@@ -3633,6 +3633,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("assistantNodeTextForCopy(eventEl)", app_js)
         self.assertIn("speakTextDirect(text, convId, paneId, btn)", app_js)
         self.assertIn("let html = assistantMessageActionsHtml(ev)", app_js)
+        self.assertIn("const assistantBlocks = Array.isArray(ev.blocks)", app_js)
+        self.assertIn("for (const b of assistantBlocks)", app_js)
         self.assertIn(".assistant-message-actions", app_css)
         self.assertIn(".assistant-message-action", app_css)
         assistant_row_css = app_css[
