@@ -33810,6 +33810,47 @@ def _group_chat_remove_participant(raw_path: str, session_id: str, raw_uuid: str
     return {"ok": True, "session_id": sid, "was_participant": True}
 
 
+def _group_chat_rename_participant(raw_path: str, session_id: str, new_name: str, raw_uuid: str = "") -> dict:
+    """Rename a participant's display name in the sidecar's name_map.
+
+    Transcript rendering resolves each message's speaker name from the hash
+    at render time (gcDisplayName in app.js), never from literal text stored
+    in the markdown headings, so this retroactively relabels every past
+    message on the next poll — no rewrite of the .md file needed.
+    """
+    real_path = _resolve_group_chat_ref(raw_path, raw_uuid)
+    if not real_path:
+        return {"ok": False, "error": "forbidden"}
+    if not os.path.exists(real_path):
+        return {"ok": False, "error": "not found"}
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+
+    clean_name = _group_chat_storeable_display_name(new_name, sid)
+    if not clean_name:
+        return {"ok": False, "error": "invalid name"}
+
+    sidecar = _load_group_chat_sidecar(real_path)
+    session_ids = list(sidecar.get("session_ids") or [])
+    if sid not in session_ids:
+        return {"ok": False, "error": "not found"}
+    name_map = dict(sidecar.get("name_map") or {})
+    old_name = name_map.get(sid) or _group_chat_fallback_agent_name(sid, session_ids)
+
+    if old_name == clean_name:
+        return {"ok": True, "session_id": sid, "name": clean_name, "changed": False}
+
+    name_map[sid] = clean_name
+    if not _update_group_chat_sidecar(real_path, name_map=name_map):
+        return {"ok": False, "error": "could not update sidecar"}
+
+    _group_chat_log_system(real_path, f"renamed `{old_name}` to `{clean_name}` ({sid[:8]})")
+    _group_chat_update_header_if_changed(real_path, force_write=True)
+
+    return {"ok": True, "session_id": sid, "name": clean_name, "changed": True}
+
+
 def _group_chat_add_participant(raw_path: str, session_id: str, display_name: str = "", raw_uuid: str = "") -> dict:
     """Add a session to an existing chat: append to sidecar's session_ids /
     name_map, then inject /group-chat into the session so it joins live.
@@ -50426,6 +50467,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing path/id or session_id"})
                 return
             result = _group_chat_remove_participant(chat_path, session_id, chat_uuid)
+            if result.get("error") == "forbidden":
+                self.send_json(result, 403)
+            elif result.get("error") == "not found":
+                self.send_json(result, 404)
+            else:
+                self.send_json(result)
+        elif path == "/api/group-chats/rename-participant":
+            # ✎ button on a participant card in the orchestrator panel.
+            # Updates the sidecar's name_map; transcript rendering resolves
+            # speaker names from that map at render time, so past messages
+            # relabel too on the next poll.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            chat_path = (payload.get("path") or "").strip()
+            chat_uuid = (payload.get("id") or payload.get("uuid") or "").strip()
+            session_id = (payload.get("session_id") or "").strip()
+            new_name = (payload.get("name") or "").strip()
+            if (not chat_path and not chat_uuid) or not session_id or not new_name:
+                self.send_json({"ok": False, "error": "missing path/id, session_id, or name"})
+                return
+            result = _group_chat_rename_participant(chat_path, session_id, new_name, chat_uuid)
             if result.get("error") == "forbidden":
                 self.send_json(result, 403)
             elif result.get("error") == "not found":

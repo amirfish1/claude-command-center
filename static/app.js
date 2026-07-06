@@ -19088,6 +19088,7 @@
       html += `  <div class="gco-part-header">`;
       html += `    <span class="gco-part-swatch" style="background-color: var(--${color})"></span>`;
       html += `    <span class="gco-part-name-title" title="${escapeAttr(sid)}">${escapeHtml(name)}</span>`;
+      html += `    <button type="button" class="gco-part-rename-btn" data-gc-rename="${escapeAttr(sid)}" data-gc-rename-name="${escapeAttr(name)}" title="Rename this participant">✎</button>`;
       html += `    <span class="gc-online-dot ${isOnline ? 'is-online' : 'is-waiting'}" title="${isOnline ? 'Online / Idle' : 'Waiting for reply'}"></span>`;
       html += `  </div>`;
       html += `  <div class="gco-part-body">`;
@@ -19203,6 +19204,15 @@
         } finally {
           setTimeout(() => { btn.disabled = false; btn.textContent = restore; }, 1800);
         }
+      });
+    });
+
+    panel.querySelectorAll('[data-gc-rename]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sid = btn.getAttribute('data-gc-rename') || '';
+        if (!sid) return;
+        const currentName = btn.getAttribute('data-gc-rename-name') || '';
+        renameGroupChatParticipant(chatPathForNudge.gcPath || '', chatPathForNudge.gcId || '', sid, currentName);
       });
     });
 
@@ -39795,6 +39805,29 @@
       }
       try { await pollGcActive(); } catch (_) {}
       showOpToast?.('Chat renamed');
+    } catch (err) {
+      showOpToast?.('Could not rename: ' + ((err && err.message) || 'network error'), 'error');
+    }
+  }
+
+  async function renameGroupChatParticipant(chatPath, chatId, sid, currentName) {
+    if ((!chatPath && !chatId) || !sid) return;
+    let name = '';
+    try { name = (window.prompt('New name for this participant:', currentName || '') || '').trim(); } catch (_) {}
+    if (!name || name === currentName) return;
+    try {
+      const res = await fetch('/api/group-chats/rename-participant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '', session_id: sid, name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not rename: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      try { await pollGroupChatReader(); } catch (_) {}
+      showOpToast?.('Participant renamed to ' + name);
     } catch (err) {
       showOpToast?.('Could not rename: ' + ((err && err.message) || 'network error'), 'error');
     }

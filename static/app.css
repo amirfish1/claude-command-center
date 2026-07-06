@@ -17209,6 +17209,31 @@ body:has(.gc-reader) .pwa-install-banner {
   align-items: center;
   gap: 8px;
 }
+.gco-part-name-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gco-part-rename-btn {
+  flex-shrink: 0;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.gco-part-card:hover .gco-part-rename-btn {
+  opacity: 1;
+}
+.gco-part-rename-btn:hover {
+  color: var(--accent);
+}
 .gco-part-swatch {
   width: 10px;
   height: 10px;
