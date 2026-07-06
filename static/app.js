@@ -26044,7 +26044,15 @@
           toggleConversationRowSelection(item);
           return;
         }
-        const alreadyActive = item.classList.contains('active') || currentConversation === item.dataset.id;
+        // A group-chat reader repurposes #conversationsView without always
+        // resetting currentConversation/the row's stale .active class in
+        // lockstep — clicking a row's title while it's showing must still
+        // open that row, never silently fall through to rename (annotation:
+        // "I click on a worker, but RHS stays of the group chat i was
+        // viewing before").
+        const _gcReaderShowing = !!document.getElementById('gcReader');
+        const alreadyActive = !_gcReaderShowing
+          && (item.classList.contains('active') || currentConversation === item.dataset.id);
         // On touch the title is the primary tap target for ENTERING a session
         // (it fills the row), so a tap must always open / slide to the main pane —
         // never hijack it for inline rename (the "two taps to get into a session"
