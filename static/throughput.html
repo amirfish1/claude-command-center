@@ -867,13 +867,13 @@
 
   .model-row {
     display: grid;
-    grid-template-columns: minmax(140px, 1.3fr) repeat(6, minmax(90px, 1fr));
+    grid-template-columns: minmax(140px, 1.3fr) repeat(7, minmax(86px, 1fr));
     gap: 12px;
     align-items: center;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     font-size: 12px;
-    min-width: 760px;
+    min-width: 850px;
   }
 
   .model-row:last-child { border-bottom: 0; }
@@ -900,6 +900,10 @@
     color: var(--text-muted);
     font-family: var(--font-mono);
     text-align: right;
+  }
+  .model-weekly-cell {
+    color: var(--accent);
+    font-weight: 700;
   }
   
   .turn-list {
@@ -1814,7 +1818,19 @@
       }
 
       // Model comparison table
-      renderModelBreakdown(summary.per_model || []);
+      const modelRows = summary.per_model || [];
+      const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
+        ? weeklyData.codex.weekly_pct
+        : null;
+      const codexWeeklyTotalTokens = modelRows.reduce((sum, model) => {
+        return sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0);
+      }, 0);
+      renderModelBreakdown(modelRows, {
+        claudePctPerToken: ppt,
+        codexWeeklyPct,
+        codexWeeklyTotalTokens,
+        engine: activeThroughputEngine
+      });
 
       // Weekly history chart (aggregate only, lazy-loaded)
       const histSection = document.getElementById('weekly-history-section');
@@ -2054,7 +2070,33 @@
       el.appendChild(totalRow);
     }
 
-    function renderModelBreakdown(models) {
+    function modelWeeklyBasisTokens(model) {
+      if (!model) return 0;
+      return (model.raw_context_tokens || 0) + (model.output_tokens || 0);
+    }
+
+    function isCodexModelRow(model, fallbackEngine) {
+      const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
+      const label = String((model && (model.model || model.engine)) || '').toLowerCase();
+      return engine === 'codex' || label.startsWith('gpt-') || label.includes('codex');
+    }
+
+    function formatModelWeeklyPct(model, context) {
+      const ctx = context || {};
+      const tokens = modelWeeklyBasisTokens(model);
+      if (!(tokens > 0)) return '—';
+      if (isCodexModelRow(model, ctx.engine)) {
+        const total = Number(ctx.codexWeeklyTotalTokens || 0);
+        const pct = Number(ctx.codexWeeklyPct);
+        if (!(total > 0) || !Number.isFinite(pct)) return '—';
+        return `${((tokens / total) * pct).toFixed(2)}%`;
+      }
+      const ppt = Number(ctx.claudePctPerToken);
+      if (!Number.isFinite(ppt) || !(ppt > 0)) return '—';
+      return `${(tokens * ppt).toFixed(2)}%`;
+    }
+
+    function renderModelBreakdown(models, context) {
       const el = document.getElementById('model-breakdown');
       if (!el) return;
       if (!models.length) {
@@ -2064,6 +2106,7 @@
       const rows = models.map(m => {
         const label = m.model || m.engine || 'unknown';
         const cost = m.cost_usd ? fmtCost(m.cost_usd) : (m.unpriced_turns ? 'n/a' : '$0.00');
+        const weeklyPct = formatModelWeeklyPct(m, context);
         return `
           <div class="model-row">
             <div class="model-name" title="${label}">${label}</div>
@@ -2071,6 +2114,7 @@
             <div class="model-cell">${fmtNum(m.active_duration_sec, 1)}s</div>
             <div class="model-cell">${fmtNum(m.effective_input_tokens)}</div>
             <div class="model-cell">${fmtNum(m.raw_context_tokens)}</div>
+            <div class="model-cell model-weekly-cell">${weeklyPct}</div>
             <div class="model-cell">${Math.round((m.cache_hit_ratio || 0) * 100)}%</div>
             <div class="model-cell">${cost}</div>
           </div>
@@ -2083,6 +2127,7 @@
           <div class="model-cell">Active</div>
           <div class="model-cell">Adj tokens</div>
           <div class="model-cell">Raw tokens</div>
+          <div class="model-cell">% Weekly</div>
           <div class="model-cell">Cache</div>
           <div class="model-cell">Cost</div>
         </div>
