@@ -9266,15 +9266,101 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             orig_db = server.HERMES_STATE_DB
+            orig_bridge = server.HERMES_WHATSAPP_BRIDGE_LOG
+            orig_pending = server.HERMES_CHUCK_PENDING_DIR
             server.HERMES_STATE_DB = pathlib.Path(tmp) / "missing-state.db"
+            server.HERMES_WHATSAPP_BRIDGE_LOG = pathlib.Path(tmp) / "missing-bridge.log"
+            server.HERMES_CHUCK_PENDING_DIR = pathlib.Path(tmp) / "missing-pending"
             server._HERMES_ID_CACHE["key"] = None
             server._HERMES_ID_CACHE["ids"] = set()
             try:
                 self.assertEqual(server.find_hermes_conversations(repo_only=False), [])
             finally:
                 server.HERMES_STATE_DB = orig_db
+                server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge
+                server.HERMES_CHUCK_PENDING_DIR = orig_pending
                 server._HERMES_ID_CACHE["key"] = None
                 server._HERMES_ID_CACHE["ids"] = set()
+
+    def test_hermes_reads_whatsapp_bridge_and_pending_sources(self):
+        """WhatsApp bridge.log and active pending-ask JSON files are Hermes
+        session sources too; they can precede or outlive state.db rows."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            bridge = root / "bridge.log"
+            pending_dir = root / "chuck_realtor_pending"
+            pending_dir.mkdir()
+            chat_id = "group-test@g.us"
+            bridge.write_text(
+                json.dumps({
+                    "event": "upsert",
+                    "type": "notify",
+                    "fromMe": False,
+                    "chatId": chat_id,
+                    "senderId": "user-test@lid",
+                    "body": "Can you run these five sample leads?",
+                }) + "\n" +
+                json.dumps({
+                    "event": "upsert",
+                    "type": "append",
+                    "fromMe": True,
+                    "chatId": "other-chat@g.us",
+                    "senderId": "other-chat@g.us",
+                    "body": "Separate bridge-only chat",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            pending_path = pending_dir / f"{chat_id}.json"
+            pending_path.write_text(json.dumps({
+                "created_at": 1780315200.0,
+                "reason": "nontrivial_or_ambiguous",
+                "change_id": "Ask #22",
+                "request_text": "Can you run these five sample leads?",
+                "group_chat_id": chat_id,
+                "group_chat_name": "Example Group",
+                "sender_id": "user-test@lid",
+                "sender_name": "Example User",
+                "notes": ["Needs approval."],
+                "private_last_planning_response": "This should pause for approval.",
+            }), encoding="utf-8")
+
+            orig_db = server.HERMES_STATE_DB
+            orig_bridge = server.HERMES_WHATSAPP_BRIDGE_LOG
+            orig_pending = server.HERMES_CHUCK_PENDING_DIR
+            server.HERMES_STATE_DB = root / "missing-state.db"
+            server.HERMES_WHATSAPP_BRIDGE_LOG = bridge
+            server.HERMES_CHUCK_PENDING_DIR = pending_dir
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._ENGINE_DETECT_CACHE.clear()
+            try:
+                rows = server.find_hermes_conversations(repo_only=False)
+                by_id = {r["session_id"]: r for r in rows}
+                pending_sid = "hermes-whatsapp-pending:" + chat_id
+                bridge_sid = "hermes-whatsapp-bridge:other-chat@g.us"
+                self.assertIn(pending_sid, by_id)
+                self.assertIn(bridge_sid, by_id)
+                self.assertTrue(by_id[pending_sid]["needs_approval"])
+                self.assertEqual(by_id[pending_sid]["pending_tool"], "Ask approval")
+                self.assertEqual(server._detect_session_engine(pending_sid), "hermes")
+
+                pending_events = server.parse_conversation(pending_sid, use_cache=False)["events"]
+                self.assertTrue(any("Ask #22" in e.get("text", "") for e in pending_events))
+                self.assertTrue(any("sample leads" in e.get("text", "") for e in pending_events))
+
+                bridge_events = server.parse_conversation(bridge_sid, use_cache=False)["events"]
+                self.assertTrue(any("Separate bridge-only chat" in e.get("text", "") for e in bridge_events))
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge
+                server.HERMES_CHUCK_PENDING_DIR = orig_pending
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
+                server._ENGINE_DETECT_CACHE.clear()
 
     def test_session_initial_scan_keeps_recent_and_live_rows(self):
         """Initial /api/sessions scans should avoid cold history while keeping

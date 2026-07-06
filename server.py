@@ -15602,7 +15602,7 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
         elif _is_antigravity_session(conversation_id):
             resolved = _antigravity_transcript_path(conversation_id)
         elif _is_hermes_session(conversation_id):
-            return _hermes_db_cache_key()
+            return _hermes_cache_key()
         else:
             resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
         if resolved and Path(resolved).is_file():
@@ -25065,6 +25065,18 @@ HERMES_GATEWAY_SESSIONS = Path(
     os.environ.get("CCC_HERMES_GATEWAY_SESSIONS")
     or (HERMES_HOME / "sessions" / "sessions.json")
 ).expanduser()
+HERMES_WHATSAPP_DIR = Path(
+    os.environ.get("CCC_HERMES_WHATSAPP_DIR")
+    or (HERMES_HOME / "whatsapp")
+).expanduser()
+HERMES_WHATSAPP_BRIDGE_LOG = Path(
+    os.environ.get("CCC_HERMES_WHATSAPP_BRIDGE_LOG")
+    or (HERMES_WHATSAPP_DIR / "bridge.log")
+).expanduser()
+HERMES_CHUCK_PENDING_DIR = Path(
+    os.environ.get("CCC_HERMES_CHUCK_PENDING_DIR")
+    or (HERMES_WHATSAPP_DIR / "chuck_realtor_pending")
+).expanduser()
 # Profile workers (e.g. the "chuckrealtor" / Becky agent that actually writes
 # code) run under their OWN state.db at ~/.hermes/profiles/<name>/state.db,
 # not the main gateway DB. Those are the sessions that do the real work, so
@@ -25079,6 +25091,8 @@ _HERMES_ID_CACHE = {"key": None, "ids": set()}
 # _hermes_session_ids() and keyed by the same (mtime,size) cache key.
 _HERMES_DB_INDEX = {"key": None, "by_session": {}}
 _HERMES_GATEWAY_CACHE = {"key": None, "by_session": {}}
+_HERMES_BRIDGE_PREFIX = "hermes-whatsapp-bridge:"
+_HERMES_PENDING_PREFIX = "hermes-whatsapp-pending:"
 
 
 def _hermes_db_path():
@@ -25150,6 +25164,162 @@ def _hermes_db_cache_key():
     return (mtime_ns, size)
 
 
+def _hermes_file_key(paths):
+    mtime_ns = 0
+    size = 0
+    for path in paths:
+        try:
+            st = Path(path).expanduser().stat()
+        except (OSError, RuntimeError, ValueError, TypeError):
+            continue
+        mtime_ns = max(mtime_ns, st.st_mtime_ns)
+        size += st.st_size
+    return (mtime_ns, size)
+
+
+def _hermes_pending_paths():
+    try:
+        pdir = Path(HERMES_CHUCK_PENDING_DIR).expanduser()
+        if not pdir.is_dir():
+            return []
+        return [
+            p for p in sorted(pdir.glob("*.json"), key=lambda p: p.name.lower())
+            if p.is_file()
+        ]
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return []
+
+
+def _hermes_cache_key():
+    """Combined cache key for all Hermes-backed cards, including file-backed
+    WhatsApp gateway sources that may exist before a row reaches state.db."""
+    db_mtime, db_size = _hermes_db_cache_key()
+    paths = [HERMES_WHATSAPP_BRIDGE_LOG]
+    paths.extend(_hermes_pending_paths())
+    file_mtime, file_size = _hermes_file_key(paths)
+    return (max(db_mtime, file_mtime), db_size + file_size)
+
+
+def _hermes_bridge_session_id(chat_id):
+    chat = str(chat_id or "").strip()
+    return _HERMES_BRIDGE_PREFIX + chat if chat else ""
+
+
+def _hermes_pending_session_id(chat_id):
+    chat = str(chat_id or "").strip()
+    return _HERMES_PENDING_PREFIX + chat if chat else ""
+
+
+def _hermes_external_session_kind(session_id):
+    sid = str(session_id or "").strip()
+    if sid.startswith(_HERMES_BRIDGE_PREFIX) and sid[len(_HERMES_BRIDGE_PREFIX):]:
+        return "bridge"
+    if sid.startswith(_HERMES_PENDING_PREFIX) and sid[len(_HERMES_PENDING_PREFIX):]:
+        return "pending"
+    return ""
+
+
+def _hermes_external_chat_id(session_id):
+    sid = str(session_id or "").strip()
+    kind = _hermes_external_session_kind(sid)
+    if kind == "bridge":
+        return sid[len(_HERMES_BRIDGE_PREFIX):]
+    if kind == "pending":
+        return sid[len(_HERMES_PENDING_PREFIX):]
+    return ""
+
+
+def _hermes_read_json_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def _hermes_bridge_tail_lines(max_lines=2000):
+    try:
+        with open(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser(), "r", encoding="utf-8", errors="replace") as fh:
+            return list(collections.deque(fh, maxlen=max(1, int(max_lines or 2000))))
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return []
+
+
+def _hermes_parse_bridge_line(raw, line_num):
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        obj = json.loads(text)
+    except (ValueError, json.JSONDecodeError):
+        if text.startswith("[bridge]"):
+            return {
+                "line": line_num,
+                "type": "system",
+                "subtype": "hermes_whatsapp_bridge_log",
+                "session": "",
+                "text": text,
+            }
+        return None
+    if not isinstance(obj, dict) or obj.get("event") != "upsert":
+        return None
+    chat_id = str(obj.get("chatId") or "").strip()
+    body = str(obj.get("body") or "").strip()
+    if not chat_id or not body:
+        return None
+    ts = _hermes_iso(obj.get("time") or obj.get("timestamp"))
+    from_me = bool(obj.get("fromMe"))
+    ev_type = "assistant" if from_me else "user_text"
+    return {
+        "line": line_num,
+        "ts": ts,
+        "type": ev_type,
+        "subtype": "hermes_whatsapp_bridge",
+        "session": _hermes_bridge_session_id(chat_id),
+        "source_platform": "whatsapp",
+        "chat_id": chat_id,
+        "sender_id": str(obj.get("senderId") or "").strip(),
+        "text": body,
+    }
+
+
+def _hermes_bridge_events_by_chat():
+    by_chat = {}
+    lines = _hermes_bridge_tail_lines()
+    start_line = 0
+    try:
+        with open(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser(), "r", encoding="utf-8", errors="replace") as fh:
+            total_lines = sum(1 for _ in fh)
+        start_line = max(0, total_lines - len(lines))
+    except (OSError, RuntimeError, ValueError, TypeError):
+        pass
+    for idx, raw in enumerate(lines, start=start_line + 1):
+        ev = _hermes_parse_bridge_line(raw, idx)
+        if not ev:
+            continue
+        chat_id = ev.get("chat_id") or ""
+        if chat_id:
+            by_chat.setdefault(chat_id, []).append(ev)
+    return by_chat
+
+
+def _hermes_pending_entries():
+    out = []
+    for path in _hermes_pending_paths():
+        data = _hermes_read_json_file(path)
+        chat_id = str(data.get("group_chat_id") or path.stem).strip()
+        if not chat_id:
+            continue
+        try:
+            st = path.stat()
+            mtime = float(st.st_mtime)
+        except OSError:
+            mtime = 0.0
+        out.append((path, chat_id, data, mtime))
+    return out
+
+
 def _hermes_connect(db=None):
     if db is None:
         db = _hermes_db_path()
@@ -25217,6 +25387,8 @@ def _is_hermes_session(session_id):
     sid = str(session_id or "").strip()
     if not sid:
         return False
+    if _hermes_external_session_kind(sid):
+        return True
     return sid in _hermes_session_ids()
 
 
@@ -25874,6 +26046,124 @@ def _hermes_folder_for_row(row, pinned=None):
     return folder_path, folder_label, effective_cwd, cwd_exists, worktree_label
 
 
+def _hermes_base_file_row(sid, modified, display_name, first_message="", last_prompt=""):
+    return {
+        "id": sid,
+        "session_id": sid,
+        "source": "hermes",
+        "engine": "hermes",
+        "timestamp": "",
+        "branch": None,
+        "git_branch": None,
+        "first_message": (first_message or "")[:200],
+        "display_name": display_name or "Hermes WhatsApp",
+        "ai_title": None,
+        "name_overridden": False,
+        "last_prompt": (last_prompt or first_message or "")[:200],
+        "size": len(first_message or "") + len(last_prompt or ""),
+        "modified": modified,
+        "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+        "mtime": modified,
+        "jsonl_path": "",
+        "folder_label": "Hermes",
+        "folder_path": "",
+        "folder_label_chip": "Hermes",
+        "worktree_label": None,
+        "session_cwd": "",
+        "session_cwd_exists": False,
+        "session_cwd_is_worktree": False,
+        "worktree_dirty": False,
+        "effective_branch": None,
+        "effective_kind": None,
+        "has_edit": False,
+        "has_commit": False,
+        "has_push": False,
+        "last_edit_pos": 0,
+        "last_commit_pos": 0,
+        "last_push_pos": 0,
+        "last_event_type": "user" if last_prompt else None,
+        "pending_tool": None,
+        "pending_file": None,
+        "last_assistant_text": "",
+        "tail_issue_number": None,
+        "tail_pr_number": None,
+        "tail_pr_url": None,
+        "pr_state": None,
+        "session_state": None,
+        "archived": False,
+        "verified": False,
+        "pinned_repo": False,
+        "last_interacted": None,
+        "is_live": False,
+        "spawn_pid": None,
+        "needs_approval": False,
+        "needs_approval_message": "",
+        "model": "",
+        "reasoning_effort": "",
+        "latest_input_tokens": 0,
+        "context_limit": HERMES_CONTEXT_LIMIT,
+        "source_platform": "whatsapp",
+        "hermes_source": "whatsapp",
+        "hermes_origin": "whatsapp",
+        "hermes_chat_type": "group",
+        "hermes_tool_calls": 0,
+        "parent_session_id": "",
+        "hermes_parent_session_id": "",
+        "hermes_lineage_session_ids": [sid],
+        "hermes_lineage_count": 1,
+        "hermes_lineage_collapsed": False,
+        "hermes_lineage_root_id": sid,
+        "hermes_continued_from": "",
+        "hermes_child_session_ids": [],
+        "hermes_is_parent": False,
+        "hermes_profile": "",
+    }
+
+
+def _hermes_external_rows(include_old=True):
+    rows = []
+    seen_chats = set()
+    for path, chat_id, data, mtime in _hermes_pending_entries():
+        sid = _hermes_pending_session_id(chat_id)
+        created = _hermes_epoch(data.get("created_at")) or mtime
+        change_id = str(data.get("change_id") or "Pending ask").strip()
+        group_name = str(data.get("group_chat_name") or chat_id).strip()
+        request_text = str(data.get("request_text") or "").strip()
+        display = (change_id + ": " + group_name).strip(": ")
+        row = _hermes_base_file_row(sid, created, display, request_text, request_text)
+        row["size"] += len(json.dumps(data, ensure_ascii=False))
+        row["needs_approval"] = True
+        row["needs_approval_message"] = str(data.get("reason") or "pending").strip()
+        row["pending_tool"] = "Ask approval"
+        row["pending_file"] = path.name
+        row["last_event_type"] = "user"
+        row["hermes_chat_type"] = "group"
+        row["hermes_pending_path"] = str(path)
+        rows.append(row)
+        seen_chats.add(chat_id)
+
+    by_chat = _hermes_bridge_events_by_chat()
+    for chat_id, events in by_chat.items():
+        if chat_id in seen_chats or not events:
+            continue
+        last = events[-1]
+        text = last.get("text") or ""
+        modified = _hermes_epoch(last.get("ts")) or 0.0
+        if not modified:
+            try:
+                modified = float(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser().stat().st_mtime)
+            except OSError:
+                modified = 0.0
+        sid = _hermes_bridge_session_id(chat_id)
+        display = "WhatsApp bridge: " + chat_id
+        row = _hermes_base_file_row(sid, modified, display, text, text)
+        row["size"] = sum(len(e.get("text") or "") for e in events)
+        row["last_event_type"] = "assistant" if last.get("type") == "assistant" else "user"
+        row["hermes_bridge_log_path"] = str(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser())
+        rows.append(row)
+    return rows
+
+
 def find_hermes_conversations(
     repo_path=None,
     include_old=True,
@@ -25884,10 +26174,14 @@ def find_hermes_conversations(
     resolve_worktree_dirty=True,
 ):
     db_paths = _hermes_db_paths()
+    external_rows = _hermes_external_rows(include_old=include_old)
     if not db_paths:
         if progress:
-            progress("hermes", state="done", count=0, detail="Hermes state.db not found.")
-        return []
+            progress(
+                "hermes", state="done", count=len(external_rows),
+                detail=f"{len(external_rows)} Hermes file-backed card(s) ready."
+            )
+        return external_rows
     if repo_only:
         repo_path = resolve_repo_path(repo_path)
     try:
@@ -26081,6 +26375,7 @@ def find_hermes_conversations(
                 # for a worker session living in a profile's own state.db.
                 "hermes_profile": profile,
             })
+        out.extend(external_rows)
         if resolve_pr_states:
             _prime_pr_states(c.get("tail_pr_url") for c in out)
             for c in out:
@@ -26174,7 +26469,113 @@ def _parse_hermes_message(msg, line_num, session_row=None):
     return None
 
 
+def _parse_hermes_pending_conversation(session_id, after_line=0):
+    chat_id = _hermes_external_chat_id(session_id)
+    entry = None
+    for path, cid, data, _mtime in _hermes_pending_entries():
+        if cid == chat_id:
+            entry = (path, data)
+            break
+    if not entry:
+        return {"events": [], "last_line": 0}
+    path, data = entry
+    line = 0
+    events = []
+
+    def add(ev):
+        nonlocal line
+        line += 1
+        ev["line"] = line
+        ev.setdefault("session", session_id)
+        events.append(ev)
+
+    ts = _hermes_iso(data.get("created_at"))
+    change_id = str(data.get("change_id") or "Pending ask").strip()
+    reason = str(data.get("reason") or "").strip()
+    add({
+        "ts": ts,
+        "type": "system",
+        "subtype": "hermes_pending_ask",
+        "source_platform": "whatsapp",
+        "text": (change_id + (" - " + reason if reason else "")).strip(),
+        "pending_path": str(path),
+        "chat_id": chat_id,
+        "group_chat_name": str(data.get("group_chat_name") or ""),
+    })
+    req = str(data.get("request_text") or "").strip()
+    if req:
+        add({
+            "ts": ts,
+            "type": "user_text",
+            "subtype": "hermes_pending_request",
+            "source_platform": "whatsapp",
+            "text": req,
+            "sender_id": str(data.get("sender_id") or ""),
+            "sender_name": str(data.get("sender_name") or ""),
+        })
+    notes = data.get("notes")
+    if isinstance(notes, list) and notes:
+        add({
+            "ts": ts,
+            "type": "system",
+            "subtype": "hermes_pending_notes",
+            "source_platform": "whatsapp",
+            "text": "\n".join(str(n).strip() for n in notes if str(n).strip()),
+        })
+    planning = str(data.get("private_last_planning_response") or "").strip()
+    if planning:
+        add({
+            "ts": _hermes_iso(data.get("closed_at") or data.get("created_at")),
+            "type": "assistant",
+            "subtype": "hermes_pending_planning",
+            "source_platform": "whatsapp",
+            "text": planning,
+        })
+    try:
+        after = int(after_line or 0)
+    except (TypeError, ValueError):
+        after = 0
+    visible = [e for e in events if e.get("line", 0) > after] if after > 0 else events
+    return {"events": visible, "last_line": line}
+
+
+def _parse_hermes_bridge_conversation(session_id, after_line=0):
+    chat_id = _hermes_external_chat_id(session_id)
+    by_chat = _hermes_bridge_events_by_chat()
+    raw_events = by_chat.get(chat_id) or []
+    events = []
+    line = 0
+    if raw_events:
+        line += 1
+        events.append({
+            "line": line,
+            "type": "system",
+            "subtype": "hermes_whatsapp_bridge_log",
+            "session": session_id,
+            "source_platform": "whatsapp",
+            "chat_id": chat_id,
+            "text": "Recent WhatsApp bridge messages from bridge.log",
+        })
+    for ev in raw_events:
+        line += 1
+        item = dict(ev)
+        item["line"] = line
+        item["session"] = session_id
+        events.append(item)
+    try:
+        after = int(after_line or 0)
+    except (TypeError, ValueError):
+        after = 0
+    visible = [e for e in events if e.get("line", 0) > after] if after > 0 else events
+    return {"events": visible, "last_line": line}
+
+
 def _parse_hermes_conversation(session_id, after_line=0):
+    kind = _hermes_external_session_kind(session_id)
+    if kind == "pending":
+        return _parse_hermes_pending_conversation(session_id, after_line=after_line)
+    if kind == "bridge":
+        return _parse_hermes_bridge_conversation(session_id, after_line=after_line)
     con = _hermes_connect(_hermes_db_for_session(session_id))
     if con is None:
         return {"events": [], "last_line": 0}
