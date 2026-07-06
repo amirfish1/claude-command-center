@@ -98,6 +98,27 @@ def test_external_writer_is_stale(server_mod, tmp_path):
     assert server_mod._headless_spawn_is_stale(entry, sid) is True
 
 
+def test_uuidless_trailer_write_not_stale(server_mod, tmp_path):
+    """Regression (premature-death hunt): a uuid-less trailer write —
+    last-prompt / mode / custom-title / queue-operation / agent-name / pr-link
+    — grows the transcript file but is NOT a conversation turn. It must NOT be
+    flagged stale. Counting raw byte-size growth from these benign metadata
+    events caused false-positive staleness that retired warm headless
+    processes (28% of one real transcript was uuid-less), forcing a cold
+    resume on the next send."""
+    sid, entry, transcript, log = _stage(server_mod, tmp_path, [_event("a")], 1)
+    log.write_text(_result_lines(1))
+    server_mod._update_spawn_transcript_watermark(entry, sid)
+    # Benign metadata is appended: file grows, but the last real (uuid'd)
+    # event is unchanged and the headless produced no new result.
+    _write_jsonl(transcript, [
+        _event("a"),
+        {"type": "last-prompt", "text": "benign metadata, not a conversation turn"},
+        {"type": "mode", "mode": "default"},
+    ])
+    assert server_mod._headless_spawn_is_stale(entry, sid) is False
+
+
 def test_no_change_not_stale(server_mod, tmp_path):
     sid, entry, _t, _l = _stage(server_mod, tmp_path, [_event("a")], 0)
     server_mod._update_spawn_transcript_watermark(entry, sid)

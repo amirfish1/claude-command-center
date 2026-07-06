@@ -31565,7 +31565,15 @@ def _headless_spawn_is_stale(entry, session_id=None):
     prev_size, prev_uuid, prev_results = watermark
     if prev_size is None:
         return False
-    tail_moved = (cur_size != prev_size) or (cur_uuid != prev_uuid)
+    # Real conversation events (user/assistant/result) all carry a `uuid`;
+    # only benign trailer writes (last-prompt / mode / custom-title /
+    # queue-operation / agent-name / pr-link) are uuid-less. Base "the tail
+    # moved" on the last uuid'd event — NOT raw byte size. Counting size growth
+    # here treated those metadata writes as an external writer and retired warm
+    # headless processes (false-positive staleness → cold resume every send;
+    # one real transcript was 28% uuid-less events). A genuine external writer
+    # still lands a uuid'd turn, so this stays correct for the GH #71 guard.
+    tail_moved = (cur_uuid != prev_uuid)
     if not tail_moved:
         return False
     # Tail moved. Did THIS headless produce a new turn since the watermark?
