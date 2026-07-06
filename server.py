@@ -2869,7 +2869,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "hermes")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -2886,6 +2886,7 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "kilo": "kilo",
     "kilo-code": "kilo",
     "kilo_code": "kilo",
+    "hermes": "hermes",
 }
 
 
@@ -2921,12 +2922,16 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_CLAUDE_MODEL", "claude-fable-5")
     if engine == "codex":
         return _codex_default_model()
+    if engine == "gemini":
+        return os.environ.get("CCC_GEMINI_MODEL", "auto")
     if engine == "cursor":
         return os.environ.get("CCC_CURSOR_MODEL", "auto")
     if engine == "antigravity":
         return os.environ.get("CCC_ANTIGRAVITY_MODEL") or _antigravity_cli_configured_model()
     if engine == "kilo":
         return os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
+    if engine == "hermes":
+        return os.environ.get("CCC_HERMES_MODEL", "auto")
     return ""
 
 
@@ -2966,7 +2971,7 @@ def _load_spawn_defaults():
             model = _clean_spawn_default_model(value)
             if len(model) <= 200:
                 models[norm] = model
-    for required in ("claude", "codex", "cursor"):
+    for required in ("claude", "codex", "cursor", "hermes"):
         if not models.get(required):
             models[required] = defaults["models"].get(required) or _spawn_fallback_model_for_engine(required)
     return {"engine": engine, "models": models}
@@ -3001,7 +3006,7 @@ def _save_spawn_defaults(config):
             model = _clean_spawn_default_model(value)
             if len(model) > 200:
                 return {"ok": False, "error": f"{engine} model is too long"}
-            if engine in ("claude", "codex", "cursor") and not model:
+            if engine in ("claude", "codex", "cursor", "hermes") and not model:
                 model = _spawn_fallback_model_for_engine(engine)
             current["models"][engine] = model
 
@@ -30874,6 +30879,65 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     return _finalize_spawn_response(resp, entry, ctx)
 
 
+def spawn_session_hermes(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+    """Spawn a headless Hermes CLI run and return tracking info."""
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    resolved = _resolve_hermes_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-hermes-{session_name}-{timestamp}.log"
+    model_to_use = model or _spawn_model_for_engine("hermes") or "auto"
+    if model_to_use:
+        _set_session_model(log_filename[:-4], model_to_use, False)
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+
+    # Hermes session UUID
+    session_id = str(uuid.uuid4())
+
+    cmd = [
+        resolved["bin"],
+        "chat",
+        "--query", prompt,
+        "--quiet",
+    ]
+    log_fh = open(log_path, "w")
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
+            cwd=spawn_cwd, start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "code": "hermes_launch_failed", "via": "hermes-spawn"}
+    failure = _spawn_early_failure_payload(proc, log_path, log_fh, engine="hermes", via="hermes-spawn")
+    if failure:
+        return failure
+    entry = {
+        "pid": proc.pid, "name": session_name, "log": str(log_path),
+        "prompt": prompt[:200], "started": timestamp, "proc": proc,
+        "log_fh": log_fh, "fifo": None, "stdin_fd": None,
+        "engine": "hermes", "cwd": spawn_cwd, "repo_path": repo_for_logs,
+        "model": model_to_use or "", "parent_session_id": parent_session_id or "",
+        "session_id": session_id,
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
+        spawned_at=timestamp, command_summary=prompt[:200],
+        fifo=None, engine="hermes", repo_path=repo_for_logs, model=model_to_use,
+        parent_session_id=parent_session_id, session_id=session_id,
+    )
+    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "hermes-spawn", "session_id": session_id}
+    return _finalize_spawn_response(resp, entry, ctx)
+
+
 _COLOR_PALETTE = [
     "red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta", "pink",
 ]
@@ -45968,6 +46032,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info = _resolve_kilo_bin()
             info["model"] = os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
             self.send_json(info)
+        elif path == "/api/sessions/spawn-hermes/availability":
+            info = _resolve_hermes_bin()
+            info["model"] = "auto"
+            self.send_json(info)
         elif path == "/api/loading-status":
             self.send_json(_session_load_snapshot())
         elif path == "/api/archive/loading-status":
@@ -49341,8 +49409,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                         )
+                    elif engine == "gemini":
+                        result = spawn_session_gemini(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                        )
                     elif engine == "kilo":
                         result = spawn_session_kilo(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                        )
+                    elif engine == "hermes":
+                        result = spawn_session_hermes(
                             prompt,
                             name=name,
                             cwd=spawn_cwd,
@@ -49376,6 +49464,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "cursor_launch_failed",
                         "antigravity_unavailable",
                         "antigravity_launch_failed",
+                        "hermes_unavailable",
+                        "hermes_launch_failed",
                     ):
                         self.send_json(result, 503)
                     else:
@@ -49684,6 +49774,67 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         model=model,
                     )
                     if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-hermes":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            cwd_raw = payload.get("cwd")
+            cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
+            cwd_resolved = None
+            cwd_error = None
+            if cwd_input:
+                try:
+                    expanded = os.path.expanduser(cwd_input)
+                    candidate = Path(expanded).resolve()
+                except (OSError, RuntimeError) as e:
+                    cwd_error = f"could not resolve path ({e})"
+                else:
+                    home = Path.home().resolve()
+                    try:
+                        st = os.stat(candidate)
+                    except OSError as e:
+                        cwd_error = f"path does not exist ({e.strerror or e})"
+                    else:
+                        if not stat.S_ISDIR(st.st_mode):
+                            cwd_error = f"not a directory: {candidate}"
+                        else:
+                            try:
+                                candidate.relative_to(home)
+                            except ValueError:
+                                if _spawn_cwd_outside_home_allowed(candidate):
+                                    cwd_resolved = candidate
+                                else:
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
+                            else:
+                                cwd_resolved = candidate
+            model = payload.get("model")
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            elif cwd_error:
+                self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
+            else:
+                try:
+                    result = spawn_session_hermes(
+                        prompt,
+                        name=name,
+                        cwd=str(cwd_resolved) if cwd_resolved else None,
+                        repo_path=payload.get("repo_path"),
+                        worktree=bool(payload.get("worktree")),
+                        model=model,
+                    )
+                    if result.get("code") in ("hermes_unavailable", "hermes_launch_failed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)

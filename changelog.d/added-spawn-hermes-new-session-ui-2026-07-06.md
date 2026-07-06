@@ -1,0 +1,2 @@
+- Integrated Gemini and Hermes as first-class engines in the new session UI (composer engine selector).
+- Added backend support for spawning new Hermes sessions headlessly (`spawn_session_hermes`) via the `/api/sessions/spawn-hermes` and `/api/sessions/spawn-hermes/availability` endpoints.

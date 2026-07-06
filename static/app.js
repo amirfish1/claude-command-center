@@ -34558,6 +34558,12 @@
       { id: 'kilo/openai/gpt-6.0',              label: 'gpt-6.0' },
       { id: 'kilo/openai/gpt-5.5',              label: 'gpt-5.5' },
     ],
+    hermes: [
+      { id: 'auto',                          label: 'Auto (default)' },
+      { id: 'hermes-3-llama-3.1-405b',       label: 'hermes-3-llama-3.1-405b' },
+      { id: 'hermes-3-llama-3.1-70b',        label: 'hermes-3-llama-3.1-70b' },
+      { id: 'hermes-2-pro-llama-3-8b',       label: 'hermes-2-pro-llama-3-8b' },
+    ],
   };
 
   // Codex's own switcher pairs a Model choice with a separate Reasoning
@@ -41520,17 +41526,16 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'gemini', 'cursor', 'antigravity', 'kilo', 'hermes'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
-    if (v === 'gemini') return 'antigravity';
     return SPAWN_DEFAULT_ENGINES.includes(v) ? v : 'claude';
   }
   function readLegacySpawnEnginePref() {
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', gemini: 'auto', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -41561,6 +41566,7 @@
     if (engine === 'cursor') return 'Cursor';
     if (engine === 'antigravity') return 'Antigravity';
     if (engine === 'kilo') return 'Kilo';
+    if (engine === 'hermes') return 'Hermes';
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
@@ -41570,6 +41576,7 @@
     if (engine === 'cursor') return 'cursor';
     if (engine === 'antigravity') return 'antigravity';
     if (engine === 'kilo') return 'kilo';
+    if (engine === 'hermes') return 'hermes';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
   }
@@ -41580,6 +41587,7 @@
     if (engine === 'cursor') return '/api/sessions/spawn-cursor';
     if (engine === 'antigravity') return '/api/sessions/spawn-antigravity';
     if (engine === 'kilo') return '/api/sessions/spawn-kilo';
+    if (engine === 'hermes') return '/api/sessions/spawn-hermes';
     return '/api/sessions/spawn';
   }
   function spawnSupportsWorktree(engine) {
@@ -41588,7 +41596,7 @@
     return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo';
   }
   function spawnUsesLogPlaceholder(engine) {
-    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo';
+    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes';
   }
 
   function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
@@ -41639,8 +41647,10 @@
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
     if (engine === 'codex' && !value) value = 'gpt-5.5';
+    if (engine === 'gemini' && !value) value = 'auto';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
+    if (engine === 'hermes' && !value) value = 'auto';
     spawnDefaultsState.models[engine] = value;
     _defaultModelsByEngine[engine] = value;
     syncSpawnEngineDependentUi();
@@ -41783,6 +41793,7 @@
       probe('cursor', '/api/sessions/spawn-cursor/availability', 'Cursor'),
       probe('antigravity', '/api/sessions/spawn-antigravity/availability', 'Antigravity'),
       probe('kilo', '/api/sessions/spawn-kilo/availability', 'Kilo'),
+      probe('hermes', '/api/sessions/spawn-hermes/availability', 'Hermes'),
     ]);
     syncSpawnEngineDependentUi();
   }
