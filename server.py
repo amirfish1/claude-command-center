@@ -41945,6 +41945,41 @@ def _usage_snapshot_iso(now_epoch=None):
     return datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _scoped_weekly_limit_from_usage(usage, model_name):
+    if not isinstance(usage, dict):
+        return {"utilization": None, "resets_at": None}
+    wanted = str(model_name or "").strip().lower()
+    explicit = usage.get(f"seven_day_{wanted}")
+    if isinstance(explicit, dict):
+        return {
+            "utilization": explicit.get("utilization"),
+            "resets_at": explicit.get("resets_at"),
+        }
+    limits = usage.get("limits")
+    if not isinstance(limits, list):
+        return {"utilization": None, "resets_at": None}
+    for limit in limits:
+        if not isinstance(limit, dict):
+            continue
+        if limit.get("kind") != "weekly_scoped" or limit.get("group") != "weekly":
+            continue
+        scope = limit.get("scope") or {}
+        model = scope.get("model") if isinstance(scope, dict) else {}
+        if not isinstance(model, dict):
+            model = {}
+        names = {
+            str(model.get("display_name") or "").strip().lower(),
+            str(model.get("id") or "").strip().lower(),
+        }
+        if wanted not in names:
+            continue
+        return {
+            "utilization": limit.get("percent"),
+            "resets_at": limit.get("resets_at"),
+        }
+    return {"utilization": None, "resets_at": None}
+
+
 def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None, codex=None):
     """Compact the direct Claude usage response into the persisted JSONL shape."""
     if not isinstance(plan_usage, dict) or not plan_usage.get("ok"):
@@ -41962,6 +41997,7 @@ def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None, codex=Non
             }
         else:
             snap[key] = {"utilization": None, "resets_at": None}
+    snap["seven_day_fable"] = _scoped_weekly_limit_from_usage(usage, "fable")
     snap["codex"] = codex
     return snap
 
@@ -42455,12 +42491,15 @@ def _live_usage_from_snapshot(snapshot):
     sd = snapshot.get("seven_day") or {}
     fh = snapshot.get("five_hour") or {}
     sonnet = snapshot.get("seven_day_sonnet") or {}
+    fable = snapshot.get("seven_day_fable") or {}
     return {
         "weekly_pct": sd.get("utilization"),
         "weekly_resets_at": sd.get("resets_at"),
         "session_pct": fh.get("utilization"),
         "session_resets_at": fh.get("resets_at"),
         "sonnet_pct": sonnet.get("utilization"),
+        "fable_pct": fable.get("utilization"),
+        "fable_resets_at": fable.get("resets_at"),
         "fetched_at": snapshot.get("ts"),
         "source": snapshot.get("source") or "native",
     }
@@ -42496,6 +42535,7 @@ def usage_current_payload(now_epoch=None):
     five_hour = (snap or {}).get("five_hour") or {}
     seven_day = (snap or {}).get("seven_day") or {}
     sonnet = (snap or {}).get("seven_day_sonnet") or {}
+    fable = (snap or {}).get("seven_day_fable") or {}
     codex = _latest_codex_usage_from_snapshots(now_epoch=now_epoch)
     cal = _weekly_pct_calibration()
     reset_events = usage_reset_events_payload(days=30, now_epoch=now_epoch).get("events", [])
@@ -42513,6 +42553,10 @@ def usage_current_payload(now_epoch=None):
             "seven_day_sonnet": {
                 "pct": sonnet.get("utilization"),
                 "resets_at": sonnet.get("resets_at"),
+            },
+            "seven_day_fable": {
+                "pct": fable.get("utilization"),
+                "resets_at": fable.get("resets_at"),
             },
             "pace": usage_pace_payload(live=live, now_epoch=now_epoch),
         },
@@ -44240,6 +44284,8 @@ def _live_weekly_usage(now_epoch=None):
         "session_pct": fh.get("utilization"),
         "session_resets_at": fh.get("resets_at"),
         "sonnet_pct": sonnet.get("utilization"),
+        "fable_pct": None,
+        "fable_resets_at": None,
         "fetched_at": data.get("fetched_at") if isinstance(data, dict) else None,
         "source": "legacy",
     }
@@ -44358,6 +44404,8 @@ def _weekly_usage_block():
         "pct_per_token": rate,
         "week_start_epoch": week_start_epoch,
         "weekly_resets_at": (live or {}).get("weekly_resets_at"),
+        "fable_pct": (live or {}).get("fable_pct"),
+        "fable_resets_at": (live or {}).get("fable_resets_at"),
         "session_pct": (live or {}).get("session_pct"),
         "source": (live or {}).get("source"),
         "calibrated_at": cal.get("calibrated_at"),

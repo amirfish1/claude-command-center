@@ -75,6 +75,17 @@ class TestServerImports(unittest.TestCase):
                                 "utilization": 8.0,
                                 "resets_at": "2026-07-09T17:00:00Z",
                             },
+                            "limits": [{
+                                "kind": "weekly_scoped",
+                                "group": "weekly",
+                                "percent": 44.0,
+                                "resets_at": "2026-07-09T17:00:00Z",
+                                "scope": {
+                                    "model": {
+                                        "display_name": "Fable",
+                                    },
+                                },
+                            }],
                         },
                     },
                     now_epoch=1_783_014_000,
@@ -85,6 +96,7 @@ class TestServerImports(unittest.TestCase):
                 self.assertEqual(live["weekly_pct"], 42.0)
                 self.assertEqual(live["session_pct"], 12.5)
                 self.assertEqual(live["sonnet_pct"], 8.0)
+                self.assertEqual(live["fable_pct"], 44.0)
                 self.assertEqual(live["source"], "native")
 
                 payload = server.usage_snapshots_payload(hours=24, now_epoch=1_783_014_300)

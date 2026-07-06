@@ -1158,7 +1158,7 @@
     <!-- Main workspace content -->
     <div class="workspace" id="workspace">
 
-      <!-- Weekly usage banner (Claude/Fable + Codex, since reset). Hidden until
+      <!-- Weekly usage banner (Claude + Fable + Codex, since reset). Hidden until
            /api/weekly_usage returns calibrated data. -->
       <div class="weekly-banner" id="weekly-banner" style="display: none;">
         <div class="weekly-meters">
@@ -1168,7 +1168,16 @@
             </div>
             <div class="weekly-main">
               <div class="weekly-pct" id="weekly-pct">–%</div>
-              <div class="weekly-label" id="weekly-label">Fable weekly limit</div>
+              <div class="weekly-label" id="weekly-label">Claude weekly limit</div>
+            </div>
+          </div>
+          <div class="weekly-meter weekly-meter-fable" id="weekly-fable-meter" style="display: none;">
+            <div class="weekly-gauge">
+              <div class="weekly-gauge-fill" id="weekly-fable-fill"></div>
+            </div>
+            <div class="weekly-main">
+              <div class="weekly-pct" id="weekly-fable-pct">–%</div>
+              <div class="weekly-label">Fable weekly limit</div>
             </div>
           </div>
           <div class="weekly-meter weekly-meter-codex" id="weekly-codex-meter" style="display: none;">
@@ -3455,11 +3464,20 @@
         setWeeklyPctText(document.getElementById('weekly-pct'), pct);
         setWeeklyFill(document.getElementById('weekly-gauge-fill'), pct);
         const bits = [];
-        if (d.real_pct != null) bits.push(`Fable ${Math.round(d.real_pct)}% last synced from claude.ai`);
-        if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% Fable live estimate`);
-        if (d.projected_pct != null) bits.push(`Fable projected ${Math.round(d.projected_pct)}% at reset`);
+        if (d.real_pct != null) bits.push(`Claude ${Math.round(d.real_pct)}% last synced from claude.ai`);
+        if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% Claude live estimate`);
+        if (d.projected_pct != null) bits.push(`Claude projected ${Math.round(d.projected_pct)}% at reset`);
         if (d.week_start && (d.week_start_source === 'event' || d.week_start_source === 'override')) {
           bits.push(`week started ${fmtResetStarted(d.week_start)} (reset detected)`);
+        }
+        const fableMeter = document.getElementById('weekly-fable-meter');
+        if (fableMeter && d.fable_pct != null) {
+          fableMeter.style.display = 'flex';
+          setWeeklyPctText(document.getElementById('weekly-fable-pct'), d.fable_pct);
+          setWeeklyFill(document.getElementById('weekly-fable-fill'), d.fable_pct);
+          bits.push(`Fable scoped ${Math.round(d.fable_pct)}%`);
+        } else if (fableMeter) {
+          fableMeter.style.display = 'none';
         }
         const codexMeter = document.getElementById('weekly-codex-meter');
         if (d.codex && d.codex.ok && d.codex.weekly_pct != null) {
