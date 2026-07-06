@@ -23034,6 +23034,92 @@
           ? _nyaRowBlockHtml(_nyaInlineItem, _nyaInlineCollapsed)
           : '');
     };
+    const _repeatGroupHash = (s) => {
+      let h = 0;
+      const str = String(s || '');
+      for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) - h) + str.charCodeAt(i);
+        h |= 0;
+      }
+      return Math.abs(h).toString(36);
+    };
+    const _repeatGroupRawTitle = (c) => {
+      if (!c) return '';
+      const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
+      if ((c.name_overridden || c.spawn_named) && c.display_name) return c.display_name;
+      if (c.display_name && c.display_name !== c.ai_title) return c.display_name;
+      if (c.ai_title) return c.ai_title;
+      if (c.display_name) return c.display_name;
+      if (cleanFirst) return firstSentenceOf(cleanFirst, 60);
+      return '';
+    };
+    const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatGroupRawTitle(c) || '(untitled)');
+    const _repeatGroupKey = (c) => {
+      const title = _repeatGroupTitle(c).trim().toLowerCase().replace(/\s+/g, ' ');
+      if (!title || title === '(untitled)') return '';
+      const engine = String(c.engine || c.source || '').trim().toLowerCase();
+      const model = String(c.model || '').trim().toLowerCase();
+      const folder = String(c.folder_path || c.folder_label_chip || '').trim().toLowerCase();
+      return [title, engine, model, folder].join('\n');
+    };
+    const _repeatGroupStorageKey = (key) => 'ccc-repeat-row-group-expanded:' + _repeatGroupHash(key);
+    const _repeatGroupExpanded = (key, cards) => {
+      if ((cards || []).some(c => c && (c.id === currentConversation || c.session_id === currentConversation))) return true;
+      try { return localStorage.getItem(_repeatGroupStorageKey(key)) === '1'; }
+      catch (_) { return false; }
+    };
+    const _renderRepeatGroup = (cards, opts, key) => {
+      if (!cards || cards.length < 2) return cards.map(c => _renderRow(c, opts)).join('');
+      const first = cards[0] || {};
+      const expanded = _repeatGroupExpanded(key, cards);
+      const latest = cards.reduce((best, c) => Math.max(best, c.modified || c.last_interacted || 0), 0);
+      const title = _repeatGroupTitle(first);
+      const engine = String(first.engine || first.source || '').trim();
+      const model = String(first.model || '').trim();
+      const meta = [engine, model].filter(Boolean).join(' · ');
+      const rel = latest ? relativeTime(latest) : '';
+      const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
+      return '<div class="conv-repeat-group' + (expanded ? '' : ' is-collapsed') + '"'
+        + ' data-role="repeat-row-group" data-repeat-key="' + keyAttr + '">'
+        + '<button type="button" class="conv-repeat-group-header" data-role="repeat-row-group-toggle"'
+        + ' aria-expanded="' + (expanded ? 'true' : 'false') + '"'
+        + ' title="Expand repeated rows">'
+        + '<span class="conv-repeat-group-arrow">' + (expanded ? '&#9662;' : '&#9656;') + '</span>'
+        + '<span class="conv-repeat-group-title">' + escapeHtml(title) + '</span>'
+        + (meta ? '<span class="conv-repeat-group-meta">' + escapeHtml(meta) + '</span>' : '')
+        + '<span class="conv-repeat-group-count">' + cards.length + '</span>'
+        + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
+        + '</button>'
+        + '<div class="conv-repeat-group-body">'
+        + cards.map(c => _renderRow(c, opts)).join('')
+        + '</div>'
+        + '</div>';
+    };
+    const _renderRowsWithRepeatGroups = (cards, opts = {}) => {
+      const chunks = [];
+      let curKey = null;
+      let curCards = [];
+      const flush = () => {
+        if (!curCards.length) return;
+        chunks.push(curKey && curCards.length > 1
+          ? _renderRepeatGroup(curCards, opts, curKey)
+          : curCards.map(c => _renderRow(c, opts)).join(''));
+        curKey = null;
+        curCards = [];
+      };
+      for (const c of (cards || [])) {
+        const key = _repeatGroupKey(c);
+        if (!key || (curKey && key !== curKey)) flush();
+        if (!key) {
+          chunks.push(_renderRow(c, opts));
+          continue;
+        }
+        curKey = key;
+        curCards.push(c);
+      }
+      flush();
+      return chunks.join('');
+    };
     // Active list keeps the date-gap separators so morning/evening
     // boundaries stay visible while scanning.
     //
@@ -23113,11 +23199,32 @@
       // ("18H GAP", "12H GAP", etc.) are noise that pushes content down
       // without adding signal.
       let _gapShown = false;
-      return cards.map((c, i, arr) => {
+      const chunks = [];
+      let curKey = null;
+      let curCards = [];
+      const flush = () => {
+        if (!curCards.length) return;
+        chunks.push({ cards: curCards, key: curKey, mtime: (curCards[0] && curCards[0].modified) || 0 });
+        curCards = [];
+        curKey = null;
+      };
+      for (const c of (cards || [])) {
+        const key = _repeatGroupKey(c);
+        if (!key) {
+          flush();
+          chunks.push({ cards: [c], key: '', mtime: c.modified || 0 });
+          continue;
+        }
+        if (curKey && curKey !== key) flush();
+        curKey = key;
+        curCards.push(c);
+      }
+      flush();
+      return chunks.map((chunk, i, arr) => {
         let separator = '';
         if (i > 0 && !_gapShown) {
-          const newer = (arr[i - 1] && arr[i - 1].modified) || 0;
-          const older = (c.modified) || 0;
+          const newer = (arr[i - 1] && arr[i - 1].mtime) || 0;
+          const older = (chunk && chunk.mtime) || 0;
           if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
             separator = '<div class="conv-gap-separator">'
               + '<span class="conv-gap-line"></span>'
@@ -23127,7 +23234,7 @@
             _gapShown = true;
           }
         }
-        return separator + _renderRow(c, opts);
+        return separator + _renderRowsWithRepeatGroups(chunk.cards, opts);
       }).join('');
     };
     // Same gap-separator behavior as _flatRowsWithSeparators, but the
@@ -23138,10 +23245,11 @@
       const items = [];
       for (const c of sessionCards) {
         items.push({
+          type: 'session',
+          card: c,
           pinRank: c.pinned ? _pinRankValue(c) : Infinity,
           mtime: c.modified || 0,
           id: c.session_id || c.id || '',
-          html: _renderRow(c, opts),
         });
       }
       for (const gc of (gcItems || [])) items.push(gc);
@@ -23161,7 +23269,36 @@
         return (b.mtime || 0) - (a.mtime || 0);
       });
       let _gapShown = false;
-      return items.map((it, i, arr) => {
+      const chunks = [];
+      let curKey = null;
+      let curCards = [];
+      const flush = () => {
+        if (!curCards.length) return;
+        chunks.push({
+          mtime: (curCards[0] && curCards[0].modified) || 0,
+          html: _renderRowsWithRepeatGroups(curCards, opts),
+        });
+        curKey = null;
+        curCards = [];
+      };
+      for (const it of items) {
+        if (it.type !== 'session') {
+          flush();
+          chunks.push({ mtime: it.mtime || 0, html: it.html });
+          continue;
+        }
+        const key = _repeatGroupKey(it.card);
+        if (!key) {
+          flush();
+          chunks.push({ mtime: it.mtime || 0, html: _renderRow(it.card, opts) });
+          continue;
+        }
+        if (curKey && curKey !== key) flush();
+        curKey = key;
+        curCards.push(it.card);
+      }
+      flush();
+      return chunks.map((it, i, arr) => {
         let separator = '';
         if (i > 0 && !_gapShown) {
           const newer = (arr[i - 1] && arr[i - 1].mtime) || 0;
@@ -23650,14 +23787,14 @@
         }).join('');
         let body;
         if (archiveObjectId) {
-          const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })).join('');
+          const rowsHtml = _renderRowsWithRepeatGroups(cards, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup });
           const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);
           const emptyHint = (!cards.length && !_objDrafts.length && !hasChildObjects)
             ? '<div class="conv-object-empty-hint">Empty — drag a session here, or use +.</div>' : '';
           body = rowsHtml + _draftsHtml + emptyHint;
         } else {
           body = cards.length
-            ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })).join('')
+            ? _renderRowsWithRepeatGroups(cards, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })
             : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         }
         // GOAL-1 status + immediate-objective — real custom objects only (not
@@ -24112,10 +24249,29 @@
               clusters[clusters.length - 1].rows.push(item);
             }
           }
-          const entries = clusters.map(cl => ({
-            mtime: cl.mtime,
-            html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
-          }));
+          const entries = [];
+          let pendingSingles = [];
+          const flushSingles = () => {
+            if (!pendingSingles.length) return;
+            const cards = pendingSingles.map(item => item.card);
+            entries.push({
+              mtime: (cards[0] && cards[0].modified) || 0,
+              html: _renderRowsWithRepeatGroups(cards, { suppressFolderChip: false, quietTitleChrome: true }),
+            });
+            pendingSingles = [];
+          };
+          for (const cl of clusters) {
+            if (cl.rows.length === 1 && cl.rows[0].depth === 0) {
+              pendingSingles.push(cl.rows[0]);
+            } else {
+              flushSingles();
+              entries.push({
+                mtime: cl.mtime,
+                html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
+              });
+            }
+          }
+          flushSingles();
           const gcs = (gcItems || []).slice().sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
           const merged = [];
           let gi = 0;
@@ -24285,7 +24441,7 @@
           + ' data-folder-label="' + escapeHtml(folder) + '"';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('inprogress', folder, cards.length, hue, orphan, collapseKey, headerAttrs, dropPath)
-          + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
+          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })
           + '</div>';
       };
       // Each folder group becomes one mtime-stamped item; group chats
@@ -25008,6 +25164,26 @@
         }
       }
     }
+    $convList.querySelectorAll('[data-role="repeat-row-group-toggle"]').forEach(btn => {
+      const toggle = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const group = btn.closest('[data-role="repeat-row-group"]');
+        if (!group) return;
+        const nowExpanded = group.classList.toggle('is-collapsed') === false;
+        const key = group.getAttribute('data-repeat-key') || '';
+        if (key) {
+          try {
+            if (nowExpanded) localStorage.setItem(key, '1');
+            else localStorage.removeItem(key);
+          } catch (_) {}
+        }
+        btn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
+        const arrow = btn.querySelector('.conv-repeat-group-arrow');
+        if (arrow) arrow.innerHTML = nowExpanded ? '&#9662;' : '&#9656;';
+      };
+      btn.addEventListener('click', toggle);
+    });
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
     if ($archivedToggle) {
@@ -36538,7 +36714,10 @@
         const blockParts = [];
         const agentAnswerParts = [];
         let lastToolPartIdx = -1;
-        for (const b of ev.blocks) {
+        const assistantBlocks = Array.isArray(ev.blocks)
+          ? ev.blocks
+          : (String(ev.text || '').trim() ? [{ kind: 'text', text: String(ev.text || '') }] : []);
+        for (const b of assistantBlocks) {
           if (b.kind === 'tool_use') {
             // Seed the subagent-tab label when a Task tool_use lands in
             // the parent JSONL — gives the tab a real name (description

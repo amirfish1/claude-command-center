@@ -3908,6 +3908,90 @@
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
   .conv-item.is-history-match { border-left-color: rgba(120, 168, 255, 0.5); }
+  .conv-repeat-group {
+    margin: 1px 0;
+  }
+  .conv-repeat-group-header {
+    width: 100%;
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px 6px var(--conv-content-left);
+    border: 0;
+    border-left: 3px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    box-sizing: border-box;
+  }
+  .conv-repeat-group-header:hover,
+  .conv-repeat-group-header:focus-visible {
+    background: var(--surface-2);
+    outline: none;
+  }
+  .conv-repeat-group-arrow {
+    width: 14px;
+    flex: 0 0 14px;
+    margin-left: calc(-1 * var(--conv-dot-col) - 2px);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    text-align: center;
+  }
+  .conv-repeat-group-title {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .conv-repeat-group-meta {
+    flex: 0 1 auto;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .conv-repeat-group-count {
+    flex: 0 0 auto;
+    min-width: 22px;
+    padding: 1px 7px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+  }
+  .conv-repeat-group-rel {
+    flex: 0 0 auto;
+    min-width: 34px;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .conv-repeat-group-body {
+    margin-left: 12px;
+    border-left: 1px solid var(--border);
+  }
+  .conv-repeat-group.is-collapsed .conv-repeat-group-body {
+    display: none;
+  }
   .conv-history-badge {
     display: inline-block; margin-left: 6px; padding: 1px 5px;
     font-size: 9px; font-weight: 500; line-height: 1.4;
@@ -17715,4 +17799,3 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-pane[data-conv-bg="stitch"] .conversations-view::-webkit-scrollbar-thumb:hover {
   background: #839493;
 }
-
