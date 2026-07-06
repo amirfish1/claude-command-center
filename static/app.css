@@ -5954,6 +5954,17 @@
     transition: border-color 0.15s, box-shadow 0.15s;
     border-top: 1px solid var(--border);
   }
+  /* Conversation replay: simulate the human actually typing their reply
+     into the real composer, then sending it (CCC-495) — same treatment as
+     the group-chat reply box. */
+  .conv-input-bar.visible:has(textarea.gc-replay-typing) {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(110,140,175,0.16);
+  }
+  .conv-input-bar .send-btn.gc-replay-send-flash {
+    transform: scale(0.85);
+    box-shadow: 0 0 0 4px rgba(110,140,175,0.35);
+  }
   .conv-input-row-top {
     display: flex;
     align-items: flex-end;

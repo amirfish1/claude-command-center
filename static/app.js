@@ -17812,6 +17812,14 @@
   let _convReplayWordItem = null;
   let _convReplayWordContainer = null;
   let _convReplayWordIdx = 0;
+  // User-turn messages "type" into the real composer instead of revealing
+  // word-by-word in the transcript bubble (annotation: make it look like
+  // the human is actually typing, then it submits in one shot) — mirrors
+  // the group-chat replay's _gcReplayHumanStep. Progress lives here (not
+  // closure-local) so pause/resume mid-type picks up where it left off.
+  let _convReplayHumanTypeIndex = 0;
+  let _convReplayHumanSendPending = false;
+  let _convReplayHumanSent = false;
 
   function _isConvReplayMeaningful(el) {
     if (!el || !el.classList) return false;
@@ -17970,6 +17978,9 @@
     _convReplaySeenEls = new WeakSet();
     _convReplayEvents = tagged;
     _convReplayClearWordReveal();
+    _convReplayHumanTypeIndex = 0;
+    _convReplayHumanSendPending = false;
+    _convReplayHumanSent = false;
     tagged.forEach(item => { _convReplaySeenEls.add(item.el); item.el.classList.add('conv-replay-hidden'); });
 
     let controls = document.getElementById('convReplayControls');
@@ -18048,6 +18059,11 @@
       _convReplayRevealAllWordsInstantly(_convReplayWordContainer);
       _convReplayClearWordReveal();
     }
+    // Also bail out of a "human is typing" animation that might be
+    // mid-flight for the CURRENT item — otherwise a stray draft is left in
+    // the composer and the next user turn resumes from the wrong index.
+    const _pendingItem = _convReplayEvents[_convReplayMsgIndex];
+    _convReplayResetHumanTyping(_pendingItem ? _pendingItem.paneId : null);
     while (_convReplayMsgIndex < _convReplayEvents.length) {
       const item = _convReplayEvents[_convReplayMsgIndex];
       item.el.classList.remove('conv-replay-hidden');
@@ -18166,6 +18182,9 @@
       _convReplayRevealAllWordsInstantly(_convReplayTextContainer(item.el));
     });
     _convReplayClearWordReveal();
+    // Escape/Skip-to-end mid "human is typing" must not leave a fake draft
+    // sitting in the real composer.
+    _convReplayResetHumanTyping();
     _convReplayEvents = [];
     _convReplaySeenEls = null;
     const controls = document.getElementById('convReplayControls');
@@ -18187,6 +18206,86 @@
     if ($view) $view.scrollTop = $view.scrollHeight;
   }
 
+  // Clears any in-progress "human is typing" state and, if a draft got
+  // stranded mid-animation (paused, skipped, or replay exited), wipes it
+  // from the real composer(s) instead of leaving fake typed text behind.
+  function _convReplayResetHumanTyping(paneId) {
+    _convReplayHumanTypeIndex = 0;
+    _convReplayHumanSendPending = false;
+    _convReplayHumanSent = false;
+    const inputs = paneId != null
+      ? [composerInputForPane(paneId)].filter(Boolean)
+      : Array.from(document.querySelectorAll('.conv-input-bar textarea.gc-replay-typing, .conv-input-bar input.gc-replay-typing'));
+    inputs.forEach(el => {
+      if (el.classList.contains('gc-replay-typing')) {
+        el.value = '';
+        el.classList.remove('gc-replay-typing');
+      }
+    });
+  }
+
+  // Drives the "human is typing this reply" illusion for one replay tick —
+  // same contract as the group-chat replay's _gcReplayHumanStep. Returns
+  // true once the message has been fully typed AND "sent" (composer
+  // cleared); the caller should then reveal the bubble immediately, fully
+  // formed. Returns false while still mid-type/mid-send-pause; this
+  // function schedules its own continuation via playNextConvReplayStep.
+  function _convReplayHumanStep(item) {
+    const textEl = _convReplayTextContainer(item.el);
+    const plainText = (textEl ? textEl.textContent : item.el.textContent || '').trim();
+    const inputEl = composerInputForPane(item.paneId);
+    if (!inputEl || !plainText) return true;  // nothing to animate — just show the bubble
+
+    if (_convReplayHumanSent) {
+      _convReplayHumanSent = false;
+      return true;
+    }
+
+    if (_convReplayHumanTypeIndex < plainText.length) {
+      if (_convReplayHumanTypeIndex === 0) {
+        inputEl.value = '';
+        inputEl.classList.add('gc-replay-typing');
+        try { inputEl.focus({ preventScroll: true }); } catch (_) { try { inputEl.focus(); } catch (_) {} }
+      }
+      const step = _convReplaySpeed >= 4 ? 4 : (_convReplaySpeed >= 2 ? 2 : 1);
+      _convReplayHumanTypeIndex = Math.min(plainText.length, _convReplayHumanTypeIndex + step);
+      inputEl.value = plainText.slice(0, _convReplayHumanTypeIndex);
+      const charDelay = Math.max(12, Math.min(45, 900 / plainText.length)) / _convReplaySpeed;
+      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, charDelay);
+      return false;
+    }
+
+    if (!_convReplayHumanSendPending) {
+      // Finished typing — hold a beat so the full text is readable, then
+      // "send": clear the composer and flash its send button.
+      _convReplayHumanSendPending = true;
+      _convReplayTimeout = setTimeout(() => {
+        _convReplayTimeout = null;
+        inputEl.value = '';
+        inputEl.classList.remove('gc-replay-typing');
+        const sendBtn = document.querySelector(`.conv-pane[data-pane-id="${item.paneId}"] .send-btn`) || $convSendBtn;
+        if (sendBtn) {
+          sendBtn.classList.add('gc-replay-send-flash');
+          setTimeout(() => sendBtn.classList.remove('gc-replay-send-flash'), 240);
+        }
+        _convReplayHumanTypeIndex = 0;
+        _convReplayHumanSendPending = false;
+        _convReplayHumanSent = true;
+        playNextConvReplayStep();
+      }, Math.max(400, 700 / _convReplaySpeed));
+      return false;
+    }
+
+    // sendPending was already true when we got here — the scheduled timeout
+    // above got cancelled mid-flight (a pause landing in that ~700ms beat).
+    // Finish the send synchronously rather than stranding the typed text.
+    inputEl.value = '';
+    inputEl.classList.remove('gc-replay-typing');
+    _convReplayHumanTypeIndex = 0;
+    _convReplayHumanSendPending = false;
+    return true;
+  }
+
   function playNextConvReplayStep() {
     if (!_convReplayActive || _convReplayPaused) return;
     if (_convReplayMsgIndex >= _convReplayEvents.length) {
@@ -18195,6 +18294,15 @@
     }
 
     const item = _convReplayEvents[_convReplayMsgIndex];
+    const isUserTurn = item.meaningful && item.el.classList.contains('user_text');
+
+    // User turns: simulate typing into the real composer, then "send" —
+    // the bubble stays hidden and untouched until that finishes, instead
+    // of unhiding now and revealing word-by-word (annotation: "make the
+    // typing look like it's happening in the input box, and then it
+    // submits ... in a one-shot").
+    if (isUserTurn && !_convReplayHumanStep(item)) return;
+
     item.el.classList.remove('conv-replay-hidden');
     _convReplayMsgIndex++;
     _scrollConvReplayToBottom(item.paneId);
@@ -18213,6 +18321,15 @@
       const charCount = (item.el.textContent || '').length;
       const delay = Math.max(1200, Math.min(3500, charCount * 4)) / _convReplaySpeed;
       _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, delay);
+      return;
+    }
+
+    if (isUserTurn) {
+      // Already "typed" it into the composer above — reveal the bubble
+      // instantly (one-shot submit) instead of word-by-word.
+      _convReplayRevealAllWordsInstantly(container);
+      if (_convReplayMsgIndex >= _convReplayEvents.length) { renderConvReplayControls(); return; }
+      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 400 / _convReplaySpeed);
       return;
     }
     _convReplayRevealWords(item, container, 0);
@@ -46080,10 +46197,10 @@
   const _systemThemeMQ = window.matchMedia('(prefers-color-scheme: light)');
 
   const CONV_BG_STORAGE_KEY = 'ccc-conv-bg-by-conversation';
-  const CONV_BG_DEFAULT = 'charcoal';
+  const CONV_BG_DEFAULT = 'stitch';
   // CCC-158: light-theme counterpart to the dark default. An UNpicked
-  // conversation should follow the app colour scheme — charcoal (≈ the dark
-  // --bg) in dark, a bright default in light — instead of forcing dark.
+  // conversation should follow the app colour scheme — the Stitch palette
+  // in dark, a bright default in light — instead of forcing dark.
   const CONV_BG_DEFAULT_LIGHT = 'paper';
   function _effectiveThemeIsLight() {
     return document.documentElement.getAttribute('data-theme') === 'light';
