@@ -17531,7 +17531,7 @@
       body.scrollTop = body.scrollHeight;
 
       const totalChars = msg.rawBody ? msg.rawBody.length : 100;
-      let delay = Math.max(1500, Math.min(2500, totalChars * 5));
+      let delay = Math.max(2500, Math.min(4500, totalChars * 6));
       delay = delay / _gcReplaySpeed;
 
       _gcReplayMsgIndex++;
