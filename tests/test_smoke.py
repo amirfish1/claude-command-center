@@ -1275,6 +1275,15 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("ccc-done-collapsed", app_js)
         self.assertNotIn(".conv-done-section", app_css)
 
+    def test_kanban_tool_groups_stay_expanded(self):
+        """Kanban comments/blocks are conversation context, not routine tools."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function toolCallCarriesConversationContext(toolCall)", app_js)
+        self.assertIn("key === 'ask_user_question' || key.startsWith('kanban_')", app_js)
+        self.assertIn("if (!on && toolGroupCarriesConversationContext(g)) return;", app_js)
+        self.assertIn("if (toolGroupCarriesConversationContext(_currentToolGroup))", app_js)
+
     def test_active_sidebar_inprogress_section_is_headerless(self):
         """The Active tab should not repeat an In Progress header/count."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -3633,8 +3642,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("assistantNodeTextForCopy(eventEl)", app_js)
         self.assertIn("speakTextDirect(text, convId, paneId, btn)", app_js)
         self.assertIn("let html = assistantMessageActionsHtml(ev)", app_js)
+        self.assertIn("const assistantBlocks = Array.isArray(ev.blocks)", app_js)
+        self.assertIn("for (const b of assistantBlocks)", app_js)
+        self.assertIn("function whatsappBridgeSenderHtml(ev)", app_js)
+        self.assertIn("ev.sender_name || ev.pushName || ev.sender_id", app_js)
+        self.assertIn("bridgeSenderHtml + linkifyPastedImages", app_js)
         self.assertIn(".assistant-message-actions", app_css)
         self.assertIn(".assistant-message-action", app_css)
+        self.assertIn(".conversations-view .whatsapp-bridge-sender", app_css)
         assistant_row_css = app_css[
             app_css.index(".conversations-view .event.assistant {"):
             app_css.index("/* Meta (line number + timestamp)", app_css.index(".conversations-view .event.assistant {"))
@@ -9119,6 +9134,116 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._HERMES_GATEWAY_CACHE["by_session"] = {}
                 server._ENGINE_DETECT_CACHE.clear()
 
+    def test_hermes_kanban_worker_rows_use_task_title(self):
+        """Kanban-launched Hermes workers start with a generic
+        "work kanban task t_..." user prompt. The actual useful title lives in
+        the kanban_show tool result, so CCC should surface that title."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            db = root / "profiles" / "chuckrealtor" / "state.db"
+            db.parent.mkdir(parents=True)
+            con = sqlite3.connect(db)
+            try:
+                con.executescript("""
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY, source TEXT, model TEXT, title TEXT,
+                        started_at REAL, ended_at REAL, parent_session_id TEXT,
+                        tool_call_count INTEGER, cwd TEXT, archived INTEGER
+                    );
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,
+                        role TEXT, content TEXT, tool_calls TEXT, tool_name TEXT,
+                        tool_call_id TEXT, timestamp REAL, reasoning TEXT, active INTEGER
+                    );
+                """)
+                sid = "20260705_173708_48d610"
+                con.execute(
+                    "INSERT INTO sessions (id,source,model,title,started_at,ended_at,"
+                    "parent_session_id,tool_call_count,cwd,archived) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (sid, "cli", "gpt-5.5", "", 1783273030.0, 0.0, "", 22, "/tmp/chuck", 0),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+                    (sid, "user", "work kanban task t_5ca440b4", 1783273031.0),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+                    (sid, "tool", json.dumps({
+                        "task": {
+                            "id": "t_5ca440b4",
+                            "title": "Ask #19: also skip tracing these expired listings",
+                        }
+                    }), 1783273032.0),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            orig_db = server.HERMES_STATE_DB
+            orig_profiles = server.HERMES_PROFILES_DIR
+            orig_gateway = server.HERMES_GATEWAY_SESSIONS
+            server.HERMES_STATE_DB = root / "missing-state.db"
+            server.HERMES_PROFILES_DIR = root / "profiles"
+            server.HERMES_GATEWAY_SESSIONS = root / "sessions" / "sessions.json"
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._HERMES_DB_INDEX["key"] = None
+            server._HERMES_DB_INDEX["by_session"] = {}
+            server._HERMES_GATEWAY_CACHE["key"] = None
+            server._HERMES_GATEWAY_CACHE["by_session"] = {}
+            try:
+                rows = server.find_hermes_conversations(repo_only=False)
+                row = next(r for r in rows if r["session_id"] == sid)
+                self.assertIn("Ask #19", row["display_name"])
+                self.assertEqual(row["hermes_kanban_task_id"], "t_5ca440b4")
+                self.assertEqual(
+                    row["hermes_kanban_task_title"],
+                    "Ask #19: also skip tracing these expired listings",
+                )
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server.HERMES_PROFILES_DIR = orig_profiles
+                server.HERMES_GATEWAY_SESSIONS = orig_gateway
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
+                server._HERMES_DB_INDEX["key"] = None
+                server._HERMES_DB_INDEX["by_session"] = {}
+                server._HERMES_GATEWAY_CACHE["key"] = None
+                server._HERMES_GATEWAY_CACHE["by_session"] = {}
+
+    def test_hermes_kanban_tool_arguments_are_not_truncated(self):
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        body = (
+            "Blocker details for Ask #19: FlexMLS returned a Client Challenge "
+            "CAPTCHA instead of listing HTML/data, so the worker needs a CSV, "
+            "export, screenshot text, or pasted address list before it can run "
+            "the skip trace. This sentence makes the payload long enough to "
+            "hit the generic prompt-fragment truncation path that used to hide "
+            "the important blocker details in the transcript."
+        )
+        block = server._hermes_tool_block({
+            "id": "call_1",
+            "name": "kanban_comment",
+            "args": {
+                "board": "example-board",
+                "task_id": "t_5ca440b4",
+                "body": body,
+            },
+        })
+
+        self.assertEqual(block["command_kind"], "Kanban arguments")
+        self.assertEqual(block["detail"], block["command"])
+        self.assertIn('"body":', block["detail"])
+        self.assertIn(body, block["detail"])
+        self.assertNotIn("...", block["detail"])
+
     def test_hermes_rows_are_not_repo_scoped(self):
         """Hermes is a non-repo-scoped source: a session whose cwd is outside
         the requested repo (or empty) must still surface under repo_only=True,
@@ -9363,9 +9488,17 @@ class TestRepoContextHelpers(unittest.TestCase):
                 pending_events = server.parse_conversation(pending_sid, use_cache=False)["events"]
                 self.assertTrue(any("Ask #22" in e.get("text", "") for e in pending_events))
                 self.assertTrue(any("sample leads" in e.get("text", "") for e in pending_events))
+                for ev in pending_events:
+                    if ev.get("type") == "assistant":
+                        self.assertIsInstance(ev.get("blocks"), list)
+                        self.assertTrue(ev["blocks"])
 
                 bridge_events = server.parse_conversation(bridge_sid, use_cache=False)["events"]
                 self.assertTrue(any("Separate bridge-only chat" in e.get("text", "") for e in bridge_events))
+                for ev in bridge_events:
+                    if ev.get("type") == "assistant":
+                        self.assertIsInstance(ev.get("blocks"), list)
+                        self.assertTrue(ev["blocks"])
             finally:
                 server.HERMES_STATE_DB = orig_db
                 server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge

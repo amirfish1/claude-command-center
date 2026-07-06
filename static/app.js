@@ -23045,6 +23045,97 @@
           ? _nyaRowBlockHtml(_nyaInlineItem, _nyaInlineCollapsed)
           : '');
     };
+    const _repeatGroupHash = (s) => {
+      let h = 0;
+      const str = String(s || '');
+      for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) - h) + str.charCodeAt(i);
+        h |= 0;
+      }
+      return Math.abs(h).toString(36);
+    };
+    const _repeatGroupRawTitle = (c) => {
+      if (!c) return '';
+      const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
+      if ((c.name_overridden || c.spawn_named) && c.display_name) return c.display_name;
+      if (c.display_name && c.display_name !== c.ai_title) return c.display_name;
+      if (c.ai_title) return c.ai_title;
+      if (c.display_name) return c.display_name;
+      if (cleanFirst) return firstSentenceOf(cleanFirst, 60);
+      return '';
+    };
+    const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatGroupRawTitle(c) || '(untitled)');
+    const _repeatGroupTitleKey = (title) => {
+      const normalized = String(title || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (normalized.length > 48) return normalized.slice(0, 32);
+      return normalized;
+    };
+    const _repeatGroupKey = (c) => {
+      const title = _repeatGroupTitleKey(_repeatGroupTitle(c));
+      if (!title || title === '(untitled)') return '';
+      const engine = String(c.engine || c.source || '').trim().toLowerCase();
+      const model = String(c.model || '').trim().toLowerCase();
+      const folder = String(c.folder_path || c.folder_label_chip || '').trim().toLowerCase();
+      return [title, engine, model, folder].join('\n');
+    };
+    const _repeatGroupStorageKey = (key) => 'ccc-repeat-row-group-expanded:' + _repeatGroupHash(key);
+    const _repeatGroupExpanded = (key, cards) => {
+      if ((cards || []).some(c => c && (c.id === currentConversation || c.session_id === currentConversation))) return true;
+      try { return localStorage.getItem(_repeatGroupStorageKey(key)) === '1'; }
+      catch (_) { return false; }
+    };
+    const _renderRepeatGroup = (cards, opts, key) => {
+      if (!cards || cards.length < 2) return cards.map(c => _renderRow(c, opts)).join('');
+      const first = cards[0] || {};
+      const expanded = _repeatGroupExpanded(key, cards);
+      const latest = cards.reduce((best, c) => Math.max(best, c.modified || c.last_interacted || 0), 0);
+      const title = _repeatGroupTitle(first);
+      const engine = String(first.engine || first.source || '').trim();
+      const model = String(first.model || '').trim();
+      const meta = [engine, model].filter(Boolean).join(' · ');
+      const rel = latest ? relativeTime(latest) : '';
+      const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
+      return '<div class="conv-repeat-group' + (expanded ? '' : ' is-collapsed') + '"'
+        + ' data-role="repeat-row-group" data-repeat-key="' + keyAttr + '">'
+        + '<button type="button" class="conv-repeat-group-header" data-role="repeat-row-group-toggle"'
+        + ' aria-expanded="' + (expanded ? 'true' : 'false') + '"'
+        + ' title="Expand repeated rows">'
+        + '<span class="conv-repeat-group-arrow">' + (expanded ? '&#9662;' : '&#9656;') + '</span>'
+        + '<span class="conv-repeat-group-title">' + escapeHtml(title) + '</span>'
+        + (meta ? '<span class="conv-repeat-group-meta">' + escapeHtml(meta) + '</span>' : '')
+        + '<span class="conv-repeat-group-count">' + cards.length + '</span>'
+        + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
+        + '</button>'
+        + '<div class="conv-repeat-group-body">'
+        + cards.map(c => _renderRow(c, opts)).join('')
+        + '</div>'
+        + '</div>';
+    };
+    const _renderRowsWithRepeatGroups = (cards, opts = {}) => {
+      const chunks = [];
+      let curKey = null;
+      let curCards = [];
+      const flush = () => {
+        if (!curCards.length) return;
+        chunks.push(curKey && curCards.length > 1
+          ? _renderRepeatGroup(curCards, opts, curKey)
+          : curCards.map(c => _renderRow(c, opts)).join(''));
+        curKey = null;
+        curCards = [];
+      };
+      for (const c of (cards || [])) {
+        const key = _repeatGroupKey(c);
+        if (!key || (curKey && key !== curKey)) flush();
+        if (!key) {
+          chunks.push(_renderRow(c, opts));
+          continue;
+        }
+        curKey = key;
+        curCards.push(c);
+      }
+      flush();
+      return chunks.join('');
+    };
     // Active list keeps the date-gap separators so morning/evening
     // boundaries stay visible while scanning.
     //
@@ -23124,11 +23215,32 @@
       // ("18H GAP", "12H GAP", etc.) are noise that pushes content down
       // without adding signal.
       let _gapShown = false;
-      return cards.map((c, i, arr) => {
+      const chunks = [];
+      let curKey = null;
+      let curCards = [];
+      const flush = () => {
+        if (!curCards.length) return;
+        chunks.push({ cards: curCards, key: curKey, mtime: (curCards[0] && curCards[0].modified) || 0 });
+        curCards = [];
+        curKey = null;
+      };
+      for (const c of (cards || [])) {
+        const key = _repeatGroupKey(c);
+        if (!key) {
+          flush();
+          chunks.push({ cards: [c], key: '', mtime: c.modified || 0 });
+          continue;
+        }
+        if (curKey && curKey !== key) flush();
+        curKey = key;
+        curCards.push(c);
+      }
+      flush();
+      return chunks.map((chunk, i, arr) => {
         let separator = '';
         if (i > 0 && !_gapShown) {
-          const newer = (arr[i - 1] && arr[i - 1].modified) || 0;
-          const older = (c.modified) || 0;
+          const newer = (arr[i - 1] && arr[i - 1].mtime) || 0;
+          const older = (chunk && chunk.mtime) || 0;
           if (newer && older && (newer - older) >= GAP_SEPARATOR_S) {
             separator = '<div class="conv-gap-separator">'
               + '<span class="conv-gap-line"></span>'
@@ -23138,7 +23250,7 @@
             _gapShown = true;
           }
         }
-        return separator + _renderRow(c, opts);
+        return separator + _renderRowsWithRepeatGroups(chunk.cards, opts);
       }).join('');
     };
     // Same gap-separator behavior as _flatRowsWithSeparators, but the
@@ -23149,10 +23261,11 @@
       const items = [];
       for (const c of sessionCards) {
         items.push({
+          type: 'session',
+          card: c,
           pinRank: c.pinned ? _pinRankValue(c) : Infinity,
           mtime: c.modified || 0,
           id: c.session_id || c.id || '',
-          html: _renderRow(c, opts),
         });
       }
       for (const gc of (gcItems || [])) items.push(gc);
@@ -23172,7 +23285,36 @@
         return (b.mtime || 0) - (a.mtime || 0);
       });
       let _gapShown = false;
-      return items.map((it, i, arr) => {
+      const chunks = [];
+      let curKey = null;
+      let curCards = [];
+      const flush = () => {
+        if (!curCards.length) return;
+        chunks.push({
+          mtime: (curCards[0] && curCards[0].modified) || 0,
+          html: _renderRowsWithRepeatGroups(curCards, opts),
+        });
+        curKey = null;
+        curCards = [];
+      };
+      for (const it of items) {
+        if (it.type !== 'session') {
+          flush();
+          chunks.push({ mtime: it.mtime || 0, html: it.html });
+          continue;
+        }
+        const key = _repeatGroupKey(it.card);
+        if (!key) {
+          flush();
+          chunks.push({ mtime: it.mtime || 0, html: _renderRow(it.card, opts) });
+          continue;
+        }
+        if (curKey && curKey !== key) flush();
+        curKey = key;
+        curCards.push(it.card);
+      }
+      flush();
+      return chunks.map((it, i, arr) => {
         let separator = '';
         if (i > 0 && !_gapShown) {
           const newer = (arr[i - 1] && arr[i - 1].mtime) || 0;
@@ -23661,14 +23803,14 @@
         }).join('');
         let body;
         if (archiveObjectId) {
-          const rowsHtml = cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })).join('');
+          const rowsHtml = _renderRowsWithRepeatGroups(cards, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup });
           const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);
           const emptyHint = (!cards.length && !_objDrafts.length && !hasChildObjects)
             ? '<div class="conv-object-empty-hint">Empty — drag a session here, or use +.</div>' : '';
           body = rowsHtml + _draftsHtml + emptyHint;
         } else {
           body = cards.length
-            ? cards.map(c => _renderRow(c, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })).join('')
+            ? _renderRowsWithRepeatGroups(cards, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })
             : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         }
         // GOAL-1 status + immediate-objective — real custom objects only (not
@@ -24078,12 +24220,48 @@
         });
         return groups.map(group => {
           const nestedRows = _currentSessionsTreeRows(group.cards);
-          const rowsHtml = nestedRows.map(item => _renderRow(item.card, {
-            suppressFolderChip: false,
-            quietTitleChrome: true,
-            currentChildDepth: item.depth,
-            elevateToObject: true
-          })).join('');
+          const chunks = [];
+          let curCards = [];
+          let curKey = null;
+          const flushCards = () => {
+            if (!curCards.length) return;
+            chunks.push(_renderRowsWithRepeatGroups(curCards, {
+              suppressFolderChip: false,
+              quietTitleChrome: true,
+              elevateToObject: true
+            }));
+            curCards = [];
+            curKey = null;
+          };
+          nestedRows.forEach(item => {
+            if (!item || !item.card || item.depth > 0) {
+              flushCards();
+              if (item && item.card) {
+                chunks.push(_renderRow(item.card, {
+                  suppressFolderChip: false,
+                  quietTitleChrome: true,
+                  currentChildDepth: item.depth,
+                  elevateToObject: true
+                }));
+              }
+              return;
+            }
+            const key = _repeatGroupKey(item.card);
+            if (!key) {
+              flushCards();
+              chunks.push(_renderRow(item.card, {
+                suppressFolderChip: false,
+                quietTitleChrome: true,
+                elevateToObject: true
+              }));
+              return;
+            }
+            if (curKey && curKey !== key) flushCards();
+            curKey = key;
+            curCards.push(item.card);
+          });
+          flushCards();
+          const rowsHtml = chunks.join('');
           return '<div class="conv-current-object-group" data-current-object-group="' + escapeAttr(group.key) + '" data-object-drop-zone="' + escapeAttr(group.key) + '">'
             + '<div class="conv-current-object-heading">'
             +   '<span class="conv-current-object-title">' + escapeHtml(group.title) + '</span>'
@@ -24123,10 +24301,29 @@
               clusters[clusters.length - 1].rows.push(item);
             }
           }
-          const entries = clusters.map(cl => ({
-            mtime: cl.mtime,
-            html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
-          }));
+          const entries = [];
+          let pendingSingles = [];
+          const flushSingles = () => {
+            if (!pendingSingles.length) return;
+            const cards = pendingSingles.map(item => item.card);
+            entries.push({
+              mtime: (cards[0] && cards[0].modified) || 0,
+              html: _renderRowsWithRepeatGroups(cards, { suppressFolderChip: false, quietTitleChrome: true }),
+            });
+            pendingSingles = [];
+          };
+          for (const cl of clusters) {
+            if (cl.rows.length === 1 && cl.rows[0].depth === 0) {
+              pendingSingles.push(cl.rows[0]);
+            } else {
+              flushSingles();
+              entries.push({
+                mtime: cl.mtime,
+                html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
+              });
+            }
+          }
+          flushSingles();
           const gcs = (gcItems || []).slice().sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
           const merged = [];
           let gi = 0;
@@ -24296,7 +24493,7 @@
           + ' data-folder-label="' + escapeHtml(folder) + '"';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('inprogress', folder, cards.length, hue, orphan, collapseKey, headerAttrs, dropPath)
-          + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
+          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })
           + '</div>';
       };
       // Each folder group becomes one mtime-stamped item; group chats
@@ -24705,7 +24902,7 @@
         const archivedRepoPath = cards[0].folder_path || '';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)
-          + cards.map(c => _renderRow(c, { suppressFolderChip: true })).join('')
+          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })
           + '</div>';
       }).join('');
       // Archived group chats live in the Trash section (CCC-468), so the
@@ -24717,9 +24914,10 @@
       const _archivedItems = [];
       for (const c of _allTabConvs) {
         _archivedItems.push({
+          type: 'session',
+          card: c,
           pinRank: c.pinned ? _pinRankValue(c) : Infinity,
           mtime: c.modified || c.last_interacted || 0,
-          html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
         });
       }
       // Archived group chats live in the Trash section (CCC-468).
@@ -24732,7 +24930,36 @@
         if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
         return (b.mtime || 0) - (a.mtime || 0);
       });
-      _arcRows = _archivedItems.map(it => it.html).join('');
+      const _arcChunks = [];
+      let _arcCurCards = [];
+      let _arcCurKey = null;
+      const _arcFlushCards = () => {
+        if (!_arcCurCards.length) return;
+        _arcChunks.push(_renderRowsWithRepeatGroups(
+          _arcCurCards,
+          { suppressFolderChip: _isSpecificFolderFilter }
+        ));
+        _arcCurCards = [];
+        _arcCurKey = null;
+      };
+      for (const it of _archivedItems) {
+        if (it.type !== 'session') {
+          _arcFlushCards();
+          _arcChunks.push(it.html || '');
+          continue;
+        }
+        const key = _repeatGroupKey(it.card);
+        if (!key) {
+          _arcFlushCards();
+          _arcChunks.push(_renderRow(it.card, { suppressFolderChip: _isSpecificFolderFilter }));
+          continue;
+        }
+        if (_arcCurKey && _arcCurKey !== key) _arcFlushCards();
+        _arcCurKey = key;
+        _arcCurCards.push(it.card);
+      }
+      _arcFlushCards();
+      _arcRows = _arcChunks.join('');
       _arcCount = _archivedItems.length + _archivedGroupChatsForRender.length + _trashConvs.length;
     }
 
@@ -25019,6 +25246,26 @@
         }
       }
     }
+    $convList.querySelectorAll('[data-role="repeat-row-group-toggle"]').forEach(btn => {
+      const toggle = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const group = btn.closest('[data-role="repeat-row-group"]');
+        if (!group) return;
+        const nowExpanded = group.classList.toggle('is-collapsed') === false;
+        const key = group.getAttribute('data-repeat-key') || '';
+        if (key) {
+          try {
+            if (nowExpanded) localStorage.setItem(key, '1');
+            else localStorage.removeItem(key);
+          } catch (_) {}
+        }
+        btn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
+        const arrow = btn.querySelector('.conv-repeat-group-arrow');
+        if (arrow) arrow.innerHTML = nowExpanded ? '&#9662;' : '&#9656;';
+      };
+      btn.addEventListener('click', toggle);
+    });
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
     if ($archivedToggle) {
@@ -35396,8 +35643,9 @@
   }
   function applyConvVerbose(on) {
     document.querySelectorAll('.tool-call-group').forEach(g => {
-      // Never re-collapse a group holding an AskUserQuestion (CCC-46).
-      if (!on && g.querySelector('.tool-call.ask-user-question')) return;
+      // Never re-collapse groups that carry conversation/control-plane
+      // context rather than routine tool noise.
+      if (!on && toolGroupCarriesConversationContext(g)) return;
       g.classList.toggle('collapsed', !on);
     });
     document.querySelectorAll('details.tool-command-disclosure').forEach(d => { d.open = on; });
@@ -35414,7 +35662,7 @@
       return '';
     }
     const kind = String((block && block.command_kind) || '').trim();
-    const label = /script/i.test(kind) ? 'View script' : 'View command';
+    const label = /argument/i.test(kind) ? 'View arguments' : (/script/i.test(kind) ? 'View script' : 'View command');
     const kindHtml = kind
       ? '<span class="tool-command-kind">' + escapeHtml(kind) + '</span>'
       : '';
@@ -35499,6 +35747,16 @@
       case 'ExitPlanMode': return 'Exited plan mode';
       default:             return detail ? 'Ran ' + displayName + ': ' + trunc(detail, 40) : 'Ran ' + (displayName || 'tool');
     }
+  }
+
+  function toolCallCarriesConversationContext(toolCall) {
+    const key = normalizedToolKey(toolCallName(toolCall));
+    return key === 'ask_user_question' || key.startsWith('kanban_');
+  }
+
+  function toolGroupCarriesConversationContext(group) {
+    if (!group) return false;
+    return Array.from(group.querySelectorAll('.tool-call')).some(toolCallCarriesConversationContext);
   }
 
   function splitShellWords(cmd) {
@@ -36081,6 +36339,13 @@
         break;
       }
     }
+    function whatsappBridgeSenderHtml(ev) {
+      if (!ev || ev.subtype !== 'hermes_whatsapp_bridge') return '';
+      const sender = String(ev.sender_name || ev.pushName || ev.sender_id || '').trim();
+      if (!sender) return '';
+      const title = ev.chat_id ? ('WhatsApp sender in ' + ev.chat_id) : 'WhatsApp sender';
+      return '<div class="whatsapp-bridge-sender" title="' + escapeAttr(title) + '">' + escapeHtml(sender) + '</div>';
+    }
     for (const ev of events) {
       if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
@@ -36488,6 +36753,7 @@
         if (_rawText && !String(cleanedText || '').trim()) {
           cleanedText = ev.text;
         }
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
         const notification = parseTaskNotificationBlock(cleanedText);
         if (notification) div.classList.add('task-notification-event');
         // Collapse /compact-resume blocks into a styled card — they're
@@ -36513,7 +36779,7 @@
         if (notification) {
           textHtml = renderTaskNotificationBlock(notification, cleanedText, true);
         } else if (compactCardHtml) {
-          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + compactCardHtml + '</div>';
+          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + compactCardHtml + '</div>';
         } else if (cleanedText) {
           if (_isPinned) {
             // For the pinned original-ask bubble: split into first sentence + rest so
@@ -36521,15 +36787,16 @@
             const _parts = splitFirstSentence(cleanedText);
             const _imagesHtml = renderImageDescriptors(ev.images);
             textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">'
+              + bridgeSenderHtml
               + '<span class="ask-first">' + linkifyPastedImages(escapeHtml(_parts[0])) + '</span>'
               + (_parts[1] ? '<span class="ask-rest">' + linkifyPastedImages(escapeHtml(_parts[1])) + '</span>' : '')
               + _imagesHtml
               + '</div>';
           } else {
-            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>';
+            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>';
           }
         } else {
-          textHtml = '';
+          textHtml = bridgeSenderHtml ? '<div class="user-msg" dir="auto" data-raw-text="">' + bridgeSenderHtml + '</div>' : '';
         }
         div.innerHTML = '<span class="label">User</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
@@ -36549,7 +36816,12 @@
         const blockParts = [];
         const agentAnswerParts = [];
         let lastToolPartIdx = -1;
-        for (const b of ev.blocks) {
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
+        if (bridgeSenderHtml) blockParts.push(bridgeSenderHtml);
+        const assistantBlocks = Array.isArray(ev.blocks)
+          ? ev.blocks
+          : (String(ev.text || '').trim() ? [{ kind: 'text', text: String(ev.text || '') }] : []);
+        for (const b of assistantBlocks) {
           if (b.kind === 'tool_use') {
             // Seed the subagent-tab label when a Task tool_use lands in
             // the parent JSONL — gives the tab a real name (description
@@ -36872,10 +37144,10 @@
           _currentToolCount = 0;
         }
         _currentToolGroup.querySelector('.tool-call-group-body').appendChild(div);
-        // CCC-46: an AskUserQuestion carries the question + chosen answer —
-        // important context. Expand its group on the spot so it never hides
-        // behind a truncated "Question: … Options: Location…" collapse.
-        if (div.querySelector('.tool-call.ask-user-question')) {
+        // AskUserQuestion and Kanban state writes carry conversation/control-
+        // plane context. Keep those readable instead of hiding them behind a
+        // compact tool batch summary.
+        if (toolGroupCarriesConversationContext(_currentToolGroup)) {
           _currentToolGroup.classList.remove('collapsed');
           var _qArrow = _currentToolGroup.querySelector('.tcg-arrow');
           if (_qArrow) _qArrow.textContent = '▼';
@@ -37016,13 +37288,12 @@
     // Re-hide the inline duplicate of a pending question after the transcript
     // rebuilds (it re-creates the .ask-user-block without the hide class).
     try { _syncLiveQuestionDuplicateHide(); } catch (_) {}
-    // CCC-46: an answered AskUserQuestion otherwise collapses into the fused
-    // "Ran 1 command ▶" group, truncated to "Question: … Options: Location…".
-    // The question (and which option was chosen) is important context to keep
-    // readable, so auto-expand any tool group that contains a question.
+    // Conversation/control-plane tools otherwise collapse into the fused
+    // "Ran N commands ▶" group. Their details are important context, so keep
+    // those groups expanded after any transcript rebuild.
     try {
       $view.querySelectorAll('.tool-call-group.collapsed').forEach(function (g) {
-        if (g.querySelector('.tool-call.ask-user-question')) {
+        if (toolGroupCarriesConversationContext(g)) {
           g.classList.remove('collapsed');
           var _arrow = g.querySelector('.tcg-arrow');
           if (_arrow) _arrow.textContent = '▼';
