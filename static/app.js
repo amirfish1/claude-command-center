@@ -17539,6 +17539,13 @@
       return false;
     }
 
+    // sendPending was already true when we got here — the scheduled timeout
+    // above got cancelled mid-flight (a pause landing in that ~700ms beat).
+    // Finish the send synchronously rather than stranding the typed text.
+    inputEl.value = '';
+    inputEl.classList.remove('gc-replay-typing');
+    _gcReplayHumanTypeIndex = 0;
+    _gcReplayHumanSendPending = false;
     return true;
   }
 
