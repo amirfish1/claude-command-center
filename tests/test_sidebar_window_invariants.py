@@ -71,3 +71,34 @@ def test_inprogress_window_derives_from_archive_window(app_js):
         "it reads a separate localStorage key again, the visible toggle and the "
         "actual data window can diverge — the CCC-168 dishonest-toggle bug."
     )
+
+
+def test_all_tab_cross_repo_ready_to_merge_respects_window(app_js):
+    """The All tab must not reintroduce old rows from full archiveData after
+    renderArchiveList already applied the 1d/7d window."""
+    m = re.search(
+        r"for \(const r of archiveData\) \{(.*?)_crossRepoRtm = Array\.from",
+        app_js,
+        re.S,
+    )
+    assert m, "could not locate the cross-repo Ready-to-merge archiveData pass"
+    assert "_archiveWindowAllowsRow(r, _ipWindowCutoff)" in m.group(1), (
+        "The cross-repo Ready-to-merge rebuild reads full archiveData. It must "
+        "re-check _archiveWindowAllowsRow(), or old PR rows leak into the All "
+        "tab when the user selects 1d/7d."
+    )
+
+
+def test_all_tab_archived_group_chats_respect_window(app_js):
+    """Archived group-chat trash rows are not part of archiveRows, so they need
+    their own 1d/7d window filter before rendering in the All tab."""
+    m = re.search(
+        r"const _archivedGroupChatsForRender = _hideGroupChatsForSearch(.*?);\n    const _arcGrouping",
+        app_js,
+        re.S,
+    )
+    assert m, "could not locate _archivedGroupChatsForRender"
+    assert "_archiveWindowAllowsRow(gc, _ipWindowCutoff)" in m.group(1), (
+        "Archived group chats bypass archiveRows. They must be filtered with "
+        "_archiveWindowAllowsRow() so the All tab's 1d/7d/All control is honest."
+    )

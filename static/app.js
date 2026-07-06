@@ -2106,6 +2106,25 @@
     // cannot recover rows this one already hid — hence the "invisible toggle".
     return 'all';
   }
+  function _archiveWindowCutoff() {
+    const win = _archiveWindow();
+    const days = win === '7d' ? 7 : (win === '1d' ? 1 : null);
+    return days ? Math.floor(Date.now() / 1000) - (days * 24 * 3600) : null;
+  }
+  function _archiveWindowRowTs(row) {
+    if (!row) return 0;
+    const raw = row.modified || row.mtime || row.last_interacted
+      || row.last_activity || row.last_mtime || row.archived_at
+      || row.closed_at || row.started_at || 0;
+    const ts = Number(raw);
+    if (!Number.isFinite(ts) || ts <= 0) return 0;
+    return ts > 100000000000 ? Math.floor(ts / 1000) : ts;
+  }
+  function _archiveWindowAllowsRow(row, cutoff = _archiveWindowCutoff()) {
+    if (!cutoff) return true;
+    if (row && (row.pinned || row.source === 'hermes' || row.engine === 'hermes')) return true;
+    return _archiveWindowRowTs(row) >= cutoff;
+  }
   // In-progress "Details" toggle: when on, every In-progress row that has a
   // matching Needs-your-attention item renders that NYA block underneath it.
   // Persisted so the choice sticks across renders/reloads.
@@ -23010,15 +23029,12 @@
     const _rowsCompactOn = compactRowsOn();
     const _ipNyaOn = _ipNyaDetailsOn();
     const _ipWindow = _hasFolderChips ? _archiveWindow() : 'all';
-    const _ipWindowDays = _ipWindow === '7d' ? 7 : (_ipWindow === '1d' ? 1 : null);
-    const _ipWindowCutoff = _ipWindowDays
-      ? Math.floor(Date.now() / 1000) - (_ipWindowDays * 24 * 3600)
-      : null;
+    const _ipWindowCutoff = _archiveWindowCutoff();
     // Hermes rows are exempt from the In Progress window too (see the archive
     // window above) so a first-class Hermes conversation never gets windowed
     // out of the active list regardless of age.
     const _visibleSessionConvs = _hasFolderChips
-      ? (_ipWindowCutoff ? _sessionConvs.filter(c => c.pinned || c.source === 'hermes' || c.engine === 'hermes' || (c.modified || 0) >= _ipWindowCutoff) : _sessionConvs)
+      ? (_ipWindowCutoff ? _sessionConvs.filter(c => _archiveWindowAllowsRow(c, _ipWindowCutoff)) : _sessionConvs)
       : _sessionConvs;
     const _groupChatWindowTs = (chat) => {
       const raw = chat && (chat.last_activity || chat.last_mtime || chat.started_at || 0);
@@ -24360,6 +24376,7 @@
         if (!rowBelongsToKnownRepo(r)) continue;
         if (String(r.pr_state || '').toUpperCase() !== 'OPEN') continue;
         if (!r.tail_pr_number) continue;
+        if (!_archiveWindowAllowsRow(r, _ipWindowCutoff)) continue;
         if (r.archived) continue;
         const existing = _rtmByPr.get(r.tail_pr_number);
         if (!existing || (r.modified || 0) > (existing.modified || 0)) {
@@ -24582,7 +24599,9 @@
     const _arcHasFolderChips = _allTabConvs.concat(_trashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
-      : (Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []);
+      : (Array.isArray(_archivedGroupChats)
+          ? _archivedGroupChats.filter(gc => _archiveWindowAllowsRow(gc, _ipWindowCutoff))
+          : []);
     const _arcGrouping = (() => {
       try { return localStorage.getItem('ccc-archived-grouping') || 'time'; }
       catch (_) { return 'time'; }
@@ -40907,7 +40926,7 @@
     // Without this, old Hermes chats silently vanish in the all-repos view and
     // the only window control lives in the Archived section header.
     const _windowed = (_arcWindowCutoff && !q)
-      ? archiveRows.filter(c => c.pinned || c.source === 'hermes' || c.engine === 'hermes' || ((c.modified || c.mtime || 0) >= _arcWindowCutoff))
+      ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff))
       : archiveRows;
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
