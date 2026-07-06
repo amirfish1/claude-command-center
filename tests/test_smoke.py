@@ -9125,6 +9125,87 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._HERMES_GATEWAY_CACHE["by_session"] = {}
                 server._ENGINE_DETECT_CACHE.clear()
 
+    def test_hermes_kanban_worker_rows_use_task_title(self):
+        """Kanban-launched Hermes workers start with a generic
+        "work kanban task t_..." user prompt. The actual useful title lives in
+        the kanban_show tool result, so CCC should surface that title."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            db = root / "profiles" / "chuckrealtor" / "state.db"
+            db.parent.mkdir(parents=True)
+            con = sqlite3.connect(db)
+            try:
+                con.executescript("""
+                    CREATE TABLE sessions (
+                        id TEXT PRIMARY KEY, source TEXT, model TEXT, title TEXT,
+                        started_at REAL, ended_at REAL, parent_session_id TEXT,
+                        tool_call_count INTEGER, cwd TEXT, archived INTEGER
+                    );
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,
+                        role TEXT, content TEXT, tool_calls TEXT, tool_name TEXT,
+                        tool_call_id TEXT, timestamp REAL, reasoning TEXT, active INTEGER
+                    );
+                """)
+                sid = "20260705_173708_48d610"
+                con.execute(
+                    "INSERT INTO sessions (id,source,model,title,started_at,ended_at,"
+                    "parent_session_id,tool_call_count,cwd,archived) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (sid, "cli", "gpt-5.5", "", 1783273030.0, 0.0, "", 22, "/tmp/chuck", 0),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+                    (sid, "user", "work kanban task t_5ca440b4", 1783273031.0),
+                )
+                con.execute(
+                    "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
+                    (sid, "tool", json.dumps({
+                        "task": {
+                            "id": "t_5ca440b4",
+                            "title": "Ask #19: also skip tracing these expired listings",
+                        }
+                    }), 1783273032.0),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            orig_db = server.HERMES_STATE_DB
+            orig_profiles = server.HERMES_PROFILES_DIR
+            orig_gateway = server.HERMES_GATEWAY_SESSIONS
+            server.HERMES_STATE_DB = root / "missing-state.db"
+            server.HERMES_PROFILES_DIR = root / "profiles"
+            server.HERMES_GATEWAY_SESSIONS = root / "sessions" / "sessions.json"
+            server._HERMES_ID_CACHE["key"] = None
+            server._HERMES_ID_CACHE["ids"] = set()
+            server._HERMES_DB_INDEX["key"] = None
+            server._HERMES_DB_INDEX["by_session"] = {}
+            server._HERMES_GATEWAY_CACHE["key"] = None
+            server._HERMES_GATEWAY_CACHE["by_session"] = {}
+            try:
+                rows = server.find_hermes_conversations(repo_only=False)
+                row = next(r for r in rows if r["session_id"] == sid)
+                self.assertIn("Ask #19", row["display_name"])
+                self.assertEqual(row["hermes_kanban_task_id"], "t_5ca440b4")
+                self.assertEqual(
+                    row["hermes_kanban_task_title"],
+                    "Ask #19: also skip tracing these expired listings",
+                )
+            finally:
+                server.HERMES_STATE_DB = orig_db
+                server.HERMES_PROFILES_DIR = orig_profiles
+                server.HERMES_GATEWAY_SESSIONS = orig_gateway
+                server._HERMES_ID_CACHE["key"] = None
+                server._HERMES_ID_CACHE["ids"] = set()
+                server._HERMES_DB_INDEX["key"] = None
+                server._HERMES_DB_INDEX["by_session"] = {}
+                server._HERMES_GATEWAY_CACHE["key"] = None
+                server._HERMES_GATEWAY_CACHE["by_session"] = {}
+
     def test_hermes_rows_are_not_repo_scoped(self):
         """Hermes is a non-repo-scoped source: a session whose cwd is outside
         the requested repo (or empty) must still surface under repo_only=True,

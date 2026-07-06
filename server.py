@@ -26139,6 +26139,8 @@ def _hermes_message_summary(con, sid):
         "first_user": "",
         "last_user": "",
         "last_assistant": "",
+        "kanban_task_id": "",
+        "kanban_task_title": "",
         "last_ts": 0.0,
         "size": 0,
         "has_edit": False,
@@ -26158,6 +26160,17 @@ def _hermes_message_summary(con, sid):
         calls_raw = msg.get("tool_calls")
         summary["size"] += len(str(content or "")) + len(str(calls_raw or "")) + len(str(msg.get("reasoning") or ""))
         text = _hermes_visible_text(content)
+        if role in ("tool", "function"):
+            parsed_content = _hermes_jsonish(content)
+            if isinstance(parsed_content, dict):
+                task = parsed_content.get("task")
+                if isinstance(task, dict):
+                    task_title = str(task.get("title") or "").strip()
+                    task_id = str(task.get("id") or "").strip()
+                    if task_title and not summary["kanban_task_title"]:
+                        summary["kanban_task_title"] = task_title
+                    if task_id and not summary["kanban_task_id"]:
+                        summary["kanban_task_id"] = task_id
         if role in ("user", "human"):
             if text:
                 summary["first_user"] = summary["first_user"] or text
@@ -26447,10 +26460,16 @@ def find_hermes_conversations(
             title = _strip_ccc_session_state_instruction(row.get("title") or "").strip()
             gateway_title = _strip_ccc_session_state_instruction(gw.get("display_name") or "").strip()
             first_message = summary.get("first_user") or ""
-            ai_title = title if title and title != first_message else None
+            kanban_title = _strip_ccc_session_state_instruction(summary.get("kanban_task_title") or "").strip()
+            ai_title = (
+                title if title and title != first_message
+                else kanban_title if kanban_title and kanban_title != first_message
+                else None
+            )
             display_name = (
                 name_overrides.get(sid)
                 or _truncate_session_name(title)
+                or _truncate_session_name(kanban_title)
                 or _truncate_session_name(gateway_title)
                 or (first_message[:80] if first_message else None)
                 or "Hermes session"
@@ -26531,6 +26550,8 @@ def find_hermes_conversations(
                 # sessions from plain chat conversations — see the "tools"/"chat"
                 # chip in the sidebar. Lives on the session row already.
                 "hermes_tool_calls": _codex_int(row.get("tool_call_count")),
+                "hermes_kanban_task_id": summary.get("kanban_task_id") or "",
+                "hermes_kanban_task_title": kanban_title,
                 "parent_session_id": parent_id,
                 "hermes_parent_session_id": parent_id,
                 "hermes_lineage_session_ids": lineage,
