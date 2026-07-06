@@ -49,12 +49,13 @@ class TestSidebarRowLayout(unittest.TestCase):
 
         self.assertIn("const _renderRowsWithRepeatGroups = (cards, opts = {}) =>", app_js)
         self.assertIn("const _repeatGroupTitleKey = (title) =>", app_js)
-        self.assertIn("if (normalized.length > 48) return normalized.slice(0, 40);", app_js)
+        self.assertIn("if (normalized.length > 48) return normalized.slice(0, 32);", app_js)
         self.assertIn("data-role=\"repeat-row-group\"", app_js)
         self.assertIn("data-role=\"repeat-row-group-toggle\"", app_js)
         self.assertIn("ccc-repeat-row-group-expanded:", app_js)
         self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })", app_js)
         self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: false, quietTitleChrome: true })", app_js)
+        self.assertIn("quietTitleChrome: true,\n              elevateToObject: true", app_js)
 
         self.assertIn(".conv-repeat-group-header", app_css)
         self.assertIn(".conv-repeat-group.is-collapsed .conv-repeat-group-body", app_css)

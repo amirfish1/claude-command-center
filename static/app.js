@@ -23056,7 +23056,7 @@
     const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatGroupRawTitle(c) || '(untitled)');
     const _repeatGroupTitleKey = (title) => {
       const normalized = String(title || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      if (normalized.length > 48) return normalized.slice(0, 40);
+      if (normalized.length > 48) return normalized.slice(0, 32);
       return normalized;
     };
     const _repeatGroupKey = (c) => {
@@ -24209,12 +24209,48 @@
         });
         return groups.map(group => {
           const nestedRows = _currentSessionsTreeRows(group.cards);
-          const rowsHtml = nestedRows.map(item => _renderRow(item.card, {
-            suppressFolderChip: false,
-            quietTitleChrome: true,
-            currentChildDepth: item.depth,
-            elevateToObject: true
-          })).join('');
+          const chunks = [];
+          let curCards = [];
+          let curKey = null;
+          const flushCards = () => {
+            if (!curCards.length) return;
+            chunks.push(_renderRowsWithRepeatGroups(curCards, {
+              suppressFolderChip: false,
+              quietTitleChrome: true,
+              elevateToObject: true
+            }));
+            curCards = [];
+            curKey = null;
+          };
+          nestedRows.forEach(item => {
+            if (!item || !item.card || item.depth > 0) {
+              flushCards();
+              if (item && item.card) {
+                chunks.push(_renderRow(item.card, {
+                  suppressFolderChip: false,
+                  quietTitleChrome: true,
+                  currentChildDepth: item.depth,
+                  elevateToObject: true
+                }));
+              }
+              return;
+            }
+            const key = _repeatGroupKey(item.card);
+            if (!key) {
+              flushCards();
+              chunks.push(_renderRow(item.card, {
+                suppressFolderChip: false,
+                quietTitleChrome: true,
+                elevateToObject: true
+              }));
+              return;
+            }
+            if (curKey && curKey !== key) flushCards();
+            curKey = key;
+            curCards.push(item.card);
+          });
+          flushCards();
+          const rowsHtml = chunks.join('');
           return '<div class="conv-current-object-group" data-current-object-group="' + escapeAttr(group.key) + '" data-object-drop-zone="' + escapeAttr(group.key) + '">'
             + '<div class="conv-current-object-heading">'
             +   '<span class="conv-current-object-title">' + escapeHtml(group.title) + '</span>'
