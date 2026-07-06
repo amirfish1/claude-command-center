@@ -3915,6 +3915,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Resume Hermes and send...", app_js)
         self.assertIn("hermes-resume", app_js)
         self.assertIn("scheduleFireAndWatchRefresh", app_js)
+        self.assertIn("currentSession.source !== 'hermes'", app_js)
         self.assertIn("hermes_lineage", app_js)
         self.assertIn("conv-signal hermes-platform", app_js)
         self.assertIn(".conv-session-icon.hermes", app_css)

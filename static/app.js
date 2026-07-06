@@ -42306,6 +42306,7 @@
           && currentSession.source !== 'gemini'
           && currentSession.source !== 'cursor'
           && currentSession.source !== 'antigravity'
+          && currentSession.source !== 'hermes'
         ) {
           // Headless session we spawned — push via stdin pipe
           res = await fetch('/api/sessions/spawned/' + currentSession.spawnPid + '/inject', {
