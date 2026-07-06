@@ -9240,9 +9240,21 @@
       .find(strip => strip && !strip.hidden);
     syncMobileBackIntoTabStrip(visibleStrip || null, !!visibleStrip);
   }
+  function handleMobileBreakpointChange() {
+    syncMobileBackForVisibleTabStrip();
+    // When transitioning to narrow viewport with an active conversation,
+    // show the pane overlay; when transitioning to wide, hide it
+    // (wide screens show both pane + sidebar side-by-side).
+    const hasConversation = !!currentConversation;
+    if (isMobile() && hasConversation) {
+      mobileShowMain(true);
+    } else if (!isMobile()) {
+      mobileShowMain(false);
+    }
+  }
   try {
-    if (_mobileMQ.addEventListener) _mobileMQ.addEventListener('change', syncMobileBackForVisibleTabStrip);
-    else if (_mobileMQ.addListener) _mobileMQ.addListener(syncMobileBackForVisibleTabStrip);
+    if (_mobileMQ.addEventListener) _mobileMQ.addEventListener('change', handleMobileBreakpointChange);
+    else if (_mobileMQ.addListener) _mobileMQ.addListener(handleMobileBreakpointChange);
   } catch (_) {}
   const $cpMobileBackBtn = document.getElementById('cpMobileBackBtn');
   if ($cpMobileBackBtn) $cpMobileBackBtn.addEventListener('click', () => mobileShowConv(false));
@@ -41898,16 +41910,17 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'gemini', 'cursor', 'antigravity', 'kilo', 'hermes'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
+    if (v === 'gemini') return 'antigravity';
     return SPAWN_DEFAULT_ENGINES.includes(v) ? v : 'claude';
   }
   function readLegacySpawnEnginePref() {
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', gemini: 'auto', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -42019,7 +42032,6 @@
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
     if (engine === 'codex' && !value) value = 'gpt-5.5';
-    if (engine === 'gemini' && !value) value = 'auto';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     if (engine === 'hermes' && !value) value = 'auto';
@@ -42161,7 +42173,6 @@
     }
     await Promise.all([
       probe('codex', '/api/sessions/spawn-codex/availability', 'Codex'),
-      probe('gemini', '/api/sessions/spawn-gemini/availability', 'Gemini'),
       probe('cursor', '/api/sessions/spawn-cursor/availability', 'Cursor'),
       probe('antigravity', '/api/sessions/spawn-antigravity/availability', 'Antigravity'),
       probe('kilo', '/api/sessions/spawn-kilo/availability', 'Kilo'),
