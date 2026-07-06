@@ -376,6 +376,13 @@ def _wt_row_name_is_generic(row, queue):
         return True
     if qlow and low.startswith(f"drain the {qlow} watchtower queue"):
         return True
+    # A name this function itself applied on an earlier serve (e.g. from a
+    # ticket this session has since moved past) is safe to refresh too —
+    # otherwise the badge freezes on the first ticket a long-lived worker
+    # session ever closed, since _archive_all_rows_cached only re-runs this
+    # at cold rebuild, not on every cache-hit serve.
+    if qlow and (low == f"{qlow} worker" or low.startswith(f"{qlow} worker:")):
+        return True
     return False
 
 
@@ -5779,6 +5786,7 @@ def _archive_compute_rows(key, cache_options):
             from_cache = False
     _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
     _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
+    _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
     if _ARCHIVE_SERVE_TTL > 0:
         with _archive_serve_lock:
             _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
@@ -5851,6 +5859,7 @@ def _archive_serve_rows(key, cache_options):
         rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
         _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
         _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
+        _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
         with _archive_serve_lock:
             _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
             if key not in _archive_serve_refreshing:
@@ -5991,6 +6000,10 @@ def _rehydrate_archive_cached_rows(rows):
     # so the stale_ok serve the dashboard polls reflects goal set/clear without
     # waiting for a full transcript-signature rebuild.
     _stamp_archive_goals(hydrated)
+    # Same reasoning for WT ticket badges: without this, a session that closes
+    # a new ticket only gets its display_name refreshed on the next full
+    # transcript-signature rebuild, not on every cache-hit serve.
+    _apply_watchtower_worker_display_names(hydrated)
     return hydrated
 
 
