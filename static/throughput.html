@@ -329,6 +329,8 @@
     .session-title { max-width: none; }
     .workspace { padding: 16px; }
     .weekly-banner { flex-wrap: wrap; gap: 10px; }
+    .weekly-meters { flex-direction: column; width: 100%; }
+    .weekly-meter { width: 100%; }
     .weekly-sub { margin-left: 0; text-align: left; width: 100%; }
 
     /* Pull the chart to the top so the graph is the first thing visible after
@@ -428,8 +430,22 @@
     border: 1px solid rgba(57,210,192,0.25);
     border-radius: 12px;
   }
+  .weekly-meters {
+    flex: 1 1 540px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+  .weekly-meter {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 220px;
+  }
   .weekly-gauge {
-    flex: 0 0 120px;
+    flex: 0 0 112px;
     height: 8px;
     border-radius: 6px;
     background: rgba(255,255,255,0.10);
@@ -442,21 +458,23 @@
     background: linear-gradient(90deg, var(--accent), var(--blue));
     transition: width 0.4s ease, background 0.4s ease;
   }
-  .weekly-main { display: flex; align-items: baseline; gap: 8px; }
+  .weekly-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   .weekly-pct {
     font-family: var(--font-display);
-    font-size: 26px;
+    font-size: 24px;
     font-weight: 700;
     color: var(--text);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
-  .weekly-label { font-size: 13px; color: var(--text-muted); }
+  .weekly-label { font-size: 13px; color: var(--text-muted); min-width: 0; }
   .weekly-sub {
-    margin-left: auto;
+    flex: 0 1 300px;
     font-size: 12px;
     color: var(--text-muted);
     text-align: right;
     line-height: 1.5;
+    min-width: 220px;
   }
   .weekly-actions {
     display: flex;
@@ -1136,15 +1154,28 @@
     <!-- Main workspace content -->
     <div class="workspace" id="workspace">
 
-      <!-- Weekly usage banner (Claude-only, since reset — matches the macOS
-           menu bar). Hidden until /api/weekly_usage returns calibrated data. -->
+      <!-- Weekly usage banner (Claude/Fable + Codex, since reset). Hidden until
+           /api/weekly_usage returns calibrated data. -->
       <div class="weekly-banner" id="weekly-banner" style="display: none;">
-        <div class="weekly-gauge">
-          <div class="weekly-gauge-fill" id="weekly-gauge-fill"></div>
-        </div>
-        <div class="weekly-main">
-          <div class="weekly-pct" id="weekly-pct">–%</div>
-          <div class="weekly-label">of Claude weekly limit</div>
+        <div class="weekly-meters">
+          <div class="weekly-meter weekly-meter-claude">
+            <div class="weekly-gauge">
+              <div class="weekly-gauge-fill" id="weekly-gauge-fill"></div>
+            </div>
+            <div class="weekly-main">
+              <div class="weekly-pct" id="weekly-pct">–%</div>
+              <div class="weekly-label" id="weekly-label">Fable weekly limit</div>
+            </div>
+          </div>
+          <div class="weekly-meter weekly-meter-codex" id="weekly-codex-meter" style="display: none;">
+            <div class="weekly-gauge">
+              <div class="weekly-gauge-fill" id="weekly-codex-fill"></div>
+            </div>
+            <div class="weekly-main">
+              <div class="weekly-pct" id="weekly-codex-pct">–%</div>
+              <div class="weekly-label">Codex weekly</div>
+            </div>
+          </div>
         </div>
         <div class="weekly-sub" id="weekly-sub"></div>
         <div class="weekly-actions">
@@ -3180,6 +3211,43 @@
       return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     }
 
+    function fmtLastUpdated(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      });
+    }
+
+    function clampPct(pct) {
+      const n = Number(pct);
+      if (!Number.isFinite(n)) return 0;
+      return Math.max(0, Math.min(n, 100));
+    }
+
+    function setWeeklyFill(el, pct) {
+      if (!el) return;
+      el.style.width = `${clampPct(pct)}%`;
+      el.style.background = pct >= 85
+        ? 'linear-gradient(90deg, var(--orange), #e3603a)'
+        : 'linear-gradient(90deg, var(--accent), var(--blue))';
+    }
+
+    function setWeeklyPctText(el, pct) {
+      if (!el) return;
+      if (pct >= 100) {
+        el.textContent = `${(pct / 100).toFixed(1)}× quota`;
+        el.title = `${pct.toFixed(0)}% of weekly limit`;
+      } else {
+        el.textContent = `${pct.toFixed(0)}%`;
+        el.title = '';
+      }
+    }
+
     function resetEventInputDefault() {
       const input = document.getElementById('reset-event-input');
       if (!input || input.value) return;
@@ -3339,33 +3407,32 @@
           return;
         }
         const pct = d.display_pct;
-        const pctEl = document.getElementById('weekly-pct');
-        if (pct >= 100) {
-          const weeks = (pct / 100).toFixed(1);
-          pctEl.textContent = `${weeks}× quota`;
-          pctEl.title = `${pct.toFixed(0)}% of weekly limit`;
-        } else {
-          pctEl.textContent = `${pct.toFixed(0)}%`;
-          pctEl.title = '';
-        }
-        const fill = document.getElementById('weekly-gauge-fill');
-        fill.style.width = `${Math.min(pct, 100)}%`;
-        fill.style.background = pct >= 85
-          ? 'linear-gradient(90deg, var(--orange), #e3603a)'
-          : 'linear-gradient(90deg, var(--accent), var(--blue))';
+        setWeeklyPctText(document.getElementById('weekly-pct'), pct);
+        setWeeklyFill(document.getElementById('weekly-gauge-fill'), pct);
         const bits = [];
-        if (d.real_pct != null) bits.push(`${Math.round(d.real_pct)}% last synced from claude.ai`);
-        if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% live estimate`);
-        if (d.projected_pct != null) bits.push(`projected ${Math.round(d.projected_pct)}% at reset`);
+        if (d.real_pct != null) bits.push(`Fable ${Math.round(d.real_pct)}% last synced from claude.ai`);
+        if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% Fable live estimate`);
+        if (d.projected_pct != null) bits.push(`Fable projected ${Math.round(d.projected_pct)}% at reset`);
         if (d.week_start && (d.week_start_source === 'event' || d.week_start_source === 'override')) {
           bits.push(`week started ${fmtResetStarted(d.week_start)} (reset detected)`);
         }
+        const codexMeter = document.getElementById('weekly-codex-meter');
         if (d.codex && d.codex.ok && d.codex.weekly_pct != null) {
+          codexMeter.style.display = 'flex';
+          setWeeklyPctText(document.getElementById('weekly-codex-pct'), d.codex.weekly_pct);
+          setWeeklyFill(document.getElementById('weekly-codex-fill'), d.codex.weekly_pct);
+          if (d.codex.plan_type) bits.push(`Codex plan ${d.codex.plan_type}`);
           const cProj = d.codex.projected_pct != null ? ` · projected ${Math.round(d.codex.projected_pct)}%` : '';
-          bits.push(`Codex ${Math.round(d.codex.weekly_pct)}%${cProj}`);
+          bits.push(`Codex weekly ${Math.round(d.codex.weekly_pct)}%${cProj}`);
+          const cSession = d.codex.session;
+          if (cSession && cSession.pct != null) bits.push(`Codex session ${Math.round(cSession.pct)}%`);
+        } else if (codexMeter) {
+          codexMeter.style.display = 'none';
         }
         const reset = fmtResetCountdown(d.weekly_resets_at);
         if (reset) bits.push(reset);
+        const updated = fmtLastUpdated(d.fetched_at || d.calibrated_at);
+        if (updated) bits.push(`last updated ${updated}`);
         document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
         banner.style.display = 'flex';
       } catch (e) {
