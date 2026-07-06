@@ -35352,6 +35352,10 @@ def _engine_stream_event_text(engine, ev):
         return _text_from_engine_stream_value(
             ev.get("content") or ev.get("message") or ev.get("text")
         ).strip()
+    if engine == "hermes":
+        return _text_from_engine_stream_value(
+            ev.get("content") or ev.get("message") or ev.get("text") or ev.get("response")
+        ).strip()
     return ""
 
 
@@ -35461,6 +35465,8 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
         spawn_result = resume_session_cursor(session_id, text)
     elif engine == "antigravity":
         spawn_result = resume_session_antigravity(session_id, text)
+    elif engine == "hermes":
+        spawn_result = resume_session_hermes(session_id, text)
     else:
         return {"ok": False, "error": f"unsupported ask engine: {engine}", "source": "engine-resume"}
     source = f"{engine}-resume"
@@ -35538,7 +35544,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
                         ev = json.loads(stripped)
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         raw = stripped.decode("utf-8", "replace")
-                        if engine == "antigravity":
+                        if engine in ("antigravity", "hermes"):
                             raw_chunks.append(raw)
                         continue
                     text_piece = _engine_stream_event_text(engine, ev)
@@ -35566,14 +35572,14 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
                         try:
                             ev = json.loads(stripped)
                         except (json.JSONDecodeError, UnicodeDecodeError):
-                            if engine == "antigravity":
+                            if engine in ("antigravity", "hermes"):
                                 raw_chunks.append(stripped.decode("utf-8", "replace"))
                             continue
                         text_piece = _engine_stream_event_text(engine, ev)
                         if text_piece:
                             text_chunks.append(text_piece)
                     text_out = "\n".join(text_chunks).strip()
-                    if not text_out and engine == "antigravity":
+                    if not text_out and engine in ("antigravity", "hermes"):
                         text_out = "\n".join(raw_chunks).strip()
                     if poll == 0:
                         return {
@@ -35594,7 +35600,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
         return {
             "ok": False,
             "error": "timeout",
-            "partial": "\n".join(text_chunks).strip(),
+            "partial": "\n".join(text_chunks or raw_chunks).strip(),
             "source": source,
         }
     finally:
@@ -35629,7 +35635,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
         return {"ok": False, "error": "missing session_id or text"}
 
     engine = _detect_session_engine(session_id)
-    if engine in ("codex", "gemini", "antigravity"):
+    if engine in ("codex", "gemini", "antigravity", "hermes"):
         return ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
 
     # Live-tail short-circuit: if the target session has a running `claude`

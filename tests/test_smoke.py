@@ -8710,6 +8710,51 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._pending_resume_queue.clear()
             server._pending_resume_queue.update(original_queue)
 
+    def test_ask_engine_hermes_waits_for_plain_text_log(self):
+        server = self.server
+        sid = "20260601_121000_child"
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        proc = mock.Mock(pid=4253)
+        proc.poll.return_value = 0
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                log_path = pathlib.Path(tmp) / "resume-hermes.log"
+                log_path.write_text("yes + 3\n", encoding="utf-8")
+
+                def fake_resume(session_id, text):
+                    server._spawned_sessions.append({
+                        "engine": "hermes",
+                        "resumed_sid": session_id,
+                        "pid": proc.pid,
+                        "proc": proc,
+                        "log": str(log_path),
+                    })
+                    return {"ok": True, "via": "hermes-resume", "engine": "hermes"}
+
+                with mock.patch.object(server, "resume_session_hermes", side_effect=fake_resume), \
+                     mock.patch.object(server, "_remove_spawn_from_registry"):
+                    result = server.ask_engine_session_and_wait(sid, "probe", 1000, "hermes")
+        finally:
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["source"], "hermes-resume")
+        self.assertEqual(result["text"], "yes + 3")
+
+    def test_ask_session_routes_hermes_to_engine_resume(self):
+        server = self.server
+        sid = "20260601_121000_child"
+        with mock.patch.object(server, "_detect_session_engine", return_value="hermes"), \
+             mock.patch.object(server, "ask_engine_session_and_wait", return_value={"ok": True}) as ask_engine, \
+             mock.patch.object(server, "resume_session_headless") as headless:
+            result = server.ask_session_and_wait(sid, "probe", timeout_ms=1000)
+
+        self.assertTrue(result["ok"])
+        ask_engine.assert_called_once_with(sid, "probe", 1000, "hermes")
+        headless.assert_not_called()
+
     def test_open_target_allows_executable_session_cwd_files(self):
         """Post-sandbox-removal: scripts in the session cwd resolve cleanly."""
         for mod in ("server",):
