@@ -28879,6 +28879,15 @@
   }
 
   async function renderIssueInConvPane(issueNum, repoPath, rowId) {
+    // CCC-495: this can be invoked directly from a kanban card click while a
+    // group-chat reader is open, bypassing selectConversation's teardown.
+    // Without this, #convInputBar stays at the inline `style.display:none`
+    // openGroupChatReader set — updateInputBar() only toggles the `.visible`
+    // class, which can't override that inline style, so the composer would
+    // stay invisible for the rest of the session.
+    if (_gcReaderInterval || _gcReaderPath || _gcReaderHiddenInputBar) {
+      try { stopGroupChatReader({ rerenderSidebar: true }); } catch (_) {}
+    }
     const $view = getConvView();
     stopConvStream();
     const concreteRepo = repoPath || repoPathForIssueNumber(issueNum);
@@ -33468,6 +33477,11 @@
   // Render a TODO.md backlog card in the conv pane. No session exists yet —
   // just show the TODO text and the two spawn buttons so the user can start one.
   function renderTodoInConvPane(backlogId) {
+    // CCC-495: same direct-call bypass as renderIssueInConvPane — clear any
+    // leftover group-chat-reader state so the composer isn't stuck hidden.
+    if (_gcReaderInterval || _gcReaderPath || _gcReaderHiddenInputBar) {
+      try { stopGroupChatReader({ rerenderSidebar: true }); } catch (_) {}
+    }
     const $view = getConvView();
     stopConvStream();
     currentConversation = backlogId;
