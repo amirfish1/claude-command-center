@@ -68,9 +68,11 @@ function validatePing(body) {
   return null;
 }
 
-// Open beacon body — three fields, on purpose. No install_id, no identity,
-// no engines list, no last_active_date. Just "a CCC server booted on this
-// version/platform at this UTC instant." Aggregates to a per-day boot count.
+// Open beacon body — three required fields plus one optional `dev` flag.
+// No install_id, no identity, no engines list, no last_active_date. The
+// `dev` flag lets the maintainer's own restarts exclude themselves from
+// the stats page counts; setting it doesn't reveal identity, just marks
+// the row as "not-a-real-user" for filtering.
 function validateOpen(body) {
   if (!body || typeof body !== "object") return "body must be a JSON object";
   if (body.schema_version !== 1) return "schema_version must be 1";
@@ -79,6 +81,9 @@ function validateOpen(body) {
   }
   if (typeof body.platform !== "string" || !ALLOWED_PLATFORMS.has(body.platform)) {
     return "platform must be a known sys.platform value";
+  }
+  if (body.dev !== undefined && typeof body.dev !== "boolean") {
+    return "dev must be a boolean if present";
   }
   return null;
 }
@@ -153,12 +158,13 @@ async function handleOpen(request, env) {
   } catch (_) { /* best-effort — never block the insert on hash failure */ }
   try {
     await env.DB.prepare(
-      "INSERT INTO opens (received_at, version, platform, ip_hash) VALUES (?, ?, ?, ?)"
+      "INSERT INTO opens (received_at, version, platform, ip_hash, is_dev) VALUES (?, ?, ?, ?, ?)"
     ).bind(
       new Date().toISOString(),
       body.version,
       body.platform,
       ipHash,
+      body.dev === true ? 1 : 0,
     ).run();
   } catch (_) {
     return new Response("", { status: 500 });
@@ -188,7 +194,8 @@ async function handleStats(_request, env) {
     const opensByDay = (await env.DB.prepare(
       "SELECT substr(received_at, 1, 10) AS day, COUNT(*) AS boots, " +
       "COUNT(DISTINCT ip_hash) AS distinct_ips " +
-      "FROM opens GROUP BY day ORDER BY day DESC LIMIT 30"
+      "FROM opens WHERE COALESCE(is_dev, 0) = 0 " +
+      "GROUP BY day ORDER BY day DESC LIMIT 30"
     ).all()).results;
 
     const pingsByDay = (await env.DB.prepare(

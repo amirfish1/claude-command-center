@@ -94,6 +94,13 @@ If you are uneasy about the hashed IP despite it being daily-rotated
 and un-reversible without the server secret, the same env var still
 kills the beacon entirely.
 
+**Maintainer dev-mode flag.** If `CCC_TELEMETRY_DEV_MODE=1` is set,
+the beacon adds a `dev: true` field that the worker persists as an
+`is_dev=1` marker on the row. Public stats then filter these rows
+out so the maintainer's own frequent restarts do not inflate the
+boot / distinct-IP counts on the public page. The flag adds no
+identity — it only says "not-a-real-user, exclude from the totals."
+
 If you are uneasy about the beacon despite it carrying no identity,
 set `CCC_TELEMETRY_DISABLED=1` before launching `server.py` / the
 `.app` / `./run.sh`; it kills both the daily ping and the boot beacon.

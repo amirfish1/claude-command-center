@@ -53762,8 +53762,17 @@ def _telemetry_resolved_open_endpoint():
     return _TELEMETRY_OPEN_DEFAULT_ENDPOINT
 
 
+def _telemetry_dev_mode_env():
+    """Maintainer's own-machine flag. When set, the beacon carries
+    dev:true so the public stats page can filter these rows out —
+    otherwise the maintainer's frequent restarts inflate boot counts.
+    Adds no identity; the flag is a plain boolean stored server-side."""
+    v = (os.environ.get("CCC_TELEMETRY_DEV_MODE") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def _send_telemetry_open_beacon():
-    """Fire-and-forget POST of the 3-field anonymous open beacon.
+    """Fire-and-forget POST of the anonymous open beacon.
 
     Not gated on opt-in by design: the payload carries NO install_id and
     NO identifying data, so the privacy contract holds without per-user
@@ -53777,6 +53786,8 @@ def _send_telemetry_open_beacon():
         "version": __version__,
         "platform": sys.platform,
     }
+    if _telemetry_dev_mode_env():
+        payload["dev"] = True
     try:
         data = json.dumps(payload).encode("utf-8")
     except (TypeError, ValueError):
