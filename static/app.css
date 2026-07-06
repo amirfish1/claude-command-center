@@ -2498,6 +2498,13 @@
   .conversations-view .tool-call-group-header .tcg-label {
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  /* CCC-501: a short hint of what the command actually returned, right of the
+     label — "Completed git status" alone gave no sense of the outcome. */
+  .conversations-view .tool-call-group-header .tcg-result {
+    flex-shrink: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; opacity: 0.6; font-size: 12px; font-style: italic;
+  }
+  .conversations-view .tool-call-group-header .tcg-result:empty { display: none; }
   /* Real time + line number, right-aligned — a run of collapsed "▶ Completed
      X" rows previously carried neither (only a hidden debug-mode ::before),
      reading as anonymous noise with no way to tell when/where each happened. */

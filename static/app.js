@@ -35720,9 +35720,9 @@
       return 'Viewed ' + _pathBase(codeRead.path) + loc;
     }
     if (isCommandActivityTool(displayName)) {
-      const compact = compactShellCommandLabel(detail);
+      const full = fullCommandSummaryLabel(detail);
       const verb = tc.classList.contains('tool-call-ok') ? 'Completed ' : 'Ran ';
-      return compact ? verb + compact : verb + 'shell command';
+      return full ? verb + full : verb + 'shell command';
     }
     if (source) {
       return detail
@@ -35817,21 +35817,43 @@
     return '';
   }
 
+  // Skip no-information wrapper segments — `cd X && real-cmd` should
+  // summarize as the real command, not "Completed cd" (CCC-120). Strip
+  // leading cd/pushd/export/source/set/unset segments up to the next
+  // && or ; as long as something runs after them.
+  function _stripCdWrapperPrefix(raw) {
+    let out = raw;
+    for (let guard = 0; guard < 6; guard++) {
+      const m = out.match(/^(?:cd|pushd|export|source|set|unset)\b[^&;|]*(?:&&|;)\s*/);
+      if (!m) break;
+      const rest = out.slice(m[0].length).trim();
+      if (!rest) break;
+      out = rest;
+    }
+    return out;
+  }
+
+  // CCC-501: the collapsed "▶ Completed X" row previously reduced a whole
+  // compound command down to just its first verb ("git status"), silently
+  // dropping everything after a `&&`/`;` — the user filed this repeatedly
+  // because the actual command that ran was unrecoverable from the header.
+  // Show the real (cd-stripped) command text instead of a synthetic
+  // "cmd sub" label; the header's CSS ellipsis clips it visually, and the
+  // untruncated string still lives in the title attribute for hover.
+  function fullCommandSummaryLabel(command, maxLen) {
+    let raw = String(command || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return '';
+    raw = raw.replace(/^Shell command:\s*/i, '').trim();
+    raw = _stripCdWrapperPrefix(raw);
+    const cap = maxLen || 140;
+    return raw.length > cap ? raw.slice(0, cap - 1) + '…' : raw;
+  }
+
   function compactShellCommandLabel(command) {
     let raw = String(command || '').replace(/\s+/g, ' ').trim();
     if (!raw) return '';
     raw = raw.replace(/^Shell command:\s*/i, '').trim();
-    // Skip no-information wrapper segments — `cd X && real-cmd` should
-    // summarize as the real command, not "Completed cd" (CCC-120). Strip
-    // leading cd/pushd/export/source/set/unset segments up to the next
-    // && or ; as long as something runs after them.
-    for (let guard = 0; guard < 6; guard++) {
-      const m = raw.match(/^(?:cd|pushd|export|source|set|unset)\b[^&;|]*(?:&&|;)\s*/);
-      if (!m) break;
-      const rest = raw.slice(m[0].length).trim();
-      if (!rest) break;
-      raw = rest;
-    }
+    raw = _stripCdWrapperPrefix(raw);
     const words = splitShellWords(raw);
     if (!words.length) return raw.length > 40 ? raw.slice(0, 39) + '…' : raw;
     const cmd = _pathBase(words[0]);
@@ -36070,6 +36092,23 @@
     return !!toolCallCommandInfo(div && div.querySelector ? div.querySelector('.tool-call') : null);
   }
 
+  // CCC-501: a single-command collapsed row said only "Completed git status" —
+  // no hint what the command actually produced. Pull the first meaningful
+  // line out of the already-rendered result/code-preview so the header reads
+  // "Completed git status … · ?? backups/" instead of a bare verb.
+  function toolCallResultSnippet(tc) {
+    if (!tc) return '';
+    const out = tc.querySelector('.tool-result-output');
+    if (out) {
+      const raw = out.textContent.replace(/^\[J[^\]]*\]\s{0,2}/, '');
+      const line = raw.split('\n').map(l => l.trim()).find(Boolean);
+      if (!line) return 'no output';
+      return line.length > 44 ? line.slice(0, 43) + '…' : line;
+    }
+    if (tc.querySelector('.tool-result-code-preview')) return '';
+    return '';
+  }
+
   function updateToolGroupLabel(group) {
     if (!group) return;
     const label = group.querySelector('.tcg-label');
@@ -36077,10 +36116,16 @@
     const count = Number(group.dataset.toolCount || 0);
     const codeReads = Number(group.dataset.codeReadCount || 0);
     const calls = Array.from(group.querySelectorAll('.tool-call'));
+    const resultEl = group.querySelector('.tcg-result');
     if (count === 1) {
       const only = group.querySelector('.tool-call-group-body > .event.tool-only');
       label.textContent = only ? summarizeToolCall(only) : 'Ran 1 command';
+      const onlyCall = only ? only.querySelector('.tool-call') : null;
+      label.title = onlyCall ? toolCallDetailText(onlyCall) : '';
+      if (resultEl) resultEl.textContent = onlyCall ? toolCallResultSnippet(onlyCall) : '';
     } else if (count > 1 && codeReads === count) {
+      label.title = '';
+      if (resultEl) resultEl.textContent = '';
       label.textContent = 'Viewed ' + count + ' file excerpts';
     } else if (calls.length) {
       const edits = calls.filter(tc => isEditToolName(toolCallName(tc)));
@@ -36143,8 +36188,12 @@
       if (namedSummary) parts.push(namedSummary);
       const text = parts.length ? parts.join('; ') : 'Ran ' + count + ' commands';
       label.textContent = text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+      label.title = '';
+      if (resultEl) resultEl.textContent = '';
     } else {
       label.textContent = 'Ran ' + count + ' commands';
+      label.title = '';
+      if (resultEl) resultEl.textContent = '';
     }
   }
 
@@ -37110,7 +37159,10 @@
               expandBtn.textContent = 'Show full result';
               last.appendChild(expandBtn);
             }
-            if (commandSucceeded) updateToolGroupLabel(_currentToolGroup);
+            // CCC-501: refresh the group header even on failure/non-command
+            // results so the collapsed row's result snippet reflects what
+            // actually came back, not just successful shell commands.
+            updateToolGroupLabel(_currentToolGroup);
           }
         }
         continue;
@@ -37134,6 +37186,7 @@
           grp.innerHTML =
               '<div class="tool-call-group-header" data-render-ts="' + _grpTs + '">'
             + '<span class="tcg-arrow">▶</span> <span class="tcg-label">Ran 1 command</span>'
+            + '<span class="tcg-result"></span>'
             + '<span class="tcg-meta"></span>'
             + '</div>'
             + '<div class="tool-call-group-body"></div>';
