@@ -9705,15 +9705,6 @@
         setActivePaneById(activePane.id);
       }
     }
-    // Mobile: selectConversation toggles mobile-show-main which slides
-    // the conv pane in. For a fresh page load on a phone, that means
-    // the user lands on the conv overlay and never sees the list — the
-    // exact opposite of the standard mobile pattern. Reset the overlay
-    // so the page lands on the list; the conv is already loaded so a
-    // single row-tap brings it back instantly.
-    if (anyRestored && typeof isMobile === 'function' && isMobile()) {
-      mobileShowMain(false);
-    }
   }
   function activePaneId() { return splitState.panes[splitState.activeIndex].id; }
   function paneByPaneId(pid) { return splitState.panes.find(p => p.id === pid) || null; }
