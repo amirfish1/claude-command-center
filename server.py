@@ -354,15 +354,29 @@ def _wt_ticket_context(item):
     return ""
 
 
+def _wt_compact_ref(queue, ref):
+    """Mirror WT's own workers._compact_ref so CCC and WT agree on the
+    ticket-reference shape (e.g. "THROUGHPUT-25" -> "THROUGHPUT#25")."""
+    prefix = str(queue or "WT").strip() or "WT"
+    raw = str(ref or "").strip()
+    if raw:
+        head, sep, tail = raw.rpartition("-")
+        if sep and tail.isdigit():
+            return f"{head or prefix}#{tail}"
+        return raw.replace("-", "#", 1)
+    return prefix
+
+
 def _wt_display_name(queue, ref, context=""):
     queue = str(queue or "WT").strip() or "WT"
     ref = str(ref or "").strip()
     context = _wt_clip_title(context)
     if not ref:
         return f"{queue} worker"
+    label = _wt_compact_ref(queue, ref)
     if context:
-        return f"{queue} worker: {ref} - {context}"
-    return f"{queue} worker: {ref}"
+        return f"{label}: {context}"
+    return label
 
 
 def _wt_row_name_is_generic(row, queue):
@@ -377,11 +391,14 @@ def _wt_row_name_is_generic(row, queue):
     if qlow and low.startswith(f"drain the {qlow} watchtower queue"):
         return True
     # A name this function itself applied on an earlier serve (e.g. from a
-    # ticket this session has since moved past) is safe to refresh too —
+    # ticket this session has since moved past, or the older "<queue> worker:
+    # <ref>" shape from before the #<seq> format) is safe to refresh too —
     # otherwise the badge freezes on the first ticket a long-lived worker
     # session ever closed, since _archive_all_rows_cached only re-runs this
     # at cold rebuild, not on every cache-hit serve.
     if qlow and (low == f"{qlow} worker" or low.startswith(f"{qlow} worker:")):
+        return True
+    if qlow and low.startswith(f"{qlow}#"):
         return True
     return False
 
