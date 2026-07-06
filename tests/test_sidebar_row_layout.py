@@ -48,6 +48,8 @@ class TestSidebarRowLayout(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _renderRowsWithRepeatGroups = (cards, opts = {}) =>", app_js)
+        self.assertIn("const _repeatGroupTitleKey = (title) =>", app_js)
+        self.assertIn("if (normalized.length > 48) return normalized.slice(0, 40);", app_js)
         self.assertIn("data-role=\"repeat-row-group\"", app_js)
         self.assertIn("data-role=\"repeat-row-group-toggle\"", app_js)
         self.assertIn("ccc-repeat-row-group-expanded:", app_js)

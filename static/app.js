@@ -23054,8 +23054,13 @@
       return '';
     };
     const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatGroupRawTitle(c) || '(untitled)');
+    const _repeatGroupTitleKey = (title) => {
+      const normalized = String(title || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (normalized.length > 48) return normalized.slice(0, 40);
+      return normalized;
+    };
     const _repeatGroupKey = (c) => {
-      const title = _repeatGroupTitle(c).trim().toLowerCase().replace(/\s+/g, ' ');
+      const title = _repeatGroupTitleKey(_repeatGroupTitle(c));
       if (!title || title === '(untitled)') return '';
       const engine = String(c.engine || c.source || '').trim().toLowerCase();
       const model = String(c.model || '').trim().toLowerCase();
