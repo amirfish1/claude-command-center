@@ -188,14 +188,19 @@
     const worst = (typeof rz.worst_cache_efficiency_pct === 'number') ? rz.worst_cache_efficiency_pct : null;
     const life = (typeof rz.avg_lifetime_s === 'number') ? rz.avg_lifetime_s : null;
     const cacheTitle =
-      'headless resume cache efficiency (rolling window)' +
+      'headless warm-reuse — share of resumes that reused a live process ' +
+      'instead of a cold `claude --resume` (rolling window)' +
       ' · warm reuse ' + (warmPct == null ? '—' : warmPct + '%') +
       ' · cold resumes ' + cold +
+      ' · cache eff ' + (eff == null ? '—' : eff + '%') +
       ' · worst ' + (worst == null ? '—' : worst + '%') +
       ' · avg lifetime ' + (life == null ? '—' : life + 's');
-    if (eff == null) _set('cache', 'cache —', '', cacheTitle);
-    else _set('cache', 'cache ' + eff.toFixed(0) + '%',
-      eff < 70 ? 'ccchealth-crit' : (eff < 90 ? 'ccchealth-warn' : 'ccchealth-ok'),
+    // Headline the warm-reuse % (the thing that proves processes stay warm and
+    // dodge the cold-resume wake latency). Cache efficiency + cold count live
+    // in the tooltip. Null (no resumes in window yet) shows a neutral dash.
+    if (warmPct == null) _set('cache', 'warm —', '', cacheTitle);
+    else _set('cache', 'warm ' + warmPct.toFixed(0) + '%',
+      warmPct < 50 ? 'ccchealth-crit' : (warmPct < 80 ? 'ccchealth-warn' : 'ccchealth-ok'),
       cacheTitle);
   }
   function _startHealthPoll(host) {
@@ -999,7 +1004,7 @@
       '<span class="ccchealth-metric" data-k="cpu"><span class="ccchealth-dot"></span><span class="ccchealth-val">cpu —</span></span>' +
       '<span class="ccchealth-metric" data-k="build"><span class="ccchealth-dot"></span><span class="ccchealth-val">build —</span></span>' +
       '<span class="ccchealth-metric" data-k="err"><span class="ccchealth-dot"></span><span class="ccchealth-val">err —</span></span>' +
-      '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">cache —</span></span>';
+      '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">warm —</span></span>';
     const toggle = document.createElement('div');
     toggle.id = 'pollerToggle';
     const _triggerCount = Object.keys(_POLLER_META).length;

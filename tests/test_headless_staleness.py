@@ -315,6 +315,7 @@ def test_inject_stale_retires_and_respawns(server_mod, tmp_path):
          mock.patch.object(server_mod, "_spawn_entry_active_tool_child", return_value=None), \
          mock.patch.object(server_mod, "_pending_ask_user_question_for_session", return_value=False), \
          mock.patch.object(server_mod, "_write_stream_json_user_message", return_value=True) as wr, \
+         mock.patch.object(server_mod, "_resume_ledger_append"), \
          mock.patch.object(server_mod, "_retire_unresponsive_spawn_entry") as retire, \
          mock.patch.object(server_mod, "resume_session_headless",
                            return_value={"ok": True, "resumed": True}) as respawn:
