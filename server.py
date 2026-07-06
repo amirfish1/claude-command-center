@@ -27240,13 +27240,18 @@ def _antigravity_spawn_pid_by_session_id():
             continue
         meta = {}
         log = s.get("log") or ""
+        if log:
+            meta = _antigravity_cli_log_meta(str(log) + ".agy.log")
+            if not (meta.get("session_id") or meta.get("cwd") or meta.get("model")):
+                meta = _antigravity_cli_log_meta(log)
+        log_sid = meta.get("session_id") or ""
         sid = s.get("session_id") or s.get("resumed_sid")
-        if not sid:
-            if log:
-                meta = _antigravity_cli_log_meta(str(log) + ".agy.log")
-                if not (meta.get("session_id") or meta.get("cwd") or meta.get("model")):
-                    meta = _antigravity_cli_log_meta(log)
-            sid = meta.get("session_id") or ""
+        if log_sid and sid != log_sid:
+            sid = log_sid
+            s["session_id"] = log_sid
+            _update_spawn_session_id_in_registry(s.get("pid"), log_sid)
+        elif not sid:
+            sid = log_sid
         if sid:
             if not s.get("session_id"):
                 s["session_id"] = sid
@@ -27260,7 +27265,7 @@ def _antigravity_spawn_pid_by_session_id():
                     "pid": s.get("pid"),
                     "alive": alive,
                     "log": log,
-                    "cwd": s.get("cwd") or "",
+                    "cwd": meta.get("cwd") or s.get("cwd") or "",
                     "repo_path": s.get("repo_path") or "",
                     "spawned_at": s.get("started") or "",
                     "prompt": s.get("prompt") or "",
@@ -31583,7 +31588,7 @@ def _update_spawn_session_id_in_registry(pid, session_id):
         entries = _load_spawn_registry()
         updated = False
         for entry in entries:
-            if entry.get("pid") == pid and not entry.get("session_id"):
+            if entry.get("pid") == pid and entry.get("session_id") != session_id:
                 entry["session_id"] = session_id
                 updated = True
         if updated:
