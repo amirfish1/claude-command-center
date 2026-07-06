@@ -12215,6 +12215,17 @@
 }
 .gc-reader-input-row .gc-send-btn:hover { opacity: 0.9; }
 .gc-reader-input-row .gc-send-btn:active { transform: translateY(1px); }
+/* Replay: simulate the human actually typing their reply, then sending it
+   (CCC-495) — a glowing border while text fills in, a quick flash on the
+   send button the instant it "submits" into the transcript. */
+.gc-reader-input-row:has(textarea.gc-replay-typing) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(110,140,175,0.16);
+}
+.gc-reader-input-row .gc-send-btn.gc-replay-send-flash {
+  transform: scale(0.85);
+  box-shadow: 0 0 0 4px rgba(110,140,175,0.35);
+}
 .gc-reader-input-row .tts-btn {
   width: 32px; height: 32px; flex-shrink: 0;
   border-radius: 999px; border: 1px solid var(--border); cursor: pointer;
@@ -16902,6 +16913,86 @@ body:has(.gc-reader) .pwa-install-banner {
 .ccc-hero-ticker.is-visible {
   opacity: 1;
   transform: translateY(0);
+}
+.ccc-hero-live-left-panel {
+  position: absolute;
+  left: 48px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 380px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+  z-index: 100;
+  pointer-events: none;
+  background: rgba(13, 17, 23, 0.45);
+  border: 1px solid rgba(139, 148, 158, 0.12);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.ccc-hero-left-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.12);
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+}
+.ccc-hero-left-status {
+  color: #c9d1d9;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+.ccc-hero-left-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+.ccc-hero-left-item {
+  background: rgba(22, 27, 34, 0.55);
+  border: 1px solid rgba(139, 148, 158, 0.12);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: rgba(201, 209, 217, 0.9);
+  font-size: 11px;
+  line-height: 1.4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-sizing: content-box;
+  
+  /* Animation states */
+  opacity: 0;
+  transform: translateX(-20px);
+  transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), height 0.4s ease, padding 0.4s ease, margin-bottom 0.4s ease;
+  height: 16px;
+}
+.ccc-hero-left-item.is-visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+.ccc-hero-left-item.is-leaving {
+  opacity: 0;
+  transform: translateX(20px);
+  height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-bottom: -8px;
+  border-color: transparent;
+}
+@media (max-width: 1024px) {
+  .ccc-hero-live-left-panel {
+    display: none !important;
+  }
 }
 .ccc-hero-stats {
   display: inline-flex;

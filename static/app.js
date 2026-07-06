@@ -17030,6 +17030,15 @@
   let _gcReplayAllNonSys = [];
   let _gcReplaySpeakersAfter = [];
   let _onReplayKeyDownRef = null;
+  // Human replay messages "type" into the real reply box instead of
+  // revealing word-by-word in a bubble (annotation: make it look like the
+  // human is actually typing, then it submits in one shot). Progress is
+  // tracked here (not just closure-local to the typing helper) so a
+  // pause/resume mid-type — which re-enters via playNextReplayStep — picks
+  // up where it left off instead of restarting the message from char 0.
+  let _gcReplayHumanTypeIndex = 0;
+  let _gcReplayHumanSendPending = false;
+  let _gcReplayHumanSent = false;
 
   function gcFallbackName(shortSid) {
     const key = String(shortSid || '').substring(0, 8).toLowerCase();
@@ -17266,6 +17275,9 @@
     _gcReplaySpeed = 1;
     _gcReplayMsgIndex = 0;
     _gcReplayWordIndex = 0;
+    _gcReplayHumanTypeIndex = 0;
+    _gcReplayHumanSendPending = false;
+    _gcReplayHumanSent = false;
     _gcReplayData = data;
 
     const reader = document.getElementById('gcReader');
@@ -17347,6 +17359,7 @@
       const isSystem = /^\s*system\b/i.test(speaker);
       const speakerHash = extractHash(speaker);
       const displayName = gcDisplayName(speakerHash);
+      const isHuman = !isSystem && /\bHuman\b/i.test(displayName);
       const side = isSystem ? 'full' : sideForSpeaker(displayName);
       const color = isSystem ? 'muted' : getParticipantColor(speakerHash, displayName);
       const isPing = isSystem && /pinged/i.test(bodyText);
@@ -17359,6 +17372,7 @@
         speaker,
         when,
         isSystem,
+        isHuman,
         side,
         color,
         isPing,
@@ -17456,8 +17470,76 @@
       body.classList.remove('gc-in-replay');
     }
 
+    // Skipping/exiting mid "human is typing" animation shouldn't leave a
+    // half-typed draft sitting in the real reply box.
+    const humanInput = document.getElementById('gcHumanInput');
+    if (humanInput && humanInput.classList.contains('gc-replay-typing')) {
+      humanInput.value = '';
+      humanInput.classList.remove('gc-replay-typing');
+    }
+    _gcReplayHumanTypeIndex = 0;
+    _gcReplayHumanSendPending = false;
+    _gcReplayHumanSent = false;
+
     _gcLastMtime = null;
     pollGroupChatReader();
+  }
+
+  // Drives the "human is typing this reply" illusion for one replay tick.
+  // Returns true once the message has been fully typed AND "sent" (input
+  // cleared) — the caller should then build the bubble immediately, fully
+  // formed. Returns false while still mid-type/mid-send-pause; this
+  // function schedules its own continuation, so the caller must bail out
+  // for the tick (matches the existing per-word reveal's re-entrant style).
+  function _gcReplayHumanStep(msg) {
+    const plainText = (msg.rawBody || '').trim();
+    const inputEl = document.getElementById('gcHumanInput');
+    if (!inputEl || !plainText) return true;  // nothing to animate — just show the bubble
+
+    if (_gcReplayHumanSent) {
+      // Already typed + sent this message on a prior tick — reset for the
+      // NEXT human message and let the caller build the bubble now.
+      _gcReplayHumanSent = false;
+      return true;
+    }
+
+    if (_gcReplayHumanTypeIndex < plainText.length) {
+      if (_gcReplayHumanTypeIndex === 0) {
+        inputEl.value = '';
+        inputEl.classList.add('gc-replay-typing');
+        try { inputEl.focus({ preventScroll: true }); } catch (_) { try { inputEl.focus(); } catch (_) {} }
+      }
+      // A couple characters per tick at 1x reads as typing without
+      // crawling on longer messages; speed multiplier shortens the delay.
+      const step = _gcReplaySpeed >= 4 ? 4 : (_gcReplaySpeed >= 2 ? 2 : 1);
+      _gcReplayHumanTypeIndex = Math.min(plainText.length, _gcReplayHumanTypeIndex + step);
+      inputEl.value = plainText.slice(0, _gcReplayHumanTypeIndex);
+      const charDelay = Math.max(12, Math.min(45, 900 / plainText.length)) / _gcReplaySpeed;
+      _gcReplayTimeout = setTimeout(playNextReplayStep, charDelay);
+      return false;
+    }
+
+    if (!_gcReplayHumanSendPending) {
+      // Finished typing — hold a beat so the full text is readable, then
+      // "send": clear the box and flash the send button.
+      _gcReplayHumanSendPending = true;
+      _gcReplayTimeout = setTimeout(() => {
+        inputEl.value = '';
+        inputEl.classList.remove('gc-replay-typing');
+        const sendBtn = document.getElementById('gcSendBtn');
+        if (sendBtn) {
+          sendBtn.classList.add('gc-replay-send-flash');
+          setTimeout(() => sendBtn.classList.remove('gc-replay-send-flash'), 240);
+        }
+        _gcReplayHumanTypeIndex = 0;
+        _gcReplayHumanSendPending = false;
+        _gcReplayHumanSent = true;
+        playNextReplayStep();
+      }, Math.max(400, 700 / _gcReplaySpeed));
+      return false;
+    }
+
+    return true;
   }
 
   function playNextReplayStep() {
@@ -17475,6 +17557,13 @@
 
     let msgEl = document.querySelector(`.gc-message[data-replay-idx="${_gcReplayMsgIndex}"]`);
     if (!msgEl) {
+      // Human messages: simulate typing into the real reply box, then
+      // "send" (clear the box, flash Send) before the bubble appears fully
+      // formed in one shot — instead of the word-by-word bubble reveal
+      // used for agent messages (annotation: "make the typing look like
+      // it's happening in the input box, and then it submits").
+      if (msg.isHuman && !_gcReplayHumanStep(msg)) return;
+
       const displayName = gcDisplayName(extractHash(msg.speaker));
 
       msgEl = document.createElement('article');
@@ -17493,7 +17582,14 @@
         + '<div class="gc-message-footer"></div>';
 
       body.appendChild(msgEl);
-      _gcReplayWordIndex = 0;
+      if (msg.isHuman) {
+        // Already "typed" it into the input box above — the bubble itself
+        // appears complete at once (one-shot submit), not word-by-word.
+        msgEl.querySelectorAll('.gc-replay-word').forEach(w => { w.style.display = ''; });
+        _gcReplayWordIndex = msg.wordCount;
+      } else {
+        _gcReplayWordIndex = 0;
+      }
       body.scrollTop = body.scrollHeight;
     }
 
@@ -46315,6 +46411,12 @@
         try { on = localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) {}
         splashCheck.textContent = on ? '✓' : '';
       }
+      const liveVariantCheck = $settingsPopover.querySelector('[data-check-live-variant]');
+      if (liveVariantCheck) {
+        let lv = 'A';
+        try { lv = localStorage.getItem('ccc-hero-live-variant') || 'A'; } catch (_) {}
+        liveVariantCheck.textContent = lv === 'B' ? '✓' : '';
+      }
     }
   }
   // Live-update when the user has 'system' selected and OS theme flips.
@@ -46378,6 +46480,14 @@
         let on = true;
         try { on = localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) {}
         try { localStorage.setItem('ccc-hero-on-boot', on ? '0' : '1'); } catch (_) {}
+        refreshAppearanceChecks();
+        return;
+      }
+      const liveVariantBtn = e.target.closest('[data-live-variant-toggle]');
+      if (liveVariantBtn) {
+        let lv = 'A';
+        try { lv = localStorage.getItem('ccc-hero-live-variant') || 'A'; } catch (_) {}
+        try { localStorage.setItem('ccc-hero-live-variant', lv === 'B' ? 'A' : 'B'); } catch (_) {}
         refreshAppearanceChecks();
       }
     });
@@ -47650,14 +47760,23 @@
       return Number.isFinite(total) ? total : (Number(data && data.total) || 0);
     });
   }
+  function getLiveVariant() {
+    try {
+      var params = new URLSearchParams(window.location.search || '');
+      var q = params.get('variant') || params.get('live-variant');
+      if (q === 'a' || q === 'A') return 'A';
+      if (q === 'b' || q === 'B') return 'B';
+    } catch (_) {}
+    try {
+      return localStorage.getItem('ccc-hero-live-variant') || 'A';
+    } catch (_) {
+      return 'A';
+    }
+  }
   function renderActivity(root, state) {
     var liveCount = state.liveIds.length;
     var status = root.querySelector('.ccc-hero-live-status');
     var ticker = root.querySelector('.ccc-hero-ticker');
-    if (!status || !ticker) return;
-    status.textContent = liveCount > 0
-      ? liveCount + ' agent' + (liveCount === 1 ? '' : 's') + ' working now'
-      : 'fleet idle - ' + (state.sessions24 || 0) + ' sessions in the last 24 hours';
     var byId = {};
     (state.conversationRows || []).forEach(function (r) { if (r && (r.session_id || r.id)) byId[r.session_id || r.id] = r; });
     var lines = state.liveIds.map(function (id) {
@@ -47668,7 +47787,34 @@
       return name + ' - ' + text;
     }).filter(function (line) { return line.replace(/[-\s]/g, '').length > 0; });
     if (!lines.length) lines = [liveCount ? 'Watching live tool activity across the fleet' : 'No live agents right now'];
-    startTicker(root, lines);
+
+    var variant = getLiveVariant();
+    if (variant === 'B' && window.innerWidth > 1024) {
+      var centerLive = root.querySelector('.ccc-hero-live');
+      if (centerLive) centerLive.style.display = 'none';
+      var leftPanel = root.querySelector('.ccc-hero-live-left-panel');
+      if (leftPanel) {
+        leftPanel.style.display = 'flex';
+        var leftStatus = leftPanel.querySelector('.ccc-hero-left-status');
+        if (leftStatus) {
+          leftStatus.textContent = liveCount > 0
+            ? liveCount + ' agent' + (liveCount === 1 ? '' : 's') + ' working now'
+            : 'fleet idle - ' + (state.sessions24 || 0) + ' sessions in the last 24 hours';
+        }
+        startLiveList(root, lines);
+      }
+    } else {
+      var centerLive = root.querySelector('.ccc-hero-live');
+      if (centerLive) centerLive.style.display = '';
+      var leftPanel = root.querySelector('.ccc-hero-live-left-panel');
+      if (leftPanel) leftPanel.style.display = 'none';
+      if (status && ticker) {
+        status.textContent = liveCount > 0
+          ? liveCount + ' agent' + (liveCount === 1 ? '' : 's') + ' working now'
+          : 'fleet idle - ' + (state.sessions24 || 0) + ' sessions in the last 24 hours';
+        startTicker(root, lines);
+      }
+    }
   }
   function startTicker(root, lines) {
     if (root.__heroTickerTimer) clearInterval(root.__heroTickerTimer);
@@ -47687,6 +47833,54 @@
     }
     if (!reduceMotion && lines.length > 1) root.__heroTickerTimer = setInterval(showNext, 2800);
   }
+  function startLiveList(root, lines) {
+    if (root.__heroTickerTimer) clearInterval(root.__heroTickerTimer);
+    var container = root.querySelector('.ccc-hero-left-list');
+    if (!container) return;
+    
+    // Clear existing
+    container.innerHTML = '';
+    
+    var idx = 0;
+    var maxItems = 5;
+    
+    function showNext() {
+      if (lines.length === 0) return;
+      var line = lines[idx % lines.length];
+      idx++;
+      
+      var item = document.createElement('div');
+      item.className = 'ccc-hero-left-item';
+      item.textContent = line;
+      container.appendChild(item);
+      
+      // Animate in
+      setTimeout(function () {
+        item.classList.add('is-visible');
+      }, 20);
+      
+      // Check count and animate old ones out
+      var items = container.querySelectorAll('.ccc-hero-left-item:not(.is-leaving)');
+      if (items.length > maxItems) {
+        var oldest = items[0];
+        oldest.classList.add('is-leaving');
+        setTimeout(function () {
+          oldest.remove();
+        }, 400);
+      }
+    }
+    
+    // Show first items initially
+    var initialCount = Math.min(lines.length, maxItems);
+    for (var i = 0; i < initialCount; i++) {
+      showNext();
+    }
+    
+    // Set interval to add new ones
+    if (!reduceMotion && lines.length > 1) {
+      root.__heroTickerTimer = setInterval(showNext, 2800);
+    }
+  }
   function buildHero() {
     var root = document.createElement('section');
     root.id = HERO_ID;
@@ -47694,6 +47888,9 @@
     root.setAttribute('tabindex', '-1');
     root.setAttribute('role', 'dialog');
     root.setAttribute('aria-label', 'Fleet Pulse');
+    
+    var variant = getLiveVariant();
+    
     root.innerHTML =
       '<div class="ccc-hero-glow"></div>' +
       '<div class="ccc-hero-stage">' +
@@ -47709,6 +47906,14 @@
           '<div class="ccc-hero-stat" data-hero-stat="cost"><span>est. cost</span><strong class="ccc-hero-stat-value">—</strong></div>' +
         '</div>' +
       '</div>' +
+      (variant === 'B' ?
+        '<div class="ccc-hero-live-left-panel">' +
+          '<div class="ccc-hero-left-header">' +
+            '<span class="ccc-hero-dot"></span>' +
+            '<span class="ccc-hero-left-status">fleet loading</span>' +
+          '</div>' +
+          '<div class="ccc-hero-left-list"></div>' +
+        '</div>' : '') +
       '<div class="ccc-hero-enter">click anywhere to enter</div>';
     var date = root.querySelector('.ccc-hero-date');
     if (date) date.textContent = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date());
