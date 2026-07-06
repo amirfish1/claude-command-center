@@ -36251,6 +36251,13 @@
         break;
       }
     }
+    function whatsappBridgeSenderHtml(ev) {
+      if (!ev || ev.subtype !== 'hermes_whatsapp_bridge') return '';
+      const sender = String(ev.sender_name || ev.pushName || ev.sender_id || '').trim();
+      if (!sender) return '';
+      const title = ev.chat_id ? ('WhatsApp sender in ' + ev.chat_id) : 'WhatsApp sender';
+      return '<div class="whatsapp-bridge-sender" title="' + escapeAttr(title) + '">' + escapeHtml(sender) + '</div>';
+    }
     for (const ev of events) {
       if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
@@ -36658,6 +36665,7 @@
         if (_rawText && !String(cleanedText || '').trim()) {
           cleanedText = ev.text;
         }
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
         const notification = parseTaskNotificationBlock(cleanedText);
         if (notification) div.classList.add('task-notification-event');
         // Collapse /compact-resume blocks into a styled card — they're
@@ -36683,7 +36691,7 @@
         if (notification) {
           textHtml = renderTaskNotificationBlock(notification, cleanedText, true);
         } else if (compactCardHtml) {
-          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + compactCardHtml + '</div>';
+          textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + compactCardHtml + '</div>';
         } else if (cleanedText) {
           if (_isPinned) {
             // For the pinned original-ask bubble: split into first sentence + rest so
@@ -36691,15 +36699,16 @@
             const _parts = splitFirstSentence(cleanedText);
             const _imagesHtml = renderImageDescriptors(ev.images);
             textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">'
+              + bridgeSenderHtml
               + '<span class="ask-first">' + linkifyPastedImages(escapeHtml(_parts[0])) + '</span>'
               + (_parts[1] ? '<span class="ask-rest">' + linkifyPastedImages(escapeHtml(_parts[1])) + '</span>' : '')
               + _imagesHtml
               + '</div>';
           } else {
-            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>';
+            textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + linkifyPastedImages(escapeHtml(cleanedText)) + '</div>';
           }
         } else {
-          textHtml = '';
+          textHtml = bridgeSenderHtml ? '<div class="user-msg" dir="auto" data-raw-text="">' + bridgeSenderHtml + '</div>' : '';
         }
         div.innerHTML = '<span class="label">User</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
@@ -36719,6 +36728,8 @@
         const blockParts = [];
         const agentAnswerParts = [];
         let lastToolPartIdx = -1;
+        const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
+        if (bridgeSenderHtml) blockParts.push(bridgeSenderHtml);
         const assistantBlocks = Array.isArray(ev.blocks)
           ? ev.blocks
           : (String(ev.text || '').trim() ? [{ kind: 'text', text: String(ev.text || '') }] : []);
