@@ -373,7 +373,9 @@ def _wt_display_name(queue, ref, context=""):
     context = _wt_clip_title(context)
     if not ref:
         return f"{queue} worker"
-    label = _wt_compact_ref(queue, ref)
+    # 🎫 flags a row as a WT worker actively holding (or having held) a
+    # ticket, distinct from the plain "<queue> worker" never-claimed state.
+    label = "🎫 " + _wt_compact_ref(queue, ref)
     if context:
         return f"{label}: {context}"
     return label
@@ -384,7 +386,9 @@ def _wt_row_name_is_generic(row, queue):
     if not raw:
         return True
     q = str(queue or "").strip()
-    low = raw.lower()
+    # Strip the 🎫 badge prefix (and any stray whitespace around it) before
+    # matching, so a previously-badged row is still recognized as WT-owned.
+    low = raw.lower().lstrip("🎫").strip()
     qlow = q.lower()
     if qlow and low == f"{qlow} queue worker":
         return True
