@@ -17502,6 +17502,7 @@
       if (wordSpan) {
         wordSpan.style.display = '';
         wordSpan.classList.add('gc-typing-shimmer');
+        body.scrollTop = body.scrollHeight;
 
         // Budget the whole message's type-in to roughly its old flat
         // per-message delay, spread across its words — same tuning as
