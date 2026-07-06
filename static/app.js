@@ -23938,6 +23938,7 @@
       //     session attached to an object intentionally appears in both.
       //  3) "Unclassified" — loose sessions outside Current sessions, so nothing is
       //     dropped from view.
+      const _ipWindowDays = _ipWindow === '7d' ? 7 : (_ipWindow === '1d' ? 1 : null);
       const _currentSessionsWindowS = _ipWindowDays ? (_ipWindowDays * 24 * 3600) : null;
       const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all' : (_ipWindow === '7d' ? 'last 7d' : 'last 1d');
       const _nowS = Date.now() / 1000;
