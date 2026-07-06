@@ -9363,9 +9363,17 @@ class TestRepoContextHelpers(unittest.TestCase):
                 pending_events = server.parse_conversation(pending_sid, use_cache=False)["events"]
                 self.assertTrue(any("Ask #22" in e.get("text", "") for e in pending_events))
                 self.assertTrue(any("sample leads" in e.get("text", "") for e in pending_events))
+                for ev in pending_events:
+                    if ev.get("type") == "assistant":
+                        self.assertIsInstance(ev.get("blocks"), list)
+                        self.assertTrue(ev["blocks"])
 
                 bridge_events = server.parse_conversation(bridge_sid, use_cache=False)["events"]
                 self.assertTrue(any("Separate bridge-only chat" in e.get("text", "") for e in bridge_events))
+                for ev in bridge_events:
+                    if ev.get("type") == "assistant":
+                        self.assertIsInstance(ev.get("blocks"), list)
+                        self.assertTrue(ev["blocks"])
             finally:
                 server.HERMES_STATE_DB = orig_db
                 server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge

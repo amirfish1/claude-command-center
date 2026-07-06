@@ -25436,7 +25436,7 @@ def _hermes_parse_bridge_line(raw, line_num):
     ts = _hermes_iso(obj.get("time") or obj.get("timestamp"))
     from_me = bool(obj.get("fromMe"))
     ev_type = "assistant" if from_me else "user_text"
-    return {
+    ev = {
         "line": line_num,
         "ts": ts,
         "type": ev_type,
@@ -25447,6 +25447,10 @@ def _hermes_parse_bridge_line(raw, line_num):
         "sender_id": str(obj.get("senderId") or "").strip(),
         "text": body,
     }
+    if ev_type == "assistant":
+        ev["message_id"] = str(obj.get("msgId") or f"hermes-bridge-{line_num}")
+        ev["blocks"] = [{"kind": "text", "text": body}]
+    return ev
 
 
 def _hermes_bridge_events_by_chat():
@@ -26695,6 +26699,8 @@ def _parse_hermes_pending_conversation(session_id, after_line=0):
             "subtype": "hermes_pending_planning",
             "source_platform": "whatsapp",
             "text": planning,
+            "message_id": f"hermes-pending-{chat_id}",
+            "blocks": [{"kind": "text", "text": planning}],
         })
     try:
         after = int(after_line or 0)
