@@ -41507,8 +41507,6 @@
   }
   let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free' };
   let _spawnDefaultsLoaded = false;
-  let _spawnDefaultsSaveTimer = null;
-  let _spawnDefaultsSaving = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
     models: Object.assign({}, _defaultModelsByEngine),
@@ -41590,13 +41588,6 @@
     return out;
   }
 
-  function spawnDefaultsPayload() {
-    return {
-      engine: getSpawnEngine(),
-      models: Object.assign({}, spawnDefaultsState.models || {}),
-    };
-  }
-
   function mergeSpawnDefaults(data) {
     if (!data || typeof data !== 'object') return;
     spawnDefaultsState.engine = normalizeSpawnDefaultEngine(data.engine);
@@ -41612,36 +41603,13 @@
     try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
   }
 
-  async function saveSpawnDefaultsNow() {
-    if (!_spawnDefaultsLoaded || _spawnDefaultsSaving) return;
-    _spawnDefaultsSaving = true;
-    try {
-      const res = await fetch('/api/spawn-defaults', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(spawnDefaultsPayload()),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data && data.ok) {
-        mergeSpawnDefaults(data);
-        syncSpawnEngineDependentUi();
-      } else {
-        showOpToast('Spawn defaults save failed: ' + ((data && data.error) || ('HTTP ' + res.status)), 'error');
-      }
-    } catch (err) {
-      showOpToast('Spawn defaults save failed: ' + ((err && err.message) || 'network'), 'error');
-    } finally {
-      _spawnDefaultsSaving = false;
-    }
-  }
-
-  function scheduleSpawnDefaultsSave() {
-    if (!_spawnDefaultsLoaded) return;
-    clearTimeout(_spawnDefaultsSaveTimer);
-    _spawnDefaultsSaveTimer = setTimeout(saveSpawnDefaultsNow, 250);
-  }
-
-  function setSpawnDefaultModel(engine, model, opts = {}) {
+  // setSpawnDefaultModel/setSpawnEngine only ever mutate in-memory +
+  // session-local state (see below) — they must NOT write back to
+  // /api/spawn-defaults. That file is a one-way settings artifact: only
+  // saveSpawnDefaultsDraft() (Settings -> Spawn defaults, human-driven Save
+  // click) is allowed to persist it. Otherwise picking a one-off engine/model
+  // for a single new session silently overwrites the human's saved default.
+  function setSpawnDefaultModel(engine, model) {
     engine = normalizeSpawnDefaultEngine(engine);
     let value = String(model == null ? '' : model).trim();
     if (engine === 'claude' && !value) value = 'opus';
@@ -41651,7 +41619,6 @@
     spawnDefaultsState.models[engine] = value;
     _defaultModelsByEngine[engine] = value;
     syncSpawnEngineDependentUi();
-    if (opts.persist !== false) scheduleSpawnDefaultsSave();
   }
 
   async function loadSpawnDefaults() {
@@ -41729,13 +41696,14 @@
       }
     }
   }
-  function setSpawnEngine(v, opts = {}) {
+  function setSpawnEngine(v) {
     v = normalizeSpawnDefaultEngine(v);
     if (!SPAWN_DEFAULT_ENGINES.includes(v)) return;
     spawnDefaultsState.engine = v;
     try { localStorage.setItem('ccc.spawnEngine', v); } catch (_) {}
-    // setSpawnEngine() persists + propagates to both; getSpawnEngine()
-    // is the canonical read used by every spawn handler.
+    // setSpawnEngine() propagates to both selectors + dependent UI, but never
+    // persists to the server — see setSpawnDefaultModel comment above.
+    // getSpawnEngine() is the canonical read used by every spawn handler.
     [$convInputEngineSelect, $kptToolbarEngineSelect]
       .forEach(s => { if (s && s.value !== v) s.value = v; });
     syncSpawnEngineDependentUi();
@@ -41743,7 +41711,6 @@
     if (currentConversation === '__new__' && typeof enterNewSessionMode === 'function') {
       enterNewSessionMode();
     }
-    if (opts.persist !== false) scheduleSpawnDefaultsSave();
   }
   [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(sel => {
     if (!sel) return;
@@ -44726,8 +44693,10 @@
     }
   });
 
-  // Spawn defaults modal — one server-backed source of truth shared by
-  // Settings, New session, and ccc-orchestration.
+  // Spawn defaults modal — the ONLY writer of /api/spawn-defaults. New
+  // session / Kanban toolbar dropdowns read this default on load but only
+  // mutate in-memory state (setSpawnEngine/setSpawnDefaultModel); a one-off
+  // engine pick for a single session must never overwrite the saved default.
   const $spawnDefaultsBtn = document.getElementById('spawnDefaultsBtn');
   const $spawnDefaultsModal = document.getElementById('spawnDefaultsModal');
   const $spawnDefaultsBackdrop = document.getElementById('spawnDefaultsBackdrop');
