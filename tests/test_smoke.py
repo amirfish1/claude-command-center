@@ -1275,6 +1275,15 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("ccc-done-collapsed", app_js)
         self.assertNotIn(".conv-done-section", app_css)
 
+    def test_kanban_tool_groups_stay_expanded(self):
+        """Kanban comments/blocks are conversation context, not routine tools."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function toolCallCarriesConversationContext(toolCall)", app_js)
+        self.assertIn("key === 'ask_user_question' || key.startsWith('kanban_')", app_js)
+        self.assertIn("if (!on && toolGroupCarriesConversationContext(g)) return;", app_js)
+        self.assertIn("if (toolGroupCarriesConversationContext(_currentToolGroup))", app_js)
+
     def test_active_sidebar_inprogress_section_is_headerless(self):
         """The Active tab should not repeat an In Progress header/count."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

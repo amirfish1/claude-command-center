@@ -35632,8 +35632,9 @@
   }
   function applyConvVerbose(on) {
     document.querySelectorAll('.tool-call-group').forEach(g => {
-      // Never re-collapse a group holding an AskUserQuestion (CCC-46).
-      if (!on && g.querySelector('.tool-call.ask-user-question')) return;
+      // Never re-collapse groups that carry conversation/control-plane
+      // context rather than routine tool noise.
+      if (!on && toolGroupCarriesConversationContext(g)) return;
       g.classList.toggle('collapsed', !on);
     });
     document.querySelectorAll('details.tool-command-disclosure').forEach(d => { d.open = on; });
@@ -35735,6 +35736,16 @@
       case 'ExitPlanMode': return 'Exited plan mode';
       default:             return detail ? 'Ran ' + displayName + ': ' + trunc(detail, 40) : 'Ran ' + (displayName || 'tool');
     }
+  }
+
+  function toolCallCarriesConversationContext(toolCall) {
+    const key = normalizedToolKey(toolCallName(toolCall));
+    return key === 'ask_user_question' || key.startsWith('kanban_');
+  }
+
+  function toolGroupCarriesConversationContext(group) {
+    if (!group) return false;
+    return Array.from(group.querySelectorAll('.tool-call')).some(toolCallCarriesConversationContext);
   }
 
   function splitShellWords(cmd) {
@@ -37111,10 +37122,10 @@
           _currentToolCount = 0;
         }
         _currentToolGroup.querySelector('.tool-call-group-body').appendChild(div);
-        // CCC-46: an AskUserQuestion carries the question + chosen answer —
-        // important context. Expand its group on the spot so it never hides
-        // behind a truncated "Question: … Options: Location…" collapse.
-        if (div.querySelector('.tool-call.ask-user-question')) {
+        // AskUserQuestion and Kanban state writes carry conversation/control-
+        // plane context. Keep those readable instead of hiding them behind a
+        // compact tool batch summary.
+        if (toolGroupCarriesConversationContext(_currentToolGroup)) {
           _currentToolGroup.classList.remove('collapsed');
           var _qArrow = _currentToolGroup.querySelector('.tcg-arrow');
           if (_qArrow) _qArrow.textContent = '▼';
@@ -37255,13 +37266,12 @@
     // Re-hide the inline duplicate of a pending question after the transcript
     // rebuilds (it re-creates the .ask-user-block without the hide class).
     try { _syncLiveQuestionDuplicateHide(); } catch (_) {}
-    // CCC-46: an answered AskUserQuestion otherwise collapses into the fused
-    // "Ran 1 command ▶" group, truncated to "Question: … Options: Location…".
-    // The question (and which option was chosen) is important context to keep
-    // readable, so auto-expand any tool group that contains a question.
+    // Conversation/control-plane tools otherwise collapse into the fused
+    // "Ran N commands ▶" group. Their details are important context, so keep
+    // those groups expanded after any transcript rebuild.
     try {
       $view.querySelectorAll('.tool-call-group.collapsed').forEach(function (g) {
-        if (g.querySelector('.tool-call.ask-user-question')) {
+        if (toolGroupCarriesConversationContext(g)) {
           g.classList.remove('collapsed');
           var _arrow = g.querySelector('.tcg-arrow');
           if (_arrow) _arrow.textContent = '▼';
