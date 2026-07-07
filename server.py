@@ -478,21 +478,30 @@ def _apply_watchtower_worker_display_names(rows):
             _wt_display_name(it.get("project"), it.get("ref"), clipped_context),
             rest_context,
         )
-    if not titles_by_sid:
+    if not titles_by_sid and not sid_to_worker:
         return rows
     for row in rows:
         if not isinstance(row, dict) or row.get("name_overridden"):
             continue
         sid = str(row.get("session_id") or row.get("id") or "").strip()
-        if sid not in titles_by_sid:
+        titled = titles_by_sid.get(sid)
+        worker = sid_to_worker.get(sid)
+        if not titled and not worker:
             continue
-        worker = sid_to_worker.get(sid) or {}
-        queue = worker.get("queue") or titles_by_sid[sid][1]
+        queue = (worker or {}).get("queue") or (titled[1] if titled else "")
         if not _wt_row_name_is_generic(row, queue):
             continue
-        row["display_name"] = titles_by_sid[sid][2]
-        if titles_by_sid[sid][3]:
-            row["wt_ticket_context_rest"] = titles_by_sid[sid][3]
+        if titled:
+            row["display_name"] = titled[2]
+            if titled[3]:
+                row["wt_ticket_context_rest"] = titled[3]
+        else:
+            # Live WT worker that hasn't claimed a ticket yet (still
+            # bootstrapping, or between tickets) — without this a fresh
+            # spawn shows whatever generic fallback the row's ai_title/
+            # first_message logic produces (WT-104) instead of a name
+            # that actually says what it is.
+            row["display_name"] = _wt_display_name(queue, None)
     return rows
 
 
@@ -5450,6 +5459,10 @@ def find_all_conversations(
             resolve_pr_states=resolve_pr_states,
             resolve_worktree_dirty=resolve_worktree_dirty,
         ))
+    except Exception:
+        pass
+    try:
+        out.extend(_find_remote_sessions(limit=limit_per_folder))
     except Exception:
         pass
 
@@ -15489,6 +15502,16 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         if progress:
             progress("hermes", state="error", detail=f"Hermes session scan failed: {exc}")
 
+    if progress:
+        progress("remote", state="running", detail="Reading remote sessions via SSH.")
+    try:
+        conversations.extend(_find_remote_sessions(repo_path=repo_path, progress=progress))
+        if progress:
+            progress("remote", state="done")
+    except Exception as exc:
+        if progress:
+            progress("remote", state="error", detail=f"Remote session scan failed: {exc}")
+
     # Add pkood agents — and merge in their linked claude-session card, if any.
     # Pkood spawns a claude process in a tmux pty, which produces a regular
     # ~/.claude/projects/*/*.jsonl file. Without dedup the kanban would show
@@ -22021,7 +22044,7 @@ def build_ux_fixes_health_payload(force=False):
         return copy.deepcopy(data)
 
 
-def _queue_codex_resume(session_id, text, pid=None):
+def _queue_codex_resume(session_id, text, pid=None, reason=None):
     with _pending_resume_lock:
         _pending_resume_queue.setdefault(session_id, []).append(text)
     _save_pending_inputs()
@@ -22030,6 +22053,11 @@ def _queue_codex_resume(session_id, text, pid=None):
         "queued": True,
         "via": "codex-resume-queued",
     }
+    if reason:
+        # Carry the real reason (e.g. "Codex thread is active") so the client can
+        # show "Queued: <reason>" inline instead of a bare "Queued".
+        payload["queued_reason"] = reason
+        payload["error"] = reason
     if pid is not None:
         payload["pid"] = pid
     return payload
@@ -22103,6 +22131,7 @@ def resume_session_codex(session_id, text, *, steer=False):
             session_id,
             text,
             pid=(active_resume_entry or {}).get("pid"),
+            reason=app_result.get("error"),
         )
     if active_resume_entry is not None:
         return _queue_codex_resume(session_id, text, pid=active_resume_entry.get("pid"))
@@ -30906,6 +30935,16 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     + branch are returned in the response under
       `worktree_path` / `worktree_branch` so the UI can show them.
     """
+    if os.environ.get("CCC_SSH_HOST"):
+        try:
+            import ssh_multiplexer
+            if ssh_multiplexer.get_global_multiplexer():
+                return spawn_session_remote(
+                    prompt, name=name, cwd=cwd, repo_path=repo_path, worktree=worktree,
+                    model=model, parent_session_id=parent_session_id, engine="claude"
+                )
+        except Exception:
+            pass
     prompt = _strip_ccc_session_state_instruction(prompt)
     ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
     spawn_cwd = ctx["cwd"]
@@ -31252,6 +31291,16 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
 
 def spawn_session_hermes(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless Hermes CLI run and return tracking info."""
+    if os.environ.get("CCC_SSH_HOST"):
+        try:
+            import ssh_multiplexer
+            if ssh_multiplexer.get_global_multiplexer():
+                return spawn_session_remote(
+                    prompt, name=name, cwd=cwd, repo_path=repo_path, worktree=worktree,
+                    model=model, parent_session_id=parent_session_id, engine="hermes"
+                )
+        except Exception:
+            pass
     prompt = _strip_ccc_session_state_instruction(prompt)
     resolved = _resolve_hermes_bin()
     if not resolved["available"]:
@@ -31307,6 +31356,148 @@ def spawn_session_hermes(prompt, name=None, cwd=None, repo_path=None, worktree=F
     )
     resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "hermes-spawn", "session_id": session_id}
     return _finalize_spawn_response(resp, entry, ctx)
+
+
+def _find_remote_sessions(repo_path=None, progress=None, limit=None):
+    try:
+        import ssh_multiplexer
+        mux = ssh_multiplexer.get_global_multiplexer()
+        if not mux:
+            return []
+        if repo_path:
+            repo_path = resolve_repo_path(repo_path)
+        return ssh_multiplexer.find_remote_sessions(mux, repo_path=repo_path, limit=limit)
+    except Exception as exc:
+        if progress:
+            progress("remote", state="error", detail=f"Remote session scan failed: {exc}")
+        return []
+
+
+def spawn_session_remote(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, engine="claude"):
+    """Spawn a remote CLI session over SSH using OpenSSH ControlMaster multiplexing."""
+    try:
+        import ssh_multiplexer
+    except ImportError:
+        return {"ok": False, "error": "ssh_multiplexer module not found", "code": "ssh_unavailable"}
+    mux = ssh_multiplexer.get_global_multiplexer()
+    if not mux:
+        return {"ok": False, "error": "CCC_SSH_HOST is not configured", "code": "ssh_unconfigured"}
+
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt)
+    if not session_name:
+        session_name = "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-remote-{session_name}-{timestamp}.log"
+    if model:
+        _set_session_model(log_filename[:-4], model, False)
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+
+    session_id = str(uuid.uuid4())
+    model_to_use = _cli_model_flag(_spawn_model_for_engine(engine or "claude", model) or "opus")
+
+    if engine == "hermes":
+        remote_cmd = f"cd {shlex.quote(spawn_cwd)} && exec hermes chat --query {shlex.quote(prompt)} --quiet"
+    else:
+        args = [
+            "claude", "-p", "--verbose",
+            "--input-format", "stream-json",
+            "--output-format", "stream-json",
+            "--model", model_to_use,
+            "--dangerously-skip-permissions",
+            "--name", session_name,
+        ]
+        args.extend(_claude_session_state_args())
+        remote_cmd = f"cd {shlex.quote(spawn_cwd)} && exec " + " ".join(shlex.quote(a) for a in args)
+
+    log_fh = open(log_path, "w")
+    fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
+    popen_kwargs = dict(
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env=_question_relay_env(),
+    )
+    popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
+    try:
+        proc = mux.popen(remote_cmd, **popen_kwargs)
+    except Exception as e:
+        log_fh.close()
+        if child_stdin_fd is not None:
+            _close_fd_quiet(child_stdin_fd)
+        if fifo_path:
+            _unlink_quiet(fifo_path)
+        return {"ok": False, "error": f"Remote SSH launch failed: {e}", "code": "ssh_launch_failed"}
+
+    stdin_fd = _open_fifo_writer(fifo_path) if fifo_path else None
+    if child_stdin_fd is not None:
+        _close_fd_quiet(child_stdin_fd)
+
+    entry = {
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "prompt": prompt[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "fifo": fifo_path,
+        "stdin_fd": stdin_fd,
+        "engine": f"remote-{engine}",
+        "cwd": spawn_cwd,
+        "repo_path": ctx["repo_path"],
+        "model": model_to_use,
+        "parent_session_id": parent_session_id or "",
+        "session_id": session_id,
+        "is_remote": True,
+    }
+    if engine != "hermes":
+        prompt_written = _write_stream_json_user_message(entry, prompt, timeout=30)
+        if not prompt_written:
+            message = "Remote Claude Code started over SSH, but CCC could not write initial prompt."
+            _write_spawn_error_event(log_fh, "spawn_stdin_unavailable", message)
+            _retire_unresponsive_spawn_entry(entry, terminate=True, reason="write_failed")
+            return {
+                "ok": False,
+                "error": message,
+                "code": "spawn_stdin_unavailable",
+                "pid": proc.pid,
+                "name": session_name,
+                "log": str(log_path),
+                "engine": f"remote-{engine}",
+            }
+
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=spawn_cwd,
+        spawned_at=timestamp,
+        command_summary=prompt[:200],
+        fifo=fifo_path,
+        engine=f"remote-{engine}",
+        repo_path=ctx["repo_path"],
+        model=model_to_use,
+        session_id=session_id,
+        parent_session_id=parent_session_id,
+    )
+    resp = {
+        "ok": True,
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "via": f"remote-{engine}-spawn",
+        "session_id": session_id,
+        "engine": f"remote-{engine}",
+        "is_remote": True,
+    }
+    return _finalize_spawn_response(resp, entry, ctx, wait_for_session_id=False)
 
 
 _COLOR_PALETTE = [
@@ -49911,6 +50102,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                             parent_session_id=parent_session_id,
+                        )
+                    elif engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None)):
+                        remote_engine = "hermes" if engine == "hermes" else "claude"
+                        result = spawn_session_remote(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                            engine=remote_engine,
                         )
                     else:
                         result = spawn_session(

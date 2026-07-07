@@ -146,6 +146,32 @@ class TestServerImports(unittest.TestCase):
             "🧵 THROUGHPUT#16: Publish usage state for external consumers",
         )
 
+    def test_watchtower_worker_titles_unclaimed_worker_gets_queue_placeholder(self):
+        """A live WT worker that hasn't claimed a ticket yet (still
+        bootstrapping, or between tickets) should get a clear placeholder
+        name instead of falling through to whatever generic ai_title/
+        first_message fallback the row would otherwise show (WT-104)."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        sid = "a27da132-bd85-4584-960b-743de30f0100"
+        rows = [{
+            "session_id": sid,
+            "source": "interactive",
+            "display_name": None,
+            "name_overridden": False,
+        }]
+
+        with mock.patch.object(server, "_wt_read_workers", return_value=[{
+            "worker_id": "ccc-bdd1ca3a",
+            "queue": "CCC",
+            "session_id": sid,
+            "alive": True,
+        }]), mock.patch.object(server._q, "list_items", return_value=[]):
+            server._apply_watchtower_worker_display_names(rows)
+
+        self.assertEqual(rows[0]["display_name"], "CCC worker")
+
     def test_watchtower_worker_titles_survive_worker_record_prune(self):
         """Closed WT tickets with claimed_session_id can still title old sessions."""
         for mod in ("server", "morning", "morning_store"):
@@ -2813,9 +2839,9 @@ class TestServerImports(unittest.TestCase):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        self.assertIn("matchMedia('(max-width: 950px)')", app_js)
+        self.assertIn("matchMedia('(max-width: 1200px)')", app_js)
         # CSS for the back-button visibility + main-overlay must match.
-        self.assertIn("@media (max-width: 950px)", app_css)
+        self.assertIn("@media (max-width: 1200px)", app_css)
         self.assertIn('id="mobileBackBtn"', index_html)
         self.assertNotIn('data-role="pane-mobile-back"', index_html)
         self.assertNotIn("mobile-show-main .conv-split[data-orientation=\"\"] .conv-pane > .conv-pane-header", app_css)
@@ -3168,11 +3194,11 @@ class TestServerImports(unittest.TestCase):
 
     def test_macapp_main_window_can_shrink_into_mobile_layout(self):
         """CCC.app must allow the main dashboard to resize below the web
-        UI's 950px narrow breakpoint. Otherwise the native shell blocks
+        UI's 1200px narrow breakpoint. Otherwise the native shell blocks
         the existing single-column layout before CSS/JS can activate it."""
         macapp = pathlib.Path(PROJECT_ROOT, "scripts", "macapp", "main.swift").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("matchMedia('(max-width: 950px)')", app_js)
+        self.assertIn("matchMedia('(max-width: 1200px)')", app_js)
         self.assertIn("let CCC_MAIN_MIN_WIDTH: CGFloat = 420", macapp)
         self.assertIn("let CCC_MAIN_MIN_HEIGHT: CGFloat = 600", macapp)
         self.assertIn(
@@ -3764,7 +3790,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Wait for the pending message to land in the transcript before compacting.", app_js)
         self.assertIn("if (compactCommand && hasPendingSendEchoBeforeCompact(", app_js)
         self.assertIn("const pendingCompactEcho = hasPendingSendEchoBeforeCompact();", app_js)
-        self.assertIn("$convCompactBtn.title = pendingCompactEcho", app_js)
+        self.assertIn("activeCompactBtn.title = pendingCompactEcho", app_js)
 
     def test_codex_spawn_log_hides_bare_error_marker(self):
         """A lone Codex CLI [error] marker should not open the log with a
