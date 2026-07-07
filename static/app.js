@@ -23944,10 +23944,15 @@
       // section reads NO Flow-object / localStorage state (no flowNodeParents,
       // no flowCustomObjects, no _byObject). It is built from two cached server
       // endpoints:
-      //   1) /api/ux-fixes/health "queues" → the drain-on queues (auto_drain
-      //      === true). Each becomes a header row with badges (open depth · live
-      //      worker count · drain on/off · state). A queue with zero workers
-      //      still shows its header — the queue is the durable anchor.
+      //   1) /api/ux-fixes/health "queues" → drain-on queues (auto_drain ===
+      //      true) PLUS any queue with a live worker right now (CCC-437's
+      //      per-row "drain once" button deliberately spawns on non-auto-drain
+      //      queues — WT-103 — so excluding auto_drain===false here hid every
+      //      run-once worker from this panel even while it was running). Each
+      //      becomes a header row with badges (open depth · live worker count
+      //      · drain on/off · state). A drain-on queue with zero workers still
+      //      shows its header — the queue is the durable anchor; a drain-off
+      //      queue only shows here while it actually has a worker.
       //   2) /api/wt/workers "workers" → live WatchTower workers, grouped by the
       //      worker's own `queue` field. Each worker renders as the EXISTING
       //      session row by resolving its cloud `session_id` to the loaded
@@ -23958,7 +23963,7 @@
       // Workers are reaped after ~5min idle, so /api/wt/workers may be empty;
       // headers still render. Scope: WatchTower queues + their workers only.
       const _twQueues = (_uxqHealthCache && Array.isArray(_uxqHealthCache.queues))
-        ? _uxqHealthCache.queues.filter(q => q && q.auto_drain === true)
+        ? _uxqHealthCache.queues.filter(q => q && (q.auto_drain === true || Number(q.workers) > 0))
         : [];
       const _twWorkers = (_wtWorkersCache && Array.isArray(_wtWorkersCache.workers))
         ? _wtWorkersCache.workers : [];
