@@ -8575,7 +8575,6 @@ SESSION_NAMES_FILE = COMMAND_CENTER_STATE_DIR / "session-names.json"  # side-car
 SESSION_NAME_MAX_CHARS = 120
 CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  # [session_id,...]
 ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
-TRASHED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "trashed-conversations.json"  # [session_id,...] — subset of archived
 ARCHIVE_GRACE_FILE = COMMAND_CENTER_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
 ARCHIVE_EVENTS_LOG = COMMAND_CENTER_STATE_DIR / "archive-events.log"  # append-only: every archive/unarchive state change, so "why did X get unarchived" is answerable without re-deriving candidacy internals after the fact (CCC-445)
 
@@ -9565,28 +9564,6 @@ def _save_archived_conversations(archived):
         archived = []
     ARCHIVED_CONVERSATIONS_FILE.write_text(json.dumps(archived, indent=2))
     return archived
-
-
-def _load_trashed_conversations(*, sweep=True):
-    """Load list of trashed session_ids from the side-car file. `sweep` is
-    accepted for signature parity with `_load_archived_conversations` but
-    unused — trashed rows have no live-session auto-unarchive sweep."""
-    try:
-        data = json.loads(TRASHED_CONVERSATIONS_FILE.read_text())
-        if isinstance(data, list):
-            return [s for s in data if isinstance(s, str)]
-    except (OSError, json.JSONDecodeError):
-        pass
-    return []
-
-
-def _save_trashed_conversations(trashed):
-    """Persist list of trashed session_ids."""
-    LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if not isinstance(trashed, list):
-        trashed = []
-    TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
-    return trashed
 
 
 def _load_pinned_conversations():
