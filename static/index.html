@@ -548,21 +548,36 @@
             </details>
           </div>
           <div class="pop-divider"></div>
-          <!-- Slot for app-level actions moved out of the conv toolbar
-               (Terminal panel toggle, History indexing status, Worktrees,
-               Stats, Report a bug, Font A-/A+). Populated at boot by JS;
-               the items get the .pop-item style via the menu wrapper. -->
-          <div class="settings-menu-slot" id="settingsMenuSlot" data-role="settings-menu-slot"></div>
-          <div class="pop-divider"></div>
-          <button class="pop-item" type="button" id="runOnboardingBtn"><span class="pop-icon">🚀</span><span>Run onboarding</span></button>
-          <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
-          <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
-          <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
-          <!-- Launchers for third-party plugin dashboards. Hidden by default;
-               shown only when /api/features confirms the plugin is installed
-               (see the feature-flag fetch below). -->
-          <a class="pop-item" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#129504;</span><span>Total Recall dashboard</span></a>
-          <a class="pop-item" id="openTokenOptimizerBtn" href="http://localhost:24842/token-optimizer" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#128202;</span><span>Token Optimizer dashboard</span></a>
+          <!-- CCC-511: these used to be ~15 flat first-level items (Terminal,
+               History, Worktrees, Stats, Today, Notes, COO, Font A/B, Run
+               onboarding, Spawn defaults, Network access, Restart server, two
+               dashboard launchers, Get help) dumped straight into the gear
+               menu. Grouped into two submenus, same pattern as Theme/Font/View
+               above, so the top level stays scannable. -->
+          <details class="pop-submenu">
+            <summary class="pop-item"><span class="pop-icon">&#129520;</span><span>Tools</span><span class="pop-chevron">&#8250;</span></summary>
+            <div class="pop-submenu-panel">
+              <!-- Slot for app-level actions moved out of the conv toolbar
+                   (Terminal panel toggle, History indexing status, Worktrees,
+                   Stats, Today, Notes, COO, Font A-/A+). Populated at boot by
+                   JS; the items get the .pop-item style via the menu wrapper. -->
+              <div class="settings-menu-slot" id="settingsMenuSlot" data-role="settings-menu-slot"></div>
+            </div>
+          </details>
+          <details class="pop-submenu">
+            <summary class="pop-item"><span class="pop-icon">&#9881;</span><span>Advanced</span><span class="pop-chevron">&#8250;</span></summary>
+            <div class="pop-submenu-panel">
+              <button class="pop-item" type="button" id="runOnboardingBtn"><span class="pop-icon">🚀</span><span>Run onboarding</span></button>
+              <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
+              <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
+              <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
+              <!-- Launchers for third-party plugin dashboards. Hidden by
+                   default; shown only when /api/features confirms the plugin
+                   is installed (see the feature-flag fetch below). -->
+              <a class="pop-item" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#129504;</span><span>Total Recall dashboard</span></a>
+              <a class="pop-item" id="openTokenOptimizerBtn" href="http://localhost:24842/token-optimizer" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#128202;</span><span>Token Optimizer dashboard</span></a>
+            </div>
+          </details>
           <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
         </div>
       </div>
