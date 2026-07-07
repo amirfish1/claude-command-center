@@ -5298,7 +5298,7 @@
     return 'claude';
   }
 
-  function conversationGoalActionButtonsHtml(statusKey, source) {
+  function conversationGoalActionButtonsHtml(statusKey, source, isLive) {
     const key = String(statusKey || 'active').trim().toLowerCase();
     const kind = conversationGoalSourceKind(source);
     let actions = [];
@@ -5316,13 +5316,24 @@
       actions.push({ action: 'clear', label: 'Clear', iconHtml: '&times;' });
     }
     if (!actions.length) return '';
+    // pause/resume/edit have no dormant-thread RPC path (server.py
+    // resume_session_codex: only /goal clear and /goal <objective> work
+    // without a live TUI) — disable them instead of letting the click
+    // round-trip into a guaranteed "requires live interactive terminal" toast.
     return '<span class="conv-goal-strip-actions" aria-label="Goal actions">'
-      + actions.map(a => '<button type="button" class="conv-goal-action'
-        + (a.action === 'clear' ? ' is-clear' : '')
-        + '" data-role="conv-goal-action" data-goal-action="' + escapeAttr(a.action) + '"'
-        + ' title="' + escapeAttr(a.label + ' goal') + '"'
-        + ' aria-label="' + escapeAttr(a.label + ' goal') + '">'
-        + (a.iconHtml || escapeHtml(a.label)) + '</button>').join('')
+      + actions.map(a => {
+        const needsLiveTui = kind === 'codex' && a.action !== 'clear' && !isLive;
+        const title = needsLiveTui
+          ? 'Launch or focus the session to ' + a.label.toLowerCase() + ' its goal'
+          : (a.label + ' goal');
+        return '<button type="button" class="conv-goal-action'
+          + (a.action === 'clear' ? ' is-clear' : '')
+          + '" data-role="conv-goal-action" data-goal-action="' + escapeAttr(a.action) + '"'
+          + (needsLiveTui ? ' disabled' : '')
+          + ' title="' + escapeAttr(title) + '"'
+          + ' aria-label="' + escapeAttr(title) + '">'
+          + (a.iconHtml || escapeHtml(a.label)) + '</button>';
+      }).join('')
       + '</span>';
   }
 
@@ -5385,7 +5396,7 @@
     strip.hidden = false;
     strip.className = 'conv-goal-strip ' + ui.className;
     strip.title = ui.label + ': ' + objective;
-    const actionsHtml = conversationGoalActionButtonsHtml(ui.key, row && row.source);
+    const actionsHtml = conversationGoalActionButtonsHtml(ui.key, row && row.source, !!(row && row.is_live));
     strip.innerHTML = '<span class="conv-goal-strip-icon" aria-hidden="true">' + ui.iconHtml + '</span>'
       + '<span class="conv-goal-strip-state">' + escapeHtml(ui.label) + '</span>'
       + '<span class="conv-goal-strip-objective">' + escapeHtml(objective) + '</span>'
