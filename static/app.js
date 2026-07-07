@@ -3818,8 +3818,8 @@
     el.className = 'conv-live-tool-inline optimistic is-stale-no-process';
     el.innerHTML = '<span class="cl-pulse"></span>'
       + '<span class="cl-tool">No active agent process</span>'
-      + '<span class="cl-hint">Last send did not find a running agent. '
-      + 'Type below to resume headlessly, or use Launch if typing is unavailable.</span>';
+      + '<span class="cl-hint">Send a message to resume it headlessly (you\'ll see "Waking up…"), '
+      + 'or use Launch if typing is unavailable.</span>';
     return true;
   }
   function clearOptimisticAgentIndicator($view) {
