@@ -2963,6 +2963,64 @@ def _spawn_fallback_model_for_engine(engine):
     return ""
 
 
+# Discovery/reference copy of the UI's model picker (static/app.js
+# MODEL_OPTIONS_BY_ENGINE) so scripted callers (the ccc-orchestration skill,
+# curl, etc.) don't have to guess a model id blind (CCC-503). Informational
+# for most engines -- only codex is hard-validated below, since claude's
+# --model flag legitimately accepts bare family names ("opus") and other
+# forms _cli_model_flag() normalizes, and cursor/kilo/hermes/antigravity pass
+# through CLI-specific strings CCC doesn't fully enumerate here.
+_ENGINE_KNOWN_MODELS = {
+    "claude": ("fable-5", "sonnet-5", "opus-4-8", "haiku-4-5"),
+    "codex": ("gpt-5.5", "gpt-5.4", "gpt-5-codex", "o4", "o4-mini", "o3", "o3-mini"),
+    "cursor": (
+        "auto", "composer-2.5-fast", "gpt-5.3-codex", "gpt-5.3-codex-high",
+        "claude-opus-4-8-thinking-high", "composer-2.5",
+    ),
+    "antigravity": (
+        "Gemini 3.5 Pro (High)", "Gemini 3.5 Pro (Medium)", "Gemini 3.5 Pro (Low)",
+        "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Medium)",
+        "Gemini 3.1 Pro (High)", "Gemini 3.1 Pro (Low)",
+        "Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)",
+        "GPT-OSS 120B (Medium)",
+    ),
+    "kilo": (
+        "kilo/stepfun/step-3.8-flash:free", "kilo/stepfun/step-3.7-flash:free",
+        "kilo/anthropic/claude-sonnet-4.8", "kilo/anthropic/claude-opus-4.8",
+        "kilo/anthropic/claude-sonnet-4.6", "kilo/openai/gpt-6.0", "kilo/openai/gpt-5.5",
+    ),
+    "hermes": ("auto", "hermes-3-llama-3.1-405b", "hermes-3-llama-3.1-70b", "hermes-2-pro-llama-3-8b"),
+}
+
+# Known typo/guess patterns for a model id that doesn't exist -- e.g. an
+# agent assuming codex model names always end in "-codex" (they don't; the
+# reported case was 'gpt-5.5-codex' when the real id is just 'gpt-5.5').
+_CODEX_MODEL_ALIASES = {
+    "gpt-5.5-codex": "gpt-5.5",
+}
+
+
+def _validate_codex_model(model):
+    """Catch codex model-id typos before a headless `codex exec --model`
+    spawn silently reports ok:true and then fails async (CCC-503).
+
+    Returns (resolved_model, error). `error` is None when `model` is empty
+    (caller falls back to the default), a known alias, or already valid.
+    """
+    if not model:
+        return model, None
+    key = model.strip().lower()
+    alias = _CODEX_MODEL_ALIASES.get(key)
+    if alias:
+        return alias, None
+    if key in _ENGINE_KNOWN_MODELS["codex"]:
+        return model, None
+    return model, (
+        f"unknown codex model: {model!r}. Known codex models: "
+        + ", ".join(_ENGINE_KNOWN_MODELS["codex"])
+    )
+
+
 def _load_spawn_defaults():
     """Return the server-backed defaults used by new-session spawns.
 
@@ -47467,6 +47525,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "version": __version__,
                 "last_updated": _ccc_last_updated_iso(),
             })
+        elif path == "/api/engines/models":
+            # Discovery endpoint (CCC-503) so scripted spawn callers (the
+            # ccc-orchestration skill, curl, etc.) can look up valid model
+            # ids per engine instead of guessing. Only "codex" is hard
+            # enforced at spawn time -- see _validate_codex_model.
+            self.send_json({
+                "engines": {k: list(v) for k, v in _ENGINE_KNOWN_MODELS.items()},
+                "enforced": ["codex"],
+            })
         elif path == "/api/search-history":
             # Read window onto ~/.claude-index/index.db, populated by the
             # bundled _history_index indexer. Returns BM25-ranked matches
@@ -49632,6 +49699,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             name = (payload.get("name") or "").strip() or None
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
+            model_error = None
+            if engine == "codex":
+                model, model_error = _validate_codex_model(model)
             report_to, report_to_error = _normalize_return_address(payload)
             parent_session_id, parent_session_error = _normalize_spawn_parent_session_id(
                 payload,
@@ -49678,6 +49748,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "ok": False,
                     "error": f"unsupported engine: {engine_raw}",
                     "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+                }, 400)
+            elif model_error:
+                self.send_json({
+                    "ok": False,
+                    "error": model_error,
+                    "known_codex_models": list(_ENGINE_KNOWN_MODELS["codex"]),
                 }, 400)
             elif cwd_error:
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
