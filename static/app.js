@@ -3899,6 +3899,8 @@
     // that clears when the reply streams in (clearOptimisticAgentIndicator).
     if (data.ok && via === 'codex-app-turn') {
       setOptimisticAgentThinking($view, '⏳ Codex resuming&hellip;');
+      const wakeSid = data.session_id || (currentSession && currentSession.id);
+      startCodexWakeBreakdown($view, wakeSid);
       return true;
     }
     // Durable queue (thread busy): show the real reason inline. The cwd-missing
@@ -3918,6 +3920,143 @@
       return true;
     }
     return false;
+  }
+  // ── Live Codex wake/turn breakdown ────────────────────────────────────────
+  // While "⏳ Codex resuming…" is up, poll /api/codex-wake-status and render a
+  // moment-to-moment breakdown (stage checklist + live token/context readout)
+  // beneath the status line — so the user sees what's happening, and sees when
+  // a turn produces nothing because the session is at its context limit.
+  let _codexWakePoll = null;
+  let _codexWakePollSid = null;
+  function stopCodexWakeBreakdown(removeEl) {
+    if (_codexWakePoll) { clearInterval(_codexWakePoll); _codexWakePoll = null; }
+    _codexWakePollSid = null;
+    if (removeEl) {
+      document.querySelectorAll('.wake-breakdown').forEach(n => n.remove());
+    }
+  }
+  function _wakeStageLabel(name, data) {
+    const model = data.model || 'model';
+    const effort = data.effort ? (' (' + data.effort + ')') : '';
+    switch (name) {
+      case 'connect': return 'Connected';
+      case 'thread-resume': return 'Reattached (thread/resume)';
+      case 'turn-start': return 'Sent (turn/start)';
+      case 'running': return 'Running ' + model + effort;
+      default: return name;
+    }
+  }
+  function _wakeInt(n) {
+    try { return Number(n).toLocaleString(); } catch (_) { return String(n); }
+  }
+  function renderCodexWakeBreakdown($view, data) {
+    if (!$view || !data) return;
+    const optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
+    let el = $view.querySelector('.wake-breakdown');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'conv-live-tool-inline wake-breakdown';
+      if (optimistic && optimistic.parentNode) {
+        optimistic.parentNode.insertBefore(el, optimistic.nextSibling);
+      } else {
+        $view.appendChild(el);
+      }
+    }
+    const stages = Array.isArray(data.stages) ? data.stages : [];
+    const currentIdx = stages.findIndex(s => !s.done);
+    const checklist = document.createElement('div');
+    checklist.className = 'wb-stages';
+    stages.forEach((s, i) => {
+      const done = !!s.done;
+      const isCurrent = !done && i === currentIdx;
+      const row = document.createElement('div');
+      row.className = 'wb-stage' + (done ? ' is-done' : (isCurrent ? ' is-current' : ' is-pending'));
+      const icon = document.createElement('span');
+      icon.className = done ? 'wb-icon wb-check' : (isCurrent ? 'wb-icon wb-spin' : 'wb-icon wb-dot');
+      if (done) icon.textContent = '✓';
+      const label = document.createElement('span');
+      label.className = 'wb-label';
+      label.textContent = _wakeStageLabel(s.name, data);
+      row.appendChild(icon);
+      row.appendChild(label);
+      checklist.appendChild(row);
+    });
+    const readout = document.createElement('div');
+    readout.className = 'wb-readout';
+    const parts = [];
+    if (data.model) parts.push(data.model);
+    if (data.effort) parts.push(data.effort);
+    if (data.input_tokens != null || data.output_tokens != null) {
+      parts.push((data.input_tokens || 0) + '↓ / ' + (data.output_tokens || 0) + '↑ tokens');
+    }
+    let pct = data.context_pct;
+    if (data.context_used != null && data.context_window) {
+      if (pct == null) pct = Math.round(100 * data.context_used / data.context_window);
+      parts.push('context ' + _wakeInt(data.context_used) + '/' + _wakeInt(data.context_window) + ' (' + pct + '%)');
+    }
+    if (data.elapsed_s != null) parts.push(data.elapsed_s + 's');
+    readout.textContent = parts.join(' · ');
+    if (pct != null && pct >= 99) readout.classList.add('is-red');
+    else if (pct != null && pct >= 90) readout.classList.add('is-amber');
+    el.innerHTML = '';
+    el.appendChild(checklist);
+    el.appendChild(readout);
+  }
+  function handleCodexWakeOutcome($view, data) {
+    const outcome = data.outcome;
+    if (outcome === 'reply') {
+      // The real reply renders through the normal transcript path; just clear
+      // the transient breakdown + resuming indicator.
+      stopCodexWakeBreakdown(true);
+      return;
+    }
+    // Empty/error outcomes: replace the breakdown with a persistent, dismissible
+    // line so the user is not left staring at a spinner that never resolves.
+    stopCodexWakeBreakdown(true);
+    let msg;
+    if (outcome === 'empty_context_full') {
+      const used = data.context_used, win = data.context_window;
+      let pct = data.context_pct;
+      if (pct == null && used != null && win) pct = Math.round(100 * used / win);
+      msg = '⚠ No response, context full';
+      if (used != null && win) {
+        msg += ' (' + _wakeInt(used) + '/' + _wakeInt(win) + ', ' + pct + '%)';
+      }
+      msg += '. Compact to continue.';
+    } else if (outcome === 'empty_other') {
+      msg = '⚠ No response' + (data.outcome_detail ? ' (' + data.outcome_detail + ')' : '.');
+    } else {
+      msg = '⚠ ' + (data.outcome_detail || 'Resume failed.');
+    }
+    renderInlineWakeError($view, msg);
+  }
+  function startCodexWakeBreakdown($view, sid) {
+    if (!$view || !sid) return;
+    stopCodexWakeBreakdown(false);
+    _codexWakePollSid = sid;
+    const startedAt = Date.now();
+    const CAP_MS = 3 * 60 * 1000;
+    const tick = () => {
+      // Stop if the pane switched sessions, the resuming indicator is gone (the
+      // real reply landed / was cleared), or we exceeded the sane cap.
+      if (!currentSession || currentSession.id !== sid) { stopCodexWakeBreakdown(true); return; }
+      if (!$view.querySelector('.conv-live-tool-inline.optimistic')) { stopCodexWakeBreakdown(true); return; }
+      if (Date.now() - startedAt > CAP_MS) { stopCodexWakeBreakdown(true); return; }
+      fetch('/api/codex-wake-status?session_id=' + encodeURIComponent(sid))
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (!data || data.sid !== sid || _codexWakePollSid !== sid) return;
+          if (!currentSession || currentSession.id !== sid) return;
+          renderCodexWakeBreakdown($view, data);
+          if (data.outcome) {
+            stopCodexWakeBreakdown(false);
+            handleCodexWakeOutcome($view, data);
+          }
+        })
+        .catch(() => {});
+    };
+    tick();
+    _codexWakePoll = setInterval(tick, 600);
   }
   // Tier 2 (live-thinking-and-input-echo doc): advance the optimistic agent
   // indicator from "Sending…" to "🧠 Thinking…" once the message is delivered

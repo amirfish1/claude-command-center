@@ -3685,6 +3685,13 @@ _RESUME_LEDGER_WINDOW = collections.deque(maxlen=50)
 # sid -> epoch of that sid's most recent exit/cold_resume, for gap computation
 # without reparsing the file.
 _RESUME_LAST_EPOCH = {}
+# sid -> deque of that sid's recent codex_wake_* rows, so the live wake-status
+# endpoint (/api/codex-wake-status) can derive the stage timeline with NO file
+# scan (perf gate). Bounded per sid AND in the number of tracked sids. Mirrors
+# how `_RESUME_LEDGER_WINDOW` is kept — updated only at wake transitions.
+_CODEX_WAKE_EVENTS = collections.OrderedDict()
+_CODEX_WAKE_MAX_SIDS = 64
+_CODEX_WAKE_PER_SID = 24
 
 
 def _resume_ledger_append(event, sid=None, pid=None, **fields):
@@ -3704,6 +3711,17 @@ def _resume_ledger_append(event, sid=None, pid=None, **fields):
             _RESUME_LEDGER_WINDOW.append(rec)
             if event in ("exit", "cold_resume") and sid is not None:
                 _RESUME_LAST_EPOCH[sid] = now
+            # Feed the per-sid codex wake window (in-memory only; the endpoint
+            # never touches the ledger file).
+            if sid is not None and isinstance(event, str) and event.startswith("codex_wake"):
+                dq = _CODEX_WAKE_EVENTS.get(sid)
+                if dq is None:
+                    dq = collections.deque(maxlen=_CODEX_WAKE_PER_SID)
+                    _CODEX_WAKE_EVENTS[sid] = dq
+                _CODEX_WAKE_EVENTS.move_to_end(sid)
+                dq.append(rec)
+                while len(_CODEX_WAKE_EVENTS) > _CODEX_WAKE_MAX_SIDS:
+                    _CODEX_WAKE_EVENTS.popitem(last=False)
             try:
                 COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
                 try:
@@ -17962,6 +17980,12 @@ def _codex_resume_or_steer_via_app_server(
         resume_params["model"] = model
     if reasoning_effort:
         resume_params["effort"] = reasoning_effort
+    # Finer stage breadcrumb for the live wake-status breakdown (diagnostic
+    # only; wrapped so it can never affect control flow).
+    try:
+        _resume_ledger_append("codex_wake_stage", sid=session_id, stage="connect")
+    except Exception:
+        pass
     resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
     if resumed.get("error"):
         _err = _codex_error_text(resumed)
@@ -18013,6 +18037,10 @@ def _codex_resume_or_steer_via_app_server(
             "error": _reason,
         }
 
+    try:
+        _resume_ledger_append("codex_wake_stage", sid=session_id, stage="turn-start")
+    except Exception:
+        pass
     started = _codex_app_server_request(
         "turn/start",
         _codex_turn_params(session_id, text, cwd=cwd, model=model, image_paths=image_paths, effort=reasoning_effort),
@@ -22062,6 +22090,242 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None):
         payload["pid"] = pid
     return payload
 
+
+# ── Live Codex wake/turn status (feeds GET /api/codex-wake-status) ──────────
+# The conversation pane polls this while "Codex resuming…" is up so the user
+# sees the wake broken down moment to moment (stages, live tokens, context %)
+# and, critically, learns when a turn produced nothing because the session hit
+# its context limit. Everything here is single-session and cheap: the stage
+# timeline comes from the in-memory `_CODEX_WAKE_EVENTS` window (NO file scan)
+# and the token/context readout comes from a ~16KB TAIL of one rollout file,
+# cached by (path, mtime, size) so repeated polls of an unchanged file re-read
+# nothing (perf gate).
+_CODEX_WAKE_TAIL_CACHE = collections.OrderedDict()
+_CODEX_WAKE_TAIL_LOCK = threading.Lock()
+_CODEX_WAKE_TAIL_BYTES = 16 * 1024
+_CODEX_WAKE_TAIL_MAX = 16
+
+
+def _codex_wake_rollout_snapshot(session_id):
+    """Latest model/effort + token/context numbers for a Codex session, read
+    from the TAIL of its rollout jsonl. Cached by (path, mtime, size). Missing
+    or unreadable rollout -> an all-None snapshot. Never raises."""
+    empty = {
+        "model": None, "effort": None,
+        "context_used": None, "context_window": None, "context_pct": None,
+        "input_tokens": None, "output_tokens": None,
+        "task_complete_epoch": 0.0, "no_agent_output": None,
+    }
+    try:
+        path = _resolve_codex_rollout_path(session_id)
+    except Exception:
+        path = None
+    if not path:
+        return dict(empty)
+    try:
+        st = path.stat()
+    except OSError:
+        return dict(empty)
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    with _CODEX_WAKE_TAIL_LOCK:
+        hit = _CODEX_WAKE_TAIL_CACHE.get(str(path))
+        if hit and hit[0] == key:
+            _CODEX_WAKE_TAIL_CACHE.move_to_end(str(path))
+            return dict(hit[1])
+    snap = dict(empty)
+    try:
+        with open(path, "rb") as f:
+            if st.st_size > _CODEX_WAKE_TAIL_BYTES:
+                f.seek(-_CODEX_WAKE_TAIL_BYTES, os.SEEK_END)
+                f.readline()  # drop the partial first line after the seek
+            chunk = f.read()
+        for raw in chunk.split(b"\n"):
+            if not raw.strip():
+                continue
+            try:
+                ev = json.loads(raw.decode("utf-8", "replace"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(ev, dict):
+                continue
+            payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+            ev_type = ev.get("type")
+            ptype = payload.get("type")
+            if ev_type == "turn_context":
+                model = payload.get("model")
+                if model:
+                    snap["model"] = model
+                settings = ((payload.get("collaboration_mode") or {}).get("settings") or {})
+                eff = (
+                    payload.get("effort")
+                    or payload.get("reasoning_effort")
+                    or (settings.get("reasoning_effort") if isinstance(settings, dict) else None)
+                )
+                if eff:
+                    snap["effort"] = eff
+                continue
+            if ptype == "token_count":
+                info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+                window = _codex_int(info.get("model_context_window"))
+                last = info.get("last_token_usage") if isinstance(info.get("last_token_usage"), dict) else {}
+                inp = _codex_int(last.get("input_tokens"))
+                out = _codex_int(last.get("output_tokens"))
+                # Live context occupancy is the size of the LAST prompt sent
+                # (last_token_usage.input_tokens), NOT the cumulative
+                # total_token_usage.total_tokens (which sums every turn and
+                # overflows the window). As the conversation fills, input_tokens
+                # climbs toward model_context_window; at the cap it reads 100%.
+                if window:
+                    snap["context_window"] = window
+                if inp:
+                    snap["context_used"] = inp
+                snap["input_tokens"] = inp
+                snap["output_tokens"] = out
+                continue
+            if ptype == "task_complete":
+                snap["task_complete_epoch"] = _codex_event_epoch(ev) or snap["task_complete_epoch"]
+                text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
+                snap["no_agent_output"] = not bool(text)
+                continue
+    except OSError:
+        return dict(empty)
+    cu, cw = snap.get("context_used"), snap.get("context_window")
+    if cu is not None and cw:
+        snap["context_pct"] = round(100.0 * cu / cw, 1)
+    with _CODEX_WAKE_TAIL_LOCK:
+        _CODEX_WAKE_TAIL_CACHE[str(path)] = (key, dict(snap))
+        _CODEX_WAKE_TAIL_CACHE.move_to_end(str(path))
+        while len(_CODEX_WAKE_TAIL_CACHE) > _CODEX_WAKE_TAIL_MAX:
+            _CODEX_WAKE_TAIL_CACHE.popitem(last=False)
+    return snap
+
+
+def build_codex_wake_status(session_id):
+    """Assemble the live wake/turn breakdown for one Codex session. Reads the
+    in-memory per-sid wake-event window plus a single rollout tail — no
+    all-sessions scan, no subprocess. Never raises (returns a safe shell)."""
+    try:
+        with _RESUME_LEDGER_LOCK:
+            dq = _CODEX_WAKE_EVENTS.get(session_id)
+            events = list(dq) if dq else []
+    except Exception:
+        events = []
+    now = time.time()
+
+    def _last(evname, **match):
+        for e in reversed(events):
+            if e.get("event") != evname:
+                continue
+            if all(e.get(k) == v for k, v in match.items()):
+                return e
+        return None
+
+    attempt = _last("codex_wake_attempt")
+    connect = _last("codex_wake_stage", stage="connect")
+    turnstart = _last("codex_wake_stage", stage="turn-start")
+    ok = _last("codex_wake_ok")
+    exec_ev = _last("codex_wake_exec")
+    fail = _last("codex_wake_fail")
+    queued = _last("codex_wake_queued")
+
+    attempt_epoch = float((attempt or {}).get("epoch") or 0.0)
+
+    snap = _codex_wake_rollout_snapshot(session_id)
+    ctx_used = snap.get("context_used")
+    ctx_win = snap.get("context_window")
+    ctx_pct = snap.get("context_pct")
+
+    running_reached = bool(ok or exec_ev)
+    tc_epoch = float(snap.get("task_complete_epoch") or 0.0)
+    turn_ended = bool(running_reached and tc_epoch and tc_epoch >= (attempt_epoch - 1.0))
+
+    # A hard failure that will not yield a turn: exec-stage failure, or a
+    # queue fallback (message parked for later). A fail whose fallback is
+    # "exec" is a retry, not terminal, so it is ignored here.
+    hard_error = None
+    if fail and float(fail.get("epoch") or 0.0) >= attempt_epoch:
+        if fail.get("stage") == "exec" or fail.get("fallback") == "queue":
+            hard_error = fail.get("error")
+    if not hard_error and queued and float(queued.get("epoch") or 0.0) >= attempt_epoch and not turn_ended:
+        hard_error = queued.get("reason") or queued.get("error")
+
+    outcome = None
+    outcome_detail = None
+    if turn_ended:
+        inp = snap.get("input_tokens") or 0
+        out = snap.get("output_tokens") or 0
+        empty = bool(snap.get("no_agent_output")) or (inp + out == 0)
+        if not empty:
+            outcome = "reply"
+        elif ctx_pct is not None and ctx_pct >= 99:
+            outcome = "empty_context_full"
+            if ctx_used is not None and ctx_win:
+                outcome_detail = f"context {ctx_used}/{ctx_win} ({ctx_pct}%), compact to continue"
+            else:
+                outcome_detail = "context full, compact to continue"
+        else:
+            outcome = "empty_other"
+            outcome_detail = "turn ended with no output"
+    elif hard_error:
+        outcome = "error"
+        outcome_detail = hard_error
+
+    active = bool(attempt) and outcome is None
+
+    # Stage timeline. Emit a stage only once it has STARTED; the current stage
+    # is the emitted one with done=false (frontend renders a spinner there).
+    resume_returned = bool(turnstart or ok or exec_ev or queued or hard_error)
+    threadresume_done = bool(turnstart or ok or exec_ev or hard_error)
+    turnstart_started = bool(turnstart or ok or exec_ev)
+    turnstart_done = bool(ok or exec_ev)
+    running_done = outcome is not None
+
+    stages = []
+    if attempt or connect:
+        stages.append({
+            "name": "connect",
+            "ts": float((connect or attempt or {}).get("epoch") or 0.0) or None,
+            "done": bool(resume_returned),
+        })
+        stages.append({
+            "name": "thread-resume",
+            "ts": float((turnstart or connect or attempt or {}).get("epoch") or 0.0) or None,
+            "done": bool(threadresume_done),
+        })
+    if turnstart_started:
+        stages.append({
+            "name": "turn-start",
+            "ts": float((turnstart or ok or exec_ev or {}).get("epoch") or 0.0) or None,
+            "done": bool(turnstart_done),
+        })
+    if running_reached:
+        stages.append({
+            "name": "running",
+            "ts": float((ok or exec_ev or {}).get("epoch") or 0.0) or None,
+            "done": bool(running_done),
+        })
+
+    # turn_context may sit beyond the tail window on a long session; fall back
+    # to the model/effort recorded on the wake attempt row so the readout is
+    # never blank during an active wake.
+    model = snap.get("model") or (attempt or {}).get("model")
+    effort = snap.get("effort") or (attempt or {}).get("effort")
+
+    return {
+        "sid": session_id,
+        "active": active,
+        "stages": stages,
+        "model": model,
+        "effort": effort,
+        "context_used": ctx_used,
+        "context_window": ctx_win,
+        "context_pct": ctx_pct,
+        "input_tokens": snap.get("input_tokens"),
+        "output_tokens": snap.get("output_tokens"),
+        "elapsed_s": round(now - attempt_epoch, 1) if attempt_epoch else None,
+        "outcome": outcome,
+        "outcome_detail": outcome_detail,
+    }
 
 
 def resume_session_codex(session_id, text, *, steer=False):
@@ -46972,6 +47236,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # monitor session) instead of having it poll /api/sessions on a
             # timer. Long-lived handler — safe under ThreadingHTTPServer.
             self._stream_sessions_state_events()
+        elif path == "/api/codex-wake-status":
+            # Live breakdown of a Codex wake/turn for the conversation pane's
+            # "Codex resuming…" status. Single-session + cheap: in-memory wake
+            # events + one rollout tail (cached). No all-sessions scan.
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = qs.get("session_id", [""])[0]
+            if not sid:
+                self.send_json({"error": "missing session_id"}, 400)
+            else:
+                self.send_json(build_codex_wake_status(sid))
         elif path == "/api/session-status":
             qs = urllib.parse.parse_qs(parsed.query)
             sid = qs.get("session_id", [""])[0]

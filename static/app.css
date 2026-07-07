@@ -9447,6 +9447,59 @@
     line-height: 1;
     padding: 0 2px;
   }
+  /* Live Codex wake/turn breakdown: a stage checklist plus a token/context
+     readout, shown beneath the "Codex resuming…" status while a wake is in
+     flight. Calm/neutral by default; the context readout turns amber (>=90%)
+     and red (>=99%). */
+  .conv-live-tool-inline.wake-breakdown {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    color: var(--text-muted);
+    background: linear-gradient(rgba(139,148,158,0.08), rgba(139,148,158,0.08)), var(--bg);
+    border-color: rgba(139,148,158,0.28);
+    cursor: default;
+  }
+  .wake-breakdown .wb-stages {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .wake-breakdown .wb-stage {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px;
+    opacity: 0.55;
+  }
+  .wake-breakdown .wb-stage.is-done { opacity: 1; color: #3fb950; }
+  .wake-breakdown .wb-stage.is-current { opacity: 1; color: #58a6ff; }
+  .wake-breakdown .wb-stage .wb-label { color: inherit; }
+  .wake-breakdown .wb-icon {
+    flex: 0 0 auto;
+    width: 12px; height: 12px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; line-height: 1;
+  }
+  .wake-breakdown .wb-check { color: #3fb950; }
+  .wake-breakdown .wb-dot::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; opacity: 0.5;
+  }
+  .wake-breakdown .wb-spin {
+    border: 2px solid rgba(88,166,255,0.30);
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: wb-spin-rot 0.7s linear infinite;
+  }
+  @keyframes wb-spin-rot { to { transform: rotate(360deg); } }
+  .wake-breakdown .wb-readout {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    padding-top: 2px;
+    border-top: 1px solid rgba(139,148,158,0.18);
+  }
+  .wake-breakdown .wb-readout.is-amber { color: #d29922; }
+  .wake-breakdown .wb-readout.is-red { color: #f85149; font-weight: 600; }
   .conv-live-tool-inline .cl-dismiss:hover { opacity: 1; }
   .conv-live-tool-inline.is-question {
     color: #58a6ff;
