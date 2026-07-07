@@ -26582,6 +26582,21 @@
       });
       attachDragHandlers(el);
     });
+    // Selection-state sync + toolbar refresh: was previously re-run INSIDE
+    // attachDragHandlers on every single row, each call re-querying and
+    // walking the entire .conv-item list — O(n²) over the whole sidebar.
+    // With a large history (1000+ rows) that alone blocked the main thread
+    // for 10-25s per render (OPS-103). It doesn't depend on the specific
+    // row, so it only needs to run once per render, after all rows exist.
+    {
+      const renderedIds = new Set();
+      $convList.querySelectorAll('.conv-item').forEach(el => {
+        if (el.dataset.id) renderedIds.add(el.dataset.id);
+        if (selectedListIds.has(el.dataset.id)) el.classList.add('list-selected');
+      });
+      selectedListIds.forEach(id => { if (!renderedIds.has(id)) selectedListIds.delete(id); });
+      updateCoordToolbar();
+    }
     // Context-% badge: click to /compact the session. The badge already
     // stops propagation via the exclusion list above so the surrounding
     // row click doesn't open the conversation. A native confirm keeps
@@ -27619,13 +27634,6 @@
       await saveConversationOrder();
       renderSidebar(filterConversations($convSearch.value));
     });
-    const renderedIds = new Set();
-    $convList.querySelectorAll('.conv-item').forEach(el => {
-      if (el.dataset.id) renderedIds.add(el.dataset.id);
-      if (selectedListIds.has(el.dataset.id)) el.classList.add('list-selected');
-    });
-    selectedListIds.forEach(id => { if (!renderedIds.has(id)) selectedListIds.delete(id); });
-    updateCoordToolbar();
   }
 
   async function saveConversationOrder() {
