@@ -14232,7 +14232,10 @@
 
     try {
       const endpoint = spawnEndpointForEngine(engine);
-      const body = { prompt, name: subject, cwd: repoPath, repo_path: repoPath };
+      // CCC-509: always send engine explicitly — see comment at the inline-
+      // input spawn call site for why omitting it lets the server's own
+      // persisted default silently override what the UI shows.
+      const body = { prompt, name: subject, cwd: repoPath, repo_path: repoPath, engine };
       if (spawnSupportsWorktree(engine)) body.worktree = false;
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -42506,9 +42509,12 @@
       try {
         const endpoint = spawnEndpointForEngine(engine);
         // Engines with native long-running app sessions can opt out of CCC-managed worktrees.
+        // CCC-509: always send engine explicitly — see comment at the inline-
+        // input spawn call site for why omitting it lets the server's own
+        // persisted default silently override what the UI shows.
         const body = spawnSupportsWorktree(engine)
-          ? { prompt, repo_path: repoPath, worktree: useWorktree }
-          : { prompt, repo_path: repoPath };
+          ? { prompt, repo_path: repoPath, worktree: useWorktree, engine }
+          : { prompt, repo_path: repoPath, engine };
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -46692,7 +46698,15 @@
       const endpoint = spawnEndpointForEngine(engine);
       const $inlineWorktree = document.getElementById('inlineWorktreeToggle');
       const useWorktree = !!($inlineWorktree && $inlineWorktree.checked);
-      const spawnBody = { prompt, name: subject, cwd: launchCwd };
+      // CCC-509: /api/sessions/spawn (the claude/default route) falls back to
+      // the *server's* persisted spawn-defaults engine when this is omitted.
+      // If that persisted default has drifted from what this tab's UI shows
+      // (e.g. another tab saved a different default after this one loaded),
+      // the server silently spawns under the wrong engine while still
+      // accepting this tab's model value verbatim — producing exactly the
+      // "unknown codex model" error for a model picked from the Claude list.
+      // Always send the engine the UI actually shows so the two can't diverge.
+      const spawnBody = { prompt, name: subject, cwd: launchCwd, engine };
       if (repoPath) spawnBody.repo_path = repoPath;
       if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none' && $convInputModelSelect.value) {
         const pickedModel = $convInputModelSelect.value;
