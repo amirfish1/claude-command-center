@@ -42071,6 +42071,12 @@
 
   function syncSpawnEngineDependentUi() {
     const engine = getSpawnEngine();
+    // Keep the visible engine selects honest — /api/spawn-defaults resolves
+    // asynchronously and can flip spawnDefaultsState.engine (and thus the
+    // model list below) well after the selects were last set from
+    // localStorage, leaving a stale engine shown next to a freshly repopulated
+    // model dropdown for a different engine (CCC-502).
+    [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(s => { if (s && s.value !== engine) s.value = engine; });
     const worktreeSupported = spawnSupportsWorktree(engine);
     ['inlineWorktreeToggle', 'nsmWorktree', 'kptWorktreeToggle'].forEach(id => {
       const el = document.getElementById(id);
