@@ -184,22 +184,27 @@
     const rz = (h && h.resume) || {};
     const eff = (typeof rz.avg_cache_efficiency_pct === 'number') ? rz.avg_cache_efficiency_pct : null;
     const warmPct = (typeof rz.warm_reuse_pct === 'number') ? rz.warm_reuse_pct : null;
+    const hits = (typeof rz.warm_reuse_hits === 'number') ? rz.warm_reuse_hits : 0;
+    const attempts = (typeof rz.warm_reuse_attempts === 'number') ? rz.warm_reuse_attempts : 0;
     const cold = (typeof rz.cold_resumes_window === 'number') ? rz.cold_resumes_window : 0;
     const worst = (typeof rz.worst_cache_efficiency_pct === 'number') ? rz.worst_cache_efficiency_pct : null;
     const life = (typeof rz.avg_lifetime_s === 'number') ? rz.avg_lifetime_s : null;
+    // Explicit fraction: (warm reuses) / (total resume attempts). Denominator =
+    // reuse_hit + cold_resume — every attempt is exactly one of those. Shown raw
+    // as N/M rather than a %, because a % over a 1-2 event post-restart window
+    // reads as a scary 0/100 when it is just a tiny sample.
     const cacheTitle =
-      'headless warm-reuse — share of resumes that reused a live process ' +
-      'instead of a cold `claude --resume` (rolling window)' +
-      ' · warm reuse ' + (warmPct == null ? '—' : warmPct + '%') +
+      'headless warm-reuse = (times a live warm process was reused) / ' +
+      '(total resume attempts) over the rolling window. ' +
+      'Denominator = reuse_hit + cold_resume.' +
+      ' · ' + hits + ' warm / ' + attempts + ' attempts' +
+      (warmPct == null ? '' : ' (' + warmPct + '%)') +
       ' · cold resumes ' + cold +
       ' · cache eff ' + (eff == null ? '—' : eff + '%') +
       ' · worst ' + (worst == null ? '—' : worst + '%') +
       ' · avg lifetime ' + (life == null ? '—' : life + 's');
-    // Headline the warm-reuse % (the thing that proves processes stay warm and
-    // dodge the cold-resume wake latency). Cache efficiency + cold count live
-    // in the tooltip. Null (no resumes in window yet) shows a neutral dash.
-    if (warmPct == null) _set('cache', 'warm —', '', cacheTitle);
-    else _set('cache', 'warm ' + warmPct.toFixed(0) + '%',
+    if (!attempts) _set('cache', 'warm 0/0', '', cacheTitle);
+    else _set('cache', 'warm ' + hits + '/' + attempts,
       warmPct < 50 ? 'ccchealth-crit' : (warmPct < 80 ? 'ccchealth-warn' : 'ccchealth-ok'),
       cacheTitle);
   }
@@ -1004,7 +1009,7 @@
       '<span class="ccchealth-metric" data-k="cpu"><span class="ccchealth-dot"></span><span class="ccchealth-val">cpu —</span></span>' +
       '<span class="ccchealth-metric" data-k="build"><span class="ccchealth-dot"></span><span class="ccchealth-val">build —</span></span>' +
       '<span class="ccchealth-metric" data-k="err"><span class="ccchealth-dot"></span><span class="ccchealth-val">err —</span></span>' +
-      '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">warm —</span></span>';
+      '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">warm 0/0</span></span>';
     const toggle = document.createElement('div');
     toggle.id = 'pollerToggle';
     const _triggerCount = Object.keys(_POLLER_META).length;

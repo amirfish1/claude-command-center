@@ -3645,6 +3645,8 @@ def _resume_ledger_stats():
     object. Reads nothing off disk. Every field tolerates an empty window."""
     empty = {
         "warm_reuse_pct": None,
+        "warm_reuse_hits": 0,
+        "warm_reuse_attempts": 0,
         "avg_cache_efficiency_pct": None,
         "cold_resumes_window": 0,
         "worst_cache_efficiency_pct": None,
@@ -3656,10 +3658,14 @@ def _resume_ledger_stats():
         if not window:
             return empty
         reuse_hit = sum(1 for e in window if e.get("event") == "reuse_hit")
-        reuse_miss = sum(1 for e in window if e.get("event") == "reuse_miss")
         cold = sum(1 for e in window if e.get("event") == "cold_resume")
-        denom = reuse_hit + reuse_miss + cold
-        warm = int(round(100 * reuse_hit / denom)) if denom else None
+        # A resume ATTEMPT is exactly one of: reuse_hit (reused a live warm
+        # process) or cold_resume (spawned a fresh `claude --resume`). Denominator
+        # is the sum of those two. `reuse_miss` is NOT counted — it is only the
+        # annotation logged immediately before every cold_resume, so including it
+        # double-counted each cold resume and understated warm reuse.
+        attempts = reuse_hit + cold
+        warm = int(round(100 * reuse_hit / attempts)) if attempts else None
         effs = [e.get("cache_efficiency_pct") for e in window
                 if e.get("event") == "exit"
                 and isinstance(e.get("cache_efficiency_pct"), (int, float))]
@@ -3671,6 +3677,8 @@ def _resume_ledger_stats():
         avg_life = round(sum(lifetimes) / len(lifetimes), 1) if lifetimes else None
         return {
             "warm_reuse_pct": warm,
+            "warm_reuse_hits": reuse_hit,
+            "warm_reuse_attempts": attempts,
             "avg_cache_efficiency_pct": avg_eff,
             "cold_resumes_window": cold,
             "worst_cache_efficiency_pct": worst_eff,
