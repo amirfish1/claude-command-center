@@ -7552,10 +7552,10 @@
   }
 
   /* Scrollbar */
-  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar { width: 14px; height: 14px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 7px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: padding-box; }
 
   /* ── Kanban board (vertical stacked columns in sidebar) ── */
   /* Sizing comes from .sh-btn (padding-based) so the " Board" label fits;
@@ -13027,7 +13027,7 @@
    Status row order in right-rail mode: header → conversation → INPUT BAR
    → status row → keyboard hint. Input reads as the primary action; the
    status (worktree / context / cost / model) is reference info underneath. */
-body.status-pos-right .conv-pane {
+body.status-pos-right .conv-pane:has(> .status-rail) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--status-rail-width, 260px);
   grid-template-rows: auto 1fr auto auto auto auto;
@@ -13040,7 +13040,7 @@ body.status-pos-right .conv-pane {
     "hint    rail";
   min-height: 0;
 }
-body.status-pos-right .conv-pane:has(> .conv-input-context.is-new-session) {
+body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
   grid-template-areas:
     "header  rail"
     "conv    rail"
@@ -13049,13 +13049,13 @@ body.status-pos-right .conv-pane:has(> .conv-input-context.is-new-session) {
     "input   rail"
     "hint    rail";
 }
-body.status-pos-right .conv-pane > .conv-pane-header   { grid-area: header;  min-width: 0; }
-body.status-pos-right .conv-pane > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
-body.status-pos-right .conv-pane > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
-body.status-pos-right .conv-pane > .conv-input-bar     { grid-area: input;   min-width: 0; }
-body.status-pos-right .conv-pane > .conv-input-hint    { grid-area: hint;    min-width: 0; }
-body.status-pos-right .conv-pane > .conv-input-context { grid-area: context; min-width: 0; }
-body.status-pos-right .conv-pane > .status-rail {
+body.status-pos-right .conv-pane:has(> .status-rail) > .conv-pane-header   { grid-area: header;  min-width: 0; }
+body.status-pos-right .conv-pane:has(> .status-rail) > .conversations-view { grid-area: conv;    min-width: 0; min-height: 0; }
+body.status-pos-right .conv-pane:has(> .status-rail) > .conv-goal-strip    { grid-area: goal;    min-width: 0; }
+body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-bar     { grid-area: input;   min-width: 0; }
+body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-hint    { grid-area: hint;    min-width: 0; }
+body.status-pos-right .conv-pane:has(> .status-rail) > .conv-input-context { grid-area: context; min-width: 0; }
+body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   grid-area: rail;
   display: flex; flex-direction: column;
   position: relative;
@@ -13449,7 +13449,7 @@ body.status-rail-resizing * {
   color: var(--accent);
   background: var(--surface-2);
 }
-body.status-pos-right.status-rail-collapsed .conv-pane {
+body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "header"
@@ -13459,7 +13459,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane {
     "hint"
     "context";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane:has(> .conv-input-context.is-new-session) {
+body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
   grid-template-areas:
     "header"
     "conv"
@@ -13468,10 +13468,10 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .conv-input-context
     "input"
     "hint";
 }
-body.status-pos-right.status-rail-collapsed .conv-pane > .status-rail {
+body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail {
   display: none;
 }
-body.status-pos-right.status-rail-collapsed .conv-pane > .status-rail-restore {
+body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail-restore {
   display: inline-flex;
 }
 /* When the rail-restore chevron is visible it sits absolutely positioned
@@ -13480,7 +13480,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane > .status-rail-restore {
    model pill — which made the model name "superseded by other stuff"
    per a user annotation. Reserve enough room (chevron width + breathing
    room) so the model pill stays clickable. */
-body.status-pos-right.status-rail-collapsed .conv-pane > .conv-input-context {
+body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .conv-input-context {
   padding-right: 40px;
 }
 
