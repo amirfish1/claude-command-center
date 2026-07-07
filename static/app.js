@@ -9192,12 +9192,13 @@
     try { localStorage.setItem('ccc-conv-panel-open', open ? '1' : '0'); } catch (_) {}
   }
   // ── Mobile overlay helpers ──
-  // 950px covers every phone in portrait AND landscape (iPhone Pro Max
+  // 1200px breakpoint (temporarily lowered from 950px for manual testing).
+  // Originally 950px covers every phone in portrait AND landscape (iPhone Pro Max
   // landscape = 932px). The earlier 768 threshold missed every iPhone
   // landscape orientation — user reported tapping a conv row didn't
   // open the conv because mobileShowForCurrentMode no-op'd whenever
   // !isMobile().
-  const _mobileMQ = window.matchMedia('(max-width: 950px)');
+  const _mobileMQ = window.matchMedia('(max-width: 1200px)');
   function isMobile() { return _mobileMQ.matches; }
   // Touch/mobile devices: HTML5 drag never fires reliably on touch, but a
   // `draggable="true"` element can make the browser intercept the first tap

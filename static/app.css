@@ -149,7 +149,7 @@
   }
   /* On mobile the conv list is full-screen; never hide it via this toggle,
      and hide both affordances (the mobile back/forward nav owns that flow). */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conv-list-collapse-btn, .conv-list-restore { display: none !important; }
   }
   .sidebar-header {
@@ -492,7 +492,7 @@
   /* Threshold matches the JS _mobileMQ (950px) — covers every phone
      in portrait AND landscape so the back button is reachable from
      the conv pane on any phone orientation. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .mobile-back-btn,
     #mobileBackBtn { display: inline-flex !important; }
   }
@@ -6426,7 +6426,7 @@
      target — it sat second-to-last (left of Submit+) and was the same 32px as
      every secondary icon, easy to miss/mis-tap with a thumb. order pushes it
      past Submit+; no DOM reorder so desktop and send logic are untouched. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conv-input-bar .conv-input-buttons .send-btn {
       order: 99;
       width: 44px; height: 44px;
@@ -6435,7 +6435,7 @@
   }
   /* Mobile space reclaim in the conversation header (CCC mobile screenshot).
      The conv view wasted ~half the viewport on header chrome. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     /* #3 — agent/subagent tabs scroll on ONE horizontal line instead of
        stacking into a tall vertical pile (each tab was claiming its own row). */
     .conv-tab-strip {
@@ -6533,7 +6533,7 @@
      stream always starts below it, never behind it. Tighten padding/font to
      reclaim more of the viewport for actual content. Collapsed default;
      the user can still tap the chevron to expand to 50vh. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conv-sticky-header {
       padding: 8px 12px 8px;
       margin-bottom: 6px;
@@ -6562,7 +6562,7 @@
      the composer. On a phone it spent a full row on a label-heavy strip.
      Tighten padding/font and let it sit on one compact scrollable row.
      The composer buttons (send/mic/etc.) are untouched here. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conv-input-context {
       gap: 6px 8px;
       padding: 4px 10px;
@@ -6582,7 +6582,7 @@
 
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────
      More message fits per screen once the inter-event margins shrink. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conversations-view .event {
       margin-bottom: 2px;
       padding: 4px 10px;
@@ -6615,7 +6615,7 @@
      size, and the HH:MM:SS time. Back keeps only its arrow. id-specificity
      (#cccBreadcrumb…) overrides the earlier full-width title rule so the title
      shares the row and ellipsizes. Mobile-only — no base/desktop rule touched. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     #convToolbar { flex-wrap: nowrap; align-items: center; }
     #convToolbar .font-size-controls { display: none !important; }
     #convToolbar .mobile-back-btn {
@@ -6675,7 +6675,7 @@
      applying it unconditionally means every mobile composer state behaves
      the same way instead of two divergent layouts.
      TTS returned to inline position — the FAB overlapped the goal strip × (CCC mobile). */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conv-input-bar { position: relative; }
     .conv-input-bar.visible {
       flex-direction: column;
@@ -6713,7 +6713,7 @@
      half the strip, leaving no room for the model pill. Drop them on mobile
      and reduce the usage pill to just the pct (font-size:0 hides the text
      node, child span gets a real size back). */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .wp-path { display: none !important; }
     .wp-quality-pill { display: none !important; }
     .wp-usage-pill { font-size: 0 !important; white-space: nowrap; }
@@ -6736,7 +6736,7 @@
      Reorder visually (not in the DOM, so desktop keeps health leading) so
      models + throughput are the pills visible without swiping; health and
      the trigger toggle become the swipeable overflow instead. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     #pollerWrap {
       overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
       flex-wrap: nowrap;
@@ -6753,7 +6753,7 @@
      .conv-sticky-header is position:sticky; its default semi-transparent
      background lets scrolled message content bleed through on small screens,
      creating an "overlay" illusion. Solid bg on mobile. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conv-sticky-header {
       background: var(--bg, #0d1117) !important;
     }
@@ -6762,7 +6762,7 @@
   /* ── Mobile: larger tap target on subagent tab × ─────────────────────────
      The close × on a background-task tab is ~12px × 20px — too small on a
      phone. Expand to a comfortable 28px square without changing the glyph. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     .conv-tab-close {
       min-width: 28px;
       min-height: 28px;
@@ -11391,9 +11391,9 @@
   .conv-nya-toggle .grouping-opt.is-active { color: var(--accent); }
   /* Mobile / narrow-tablet layout: sidebar fills the viewport, main
      pane is a slide-in overlay toggled by tapping a conv row → back
-     button. 950px threshold matches the JS _mobileMQ so iPhone
+     button. 1200px threshold matches the JS _mobileMQ (temp breakpoint for testing) so iPhone
      landscape (up to ~932px) also gets the single-column treatment. */
-  @media (max-width: 950px) {
+  @media (max-width: 1200px) {
     body {
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
@@ -14047,7 +14047,7 @@ body.status-pos-right #convToolbar {
 }
 /* On mobile the right-rail doesn't exist; restore #convToolbar so the mobile
    back button (which lives there when there are no subagent tabs) is visible. */
-@media (max-width: 950px) {
+@media (max-width: 1200px) {
   body.status-pos-right #convToolbar {
     display: flex !important;
   }
