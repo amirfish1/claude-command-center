@@ -884,8 +884,21 @@
     const bar = document.getElementById('convInputBar');
     let nudge = document.getElementById('maInlineNudge');
     // The nudge sits above the ACTIVE pane's composer — use that pane's session.
-    const sid = (typeof _usageSessionIdByPane !== 'undefined' && typeof activePaneId === 'function')
-      ? (_usageSessionIdByPane[activePaneId()] || null) : null;
+    // Read straight off the pane's conversationId (set synchronously by
+    // selectConversation) rather than _usageSessionIdByPane, which defers its
+    // update while the composer has focus (CCC-512) — a stale mapping meant
+    // the nudge could keep showing a PREVIOUS (Claude) session's recommendation
+    // after switching to a non-Claude engine pane (Codex, cursor, ...) that the
+    // advisor never scores.
+    let sid = null;
+    if (typeof activePaneId === 'function' && typeof paneByPaneId === 'function') {
+      const pane = paneByPaneId(activePaneId());
+      const convId = pane && pane.conversationId;
+      sid = (convId && typeof sessionIdByConv !== 'undefined' && sessionIdByConv[convId]) || null;
+    }
+    if (!sid && typeof _usageSessionIdByPane !== 'undefined' && typeof activePaneId === 'function') {
+      sid = _usageSessionIdByPane[activePaneId()] || null;
+    }
     const rec = sid && window.__advisorBySid ? window.__advisorBySid[sid] : null;
     if (!bar || !rec) { if (nudge) nudge.remove(); return; }
     if (!document.getElementById('__maNudgeStyle')) {
