@@ -48265,6 +48265,11 @@
     var params = new URLSearchParams(window.location.search || '');
     if (params.get('hero') === '1') return true;
     if (params.get('hero') === '0') return false;
+    // Popout windows and embedded subagent-tab iframes (both boot this same
+    // app.js with ?ccc_popout=...) are not the main app entering — the Fleet
+    // Pulse splash has no business covering a single-conversation/Flow/chat
+    // surface (CCC-510).
+    if (CONV_POPOUT_MODE || FLOW_POPOUT_MODE || GROUPCHAT_POPOUT_MODE) return false;
     try { return localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) { return true; }
   }
   function fetchJSON(path, timeoutMs) {
