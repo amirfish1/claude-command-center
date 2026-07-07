@@ -17941,27 +17941,53 @@ def _codex_resume_or_steer_via_app_server(
         resume_params["effort"] = reasoning_effort
     resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
     if resumed.get("error"):
-        return {"ok": False, "fallback": "exec", "error": _codex_error_text(resumed)}
+        _err = _codex_error_text(resumed)
+        _resume_ledger_append(
+            "codex_wake_fail", sid=session_id,
+            stage="thread/resume", error=_err, fallback="exec",
+        )
+        return {"ok": False, "via": "codex-app-server", "stage": "thread/resume", "fallback": "exec", "error": _err}
     thread = ((resumed.get("result") or {}).get("thread") or {})
     active_turn = _codex_latest_active_turn(thread)
     status = (thread.get("status") or {}).get("type")
     if status == "active" and active_turn:
+        _reason = "Codex thread is active; queue the next message durably in CCC"
+        _resume_ledger_append(
+            "codex_wake_queued", sid=session_id,
+            stage="thread/resume", reason=_reason,
+        )
         return {
             "ok": False,
+            "via": "codex-app-server",
+            "stage": "thread/resume",
             "fallback": "queue",
-            "error": "Codex thread is active; queue the next message durably in CCC",
+            "error": _reason,
         }
     if status == "active":
+        _reason = "Codex app-server reports an active turn without a steerable turn id"
+        _resume_ledger_append(
+            "codex_wake_queued", sid=session_id,
+            stage="thread/resume", reason=_reason,
+        )
         return {
             "ok": False,
+            "via": "codex-app-server",
+            "stage": "thread/resume",
             "fallback": "queue",
-            "error": "Codex app-server reports an active turn without a steerable turn id",
+            "error": _reason,
         }
     if not allow_start:
+        _reason = "Codex CLI resume is still running and app-server did not expose a steerable turn"
+        _resume_ledger_append(
+            "codex_wake_queued", sid=session_id,
+            stage="thread/resume", reason=_reason,
+        )
         return {
             "ok": False,
+            "via": "codex-app-server",
+            "stage": "thread/resume",
             "fallback": "queue",
-            "error": "Codex CLI resume is still running and app-server did not expose a steerable turn",
+            "error": _reason,
         }
 
     started = _codex_app_server_request(
@@ -17971,19 +17997,36 @@ def _codex_resume_or_steer_via_app_server(
     )
     if _codex_response_succeeded(started):
         turn = ((started.get("result") or {}).get("turn") or {})
+        _turn_id = turn.get("id")
+        _resume_ledger_append(
+            "codex_wake_ok", sid=session_id,
+            via="codex-app-turn", turn_id=_turn_id,
+        )
         return {
             "ok": True,
             "via": "codex-app-turn",
-            "turn_id": turn.get("id"),
+            "turn_id": _turn_id,
             "session_id": session_id,
         }
     if _codex_error_is_not_steerable(started):
+        _err = _codex_error_text(started)
+        _resume_ledger_append(
+            "codex_wake_fail", sid=session_id,
+            stage="turn/start", error=_err, fallback="queue",
+        )
         return {
             "ok": False,
+            "via": "codex-app-server",
+            "stage": "turn/start",
             "fallback": "queue",
-            "error": _codex_error_text(started),
+            "error": _err,
         }
-    return {"ok": False, "fallback": "exec", "error": _codex_error_text(started)}
+    _err = _codex_error_text(started)
+    _resume_ledger_append(
+        "codex_wake_fail", sid=session_id,
+        stage="turn/start", error=_err, fallback="exec",
+    )
+    return {"ok": False, "via": "codex-app-server", "stage": "turn/start", "fallback": "exec", "error": _err}
 
 
 def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_paths=None):
@@ -22032,6 +22075,10 @@ def resume_session_codex(session_id, text, *, steer=False):
     override_model = (override or {}).get("model") if override else None
     reasoning_effort = (override or {}).get("reasoning_effort") or ""
     model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or _spawn_fallback_model_for_engine("codex")
+    _resume_ledger_append(
+        "codex_wake_attempt", sid=session_id,
+        cwd=cwd, model=model, steer=bool(steer),
+    )
     if steer:
         return _codex_steer_via_app_server(
             session_id,
@@ -22079,6 +22126,10 @@ def resume_session_codex(session_id, text, *, steer=False):
     for image_path in image_paths:
         cmd.extend(["--image", image_path])
     cmd.extend([session_id, text])
+    _resume_ledger_append(
+        "codex_wake_exec", sid=session_id,
+        stage="exec", log_path=str(log_path),
+    )
     log_fh = open(log_path, "w")
     try:
         proc = subprocess.Popen(
@@ -22091,7 +22142,11 @@ def resume_session_codex(session_id, text, *, steer=False):
         )
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
-        return {"ok": False, "error": str(e), "via": "codex-resume"}
+        _resume_ledger_append(
+            "codex_wake_fail", sid=session_id,
+            stage="exec", error=str(e),
+        )
+        return {"ok": False, "error": str(e), "via": "codex-resume", "stage": "exec"}
     entry = {
         "pid": proc.pid,
         "name": f"resume-codex-{session_id[:8]}",

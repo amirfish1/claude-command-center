@@ -3831,6 +3831,81 @@
     }
     _stopOptimisticAgeTicker();
   }
+  // ── Headless wake status in the conversation pane ─────────────────────────
+  // A dormant session (Claude OR Codex) has no live process, so a send wakes it
+  // headlessly. Codex wakes used to be a total blind spot: a failed resume
+  // logged nothing and the pane showed nothing. These helpers render the wake
+  // lifecycle inline from the /api/inject-input response so the outcome (and,
+  // on failure, the REAL reason + which path failed) is visible in the pane.
+  function looksDormantNoProcess() {
+    return liveStatusMatchesOpenConv()
+      && !liveStatus.live && !liveStatus.headlessPresent && !liveStatus.terminalPresent
+      && !liveStatus.bgPresent && !liveStatus.sidecarInFlight && liveStatus.codexState !== 'working';
+  }
+  function _removePriorWakeStatus($view) {
+    if (!$view) return;
+    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status').forEach(n => n.remove());
+  }
+  // Transient status (queued / resuming). Not dismissible — it clears when
+  // activity streams in or a re-render swaps in the durable transcript.
+  function renderInlineWakeStatus($view, kind, message) {
+    if (!$view) return;
+    _removePriorWakeStatus($view);
+    const el = document.createElement('div');
+    el.className = 'conv-live-tool-inline is-wake-status is-' + kind;
+    el.innerHTML = '<span class="cl-pulse"></span>'
+      + '<span class="cl-tool"></span>';
+    el.querySelector('.cl-tool').textContent = message;
+    $view.appendChild(el);
+    scrollConversationToEnd($view);
+  }
+  // Persistent, dismissible inline resume-failure banner — the headline fix.
+  // Turns the silent Codex failure into a visible message with the real reason
+  // and which path failed (via / stage), not just a toast.
+  function renderInlineWakeError($view, message) {
+    if (!$view) return;
+    clearOptimisticAgentIndicator($view);
+    _removePriorWakeStatus($view);
+    const el = document.createElement('div');
+    el.className = 'conv-live-tool-inline is-wake-status is-error';
+    el.innerHTML = '<span class="cl-pulse"></span>'
+      + '<span class="cl-tool"></span>'
+      + '<button type="button" class="cl-dismiss" title="Dismiss">×</button>';
+    el.querySelector('.cl-tool').textContent = message;
+    el.querySelector('.cl-dismiss').addEventListener('click', () => el.remove());
+    $view.appendChild(el);
+    scrollConversationToEnd($view);
+  }
+  // Render the wake OUTCOME inline from an inject-input response. Returns true
+  // if it handled the outcome (so callers know a wake-status was shown).
+  function renderConvWakeOutcome($view, data) {
+    if (!$view || !data) return false;
+    const via = String(data.via || '');
+    const stage = String(data.stage || '');
+    // Success via the Codex app-server turn: keep an alive "resuming" indicator
+    // that clears when the reply streams in (clearOptimisticAgentIndicator).
+    if (data.ok && via === 'codex-app-turn') {
+      setOptimisticAgentThinking($view, '⏳ Codex resuming&hellip;');
+      return true;
+    }
+    // Durable queue (thread busy): show the real reason inline. The cwd-missing
+    // queue has its own richer handling upstream — leave it alone.
+    if ((data.queued || data.fallback === 'queue') && !data.cwd_missing) {
+      clearOptimisticAgentIndicator($view);
+      const reason = data.queued_reason || data.error || 'the session is busy';
+      renderInlineWakeStatus($view, 'queued', '⏳ Queued: ' + reason);
+      return true;
+    }
+    // Hard failure: persistent, dismissible inline error with the real reason
+    // and which path failed.
+    if (!data.ok && (data.error || data.message)) {
+      const reason = data.error || data.message;
+      const where = [via, stage].filter(Boolean).join(' / ');
+      renderInlineWakeError($view, '⚠ Resume failed: ' + reason + (where ? ' (' + where + ')' : ''));
+      return true;
+    }
+    return false;
+  }
   // Tier 2 (live-thinking-and-input-echo doc): advance the optimistic agent
   // indicator from "Sending…" to "🧠 Thinking…" once the message is delivered
   // (ACK) and the agent goes to work. Only updates an EXISTING indicator —
@@ -6537,6 +6612,13 @@
     updateInputBar();
     $input.value = '';
     clearInputDraftForConversation(draftConversation);
+    // If the session has no live process, this send wakes it headlessly. Show
+    // "⏻ Waking up…" inline immediately (Claude AND Codex) rather than leaving a
+    // bare "Sending…" — the response then renders the outcome/error inline.
+    if (!compactCommand && !clearCommand && looksDormantNoProcess()) {
+      const $wv = getConvViewForPane(paneId || activePaneId()) || getConvView();
+      setOptimisticAgentThinking($wv, '⏻ Waking up&hellip;');
+    }
     if (_ttsActive) await stopTextToSpeech();
     try {
       let res;
@@ -6602,6 +6684,9 @@
         removePendingSendEcho(pendingSend);
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
       } else if (res.ok && data.ok) {
+        // Render the wake OUTCOME inline first (codex resuming / queued reason),
+        // then let the existing per-transport branches add their toast/echo.
+        renderConvWakeOutcome(getConvViewForPane(paneId || activePaneId()) || getConvView(), data);
         if (data.via === 'codex-app-queued') {
           markPendingSendQueued(pendingSend, 'Queued for Codex — will send when the running turn is ready.');
           showOpToast('Queued for Codex.');
@@ -6692,6 +6777,16 @@
           appendSendFailureNotice(pendingSend, 'Cursor usage limit hit. Cursor says: ' + reason, paneId || activePaneId());
         } else {
           removePendingSendEcho(pendingSend);
+          // Headline fix: the previously-silent Codex resume failure becomes a
+          // persistent, dismissible inline error in the pane (real reason + the
+          // path that failed) — not just a toast.
+          renderInlineWakeError(
+            getConvViewForPane(paneId || activePaneId()) || getConvView(),
+            '⚠ Resume failed: ' + reason
+              + ([String(data && data.via || ''), String(data && data.stage || '')].filter(Boolean).join(' / ')
+                  ? ' (' + [String(data && data.via || ''), String(data && data.stage || '')].filter(Boolean).join(' / ') + ')'
+                  : ''),
+          );
         }
         restoreInputAfterSendFailure($input, text);
         flashRed();

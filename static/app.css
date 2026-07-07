@@ -9420,6 +9420,34 @@
     box-shadow: none;
     animation: none;
   }
+  /* Wake-status banners (headless resume lifecycle). A queued/resuming status
+     stays calm; a hard resume failure gets a distinct persistent error look
+     (mirrors is-stale-no-process but in the red channel). */
+  .conv-live-tool-inline.is-wake-status { cursor: default; }
+  .conv-live-tool-inline.is-error {
+    color: #f85149;
+    background: linear-gradient(rgba(248,81,73,0.10), rgba(248,81,73,0.10)), var(--bg);
+    border-color: rgba(248,81,73,0.40);
+    cursor: default;
+  }
+  .conv-live-tool-inline.is-error .cl-pulse {
+    background: #f85149;
+    box-shadow: none;
+    animation: none;
+  }
+  .conv-live-tool-inline .cl-dismiss {
+    margin-left: auto;
+    flex: 0 0 auto;
+    background: transparent;
+    border: none;
+    color: inherit;
+    opacity: 0.65;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .conv-live-tool-inline .cl-dismiss:hover { opacity: 1; }
   .conv-live-tool-inline.is-question {
     color: #58a6ff;
     background: linear-gradient(rgba(88,166,255,0.12), rgba(88,166,255,0.12)), var(--bg);
