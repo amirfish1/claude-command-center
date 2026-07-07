@@ -37446,7 +37446,14 @@
   function _conversationNameMatchesQuery(c, qLower) {
     if (!qLower || !c) return false;
     const name = String((c.display_name || c.ai_title) || '').toLowerCase();
-    return !!name && name.indexOf(qLower) !== -1;
+    if (!name) return false;
+    if (name.indexOf(qLower) !== -1) return true;
+    // CCC-506: multi-word queries rarely land as an exact phrase in the
+    // title ("search fix" vs "Fix search box") — fall back to a simple
+    // word search that requires every query word to appear somewhere in
+    // the title, regardless of order.
+    const words = qLower.split(/\s+/).filter(Boolean);
+    return words.length > 1 && words.every(w => name.indexOf(w) !== -1);
   }
 
   function _prioritizeNameMatches(rows, qLower) {
