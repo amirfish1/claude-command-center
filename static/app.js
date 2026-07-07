@@ -47227,12 +47227,6 @@
           btnHide.style.display = '';
         }
       }
-      const splashCheck = $settingsPopover.querySelector('[data-check-splash]');
-      if (splashCheck) {
-        let on = true;
-        try { on = localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) {}
-        splashCheck.textContent = on ? '✓' : '';
-      }
       const liveVariantCheck = $settingsPopover.querySelector('[data-check-live-variant]');
       if (liveVariantCheck) {
         let lv = 'A';
@@ -47297,12 +47291,10 @@
         refreshAppearanceChecks();
         return;
       }
-      const splashBtn = e.target.closest('[data-splash-toggle]');
-      if (splashBtn) {
-        let on = true;
-        try { on = localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) {}
-        try { localStorage.setItem('ccc-hero-on-boot', on ? '0' : '1'); } catch (_) {}
-        refreshAppearanceChecks();
+      const heroOpenBtn = e.target.closest('[data-hero-open]');
+      if (heroOpenBtn) {
+        $settingsPopover.classList.remove('open');
+        if (typeof window._cccOpenFleetPulse === 'function') window._cccOpenFleetPulse();
         return;
       }
       const liveVariantBtn = e.target.closest('[data-live-variant-toggle]');
@@ -48382,17 +48374,6 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
     else fn();
   }
-  function shouldShowOnBoot() {
-    var params = new URLSearchParams(window.location.search || '');
-    if (params.get('hero') === '1') return true;
-    if (params.get('hero') === '0') return false;
-    // Popout windows and embedded subagent-tab iframes (both boot this same
-    // app.js with ?ccc_popout=...) are not the main app entering — the Fleet
-    // Pulse splash has no business covering a single-conversation/Flow/chat
-    // surface (CCC-510).
-    if (CONV_POPOUT_MODE || FLOW_POPOUT_MODE || GROUPCHAT_POPOUT_MODE) return false;
-    try { return localStorage.getItem('ccc-hero-on-boot') !== '0'; } catch (_) { return true; }
-  }
   function fetchJSON(path, timeoutMs) {
     var controller = window.AbortController ? new AbortController() : null;
     var timer = controller ? setTimeout(function () { controller.abort(); }, timeoutMs || 5000) : null;
@@ -48842,18 +48823,12 @@
     }
     attach();
   }
-  // Paint the boot hero synchronously (body already exists this far down
-  // app.js) so it covers the app before any loading state can flash. The
-  // pill waits for the footer to exist, hence ready().
+  // Demo mode only: ?hero=1 opens the hero on boot (for recordings).
+  // Normal boot no longer auto-shows; use the pill or Settings > Show Fleet Pulse.
   try {
-    var forced = false;
-    try { forced = new URLSearchParams(window.location.search || '').get('hero') === '1'; } catch (_) {}
-    // Normal boot auto-dismisses after 2s; ?hero=1 (demo recording) stays.
-    if (shouldShowOnBoot() && document.body) openHero(true, forced ? 0 : 2000);
-  } catch (err) {
-    var boot = document.getElementById(HERO_ID);
-    if (boot) boot.remove();
-  }
+    if (new URLSearchParams(window.location.search || '').get('hero') === '1' && document.body) openHero(true, 0);
+  } catch (_) {}
+  window._cccOpenFleetPulse = openHero;
   ready(function () {
     try { ensurePulsePill(); } catch (_) {}
   });
