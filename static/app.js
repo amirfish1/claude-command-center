@@ -37486,6 +37486,16 @@
         && _streamingBubble !== $view.lastElementChild) {
       $view.appendChild(_streamingBubble);
     }
+    // Same story for not-yet-delivered send echoes (`.pending` /
+    // `.send-queued` / `.not-acknowledged`) — a turn that streams in while
+    // the agent hasn't drained the queued input yet would otherwise bury the
+    // message the user is still waiting to have acknowledged, stranding it
+    // mid-transcript instead of right above the input box (CCC-515).
+    for (const p of _pendingSends) {
+      if (p.element && p.element.parentNode === $view && p.element !== $view.lastElementChild) {
+        $view.appendChild(p.element);
+      }
+    }
     // The optimistic "Sending…" pill needs two things:
     //   1) If the agent has already produced a real reply (assistant /
     //      tool_use / result event in this batch), kill it — "starting up"
