@@ -42059,6 +42059,20 @@
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     if (engine === 'hermes' && !value) value = 'auto';
+    // Reject a value from a different engine's model family before it can
+    // poison _defaultModelsByEngine[engine] (CCC-503) -- if the model
+    // <select>'s options were ever rebuilt for a different engine than the
+    // one getSpawnEngine() now reports (a boot/timing desync), the change
+    // handler here would otherwise attribute e.g. Claude's opus-4-8 to the
+    // Codex slot, and the next spawn ships an invalid model to the wrong CLI.
+    if (value && engine !== 'antigravity') {
+      const engineModelIds = (MODEL_OPTIONS_BY_ENGINE[engine] || []).map(o => _normalizeModelId(o.id));
+      if (!engineModelIds.includes(_normalizeModelId(value))) {
+        console.warn('[spawn] ignoring "' + value + '" for engine "' + engine + '" (not one of its models); resyncing UI instead');
+        syncSpawnEngineDependentUi();
+        return;
+      }
+    }
     spawnDefaultsState.models[engine] = value;
     _defaultModelsByEngine[engine] = value;
     syncSpawnEngineDependentUi();
@@ -46566,7 +46580,22 @@
       const spawnBody = { prompt, name: subject, cwd: launchCwd };
       if (repoPath) spawnBody.repo_path = repoPath;
       if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none' && $convInputModelSelect.value) {
-        spawnBody.model = $convInputModelSelect.value;
+        const pickedModel = $convInputModelSelect.value;
+        // Guard against a stale/orphaned select value from a different
+        // engine's model family (e.g. the select still holding a Claude
+        // model id right after switching to Codex) ever reaching the
+        // wrong CLI, which produced a hard "model not supported" spawn
+        // failure (CCC-503). Only forward the model if it's actually one
+        // of this engine's own options; otherwise drop it and let the
+        // server apply its own per-engine fallback default.
+        const engineModelIds = (MODEL_OPTIONS_BY_ENGINE[engine] || []).map(o => _normalizeModelId(o.id));
+        const isValidForEngine = (engine === 'antigravity' && pickedModel === '')
+          || engineModelIds.includes(_normalizeModelId(pickedModel));
+        if (isValidForEngine) {
+          spawnBody.model = pickedModel;
+        } else {
+          console.warn('[spawn] dropping model "' + pickedModel + '" not valid for engine "' + engine + '"; using server default instead');
+        }
       }
       if (spawnSupportsWorktree(engine)) spawnBody.worktree = useWorktree;
       const res = await fetch(endpoint, {
