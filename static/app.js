@@ -22748,7 +22748,10 @@
       } else if (isGithubPrRow) {
         archiveBtn = '';
       } else {
-        archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128229;') + '</button>';
+        // CCC-507: archiving a session moves it into the "Trash" section
+        // (see conv-trash-section below) — use the trash-can glyph already
+        // established for archive actions elsewhere (data-role="archive-object").
+        archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128465;') + '</button>';
       }
       // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
       // the meta row — it wrapped onto a second line and is redundant with the
@@ -28201,6 +28204,21 @@
         // only the active pane drives it.
         const railTitleEl = document.getElementById('statusRailTitle');
         if (railTitleEl) railTitleEl.textContent = title || category || 'Session';
+        // CCC-505: the bold title can be a WT-worker label whose ticket
+        // context was hard-clipped server-side (wt_ticket_context_rest
+        // carries whatever got cut). Show it below, unbold, instead of the
+        // rest of the summary silently vanishing.
+        const railTitleRestEl = document.getElementById('statusRailTitleRest');
+        if (railTitleRestEl) {
+          const restText = row && row.wt_ticket_context_rest;
+          if (restText) {
+            railTitleRestEl.textContent = restText;
+            railTitleRestEl.hidden = false;
+          } else {
+            railTitleRestEl.textContent = '';
+            railTitleRestEl.hidden = true;
+          }
+        }
         _statusRailActiveRow = row || null;
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
         if (railRenameBtn) railRenameBtn.style.display = (_statusRailActiveRow && _statusRailActiveRow.id) ? '' : 'none';
@@ -28211,6 +28229,8 @@
         breadcrumbEl.hidden = true;
         const railTitleEl = document.getElementById('statusRailTitle');
         if (railTitleEl) railTitleEl.textContent = 'Session Utilities';
+        const railTitleRestEl = document.getElementById('statusRailTitleRest');
+        if (railTitleRestEl) { railTitleRestEl.textContent = ''; railTitleRestEl.hidden = true; }
         _statusRailActiveRow = null;
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
         if (railRenameBtn) railRenameBtn.style.display = 'none';

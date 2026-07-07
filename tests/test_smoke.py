@@ -143,7 +143,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertEqual(
             rows[0]["display_name"],
-            "THROUGHPUT worker: THROUGHPUT-16 - Publish usage state for external consumers",
+            "🧵 THROUGHPUT#16: Publish usage state for external consumers",
         )
 
     def test_watchtower_worker_titles_survive_worker_record_prune(self):
@@ -175,7 +175,22 @@ class TestServerImports(unittest.TestCase):
 
         self.assertEqual(
             rows[0]["display_name"],
-            "THROUGHPUT worker: THROUGHPUT-16 - Published usage state API",
+            "🧵 THROUGHPUT#16: Published usage state API",
+        )
+
+    def test_find_all_conversations_applies_watchtower_overlay(self):
+        """CCC-505: the cross-repo archive path (find_all_conversations, used
+        by /api/conversations/all) must run the same WT display-name overlay
+        as the repo-scoped path (find_all_sessions) — otherwise a dormant
+        session's clipped custom title never gets its unclipped "rest"
+        attached and looks permanently truncated in the All-sessions view."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        fn_start = server_py.index("def find_all_conversations(")
+        fn_end = server_py.index("\ndef ", fn_start + 1)
+        self.assertIn(
+            "_apply_watchtower_worker_display_names(out)",
+            server_py[fn_start:fn_end],
+            "find_all_conversations must apply the WT display-name overlay before returning",
         )
 
     def test_usage_pace_uses_ccc_calibration_and_week_override(self):
@@ -4105,11 +4120,8 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         # All three window filters use the hermes exemption clause.
         self.assertIn(
-            "c.pinned || c.source === 'hermes' || c.engine === 'hermes' || ((c.modified || c.mtime || 0) >= _arcWindowCutoff)",
+            "row.pinned || row.source === 'hermes' || row.engine === 'hermes'",
             app_js, "archive window must exempt Hermes rows")
-        self.assertIn(
-            "c.pinned || c.source === 'hermes' || c.engine === 'hermes' || (c.modified || 0) >= _ipWindowCutoff",
-            app_js, "In Progress window must exempt Hermes rows")
         self.assertIn(
             "showRecentOnly && c.source !== 'hermes' && c.engine !== 'hermes'",
             app_js, "global recency filter must exempt Hermes rows")

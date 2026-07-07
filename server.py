@@ -340,7 +340,7 @@ def _wt_clip_title(text, limit=60):
     return text
 
 
-def _wt_ticket_context(item):
+def _wt_ticket_context(item, limit=60):
     res = item.get("resolution") if isinstance(item, dict) else {}
     summary = ""
     if isinstance(res, str):
@@ -348,7 +348,7 @@ def _wt_ticket_context(item):
     elif isinstance(res, dict):
         summary = str(res.get("summary") or "")
     for value in (summary, item.get("title"), item.get("note"), item.get("text")):
-        text = _wt_clip_title(value)
+        text = _wt_clip_title(value, limit=limit)
         if text:
             return text
     return ""
@@ -462,10 +462,21 @@ def _apply_watchtower_worker_display_names(rows):
         prev = titles_by_sid.get(sid)
         if prev and prev[0] >= score:
             continue
+        # Clipped context feeds the bold display_name (sidebar/breadcrumb rely
+        # on CSS ellipsis, but the *source string* was still hard-cut with a
+        # baked-in "..." that threw away the rest forever). Keep the full,
+        # unclipped context alongside it so a roomier surface (the status
+        # rail head) can show the remainder instead of losing it (CCC-505).
+        full_context = _wt_ticket_context(it, limit=0)
+        clipped_context = _wt_clip_title(full_context, limit=60)
+        rest_context = ""
+        if clipped_context.endswith("...") and full_context.startswith(clipped_context[:-3]):
+            rest_context = full_context[len(clipped_context) - 3:].strip()
         titles_by_sid[sid] = (
             score,
             str(it.get("project") or ""),
-            _wt_display_name(it.get("project"), it.get("ref"), _wt_ticket_context(it)),
+            _wt_display_name(it.get("project"), it.get("ref"), clipped_context),
+            rest_context,
         )
     if not titles_by_sid:
         return rows
@@ -480,6 +491,8 @@ def _apply_watchtower_worker_display_names(rows):
         if not _wt_row_name_is_generic(row, queue):
             continue
         row["display_name"] = titles_by_sid[sid][2]
+        if titles_by_sid[sid][3]:
+            row["wt_ticket_context_rest"] = titles_by_sid[sid][3]
     return rows
 
 
@@ -5452,6 +5465,11 @@ def find_all_conversations(
     _apply_pinned_conversation_fields(out, pinned_list)
     out.sort(key=lambda r: r["mtime"], reverse=True)
     _sort_pinned_conversations_first(out, pinned_list)
+    # CCC-505: the cross-repo archive (this function) skipped the WT overlay
+    # that find_all_sessions applies, so a dormant session whose display_name
+    # was clipped at self-rename time (e.g. "CCC#496: ...sc…") never got the
+    # unclipped rest attached — it just looked permanently truncated here.
+    _apply_watchtower_worker_display_names(out)
     return out
 
 
