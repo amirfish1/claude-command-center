@@ -21842,6 +21842,13 @@
     // catches "morning vs evening" + "today vs yesterday" without
     // littering the list with separators between consecutive turns.
     const GAP_SEPARATOR_S = 6 * 3600;
+    // The All tab (CCC-504) is browsed as a chronological scan across an
+    // entire working day, not just "recent vs older" like the Active tab
+    // above -- so unlike GAP_SEPARATOR_S (which only ever shows its FIRST
+    // match), every gap at or above this threshold gets a divider, so a day
+    // that clusters into "15m ago", "3h ago", "7h ago", "13h ago" reads as
+    // four visually separated blocks instead of one flat scroll.
+    const ARCHIVE_GAP_SEPARATOR_S = 2 * 3600;
     // Hysteresis window for the In Progress repo-group order. When two
     // folders' max-modified timestamps differ by less than this, the
     // previous-render order is kept so the list doesn't reshuffle on
@@ -24961,9 +24968,37 @@
       const _arcChunks = [];
       let _arcCurCards = [];
       let _arcCurKey = null;
+      // Unlike the Active tab's _flatRowsWithSeparators (first-gap-only),
+      // the All tab shows every qualifying gap (CCC-504) -- so track the
+      // previously emitted chunk's (mtime, pinRank) to decide each boundary
+      // independently. Pinned rows sort to the top regardless of mtime, so
+      // a gap is only ever computed between two chunks that are BOTH
+      // outside the pinned tier (pinRank === Infinity); otherwise an old
+      // pinned row would falsely read as a huge gap before today's rows.
+      let _arcPrevMtime = null;
+      let _arcPrevPinRank = null;
+      const _arcSeparatorBefore = (mtime, pinRank) => {
+        let sep = '';
+        if (_arcPrevMtime && mtime && _arcPrevPinRank === Infinity && pinRank === Infinity) {
+          const gapS = _arcPrevMtime - mtime;
+          if (gapS >= ARCHIVE_GAP_SEPARATOR_S) {
+            sep = '<div class="conv-gap-separator">'
+              + '<span class="conv-gap-line"></span>'
+              + '<span class="conv-gap-label">' + escapeHtml(_gapLabel(_arcPrevMtime, mtime)) + '</span>'
+              + '<span class="conv-gap-line"></span>'
+              + '</div>';
+          }
+        }
+        _arcPrevMtime = mtime;
+        _arcPrevPinRank = pinRank;
+        return sep;
+      };
       const _arcFlushCards = () => {
         if (!_arcCurCards.length) return;
-        _arcChunks.push(_renderRowsWithRepeatGroups(
+        const mtime = _arcCurCards[0].modified || _arcCurCards[0].last_interacted || 0;
+        const pinRank = _arcCurCards[0].pinned ? _pinRankValue(_arcCurCards[0]) : Infinity;
+        const sep = _arcSeparatorBefore(mtime, pinRank);
+        _arcChunks.push(sep + _renderRowsWithRepeatGroups(
           _arcCurCards,
           { suppressFolderChip: _isSpecificFolderFilter }
         ));
@@ -24973,13 +25008,15 @@
       for (const it of _archivedItems) {
         if (it.type !== 'session') {
           _arcFlushCards();
-          _arcChunks.push(it.html || '');
+          const sep = _arcSeparatorBefore(it.mtime || 0, it.pinRank);
+          _arcChunks.push(sep + (it.html || ''));
           continue;
         }
         const key = _repeatGroupKey(it.card);
         if (!key) {
           _arcFlushCards();
-          _arcChunks.push(_renderRow(it.card, { suppressFolderChip: _isSpecificFolderFilter }));
+          const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
+          _arcChunks.push(sep + _renderRow(it.card, { suppressFolderChip: _isSpecificFolderFilter }));
           continue;
         }
         if (_arcCurKey && _arcCurKey !== key) _arcFlushCards();
