@@ -42024,6 +42024,14 @@
     });
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
     try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
+    // The engine <select> DOM nodes are set synchronously at boot from the
+    // (possibly stale) localStorage pref, before this async server fetch
+    // resolves. Without this, the engine dropdown can keep showing the old
+    // value while the model dropdown (rebuilt from spawnDefaultsState.engine
+    // via syncSpawnEngineDependentUi) already reflects the real one,
+    // producing an engine/model pairing that was never actually chosen.
+    [$convInputEngineSelect, $kptToolbarEngineSelect]
+      .forEach(s => { if (s && s.value !== spawnDefaultsState.engine) s.value = spawnDefaultsState.engine; });
   }
 
   // setSpawnDefaultModel/setSpawnEngine only ever mutate in-memory +
