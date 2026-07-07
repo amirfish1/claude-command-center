@@ -21490,10 +21490,21 @@
     const modes = [];
     if (headActive) modes.push(headLabel);
     if (termOn) modes.push(bgOn ? 'terminal · Claude app' : 'terminal');
-    const procLabel = modes.length ? modes.join(' · ') : 'no process';
-    const procCls = modes.length ? (stale ? 'is-stale' : 'is-on') : 'is-off';
+    // Suppress the bare "no process" flash during the resume/wake window: right
+    // after a send the process is spawning but the next liveness poll hasn't
+    // caught it yet (~1-2s). Show "waking…" until a run mode lights up, or —
+    // if the send times out with still no process — fall back to "no process".
+    const _pillSid = (currentSession && currentSession.id) || null;
+    const waking = !modes.length && !!_pillSid
+      && typeof sessionIsOptimisticallySending === 'function'
+      && sessionIsOptimisticallySending(_pillSid);
+    const procLabel = modes.length ? modes.join(' · ') : (waking ? 'waking…' : 'no process');
+    const procCls = modes.length ? (stale ? 'is-stale' : 'is-on') : (waking ? 'is-waking' : 'is-off');
     const procTitle = [headActive ? headPillTitle : '', termOn ? termTitle : '']
-      .filter(Boolean).join('  •  ') || 'No headless agent or terminal attached to this session';
+      .filter(Boolean).join('  •  ')
+      || (waking
+          ? 'Resuming this session — the process is starting up (waiting for the next liveness poll)'
+          : 'No headless agent or terminal attached to this session');
     const mergedPill = '<span class="ccc-proc-pill ' + procCls + (streaming ? ' is-streaming' : '') + '"'
       + ' title="' + escapeHtml(procTitle) + '">'
       + '<span class="ccc-proc-dot"></span>' + escapeHtml(procLabel) + '</span>';

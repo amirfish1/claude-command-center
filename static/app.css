@@ -1733,6 +1733,22 @@
     background: color-mix(in srgb, var(--warn, #d29922) 14%, transparent);
     border-color: color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
   }
+  /* Waking — a resume was just sent; the process is spawning but the next
+     liveness poll hasn't caught it yet. Amber so it never flashes a false
+     "no process" during the ~1-2s window. Dot softly pulses (opacity only —
+     compositor-cheap, unlike box-shadow). */
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill.is-waking {
+    color: var(--warn, #d29922);
+    background: color-mix(in srgb, var(--warn, #d29922) 10%, transparent);
+    border-color: color-mix(in srgb, var(--warn, #d29922) 30%, transparent);
+  }
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill.is-waking .ccc-proc-dot {
+    animation: ccc-proc-wake-pulse 1s ease-in-out infinite;
+  }
+  @keyframes ccc-proc-wake-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
   :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-checked {
     flex: 0 0 auto;
     font-size: 10px;
