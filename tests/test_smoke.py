@@ -6962,7 +6962,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                     data=json.dumps({
                         "prompt": "do the thing",
                         "engine": "Codex",
-                        "model": "gpt-test",
+                        "model": "gpt-5.5",
                     }).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -6976,7 +6976,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 cwd=None,
                 repo_path=None,
                 worktree=False,
-                model="gpt-test",
+                model="gpt-5.5",
                 parent_session_id=None,
             )
         finally:
