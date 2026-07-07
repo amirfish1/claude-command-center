@@ -4414,6 +4414,10 @@ def system_health_reap(pids):
     for pid in to_kill:
         try:
             os.kill(pid, signal.SIGTERM)
+            # Attribution: a user-triggered System Health reap. Lets a later
+            # `exit` (SIGTERM) row be matched to this CCC-side kill rather than
+            # being misread as an external / mystery death.
+            _resume_ledger_append("kill", pid=pid, source="system_health_reap")
             killed.append(pid)
         except (ProcessLookupError, PermissionError):
             pass
@@ -45541,6 +45545,14 @@ def _reap_idle_sessions(now=None):
             continue
         try:
             os.kill(int(pid), _signal.SIGTERM)
+            # Attribution (premature-death hunt): stamp WHO killed this headless
+            # so a later `exit` row (SIGTERM) can be matched to a CCC-side kill.
+            # An exit=SIGTERM with no matching kill/retire row = provably external
+            # (a closed terminal, an outside cleanup tool), not CCC.
+            _resume_ledger_append(
+                "kill", sid=sid, pid=int(pid), source="idle_reaper",
+                idle_hours=round((now - last_active) / 3600, 1),
+            )
             reaped.append({
                 "sid": sid,
                 "pid": int(pid),
