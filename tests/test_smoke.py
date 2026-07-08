@@ -8580,6 +8580,171 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["fallback"], "queue")
         self.assertEqual(calls, ["thread/resume"])
 
+    def test_codex_app_server_tracks_notifications(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-active"}},
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": sid, "turnId": "turn-active", "delta": "ok"},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "active")
+        self.assertEqual(state["active_turn_id"], "turn-active")
+        self.assertEqual(state["last_turn_id"], "turn-active")
+        self.assertGreater(state["event_seq"], 0)
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/completed",
+            "params": {"threadId": sid, "turnId": "turn-active"},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertEqual(state["last_completed_turn_id"], "turn-active")
+        self.assertNotIn("active_turn_id", state)
+
+    def test_codex_app_server_wake_confirms_from_notification(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        calls = []
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        def fake_request(method, params=None, timeout=20):
+            calls.append(method)
+            if method == "thread/resume":
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}, "turns": []}}}
+            if method == "turn/start":
+                server._codex_app_server_handle_message({
+                    "jsonrpc": "2.0",
+                    "method": "turn/started",
+                    "params": {"threadId": sid, "turn": {"id": "turn-next"}},
+                })
+                return {"result": {"turn": {"id": "turn-next"}}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+             mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+             mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1"}):
+            result = server._codex_resume_or_steer_via_app_server(sid, "wake")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["accepted"])
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["confirmation_source"], "app-server-notification")
+        self.assertEqual(calls, ["thread/resume", "turn/start"])
+
+    def test_codex_app_server_wake_warns_when_no_events_follow(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        def fake_request(method, params=None, timeout=20):
+            if method == "thread/resume":
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}, "turns": []}}}
+            if method == "turn/start":
+                return {"result": {"turn": {"id": "turn-next"}}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+             mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+             mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0"}):
+            result = server._codex_resume_or_steer_via_app_server(sid, "wake")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["accepted"])
+        self.assertFalse(result["confirmed"])
+        self.assertEqual(result["warning"], "turn accepted but no app-server events observed")
+
+    def test_codex_app_server_prefers_managed_socket(self):
+        server = self.server
+
+        class FakeTransport:
+            kind = "managed-unix"
+            proc = None
+
+            def __init__(self):
+                self.sent = []
+
+            def alive(self):
+                return True
+
+            def send_json(self, payload):
+                self.sent.append(payload)
+
+            def close(self):
+                pass
+
+        class FakeThread:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        transport = FakeTransport()
+        with tempfile.TemporaryDirectory() as td:
+            sock = pathlib.Path(td) / "app-server.sock"
+            sock.write_text("")
+            server._codex_app_server_shutdown()
+            try:
+                with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
+                     mock.patch.object(server, "_connect_codex_managed_app_server", return_value=transport), \
+                     mock.patch.object(server, "_codex_app_server_request_to_transport", return_value={"result": {}}), \
+                     mock.patch.object(server.threading, "Thread", FakeThread), \
+                     mock.patch.object(server.subprocess, "Popen") as popen:
+                    result = server._ensure_codex_app_server()
+            finally:
+                server._codex_app_server_shutdown()
+
+        self.assertIs(result, transport)
+        self.assertEqual(result.kind, "managed-unix")
+        popen.assert_not_called()
+
+    def test_codex_app_server_falls_back_to_stdio_when_managed_fails(self):
+        server = self.server
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        proc.stdin = mock.Mock()
+        proc.stdout = []
+
+        class FakeThread:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as td:
+            sock = pathlib.Path(td) / "app-server.sock"
+            sock.write_text("")
+            server._codex_app_server_shutdown()
+            try:
+                with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
+                     mock.patch.object(server, "_connect_codex_managed_app_server", side_effect=OSError("nope")), \
+                     mock.patch.object(server, "_resolve_codex_bin", return_value={"available": True, "bin": "/usr/bin/codex-test"}), \
+                     mock.patch.object(server.subprocess, "Popen", return_value=proc), \
+                     mock.patch.object(server, "_codex_app_server_request_to_transport", return_value={"result": {}}), \
+                     mock.patch.object(server.threading, "Thread", FakeThread):
+                    result = server._ensure_codex_app_server()
+            finally:
+                server._codex_app_server_shutdown()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.kind, "stdio")
+
     def test_resume_codex_prefers_app_server_before_queued_cli_resume(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -11291,6 +11456,11 @@ class TestCodexEsc(unittest.TestCase):
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
              mock.patch.object(self.server, "find_session_cwd", return_value="/tmp"), \
              mock.patch.object(self.server, "session_live_status") as mock_status, \
+             mock.patch.object(
+                 self.server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": False, "code": "codex_interrupt_unavailable"},
+             ), \
              mock.patch.object(self.server.os, "kill") as mock_kill:
 
             mock_status.return_value = {
@@ -11309,6 +11479,11 @@ class TestCodexEsc(unittest.TestCase):
     def test_interrupt_non_live_codex_session(self):
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
              mock.patch.object(self.server, "find_session_cwd", return_value="/tmp"), \
+             mock.patch.object(
+                 self.server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": False, "code": "codex_no_active_turn"},
+             ), \
              mock.patch.object(self.server, "session_live_status") as mock_status:
 
             mock_status.return_value = {
@@ -11321,6 +11496,39 @@ class TestCodexEsc(unittest.TestCase):
             res = self.server._interrupt_session("some-codex-session-id")
             self.assertFalse(res["ok"])
             self.assertEqual(res["error"], "Codex session is not live — nothing to interrupt")
+
+    def test_interrupt_codex_app_server_turn(self):
+        calls = []
+
+        def fake_request(method, params=None, timeout=20):
+            calls.append((method, params, timeout))
+            if method == "thread/resume":
+                return {
+                    "result": {
+                        "thread": {
+                            "id": "some-codex-session-id",
+                            "status": {"type": "active"},
+                            "turns": [{"id": "turn-active", "status": "inProgress"}],
+                        }
+                    }
+                }
+            if method == "turn/interrupt":
+                return {"result": {}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/tmp"), \
+             mock.patch.object(self.server, "session_live_status", return_value={"live": False, "pid": None}), \
+             mock.patch.object(self.server, "_codex_app_server_is_live", return_value=True), \
+             mock.patch.object(self.server, "_codex_app_server_request", side_effect=fake_request):
+
+            res = self.server._interrupt_session("some-codex-session-id")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["via"], "codex-app-interrupt")
+        self.assertEqual(res["turn_id"], "turn-active")
+        self.assertEqual([call[0] for call in calls], ["thread/resume", "turn/interrupt"])
+        self.assertEqual(calls[1][1], {"threadId": "some-codex-session-id", "turnId": "turn-active"})
 
     def test_codex_liveness_fallback_to_spawned_sessions(self):
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \

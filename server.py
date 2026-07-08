@@ -17626,11 +17626,175 @@ CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 _CODEX_META_VERSION = 3
 _CODEX_APP_SERVER_LOCK = threading.Condition()
 _CODEX_APP_SERVER_PROC = None
+_CODEX_APP_SERVER_TRANSPORT = None
 _CODEX_APP_SERVER_READER = None
 _CODEX_APP_SERVER_INITIALIZED = False
 _CODEX_APP_SERVER_INITIALIZING = False
 _CODEX_APP_SERVER_NEXT_ID = 1
 _CODEX_APP_SERVER_RESPONSES = {}
+_CODEX_APP_SERVER_EVENT_SEQ = 0
+_CODEX_APP_SERVER_THREAD_STATE = {}
+_CODEX_APP_SERVER_TURN_THREAD = {}
+
+
+def _codex_managed_app_server_socket_path():
+    raw = os.environ.get("CCC_CODEX_APP_SERVER_SOCKET")
+    if raw:
+        return Path(os.path.expanduser(raw))
+    return Path.home() / ".codex" / "app-server-control" / "app-server-control.sock"
+
+
+def _codex_managed_app_server_enabled():
+    return os.environ.get("CCC_CODEX_MANAGED_APP_SERVER", "1").lower() not in ("0", "false", "no")
+
+
+class _CodexAppServerTransport:
+    def __init__(self, kind, *, proc=None, sock=None):
+        self.kind = kind
+        self.proc = proc
+        self.sock = sock
+        self._send_lock = threading.Lock()
+
+    def alive(self):
+        if self.kind == "stdio":
+            return self.proc is not None and self.proc.poll() is None
+        return self.sock is not None
+
+    def send_json(self, payload):
+        data = json.dumps(payload)
+        with self._send_lock:
+            if self.kind == "stdio":
+                self.proc.stdin.write(data + "\n")
+                self.proc.stdin.flush()
+            else:
+                _websocket_send_text(self.sock, data)
+
+    def close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+        if self.proc is not None and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+
+
+def _read_exact(sock, n):
+    chunks = []
+    remaining = n
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise OSError("socket closed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _websocket_send_frame(sock, opcode, payload=b"", *, mask=True):
+    payload = payload or b""
+    first = 0x80 | (opcode & 0x0F)
+    length = len(payload)
+    if length <= 125:
+        header = bytes([first, (0x80 if mask else 0) | length])
+    elif length <= 0xFFFF:
+        header = bytes([first, (0x80 if mask else 0) | 126]) + length.to_bytes(2, "big")
+    else:
+        header = bytes([first, (0x80 if mask else 0) | 127]) + length.to_bytes(8, "big")
+    if not mask:
+        sock.sendall(header + payload)
+        return
+    key = os.urandom(4)
+    masked = bytes(b ^ key[i % 4] for i, b in enumerate(payload))
+    sock.sendall(header + key + masked)
+
+
+def _websocket_send_text(sock, text):
+    _websocket_send_frame(sock, 0x1, str(text).encode("utf-8"), mask=True)
+
+
+def _websocket_recv_text(sock):
+    fragments = []
+    while True:
+        first, second = _read_exact(sock, 2)
+        fin = bool(first & 0x80)
+        opcode = first & 0x0F
+        masked = bool(second & 0x80)
+        length = second & 0x7F
+        if length == 126:
+            length = int.from_bytes(_read_exact(sock, 2), "big")
+        elif length == 127:
+            length = int.from_bytes(_read_exact(sock, 8), "big")
+        mask_key = _read_exact(sock, 4) if masked else b""
+        payload = _read_exact(sock, length) if length else b""
+        if masked and payload:
+            payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+        if opcode == 0x8:
+            raise OSError("websocket closed")
+        if opcode == 0x9:
+            _websocket_send_frame(sock, 0xA, payload, mask=True)
+            continue
+        if opcode == 0xA:
+            continue
+        if opcode == 0x1:
+            fragments = [payload]
+        elif opcode == 0x0:
+            fragments.append(payload)
+        else:
+            continue
+        if fin:
+            return b"".join(fragments).decode("utf-8", "replace")
+
+
+def _connect_codex_managed_app_server(path):
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    try:
+        sock.connect(str(path))
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = (
+            "GET / HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        )
+        sock.sendall(request.encode("ascii"))
+        response = b""
+        while b"\r\n\r\n" not in response and len(response) < 16384:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise OSError("managed app-server closed during websocket handshake")
+            response += chunk
+        header = response.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1", "replace")
+        lines = header.split("\r\n")
+        if not lines or " 101 " not in f" {lines[0]} ":
+            raise OSError("managed app-server did not accept websocket upgrade")
+        accept = ""
+        for line in lines[1:]:
+            name, _, value = line.partition(":")
+            if name.lower() == "sec-websocket-accept":
+                accept = value.strip()
+                break
+        expected = base64.b64encode(hashlib.sha1(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+        ).digest()).decode("ascii")
+        if accept and accept != expected:
+            raise OSError("managed app-server websocket accept key mismatch")
+        sock.settimeout(None)
+        return _CodexAppServerTransport("managed-unix", sock=sock)
+    except Exception:
+        try:
+            sock.close()
+        except OSError:
+            pass
+        raise
 
 
 def _resolve_codex_bin():
@@ -17673,46 +17837,191 @@ def _resolve_codex_bin():
     }
 
 
-def _codex_app_server_reader(proc):
-    """Collect JSON-RPC responses from the long-lived Codex app-server."""
-    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
+def _codex_notification_thread_id(method, params):
+    for key in ("threadId", "thread_id"):
+        value = params.get(key) if isinstance(params, dict) else None
+        if value:
+            return str(value)
+    thread = params.get("thread") if isinstance(params, dict) else None
+    if isinstance(thread, dict) and thread.get("id"):
+        return str(thread["id"])
+    turn_id = _codex_notification_turn_id(method, params)
+    if turn_id:
+        return _CODEX_APP_SERVER_TURN_THREAD.get(turn_id)
+    return None
+
+
+def _codex_notification_turn_id(method, params):
+    for key in ("turnId", "turn_id", "expectedTurnId"):
+        value = params.get(key) if isinstance(params, dict) else None
+        if value:
+            return str(value)
+    turn = params.get("turn") if isinstance(params, dict) else None
+    if isinstance(turn, dict) and turn.get("id"):
+        return str(turn["id"])
+    item = params.get("item") if isinstance(params, dict) else None
+    if isinstance(item, dict):
+        for key in ("turnId", "turn_id"):
+            if item.get(key):
+                return str(item[key])
+    return None
+
+
+def _codex_app_server_record_thread(thread_id, thread):
+    if not thread_id or not isinstance(thread, dict):
+        return
+    status = (thread.get("status") or {}).get("type") if isinstance(thread.get("status"), dict) else thread.get("status")
+    state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
+    if status:
+        state["status"] = status
+    state["thread_id"] = thread_id
+    state["last_event_at"] = time.time()
+    turns = thread.get("turns") or []
+    active = _codex_latest_active_turn(thread)
+    if active and active.get("id"):
+        turn_id = str(active["id"])
+        state["active_turn_id"] = turn_id
+        state["last_turn_id"] = turn_id
+        state["last_activity_at"] = state["last_event_at"]
+        _CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
+    elif str(status or "").lower() == "idle":
+        state.pop("active_turn_id", None)
+    for turn in turns:
+        if isinstance(turn, dict) and turn.get("id"):
+            _CODEX_APP_SERVER_TURN_THREAD[str(turn["id"])] = thread_id
+
+
+def _codex_app_server_handle_notification(method, params):
+    global _CODEX_APP_SERVER_EVENT_SEQ
+    if not isinstance(params, dict):
+        params = {}
+    thread = params.get("thread") if isinstance(params.get("thread"), dict) else None
+    thread_id = _codex_notification_thread_id(method, params)
+    turn_id = _codex_notification_turn_id(method, params)
+    if thread_id and turn_id:
+        _CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
+    if thread and not thread_id and thread.get("id"):
+        thread_id = str(thread["id"])
+    if not thread_id:
+        return
+    _CODEX_APP_SERVER_EVENT_SEQ += 1
+    now = time.time()
+    state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
+    state.update({
+        "thread_id": thread_id,
+        "event_seq": _CODEX_APP_SERVER_EVENT_SEQ,
+        "last_event": method,
+        "last_event_at": now,
+    })
+    if turn_id:
+        state["last_turn_id"] = turn_id
+    if thread:
+        _codex_app_server_record_thread(thread_id, thread)
+    if method == "thread/status/changed":
+        status = params.get("status")
+        if isinstance(status, dict):
+            status = status.get("type")
+        if status:
+            state["status"] = str(status)
+            if str(status).lower() == "idle":
+                state.pop("active_turn_id", None)
+    elif method == "turn/started":
+        if turn_id:
+            state["active_turn_id"] = turn_id
+            state["last_activity_at"] = now
+        state["status"] = "active"
+    elif method in (
+        "item/started",
+        "item/completed",
+        "item/agentMessage/delta",
+        "thread/tokenUsage/updated",
+    ):
+        state["last_activity_at"] = now
+        if turn_id:
+            state["active_turn_id"] = turn_id
+    elif method == "turn/completed":
+        state["last_activity_at"] = now
+        state["last_completed_turn_id"] = turn_id
+        if not turn_id or state.get("active_turn_id") == turn_id:
+            state.pop("active_turn_id", None)
+        state["status"] = "idle"
+
+
+def _codex_app_server_handle_message(payload):
+    if not isinstance(payload, dict):
+        return
+    with _CODEX_APP_SERVER_LOCK:
+        if "id" in payload:
+            result = payload.get("result")
+            if isinstance(result, dict):
+                thread = result.get("thread")
+                if isinstance(thread, dict) and thread.get("id"):
+                    _codex_app_server_record_thread(str(thread["id"]), thread)
+            _CODEX_APP_SERVER_RESPONSES[payload.get("id")] = payload
+            _CODEX_APP_SERVER_LOCK.notify_all()
+            return
+        method = payload.get("method")
+        if method:
+            _codex_app_server_handle_notification(str(method), payload.get("params") or {})
+            _CODEX_APP_SERVER_LOCK.notify_all()
+
+
+def _codex_app_server_thread_state(session_id):
+    if not session_id:
+        return {}
+    with _CODEX_APP_SERVER_LOCK:
+        return dict(_CODEX_APP_SERVER_THREAD_STATE.get(session_id) or {})
+
+
+def _codex_app_server_reader(transport):
+    """Collect JSON-RPC responses and notifications from Codex app-server."""
+    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT
+    global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
     try:
-        for line in proc.stdout:
-            line = (line or "").strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if "id" not in payload:
-                continue
-            with _CODEX_APP_SERVER_LOCK:
-                _CODEX_APP_SERVER_RESPONSES[payload.get("id")] = payload
-                _CODEX_APP_SERVER_LOCK.notify_all()
+        if transport.kind == "stdio":
+            for line in transport.proc.stdout:
+                line = (line or "").strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                _codex_app_server_handle_message(payload)
+        else:
+            while True:
+                try:
+                    message = _websocket_recv_text(transport.sock)
+                except OSError:
+                    break
+                try:
+                    payload = json.loads(message)
+                except json.JSONDecodeError:
+                    continue
+                _codex_app_server_handle_message(payload)
     finally:
         with _CODEX_APP_SERVER_LOCK:
-            if _CODEX_APP_SERVER_PROC is proc:
+            if _CODEX_APP_SERVER_TRANSPORT is transport:
+                _CODEX_APP_SERVER_TRANSPORT = None
                 _CODEX_APP_SERVER_PROC = None
                 _CODEX_APP_SERVER_INITIALIZED = False
                 _CODEX_APP_SERVER_INITIALIZING = False
             _CODEX_APP_SERVER_LOCK.notify_all()
 
 
-def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
+def _codex_app_server_request_to_transport(transport, method, params=None, timeout=20):
     """Send one JSON-RPC request to an already-started Codex app-server."""
     with _CODEX_APP_SERVER_LOCK:
         global _CODEX_APP_SERVER_NEXT_ID
         req_id = _CODEX_APP_SERVER_NEXT_ID
         _CODEX_APP_SERVER_NEXT_ID += 1
         try:
-            proc.stdin.write(json.dumps({
+            transport.send_json({
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "method": method,
                 "params": params or {},
-            }) + "\n")
-            proc.stdin.flush()
+            })
         except (BrokenPipeError, OSError) as e:
             return {"ok": False, "error": str(e), "fallback": "exec"}
 
@@ -17728,6 +18037,15 @@ def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
             "error": f"Codex app-server request timed out: {method}",
             "fallback": "exec",
         }
+
+
+def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
+    return _codex_app_server_request_to_transport(
+        _CodexAppServerTransport("stdio", proc=proc),
+        method,
+        params=params,
+        timeout=timeout,
+    )
 
 
 def _codex_context_window_args():
@@ -17756,127 +18074,146 @@ def _codex_app_server_request(method, params=None, timeout=20):
     The app-server is the only local Codex interface that can append input to
     a loaded thread; `codex exec resume` can only start a one-shot process.
     """
-    proc = _ensure_codex_app_server()
-    if proc is None:
+    transport = _ensure_codex_app_server()
+    if transport is None:
         return {
             "ok": False,
             "error": "Codex app-server is unavailable",
             "fallback": "exec",
         }
-    return _codex_app_server_request_to_proc(proc, method, params=params, timeout=timeout)
+    return _codex_app_server_request_to_transport(transport, method, params=params, timeout=timeout)
 
 
 def _ensure_codex_app_server():
     """Start and initialize a persistent Codex app-server if needed."""
-    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_READER
+    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT, _CODEX_APP_SERVER_READER
     global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
     with _CODEX_APP_SERVER_LOCK:
         while _CODEX_APP_SERVER_INITIALIZING:
             _CODEX_APP_SERVER_LOCK.wait(0.5)
-            proc = _CODEX_APP_SERVER_PROC
-            if proc is not None and proc.poll() is None and _CODEX_APP_SERVER_INITIALIZED:
-                return proc
+            transport = _CODEX_APP_SERVER_TRANSPORT
+            if transport is not None and transport.alive() and _CODEX_APP_SERVER_INITIALIZED:
+                return transport
             if not _CODEX_APP_SERVER_INITIALIZING:
                 break
-        proc = _CODEX_APP_SERVER_PROC
-        if proc is not None and proc.poll() is None and _CODEX_APP_SERVER_INITIALIZED:
-            return proc
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except OSError:
-                pass
+        transport = _CODEX_APP_SERVER_TRANSPORT
+        if transport is not None and transport.alive() and _CODEX_APP_SERVER_INITIALIZED:
+            return transport
+        if transport is not None:
+            transport.close()
         _CODEX_APP_SERVER_PROC = None
+        _CODEX_APP_SERVER_TRANSPORT = None
         _CODEX_APP_SERVER_INITIALIZED = False
-        _CODEX_APP_SERVER_INITIALIZING = False
-
-        resolved = _resolve_codex_bin()
-        if not resolved.get("available"):
-            return None
-        try:
-            proc = subprocess.Popen(
-                [resolved["bin"], *_codex_context_window_args(), "app-server", "--listen", "stdio://"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1,
-                start_new_session=True,
-            )
-        except (FileNotFoundError, OSError):
-            return None
-        _CODEX_APP_SERVER_PROC = proc
         _CODEX_APP_SERVER_INITIALIZING = True
-        _CODEX_APP_SERVER_READER = threading.Thread(
-            target=_codex_app_server_reader,
-            args=(proc,),
-            daemon=True,
-            name="codex-app-server-reader",
-        )
-        _CODEX_APP_SERVER_READER.start()
 
-    init = _codex_app_server_request_to_proc(
-        proc,
-        "initialize",
-        {
-            "clientInfo": {
-                "name": "claude-command-center",
-                "title": "Claude Command Center",
-                "version": __version__,
-            },
-            "capabilities": {"experimentalApi": True},
-        },
-        timeout=10,
-    )
-    if init.get("result") is not None:
+    candidates = []
+    managed_path = _codex_managed_app_server_socket_path()
+    if _codex_managed_app_server_enabled() and managed_path.exists():
+        candidates.append(("managed-unix", managed_path))
+    candidates.append(("stdio", None))
+
+    for kind, arg in candidates:
+        transport = None
+        proc = None
+        if kind == "managed-unix":
+            try:
+                transport = _connect_codex_managed_app_server(arg)
+            except (OSError, socket.timeout):
+                transport = None
+        else:
+            resolved = _resolve_codex_bin()
+            if not resolved.get("available"):
+                continue
+            try:
+                proc = subprocess.Popen(
+                    [resolved["bin"], *_codex_context_window_args(), "app-server", "--listen", "stdio://"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1,
+                    start_new_session=True,
+                )
+                transport = _CodexAppServerTransport("stdio", proc=proc)
+            except (FileNotFoundError, OSError):
+                transport = None
+        if transport is None:
+            continue
         with _CODEX_APP_SERVER_LOCK:
-            if _CODEX_APP_SERVER_PROC is proc and proc.poll() is None:
-                _CODEX_APP_SERVER_INITIALIZED = True
-                _CODEX_APP_SERVER_INITIALIZING = False
-                _CODEX_APP_SERVER_LOCK.notify_all()
-                return proc
-    try:
-        proc.terminate()
-    except OSError:
-        pass
+            _CODEX_APP_SERVER_PROC = proc
+            _CODEX_APP_SERVER_TRANSPORT = transport
+            _CODEX_APP_SERVER_INITIALIZING = True
+            _CODEX_APP_SERVER_READER = threading.Thread(
+                target=_codex_app_server_reader,
+                args=(transport,),
+                daemon=True,
+                name=f"codex-app-server-reader-{kind}",
+            )
+            _CODEX_APP_SERVER_READER.start()
+
+        init = _codex_app_server_request_to_transport(
+            transport,
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "claude-command-center",
+                    "title": "Claude Command Center",
+                    "version": __version__,
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+            timeout=10,
+        )
+        if init.get("result") is not None:
+            try:
+                transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+            except (BrokenPipeError, OSError):
+                pass
+            with _CODEX_APP_SERVER_LOCK:
+                if _CODEX_APP_SERVER_TRANSPORT is transport and transport.alive():
+                    _CODEX_APP_SERVER_INITIALIZED = True
+                    _CODEX_APP_SERVER_INITIALIZING = False
+                    _CODEX_APP_SERVER_LOCK.notify_all()
+                    return transport
+        transport.close()
+        with _CODEX_APP_SERVER_LOCK:
+            if _CODEX_APP_SERVER_TRANSPORT is transport:
+                _CODEX_APP_SERVER_TRANSPORT = None
+                _CODEX_APP_SERVER_PROC = None
+                _CODEX_APP_SERVER_INITIALIZED = False
+            _CODEX_APP_SERVER_LOCK.notify_all()
+
     with _CODEX_APP_SERVER_LOCK:
-        if _CODEX_APP_SERVER_PROC is proc:
-            _CODEX_APP_SERVER_PROC = None
-            _CODEX_APP_SERVER_INITIALIZED = False
-            _CODEX_APP_SERVER_INITIALIZING = False
+        _CODEX_APP_SERVER_INITIALIZING = False
         _CODEX_APP_SERVER_LOCK.notify_all()
     return None
 
 
 def _codex_app_server_shutdown():
-    """Terminate the CCC-owned Codex app-server process on server exit."""
-    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
+    """Close CCC's Codex app-server transport on server exit."""
+    global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT
+    global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
     with _CODEX_APP_SERVER_LOCK:
-        proc = _CODEX_APP_SERVER_PROC
+        transport = _CODEX_APP_SERVER_TRANSPORT
         _CODEX_APP_SERVER_PROC = None
+        _CODEX_APP_SERVER_TRANSPORT = None
         _CODEX_APP_SERVER_INITIALIZED = False
         _CODEX_APP_SERVER_INITIALIZING = False
         _CODEX_APP_SERVER_LOCK.notify_all()
-    if proc is not None and proc.poll() is None:
-        try:
-            proc.terminate()
-        except OSError:
-            pass
+    if transport is not None:
+        transport.close()
 
 
 def _codex_app_server_is_live():
-    """True iff CCC's own Codex app-server subprocess is up and initialized.
+    """True iff CCC has a live initialized Codex app-server transport.
 
-    This reflects whether CCC is currently driving Codex via the JSON-RPC
-    stdio app-server (the path that can append input to a loaded thread and
-    run thread/compact) versus having no live app-server (in which case a
-    Codex action would lazily spawn one or fall back to one-shot `codex exec`).
-    Read-only: it does NOT start the server (so it stays cheap for polling).
+    This may be the managed Unix-socket app-server or CCC's fallback stdio
+    subprocess. Read-only: it does NOT start the server, so polling stays cheap.
     """
-    proc = _CODEX_APP_SERVER_PROC
+    transport = _CODEX_APP_SERVER_TRANSPORT
     return bool(
-        proc is not None
-        and proc.poll() is None
+        transport is not None
+        and transport.alive()
         and _CODEX_APP_SERVER_INITIALIZED
     )
 
@@ -17919,6 +18256,59 @@ def _codex_response_succeeded(response):
     return isinstance(response, dict) and "result" in response and not response.get("error")
 
 
+def _codex_rollout_stat(session_id):
+    try:
+        path = _resolve_codex_rollout_path(session_id)
+        if not path:
+            return None
+        st = Path(path).stat()
+        return {"path": str(path), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    except OSError:
+        return None
+
+
+def _codex_rollout_grew(before, session_id):
+    if not before:
+        return False
+    after = _codex_rollout_stat(session_id)
+    if not after or after.get("path") != before.get("path"):
+        return False
+    return (
+        int(after.get("size") or 0) > int(before.get("size") or 0)
+        or int(after.get("mtime_ns") or 0) > int(before.get("mtime_ns") or 0)
+    )
+
+
+def _codex_wait_for_turn_activity(session_id, turn_id=None, *, baseline_state=None, baseline_rollout=None, timeout=5.0):
+    """Confirm that an accepted app-server turn produced observable activity."""
+    baseline_state = baseline_state or {}
+    baseline_seq = int(baseline_state.get("event_seq") or 0)
+    deadline = time.time() + max(0.0, float(timeout))
+    while True:
+        with _CODEX_APP_SERVER_LOCK:
+            state = dict(_CODEX_APP_SERVER_THREAD_STATE.get(session_id) or {})
+            seq = int(state.get("event_seq") or 0)
+            state_turn = state.get("active_turn_id") or state.get("last_turn_id") or state.get("last_completed_turn_id")
+            if seq > baseline_seq and (not turn_id or state_turn == turn_id):
+                return {"confirmed": True, "source": "app-server-notification", "state": state}
+            if turn_id and state.get("last_completed_turn_id") == turn_id:
+                return {"confirmed": True, "source": "app-server-notification", "state": state}
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            _CODEX_APP_SERVER_LOCK.wait(min(0.25, remaining))
+        if _codex_rollout_grew(baseline_rollout, session_id):
+            return {"confirmed": True, "source": "rollout-growth", "state": _codex_app_server_thread_state(session_id)}
+    if _codex_rollout_grew(baseline_rollout, session_id):
+        return {"confirmed": True, "source": "rollout-growth", "state": _codex_app_server_thread_state(session_id)}
+    return {
+        "confirmed": False,
+        "source": None,
+        "state": _codex_app_server_thread_state(session_id),
+        "warning": "turn accepted but no app-server events observed",
+    }
+
+
 def _codex_app_server_thread_is_active(session_id):
     """Best-effort read of whether CCC's live Codex app-server has an active turn.
 
@@ -17937,10 +18327,12 @@ def _codex_app_server_thread_is_active(session_id):
     except Exception:
         return False
     if not _codex_response_succeeded(resumed):
-        return False
+        state = _codex_app_server_thread_state(session_id)
+        return bool(state.get("active_turn_id") or str(state.get("status") or "").lower() == "active")
     thread = ((resumed.get("result") or {}).get("thread") or {})
     status = ((thread.get("status") or {}).get("type") or "").lower()
-    return status == "active" or bool(_codex_latest_active_turn(thread))
+    state = _codex_app_server_thread_state(session_id)
+    return status == "active" or bool(_codex_latest_active_turn(thread)) or bool(state.get("active_turn_id"))
 
 
 def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None, effort=None):
@@ -18044,6 +18436,8 @@ def _codex_resume_or_steer_via_app_server(
         _resume_ledger_append("codex_wake_stage", sid=session_id, stage="turn-start")
     except Exception:
         pass
+    baseline_state = _codex_app_server_thread_state(session_id)
+    baseline_rollout = _codex_rollout_stat(session_id)
     started = _codex_app_server_request(
         "turn/start",
         _codex_turn_params(session_id, text, cwd=cwd, model=model, image_paths=image_paths, effort=reasoning_effort),
@@ -18056,9 +18450,30 @@ def _codex_resume_or_steer_via_app_server(
             "codex_wake_ok", sid=session_id,
             via="codex-app-turn", turn_id=_turn_id,
         )
+        try:
+            confirm_timeout = float(os.environ.get("CCC_CODEX_WAKE_CONFIRM_TIMEOUT", "5"))
+        except ValueError:
+            confirm_timeout = 5.0
+        confirmation = _codex_wait_for_turn_activity(
+            session_id,
+            _turn_id,
+            baseline_state=baseline_state,
+            baseline_rollout=baseline_rollout,
+            timeout=confirm_timeout,
+        )
+        if not confirmation.get("confirmed"):
+            _resume_ledger_append(
+                "codex_wake_warn", sid=session_id,
+                via="codex-app-turn", turn_id=_turn_id,
+                warning=confirmation.get("warning"),
+            )
         return {
             "ok": True,
             "via": "codex-app-turn",
+            "accepted": True,
+            "confirmed": bool(confirmation.get("confirmed")),
+            "confirmation_source": confirmation.get("source"),
+            "warning": confirmation.get("warning"),
             "turn_id": _turn_id,
             "session_id": session_id,
         }
@@ -18314,6 +18729,58 @@ def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None):
         "via": "codex-goal",
         "code": "codex_goal_failed",
         "error": _codex_error_text(result) or f"Codex goal {action} failed",
+    }
+
+
+def _codex_interrupt_via_app_server(session_id, cwd=None):
+    if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
+        return {
+            "ok": False,
+            "via": "codex-app-interrupt",
+            "code": "codex_interrupt_unavailable",
+            "error": "Codex app-server disabled",
+        }
+    if not _codex_app_server_is_live() and not (
+        _codex_managed_app_server_enabled() and _codex_managed_app_server_socket_path().exists()
+    ):
+        return {
+            "ok": False,
+            "via": "codex-app-interrupt",
+            "code": "codex_interrupt_unavailable",
+            "error": "Codex app-server unavailable",
+        }
+    resume_params = {"threadId": session_id, "excludeTurns": False}
+    if cwd:
+        resume_params["cwd"] = cwd
+    resumed = _codex_app_server_request("thread/resume", resume_params, timeout=10)
+    thread = ((resumed.get("result") or {}).get("thread") or {})
+    active_turn = _codex_latest_active_turn(thread)
+    turn_id = (active_turn or {}).get("id") or _codex_app_server_thread_state(session_id).get("active_turn_id")
+    status = ((thread.get("status") or {}).get("type") or "").lower()
+    if not turn_id or (status and status != "active" and not active_turn):
+        return {
+            "ok": False,
+            "via": "codex-app-interrupt",
+            "code": "codex_no_active_turn",
+            "error": "No running Codex turn to interrupt",
+        }
+    interrupted = _codex_app_server_request(
+        "turn/interrupt",
+        {"threadId": session_id, "turnId": turn_id},
+        timeout=10,
+    )
+    if _codex_response_succeeded(interrupted):
+        return {
+            "ok": True,
+            "via": "codex-app-interrupt",
+            "turn_id": turn_id,
+            "session_id": session_id,
+        }
+    return {
+        "ok": False,
+        "via": "codex-app-interrupt",
+        "code": "codex_interrupt_failed",
+        "error": _codex_error_text(interrupted) or interrupted.get("error") or "Codex interrupt failed",
     }
 
 
@@ -22360,6 +22827,7 @@ def build_codex_wake_status(session_id):
     connect = _last("codex_wake_stage", stage="connect")
     turnstart = _last("codex_wake_stage", stage="turn-start")
     ok = _last("codex_wake_ok")
+    warn = _last("codex_wake_warn")
     exec_ev = _last("codex_wake_exec")
     fail = _last("codex_wake_fail")
     queued = _last("codex_wake_queued")
@@ -22367,6 +22835,7 @@ def build_codex_wake_status(session_id):
     attempt_epoch = float((attempt or {}).get("epoch") or 0.0)
 
     snap = _codex_wake_rollout_snapshot(session_id)
+    app_state = _codex_app_server_thread_state(session_id)
     ctx_used = snap.get("context_used")
     ctx_win = snap.get("context_window")
     ctx_pct = snap.get("context_pct")
@@ -22405,6 +22874,9 @@ def build_codex_wake_status(session_id):
     elif hard_error:
         outcome = "error"
         outcome_detail = hard_error
+    elif warn and float(warn.get("epoch") or 0.0) >= attempt_epoch:
+        outcome = "warning"
+        outcome_detail = warn.get("warning")
 
     active = bool(attempt) and outcome is None
 
@@ -22458,6 +22930,8 @@ def build_codex_wake_status(session_id):
         "context_pct": ctx_pct,
         "input_tokens": snap.get("input_tokens"),
         "output_tokens": snap.get("output_tokens"),
+        "app_server_state": app_state,
+        "warning": warn.get("warning") if warn and float(warn.get("epoch") or 0.0) >= attempt_epoch else None,
         "elapsed_s": round(now - attempt_epoch, 1) if attempt_epoch else None,
         "outcome": outcome,
         "outcome_detail": outcome_detail,
@@ -36595,8 +37069,8 @@ def _interrupt_session(session_id):
     """Send an interrupt to a session using the same fall-through as
     `_inject_text_into_session`:
 
-      * Codex session → SIGINT directly to the process (both TTY and headless)
-        since Codex does not have a native TUI Escape key handler.
+      * Codex app-server turn → `turn/interrupt`.
+      * Live Codex process → SIGINT directly to the process.
       * Live TTY (non-Codex) → AppleScript Esc keystroke (cancels the in-flight stream
         when Claude is mid-response, clears the input buffer otherwise).
       * Live CCC-spawned headless session (no TTY, non-Codex) → SIGINT to the spawned
@@ -36610,6 +37084,9 @@ def _interrupt_session(session_id):
     cwd = find_session_cwd(session_id)
     status = session_live_status(session_id, cwd)
     if _is_codex_session(session_id):
+        app_interrupt = _codex_interrupt_via_app_server(session_id, cwd=cwd)
+        if app_interrupt.get("ok"):
+            return app_interrupt
         pid = status.get("pid")
         if not pid:
             spawn = _find_live_spawn_entry_for_session(session_id)
