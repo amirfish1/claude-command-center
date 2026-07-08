@@ -25706,8 +25706,7 @@
         if (!opt) return;
         const value = opt.getAttribute('data-window');
         if (value !== '1d' && value !== '7d' && value !== 'all') return;
-        try { localStorage.setItem(ARCHIVE_WINDOW_KEY, value); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        _refreshArchiveWindow(value);
       });
     }
     const $archivedExpandAll = $convList.querySelector('[data-role="archived-expand-all"]');
@@ -26663,15 +26662,13 @@
         // Unified window key (CCC-168 follow-up): write the SAME key the data
         // feed reads (ccc-archive-window), so this visible Active-tab toggle
         // controls the real upstream window — not a dead downstream key.
-        try { localStorage.setItem(ARCHIVE_WINDOW_KEY, value); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        _refreshArchiveWindow(value);
       });
     }
     const $ipWindowFooter = $convList.querySelector('[data-role="inprogress-window-footer"]');
     if ($ipWindowFooter) {
       const showAll = () => {
-        try { localStorage.setItem(ARCHIVE_WINDOW_KEY, 'all'); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
+        _refreshArchiveWindow('all');
       };
       $ipWindowFooter.addEventListener('click', (ev) => { ev.stopPropagation(); showAll(); });
       $ipWindowFooter.addEventListener('keydown', (ev) => {
@@ -40967,6 +40964,7 @@
   // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
+  let archiveDataWindow = null;
   let _lastArchiveRenderFilter = null;
   let uxFixesQueueMeta = { total: 0, byClaimedSession: new Map() };
   let _uxFixesQueueMetaPromise = null;
@@ -41420,15 +41418,20 @@
     requestAnimationFrame(restore);
   }
 
-  // Dedupe concurrent /api/conversations/all fetches keyed by URL. Recovery,
+  // Dedupe concurrent sidebar archive fetches keyed by URL. Recovery,
   // PR-hydration, and refresh paths all call loadArchiveAll independently;
-  // without this they fire 3+ parallel ~500KB requests for the same payload.
+  // without this they fire 3+ parallel requests for the same payload.
   const _archiveAllInflight = new Map();
   const _archiveAllEtag = new Map();  // url -> last ETag from the server
   const _archiveAllData = new Map();  // url -> last conversations[] (reused on 304)
 
   async function loadArchiveAll(opts = {}) {
     const params = new URLSearchParams();
+    if (opts.window) {
+      params.set('window', opts.window);
+    } else {
+      params.set('window', _archiveWindow());
+    }
     if (opts.staleOk !== false) {
       params.set('stale_ok', '1');
     }
@@ -41439,7 +41442,7 @@
       params.set('resolve_worktrees', '1');
       params.set('background', '1');
     }
-    const url = '/api/conversations/all' + (params.toString() ? '?' + params.toString() : '');
+    const url = '/api/conversations/list' + (params.toString() ? '?' + params.toString() : '');
     const pending = _archiveAllInflight.get(url);
     if (pending) return pending;
     const p = (async () => {
@@ -41564,6 +41567,18 @@
   function _archiveQuery() {
     return document.getElementById('convSearch')?.value || '';
   }
+  function _refreshArchiveWindow(value) {
+    const next = (value === '1d' || value === '7d' || value === 'all') ? value : 'all';
+    try { localStorage.setItem(ARCHIVE_WINDOW_KEY, next); } catch (_) {}
+    const query = _archiveQuery();
+    if (!archiveLoaded || archiveDataWindow !== next) {
+      refreshArchiveData({ staleOk: true, window: next })
+        .then(() => renderArchiveList(query))
+        .catch(() => renderArchiveList(query));
+      return;
+    }
+    renderArchiveList(query);
+  }
   function _renderArchiveIfLoaded() {
     if (!archiveLoaded) return;
     renderArchiveList(_archiveQuery());
@@ -41583,6 +41598,7 @@
     _archiveStuckRenderRecoveryPromise = loadArchiveAll({ staleOk: true }).then(convs => {
       if (!Array.isArray(convs) || !convs.length || !_archiveListStillShowsLoader()) return;
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
+      archiveDataWindow = _archiveWindow();
       archiveLoaded = true;
       renderArchiveList(_archiveQuery());
     }).finally(() => {
@@ -41624,9 +41640,10 @@
     if (!force && _archivePrHydratedAt && (Date.now() - _archivePrHydratedAt) < ARCHIVE_HYDRATE_TTL_MS) {
       return Promise.resolve();
     }
-    _archivePrHydratePromise = loadArchiveAll({ includePrs: true }).then(convs => {
+    _archivePrHydratePromise = loadArchiveAll({ includePrs: true, window: archiveDataWindow || _archiveWindow() }).then(convs => {
       if (Array.isArray(convs) && convs.length) {
         archiveData = convs;
+        archiveDataWindow = archiveDataWindow || _archiveWindow();
         _archivePrHydratedAt = Date.now();
         _renderArchiveIfLoaded();
       }
@@ -41663,10 +41680,12 @@
   async function refreshArchiveData(opts = {}) {
     if (_archiveRefreshPromise) return _archiveRefreshPromise;
     _startArchiveProgressPoll();
+    const requestedWindow = opts.window || _archiveWindow();
     _archiveRefreshPromise = (async () => {
       try {
-        const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force });
+        const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force, window: requestedWindow });
         archiveData = _mergeArchivePrSnapshot(convs, archiveData);
+        archiveDataWindow = requestedWindow;
         archiveLoaded = true;
         // Re-poll COO escalated markers on each data refresh so newly-bounced
         // sessions surface their badge without a manual reload.
@@ -41725,8 +41744,7 @@
     const el = $list.querySelector('[data-role="archive-window-showall"]');
     if (!el) return;
     const showAll = () => {
-      try { localStorage.setItem(ARCHIVE_WINDOW_KEY, 'all'); } catch (_) {}
-      renderArchiveList(document.getElementById('convSearch')?.value || '');
+      _refreshArchiveWindow('all');
     };
     el.addEventListener('click', (ev) => { ev.stopPropagation(); showAll(); });
     el.addEventListener('keydown', (ev) => {
@@ -41744,6 +41762,11 @@
     if (deferSidebarRenderIfDragging()) return;
     if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
     const q = (filter || '').trim().toLowerCase();
+    if (q && archiveDataWindow && archiveDataWindow !== 'all' && !_archiveRefreshPromise) {
+      refreshArchiveData({ staleOk: true, window: 'all' })
+        .then(() => renderArchiveList(_archiveQuery()))
+        .catch(() => {});
+    }
     const scrollState = _captureArchiveListScroll(q, $list);
     const _finishArchiveRender = () => {
       _lastArchiveRenderFilter = q;

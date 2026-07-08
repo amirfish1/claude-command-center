@@ -14,8 +14,10 @@ restore the gate. See CLAUDE.md "Performance gates".
 """
 import importlib
 import concurrent.futures
+import gzip
 import json
 import os
+from pathlib import Path
 import sys
 import threading
 import time
@@ -846,6 +848,132 @@ def test_archive_rows_carry_state_stamp_cache_safe(big_projects, isolated_archiv
     for r in warm_rows:
         assert r.get("state") is not None, "warm-served row missing state (stamp not cache-safe)"
         assert "ended_blocked" in r, "warm-served row missing ended_blocked (stamp not cache-safe)"
+
+
+def test_archive_list_projection_filters_window_and_shrinks_payload():
+    """The sidebar list payload should carry only row-render fields.
+
+    /api/conversations/all is the compatibility payload. The sidebar path gets
+    a projected shape that drops disk/debug/transcript text and can server-side
+    apply the same 1d/7d/all window the client already uses.
+    """
+    now = time.time()
+    bulky_tail = " ".join(
+        f"assistant-details-{i:04d}-{(i * 2654435761) % (2 ** 32):08x}"
+        for i in range(600)
+    )
+    rows = [
+        {
+            "session_id": "recent-session",
+            "engine": "claude",
+            "source": "interactive",
+            "jsonl_path": "/tmp/not-public/recent.jsonl",
+            "folder_label": "demo",
+            "folder_path": "/tmp/demo",
+            "session_cwd": "/tmp/demo",
+            "mtime": now - 60,
+            "modified": now - 60,
+            "first_message": "recent work",
+            "display_name": "Recent work",
+            "last_assistant_text": bulky_tail,
+            "question_text": "Approve this?",
+            "question_options": ["Yes", "No"],
+            "state": "waiting",
+            "latest_input_tokens": 123,
+            "live_context_percent": 12,
+            "quality_summary": "good context hygiene",
+        },
+        {
+            "session_id": "old-session",
+            "engine": "claude",
+            "source": "interactive",
+            "jsonl_path": "/tmp/not-public/old.jsonl",
+            "folder_label": "demo",
+            "folder_path": "/tmp/demo",
+            "mtime": now - 10 * 86400,
+            "modified": now - 10 * 86400,
+            "first_message": "old work",
+            "display_name": "Old work",
+            "last_assistant_text": bulky_tail,
+        },
+        {
+            "session_id": "pinned-old-session",
+            "engine": "claude",
+            "source": "interactive",
+            "jsonl_path": "/tmp/not-public/pinned.jsonl",
+            "folder_label": "demo",
+            "folder_path": "/tmp/demo",
+            "mtime": now - 10 * 86400,
+            "modified": now - 10 * 86400,
+            "first_message": "pinned old work",
+            "display_name": "Pinned old work",
+            "last_assistant_text": bulky_tail,
+            "pinned": True,
+        },
+        {
+            "session_id": "hermes-old-session",
+            "engine": "hermes",
+            "source": "hermes",
+            "jsonl_path": "/tmp/not-public/hermes.jsonl",
+            "folder_label": "messages",
+            "folder_path": "/tmp/messages",
+            "mtime": now - 10 * 86400,
+            "modified": now - 10 * 86400,
+            "first_message": "old hermes work",
+            "display_name": "Hermes old work",
+            "last_assistant_text": bulky_tail,
+        },
+    ]
+
+    payload = server._archive_list_payload(rows, window="1d", now=now)
+    projected = payload["conversations"]
+
+    assert [r["session_id"] for r in projected] == [
+        "recent-session",
+        "pinned-old-session",
+        "hermes-old-session",
+    ]
+    assert payload["count"] == 3
+    assert payload["total_count"] == 4
+    assert payload["window"] == "1d"
+    assert payload["fields"], "response should advertise its projection"
+    assert projected[0]["question_text"] == "Approve this?"
+    assert projected[0]["quality_summary"] == "good context hygiene"
+    assert all("jsonl_path" not in r for r in projected)
+    assert all("last_assistant_text" not in r for r in projected)
+
+    full_raw = json.dumps({"conversations": rows}).encode()
+    slim_raw = json.dumps(payload).encode()
+    assert len(slim_raw) < len(full_raw) * 0.45
+    assert len(gzip.compress(slim_raw)) < len(gzip.compress(full_raw)) * 0.75
+
+
+def test_archive_list_rows_reuse_warm_serve_cache(big_projects, isolated_archive_cache, monkeypatch):
+    """The list endpoint must project an existing archive snapshot, not create
+    a second O(all conversations) scan path for the sidebar."""
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 60.0)
+    cold_rows, _ = server._archive_all_rows_cached(_ALL_OPTS)
+    assert cold_rows
+
+    builds = _count_calls(monkeypatch, "find_all_conversations")
+    rehydrates = _count_calls(monkeypatch, "_rehydrate_archive_cached_rows")
+    rows, from_cache = server._archive_list_rows_cached(_ALL_OPTS, window="all")
+
+    assert from_cache is True
+    assert rows
+    assert builds == [], "sidebar list projection must not rebuild the archive"
+    assert rehydrates == [], "warm sidebar list projection must not rehydrate rows"
+
+
+def test_sidebar_archive_fetch_uses_lightweight_list_endpoint():
+    app_js = Path("static/app.js").read_text()
+    start = app_js.index("async function loadArchiveAll")
+    end = app_js.index("// Cross-repo open GH issues", start)
+    loader = app_js[start:end]
+
+    assert "'/api/conversations/list'" in loader
+    assert "'/api/conversations/all'" not in loader
+    assert "params.set('window', _archiveWindow())" in loader
 
 
 # ── Latency budget (lenient smoke on the scale fixture) ───────────────────────
