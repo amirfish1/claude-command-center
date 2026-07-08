@@ -2945,10 +2945,16 @@
 
         // 7b. FABLE % OF WEEKLY — dashed gold line showing Fable's actual cumulative
         // contribution to the weekly quota (share of total tokens × cumulative actual %).
+        // summary.per_model is a rolling last-7-days total, not aligned to the current
+        // billing period (selPeriodStart/selPeriodEnd) — so it can still hold pre-reset
+        // Fable rows even when the current period has none. Gate on weeklyData.fable_pct,
+        // which IS scoped to the current period, so the line only appears when Fable is
+        // actually active in this billing period.
+        const _fableActiveThisPeriod = weeklyData && weeklyData.fable_pct != null && weeklyData.fable_pct > 0;
         const _fableRows = (summary.per_model || []).filter(m => (m.model || m.engine || '').toLowerCase().includes('fable'));
         const _fableTok = _fableRows.reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
         const _totalModelTok = (summary.per_model || []).reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
-        const _fableRatio = (_totalModelTok > 0 && _fableTok > 0) ? _fableTok / _totalModelTok : null;
+        const _fableRatio = (_fableActiveThisPeriod && _totalModelTok > 0 && _fableTok > 0) ? _fableTok / _totalModelTok : null;
         let lastFableV = null, lastFableI = -1;
         const cumFableVals = _fableRatio ? cumActVals.map(v => {
           if (v == null) return null;
