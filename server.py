@@ -10188,6 +10188,7 @@ def rename_session(session_id, name, source="user"):
         if source == "user":
             try:
                 _save_session_name_override(session_id, name)
+                _sync_codex_thread_title(session_id, name)
             except OSError:
                 pass  # non-fatal
         result["ok"] = True
@@ -10197,6 +10198,8 @@ def rename_session(session_id, name, source="user"):
     # Side-car path: live session, missing jsonl, or clearing a name
     try:
         _save_session_name_override(session_id, name or None)
+        if source == "user" and name:
+            _sync_codex_thread_title(session_id, name)
     except OSError as e:
         result["error"] = f"side-car write failed: {e}"
         return result
@@ -18504,6 +18507,86 @@ def _mark_codex_thread_user_visible(thread_id, update_rollout=True):
     return False
 
 
+def _sync_codex_thread_title(thread_id, title):
+    """Mirror a CCC user rename into Codex's user-facing thread title.
+
+    Keep `first_user_message` intact as provenance; Codex mobile/sidebar list
+    uses the shorter `title`/`preview` fields when present.
+    """
+    sid = str(thread_id or "").strip()
+    name = _truncate_session_name(title)
+    if not sid or not name:
+        return False
+    for db in _codex_state_db_candidates():
+        con = None
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=rw", uri=True, timeout=0.25)
+            cols = {
+                row[1]
+                for row in con.execute("PRAGMA table_info(threads)").fetchall()
+            }
+            if "id" not in cols or "title" not in cols:
+                continue
+            assignments = ["title = ?"]
+            values = [name]
+            if "preview" in cols:
+                assignments.append("preview = ?")
+                values.append(name)
+            values.append(sid)
+            cur = con.execute(
+                f"UPDATE threads SET {', '.join(assignments)} WHERE id = ?",
+                tuple(values),
+            )
+            con.commit()
+            if cur.rowcount:
+                return True
+        except sqlite3.Error:
+            continue
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except sqlite3.Error:
+                    pass
+    return False
+
+
+_codex_visibility_retry_sids = set()
+_codex_visibility_retry_lock = threading.Lock()
+
+
+def _schedule_codex_visibility_retry(session_id, spawn_entry=None, attempts=60, delay=1.0):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    with _codex_visibility_retry_lock:
+        if sid in _codex_visibility_retry_sids:
+            return False
+        _codex_visibility_retry_sids.add(sid)
+
+    entry = dict(spawn_entry or {})
+
+    def worker():
+        try:
+            for _idx in range(max(1, int(attempts or 1))):
+                if _mark_codex_thread_user_visible(sid, update_rollout=True):
+                    _register_codex_sidebar_project_for_spawn_entry(entry, sid)
+                    return
+                time.sleep(max(0.05, float(delay or 0.5)))
+        except Exception:
+            pass
+        finally:
+            with _codex_visibility_retry_lock:
+                _codex_visibility_retry_sids.discard(sid)
+
+    threading.Thread(
+        target=worker,
+        daemon=True,
+        name=f"ccc-codex-visible-{sid[:8]}",
+    ).start()
+    return True
+
+
 def _codex_fetch_threads(where="", params=(), limit=None):
     """Read rows from Codex's local thread index without creating files.
 
@@ -19347,6 +19430,49 @@ def _codex_sidebar_project_roots_from_values(repo_paths):
     return roots
 
 
+def _codex_backfill_candidate_rows(days=None, repo_paths=None, now=None, limit=1000):
+    """Recent Codex exec/cli rows that can be made sidebar-visible.
+
+    This complements CCC spawn logs: the Codex DB is the durable index, while
+    old CCC logs/registry entries can be pruned or missed. Keep the candidate
+    set narrow so we only rewrite rows that Codex itself classifies as
+    non-interactive and otherwise user-owned.
+    """
+    if days is None:
+        days = _codex_sidebar_backfill_window_days()
+    try:
+        now = float(now if now is not None else time.time())
+    except (TypeError, ValueError):
+        now = time.time()
+    cutoff = now - (float(days) * 86400.0)
+    try:
+        limit = max(1, int(limit or 1000))
+    except (TypeError, ValueError):
+        limit = 1000
+
+    allowed_roots = None
+    if repo_paths is not None:
+        allowed_roots = set(_codex_sidebar_project_roots_from_values(repo_paths))
+
+    out = []
+    for row in _codex_fetch_threads(limit=limit):
+        source = row.get("source")
+        thread_source = row.get("thread_source")
+        if source not in ("exec", "cli"):
+            continue
+        if thread_source and thread_source != "user":
+            continue
+        ts = _codex_ts_seconds(row, "updated") or _codex_ts_seconds(row, "created")
+        if ts and ts < cutoff:
+            break
+        if allowed_roots is not None:
+            root = _codex_sidebar_project_root_for_thread(row)
+            if root not in allowed_roots:
+                continue
+        out.append(row)
+    return out
+
+
 def _codex_global_state_path():
     return Path.home() / ".codex" / ".codex-global-state.json"
 
@@ -19539,6 +19665,14 @@ def backfill_codex_sidebar_visibility(days=None, repo_paths=None, now=None, max_
         add_sid(entry.get("session_id") or entry.get("resumed_sid"))
         if log_path:
             add_sid(_extract_codex_thread_id_from_log(log_path))
+
+    for row in _codex_backfill_candidate_rows(
+        days=days,
+        repo_paths=repo_paths,
+        now=now,
+        limit=max_logs,
+    ):
+        add_sid(row.get("id"))
 
     updated = 0
     already_visible = 0
@@ -19858,8 +19992,10 @@ def _codex_spawn_pid_by_thread_id():
                 alive = _poll_spawn_entry(s) is None
             except Exception:
                 alive = False
-            _mark_codex_thread_user_visible(sid, update_rollout=not alive)
-            _register_codex_sidebar_project_for_spawn_entry(s, sid)
+            if _mark_codex_thread_user_visible(sid, update_rollout=True):
+                _register_codex_sidebar_project_for_spawn_entry(s, sid)
+            else:
+                _schedule_codex_visibility_retry(sid, spawn_entry=s)
             if not s.get("session_id"):
                 s["session_id"] = sid
                 _update_spawn_session_id_in_registry(s.get("pid"), sid)
@@ -30869,8 +31005,10 @@ def _spawn_session_id_from_entry(entry):
             if not _ensure_claude_desktop_session_visible(sid, spawn_entry=entry):
                 _schedule_claude_desktop_visibility_retry(sid, spawn_entry=entry)
         elif engine == "codex":
-            _mark_codex_thread_user_visible(sid, update_rollout=False)
-            _register_codex_sidebar_project_for_spawn_entry(entry, sid)
+            if _mark_codex_thread_user_visible(sid, update_rollout=True):
+                _register_codex_sidebar_project_for_spawn_entry(entry, sid)
+            else:
+                _schedule_codex_visibility_retry(sid, spawn_entry=entry)
         elif engine == "cursor":
             _ensure_cursor_session_visible(sid, spawn_entry=entry)
         return sid
@@ -30897,8 +31035,10 @@ def _spawn_session_id_from_entry(entry):
             if not _ensure_claude_desktop_session_visible(sid, spawn_entry=entry):
                 _schedule_claude_desktop_visibility_retry(sid, spawn_entry=entry)
         elif engine == "codex":
-            _mark_codex_thread_user_visible(sid, update_rollout=False)
-            _register_codex_sidebar_project_for_spawn_entry(entry, sid)
+            if _mark_codex_thread_user_visible(sid, update_rollout=True):
+                _register_codex_sidebar_project_for_spawn_entry(entry, sid)
+            else:
+                _schedule_codex_visibility_retry(sid, spawn_entry=entry)
         elif engine == "cursor":
             _ensure_cursor_session_visible(sid, spawn_entry=entry)
     return sid
