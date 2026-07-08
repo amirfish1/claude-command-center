@@ -748,8 +748,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('aria-label="Recent folder shortcuts"', index_html)
         self.assertIn("spawn-cwd-chip-label", app_js)
         self.assertIn("Recent folders", app_js)
+        self.assertIn("id=\"nsRepoSuggestions\"", app_js)
+        self.assertIn("function renderNewSessionRepoSuggestions", app_js)
+        self.assertIn("for (const opt of (spawnCwdOptions || []))", app_js)
         self.assertIn("Show all folder suggestions", index_html)
         self.assertIn(".spawn-cwd-chip-label", app_css)
+        self.assertIn(".ns-repo-suggestions", app_css)
 
     def test_new_session_stage_demotes_center_card_and_expands_composer(self):
         """New-session mode should make the bottom composer primary and keep
@@ -2814,6 +2818,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("syncMobileBackIntoTabStrip(strip, false);", app_js)
         self.assertIn(".conv-tab-strip.has-mobile-back", app_css)
         self.assertIn(".conv-tab-strip.has-mobile-back #mobileBackBtn", app_css)
+        self.assertIn("#convToolbar .font-size-controls { display: none !important; }", app_css)
+        self.assertIn("order: -100;", app_css)
 
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""

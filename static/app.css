@@ -6617,7 +6617,15 @@
      shares the row and ellipsizes. Mobile-only — no base/desktop rule touched. */
   @media (max-width: 950px) {
     #convToolbar { flex-wrap: nowrap; align-items: center; }
-    #convToolbar .mobile-back-btn { order: -3; padding: 4px 8px; flex: 0 0 auto; }
+    #convToolbar .font-size-controls { display: none !important; }
+    #convToolbar .mobile-back-btn {
+      order: -100;
+      padding: 4px 8px;
+      flex: 0 0 34px;
+      width: 34px;
+      min-width: 34px;
+      justify-content: center;
+    }
     #convToolbar .mobile-back-btn .mb-label { display: none; }
     #cccBreadcrumb.ccc-breadcrumb {
       order: -2; flex: 1 1 auto; min-width: 0; flex-wrap: nowrap;
@@ -15777,6 +15785,18 @@ body:has(.gc-reader) .pwa-install-banner {
 .ns-create-btn:disabled { opacity: 0.45; cursor: default; }
 .ns-create-btn:not(:disabled):hover { background: rgba(88,166,255,0.22); }
 .ns-muted { font-size: 11.5px; color: var(--text-muted); }
+.ns-repo-suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  width: min(560px, 100%);
+  margin: 2px 0 0;
+}
+.ns-repo-suggestions[hidden] { display: none; }
+.ns-repo-suggestions .ns-repo-chips {
+  justify-content: center;
+}
 
 /* UX-fixes worker badge in the toolbar breadcrumb (CCC-90). */
 .ccc-breadcrumb-ux {
