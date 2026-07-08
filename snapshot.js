@@ -18,7 +18,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const puppeteer = require('puppeteer');
+const puppeteer = require('./require-puppeteer.js');
 
 // Chrome for Testing v149 on macOS ARM has a renderer crash during
 // Page.captureScreenshot ("Target closed"). Prefer the user's installed

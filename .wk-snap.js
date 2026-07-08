@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer');
+const puppeteer = require('./require-puppeteer.js');
 (async () => {
   const b = await puppeteer.launch({headless:'new', args:['--no-sandbox']});
   const p = await b.newPage();
