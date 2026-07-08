@@ -503,11 +503,11 @@ def test_conv_meta_cache_roundtrip_avoids_reparse(big_projects, monkeypatch, tmp
 # AND the COO board. They used to call _build_archive_conversations (O(all
 # sessions)) on EVERY request with no response cache and no single-flight — a
 # 14s request once wedged the live server. _archive_all_rows_cached now has two
-# cache layers: a durable signature-gated *build* cache (unchanged transcript
-# corpus → no O(all) rebuild; a real change → exactly one rebuild reusing the
-# per-(mtime,size) parse cache) and a short time-based *serve* cache that
-# coalesces concurrent polls. These guard the build cache; serve coalescing is
-# exercised separately below.
+# cache layers: a durable per-file *build* cache (unchanged transcript file →
+# no O(all) rebuild; a real file change → refresh only that transcript row by
+# its own (mtime,size)) and a short time-based *serve* cache that coalesces
+# concurrent polls. These guard the build cache; serve coalescing is exercised
+# separately below.
 
 @pytest.fixture
 def isolated_archive_cache(monkeypatch, tmp_path):
@@ -519,9 +519,8 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     server._ARCHIVE_BUILD_LOCKS.clear()
     server._archive_serve_cache.clear()
     server._archive_serve_refreshing.clear()
-    # Short-TTL memos (corpus signature + per-session liveness) are module
-    # globals; reset them so a leaked sig/liveness entry from a prior test can't
-    # make a signature-gated assertion order-dependent.
+    # Short-TTL per-session liveness is module-global; reset it so a leaked
+    # entry from a prior test can't make an assertion order-dependent.
     _reset_short_ttl_memos()
     yield
     server._ARCHIVE_RESPONSE_CACHE.clear()
@@ -532,13 +531,7 @@ def isolated_archive_cache(monkeypatch, tmp_path):
 
 
 def _reset_short_ttl_memos():
-    """Clear the corpus-signature and per-session-liveness memos (added for the
-    under-polling perf work) between tests. Tolerant of their absence so the
-    suite still runs if the memos are removed."""
-    sig = getattr(server, "_archive_sig_cache", None)
-    if isinstance(sig, dict):
-        sig["ts"] = 0.0
-        sig["sig"] = None
+    """Clear per-session-liveness memos between tests."""
     live = getattr(server, "_session_live_cache", None)
     if isinstance(live, dict):
         live.clear()
@@ -552,8 +545,8 @@ _ALL_KEY = server._archive_response_cache_key(**_ALL_OPTS)
 
 
 def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated_archive_cache, monkeypatch):
-    """The signature-gated build cache must NOT re-scan all sessions when the
-    transcript corpus is unchanged.
+    """The per-file build cache must NOT re-scan all sessions when transcript
+    fingerprints are unchanged.
 
     This is the regression guard for the wedge: a second pass over an unchanged
     corpus must NOT call find_all_conversations (the full per-session scan). We
@@ -576,39 +569,44 @@ def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated
     assert len(rows2) == len(rows1), "rehydrate must return the same rows as the build"
 
 
-def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
-    """Touching a transcript must bust the signature and force exactly one rebuild
-    (the build cache must never serve a stale payload after a real change)."""
+def test_archive_build_cache_refreshes_only_changed_transcript(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
+    """Touching one transcript must refresh that row without a full archive scan."""
     n, sids = big_projects
     cold_rows, _ = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)  # warm the cache
 
-    # Sanity: an unchanged pass rehydrates without rebuilding (proves the bust
-    # below is the signature reacting to the edit, not a cold cache).
+    # Sanity: an unchanged pass rehydrates without rebuilding.
     _, warm_from_cache = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
     assert warm_from_cache is True
 
-    # Mutate one transcript's mtime → corpus signature changes.
+    # Mutate one transcript with a visible metadata-only row change. It remains
+    # old enough to stay out of liveness windows, so any expensive work below is
+    # archive-cache work, not live-state refresh.
     p = tmp_path / ".claude" / "projects" / "-tmp-perf-repo" / f"{sids[0]}.jsonl"
-    newer = time.time() - 29 * 86400  # still old enough to stay out of liveness windows
+    with p.open("a") as f:
+        f.write(json.dumps({
+            "type": "custom-title",
+            "sessionId": sids[0],
+            "timestamp": "2026-01-01T00:00:02.000Z",
+            "customTitle": "Renamed one",
+        }) + "\n")
+    newer = time.time() - 29 * 86400
     os.utime(p, (newer, newer))
+    full_scans = []
+    orig_find_all = server.find_all_conversations
 
-    # The corpus signature is memoized for _ARCHIVE_SIG_TTL (default 2s) so
-    # concurrent per-key refreshes share one full-corpus walk. That means a real
-    # edit is picked up on the NEXT signature computation once the tiny TTL
-    # lapses — not necessarily within the same 2s window. Expire the memo here to
-    # simulate that lapse deterministically; the invariant under test is
-    # "a real change forces exactly ONE rebuild (never an infinite stale
-    # rehydrate)", which holds regardless of the memo window.
-    sig_cache = getattr(server, "_archive_sig_cache", None)
-    if isinstance(sig_cache, dict):
-        sig_cache["ts"] = 0.0
-        sig_cache["sig"] = None
+    def spy_find_all(*args, **kwargs):
+        if not kwargs.get("only_jsonl_paths"):
+            full_scans.append((args, kwargs))
+        return orig_find_all(*args, **kwargs)
 
-    builds = _count_calls(monkeypatch, "find_all_conversations")
+    monkeypatch.setattr(server, "find_all_conversations", spy_find_all)
     rows, from_cache = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
-    assert from_cache is False, "a changed corpus must rebuild, not rehydrate the stale payload"
-    assert len(builds) == 1, (
-        f"expected exactly one rebuild after a real change, got {len(builds)}"
+    assert from_cache is True, "single-file refresh should reuse the archive cache"
+    changed = next(r for r in rows if r.get("session_id") == sids[0])
+    assert changed.get("display_name") == "Renamed one", "changed row was not refreshed"
+    assert full_scans == [], (
+        f"changed one transcript but ran {len(full_scans)} full archive scan(s) — "
+        "the archive build cache is still gated on a whole-corpus invalidation"
     )
     assert len(rows) == len(cold_rows)
 

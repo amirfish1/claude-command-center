@@ -4933,6 +4933,8 @@ def find_all_conversations(
     resolve_pr_states=True,
     resolve_effective=True,
     resolve_worktree_dirty=True,
+    only_jsonl_paths=None,
+    include_engine_sources=True,
 ):
     """Walk ~/.claude/projects/ for every subdir and return a flat list of
     conversation metadata across every folder you've ever Claude-Code'd in.
@@ -4953,6 +4955,16 @@ def find_all_conversations(
     """
     projects_root = Path.home() / ".claude" / "projects"
     projects_root_exists = projects_root.is_dir()
+    only_by_project = None
+    if only_jsonl_paths is not None:
+        only_by_project = {}
+        for raw_path in only_jsonl_paths or []:
+            try:
+                p = Path(_archive_transcript_cache_path(raw_path))
+            except (TypeError, OSError):
+                continue
+            if p.name.endswith(".jsonl"):
+                only_by_project.setdefault(str(p.parent), []).append(p)
 
     # Build slug → repo_path map for label resolution.
     known_by_slug = {}
@@ -5005,7 +5017,9 @@ def find_all_conversations(
     _now = time.time()
 
     project_dirs = []
-    if projects_root_exists:
+    if only_by_project is not None:
+        project_dirs = [Path(p) for p in sorted(only_by_project)]
+    elif projects_root_exists:
         try:
             project_dirs = list(projects_root.iterdir())
         except OSError:
@@ -5040,7 +5054,11 @@ def find_all_conversations(
 
         try:
             jsonls = []
-            for f in project_dir.iterdir():
+            if only_by_project is not None:
+                candidates = only_by_project.get(str(project_dir), [])
+            else:
+                candidates = project_dir.iterdir()
+            for f in candidates:
                 if f.is_file() and f.name.endswith(".jsonl"):
                     try:
                         jsonls.append((f, f.stat()))
@@ -5385,104 +5403,105 @@ def find_all_conversations(
                 **sidecar_fields,
             })
 
-    # Claude can have a live process registry entry before it has written
-    # a project JSONL. Surface those registry-only sessions so UUID search
-    # and active-session discovery do not silently miss them.
-    try:
-        for sid, meta in _load_session_registry().items():
-            if sid in seen_session_ids:
-                continue
-            row = _live_registry_conversation_row(
-                sid,
-                meta,
-                name_overrides=name_overrides,
-                archived_set=archived_set,
-                pinned_rank=pinned_rank,
-                repo_pins=repo_pins,
+    if include_engine_sources:
+        # Claude can have a live process registry entry before it has written
+        # a project JSONL. Surface those registry-only sessions so UUID search
+        # and active-session discovery do not silently miss them.
+        try:
+            for sid, meta in _load_session_registry().items():
+                if sid in seen_session_ids:
+                    continue
+                row = _live_registry_conversation_row(
+                    sid,
+                    meta,
+                    name_overrides=name_overrides,
+                    archived_set=archived_set,
+                    pinned_rank=pinned_rank,
+                    repo_pins=repo_pins,
+                    resolve_worktree_dirty=resolve_worktree_dirty,
+                )
+                if row:
+                    out.append(row)
+                    seen_session_ids.add(sid)
+        except Exception:
+            pass
+
+        # Add Codex threads to the archive too. They live in ~/.codex/state_*.sqlite
+        # instead of ~/.claude/projects, but the row shape below matches the archive
+        # renderer's existing Claude session rows.
+        try:
+            out.extend(find_codex_conversations(
+                include_old=True,
+                repo_only=False,
+                limit=limit_per_folder,
+                resolve_pr_states=resolve_pr_states,
                 resolve_worktree_dirty=resolve_worktree_dirty,
-            )
-            if row:
-                out.append(row)
-                seen_session_ids.add(sid)
-    except Exception:
-        pass
+            ))
+        except Exception:
+            pass
 
-    # Add Codex threads to the archive too. They live in ~/.codex/state_*.sqlite
-    # instead of ~/.claude/projects, but the row shape below matches the archive
-    # renderer's existing Claude session rows.
-    try:
-        out.extend(find_codex_conversations(
-            include_old=True,
-            repo_only=False,
-            limit=limit_per_folder,
-            resolve_pr_states=resolve_pr_states,
-            resolve_worktree_dirty=resolve_worktree_dirty,
-        ))
-    except Exception:
-        pass
+        # Add Gemini sessions to the archive too. They live in ~/.gemini/tmp/
+        # and have their own JSON format, but find_gemini_conversations returns
+        # rows compatible with the archive renderer.
+        try:
+            out.extend(find_gemini_conversations(
+                include_old=True,
+                repo_only=False,
+                limit=limit_per_folder,
+                resolve_pr_states=resolve_pr_states,
+                resolve_worktree_dirty=resolve_worktree_dirty,
+            ))
+        except Exception:
+            pass
 
-    # Add Gemini sessions to the archive too. They live in ~/.gemini/tmp/
-    # and have their own JSON format, but find_gemini_conversations returns
-    # rows compatible with the archive renderer.
-    try:
-        out.extend(find_gemini_conversations(
-            include_old=True,
-            repo_only=False,
-            limit=limit_per_folder,
-            resolve_pr_states=resolve_pr_states,
-            resolve_worktree_dirty=resolve_worktree_dirty,
-        ))
-    except Exception:
-        pass
+        # Add Cursor agent transcripts from ~/.cursor/projects.
+        try:
+            out.extend(find_cursor_conversations(
+                include_old=True,
+                repo_only=False,
+                limit=limit_per_folder,
+                resolve_pr_states=resolve_pr_states,
+                resolve_worktree_dirty=resolve_worktree_dirty,
+            ))
+        except Exception:
+            pass
 
-    # Add Cursor agent transcripts from ~/.cursor/projects.
-    try:
-        out.extend(find_cursor_conversations(
-            include_old=True,
-            repo_only=False,
-            limit=limit_per_folder,
-            resolve_pr_states=resolve_pr_states,
-            resolve_worktree_dirty=resolve_worktree_dirty,
-        ))
-    except Exception:
-        pass
-
-    # Add Antigravity sessions to the archive. Antigravity stores JSONL
-    # transcripts under ~/.gemini/antigravity/brain/<uuid>/.
-    try:
-        out.extend(find_antigravity_conversations(
-            include_old=True,
-            repo_only=False,
-            limit=limit_per_folder,
-            resolve_pr_states=resolve_pr_states,
-            resolve_worktree_dirty=resolve_worktree_dirty,
-        ))
-    except Exception:
-        pass
-    try:
-        out.extend(find_kilo_conversations(
-            include_old=True,
-            repo_only=False,
-            limit=limit_per_folder,
-            resolve_pr_states=resolve_pr_states,
-            resolve_worktree_dirty=resolve_worktree_dirty,
-        ))
-    except Exception:
-        pass
-    try:
-        out.extend(find_hermes_conversations(
-            include_old=True,
-            repo_only=False,
-            limit=limit_per_folder,
-            resolve_pr_states=resolve_pr_states,
-            resolve_worktree_dirty=resolve_worktree_dirty,
-        ))
-    except Exception:
-        pass
-    try:
-        out.extend(_find_remote_sessions(limit=limit_per_folder))
-    except Exception:
-        pass
+        # Add Antigravity sessions to the archive. Antigravity stores JSONL
+        # transcripts under ~/.gemini/antigravity/brain/<uuid>/.
+        try:
+            out.extend(find_antigravity_conversations(
+                include_old=True,
+                repo_only=False,
+                limit=limit_per_folder,
+                resolve_pr_states=resolve_pr_states,
+                resolve_worktree_dirty=resolve_worktree_dirty,
+            ))
+        except Exception:
+            pass
+        try:
+            out.extend(find_kilo_conversations(
+                include_old=True,
+                repo_only=False,
+                limit=limit_per_folder,
+                resolve_pr_states=resolve_pr_states,
+                resolve_worktree_dirty=resolve_worktree_dirty,
+            ))
+        except Exception:
+            pass
+        try:
+            out.extend(find_hermes_conversations(
+                include_old=True,
+                repo_only=False,
+                limit=limit_per_folder,
+                resolve_pr_states=resolve_pr_states,
+                resolve_worktree_dirty=resolve_worktree_dirty,
+            ))
+        except Exception:
+            pass
+        try:
+            out.extend(_find_remote_sessions(limit=limit_per_folder))
+        except Exception:
+            pass
 
     if resolve_pr_states:
         # Parallel-resolve PR states for every row that recorded a PR URL.
@@ -5504,7 +5523,7 @@ def find_all_conversations(
     return out
 
 
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 5
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 6
 _ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
 # The all-repos archive payload can be several MB on machines with years of
 # agent history. Refreshing it every 30 seconds keeps the Python server in a
@@ -5521,6 +5540,80 @@ _ARCHIVE_RESPONSE_CACHE_LOCK = threading.Lock()
 _ARCHIVE_RESPONSE_CACHE_LOADED = False
 _ARCHIVE_RESPONSE_CACHE = {}
 _ARCHIVE_RESPONSE_REFRESHING = set()
+
+
+def _archive_transcript_cache_path(path):
+    try:
+        return os.path.abspath(os.path.expanduser(os.fspath(path)))
+    except TypeError:
+        return str(path or "")
+
+
+def _archive_engine_sources_signature():
+    parts = []
+    for extra in (
+        Path.home() / ".codex" / "sessions",
+        Path.home() / ".cursor" / "projects",
+        Path.home() / ".gemini" / "antigravity" / "brain",
+        Path.home() / ".hermes" / "state.db",
+    ):
+        try:
+            st = os.stat(extra)
+            parts.append(f"{extra}|{st.st_mtime_ns}|{st.st_size}")
+        except OSError:
+            pass
+    parts.sort()
+    h = hashlib.sha1()
+    for p in parts:
+        h.update(p.encode("utf-8", "replace"))
+        h.update(b"\n")
+    h.update(str(len(parts)).encode())
+    return h.hexdigest()
+
+
+def _archive_claude_transcript_fingerprints():
+    """Return path -> (mtime_ns,size) for Claude transcript files."""
+    files = {}
+    projects_root = Path.home() / ".claude" / "projects"
+    try:
+        dir_paths = sorted(
+            e.path for e in os.scandir(projects_root) if e.is_dir()
+        )
+    except OSError:
+        dir_paths = []
+    for d in dir_paths:
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    if not e.name.endswith(".jsonl"):
+                        continue
+                    try:
+                        st = e.stat()
+                    except OSError:
+                        continue
+                    files[_archive_transcript_cache_path(e.path)] = {
+                        "mtime_ns": int(st.st_mtime_ns),
+                        "size": int(st.st_size),
+                    }
+        except OSError:
+            continue
+    return files
+
+
+def _normalize_archive_file_fingerprints(raw):
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for path, meta in raw.items():
+        if not isinstance(path, str) or not isinstance(meta, dict):
+            continue
+        try:
+            mtime_ns = int(meta.get("mtime_ns"))
+            size = int(meta.get("size"))
+        except (TypeError, ValueError):
+            continue
+        out[path] = {"mtime_ns": mtime_ns, "size": size}
+    return out
 
 
 def _archive_response_cache_key(
@@ -5565,7 +5658,8 @@ def _load_archive_response_cache():
         keep[key] = {
             "cached_at": float(entry.get("cached_at") or 0),
             "conversations": entry.get("conversations") or [],
-            "signature": entry.get("signature") or None,
+            "files": _normalize_archive_file_fingerprints(entry.get("files")),
+            "engine_signature": entry.get("engine_signature") or "",
         }
     if keep:
         with _ARCHIVE_RESPONSE_CACHE_LOCK:
@@ -5597,17 +5691,26 @@ def _archive_response_cache_get(key):
         return {
             "cached_at": float(entry.get("cached_at") or 0),
             "conversations": [dict(r) for r in (entry.get("conversations") or []) if isinstance(r, dict)],
-            "signature": entry.get("signature") or None,
+            "files": dict(entry.get("files") or {}),
+            "engine_signature": entry.get("engine_signature") or "",
         }
 
 
-def _archive_response_cache_put(key, conversations, signature=None):
+def _archive_response_cache_put(key, conversations, files=None, engine_signature=None):
     rows = [dict(r) for r in (conversations or []) if isinstance(r, dict)]
+    file_fingerprints = (
+        _normalize_archive_file_fingerprints(files)
+        if files is not None
+        else _archive_claude_transcript_fingerprints()
+    )
+    if engine_signature is None:
+        engine_signature = _archive_engine_sources_signature()
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         _ARCHIVE_RESPONSE_CACHE[key] = {
             "cached_at": time.time(),
             "conversations": rows,
-            "signature": signature,
+            "files": file_fingerprints,
+            "engine_signature": engine_signature or "",
         }
     _save_archive_response_cache()
 
@@ -5654,108 +5757,6 @@ def _archive_build_lock(key):
         return lk
 
 
-# TTL-memoized wrapper around the corpus fingerprint. The fingerprint is a
-# stat-only walk of the WHOLE transcript corpus (thousands of files), but it is
-# GLOBAL — identical for every archive cache key. Without memoization each
-# cache key's background refresh (dashboard + COO board + every filter/sort
-# combo poll distinct keys) re-walked the entire corpus independently, so N
-# concurrently-refreshing keys meant N full-corpus scandir passes every serve
-# TTL. That O(keys × all-files) scandir per window is the sustained CPU burn
-# `sample` caught across the `refresh` threads. Caching the signature for a
-# short window collapses it to ONE walk per window shared by all keys. The TTL
-# stays within the serve cache's existing staleness tolerance, so it introduces
-# no correctness window the serve path didn't already have.
-try:
-    _ARCHIVE_SIG_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SIG_TTL_SEC", "2")))
-except ValueError:
-    _ARCHIVE_SIG_TTL = 2.0
-_archive_sig_cache = {"ts": 0.0, "sig": None}
-_archive_sig_lock = threading.Lock()
-
-
-def _archive_corpus_signature():
-    """Corpus fingerprint, memoized for _ARCHIVE_SIG_TTL so concurrent per-key
-    refreshes share one full-corpus walk instead of each re-scanning it."""
-    if _ARCHIVE_SIG_TTL > 0:
-        now = time.time()
-        with _archive_sig_lock:
-            c = _archive_sig_cache
-            if c["sig"] is not None and (now - c["ts"]) < _ARCHIVE_SIG_TTL:
-                return c["sig"]
-    sig = _archive_corpus_signature_uncached()
-    if _ARCHIVE_SIG_TTL > 0:
-        with _archive_sig_lock:
-            _archive_sig_cache["ts"] = time.time()
-            _archive_sig_cache["sig"] = sig
-    return sig
-
-
-def _archive_corpus_signature_uncached():
-    """Cheap stat-only fingerprint of the conversation corpus on disk.
-
-    No JSON parse, no subprocess, no per-row liveness probe — just the
-    (mtime_ns, size) of every Claude transcript plus the mtime of the engine
-    transcript roots and CCC state dirs that feed archive rows. Two identical
-    signatures ⇒ nothing the archive build reads has changed, so the persisted
-    response payload can be served as-is without an O(all-sessions) rebuild.
-
-    A new/edited/removed transcript flips a file's mtime (and the dir mtime),
-    so the signature changes and the cache invalidates immediately — no TTL
-    staleness window for the dominant Claude corpus. Engine sources beyond
-    ~/.claude/projects are covered at directory granularity (their root mtime
-    changes when sessions are added/removed); in-place edits there fall back to
-    the build cache's own (mtime,size) gating on the next signature change.
-
-    Deliberately EXCLUDES fast-changing live state (sidecar markers, the spawned
-    registry): those mutate on every poll while a session is live, so folding
-    them in would bust the build cache constantly and pin the CPU. Live state is
-    not part of the expensive build — it is layered back on by
-    _rehydrate_archive_cached_rows and coalesced by the serve cache, so it does
-    not need to gate the transcript-parse cache.
-    """
-    parts = []
-    projects_root = Path.home() / ".claude" / "projects"
-    try:
-        dir_paths = sorted(
-            e.path for e in os.scandir(projects_root) if e.is_dir()
-        )
-    except OSError:
-        dir_paths = []
-    for d in dir_paths:
-        try:
-            with os.scandir(d) as it:
-                for e in it:
-                    if not e.name.endswith(".jsonl"):
-                        continue
-                    try:
-                        st = e.stat()
-                    except OSError:
-                        continue
-                    parts.append(f"{e.path}|{st.st_mtime_ns}|{st.st_size}")
-        except OSError:
-            continue
-    # Fold in dir-level mtimes of sibling engine transcript stores so adds /
-    # removes / renames there also bust the cache. stat() only — cheap. These
-    # are transcript corpora (not live state), so they are safe to gate on.
-    for extra in (
-        Path.home() / ".codex" / "sessions",
-        Path.home() / ".cursor" / "projects",
-        Path.home() / ".gemini" / "antigravity" / "brain",
-        Path.home() / ".hermes" / "state.db",
-    ):
-        try:
-            parts.append(f"{extra}|{os.stat(extra).st_mtime_ns}")
-        except OSError:
-            pass
-    parts.sort()
-    h = hashlib.sha1()
-    for p in parts:
-        h.update(p.encode("utf-8", "replace"))
-        h.update(b"\n")
-    h.update(str(len(parts)).encode())
-    return h.hexdigest()
-
-
 # Short-TTL coalescing cache for the fully-rehydrated ?all=1 payload. The
 # dashboard AND the COO board both poll these endpoints; without coalescing,
 # every concurrent poll re-ran _rehydrate_archive_cached_rows — whose dominant
@@ -5764,7 +5765,7 @@ def _archive_corpus_signature_uncached():
 # on the GIL and held the endpoint at 1-2s + a sustained CPU burn. Same fix and
 # rationale as _live_activity_snapshot's 1.5s window: serve one ≤TTL-old
 # rehydrated snapshot to all concurrent callers. Transcript-derived fields
-# (state / ended_blocked / question from JSONL) are signature-gated and stay
+# (state / ended_blocked / question from JSONL) are per-file-gated and stay
 # fresh on any real change; only process-liveness/sidecar lag, by ≤TTL.
 try:
     _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "2")))
@@ -5839,17 +5840,16 @@ def _archive_all_rows_cached(cache_options):
 
     Three tiers, cheapest first:
       1. Coalescing serve cache: a fully-rehydrated snapshot ≤_ARCHIVE_SERVE_TTL
-         old for the same corpus signature → return a copy immediately, so
+         old for the same cache key → return a copy immediately, so
          concurrent dashboard/COO polls share one rehydrate instead of each
          re-probing liveness.
-      2. Signature-matched response cache: rehydrate the persisted rows (cheap —
-         refresh only fast-changing live/sidecar/name/pin state, same transform
-         /api/conversations/all's stale-serve uses) with NO O(all-sessions)
-         rebuild.
-      3. Miss / changed corpus: rebuild once under a per-key lock so concurrent
-         pollers don't stampede the CPU (the bug that wedged the server),
-         persist with the new signature, return raw build rows (identical shape
-         to today's direct-build response).
+      2. Per-file response cache: refresh only rows whose transcript
+         fingerprint changed, then rehydrate fast-changing live/sidecar/name/pin
+         state with NO O(all-sessions) rebuild.
+      3. Miss / incompatible cache: rebuild once under a per-key lock so
+         concurrent pollers don't stampede the CPU (the bug that wedged the
+         server), persist the per-file fingerprints, return raw build rows
+         (identical shape to today's direct-build response).
 
     Returns (rows, from_cache: bool). from_cache is False only when tier 3 ran.
     """
@@ -5881,8 +5881,8 @@ def _stamp_archive_goals(rows):
     """Stamp the current codex `/goal` objective + status onto codex rows, IN
     PLACE, at serve time.
 
-    Goal lives in ~/.codex/goals_1.sqlite — outside the transcript corpus
-    signature and not re-layered by _rehydrate_archive_cached_rows — so a goal
+    Goal lives in ~/.codex/goals_1.sqlite — outside Claude transcript
+    fingerprints and not re-layered by _rehydrate_archive_cached_rows — so a goal
     set or cleared after the persisted build would never reach the row without
     this pass. ONE batched, cached snapshot read (no per-row DB work), so it is
     cache-safe to run on every warm serve, exactly like _stamp_archive_state.
@@ -5903,25 +5903,93 @@ def _stamp_archive_goals(rows):
     return rows
 
 
+def _archive_rows_from_incremental_cache(entry, cache_options):
+    """Refresh cached archive rows by per-transcript fingerprints.
+
+    Returns (rows, needs_persist, current_files, engine_signature). A None rows
+    value tells the caller to fall back to the existing full builder.
+    """
+    cached_files = _normalize_archive_file_fingerprints(entry.get("files"))
+    if not cached_files:
+        return None, False, None, None
+
+    current_files = _archive_claude_transcript_fingerprints()
+    engine_signature = _archive_engine_sources_signature()
+    if (entry.get("engine_signature") or "") != engine_signature:
+        return None, False, None, engine_signature
+
+    removed_paths = set(cached_files) - set(current_files)
+    changed_paths = sorted(
+        path for path, fp in current_files.items()
+        if cached_files.get(path) != fp
+    )
+    if not changed_paths and not removed_paths:
+        return (
+            _rehydrate_archive_cached_rows(entry.get("conversations") or []),
+            False,
+            current_files,
+            engine_signature,
+        )
+
+    changed_set = set(changed_paths)
+    rows = []
+    for raw in entry.get("conversations") or []:
+        if not isinstance(raw, dict):
+            continue
+        row_path = raw.get("jsonl_path")
+        if row_path and (raw.get("engine") == "claude" or raw.get("source") == "interactive"):
+            path_key = _archive_transcript_cache_path(row_path)
+            if path_key in changed_set or path_key in removed_paths:
+                continue
+        rows.append(dict(raw))
+
+    if changed_paths:
+        refreshed_rows = find_all_conversations(
+            resolve_pr_states=cache_options.get("resolve_pr_states", False),
+            resolve_effective=cache_options.get("resolve_effective", False),
+            resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+            only_jsonl_paths=changed_paths,
+            include_engine_sources=False,
+        )
+        if cache_options.get("include_prs"):
+            refreshed_rows = conversations_with_open_prs(refreshed_rows)
+        rows.extend(refreshed_rows)
+
+    return _rehydrate_archive_cached_rows(rows), True, current_files, engine_signature
+
+
 def _archive_compute_rows(key, cache_options):
     """Produce archive rows under the per-key build lock (single-flight).
 
-    Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
-    (cheap, refreshes only live/sidecar state); changed → rebuild, reusing the
-    per-(mtime,size) parse cache so only the touched sessions re-parse. Updates
-    both the persisted response cache and the in-memory serve snapshot.
+    Per-file-gated: unchanged transcript files → rehydrate the persisted rows
+    (cheap, refreshes only live/sidecar state); changed Claude JSONLs → rebuild
+    just those rows by their own (mtime,size) fingerprints. If cache metadata is
+    missing or sibling engine stores changed, fall back to the existing full
+    builder. Updates both the persisted response cache and the in-memory serve
+    snapshot.
     Returns (rows, from_cache).
     """
-    sig = _archive_corpus_signature()
     lock = _archive_build_lock(key)
     with lock:
         entry = _archive_response_cache_get(key)
-        if entry and entry.get("signature") == sig:
-            rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
-            from_cache = True
-        else:
+        rows = None
+        if entry:
+            rows, needs_persist, files, engine_signature = _archive_rows_from_incremental_cache(
+                entry, cache_options
+            )
+            if rows is not None:
+                from_cache = True
+                if needs_persist:
+                    _archive_response_cache_put(
+                        key,
+                        rows,
+                        files=files,
+                        engine_signature=engine_signature,
+                    )
+                    _save_conv_meta_cache()
+        if rows is None:
             rows = _build_archive_conversations(**cache_options)
-            _archive_response_cache_put(key, rows, signature=sig)
+            _archive_response_cache_put(key, rows)
             _save_conv_meta_cache()
             from_cache = False
     _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
@@ -5948,10 +6016,9 @@ def _archive_serve_rows(key, cache_options):
     """Archive rows for an ?all=1 request, stale-while-revalidate.
 
     The endpoint is polled continuously by the dashboard AND the COO board, and
-    in a live environment a session is almost always writing its JSONL — so the
-    corpus signature changes on nearly every poll. Blocking each poll on the
-    signature-gated rebuild (~1-2s, GIL-bound) is exactly the sustained CPU
-    drain we are killing. Instead:
+    in a live environment a session is almost always writing its JSONL. Blocking
+    each poll on a full archive rebuild (~1-2s, GIL-bound) is exactly the
+    sustained CPU drain we are killing. Instead:
 
       - fresh snapshot (< serve TTL) → return a copy immediately;
       - stale snapshot → return it immediately AND kick a single background
@@ -5961,8 +6028,8 @@ def _archive_serve_rows(key, cache_options):
     Same shape and tolerance as _live_activity_snapshot and the sibling
     /api/conversations/all?stale_ok serve: transcript-derived fields
     (state/ended_blocked/question) and live state lag by at most the serve TTL
-    plus one background refresh. The signature still gates the actual rebuild, so
-    a changed corpus re-parses only the touched sessions.
+    plus one background refresh. The response cache refreshes changed JSONLs by
+    their own fingerprints, so one active transcript refreshes one row.
 
     Returns (rows, from_cache). from_cache is False only on the cold build.
     """
@@ -6138,11 +6205,11 @@ def _rehydrate_archive_cached_rows(rows):
     _stamp_archive_state(hydrated)
     # Layer the current codex goal on every rehydrate (one batched, cached read)
     # so the stale_ok serve the dashboard polls reflects goal set/clear without
-    # waiting for a full transcript-signature rebuild.
+    # waiting for a full transcript rebuild.
     _stamp_archive_goals(hydrated)
     # Same reasoning for WT ticket badges: without this, a session that closes
     # a new ticket only gets its display_name refreshed on the next full
-    # transcript-signature rebuild, not on every cache-hit serve.
+    # transcript rebuild, not on every cache-hit serve.
     _apply_watchtower_worker_display_names(hydrated)
     return hydrated
 
@@ -6221,9 +6288,7 @@ def _archive_refresh_response_cache_async(key, options):
 
     def refresh():
         try:
-            convs = _build_archive_conversations(**options)
-            _archive_response_cache_put(key, convs)
-            _save_conv_meta_cache()
+            _archive_compute_rows(key, options)
         except Exception as e:
             print(f"  [archive-cache] background refresh failed: {e}")
         finally:
