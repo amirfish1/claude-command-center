@@ -209,7 +209,7 @@ install_watchtower() {
   fi
 
   if [ -z "$wt_dir" ]; then
-    printf 'install: WatchTower not found (checked ~/Apps/watchtower, ~/dev/watchtower, $WATCHTOWER_DIR)\n'
+    printf 'install: WatchTower not found (checked ~/Apps/watchtower, ~/dev/watchtower, WATCHTOWER_DIR env var)\n'
     printf 'install: CCC will use its built-in queue engine. Set WATCHTOWER_DIR or clone WT to enable delegation.\n'
     return 0
   fi

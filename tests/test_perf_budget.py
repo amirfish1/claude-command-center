@@ -63,6 +63,40 @@ def big_projects(tmp_path, monkeypatch):
         _write_transcript(root / slug / f"{sid}.jsonl", sid, old_ts=old_ts)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(server, "PROJECTS_ROOT", root)
+    # find_all_conversations now merges every supported engine into the archive.
+    # This fixture is a synthetic Claude corpus; keep import-time engine globals
+    # pointed at tmp_path so local Codex/Gemini/Cursor/Hermes state cannot dirty
+    # the shared meta cache and make the perf gate depend on the developer's box.
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setattr(server, "CODEX_STATE_DB", codex_home / "state_5.sqlite")
+    monkeypatch.setattr(server, "CODEX_SESSIONS_ROOT", codex_home / "sessions")
+    monkeypatch.setattr(server, "CODEX_GOALS_DB_CANDIDATES", (
+        codex_home / "goals_1.sqlite",
+        codex_home / "sqlite" / "goals_1.sqlite",
+    ))
+    monkeypatch.setattr(server, "CODEX_PARENT_LINKS_FILE", tmp_path / ".claude" / "command-center" / "codex-parent-links.json")
+    gemini_home = tmp_path / ".gemini"
+    monkeypatch.setattr(server, "GEMINI_HOME", gemini_home)
+    monkeypatch.setattr(server, "ANTIGRAVITY_HOME", gemini_home / "antigravity")
+    monkeypatch.setattr(server, "ANTIGRAVITY_BRAIN", gemini_home / "antigravity" / "brain")
+    monkeypatch.setattr(server, "ANTIGRAVITY_CONVERSATIONS", gemini_home / "antigravity" / "conversations")
+    monkeypatch.setattr(server, "ANTIGRAVITY_CLI_HOME", gemini_home / "antigravity-cli")
+    monkeypatch.setattr(server, "ANTIGRAVITY_CLI_SETTINGS", gemini_home / "antigravity-cli" / "settings.json")
+    monkeypatch.setattr(server, "ANTIGRAVITY_CLI_BRAIN", gemini_home / "antigravity-cli" / "brain")
+    monkeypatch.setattr(server, "ANTIGRAVITY_CLI_CONVERSATIONS", gemini_home / "antigravity-cli" / "conversations")
+    monkeypatch.setattr(server, "ANTIGRAVITY_MAIN_LOG", tmp_path / "Library" / "Logs" / "Antigravity" / "main.log")
+    monkeypatch.setattr(server, "ANTIGRAVITY_SUMMARIES_PROTO", gemini_home / "antigravity" / "agyhub_summaries_proto.pb")
+    cursor_home = tmp_path / ".cursor"
+    monkeypatch.setattr(server, "CURSOR_HOME", cursor_home)
+    monkeypatch.setattr(server, "CURSOR_PROJECTS_ROOT", cursor_home / "projects")
+    hermes_home = tmp_path / ".hermes"
+    monkeypatch.setattr(server, "HERMES_HOME", hermes_home)
+    monkeypatch.setattr(server, "HERMES_STATE_DB", hermes_home / "state.db")
+    monkeypatch.setattr(server, "HERMES_GATEWAY_SESSIONS", hermes_home / "sessions" / "sessions.json")
+    monkeypatch.setattr(server, "HERMES_WHATSAPP_DIR", hermes_home / "whatsapp")
+    monkeypatch.setattr(server, "HERMES_WHATSAPP_BRIDGE_LOG", hermes_home / "whatsapp" / "bridge.log")
+    monkeypatch.setattr(server, "HERMES_CHUCK_PENDING_DIR", hermes_home / "whatsapp" / "chuck_realtor_pending")
+    monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
     return n, sids
 
 
@@ -438,12 +472,27 @@ def test_conv_meta_cache_roundtrip_avoids_reparse(big_projects, monkeypatch, tmp
         )
         assert isinstance(entry["cache_key"], tuple)
 
-    # Behavioural: a warm rebuild must not re-parse anything. A cache miss in
-    # _extract_tail_meta rewrites the entry and flips the dirty flag, so a
-    # clean (False) flag after the second build proves every row hit the cache.
-    server._conv_meta_cache_dirty = False
+    # Behavioural: a warm rebuild must not re-parse Claude transcripts. Other
+    # engine tail caches share _conv_meta_cache_dirty, so spy on the Claude
+    # extraction path directly instead of using the global dirty flag as a
+    # proxy.
+    orig_extract = server._extract_tail_meta
+    tail_misses = []
+
+    def spy_extract(path):
+        try:
+            st = path.stat()
+            cache_key = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            cache_key = None
+        cached = server._conv_meta_cache.get(str(path))
+        if not (cached and cached.get("cache_key") == cache_key):
+            tail_misses.append(str(path))
+        return orig_extract(path)
+
+    monkeypatch.setattr(server, "_extract_tail_meta", spy_extract)
     server.find_all_conversations(**flags)
-    assert server._conv_meta_cache_dirty is False, (
+    assert not tail_misses, (
         "warm find_all_conversations re-parsed transcripts after a cache "
         "reload — the disk tail-meta cache regressed (every restart cold-scans)"
     )

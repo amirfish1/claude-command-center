@@ -55,7 +55,7 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn("ccc-repeat-row-group-expanded:", app_js)
         self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })", app_js)
         self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: false, quietTitleChrome: true })", app_js)
-        self.assertIn("_arcChunks.push(_renderRowsWithRepeatGroups(", app_js)
+        self.assertIn("_arcChunks.push(sep + _renderRowsWithRepeatGroups(", app_js)
         self.assertIn("type: 'session',\n          card: c,", app_js)
         self.assertIn("quietTitleChrome: true,\n              elevateToObject: true", app_js)
 
