@@ -1270,6 +1270,10 @@
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #94a3b8;background:transparent;"></span>
                   <span style="color:#94a3b8;">Last week</span>
                 </div>
+                <div class="legend-item" id="fable-contribution-legend" style="display:none;">
+                  <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #f5c842;background:transparent;"></span>
+                  <span style="color:#f5c842;">Fable % of weekly</span>
+                </div>
               </div>
             </div>
           </div>
@@ -2935,6 +2939,46 @@
               opLbl.setAttribute('font-weight', 'bold'); opLbl.setAttribute('text-anchor', 'start');
               opLbl.setAttribute('font-family', 'var(--font-mono)'); opLbl.setAttribute('opacity', '0.8');
               opLbl.textContent = `${lastOpusV.toFixed(1)}% if opus`; svg.appendChild(opLbl);
+            }
+          }
+        }
+
+        // 7b. FABLE % OF WEEKLY — dashed gold line showing Fable's actual cumulative
+        // contribution to the weekly quota (share of total tokens × cumulative actual %).
+        const _fableRows = (summary.per_model || []).filter(m => (m.model || m.engine || '').toLowerCase().includes('fable'));
+        const _fableTok = _fableRows.reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
+        const _totalModelTok = (summary.per_model || []).reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
+        const _fableRatio = (_totalModelTok > 0 && _fableTok > 0) ? _fableTok / _totalModelTok : null;
+        let lastFableV = null, lastFableI = -1;
+        const cumFableVals = _fableRatio ? cumActVals.map(v => {
+          if (v == null) return null;
+          return v * _fableRatio;
+        }) : [];
+        const fableContribLegend = document.getElementById('fable-contribution-legend');
+        if (fableContribLegend) fableContribLegend.style.display = _fableRatio ? 'flex' : 'none';
+        if (_fableRatio) {
+          let fp = '', fpS = false;
+          cumFableVals.forEach((fv, i) => {
+            if (fv == null) return;
+            const x = xScale(i + 1), y = yPct(fv);
+            fp += fpS ? `L ${x} ${y} ` : `M ${x} ${y} `;
+            fpS = true;
+            lastFableV = fv; lastFableI = i;
+          });
+          if (fp) {
+            const fableLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            fableLine.setAttribute('d', fp); fableLine.setAttribute('fill', 'none');
+            fableLine.setAttribute('stroke', '#f5c842'); fableLine.setAttribute('stroke-width', '1.5');
+            fableLine.setAttribute('stroke-dasharray', '3,2'); fableLine.setAttribute('opacity', '0.75');
+            svg.appendChild(fableLine);
+            if (lastFableI >= 0) {
+              const fx = xScale(lastFableI + 1), fy = yPct(lastFableV);
+              const fableLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+              fableLbl.setAttribute('x', fx + 6); fableLbl.setAttribute('y', fy + 14);
+              fableLbl.setAttribute('fill', '#f5c842'); fableLbl.setAttribute('font-size', '10px');
+              fableLbl.setAttribute('font-weight', 'bold'); fableLbl.setAttribute('text-anchor', 'start');
+              fableLbl.setAttribute('font-family', 'var(--font-mono)'); fableLbl.setAttribute('opacity', '0.85');
+              fableLbl.textContent = `${lastFableV.toFixed(1)}% fable`; svg.appendChild(fableLbl);
             }
           }
         }
