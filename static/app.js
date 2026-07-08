@@ -25193,20 +25193,25 @@
     const _pinnedArchived = _archivedConvs.filter(c => c.pinned);
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
     const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
-    const _isHermesCodingRow = (c) => _isHermesAllRow(c) && Number(c.hermes_tool_calls || 0) > 0;
-    const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesCodingRow(c);
-    const _allTabHermesCodingConvs = _allTabConvs.filter(_isHermesCodingRow);
+    const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
+      && (Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim());
+    const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);
+    const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c));
+    const _allTabHermesWorkerConvs = _allTabConvs.filter(_isHermesWorkerRow);
     const _allTabHermesMessageConvs = _allTabConvs.filter(_isHermesMessageRow);
-    const _allTabHasHermesSplit = _allTabHermesCodingConvs.length > 0 && _allTabHermesMessageConvs.length > 0;
+    const _allTabHasHermesSplit = _allTabHermesWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
     const _allTabView = (() => {
       if (!_allTabHasHermesSplit) return 'coding';
       try {
-        return localStorage.getItem('ccc-all-hermes-tab') === 'messages' ? 'messages' : 'coding';
+        const v = localStorage.getItem('ccc-all-hermes-tab');
+        return (v === 'workers' || v === 'messages') ? v : 'coding';
       } catch (_) { return 'coding'; }
     })();
-    const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'messages')
-      ? _allTabHermesMessageConvs
-      : _allTabConvs.filter(c => !_isHermesMessageRow(c));
+    const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
+      ? _allTabHermesWorkerConvs
+      : ((_allTabHasHermesSplit && _allTabView === 'messages')
+        ? _allTabHermesMessageConvs
+        : _allTabCodingConvs);
     const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
@@ -25278,7 +25283,7 @@
       }).join('');
       // Archived group chats live in the Trash section (CCC-468), so the
       // flat tail below the folder groups carries only unarchived chats.
-      _arcRows = _folderRowsHtml + (_allTabView === 'messages' ? '' : (_gcItems || []).map(it => it.html).join(''));
+      _arcRows = _folderRowsHtml + (_allTabView === 'coding' ? (_gcItems || []).map(it => it.html).join('') : '');
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length + _trashConvs.length;
     } else {
       // Flat chronological list — original behavior.
@@ -25294,7 +25299,7 @@
       // Archived group chats live in the Trash section (CCC-468).
       // Active/paused/closed (unarchived) group chats still interleave here
       // so they appear in the All view, not just in Current Sessions.
-      if (_allTabView !== 'messages') {
+      if (_allTabView === 'coding') {
         for (const gci of (_gcItems || [])) {
           _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
         }
@@ -25370,7 +25375,10 @@
     const _allHermesTabBarHtml = _allTabHasHermesSplit
       ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '">'
-        +   'Coding<span class="conv-tab-count">' + (_allTabConvs.length - _allTabHermesMessageConvs.length + ((_gcItems || []).length || 0)) + '</span>'
+        +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + ((_gcItems || []).length || 0)) + '</span>'
+        + '</button>'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '">'
+        +   'Workers<span class="conv-tab-count">' + _allTabHermesWorkerConvs.length + '</span>'
         + '</button>'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '">'
         +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
@@ -25746,7 +25754,8 @@
         ev.stopPropagation();
         const opt = ev.target.closest('[data-all-hermes-tab]');
         if (!opt) return;
-        const value = opt.getAttribute('data-all-hermes-tab') === 'messages' ? 'messages' : 'coding';
+        const raw = opt.getAttribute('data-all-hermes-tab');
+        const value = raw === 'workers' || raw === 'messages' ? raw : 'coding';
         try { localStorage.setItem('ccc-all-hermes-tab', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });

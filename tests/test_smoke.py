@@ -929,18 +929,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('<div class="conv-archived-list">', archived_markup)
         self.assertIn("_sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))", app_js)
 
-    def test_sidebar_all_tab_splits_hermes_coding_from_messages(self):
-        """When Hermes coding and message/router rows coexist, All should expose
-        a secondary split so plain WhatsApp/router conversations do not bury
+    def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
+        """When Hermes rows exist, All should expose Coding, Workers, and
+        Messages lanes so plain WhatsApp/router conversations do not bury
         agentic Hermes work."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("const _isHermesCodingRow = (c) => _isHermesAllRow(c) && Number(c.hermes_tool_calls || 0) > 0;", app_js)
-        self.assertIn("const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesCodingRow(c);", app_js)
-        self.assertIn("const _allTabHasHermesSplit = _allTabHermesCodingConvs.length > 0 && _allTabHermesMessageConvs.length > 0;", app_js)
+        self.assertIn("const _isHermesWorkerRow = (c) => _isHermesAllRow(c)", app_js)
+        self.assertIn("Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim()", app_js)
+        self.assertIn("const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);", app_js)
+        self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c));", app_js)
+        self.assertIn("const _allTabHasHermesSplit = _allTabHermesWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;", app_js)
         self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
+        self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
         self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
         self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
         self.assertIn(".conv-all-hermes-tabs", app_css)

@@ -1,1 +1,1 @@
-- Split the All sidebar tab into Hermes coding and message lanes when both are present.
+- Split the All sidebar tab into Coding, Hermes workers, and Messages lanes when Hermes rows are present.
