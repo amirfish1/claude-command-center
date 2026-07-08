@@ -25192,7 +25192,22 @@
     const _trashConvs = _archivedConvs.filter(c => !c.pinned);
     const _pinnedArchived = _archivedConvs.filter(c => c.pinned);
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
-    const _arcHasFolderChips = _allTabConvs.concat(_trashConvs).some(c => c.folder_label_chip);
+    const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
+    const _isHermesCodingRow = (c) => _isHermesAllRow(c) && Number(c.hermes_tool_calls || 0) > 0;
+    const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesCodingRow(c);
+    const _allTabHermesCodingConvs = _allTabConvs.filter(_isHermesCodingRow);
+    const _allTabHermesMessageConvs = _allTabConvs.filter(_isHermesMessageRow);
+    const _allTabHasHermesSplit = _allTabHermesCodingConvs.length > 0 && _allTabHermesMessageConvs.length > 0;
+    const _allTabView = (() => {
+      if (!_allTabHasHermesSplit) return 'coding';
+      try {
+        return localStorage.getItem('ccc-all-hermes-tab') === 'messages' ? 'messages' : 'coding';
+      } catch (_) { return 'coding'; }
+    })();
+    const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'messages')
+      ? _allTabHermesMessageConvs
+      : _allTabConvs.filter(c => !_isHermesMessageRow(c));
+    const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
       : (Array.isArray(_archivedGroupChats)
@@ -25239,7 +25254,7 @@
       // groups (they're not project-scoped). Sort folders by their
       // most-recent archived-row mtime, descending.
       const _byFolder = new Map();
-      for (const c of _allTabConvs) {
+      for (const c of _allTabMainConvs) {
         const key = c.folder_label_chip || c.folder_path || '(unknown)';
         if (!_byFolder.has(key)) _byFolder.set(key, []);
         _byFolder.get(key).push(c);
@@ -25263,12 +25278,12 @@
       }).join('');
       // Archived group chats live in the Trash section (CCC-468), so the
       // flat tail below the folder groups carries only unarchived chats.
-      _arcRows = _folderRowsHtml + (_gcItems || []).map(it => it.html).join('');
+      _arcRows = _folderRowsHtml + (_allTabView === 'messages' ? '' : (_gcItems || []).map(it => it.html).join(''));
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length + _trashConvs.length;
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
-      for (const c of _allTabConvs) {
+      for (const c of _allTabMainConvs) {
         _archivedItems.push({
           type: 'session',
           card: c,
@@ -25279,8 +25294,10 @@
       // Archived group chats live in the Trash section (CCC-468).
       // Active/paused/closed (unarchived) group chats still interleave here
       // so they appear in the All view, not just in Current Sessions.
-      for (const gci of (_gcItems || [])) {
-        _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
+      if (_allTabView !== 'messages') {
+        for (const gci of (_gcItems || [])) {
+          _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
+        }
       }
       _archivedItems.sort((a, b) => {
         if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
@@ -25348,6 +25365,18 @@
       _arcRows = _arcChunks.join('');
       _arcCount = _archivedItems.length + _archivedGroupChatsForRender.length + _trashConvs.length;
     }
+    const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + ((_gcItems || []).length || 0) + _trashConvs.length;
+    _arcCount = _allTabTotalCount;
+    const _allHermesTabBarHtml = _allTabHasHermesSplit
+      ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '">'
+        +   'Coding<span class="conv-tab-count">' + (_allTabConvs.length - _allTabHermesMessageConvs.length + ((_gcItems || []).length || 0)) + '</span>'
+        + '</button>'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '">'
+        +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
+        + '</button>'
+        + '</div>'
+      : '';
 
     // Trash section (CCC-468): archived sessions + archived group chats,
     // flat and recency-sorted, in a collapsed-by-default section at the very
@@ -25428,6 +25457,7 @@
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
+        + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + _trashHtml
         + '</div>';
@@ -25707,6 +25737,17 @@
         const value = opt.getAttribute('data-window');
         if (value !== '1d' && value !== '7d' && value !== 'all') return;
         try { localStorage.setItem(ARCHIVE_WINDOW_KEY, value); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    const $allHermesTabs = $convList.querySelector('[data-role="all-hermes-tabs"]');
+    if ($allHermesTabs) {
+      $allHermesTabs.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (!opt) return;
+        const value = opt.getAttribute('data-all-hermes-tab') === 'messages' ? 'messages' : 'coding';
+        try { localStorage.setItem('ccc-all-hermes-tab', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
@@ -41945,6 +41986,9 @@
           pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
           model: c.model || '',
           engine: c.engine || c.source || '',
+          source_platform: c.source_platform || '',
+          hermes_source: c.hermes_source || '',
+          hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
         });
       }
       const folderOrphan = (c.folder_path === c.slug);
@@ -42040,6 +42084,9 @@
         pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
         model: c.model || '',
         engine: c.engine || c.source || '',
+        source_platform: c.source_platform || '',
+        hermes_source: c.hermes_source || '',
+        hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
         // Codex current-goal (server reads ~/.codex/goals_1.sqlite). The shaped
         // object is an explicit allowlist, so goal must be copied through or the
         // goal chip never renders.

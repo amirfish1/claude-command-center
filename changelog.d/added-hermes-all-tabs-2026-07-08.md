@@ -1,0 +1,1 @@
+- Split the All sidebar tab into Hermes coding and message lanes when both are present.
