@@ -116,7 +116,11 @@
 <section class="section" style="background:var(--bg-2)">
  <div class="wrap reveal" style="text-align:center">
   <h2 class="h2">Install in one line.</h2>
-  <pre class="mono" style="display:inline-block;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 22px;overflow-x:auto;max-width:100%"><code>curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash</code></pre>
+  <pre class="mono" style="display:inline-block;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 22px;overflow-x:auto;max-width:100%"><code># macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | bash
+
+# Windows PowerShell
+irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex</code></pre>
   <div style="display:flex;gap:12px;justify-content:center;margin-top:22px;flex-wrap:wrap">
     <a class="btn btn-primary" href="/install/">All install options</a>
     <a class="btn btn-ghost" href="https://github.com/amirfish1/claude-command-center/releases/latest">Download DMG</a>
@@ -127,7 +131,7 @@
 
 <footer class="site-footer"><div class="wrap footer-cols">
   <div><a class="nav-brand" href="/">▦ CCC</a><p style="color:var(--fg-dim);max-width:30ch">
-    A local command center for every coding agent on your Mac. Open source.</p></div>
+    A local command center for every coding agent on your machine. Open source.</p></div>
   <div><h4>Product</h4><a href="/features/">Features</a><a href="/why/">Why CCC</a><a href="/install/">Download</a><a href="/demo/">Live demo</a></div>
   <div><h4>Resources</h4><a href="/changelog/">Changelog</a><a href="/roadmap/">Roadmap</a><a href="https://github.com/amirfish1/claude-command-center">GitHub</a></div>
   <div><h4>Compare</h4><a href="/compare/">All tools</a><a href="/compare/vibe-kanban/">vs Vibe Kanban</a><a href="/compare/conductor/">vs Conductor</a><a href="/compare/omnara/">vs Omnara</a></div>

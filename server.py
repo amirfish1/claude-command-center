@@ -52984,10 +52984,10 @@ def _platform_capabilities():
     """Desktop conveniences that only work on macOS today.
 
     The frontend hides the matching control when a flag is false, so a
-    Linux / headless user never sees a button that does nothing. Every flag
-    is True on Darwin (no behavior change) and False elsewhere. One flag
-    drives both the server-side stub and the UI visibility, so there is no
-    per-desktop-environment code. See docs/linux-support-plan.md.
+    Linux / Windows / headless user never sees a button that does nothing.
+    Every flag is True on Darwin (no behavior change) and False elsewhere.
+    One flag drives both the server-side stub and the UI visibility, so there
+    is no per-desktop-environment code. See docs/linux-support-plan.md.
     """
     is_mac = platform.system() == "Darwin"
     return {

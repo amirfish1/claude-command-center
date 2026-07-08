@@ -450,7 +450,7 @@
       </div>
 
       <div class="install-meta fade-target">
-        Or use <a href="#install" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">Homebrew / DMG</a> <span class="sep">·</span> macOS + Linux <span class="sep">·</span> No telemetry by default <span class="sep">·</span> MIT
+        Or use <a href="#install" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">Homebrew / DMG</a> <span class="sep">·</span> macOS + Linux + Windows <span class="sep">·</span> No telemetry by default <span class="sep">·</span> MIT
       </div>
 
       <div class="demo boot-target" aria-label="CCC dashboard demo">
@@ -681,18 +681,24 @@ agy --conversation &lt;sid&gt;</pre>
       <div class="section-eyebrow fade-target">Get it</div>
       <h2 class="fade-target">Install in 60 seconds.</h2>
       <p class="section-lede fade-target">
-        macOS or Linux, Python 3, and Claude Code. Add Codex, Cursor, Antigravity, Kilo Code, or GitHub CLI and the matching surfaces light up.
+        macOS, Linux, or Windows, Python 3, and Claude Code. Add Codex, Cursor, Antigravity, Kilo Code, or GitHub CLI and the matching surfaces light up.
       </p>
 
       <div class="install-grid stagger-grid">
         <div class="install-block">
           <h3># one-line install</h3>
-<pre><span class="comment"># downloads, installs, opens the dashboard</span>
+<pre><span class="comment"># macOS / Linux: downloads, installs, opens the dashboard</span>
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing bash
 
-<span class="comment"># launch later</span>
+<span class="comment"># Windows PowerShell</span>
+irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex
+
+<span class="comment"># macOS / Linux: launch later</span>
 ccc start
-open http://localhost:8090</pre>
+open http://localhost:8090
+
+<span class="comment"># Windows PowerShell: launch later</span>
+.\run.ps1</pre>
           <p class="req">Installs two hooks into <code>~/.claude/settings.json</code> so every Claude Code session writes the sidecar state CCC reads. Idempotent.</p>
         </div>
 

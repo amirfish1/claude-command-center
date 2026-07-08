@@ -4369,16 +4369,33 @@ class TestRunScript(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("systemd", result.stdout)
 
+    def test_windows_run_script_exists(self):
+        script = pathlib.Path(PROJECT_ROOT, "run.ps1")
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("server.py", text)
+        self.assertIn("Resolve-Python", text)
+        self.assertIn("--app", text)
+        self.assertIn("--service-status", text)
+
+    def test_windows_installer_exists(self):
+        script = pathlib.Path(PROJECT_ROOT, "scripts", "install.ps1")
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("claude-command-center", text)
+        self.assertIn("git clone", text)
+        self.assertIn("run.ps1", text)
+
 
 class TestPlatformDocs(unittest.TestCase):
-    def test_readme_documents_wsl2_as_windows_route(self):
+    def test_readme_documents_native_windows_and_wsl2_routes(self):
         readme = pathlib.Path(PROJECT_ROOT, "README.md").read_text(encoding="utf-8")
 
+        self.assertIn("Running on Windows", readme)
+        self.assertIn("install.ps1", readme)
+        self.assertIn(".\\run.ps1", readme)
         self.assertIn("WSL2", readme)
-        self.assertIn("Native Windows", readme)
         self.assertIn("systemd", readme)
 
-    def test_installer_points_windows_users_to_wsl2(self):
+    def test_installer_points_windows_users_to_windows_options(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_uname = pathlib.Path(tmpdir, "uname")
             fake_uname.write_text("#!/bin/sh\nprintf 'MINGW64_NT-10.0\\n'\n", encoding="utf-8")
@@ -4395,6 +4412,7 @@ class TestPlatformDocs(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("Windows", result.stderr)
+        self.assertIn("install.ps1", result.stderr)
         self.assertIn("WSL2", result.stderr)
 
 

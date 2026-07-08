@@ -80,16 +80,23 @@ that already exists.
 
 **Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) — read-only kanban with seeded fake data, no install required.
 
-Requirements: macOS or Linux, Python 3, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
+Requirements: macOS, Linux, or Windows, Python 3, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
 Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.
 Linux is supported for headless / remote-box use (see [Running on Linux](#running-on-linux)); the macOS-only desktop conveniences degrade cleanly there.
-On Windows, run CCC inside WSL2 (Ubuntu or another Linux distro). Native Windows
-shells are not supported.
+Windows is supported for native foreground use with PowerShell, and WSL2 remains
+the best route if you want the Linux service path.
 
 **curl** — clones into `~/.ccc/claude-command-center` and runs in foreground. Re-running does a `git pull`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
+```
+
+**Windows PowerShell** — clones into `%USERPROFILE%\.ccc\claude-command-center`
+and runs in foreground. Re-running does a `git pull`.
+
+```powershell
+irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex
 ```
 
 **Homebrew** — installs into the Cellar, puts `ccc` on `PATH`, pins a brew-managed Python. Upgrade via `brew upgrade ccc`.
@@ -131,6 +138,33 @@ Normal CCC app updates keep using the same checkout path; re-run
 `./run.sh --install-service` only when you want to change baked-in env vars or
 pick up a release that changes the launchd plist itself.
 
+### Running on Windows
+
+CCC runs natively on Windows as a foreground PowerShell process. The dashboard,
+session ingestion, repo picker, and agent spawn paths use the same Python server
+as macOS/Linux. macOS-only desktop conveniences (screenshots, jump-to-terminal,
+native folder picker, Finder reveal, desktop deep links) are hidden on Windows
+the same way they are on Linux.
+
+```powershell
+git clone https://github.com/amirfish1/claude-command-center
+cd claude-command-center
+
+# Try it. Runs in the foreground until Ctrl-C / terminal close
+.\run.ps1
+
+# Optional: open the dashboard as a chromeless Chromium app window
+.\run.ps1 --app
+```
+
+Open [http://localhost:8090](http://localhost:8090), then pick a repo from
+the repo dropdown before starting repo-scoped actions. Native Windows service
+install is not implemented yet; keep the PowerShell window open or run
+`.\run.ps1` under your preferred process manager.
+
+If you prefer Linux-style service management on Windows, run CCC inside WSL2
+and use the Linux instructions below.
+
 ### Running on Linux
 
 CCC runs on Linux as a headless service you reach from the browser on another
@@ -140,9 +174,9 @@ drive) works the same as on macOS. The macOS-only desktop conveniences
 not available on Linux yet; the UI hides those controls automatically, so you
 never see a button that does nothing.
 
-Windows users should use this Linux path under WSL2. Install Python 3, git, and
-your agent CLIs inside the WSL distro, then open `http://localhost:8090` from
-the Windows browser after `./run.sh` starts.
+Windows users who want a systemd-managed service can use this Linux path under
+WSL2. Install Python 3, git, and your agent CLIs inside the WSL distro, then
+open `http://localhost:8090` from the Windows browser after `./run.sh` starts.
 
 ```bash
 git clone https://github.com/amirfish1/claude-command-center
@@ -409,8 +443,9 @@ For any other env var (not just the network ones above), `run.sh` sources `~/.cl
   [Running on Linux](#running-on-linux)) with a systemd service and clean
   degradation of the macOS-only desktop glue. Native Linux equivalents for
   screenshots, jump-to-terminal, and deep links (X11/Wayland, wmctrl/tmux) are
-  a possible follow-on, not a current goal. Native Windows is unsupported; use
-  WSL2 for the supported Windows route.
+  a possible follow-on, not a current goal. Native Windows uses the same
+  degraded desktop capability set and currently runs as a foreground
+  PowerShell process.
 - Multi-user / network-exposed mode. This is a local dev tool. If you're
   looking at it on a remote host, something has gone wrong.
 - Electron / native wrap. Browser is the UI on purpose.
