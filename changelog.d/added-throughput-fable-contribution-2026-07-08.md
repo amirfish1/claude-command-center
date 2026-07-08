@@ -1,0 +1,1 @@
+Added a "Fable % of weekly" dashed line to the main throughput chart's weekly overlay, showing Fable's actual cumulative contribution to the weekly quota (token share × cumulative actual %) alongside the existing "if opus only" hypothetical.
