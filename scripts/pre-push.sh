@@ -14,8 +14,15 @@ if [ ! -f tests/test_perf_budget.py ]; then
   exit 0  # nothing to gate on this checkout
 fi
 
-PY="$(command -v python3 || true)"
-[ -z "$PY" ] && { echo "pre-push: python3 not found, skipping perf gate"; exit 0; }
+PY=""
+for candidate in "$REPO_ROOT/.venv/bin/python3" $(command -v -a python3 2>/dev/null); do
+  [ -x "$candidate" ] || continue
+  if "$candidate" -c "import pytest" >/dev/null 2>&1; then
+    PY="$candidate"
+    break
+  fi
+done
+[ -z "$PY" ] && { echo "pre-push: no python3 with pytest found (checked .venv and PATH), skipping perf gate"; exit 0; }
 
 echo "pre-push: running perf-budget gate…"
 if ! "$PY" -m pytest tests/test_perf_budget.py -q --tb=short; then
