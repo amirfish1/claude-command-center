@@ -5172,6 +5172,24 @@
   const $convTtyLabel = document.getElementById('convTtyLabel') || document.createElement('span');
   const $convCodexAppSrv = document.getElementById('convCodexAppSrv');
   const $convCodexAppSrvLabel = document.getElementById('convCodexAppSrvLabel');
+  function inputControlsForBar(bar) {
+    const root = bar || $convInputBar;
+    const q = (sel) => root ? root.querySelector(sel) : null;
+    return {
+      input: q('textarea, input[type="text"]') || (root === $convInputBar ? $convInput : null),
+      ttyLabel: q('#convTtyLabel, .tty-label, [data-role="tty-label"]') || $convTtyLabel,
+      sendBtn: q('.send-btn') || (root === $convInputBar ? $convSendBtn : null),
+      steerBtn: q('.steer-btn') || (root === $convInputBar ? $convSteerBtn : null),
+      compactBtn: q('.compact-btn') || (root === $convInputBar ? $convCompactBtn : null),
+      escBtn: q('.esc-btn') || (root === $convInputBar ? $convEscBtn : null),
+      issueAction: q('#convInputIssueAction, select[title="Action to take on this issue"]'),
+      announcedFromControl: q('.conv-announced-from') || (root === $convInputBar ? $convAnnouncedFromControl : null),
+      codexAppSrv: q('.codex-appsrv') || (root === $convInputBar ? $convCodexAppSrv : null),
+      codexAppSrvLabel: q('.codex-appsrv-label') || (root === $convInputBar ? $convCodexAppSrvLabel : null),
+      engineSelect: q('.engine-select') || (root === $convInputBar ? document.getElementById('convInputEngineSelect') : null),
+      modelSelect: q('.model-select') || (root === $convInputBar ? document.getElementById('convInputModelSelect') : null),
+    };
+  }
   // Guards the Compact button while a compaction request is in flight so a
   // double-click can't fire two /api/session/compact calls; updateInputBar
   // respects it so a poll mid-flight doesn't re-enable the button.
@@ -5559,6 +5577,18 @@
     const _activeInputBar = (typeof getConvInputBarForPane === 'function')
       ? (getConvInputBarForPane(activePaneId()) || $convInputBar)
       : $convInputBar;
+    const activeInputControls = inputControlsForBar(_activeInputBar);
+    const activeInput = activeInputControls.input;
+    const activeSendBtn = activeInputControls.sendBtn;
+    const activeSteerBtn = activeInputControls.steerBtn;
+    const activeCompactBtn = activeInputControls.compactBtn;
+    const activeEscBtn = activeInputControls.escBtn;
+    const activeIssueAction = activeInputControls.issueAction;
+    const activeAnnouncedFromControl = activeInputControls.announcedFromControl;
+    const activeCodexAppSrv = activeInputControls.codexAppSrv;
+    const activeCodexAppSrvLabel = activeInputControls.codexAppSrvLabel;
+    const activeEngineSelect = activeInputControls.engineSelect;
+    const activeModelSelect = activeInputControls.modelSelect;
     const isPkood = currentSession.source === 'pkood';
     const isCodex = currentSession.source === 'codex';
     const isGemini = currentSession.source === 'gemini';
@@ -5596,59 +5626,58 @@
       _activeInputBar.classList.add('visible');
       if (isBacklogIssue) {
         const n = (currentBacklogRow && currentBacklogRow.issue_number) || currentConversation.replace('backlog-issue-', '');
-        $convTtyLabel.textContent = '#' + n;
-        const $issueAction = document.getElementById('convInputIssueAction');
-        if ($issueAction) $issueAction.style.display = '';
-        $convInput.placeholder = issueInputPlaceholder(n);
+        activeInputControls.ttyLabel.textContent = '#' + n;
+        if (activeIssueAction) activeIssueAction.style.display = '';
+        if (activeInput) activeInput.placeholder = issueInputPlaceholder(n);
       } else if (isNewSession) {
-        $convTtyLabel.textContent = 'new';
+        activeInputControls.ttyLabel.textContent = 'new';
         const cwdForPrompt = (typeof getSpawnCwd === 'function' && getSpawnCwd()) || activeConvRepoPath();
         const repoLabel = (typeof spawnCwdLabel === 'function' && spawnCwdLabel(cwdForPrompt)) || _pathLeaf(cwdForPrompt);
         const spawnEngine = getSpawnEngine();
         if (spawnEngine === 'antigravity') {
-          $convInput.placeholder = repoLabel
-            ? 'Type a prompt to start a headless Antigravity run in ' + repoLabel + '…'
-            : 'Pick a folder before starting Antigravity…';
+          if (activeInput) activeInput.placeholder = repoLabel
+              ? 'Type a prompt to start a headless Antigravity run in ' + repoLabel + '…'
+              : 'Pick a folder before starting Antigravity…';
         } else {
-          $convInput.placeholder = repoLabel
-            ? 'Type a prompt to start a new session in ' + repoLabel + '…'
-            : 'Pick a folder before starting a new session…';
+          if (activeInput) activeInput.placeholder = repoLabel
+              ? 'Type a prompt to start a new session in ' + repoLabel + '…'
+              : 'Pick a folder before starting a new session…';
         }
       } else if (isPkood) {
-        $convTtyLabel.textContent = 'pkood';
-        $convInput.placeholder = 'Send to pkood agent...';
+        activeInputControls.ttyLabel.textContent = 'pkood';
+        if (activeInput) activeInput.placeholder = 'Send to pkood agent...';
       } else if (isCodex) {
-        $convTtyLabel.textContent = live ? (liveStatus.tty || 'codex') : 'codex';
-        $convInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
+        activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'codex') : 'codex';
+        if (activeInput) activeInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
       } else if (isGemini) {
-        $convTtyLabel.textContent = live ? (liveStatus.tty || 'gemini') : 'gemini';
-        $convInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
+        activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'gemini') : 'gemini';
+        if (activeInput) activeInput.placeholder = live ? 'Send to Gemini terminal...' : 'Resume Gemini and send...';
       } else if (isCursor) {
-        $convTtyLabel.textContent = live ? (liveStatus.tty || 'cursor') : 'cursor';
-        $convInput.placeholder = live ? 'Send to Cursor terminal...' : 'Resume Cursor and send...';
+        activeInputControls.ttyLabel.textContent = live ? (liveStatus.tty || 'cursor') : 'cursor';
+        if (activeInput) activeInput.placeholder = live ? 'Send to Cursor terminal...' : 'Resume Cursor and send...';
       } else if (isAntigravity) {
-        $convTtyLabel.textContent = liveStatus.live ? (liveStatus.tty || 'antigravity') : 'antigravity';
-        $convInput.placeholder = antigravityCanSendNow
-          ? antigravityInputPlaceholder(currentSession)
-          : 'Type a follow-up — Antigravity will resume headless…';
+        activeInputControls.ttyLabel.textContent = liveStatus.live ? (liveStatus.tty || 'antigravity') : 'antigravity';
+        if (activeInput) activeInput.placeholder = antigravityCanSendNow
+            ? antigravityInputPlaceholder(currentSession)
+            : 'Type a follow-up — Antigravity will resume headless…';
       } else if (isHermes) {
-        $convTtyLabel.textContent = 'hermes';
-        $convInput.placeholder = 'Resume Hermes and send...';
+        activeInputControls.ttyLabel.textContent = 'hermes';
+        if (activeInput) activeInput.placeholder = 'Resume Hermes and send...';
       } else if (live) {
-        $convTtyLabel.textContent = liveStatus.tty;
-        $convInput.placeholder = 'Send to terminal...';
+        activeInputControls.ttyLabel.textContent = liveStatus.tty;
+        if (activeInput) activeInput.placeholder = 'Send to terminal...';
       } else if (liveStatus.live && liveStatus.bgPresent) {
         // Live in a Claude-app-managed terminal (no system tty): not dormant
         // — the process is up, CCC just has no input channel to it (CCC-115).
-        $convTtyLabel.textContent = 'Claude app';
-        $convInput.placeholder = 'Session is open in the Claude app — messages park until it closes…';
+        activeInputControls.ttyLabel.textContent = 'Claude app';
+        if (activeInput) activeInput.placeholder = 'Session is open in the Claude app — messages park until it closes…';
       } else if (liveStatus.live && liveStatus.pid) {
         // Live process without a tty (e.g. CCC headless): also not dormant.
-        $convTtyLabel.textContent = 'headless';
-        $convInput.placeholder = 'Send to headless…';
+        activeInputControls.ttyLabel.textContent = 'headless';
+        if (activeInput) activeInput.placeholder = 'Send to headless…';
       } else {
-        $convTtyLabel.textContent = 'dormant';
-        $convInput.placeholder = 'Resume and send…';
+        activeInputControls.ttyLabel.textContent = 'dormant';
+        if (activeInput) activeInput.placeholder = 'Resume and send…';
       }
       // Antigravity sessions always accept input — the server's
       // resume_session_antigravity() routes to CLI headless / running
@@ -5657,15 +5686,15 @@
       // can_headless_resume and can_app_resume were false, leaving the
       // user with a dead input bar and no way to type a follow-up.
       const canSend = !isAntigravity || antigravityCanSendNow;
-      if ($convInput) {
+      if (activeInput) {
         const blockTyping = !canSend && !isAntigravity;
-        $convInput.readOnly = blockTyping;
-        $convInput.classList.toggle('is-readonly', blockTyping);
+        activeInput.readOnly = blockTyping;
+        activeInput.classList.toggle('is-readonly', blockTyping);
       }
-      if ($convSendBtn) {
+      if (activeSendBtn) {
         const blockSend = !canSend && !isAntigravity;
-        $convSendBtn.disabled = blockSend;
-        $convSendBtn.title = blockSend
+        activeSendBtn.disabled = blockSend;
+        activeSendBtn.title = blockSend
           ? 'Open Antigravity to continue this app session'
           : (isAntigravity && !antigravityCanSendNow
               ? 'Send — runs AGY headless on this session'
@@ -5676,33 +5705,33 @@
       // otherwise invites a second input that does NOT answer the question —
       // it queues a follow-up the blocked turn never reads. Redirect the user
       // up to the card while it's open.
-      if ($convInput && liveStatus.questionWaiting
+      if (activeInput && liveStatus.questionWaiting
           && typeof _relayedQuestionInlineEl === 'function' && _relayedQuestionInlineEl()) {
-        $convInput.readOnly = true;
-        $convInput.classList.add('is-readonly');
-        $convInput.placeholder = '↑ Answer the question above to continue';
-        if ($convSendBtn) {
-          $convSendBtn.disabled = true;
-          $convSendBtn.title = 'Answer the question above first';
+        activeInput.readOnly = true;
+        activeInput.classList.add('is-readonly');
+        activeInput.placeholder = '↑ Answer the question above to continue';
+        if (activeSendBtn) {
+          activeSendBtn.disabled = true;
+          activeSendBtn.title = 'Answer the question above first';
         }
       }
-      if ($convSteerBtn) {
+      if (activeSteerBtn) {
         const canSteer = canSend && isCodex && hasSession && !isNewSession && !isBacklogIssue;
-        $convSteerBtn.classList.toggle('visible', canSteer);
-        $convSteerBtn.disabled = !canSteer;
-        $convSteerBtn.title = canSteer ? 'Steer running Codex turn now' : 'Steer is only available for Codex sessions';
+        activeSteerBtn.classList.toggle('visible', canSteer);
+        activeSteerBtn.disabled = !canSteer;
+        activeSteerBtn.title = canSteer ? 'Steer running Codex turn now' : 'Steer is only available for Codex sessions';
       }
       // Compact button — only for compaction-capable open sessions (Claude
       // AND Codex). cursor/gemini/antigravity return compact_unsupported_engine
       // server-side, so we don't show it for them. Clicking runs the same path
       // as typing /compact (routed via postRunCompactForSession).
-      if ($convCompactBtn) {
+      if (activeCompactBtn) {
         const canCompact = hasSession && !isNewSession && !isBacklogIssue && !isPkood
           && isCompactionCapableSource(currentSession.source);
         const pendingCompactEcho = hasPendingSendEchoBeforeCompact();
-        $convCompactBtn.classList.toggle('visible', canCompact);
-        if (!_compactInFlight) $convCompactBtn.disabled = !canCompact || pendingCompactEcho;
-        $convCompactBtn.title = pendingCompactEcho
+        activeCompactBtn.classList.toggle('visible', canCompact);
+        if (!_compactInFlight) activeCompactBtn.disabled = !canCompact || pendingCompactEcho;
+        activeCompactBtn.title = pendingCompactEcho
           ? 'Wait for the pending message to land in the transcript before compacting.'
           : 'Compact conversation context';
       }
@@ -5711,15 +5740,15 @@
       // can append to a loaded thread + run thread/compact) vs no live
       // app-server ("exec" fallback would be used). Driven off the 5s
       // /api/session-status poll's codex_app_server flag.
-      if ($convCodexAppSrv) {
+      if (activeCodexAppSrv) {
         const showAppSrv = isCodex && hasSession && !isNewSession && !isBacklogIssue;
-        $convCodexAppSrv.classList.toggle('visible', showAppSrv);
-        if (!showAppSrv) $convCodexAppSrv.classList.remove('live');
+        activeCodexAppSrv.classList.toggle('visible', showAppSrv);
+        if (!showAppSrv) activeCodexAppSrv.classList.remove('live');
         if (showAppSrv) {
           const appLive = !!liveStatus.codexAppServer;
-          $convCodexAppSrv.classList.toggle('live', appLive);
-          if ($convCodexAppSrvLabel) $convCodexAppSrvLabel.textContent = appLive ? 'app-server' : 'exec';
-          $convCodexAppSrv.title = appLive
+          activeCodexAppSrv.classList.toggle('live', appLive);
+          if (activeCodexAppSrvLabel) activeCodexAppSrvLabel.textContent = appLive ? 'app-server' : 'exec';
+          activeCodexAppSrv.title = appLive
             ? 'CCC is driving this Codex session via its app-server (JSON-RPC); /compact and follow-ups append to the loaded thread.'
             : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.';
         }
@@ -5729,55 +5758,55 @@
       // button doesn't tease an action that will just error.
       // Codex app-server sessions signal liveness via codexState='working',
       // not liveStatus.live (which stays false for pool-model Codex.app runs).
-      if ($convEscBtn) {
+      if (activeEscBtn) {
         const codexWorking = isCodex && liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
         const canEsc = hasSession && !isPkood && !isNewSession && !isBacklogIssue && (!!liveStatus.live || codexWorking);
-        $convEscBtn.style.display = canEsc ? '' : 'none';
+        activeEscBtn.style.display = canEsc ? '' : 'none';
       }
       // Issue action selector: only for backlog issues.
-      { const $ia = document.getElementById('convInputIssueAction'); if ($ia && !isBacklogIssue) $ia.style.display = 'none'; }
-      if ($convAnnouncedFromControl) {
+      if (activeIssueAction && !isBacklogIssue) activeIssueAction.style.display = 'none';
+      if (activeAnnouncedFromControl) {
         const showAnnouncedFrom = hasSession && !isNewSession && !isBacklogIssue && !isPkood;
-        $convAnnouncedFromControl.classList.toggle('visible', showAnnouncedFrom);
+        activeAnnouncedFromControl.classList.toggle('visible', showAnnouncedFrom);
       }
       // Engine selector occupies the same slot as Esc but only matters
       // when the input is about to spawn a fresh session. Backlog-issue
       // mode also spawns, but its `/api/sessions/spawn` flow is
       // engine-fixed (claude) — don't show a misleading toggle there.
-      if ($convInputEngineSelect) {
-        $convInputEngineSelect.style.display = isNewSession ? '' : 'none';
+      if (activeEngineSelect) {
+        activeEngineSelect.style.display = isNewSession ? '' : 'none';
       }
-      if ($convInputModelSelect) {
+      if (activeModelSelect) {
         if (!isNewSession) {
-          $convInputModelSelect.style.display = 'none';
+          activeModelSelect.style.display = 'none';
         } else {
           const engine = getSpawnEngine();
           const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
           const defaultModel = _defaultModelsByEngine[engine] || '';
-          $convInputModelSelect.style.display = (options.length === 0 && !defaultModel) ? 'none' : '';
+          activeModelSelect.style.display = (options.length === 0 && !defaultModel) ? 'none' : '';
         }
       }
     } else {
       _activeInputBar.classList.remove('visible');
       _activeInputBar.classList.remove('is-new-session-launch');
-      if ($convInput) {
-        $convInput.readOnly = false;
-        $convInput.classList.remove('is-readonly');
+      if (activeInput) {
+        activeInput.readOnly = false;
+        activeInput.classList.remove('is-readonly');
       }
-      if ($convSendBtn) {
-        $convSendBtn.disabled = false;
-        $convSendBtn.title = 'Send';
+      if (activeSendBtn) {
+        activeSendBtn.disabled = false;
+        activeSendBtn.title = 'Send';
       }
-      if ($convSteerBtn) {
-        $convSteerBtn.classList.remove('visible');
-        $convSteerBtn.disabled = true;
+      if (activeSteerBtn) {
+        activeSteerBtn.classList.remove('visible');
+        activeSteerBtn.disabled = true;
       }
-      if ($convCompactBtn) {
-        $convCompactBtn.classList.remove('visible');
-        $convCompactBtn.disabled = true;
+      if (activeCompactBtn) {
+        activeCompactBtn.classList.remove('visible');
+        activeCompactBtn.disabled = true;
       }
-      if ($convAnnouncedFromControl) $convAnnouncedFromControl.classList.remove('visible');
-      if ($convCodexAppSrv) $convCodexAppSrv.classList.remove('visible', 'live');
+      if (activeAnnouncedFromControl) activeAnnouncedFromControl.classList.remove('visible');
+      if (activeCodexAppSrv) activeCodexAppSrv.classList.remove('visible', 'live');
     }
   }
 
@@ -10126,9 +10155,31 @@
     if (idx < 0) return false;
     const changed = splitState.activeIndex !== idx;
     splitState.activeIndex = idx;
+    if (typeof mountStatusRailForActivePane === 'function') mountStatusRailForActivePane();
     if (changed) saveSplitState();
     if (arguments.length > 1) syncActivePaneChrome(activeConvId);
     else syncActivePaneChrome();
+    if (changed) {
+      const pane = paneByPaneId(paneId);
+      const convId = pane && pane.conversationId;
+      const row = convId
+        ? ((conversationsData || []).find(x => x && x.id === convId)
+          || (Array.isArray(archiveData) ? archiveData.find(x => x && ((x.id || x.session_id) === convId)) : null))
+        : null;
+      if (convId || row) updatePaneHeader(paneId, row || { id: convId, session_id: convId });
+      if (typeof updateInputBar === 'function') updateInputBar();
+      if (typeof updateResumeButton === 'function') updateResumeButton();
+      if (typeof updateAnnounceButton === 'function') updateAnnounceButton();
+      if (typeof updateJumpButton === 'function') updateJumpButton();
+      if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
+      try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
+      try {
+        if (typeof resetLocalhostPill === 'function') resetLocalhostPill();
+        if (typeof pollLocalhost === 'function') pollLocalhost();
+      } catch (_) {}
+      try { if (typeof _applyStatusRailLayout === 'function') _applyStatusRailLayout(); } catch (_) {}
+      try { if (typeof window._cccApplyToolbarRailLayout === 'function') window._cccApplyToolbarRailLayout(); } catch (_) {}
+    }
     return true;
   }
 
@@ -28978,6 +29029,24 @@
   }
   ensureAllConversationEndAffordances();
 
+  function mountStatusRailForPaneId(paneId) {
+    const pane = document.querySelector(`.conv-pane[data-pane-id="${paneId || 'p1'}"]`);
+    if (!pane) return;
+    const rail = document.getElementById('statusRail');
+    const restore = document.getElementById('statusRailRestoreBtn');
+    if (rail && rail.parentElement !== pane) pane.appendChild(rail);
+    if (restore && restore.parentElement !== pane) pane.appendChild(restore);
+  }
+
+  function mountStatusRailForActivePane() {
+    mountStatusRailForPaneId(activePaneId());
+  }
+
+  function removeSplitPaneSingletonChrome(paneEl) {
+    if (!paneEl) return;
+    paneEl.querySelectorAll('.status-rail, .status-rail-restore').forEach(el => el.remove());
+  }
+
   // Build a fresh `.conv-pane` element for paneId, cloning the chrome of
   // pane "p1" so styling / wiring stays in lockstep. Called only when
   // splitting from one pane to two.
@@ -28997,6 +29066,7 @@
     // to p1's element, never the clone's. Task 6 will re-find the cloned
     // chrome elements via class/tag selectors scoped to the clone.
     clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    removeSplitPaneSingletonChrome(clone);
     clone.querySelectorAll('.conv-scroll-end-btn').forEach(el => el.remove());
     // Replace the transcript with a Loading… empty state; the dropped
     // conversation will be loaded by selectConversation(id, paneId)
@@ -29034,6 +29104,8 @@
     // Wire the cloned input bar to send into this specific pane.
     const sendBtn = clone.querySelector('.send-btn');
     const steerBtn = clone.querySelector('.steer-btn');
+    const compactBtn = clone.querySelector('.compact-btn');
+    const escBtn = clone.querySelector('.esc-btn');
     const ttsBtn = clone.querySelector('.tts-btn');
     const input = clone.querySelector('.conv-input-bar textarea, .conv-input-bar input[type="text"]');
     if (sendBtn) {
@@ -29047,6 +29119,21 @@
       steerBtn.addEventListener('click', (ev) => {
         ev.preventDefault();
         sendToTerminal(paneId, 'steer');
+      });
+    }
+    if (compactBtn) {
+      compactBtn.classList.remove('visible');
+      compactBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        setActivePaneById(paneId);
+        compactCurrentSession();
+      });
+    }
+    if (escBtn) {
+      escBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        setActivePaneById(paneId);
+        sendEscToTerminal();
       });
     }
     if (ttsBtn) {
@@ -29081,6 +29168,7 @@
   function renderSplitLayout() {
     const $split = document.getElementById('convSplit');
     if (!$split) return;
+    mountStatusRailForActivePane();
     const bottomAnchors = captureConversationBottomAnchors();
     if (!splitState.orientation || splitState.panes.length < 2) {
       $split.setAttribute('data-orientation', '');
@@ -29361,6 +29449,10 @@
     }
     // Remove the DOM element.
     const el = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
+    const survivor = splitState.panes.find((_, i) => i !== idx);
+    if (survivor && el && (el.contains(document.getElementById('statusRail')) || el.contains(document.getElementById('statusRailRestoreBtn')))) {
+      mountStatusRailForPaneId(survivor.id);
+    }
     if (el) el.remove();
     // Splice state and collapse.
     splitState.panes.splice(idx, 1);
@@ -29406,6 +29498,7 @@
       // Use selectConversation to ensure proper state setup (Task 7 fix).
       const survivorConvId = survivor.conversationId;
       if (survivor.eventSource) { try { survivor.eventSource.close(); } catch (e) {} }
+      mountStatusRailForPaneId('p1');
       const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
       if (survivorEl) survivorEl.remove();
       if (splitState.panes[0].eventSource) {
@@ -38467,7 +38560,9 @@
       }
     };
     const _statusRailMaxWidth = () => {
-      const pane = document.querySelector('.conv-pane');
+      const pane = document.querySelector('.conv-pane.is-active')
+        || document.querySelector('.conv-pane[data-pane-id="' + activePaneId() + '"]')
+        || document.querySelector('.conv-pane');
       const paneWidth = pane ? pane.getBoundingClientRect().width : window.innerWidth;
       return Math.max(STATUS_RAIL_MIN_WIDTH, Math.min(STATUS_RAIL_MAX_WIDTH, Math.round(paneWidth - 260)));
     };
@@ -38597,7 +38692,9 @@
       let railStartWidth = STATUS_RAIL_DEFAULT_WIDTH;
       let railCollapseOnRelease = false;
       const _railShouldCollapse = (e, rawWidth) => {
-        const pane = document.querySelector('.conv-pane');
+        const pane = document.querySelector('.conv-pane.is-active')
+          || document.querySelector('.conv-pane[data-pane-id="' + activePaneId() + '"]')
+          || document.querySelector('.conv-pane');
         const right = pane ? pane.getBoundingClientRect().right : window.innerWidth;
         return rawWidth <= STATUS_RAIL_COLLAPSE_WIDTH || e.clientX >= right - 28;
       };
@@ -47857,6 +47954,7 @@
         splitState.panes[0].eventSource = null;
       }
       // Remove survivor's DOM (p1's static element stays put).
+      mountStatusRailForPaneId('p1');
       const survivorEl = document.querySelector(`.conv-pane[data-pane-id="${survivor.id}"]`);
       if (survivorEl) survivorEl.remove();
       // Collapse splitState back to single-pane mode and reset p1's

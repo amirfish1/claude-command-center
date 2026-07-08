@@ -1474,7 +1474,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (_evergreenObjectNodes.has(nodeId)) continue;", app_js)
         # The section is built from the cached server endpoints only: drain-on
         # queues from /api/ux-fixes/health and live workers from /api/wt/workers.
-        self.assertIn("_uxqHealthCache.queues.filter(q => q && q.auto_drain === true)", app_js)
+        self.assertIn("_uxqHealthCache.queues.filter(q => q && (q.auto_drain === true || Number(q.workers) > 0))", app_js)
         self.assertIn("const _twWorkers = (_wtWorkersCache && Array.isArray(_wtWorkersCache.workers))", app_js)
         self.assertIn("const _twWorkersByQueue = new Map();", app_js)
         # Workers resolve to the EXISTING session row via their cloud session_id.
@@ -3745,8 +3745,8 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("function settleStaleOptimisticAgentIndicator($view)", app_js)
         self.assertIn("No active agent process", app_js)
-        self.assertIn("Last send did not find a running agent.", app_js)
-        self.assertIn("Type below to resume headlessly, or use Launch if typing is unavailable.", app_js)
+        self.assertIn("Send a message to resume it headlessly", app_js)
+        self.assertIn("or use Launch if typing is unavailable.", app_js)
         self.assertIn("!liveStatus.live && !liveStatus.headlessPresent && !liveStatus.terminalPresent && !liveStatus.bgPresent", app_js)
         self.assertIn("settleStaleOptimisticAgentIndicator($view);", app_js)
         self.assertIn(".conv-live-tool-inline.is-stale-no-process", app_css)
@@ -3819,7 +3819,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("renderConversationGoalStrip(activePaneId(), currentConversationRow())", app_js)
         self.assertIn("is-paused", goal_js)
         self.assertIn("is-blocked", goal_js)
-        self.assertIn("function conversationGoalActionButtonsHtml(statusKey, source)", goal_js)
+        self.assertIn("function conversationGoalActionButtonsHtml(statusKey, source, isLive)", goal_js)
+        self.assertIn("const needsLiveTui = kind === 'codex' && a.action !== 'clear' && !isLive;", goal_js)
         self.assertIn('data-role="conv-goal-action"', goal_js)
         self.assertIn("function conversationGoalActionCommand(action)", goal_js)
         self.assertIn("return '/goal clear';", goal_js)
@@ -3830,7 +3831,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function conversationGoalSourceKind(source)", goal_js)
         self.assertIn("if (kind === 'claude')", goal_js)
         self.assertIn("{ action: 'clear', label: 'Clear', iconHtml: '&times;' }", goal_js)
-        self.assertIn("conversationGoalActionButtonsHtml(ui.key, row && row.source)", goal_js)
+        self.assertIn("conversationGoalActionButtonsHtml(ui.key, row && row.source, !!(row && row.is_live))", goal_js)
         self.assertNotIn("(row && row.source === 'codex') ? conversationGoalActionButtonsHtml", goal_js)
         self.assertIn(".conv-goal-strip", app_css)
         self.assertIn(".conv-goal-strip-actions", app_css)
