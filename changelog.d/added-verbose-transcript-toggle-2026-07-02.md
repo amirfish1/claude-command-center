@@ -1,1 +1,0 @@
-- Verbose toggle in the status rail (left of Annotate) keeps tool calls, command details, and thinking expanded in conversation views; silent thought markers now explain that the reasoning text wasn't saved to the transcript.

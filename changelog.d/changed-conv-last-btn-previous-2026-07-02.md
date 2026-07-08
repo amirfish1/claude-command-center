@@ -1,1 +1,0 @@
-- Conversation pane: the floating "↑ Last" button now relabels to "↑ Previous" once your last message is reached, and each click steps back to the next-earlier user message.

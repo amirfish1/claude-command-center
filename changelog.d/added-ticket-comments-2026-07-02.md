@@ -1,1 +1,0 @@
-The ticket detail modal now has an "Add comment" section for logging a status update (timestamped, visible via `wt find`) without closing the ticket. Also removed the redundant footer "Close" button — the × already closes the modal.

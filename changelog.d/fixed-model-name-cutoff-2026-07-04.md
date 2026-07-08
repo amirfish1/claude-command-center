@@ -1,1 +1,0 @@
-- Fixed layout cutoff of the model name in the conversation footer by making the workspace container a flex-shrinkable element, capping long branch names, and hiding extra usage details at small viewport widths.

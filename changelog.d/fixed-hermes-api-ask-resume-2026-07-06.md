@@ -1,1 +1,0 @@
-- Route synchronous `/api/ask` requests for Hermes sessions through the Hermes resume harness instead of Claude JSONL resume.

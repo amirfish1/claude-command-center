@@ -1,1 +1,0 @@
-- Restore visible repo suggestion chips in New session and keep the mobile Back button reachable in the session header.

@@ -1,1 +1,0 @@
-Fixed Antigravity spawns dying after 5 minutes with "Error: timeout waiting for response" — CCC now passes `--print-timeout` (default 2h, override with `CCC_ANTIGRAVITY_PRINT_TIMEOUT`) to every headless AGY run, and the resume-staleness window scales with it.

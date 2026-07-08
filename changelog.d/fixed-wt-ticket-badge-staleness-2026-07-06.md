@@ -1,1 +1,0 @@
-- Refresh WatchTower ticket badges on every session-list serve, not just at cold rebuild, so a Codex worker's title stops freezing on the first ticket it ever closed (or the raw spawn prompt) while the cross-repo `?all=1` cache stays warm
