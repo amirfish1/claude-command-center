@@ -25339,14 +25339,53 @@
     const _trashConvs = _archivedConvs.filter(c => !c.pinned);
     const _pinnedArchived = _archivedConvs.filter(c => c.pinned);
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
+    try { _ensureEvergreenQueuesFresh(); } catch (_) {}
     const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
     const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
       && (Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim());
     const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);
-    const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c));
+    const _wtWorkerSessionIds = new Set();
+    const _wtWorkerQueues = new Set();
+    try {
+      ((_uxqHealthCache && _uxqHealthCache.worker_session_ids) || [])
+        .forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
+      ((_wtWorkersCache && _wtWorkersCache.workers) || []).forEach(w => {
+        if (!w) return;
+        if (w.session_id) _wtWorkerSessionIds.add(String(w.session_id));
+        if (w.queue) _wtWorkerQueues.add(String(w.queue).trim().toUpperCase());
+      });
+      ((_uxqHealthCache && _uxqHealthCache.queues) || []).forEach(q => {
+        if (q && q.queue) _wtWorkerQueues.add(String(q.queue).trim().toUpperCase());
+      });
+      Object.keys(_wtWorkerConvsCache || {}).forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
+    } catch (_) {}
+    const _looksLikeWtWorkerTitle = (c) => {
+      const raw = String((c && (c.display_name || c.ai_title || c.title || c.name)) || '').trim();
+      if (!raw) return false;
+      const plain = raw.replace(/^🧵\s*/, '').trim();
+      const low = plain.toLowerCase();
+      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*\s+worker(?::|\s*$)/.test(plain)) return true;
+      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*#\d+\b/.test(plain)) return true;
+      if (/^drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b/.test(low)) return true;
+      if (!_wtWorkerQueues.size) return false;
+      for (const q of _wtWorkerQueues) {
+        const qlow = q.toLowerCase();
+        if (low === qlow + ' queue worker' || low === qlow + ' worker' || low.startsWith(qlow + ' worker:')) return true;
+        if (low.startsWith(qlow + '#')) return true;
+      }
+      return false;
+    };
+    const _isWatchTowerWorkerRow = (c) => {
+      if (!c) return false;
+      const sid = String(c.session_id || c.id || '').trim();
+      return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
+    };
+    const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c) && !_isWatchTowerWorkerRow(c));
+    const _allTabWatchTowerWorkerConvs = _allTabConvs.filter(c => !_isHermesWorkerRow(c) && _isWatchTowerWorkerRow(c));
     const _allTabHermesWorkerConvs = _allTabConvs.filter(_isHermesWorkerRow);
+    const _allTabWorkerConvs = _allTabHermesWorkerConvs.concat(_allTabWatchTowerWorkerConvs);
     const _allTabHermesMessageConvs = _allTabConvs.filter(_isHermesMessageRow);
-    const _allTabHasHermesSplit = _allTabHermesWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
+    const _allTabHasHermesSplit = _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
     const _allTabView = (() => {
       if (!_allTabHasHermesSplit) return 'coding';
       try {
@@ -25355,7 +25394,7 @@
       } catch (_) { return 'coding'; }
     })();
     const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
-      ? _allTabHermesWorkerConvs
+      ? _allTabWorkerConvs
       : ((_allTabHasHermesSplit && _allTabView === 'messages')
         ? _allTabHermesMessageConvs
         : _allTabCodingConvs);
@@ -25525,7 +25564,7 @@
         +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + ((_gcItems || []).length || 0)) + '</span>'
         + '</button>'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '">'
-        +   'Workers<span class="conv-tab-count">' + _allTabHermesWorkerConvs.length + '</span>'
+        +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
         + '</button>'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '">'
         +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
