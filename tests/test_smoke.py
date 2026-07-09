@@ -3149,6 +3149,21 @@ class TestServerImports(unittest.TestCase):
         # CSS
         self.assertIn(".tts-rate-control", app_css)
 
+    def test_tts_last_message_skips_queued_user_echoes(self):
+        """The main Speak button should not read optimistic queued user sends
+        instead of the latest agent reply."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        last_msg = app_js[
+            app_js.index("function lastMessageTtsData(paneId)"):
+            app_js.index("  // TTS playback rate", app_js.index("function lastMessageTtsData(paneId)"))
+        ]
+
+        self.assertIn("function isPendingSendEchoElement(el)", app_js)
+        self.assertIn("el.classList.contains('send-queued')", app_js)
+        self.assertIn("el.classList.contains('send-delivered')", app_js)
+        self.assertIn("el.classList.contains('not-acknowledged')", app_js)
+        self.assertIn("if (isPendingSendEchoElement(el)) continue;", last_msg)
+
     def test_first_existing_dir_picks_first_real_path(self):
         """Codex / claude rows used to surface a tail-extracted worktree
         cwd that had since been deleted, so Launch built

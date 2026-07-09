@@ -7439,6 +7439,14 @@
     return null;
   }
 
+  function isPendingSendEchoElement(el) {
+    if (!el || !el.classList) return false;
+    return el.classList.contains('pending')
+      || el.classList.contains('send-queued')
+      || el.classList.contains('send-delivered')
+      || el.classList.contains('not-acknowledged');
+  }
+
   function lastMessageTtsData(paneId) {
     const view = getConvViewForPane(paneId || activePaneId()) || getConvView();
     if (!view) return null;
@@ -7456,6 +7464,7 @@
       } else if (el.classList.contains('assistant')) {
         nodesToExtract = Array.from(el.querySelectorAll('.assistant-text'));
       } else if (el.classList.contains('user_text')) {
+        if (isPendingSendEchoElement(el)) continue;
         const msg = el.querySelector('.user-msg');
         if (msg) nodesToExtract = [msg];
       } else if (el.classList.contains('assistant-text')) {
