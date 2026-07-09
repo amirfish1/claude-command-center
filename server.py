@@ -3619,6 +3619,9 @@ def _live_activity_entry_for_session(session_id):
         path = _resolve_codex_rollout_path(session_id)
         tail = _extract_codex_tail_meta(path) if path else {}
         entry.update(_codex_activity_fields_from_tail(tail, True))
+        app_activity = _codex_app_server_activity_fields(session_id)
+        if app_activity.get("sidecar_status"):
+            entry.update(app_activity)
         entry["pending_tool"] = tail.get("pending_tool")
         entry["pending_file"] = tail.get("pending_file")
         entry["last_event_type"] = tail.get("last_event_type")
@@ -4772,6 +4775,16 @@ def _spawn_registry_entry_for_session(session_id, engine=None):
         if engine and entry.get("engine") != engine:
             continue
         return entry
+    if engine in (None, "codex"):
+        reg = _codex_thread_registry_entry(sid)
+        if reg:
+            shaped = _codex_thread_registry_spawn_shape(reg)
+            shaped.update({
+                "session_id": sid,
+                "engine": "codex",
+                "codex_thread_registry": True,
+            })
+            return shaped
     return None
 
 
@@ -4792,6 +4805,16 @@ def _spawn_registry_entries_by_session(engine=None):
             sid = str(entry.get(key) or "").strip()
             if sid and sid not in out:
                 out[sid] = entry
+    if engine in (None, "codex"):
+        for sid, entry in _codex_thread_registry_entries().items():
+            if sid and sid not in out:
+                shaped = _codex_thread_registry_spawn_shape(entry)
+                shaped.update({
+                    "session_id": sid,
+                    "engine": "codex",
+                    "codex_thread_registry": True,
+                })
+                out[sid] = shaped
     return out
 
 
@@ -8727,6 +8750,15 @@ SPAWNED_PIDS_FILE = COMMAND_CENTER_STATE_DIR / "spawned-pids.json"
 # registry entry before launch). Survives spawn-registry pruning so
 # parent-child nesting works even after the Codex session exits. (CCC-465)
 CODEX_PARENT_LINKS_FILE = COMMAND_CENTER_STATE_DIR / "codex-parent-links.json"
+_CODEX_THREAD_REGISTRY_ENV = (
+    os.environ.get("CCC_CODEX_THREAD_REGISTRY")
+    or os.environ.get("WATCHTOWER_CODEX_THREAD_REGISTRY")
+)
+CODEX_THREAD_REGISTRY_FILE = (
+    Path(os.path.expanduser(_CODEX_THREAD_REGISTRY_ENV))
+    if _CODEX_THREAD_REGISTRY_ENV else
+    COMMAND_CENTER_STATE_DIR / "codex-thread-registry.json"
+)
 
 # Per-session model + context override. Set by the click-to-switch picker
 # in the session card (see /api/session/<sid>/model). Schema:
@@ -17624,6 +17656,23 @@ CODEX_GOALS_DB_CANDIDATES = (
 )
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 _CODEX_META_VERSION = 3
+CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
+CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
+_CODEX_APP_SERVER_STATE_SCHEMA = 1
+_CODEX_THREAD_REGISTRY_SCHEMA = 1
+_CODEX_THREAD_VISIBILITY_RANK = {
+    "unknown": 0,
+    "registered-agent": 1,
+    "worker": 2,
+    "user-visible": 3,
+}
+_CODEX_THREAD_OWNER_RANK = {
+    "codex-exec": 1,
+    "wt-codex-exec": 1,
+    "ccc-codex-exec": 1,
+    "wt-private-app-server": 2,
+    "ccc-managed-app-server": 3,
+}
 _CODEX_APP_SERVER_LOCK = threading.Condition()
 _CODEX_APP_SERVER_PROC = None
 _CODEX_APP_SERVER_TRANSPORT = None
@@ -17635,6 +17684,306 @@ _CODEX_APP_SERVER_RESPONSES = {}
 _CODEX_APP_SERVER_EVENT_SEQ = 0
 _CODEX_APP_SERVER_THREAD_STATE = {}
 _CODEX_APP_SERVER_TURN_THREAD = {}
+_CODEX_TELEMETRY_TURNS = {}
+_CODEX_APP_SERVER_RECENT_ITEM_MAX = 24
+_CODEX_APP_SERVER_ITEM_TEXT_MAX = 1200
+
+
+def _codex_telemetry_append(event, **fields):
+    rec = {
+        "ts": time.time(),
+        "event": str(event or "codex_event"),
+    }
+    rec.update({k: v for k, v in fields.items() if v is not None})
+    try:
+        CODEX_TELEMETRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with CODEX_TELEMETRY_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, sort_keys=True, default=str) + "\n")
+    except OSError:
+        pass
+
+
+def _codex_elapsed_ms(start):
+    try:
+        return round((time.monotonic() - float(start)) * 1000.0, 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _codex_telemetry_register_turn(thread_id, turn_id, *, path, started_at_monotonic=None, **fields):
+    if not turn_id:
+        return
+    rec = {
+        "thread_id": str(thread_id or ""),
+        "turn_id": str(turn_id),
+        "path": str(path or "codex"),
+        "started_at_monotonic": float(started_at_monotonic or time.monotonic()),
+    }
+    for key in ("transport", "model", "cwd"):
+        if fields.get(key) is not None:
+            rec[key] = fields[key]
+    _CODEX_TELEMETRY_TURNS[str(turn_id)] = rec
+
+
+def _codex_telemetry_note_notification(method, params, thread_id, turn_id):
+    if not turn_id:
+        return
+    rec = _CODEX_TELEMETRY_TURNS.get(str(turn_id))
+    if not rec:
+        return
+    latency_ms = _codex_elapsed_ms(rec.get("started_at_monotonic"))
+    common = {
+        "thread_id": thread_id or rec.get("thread_id"),
+        "turn_id": str(turn_id),
+        "path": rec.get("path"),
+        "transport": rec.get("transport"),
+        "model": rec.get("model"),
+        "cwd": rec.get("cwd"),
+        "latency_ms": latency_ms,
+        "method": method,
+    }
+    if not rec.get("first_notification_seen"):
+        rec["first_notification_seen"] = True
+        _codex_telemetry_append("codex_turn_first_notification", **common)
+    if method == "item/agentMessage/delta" and not rec.get("first_visible_output_seen"):
+        rec["first_visible_output_seen"] = True
+        _codex_telemetry_append("codex_turn_first_visible_output", **common)
+    if method == "thread/tokenUsage/updated":
+        usage = params.get("tokenUsage") or params.get("token_usage") or params.get("usage")
+        if isinstance(usage, dict):
+            rec["token_usage"] = usage
+    if method == "turn/completed":
+        _codex_telemetry_append(
+            "codex_turn_complete",
+            **common,
+            token_usage=rec.get("token_usage"),
+        )
+        _CODEX_TELEMETRY_TURNS.pop(str(turn_id), None)
+
+
+def _codex_thread_registry_now():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _codex_thread_registry_empty():
+    return {
+        "schema_version": _CODEX_THREAD_REGISTRY_SCHEMA,
+        "authoritative": False,
+        "source": "ccc-wt-codex-reconciliation",
+        "updated_at": _codex_thread_registry_now(),
+        "threads": {},
+    }
+
+
+def _load_codex_thread_registry():
+    try:
+        with CODEX_THREAD_REGISTRY_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return _codex_thread_registry_empty()
+    if not isinstance(data, dict):
+        return _codex_thread_registry_empty()
+    if not isinstance(data.get("threads"), dict):
+        data["threads"] = {}
+    data["schema_version"] = _CODEX_THREAD_REGISTRY_SCHEMA
+    data["authoritative"] = False
+    data.setdefault("source", "ccc-wt-codex-reconciliation")
+    return data
+
+
+def _save_codex_thread_registry(data):
+    data["schema_version"] = _CODEX_THREAD_REGISTRY_SCHEMA
+    data["authoritative"] = False
+    data["source"] = "ccc-wt-codex-reconciliation"
+    data["updated_at"] = _codex_thread_registry_now()
+    CODEX_THREAD_REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CODEX_THREAD_REGISTRY_FILE.with_suffix(CODEX_THREAD_REGISTRY_FILE.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+    tmp.replace(CODEX_THREAD_REGISTRY_FILE)
+
+
+class _CodexThreadRegistryLock:
+    def __init__(self):
+        self._fh = None
+
+    def __enter__(self):
+        lock_path = CODEX_THREAD_REGISTRY_FILE.with_suffix(CODEX_THREAD_REGISTRY_FILE.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = lock_path.open("a+")
+        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *_exc):
+        if self._fh is not None:
+            try:
+                fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._fh.close()
+
+
+def _codex_thread_registry_merge_nested(dst, src):
+    if not isinstance(src, dict):
+        return dst
+    out = dict(dst or {})
+    for key, value in src.items():
+        if value is None or value == "":
+            continue
+        out[key] = value
+    return out
+
+
+def _codex_thread_registry_merge_record(existing, fields, now):
+    rec = dict(existing or {})
+    rec.setdefault("created_at", now)
+    rec["updated_at"] = now
+    rec["thread_id"] = fields.get("thread_id") or rec.get("thread_id")
+    rec["engine"] = "codex"
+    source = fields.get("source")
+    sources = [str(s) for s in rec.get("sources") or [] if s]
+    if source and str(source) not in sources:
+        sources.append(str(source))
+    if sources:
+        rec["sources"] = sources
+    visibility = fields.get("visibility")
+    if visibility and _CODEX_THREAD_VISIBILITY_RANK.get(str(visibility), 0) >= _CODEX_THREAD_VISIBILITY_RANK.get(str(rec.get("visibility") or "unknown"), 0):
+        rec["visibility"] = str(visibility)
+    owner = fields.get("transport_owner")
+    if owner and _CODEX_THREAD_OWNER_RANK.get(str(owner), 0) >= _CODEX_THREAD_OWNER_RANK.get(str(rec.get("transport_owner") or ""), 0):
+        rec["transport_owner"] = str(owner)
+    for key in (
+        "cwd",
+        "repo_path",
+        "transport",
+        "title",
+        "name",
+        "parent_session_id",
+        "report_to",
+        "model",
+        "reasoning_effort",
+        "worker_id",
+        "queue",
+        "ref",
+    ):
+        value = fields.get(key)
+        if value is not None and value != "":
+            rec[key] = value
+    for key in ("ccc", "wt"):
+        value = fields.get(key)
+        if isinstance(value, dict):
+            nested = _codex_thread_registry_merge_nested(rec.get(key), value)
+            if nested:
+                rec[key] = nested
+    return rec
+
+
+def _codex_thread_registry_upsert(thread_id, **fields):
+    sid = str(thread_id or "").strip()
+    if not sid:
+        return None
+    fields["thread_id"] = sid
+    try:
+        with _CodexThreadRegistryLock():
+            data = _load_codex_thread_registry()
+            threads = data.setdefault("threads", {})
+            now = _codex_thread_registry_now()
+            existing = threads.get(sid) if isinstance(threads.get(sid), dict) else {}
+            rec = _codex_thread_registry_merge_record(existing, fields, now)
+            threads[sid] = rec
+            _save_codex_thread_registry(data)
+            return rec
+    except OSError:
+        return None
+
+
+def _codex_thread_registry_entries():
+    try:
+        threads = _load_codex_thread_registry().get("threads") or {}
+    except Exception:
+        return {}
+    return {
+        str(sid): dict(rec)
+        for sid, rec in threads.items()
+        if sid and isinstance(rec, dict)
+    }
+
+
+def _codex_thread_registry_entry(thread_id):
+    return _codex_thread_registry_entries().get(str(thread_id or "").strip())
+
+
+def _codex_thread_registry_spawn_shape(entry):
+    if not isinstance(entry, dict):
+        return {}
+    ccc = entry.get("ccc") if isinstance(entry.get("ccc"), dict) else {}
+    wt = entry.get("wt") if isinstance(entry.get("wt"), dict) else {}
+    return {
+        "pid": ccc.get("spawn_id") or entry.get("worker_id") or wt.get("worker_id") or "",
+        "alive": False,
+        "log": ccc.get("log") or wt.get("log") or "",
+        "cwd": entry.get("cwd") or "",
+        "repo_path": entry.get("repo_path") or entry.get("cwd") or "",
+        "spawned_at": ccc.get("spawned_at") or wt.get("started_at") or entry.get("created_at") or "",
+        "prompt": ccc.get("prompt") or "",
+        "model": entry.get("model") or "",
+        "parent_session_id": entry.get("parent_session_id") or "",
+        "worker_id": entry.get("worker_id") or wt.get("worker_id") or "",
+        "queue": entry.get("queue") or wt.get("queue") or "",
+        "ref": entry.get("ref") or wt.get("ref") or "",
+        "visibility": entry.get("visibility") or "",
+        "transport_owner": entry.get("transport_owner") or "",
+    }
+
+
+def _codex_app_server_state_payload_unlocked():
+    threads = {}
+    for sid, state in (_CODEX_APP_SERVER_THREAD_STATE or {}).items():
+        if not sid or not isinstance(state, dict):
+            continue
+        public = {}
+        for key in (
+            "thread_id",
+            "status",
+            "event_seq",
+            "last_event",
+            "last_event_at",
+            "last_activity_at",
+            "last_turn_id",
+            "active_turn_id",
+            "last_completed_turn_id",
+            "token_usage",
+            "active_item",
+            "last_item",
+            "recent_items",
+        ):
+            if key in state:
+                public[key] = state[key]
+        threads[str(sid)] = public
+    return {
+        "schema_version": _CODEX_APP_SERVER_STATE_SCHEMA,
+        "authoritative": False,
+        "source": "codex-app-server-notifications",
+        "updated_at": time.time(),
+        "transport": _codex_app_server_transport_kind(),
+        "threads": threads,
+    }
+
+
+def _save_codex_app_server_state_unlocked():
+    """Persist compact last-known Codex app-server state for UI/diagnostics.
+
+    This is intentionally not the durable transcript. Consumers must treat
+    Codex rollout/session files as authoritative history and use this only for
+    live status, telemetry, and coordination hints.
+    """
+    try:
+        CODEX_APP_SERVER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CODEX_APP_SERVER_STATE_FILE.with_suffix(".json.tmp")
+        with tmp.open("w") as f:
+            json.dump(_codex_app_server_state_payload_unlocked(), f, indent=2, sort_keys=True)
+        tmp.replace(CODEX_APP_SERVER_STATE_FILE)
+    except OSError:
+        pass
 
 
 def _codex_managed_app_server_socket_path():
@@ -17891,6 +18240,293 @@ def _codex_app_server_record_thread(thread_id, thread):
             _CODEX_APP_SERVER_TURN_THREAD[str(turn["id"])] = thread_id
 
 
+def _codex_app_server_trim_text(value, limit=_CODEX_APP_SERVER_ITEM_TEXT_MAX):
+    text = value if isinstance(value, str) else ("" if value is None else str(value))
+    text = text.strip()
+    if len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
+def _codex_app_server_json_preview(value, limit=240):
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        return _codex_app_server_trim_text(value, limit)
+    try:
+        text = json.dumps(value, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        text = str(value)
+    return _codex_app_server_trim_text(text, limit)
+
+
+def _codex_app_server_item_id(item, params=None):
+    params = params if isinstance(params, dict) else {}
+    for value in (params.get("itemId"), params.get("item_id")):
+        if value:
+            return str(value)
+    if isinstance(item, dict):
+        for key in ("id", "call_id", "callId"):
+            if item.get(key):
+                return str(item[key])
+    return ""
+
+
+def _codex_app_server_file_change_detail(changes):
+    if not isinstance(changes, list):
+        return ""
+    parts = []
+    for change in changes[:6]:
+        if not isinstance(change, dict):
+            continue
+        path = change.get("path") or change.get("move_path") or ""
+        kind = change.get("kind")
+        if isinstance(kind, dict):
+            kind = kind.get("type")
+        kind = str(kind or "update")
+        if path:
+            parts.append(f"{kind} {path}")
+    if len(changes) > 6:
+        parts.append(f"+{len(changes) - 6} more")
+    return ", ".join(parts)
+
+
+def _codex_app_server_item_summary(item, params=None, *, in_flight=None, now=None):
+    """Compact a Codex app-server ThreadItem into CCC live-activity fields.
+
+    App-server notifications are faster than rollout JSONL flushes and include
+    rich non-JSONL item types. This summary is intentionally small: it drives
+    live status UI only; persisted Codex rollout remains the durable transcript.
+    """
+    if not isinstance(item, dict):
+        item = {}
+    params = params if isinstance(params, dict) else {}
+    typ = str(item.get("type") or params.get("itemType") or params.get("item_type") or "")
+    status = item.get("status") or params.get("status") or ""
+    item_id = _codex_app_server_item_id(item, params)
+    if in_flight is None:
+        in_flight = str(status or "").lower() in ("", "inprogress", "in_progress", "running", "pending")
+    ts_ms = params.get("startedAtMs") or params.get("completedAtMs") or params.get("timestampMs")
+    try:
+        ts = float(ts_ms) / 1000.0 if ts_ms else float(now if now is not None else time.time())
+    except (TypeError, ValueError):
+        ts = float(now if now is not None else time.time())
+
+    tool = ""
+    detail = ""
+    command = ""
+    output = ""
+    is_error = False
+
+    if typ == "commandExecution":
+        tool = "Bash"
+        command = item.get("command") or ""
+        detail = _shell_command_activity_label(command, max_len=240) if command else ""
+        output = item.get("aggregatedOutput") or ""
+        is_error = str(status or "").lower() in ("failed", "declined") or item.get("exitCode") not in (None, 0)
+    elif typ == "fileChange":
+        tool = "apply_patch"
+        detail = _codex_app_server_file_change_detail(item.get("changes"))
+        output = item.get("output") or ""
+        is_error = str(status or "").lower() in ("failed", "declined")
+    elif typ == "mcpToolCall":
+        tool_name = item.get("tool") or "mcpToolCall"
+        server = item.get("server") or ""
+        tool = f"{server}.{tool_name}" if server else str(tool_name)
+        detail = _codex_app_server_json_preview(item.get("arguments"))
+        result = item.get("result")
+        output = _codex_app_server_json_preview(result, limit=600)
+        is_error = bool(item.get("error")) or str(status or "").lower() in ("failed", "errored")
+    elif typ == "dynamicToolCall":
+        tool_name = item.get("tool") or "dynamicToolCall"
+        namespace = item.get("namespace") or ""
+        tool = f"{namespace}.{tool_name}" if namespace else str(tool_name)
+        detail = _codex_app_server_json_preview(item.get("arguments"))
+        output = _codex_app_server_json_preview(item.get("contentItems"), limit=600)
+        is_error = item.get("success") is False or str(status or "").lower() in ("failed", "errored")
+    elif typ == "collabAgentToolCall":
+        tool = item.get("tool") or "collabAgent"
+        detail = _codex_app_server_json_preview(item.get("input") or item.get("arguments"))
+        state = item.get("state") if isinstance(item.get("state"), dict) else {}
+        output = _codex_app_server_trim_text(state.get("message") or "", 600)
+        is_error = str((state.get("status") if state else status) or "").lower() in ("failed", "errored", "notfound")
+    elif typ == "webSearch":
+        tool = "WebSearch"
+        detail = _codex_app_server_json_preview(item.get("action") or item.get("query"))
+    elif typ == "imageView":
+        tool = "view_image"
+        detail = item.get("path") or item.get("url") or item.get("imageUrl") or ""
+    elif typ == "imageGeneration":
+        tool = "image_gen"
+        detail = item.get("prompt") or item.get("description") or ""
+    elif typ == "subAgentActivity":
+        tool = "Task"
+        detail = item.get("message") or item.get("title") or item.get("description") or ""
+    elif typ == "agentMessage":
+        detail = item.get("text") or ""
+    elif typ == "plan":
+        tool = "Plan"
+        detail = item.get("text") or ""
+    elif typ == "reasoning":
+        tool = "Thinking"
+        summary = item.get("summary") if isinstance(item.get("summary"), list) else []
+        detail = " ".join(str(x) for x in summary if x)[:240]
+    elif typ:
+        tool = typ
+        detail = _codex_app_server_json_preview(item)
+
+    summary = {
+        "id": item_id,
+        "type": typ,
+        "tool": _codex_app_server_trim_text(tool, 120),
+        "detail": _codex_app_server_trim_text(detail, 240),
+        "status": str(status or ("inProgress" if in_flight else "completed")),
+        "in_flight": bool(in_flight),
+        "ts": ts,
+        "updated_at": float(now if now is not None else time.time()),
+    }
+    if command:
+        summary["command"] = _codex_app_server_trim_text(command)
+    if output:
+        summary["output"] = _codex_app_server_trim_text(output, 600)
+    if is_error:
+        summary["is_error"] = True
+    return summary
+
+
+def _codex_app_server_latest_active_item(state):
+    active = state.get("active_items") if isinstance(state, dict) else None
+    if not isinstance(active, dict) or not active:
+        return None
+    items = [v for v in active.values() if isinstance(v, dict)]
+    if not items:
+        return None
+    return max(items, key=lambda x: float(x.get("updated_at") or x.get("ts") or 0))
+
+
+def _codex_app_server_push_recent_item(state, item):
+    if not isinstance(state, dict) or not isinstance(item, dict):
+        return
+    recent = state.setdefault("recent_items", [])
+    if not isinstance(recent, list):
+        recent = []
+        state["recent_items"] = recent
+    item_id = item.get("id")
+    if item_id:
+        recent[:] = [x for x in recent if not (isinstance(x, dict) and x.get("id") == item_id)]
+    recent.append(dict(item))
+    del recent[:-_CODEX_APP_SERVER_RECENT_ITEM_MAX]
+
+
+def _codex_app_server_record_item_notification(state, method, params, now):
+    item = params.get("item") if isinstance(params.get("item"), dict) else {}
+    item_id = _codex_app_server_item_id(item, params)
+    active = state.setdefault("active_items", {})
+    if not isinstance(active, dict):
+        active = {}
+        state["active_items"] = active
+
+    if method == "item/started":
+        summary = _codex_app_server_item_summary(item, params, in_flight=True, now=now)
+        if item_id:
+            active[item_id] = summary
+        state["active_item"] = summary
+        state["last_item"] = summary
+        return
+
+    if method == "item/completed":
+        summary = _codex_app_server_item_summary(item, params, in_flight=False, now=now)
+        if item_id and isinstance(active.get(item_id), dict):
+            merged = dict(active[item_id])
+            merged.update({k: v for k, v in summary.items() if v not in (None, "", [], {})})
+            summary = merged
+        if item_id:
+            active.pop(item_id, None)
+        _codex_app_server_push_recent_item(state, summary)
+        state["last_item"] = summary
+        latest = _codex_app_server_latest_active_item(state)
+        if latest:
+            state["active_item"] = latest
+        else:
+            state.pop("active_item", None)
+        return
+
+    if method in ("item/commandExecution/outputDelta", "item/fileChange/outputDelta"):
+        delta = params.get("delta") or ""
+        if not item_id:
+            return
+        current = active.get(item_id)
+        if not isinstance(current, dict):
+            item_type = "fileChange" if method == "item/fileChange/outputDelta" else "commandExecution"
+            current = _codex_app_server_item_summary(
+                {"id": item_id, "type": item_type, "status": "inProgress"},
+                params,
+                in_flight=True,
+                now=now,
+            )
+            active[item_id] = current
+        current["output"] = _codex_app_server_trim_text((current.get("output") or "") + str(delta), 600)
+        current["updated_at"] = now
+        state["active_item"] = current
+        state["last_item"] = current
+        return
+
+    if method == "item/fileChange/patchUpdated":
+        changes = params.get("changes")
+        if not item_id:
+            return
+        current = active.get(item_id)
+        if not isinstance(current, dict):
+            current = _codex_app_server_item_summary(
+                {"id": item_id, "type": "fileChange", "status": "inProgress", "changes": changes},
+                params,
+                in_flight=True,
+                now=now,
+            )
+            active[item_id] = current
+        current["detail"] = _codex_app_server_file_change_detail(changes)
+        current["updated_at"] = now
+        state["active_item"] = current
+        state["last_item"] = current
+
+
+def _codex_app_server_activity_fields(session_id):
+    fields = {
+        "sidecar_status": None,
+        "sidecar_has_writes": False,
+        "sidecar_tool": None,
+        "sidecar_file": None,
+        "sidecar_ts": 0,
+        "sidecar_in_flight": False,
+    }
+    state = _codex_app_server_thread_state(session_id)
+    if not state:
+        return fields
+    status = str(state.get("status") or "").lower()
+    active = bool(state.get("active_turn_id") or status == "active")
+    if not active:
+        return fields
+    item = state.get("active_item") if isinstance(state.get("active_item"), dict) else None
+    if item and item.get("tool") and item.get("tool") != "Thinking":
+        fields.update({
+            "sidecar_status": "active",
+            "sidecar_has_writes": False,
+            "sidecar_tool": item.get("tool"),
+            "sidecar_file": item.get("detail") or item.get("output") or "",
+            "sidecar_ts": item.get("ts") or state.get("last_activity_at") or time.time(),
+            "sidecar_in_flight": bool(item.get("in_flight", True)),
+        })
+        return fields
+    fields.update({
+        "sidecar_status": "active",
+        "sidecar_tool": "Thinking",
+        "sidecar_file": (item or {}).get("detail") or "",
+        "sidecar_ts": state.get("last_activity_at") or state.get("last_event_at") or time.time(),
+        "sidecar_in_flight": True,
+    })
+    return fields
+
+
 def _codex_app_server_handle_notification(method, params):
     global _CODEX_APP_SERVER_EVENT_SEQ
     if not isinstance(params, dict):
@@ -17925,26 +18561,57 @@ def _codex_app_server_handle_notification(method, params):
             state["status"] = str(status)
             if str(status).lower() == "idle":
                 state.pop("active_turn_id", None)
+                state.pop("active_item", None)
+                state.pop("active_items", None)
     elif method == "turn/started":
         if turn_id:
             state["active_turn_id"] = turn_id
             state["last_activity_at"] = now
+        state["active_items"] = {}
+        state.pop("active_item", None)
         state["status"] = "active"
     elif method in (
         "item/started",
         "item/completed",
         "item/agentMessage/delta",
+        "item/commandExecution/outputDelta",
+        "item/fileChange/patchUpdated",
+        "item/fileChange/outputDelta",
+        "item/mcpToolCall/progress",
+        "item/reasoning/summaryTextDelta",
+        "item/reasoning/summaryPartAdded",
+        "item/reasoning/textDelta",
+        "item/plan/delta",
         "thread/tokenUsage/updated",
     ):
         state["last_activity_at"] = now
         if turn_id:
             state["active_turn_id"] = turn_id
+        if method == "thread/tokenUsage/updated":
+            usage = params.get("tokenUsage") or params.get("token_usage") or params.get("usage")
+            if isinstance(usage, dict):
+                state["token_usage"] = usage
+        elif method in (
+            "item/started",
+            "item/completed",
+            "item/commandExecution/outputDelta",
+            "item/fileChange/patchUpdated",
+            "item/fileChange/outputDelta",
+        ):
+            _codex_app_server_record_item_notification(state, method, params, now)
     elif method == "turn/completed":
         state["last_activity_at"] = now
         state["last_completed_turn_id"] = turn_id
         if not turn_id or state.get("active_turn_id") == turn_id:
             state.pop("active_turn_id", None)
+        state.pop("active_item", None)
+        state.pop("active_items", None)
         state["status"] = "idle"
+    _save_codex_app_server_state_unlocked()
+    try:
+        _codex_telemetry_note_notification(method, params, thread_id, turn_id)
+    except Exception:
+        pass
 
 
 def _codex_app_server_handle_message(payload):
@@ -17957,6 +18624,7 @@ def _codex_app_server_handle_message(payload):
                 thread = result.get("thread")
                 if isinstance(thread, dict) and thread.get("id"):
                     _codex_app_server_record_thread(str(thread["id"]), thread)
+                    _save_codex_app_server_state_unlocked()
             _CODEX_APP_SERVER_RESPONSES[payload.get("id")] = payload
             _CODEX_APP_SERVER_LOCK.notify_all()
             return
@@ -18370,6 +19038,334 @@ def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None, 
     return params
 
 
+def _codex_app_server_spawn_enabled():
+    for key in ("CCC_CODEX_APP_SERVER", "CCC_CODEX_SPAWN_APP_SERVER"):
+        if os.environ.get(key, "1").lower() in ("0", "false", "no"):
+            return False
+    return True
+
+
+def _codex_app_server_thread_start_params(cwd=None, model=None):
+    params = {
+        "approvalPolicy": "never",
+        "sandbox": "danger-full-access",
+        "threadSource": "ccc",
+        "sessionStartSource": "startup",
+        "ephemeral": False,
+    }
+    if cwd:
+        params["cwd"] = cwd
+        params["runtimeWorkspaceRoots"] = [cwd]
+    if model:
+        params["model"] = model
+    if _codex_context_1m_enabled():
+        params["config"] = {"model_context_window": 1000000}
+    return params
+
+
+def _codex_app_server_response_error(response, default="Codex app-server request failed"):
+    if not isinstance(response, dict):
+        return default
+    return _codex_error_text(response) or str(response.get("error") or default)
+
+
+def _codex_spawn_id_for_thread(thread_id):
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(thread_id or "")).strip("-")
+    cleaned = cleaned[:32] or str(int(time.time() * 1000))
+    return f"codex-app-{cleaned}"
+
+
+def _codex_spawn_via_app_server(
+    prompt,
+    *,
+    session_name,
+    spawn_cwd,
+    repo_for_logs,
+    model_to_use,
+    image_paths=None,
+    parent_session_id=None,
+    timestamp=None,
+    worktree_path=None,
+    worktree_branch=None,
+    parent_repo=None,
+):
+    """Start a fresh Codex thread through the app-server.
+
+    Returns None when callers should fall back to the legacy `codex exec` path.
+    Once a durable thread has been created, errors are returned to the caller
+    instead of launching a second session for the same requested task.
+    """
+    if not _codex_app_server_spawn_enabled():
+        _codex_telemetry_append(
+            "codex_spawn",
+            ok=False,
+            via="codex-app-spawn",
+            fallback="codex-exec",
+            fallback_reason="app-server-disabled",
+            cwd=spawn_cwd,
+            model=model_to_use,
+        )
+        return None
+    timestamp = timestamp or time.strftime("%Y%m%dT%H%M%S")
+    total_start = time.monotonic()
+    app_server_warm = _codex_app_server_is_live()
+    thread_start_at = time.monotonic()
+    start = _codex_app_server_request(
+        "thread/start",
+        _codex_app_server_thread_start_params(cwd=spawn_cwd, model=model_to_use),
+        timeout=20,
+    )
+    thread_start_ms = _codex_elapsed_ms(thread_start_at)
+    if not _codex_response_succeeded(start):
+        _codex_telemetry_append(
+            "codex_spawn",
+            ok=False,
+            via="codex-app-spawn",
+            fallback="codex-exec",
+            fallback_reason="thread/start failed",
+            stage="thread/start",
+            error=_codex_app_server_response_error(start),
+            app_server_warm=app_server_warm,
+            thread_start_ms=thread_start_ms,
+            total_ms=_codex_elapsed_ms(total_start),
+            transport=_codex_app_server_transport_kind(),
+            cwd=spawn_cwd,
+            model=model_to_use,
+        )
+        return None
+    thread = ((start.get("result") or {}).get("thread") or {})
+    thread_id = thread.get("id")
+    if not thread_id:
+        return None
+    thread_id = str(thread_id)
+    _codex_app_server_record_thread(thread_id, thread)
+
+    rename_warning = ""
+    name_set_ms = None
+    if session_name:
+        name_set_at = time.monotonic()
+        renamed = _codex_app_server_request(
+            "thread/name/set",
+            {"threadId": thread_id, "name": session_name},
+            timeout=10,
+        )
+        name_set_ms = _codex_elapsed_ms(name_set_at)
+        if not _codex_response_succeeded(renamed):
+            rename_warning = _codex_app_server_response_error(
+                renamed,
+                "Codex app-server accepted the thread but did not name it",
+            )
+
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"spawn-codex-app-{session_name}-{timestamp}.log"
+    log_fh = open(log_path, "w")
+    try:
+        log_fh.write(json.dumps({
+            "event": "codex_app_server_spawn",
+            "thread_id": thread_id,
+            "name": session_name,
+            "cwd": spawn_cwd,
+            "model": model_to_use or "",
+            "transport": _codex_app_server_transport_kind(),
+        }, sort_keys=True) + "\n")
+        if rename_warning:
+            log_fh.write(json.dumps({
+                "event": "codex_app_server_name_warning",
+                "warning": rename_warning,
+            }, sort_keys=True) + "\n")
+        log_fh.flush()
+        if worktree_path:
+            _run_worktree_init_hook(worktree_path, parent_repo or repo_for_logs, session_name, log_fh)
+
+        baseline_state = _codex_app_server_thread_state(thread_id)
+        baseline_rollout = _codex_rollout_stat(thread_id)
+        turn_start_at = time.monotonic()
+        started = _codex_app_server_request(
+            "turn/start",
+            _codex_turn_params(
+                thread_id,
+                prompt,
+                cwd=spawn_cwd,
+                model=model_to_use,
+                image_paths=image_paths,
+            ),
+            timeout=20,
+        )
+        turn_start_ms = _codex_elapsed_ms(turn_start_at)
+        if not _codex_response_succeeded(started):
+            error = _codex_app_server_response_error(started)
+            log_fh.write(json.dumps({
+                "event": "codex_app_server_turn_failed",
+                "error": error,
+            }, sort_keys=True) + "\n")
+            log_fh.flush()
+            _codex_telemetry_append(
+                "codex_spawn",
+                ok=False,
+                via="codex-app-spawn",
+                fallback="none-durable-thread-created",
+                fallback_reason="turn/start failed after thread/start",
+                stage="turn/start",
+                error=error,
+                app_server_warm=app_server_warm,
+                thread_start_ms=thread_start_ms,
+                name_set_ms=name_set_ms,
+                turn_start_ms=turn_start_ms,
+                total_ms=_codex_elapsed_ms(total_start),
+                transport=_codex_app_server_transport_kind(),
+                session_id=thread_id,
+                cwd=spawn_cwd,
+                model=model_to_use,
+            )
+            return {
+                "ok": False,
+                "error": error,
+                "code": "codex_app_spawn_failed",
+                "via": "codex-app-spawn",
+                "session_id": thread_id,
+                "log": str(log_path),
+            }
+
+        turn = ((started.get("result") or {}).get("turn") or {})
+        turn_id = turn.get("id")
+        _codex_telemetry_register_turn(
+            thread_id,
+            turn_id,
+            path="spawn",
+            started_at_monotonic=turn_start_at,
+            transport=_codex_app_server_transport_kind(),
+            cwd=spawn_cwd,
+            model=model_to_use,
+        )
+        try:
+            confirm_timeout = float(os.environ.get("CCC_CODEX_WAKE_CONFIRM_TIMEOUT", "5"))
+        except ValueError:
+            confirm_timeout = 5.0
+        confirm_at = time.monotonic()
+        confirmation = _codex_wait_for_turn_activity(
+            thread_id,
+            turn_id,
+            baseline_state=baseline_state,
+            baseline_rollout=baseline_rollout,
+            timeout=confirm_timeout,
+        )
+        confirm_ms = _codex_elapsed_ms(confirm_at)
+        if not confirmation.get("confirmed"):
+            log_fh.write(json.dumps({
+                "event": "codex_app_server_spawn_warning",
+                "warning": confirmation.get("warning"),
+                "turn_id": turn_id,
+            }, sort_keys=True) + "\n")
+        log_fh.write(json.dumps({
+            "event": "codex_app_server_turn_started",
+            "turn_id": turn_id,
+            "confirmed": bool(confirmation.get("confirmed")),
+            "confirmation_source": confirmation.get("source"),
+        }, sort_keys=True) + "\n")
+        log_fh.flush()
+        total_ms = _codex_elapsed_ms(total_start)
+        _codex_telemetry_append(
+            "codex_spawn",
+            ok=True,
+            via="codex-app-spawn",
+            app_server_warm=app_server_warm,
+            thread_start_ms=thread_start_ms,
+            name_set_ms=name_set_ms,
+            turn_start_ms=turn_start_ms,
+            confirm_ms=confirm_ms,
+            total_ms=total_ms,
+            confirmed=bool(confirmation.get("confirmed")),
+            confirmation_source=confirmation.get("source"),
+            warning=confirmation.get("warning") or rename_warning or None,
+            transport=_codex_app_server_transport_kind(),
+            session_id=thread_id,
+            turn_id=turn_id,
+            cwd=spawn_cwd,
+            model=model_to_use,
+        )
+    finally:
+        log_fh.close()
+
+    spawn_id = _codex_spawn_id_for_thread(thread_id)
+    entry = {
+        "pid": spawn_id,
+        "spawn_id": spawn_id,
+        "name": session_name,
+        "log": str(log_path),
+        "prompt": prompt[:200],
+        "started": timestamp,
+        "proc": None,
+        "log_fh": None,
+        "fifo": None,
+        "stdin_fd": None,
+        "engine": "codex",
+        "cwd": spawn_cwd,
+        "repo_path": repo_for_logs,
+        "model": model_to_use or "",
+        "parent_session_id": parent_session_id or "",
+        "session_id": thread_id,
+        "app_server_spawn": True,
+        "turn_id": turn_id,
+        "confirmed": bool(confirmation.get("confirmed")),
+        "confirmation_source": confirmation.get("source"),
+        "app_server_warm": app_server_warm,
+        "thread_start_ms": thread_start_ms,
+        "name_set_ms": name_set_ms,
+        "turn_start_ms": turn_start_ms,
+        "confirm_ms": confirm_ms,
+        "latency_ms": total_ms,
+    }
+    _spawned_sessions.append(entry)
+    _codex_thread_registry_upsert(
+        thread_id,
+        source="ccc-spawn",
+        visibility="user-visible",
+        transport_owner="ccc-managed-app-server",
+        transport=_codex_app_server_transport_kind(),
+        cwd=spawn_cwd,
+        repo_path=repo_for_logs,
+        title=session_name,
+        name=session_name,
+        parent_session_id=parent_session_id or "",
+        model=model_to_use or "",
+        ccc={
+            "spawn_id": spawn_id,
+            "log": str(log_path),
+            "spawned_at": timestamp,
+            "prompt": prompt[:200],
+            "app_server_spawn": True,
+            "worktree_path": worktree_path or "",
+            "worktree_branch": worktree_branch or "",
+        },
+    )
+    resp = {
+        "ok": True,
+        "pid": spawn_id,
+        "spawn_id": spawn_id,
+        "name": session_name,
+        "log": str(log_path),
+        "via": "codex-app-spawn",
+        "accepted": True,
+        "confirmed": bool(confirmation.get("confirmed")),
+        "confirmation_source": confirmation.get("source"),
+        "warning": confirmation.get("warning") or rename_warning or None,
+        "turn_id": turn_id,
+        "session_id": thread_id,
+        "app_server_transport": _codex_app_server_transport_kind(),
+        "app_server_warm": app_server_warm,
+        "thread_start_ms": thread_start_ms,
+        "name_set_ms": name_set_ms,
+        "turn_start_ms": turn_start_ms,
+        "confirm_ms": confirm_ms,
+        "latency_ms": total_ms,
+    }
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return _finalize_spawn_response(resp, entry, {"cwd": spawn_cwd, "repo_path": repo_for_logs}, wait_for_session_id=False)
+
+
 def _codex_resume_or_steer_via_app_server(
     session_id,
     text,
@@ -18380,7 +19376,20 @@ def _codex_resume_or_steer_via_app_server(
     reasoning_effort=None,
 ):
     if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
+        _codex_telemetry_append(
+            "codex_wake",
+            ok=False,
+            via="codex-app-server",
+            fallback="exec",
+            fallback_reason="app-server-disabled",
+            stage="disabled",
+            session_id=session_id,
+            cwd=cwd,
+            model=model,
+        )
         return {"ok": False, "fallback": "exec", "error": "Codex app-server disabled"}
+    total_start = time.monotonic()
+    app_server_warm = _codex_app_server_is_live()
     resume_params = {
         "threadId": session_id,
         "excludeTurns": False,
@@ -18397,14 +19406,41 @@ def _codex_resume_or_steer_via_app_server(
         _resume_ledger_append("codex_wake_stage", sid=session_id, stage="connect")
     except Exception:
         pass
+    resume_at = time.monotonic()
     resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
+    resume_ms = _codex_elapsed_ms(resume_at)
     if resumed.get("error"):
         _err = _codex_error_text(resumed)
         _resume_ledger_append(
             "codex_wake_fail", sid=session_id,
             stage="thread/resume", error=_err, fallback="exec",
         )
-        return {"ok": False, "via": "codex-app-server", "stage": "thread/resume", "fallback": "exec", "error": _err}
+        _codex_telemetry_append(
+            "codex_wake",
+            ok=False,
+            via="codex-app-server",
+            fallback="exec",
+            fallback_reason="thread/resume failed",
+            stage="thread/resume",
+            error=_err,
+            app_server_warm=app_server_warm,
+            resume_ms=resume_ms,
+            total_ms=_codex_elapsed_ms(total_start),
+            transport=_codex_app_server_transport_kind(),
+            session_id=session_id,
+            cwd=cwd,
+            model=model,
+        )
+        return {
+            "ok": False,
+            "via": "codex-app-server",
+            "stage": "thread/resume",
+            "fallback": "exec",
+            "error": _err,
+            "app_server_warm": app_server_warm,
+            "resume_ms": resume_ms,
+            "latency_ms": _codex_elapsed_ms(total_start),
+        }
     thread = ((resumed.get("result") or {}).get("thread") or {})
     active_turn = _codex_latest_active_turn(thread)
     status = (thread.get("status") or {}).get("type")
@@ -18414,12 +19450,30 @@ def _codex_resume_or_steer_via_app_server(
             "codex_wake_queued", sid=session_id,
             stage="thread/resume", reason=_reason,
         )
+        _codex_telemetry_append(
+            "codex_wake",
+            ok=False,
+            via="codex-app-server",
+            fallback="queue",
+            fallback_reason=_reason,
+            stage="thread/resume",
+            app_server_warm=app_server_warm,
+            resume_ms=resume_ms,
+            total_ms=_codex_elapsed_ms(total_start),
+            transport=_codex_app_server_transport_kind(),
+            session_id=session_id,
+            cwd=cwd,
+            model=model,
+        )
         return {
             "ok": False,
             "via": "codex-app-server",
             "stage": "thread/resume",
             "fallback": "queue",
             "error": _reason,
+            "app_server_warm": app_server_warm,
+            "resume_ms": resume_ms,
+            "latency_ms": _codex_elapsed_ms(total_start),
         }
     if status == "active":
         _reason = "Codex app-server reports an active turn without a steerable turn id"
@@ -18427,18 +19481,20 @@ def _codex_resume_or_steer_via_app_server(
             "codex_wake_queued", sid=session_id,
             stage="thread/resume", reason=_reason,
         )
-        return {
-            "ok": False,
-            "via": "codex-app-server",
-            "stage": "thread/resume",
-            "fallback": "queue",
-            "error": _reason,
-        }
-    if not allow_start:
-        _reason = "Codex CLI resume is still running and app-server did not expose a steerable turn"
-        _resume_ledger_append(
-            "codex_wake_queued", sid=session_id,
-            stage="thread/resume", reason=_reason,
+        _codex_telemetry_append(
+            "codex_wake",
+            ok=False,
+            via="codex-app-server",
+            fallback="queue",
+            fallback_reason=_reason,
+            stage="thread/resume",
+            app_server_warm=app_server_warm,
+            resume_ms=resume_ms,
+            total_ms=_codex_elapsed_ms(total_start),
+            transport=_codex_app_server_transport_kind(),
+            session_id=session_id,
+            cwd=cwd,
+            model=model,
         )
         return {
             "ok": False,
@@ -18446,6 +19502,40 @@ def _codex_resume_or_steer_via_app_server(
             "stage": "thread/resume",
             "fallback": "queue",
             "error": _reason,
+            "app_server_warm": app_server_warm,
+            "resume_ms": resume_ms,
+            "latency_ms": _codex_elapsed_ms(total_start),
+        }
+    if not allow_start:
+        _reason = "Codex CLI resume is still running and app-server did not expose a steerable turn"
+        _resume_ledger_append(
+            "codex_wake_queued", sid=session_id,
+            stage="thread/resume", reason=_reason,
+        )
+        _codex_telemetry_append(
+            "codex_wake",
+            ok=False,
+            via="codex-app-server",
+            fallback="queue",
+            fallback_reason=_reason,
+            stage="thread/resume",
+            app_server_warm=app_server_warm,
+            resume_ms=resume_ms,
+            total_ms=_codex_elapsed_ms(total_start),
+            transport=_codex_app_server_transport_kind(),
+            session_id=session_id,
+            cwd=cwd,
+            model=model,
+        )
+        return {
+            "ok": False,
+            "via": "codex-app-server",
+            "stage": "thread/resume",
+            "fallback": "queue",
+            "error": _reason,
+            "app_server_warm": app_server_warm,
+            "resume_ms": resume_ms,
+            "latency_ms": _codex_elapsed_ms(total_start),
         }
 
     try:
@@ -18454,14 +19544,25 @@ def _codex_resume_or_steer_via_app_server(
         pass
     baseline_state = _codex_app_server_thread_state(session_id)
     baseline_rollout = _codex_rollout_stat(session_id)
+    turn_start_at = time.monotonic()
     started = _codex_app_server_request(
         "turn/start",
         _codex_turn_params(session_id, text, cwd=cwd, model=model, image_paths=image_paths, effort=reasoning_effort),
         timeout=20,
     )
+    turn_start_ms = _codex_elapsed_ms(turn_start_at)
     if _codex_response_succeeded(started):
         turn = ((started.get("result") or {}).get("turn") or {})
         _turn_id = turn.get("id")
+        _codex_telemetry_register_turn(
+            session_id,
+            _turn_id,
+            path="wake",
+            started_at_monotonic=turn_start_at,
+            transport=_codex_app_server_transport_kind(),
+            cwd=cwd,
+            model=model,
+        )
         _resume_ledger_append(
             "codex_wake_ok", sid=session_id,
             via="codex-app-turn", turn_id=_turn_id,
@@ -18470,6 +19571,7 @@ def _codex_resume_or_steer_via_app_server(
             confirm_timeout = float(os.environ.get("CCC_CODEX_WAKE_CONFIRM_TIMEOUT", "5"))
         except ValueError:
             confirm_timeout = 5.0
+        confirm_at = time.monotonic()
         confirmation = _codex_wait_for_turn_activity(
             session_id,
             _turn_id,
@@ -18477,12 +19579,32 @@ def _codex_resume_or_steer_via_app_server(
             baseline_rollout=baseline_rollout,
             timeout=confirm_timeout,
         )
+        confirm_ms = _codex_elapsed_ms(confirm_at)
         if not confirmation.get("confirmed"):
             _resume_ledger_append(
                 "codex_wake_warn", sid=session_id,
                 via="codex-app-turn", turn_id=_turn_id,
                 warning=confirmation.get("warning"),
             )
+        total_ms = _codex_elapsed_ms(total_start)
+        _codex_telemetry_append(
+            "codex_wake",
+            ok=True,
+            via="codex-app-turn",
+            app_server_warm=app_server_warm,
+            resume_ms=resume_ms,
+            turn_start_ms=turn_start_ms,
+            confirm_ms=confirm_ms,
+            total_ms=total_ms,
+            confirmed=bool(confirmation.get("confirmed")),
+            confirmation_source=confirmation.get("source"),
+            warning=confirmation.get("warning"),
+            transport=_codex_app_server_transport_kind(),
+            session_id=session_id,
+            turn_id=_turn_id,
+            cwd=cwd,
+            model=model,
+        )
         return {
             "ok": True,
             "via": "codex-app-turn",
@@ -18493,6 +19615,11 @@ def _codex_resume_or_steer_via_app_server(
             "turn_id": _turn_id,
             "session_id": session_id,
             "app_server_transport": _codex_app_server_transport_kind(),
+            "app_server_warm": app_server_warm,
+            "resume_ms": resume_ms,
+            "turn_start_ms": turn_start_ms,
+            "confirm_ms": confirm_ms,
+            "latency_ms": total_ms,
         }
     if _codex_error_is_not_steerable(started):
         _err = _codex_error_text(started)
@@ -18500,19 +19627,67 @@ def _codex_resume_or_steer_via_app_server(
             "codex_wake_fail", sid=session_id,
             stage="turn/start", error=_err, fallback="queue",
         )
+        _codex_telemetry_append(
+            "codex_wake",
+            ok=False,
+            via="codex-app-server",
+            fallback="queue",
+            fallback_reason="turn/start not steerable",
+            stage="turn/start",
+            error=_err,
+            app_server_warm=app_server_warm,
+            resume_ms=resume_ms,
+            turn_start_ms=turn_start_ms,
+            total_ms=_codex_elapsed_ms(total_start),
+            transport=_codex_app_server_transport_kind(),
+            session_id=session_id,
+            cwd=cwd,
+            model=model,
+        )
         return {
             "ok": False,
             "via": "codex-app-server",
             "stage": "turn/start",
             "fallback": "queue",
             "error": _err,
+            "app_server_warm": app_server_warm,
+            "resume_ms": resume_ms,
+            "turn_start_ms": turn_start_ms,
+            "latency_ms": _codex_elapsed_ms(total_start),
         }
     _err = _codex_error_text(started)
     _resume_ledger_append(
         "codex_wake_fail", sid=session_id,
         stage="turn/start", error=_err, fallback="exec",
     )
-    return {"ok": False, "via": "codex-app-server", "stage": "turn/start", "fallback": "exec", "error": _err}
+    _codex_telemetry_append(
+        "codex_wake",
+        ok=False,
+        via="codex-app-server",
+        fallback="exec",
+        fallback_reason="turn/start failed",
+        stage="turn/start",
+        error=_err,
+        app_server_warm=app_server_warm,
+        resume_ms=resume_ms,
+        turn_start_ms=turn_start_ms,
+        total_ms=_codex_elapsed_ms(total_start),
+        transport=_codex_app_server_transport_kind(),
+        session_id=session_id,
+        cwd=cwd,
+        model=model,
+    )
+    return {
+        "ok": False,
+        "via": "codex-app-server",
+        "stage": "turn/start",
+        "fallback": "exec",
+        "error": _err,
+        "app_server_warm": app_server_warm,
+        "resume_ms": resume_ms,
+        "turn_start_ms": turn_start_ms,
+        "latency_ms": _codex_elapsed_ms(total_start),
+    }
 
 
 def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_paths=None):
@@ -20489,6 +21664,35 @@ def _codex_spawn_pid_by_thread_id():
                 # First-time only (idempotent); cheap dict check skips the
                 # file write on subsequent polls. (CCC-465)
                 _persist_codex_parent_link(sid, parent_sid)
+            _codex_thread_registry_upsert(
+                sid,
+                source="ccc-spawn-registry",
+                visibility="user-visible",
+                transport_owner=(
+                    "ccc-managed-app-server"
+                    if s.get("app_server_spawn") else
+                    "ccc-codex-exec"
+                ),
+                transport=(
+                    _codex_app_server_transport_kind()
+                    if s.get("app_server_spawn") else
+                    "codex-exec"
+                ),
+                cwd=s.get("cwd") or "",
+                repo_path=s.get("repo_path") or "",
+                title=s.get("name") or "",
+                name=s.get("name") or "",
+                parent_session_id=parent_sid,
+                model=s.get("model") or "",
+                ccc={
+                    "spawn_id": s.get("spawn_id") or s.get("pid") or "",
+                    "pid": s.get("pid") or "",
+                    "log": s.get("log") or "",
+                    "spawned_at": s.get("started") or "",
+                    "prompt": s.get("prompt") or "",
+                    "app_server_spawn": bool(s.get("app_server_spawn")),
+                },
+            )
             if sid not in out:
                 out[sid] = {
                     "pid": s.get("pid"),
@@ -20501,6 +21705,9 @@ def _codex_spawn_pid_by_thread_id():
                     "model": s.get("model") or "",
                     "parent_session_id": parent_sid,
                 }
+    for sid, entry in _codex_thread_registry_entries().items():
+        if sid and sid not in out:
+            out[sid] = _codex_thread_registry_spawn_shape(entry)
     return out
 
 
@@ -20953,6 +22160,14 @@ def _codex_state_fields(sid, now=None):
     if not sid:
         return fields
     try:
+        app_state = _codex_app_server_thread_state(sid)
+        if app_state and (app_state.get("active_turn_id") or str(app_state.get("status") or "").lower() == "active"):
+            fields["codex_state"] = "working"
+            fields["codex_fresh"] = True
+            return fields
+    except Exception:
+        pass
+    try:
         path = _resolve_codex_rollout_path(sid)
         if not path:
             return fields
@@ -21079,7 +22294,12 @@ def find_codex_conversations(
             or st.st_mtime
         )
         freshness = max(modified, last_interactions.get(sid) or 0)
-        if not include_old and sid not in spawn_by_sid and cutoff > 0 and freshness < cutoff:
+        if (
+            not include_old
+            and not (spawn_by_sid.get(sid) or {}).get("alive")
+            and cutoff > 0
+            and freshness < cutoff
+        ):
             continue
         if not include_old and max_rows > 0 and len(out) >= max_rows:
             continue
@@ -21144,6 +22364,9 @@ def find_codex_conversations(
         spawn_pid = spawn_info.get("pid")
         spawn_alive = bool(spawn_info.get("alive"))
         codex_activity = _codex_activity_fields_from_tail(tail, spawn_alive)
+        app_activity = _codex_app_server_activity_fields(sid)
+        if app_activity.get("sidecar_status"):
+            codex_activity.update(app_activity)
         codex_stale_tool = _codex_stale_tool_fields(tail)
         _goal = goals_by_sid.get(sid) or {}
         out.append({
@@ -31551,9 +32774,13 @@ def _finalize_spawn_response(resp, entry, ctx, *, wait_for_session_id=True):
     """Attach correlation and placement fields to a successful spawn response."""
     resp = dict(resp or {})
     pid = entry.get("pid") if isinstance(entry, dict) else resp.get("pid")
+    spawn_id = entry.get("spawn_id") if isinstance(entry, dict) else resp.get("spawn_id")
     if pid is not None:
         resp.setdefault("pid", pid)
-        resp["spawn_id"] = str(pid)
+        spawn_id = spawn_id or str(pid)
+    if spawn_id:
+        resp["spawn_id"] = str(spawn_id)
+        resp.setdefault("pid", spawn_id)
     engine = (entry.get("engine") if isinstance(entry, dict) else None) or resp.get("engine") or "claude"
     resp["engine"] = engine
     if isinstance(ctx, dict):
@@ -31992,13 +33219,13 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
 
 
 def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
-    """Spawn a headless Codex CLI run and return tracking info.
+    """Spawn a headless Codex run and return tracking info.
 
-    Mirrors `spawn_session` but invokes the Codex CLI's `exec`
-    subcommand instead of `claude -p`. Codex `exec` is one-shot —
-    the prompt comes from argv and the process exits when the model
-    is done — so we use `subprocess.DEVNULL` for stdin (no FIFO,
-    no mid-run inject support).
+    Prefer the Codex app-server for fresh durable threads when available. If
+    that is disabled or unavailable before a thread is created, fall back to the
+    legacy Codex CLI `exec` path. `codex exec` is one-shot: the prompt comes
+    from argv and the process exits when the model is done, so it uses
+    `subprocess.DEVNULL` for stdin (no FIFO, no mid-run inject support).
 
     Tested against codex-cli 0.125.0-alpha.3.
 
@@ -32014,10 +33241,6 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     """
     prompt = _strip_ccc_session_state_instruction(prompt)
     image_paths = _extract_pasted_image_paths(prompt)
-    resolved = _resolve_codex_bin()
-    if not resolved["available"]:
-        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
-    bin_path = resolved["bin"]
     ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
     spawn_cwd = ctx["cwd"]
     repo_for_logs = ctx["repo_path"]
@@ -32045,6 +33268,39 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         except RuntimeError as e:
             return {"ok": False, "error": f"worktree creation failed: {e}"}
 
+    app_server_spawn = _codex_spawn_via_app_server(
+        prompt,
+        session_name=session_name,
+        spawn_cwd=spawn_cwd,
+        repo_for_logs=repo_for_logs,
+        model_to_use=model_to_use,
+        image_paths=image_paths,
+        parent_session_id=parent_session_id,
+        timestamp=timestamp,
+        worktree_path=worktree_path,
+        worktree_branch=worktree_branch,
+        parent_repo=ctx["repo_path"],
+    )
+    if app_server_spawn is not None:
+        return app_server_spawn
+
+    exec_total_start = time.monotonic()
+    resolved = _resolve_codex_bin()
+    if not resolved["available"]:
+        _codex_telemetry_append(
+            "codex_spawn",
+            ok=False,
+            via="codex-spawn",
+            stage="resolve",
+            error=resolved["reason"],
+            code=resolved.get("code"),
+            total_ms=_codex_elapsed_ms(exec_total_start),
+            cwd=spawn_cwd,
+            model=model_to_use,
+        )
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    bin_path = resolved["bin"]
+
     cmd = [
         bin_path, *_codex_context_window_args(), "exec",
         "--json",
@@ -32061,6 +33317,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     if worktree_path:
         _run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
     try:
+        launch_start = time.monotonic()
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -32069,13 +33326,38 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             cwd=spawn_cwd,
             start_new_session=True,
         )
+        launch_ms = _codex_elapsed_ms(launch_start)
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
+        _codex_telemetry_append(
+            "codex_spawn",
+            ok=False,
+            via="codex-spawn",
+            stage="popen",
+            error=str(e),
+            code="codex_launch_failed",
+            total_ms=_codex_elapsed_ms(exec_total_start),
+            cwd=spawn_cwd,
+            model=model_to_use,
+        )
         return {"ok": False, "error": str(e), "code": "codex_launch_failed", "via": "codex-spawn"}
     failure = _spawn_early_failure_payload(
         proc, log_path, log_fh, engine="codex", via="codex-spawn",
     )
     if failure:
+        _codex_telemetry_append(
+            "codex_spawn",
+            ok=False,
+            via="codex-spawn",
+            stage="early-failure",
+            error=failure.get("error"),
+            code=failure.get("code"),
+            launch_ms=launch_ms,
+            total_ms=_codex_elapsed_ms(exec_total_start),
+            pid=proc.pid,
+            cwd=spawn_cwd,
+            model=model_to_use,
+        )
         return failure
 
     entry = {
@@ -32119,6 +33401,16 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
+    _codex_telemetry_append(
+        "codex_spawn",
+        ok=True,
+        via="codex-spawn",
+        launch_ms=launch_ms,
+        total_ms=_codex_elapsed_ms(exec_total_start),
+        pid=proc.pid,
+        cwd=spawn_cwd,
+        model=model_to_use,
+    )
     return _finalize_spawn_response(resp, entry, ctx)
 
 
@@ -32541,11 +33833,24 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None):
 
 def _poll_spawn_entry(entry):
     """Poll a tracked spawned child and clean transient handles once it exits."""
-    proc = entry.get("proc") if isinstance(entry, dict) else None
-    try:
-        poll = proc.poll() if proc is not None else -1
-    except Exception:
-        poll = -1
+    if isinstance(entry, dict) and entry.get("app_server_spawn"):
+        state = _codex_app_server_thread_state(entry.get("session_id"))
+        turn_id = entry.get("turn_id")
+        completed_turn = state.get("last_completed_turn_id")
+        if turn_id and completed_turn == turn_id:
+            poll = 0
+        elif completed_turn:
+            poll = 0
+        elif state.get("active_turn_id") or str(state.get("status") or "").lower() == "active":
+            poll = None
+        else:
+            poll = None
+    else:
+        proc = entry.get("proc") if isinstance(entry, dict) else None
+        try:
+            poll = proc.poll() if proc is not None else -1
+        except Exception:
+            poll = -1
     if poll is not None and isinstance(entry, dict) and not entry.get("_cleanup_done"):
         # Diagnostic: a tracked child just EXITED. Log lifetime + cache/cost
         # from the resume log's final result event before we drop its handles.
@@ -33880,14 +35185,15 @@ def list_spawned_sessions():
     for s in _spawned_sessions:
         poll = _poll_spawn_entry(s)
         sid = _spawn_session_id_from_entry(s)
-        pid = s["pid"]
+        pid = s.get("pid")
+        spawn_id = str(s.get("spawn_id") or pid or "")
         result.append({
             "pid": pid,
-            "spawn_id": str(pid),
+            "spawn_id": spawn_id,
             "session_id": sid,
             "session_id_pending": not bool(sid),
-            "name": s["name"],
-            "log": s["log"],
+            "name": s.get("name", ""),
+            "log": s.get("log", ""),
             "prompt": s.get("prompt", ""),
             "started": s.get("started", ""),
             "spawned_at": s.get("started", ""),
@@ -36598,7 +37904,27 @@ def _try_wt_send_for_headless_delivery(session_id, text):
         )
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
+    try:
+        payload = json.loads(proc.stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        payload = None
     if proc.returncode != 0:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("queued"):
+        result = {
+            "ok": True,
+            "queued": True,
+            "source": "wt-send",
+            "via": "wt-send-queued",
+            "queued_reason": payload.get("error") or "WatchTower queued the message",
+        }
+        for key in ("id", "transport", "receipt_id", "log"):
+            if payload.get(key):
+                result[key] = str(payload[key])
+        return result
+    if not payload.get("ok"):
         return None
     result = {"ok": True, "source": "wt-send", "via": "wt-send", "resumed": True}
     # CCC-452: surface wt's delivery pipeline to the UI. `wt send --json`
@@ -36606,14 +37932,9 @@ def _try_wt_send_for_headless_delivery(session_id, text):
     # the transport records one, a receipt_id the client can poll via
     # /api/wt/receipt/<id> until the message is verified against the target
     # transcript (landed) or declared lost (native-resume fallback).
-    try:
-        payload = json.loads(proc.stdout or "")
-    except (json.JSONDecodeError, TypeError):
-        payload = None
-    if isinstance(payload, dict):
-        for key in ("transport", "receipt_id", "log"):
-            if payload.get(key):
-                result[key] = str(payload[key])
+    for key in ("transport", "receipt_id", "log"):
+        if payload.get(key):
+            result[key] = str(payload[key])
     return result
 
 
@@ -47910,6 +49231,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status.update(_codex_activity_fields_from_tail(tail, status.get("live")))
                 status.update(_codex_stale_tool_fields(tail))
                 status.update(_codex_state_fields(sid))
+                app_activity = _codex_app_server_activity_fields(sid)
+                if app_activity.get("sidecar_status"):
+                    status.update(app_activity)
+                    status["codex_state"] = "working"
+                    status["codex_fresh"] = True
                 # App-server liveness: is CCC currently driving Codex via its
                 # own JSON-RPC stdio app-server (the path that can append input
                 # to a loaded thread and run thread/compact), or is there no

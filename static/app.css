@@ -800,8 +800,23 @@
   .conv-outcome-banner .cob-icon { font-size: 15px; line-height: 1.3; flex: 0 0 auto; }
   .conv-outcome-banner.conv-outcome-error .cob-icon { color: var(--red); }
   .conv-outcome-banner.conv-outcome-incomplete .cob-icon { color: var(--orange, #d29922); }
-  .conv-outcome-banner .cob-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .conv-outcome-banner .cob-body { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
   .conv-outcome-banner .cob-detail { color: var(--text-muted); font-size: 12px; word-break: break-word; }
+  .conv-outcome-banner .cob-wake-btn {
+    flex: 0 0 auto; align-self: center;
+    border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+    background: rgba(57, 210, 192, 0.10); color: var(--cyan);
+    border-radius: 4px; padding: 5px 9px;
+    font-size: 12px; font-weight: 700; line-height: 1.1;
+    cursor: pointer; white-space: nowrap;
+  }
+  .conv-outcome-banner .cob-wake-btn:hover:not(:disabled) {
+    background: rgba(57, 210, 192, 0.16);
+    border-color: color-mix(in srgb, var(--cyan) 70%, transparent);
+  }
+  .conv-outcome-banner .cob-wake-btn:disabled {
+    cursor: default; opacity: 0.65;
+  }
 
   .event.user_text.pending {
     font-style: italic; opacity: 0.62;

@@ -3838,8 +3838,10 @@
     return true;
   }
   function clearOptimisticAgentIndicator($view) {
-    const el = ($view || document).querySelector('.conv-live-tool-inline.optimistic');
-    if (el) el.remove();
+    const root = $view || document;
+    root.querySelectorAll('.conv-live-tool-inline.optimistic').forEach(el => el.remove());
+    _removePriorWakeStatus(root);
+    stopCodexWakeBreakdown(true);
     if (_optimisticAgentTimer) {
       clearTimeout(_optimisticAgentTimer);
       _optimisticAgentTimer = null;
@@ -3859,7 +3861,26 @@
   }
   function _removePriorWakeStatus($view) {
     if (!$view) return;
-    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status').forEach(n => n.remove());
+    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown').forEach(n => n.remove());
+  }
+  function clearLiveGeneratingIndicator($view) {
+    ($view || document).querySelectorAll('.conv-live-tool-inline.is-generating').forEach(n => n.remove());
+  }
+  function getSingleLiveToolInline($view) {
+    if (!$view) return null;
+    const nodes = Array.from($view.querySelectorAll('.conv-live-tool-inline:not(.optimistic):not(.is-wake-status):not(.wake-breakdown)'));
+    if (!nodes.length) return null;
+    const keep = nodes[nodes.length - 1];
+    nodes.forEach(node => { if (node !== keep) node.remove(); });
+    return keep;
+  }
+  function _anchorWakeBreakdown($view) {
+    if (!$view) return;
+    const optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
+    const breakdown = $view.querySelector('.conv-live-tool-inline.wake-breakdown');
+    if (optimistic && breakdown && breakdown.previousElementSibling !== optimistic) {
+      optimistic.parentNode.insertBefore(breakdown, optimistic.nextSibling);
+    }
   }
   // Transient status (queued / resuming). Not dismissible — it clears when
   // activity streams in or a re-render swaps in the durable transcript.
@@ -3974,6 +3995,7 @@
         $view.appendChild(el);
       }
     }
+    _anchorWakeBreakdown($view);
     const stages = Array.isArray(data.stages) ? data.stages : [];
     const currentIdx = stages.findIndex(s => !s.done);
     const checklist = document.createElement('div');
@@ -4483,7 +4505,7 @@
       const _doneAge = _liveStripLastLiveTime ? (Date.now() - _liveStripLastLiveTime) : 9999999;
       if (_doneAge < 4000) {
         document.querySelectorAll('.conv-live-tool-strip').forEach(n => n.remove());
-        let _doneInline = $view.querySelector('.conv-live-tool-inline:not(.optimistic)');
+        let _doneInline = getSingleLiveToolInline($view);
         if (!_doneInline) {
           _doneInline = document.createElement('div');
           _doneInline.className = 'conv-live-tool-inline';
@@ -4511,7 +4533,7 @@
     // Match only the *real* inline indicator — leave the optimistic
     // twin alone so it lingers until either real data lands or its
     // own 60s safety timeout fires.
-    let inline = $view.querySelector('.conv-live-tool-inline:not(.optimistic)');
+    let inline = getSingleLiveToolInline($view);
     const tool = liveStatus.sidecarTool;
     const ts = liveStatus.sidecarTs || 0;
     const ageSec = ts ? Math.max(0, Math.floor(Date.now() / 1000 - ts)) : 9999;
@@ -4531,6 +4553,7 @@
     // end; the age cap covers a stale sidecar that never got cleared.
     const isGenerating = (liveStatus.live || codexStateWorking) && !tool
       && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking);
+    const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');
     const shouldShow = (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
       && (ageSec < 300 || isQuestion) && !_headlessQuestion)
       || isGenerating;
@@ -4542,6 +4565,12 @@
     }
     // "Generating…" — session is live but no tool is executing yet/anymore
     if (isGenerating) {
+      if (hasWakeProgress) {
+        if (inline) inline.remove();
+        updateLiveStripOffset($view, null);
+        _liveStripShown = false;
+        return;
+      }
       if (!inline) {
         inline = document.createElement('div');
         inline.className = 'conv-live-tool-inline';
@@ -4550,6 +4579,9 @@
       inline.className = 'conv-live-tool-inline is-generating';
       inline.innerHTML = '<span class="cl-pulse"></span><span class="cl-tool">Generating…</span>';
       inline.title = 'Session is live — model is generating';
+      if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
+        $view.appendChild(inline);
+      }
       _liveStripShown = true;
       return;
     }
@@ -14580,7 +14612,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
+        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);
         if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
           selectConversation(placeholder.id);
         }
@@ -21715,12 +21747,13 @@
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error(data.error || 'spawn_failed');
-          if (data.pid) {
+          const realSpawnId = data.spawn_id || data.pid;
+          if (realSpawnId) {
             const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
             if (placeholder) {
-              placeholder.spawn_pid = data.pid;
+              placeholder.spawn_pid = realSpawnId;
               pendingSpawns.delete(tempPid);
-              pendingSpawns.set(data.pid, placeholder);
+              pendingSpawns.set(realSpawnId, placeholder);
             }
           }
           // Fire-and-forget: signal to GitHub that this issue is being worked on
@@ -22107,7 +22140,7 @@
     }
   }
 
-  async function wakeCodexSession(sessionId, feedbackEl) {
+  async function wakeCodexSession(sessionId, feedbackEl, opts) {
     if (!sessionId) return;
     const originalText = feedbackEl ? feedbackEl.textContent : '';
     const originalTitle = feedbackEl ? feedbackEl.title : '';
@@ -22126,6 +22159,9 @@
         data = await postInjectInput(sessionId, CODEX_WAKE_TEXT, 'send');
       }
       if (!data.ok) throw new Error(data.error || 'wake failed');
+      if (opts && opts.view) {
+        renderConvWakeOutcome(opts.view, data);
+      }
       touchSessionOptimistically(sessionId);
       showOpToast(data.via === 'codex-steer' ? 'Wake sent to running Codex turn.' : 'Wake sent to Codex.');
       setTimeout(refreshConversationList, 1500);
@@ -27308,12 +27344,13 @@
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || !data.ok) throw new Error(data.error || 'spawn_failed');
-            if (data.pid) {
+            const realSpawnId = data.spawn_id || data.pid;
+            if (realSpawnId) {
               const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
               if (placeholder) {
-                placeholder.spawn_pid = data.pid;
+                placeholder.spawn_pid = realSpawnId;
                 pendingSpawns.delete(tempPid);
-                pendingSpawns.set(data.pid, placeholder);
+                pendingSpawns.set(realSpawnId, placeholder);
               }
             }
             if (issueNum && spawnRepoPath) {
@@ -29006,6 +29043,8 @@
     }
     if (!kind) return;
 
+    const wakeSessionId = (currentSession && currentSession.id) ? String(currentSession.id) : '';
+    const canWakeCodex = !!(wakeSessionId && currentSession && currentSession.source === 'codex');
     const banner = document.createElement('div');
     banner.className = 'conv-outcome-banner conv-outcome-' + kind;
     banner.setAttribute('role', 'status');
@@ -29014,7 +29053,22 @@
       '<span class="cob-icon" aria-hidden="true">' + icon + '</span>'
       + '<span class="cob-body"><strong>' + escapeHtml(title) + '</strong>'
       + (detail ? '<span class="cob-detail">' + escapeHtml(detail) + '</span>' : '')
-      + '</span>';
+      + '</span>'
+      + (canWakeCodex
+        ? '<button type="button" class="cob-wake-btn" data-role="outcome-wake-codex"'
+          + ' data-session-id="' + escapeAttr(wakeSessionId) + '"'
+          + ' title="Wake Codex with a status check">Wake up</button>'
+        : '');
+    const wakeBtn = banner.querySelector('[data-role="outcome-wake-codex"]');
+    if (wakeBtn) {
+      wakeBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = wakeBtn.getAttribute('data-session-id') || '';
+        if (!sid) return;
+        wakeCodexSession(sid, wakeBtn, { view });
+      });
+    }
     view.appendChild(banner);
   }
 
@@ -37881,6 +37935,7 @@
     if (compactBoundary) {
       // The compact boundary proves the pending compact turn is over.
       clearOptimisticAgentIndicator($view);
+      clearLiveGeneratingIndicator($view);
       if (currentSession.id) clearSessionSending(currentSession.id);
       const sid = compactBoundary.session || (currentSession && currentSession.id) || '';
       if (sid && currentSession && currentSession.id === sid) fetchSessionUsage(sid);
@@ -37914,12 +37969,14 @@
     );
     if (_agentReplied) {
       clearOptimisticAgentIndicator($view);
+      clearLiveGeneratingIndicator($view);
       if (currentSession.id) clearSessionSending(currentSession.id);
     } else {
       const _optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
       if (_optimistic && _optimistic !== $view.lastElementChild) {
         $view.appendChild(_optimistic);
       }
+      _anchorWakeBreakdown($view);
     }
     // Re-evaluate the end-of-session outcome banner now that the latest
     // events are painted (covers error tool-results and mid-action stops).
@@ -43071,19 +43128,20 @@
         if (data.ok) {
           $kptNewSession.value = '';
           $kptRunBtn.textContent = engine === 'antigravity' ? 'Started!' : 'Spawned!';
-          // Swap the temp-pid key for the real pid so the next /api/sessions
+          // Swap the temp-pid key for the real spawn id so the next /api/sessions
           // poll can match by spawn_pid and replace the placeholder with the
           // real card. Without this the placeholder sits on the board until
           // the 30s auto-cleanup fires.
-          if (data.pid) {
+          const realSpawnId = data.spawn_id || data.pid;
+          if (realSpawnId) {
             const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
             if (placeholder) {
-              placeholder.spawn_pid = data.pid;
+              placeholder.spawn_pid = realSpawnId;
               // Fire-and-watch engines stash the log path so the
               // right-pane renderer can fetch /api/sessions/spawned/<pid>/log.
               if (spawnUsesLogPlaceholder(engine) && data.log) placeholder.agent_log_path = data.log;
               pendingSpawns.delete(tempPid);
-              pendingSpawns.set(data.pid, placeholder);
+              pendingSpawns.set(realSpawnId, placeholder);
             }
           }
           // Tight poll schedule so the real card replaces the placeholder fast.
@@ -47087,7 +47145,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        insertPendingSpawnCard(data.pid, subject, false, null, {
+        insertPendingSpawnCard(data.spawn_id || data.pid, subject, false, null, {
           first_message: body,
           repo_path: repoPath,
           folder_path: repoPath,
@@ -47282,7 +47340,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
+        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);
         assignSpawnedSessionToDefaultObject(data);
         // Fire-and-watch engines can stream their spawn log once the real pid
         // is known. Re-select the same placeholder id so fetchConversationEvents

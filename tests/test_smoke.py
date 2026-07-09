@@ -831,7 +831,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function ensureNewSessionDefaultObject()", app_js)
         self.assertIn("function assignSpawnedSessionToDefaultObject(data)", app_js)
         self.assertIn("function reconcilePendingNewSessionObjectAssignments()", app_js)
-        self.assertIn("const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);", spawn_block)
+        self.assertIn("const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);", spawn_block)
         self.assertIn("assignSpawnedSessionToDefaultObject(data);", spawn_block)
         self.assertNotIn("assignSpawnedSessionToDefaultObject(data);", draft_block)
         self.assertIn("_objectsApiPost('assign', { session_node_id: flowNodeKey('session', sid), object_id: objectId })", app_js)
@@ -3818,6 +3818,29 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("settleStaleOptimisticAgentIndicator($view);", app_js)
         self.assertIn(".conv-live-tool-inline.is-stale-no-process", app_css)
 
+    def test_live_inline_indicator_is_singleton(self):
+        """A refreshed live status tick should not leave stacked Generating rows."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function getSingleLiveToolInline($view)", app_js)
+        self.assertIn("const nodes = Array.from($view.querySelectorAll('.conv-live-tool-inline:not(.optimistic):not(.is-wake-status):not(.wake-breakdown)'));", app_js)
+        self.assertIn("const keep = nodes[nodes.length - 1];", app_js)
+        self.assertIn("nodes.forEach(node => { if (node !== keep) node.remove(); });", app_js)
+        self.assertIn("let _doneInline = getSingleLiveToolInline($view);", app_js)
+        self.assertIn("let inline = getSingleLiveToolInline($view);", app_js)
+        self.assertIn("inline !== $view.lastElementChild", app_js)
+
+    def test_codex_wake_status_does_not_stack_with_generating(self):
+        """Codex wake rows own their progress UI and should not stack with Generating."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn(".conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown", app_js)
+        self.assertIn("function clearLiveGeneratingIndicator($view)", app_js)
+        self.assertIn("function _anchorWakeBreakdown($view)", app_js)
+        self.assertIn("const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');", app_js)
+        self.assertIn("if (hasWakeProgress) {", app_js)
+        self.assertIn("clearLiveGeneratingIndicator($view);", app_js)
+
     def test_mobile_live_command_indicator_collapses_command_detail(self):
         """Mobile should show a compact Bash/tool pill instead of a multi-line
         command block at the bottom of the conversation pane."""
@@ -4381,6 +4404,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-pending-spawn-retry", app_js)
         self.assertIn("data-pending-spawn-dismiss", app_js)
         self.assertIn("const spawnFailed = c.spawn_failed ? ' spawn-failed' : '';", app_js)
+
+    def test_spawn_adoption_accepts_spawn_id_without_pid(self):
+        """App-server Codex spawns use synthetic spawn ids rather than OS pids."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log)", app_js)
+        self.assertIn("const realSpawnId = data.spawn_id || data.pid;", app_js)
+        self.assertIn("insertPendingSpawnCard(data.spawn_id || data.pid, subject", app_js)
 
     def test_slash_command_args_surface_in_user_text(self):
         """A /command user turn must render "/cmd <args>", not a bare "/cmd".
@@ -8002,7 +8032,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server,
                 "_resolve_codex_bin",
                 return_value={"available": True, "bin": "/usr/bin/codex-test"},
-            ), mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+            ), mock.patch.dict(os.environ, {"CCC_CODEX_SPAWN_APP_SERVER": "0"}), \
+                 mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
                  mock.patch.object(server, "_record_spawn_to_registry"):
                 result = server.spawn_session_codex(
                     f"inspect this screenshot {image}",
@@ -8022,6 +8053,103 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("--image", cmd)
         self.assertEqual(cmd[cmd.index("--image") + 1], str(image))
 
+    def test_spawn_session_codex_uses_app_server_when_available(self):
+        """Fresh Codex sessions should prefer app-server thread/start."""
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        calls = []
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        def fake_request(method, params=None, timeout=20):
+            calls.append((method, params or {}))
+            if method == "thread/start":
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}, "turns": []}}}
+            if method == "thread/name/set":
+                return {"result": {}}
+            if method == "turn/start":
+                server._codex_app_server_handle_message({
+                    "jsonrpc": "2.0",
+                    "method": "turn/started",
+                    "params": {"threadId": sid, "turn": {"id": "turn-1"}},
+                })
+                return {"result": {"turn": {"id": "turn-1"}}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        try:
+            with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+                 mock.patch.object(server, "_codex_app_server_transport_kind", return_value="managed"), \
+                 mock.patch.object(server, "_mark_codex_thread_user_visible", return_value=True), \
+                 mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
+                 mock.patch.object(server, "_record_spawn_to_registry") as registry, \
+                 mock.patch.object(server.subprocess, "Popen", side_effect=AssertionError("exec fallback should not run")), \
+                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1"}):
+                result = server.spawn_session_codex(
+                    "say ok",
+                    name="app spawn",
+                    repo_path=str(self.repo),
+                )
+                rows = server.list_spawned_sessions()
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "codex-app-spawn")
+        self.assertEqual(result["session_id"], sid)
+        self.assertFalse(result["session_id_pending"])
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["confirmation_source"], "app-server-notification")
+        self.assertEqual(result["app_server_transport"], "managed")
+        self.assertTrue(str(result["spawn_id"]).startswith("codex-app-"))
+        self.assertEqual(result["pid"], result["spawn_id"])
+        self.assertEqual([method for method, _ in calls], ["thread/start", "thread/name/set", "turn/start"])
+
+        start_params = calls[0][1]
+        self.assertEqual(start_params["cwd"], str(self.repo))
+        self.assertEqual(start_params["runtimeWorkspaceRoots"], [str(self.repo)])
+        self.assertEqual(start_params["approvalPolicy"], "never")
+        self.assertEqual(start_params["sandbox"], "danger-full-access")
+        self.assertEqual(start_params["model"], "gpt-5.5")
+        self.assertEqual(start_params["config"]["model_context_window"], 1000000)
+
+        name_params = calls[1][1]
+        self.assertEqual(name_params, {"threadId": sid, "name": "app-spawn"})
+
+        turn_params = calls[2][1]
+        self.assertEqual(turn_params["threadId"], sid)
+        self.assertEqual(turn_params["cwd"], str(self.repo))
+        self.assertEqual(turn_params["input"], [{"type": "text", "text": "say ok"}])
+        self.assertEqual(turn_params["approvalPolicy"], "never")
+        self.assertEqual(turn_params["sandboxPolicy"], {"type": "dangerFullAccess"})
+        registry.assert_not_called()
+        self.assertEqual(rows[0]["spawn_id"], result["spawn_id"])
+        self.assertEqual(rows[0]["pid"], result["pid"])
+        self.assertEqual(rows[0]["session_id"], sid)
+        self.assertTrue(rows[0]["running"])
+        registry = json.loads(server.CODEX_THREAD_REGISTRY_FILE.read_text())
+        reg_thread = registry["threads"][sid]
+        self.assertFalse(registry["authoritative"])
+        self.assertEqual(reg_thread["thread_id"], sid)
+        self.assertEqual(reg_thread["engine"], "codex")
+        self.assertEqual(reg_thread["visibility"], "user-visible")
+        self.assertEqual(reg_thread["transport_owner"], "ccc-managed-app-server")
+        self.assertEqual(reg_thread["transport"], "managed")
+        self.assertEqual(reg_thread["cwd"], str(self.repo))
+        self.assertEqual(reg_thread["repo_path"], str(self.repo))
+        self.assertEqual(reg_thread["model"], "gpt-5.5")
+        self.assertEqual(reg_thread["title"], "app-spawn")
+        self.assertEqual(reg_thread["ccc"]["spawn_id"], result["spawn_id"])
+
     def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
         """Default Codex spawns should prefer 5.5 while requesting max context."""
         server = self.server
@@ -8032,7 +8160,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
             try:
-                with mock.patch.dict(os.environ, {}, clear=True), \
+                with mock.patch.dict(os.environ, {"CCC_CODEX_SPAWN_APP_SERVER": "0"}, clear=True), \
                      mock.patch.object(
                          server,
                          "_resolve_codex_bin",
@@ -8663,6 +8791,82 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(state["last_completed_turn_id"], "turn-active")
         self.assertNotIn("active_turn_id", state)
 
+    def test_codex_app_server_item_activity_feeds_live_ui_fields(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-active"}},
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/started",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "startedAtMs": 1783600000000,
+                "item": {
+                    "id": "item-shell",
+                    "type": "commandExecution",
+                    "status": "inProgress",
+                    "cwd": str(self.repo),
+                    "command": "python3 -m pytest tests/test_smoke.py -q",
+                    "commandActions": [],
+                },
+            },
+        })
+
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_item"]["tool"], "Bash")
+        self.assertIn("pytest", state["active_item"]["detail"])
+        fields = server._codex_app_server_activity_fields(sid)
+        self.assertEqual(fields["sidecar_status"], "active")
+        self.assertEqual(fields["sidecar_tool"], "Bash")
+        self.assertIn("pytest", fields["sidecar_file"])
+        self.assertTrue(fields["sidecar_in_flight"])
+        self.assertEqual(server._codex_state_fields(sid)["codex_state"], "working")
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/completed",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "completedAtMs": 1783600005000,
+                "item": {
+                    "id": "item-shell",
+                    "type": "commandExecution",
+                    "status": "completed",
+                    "cwd": str(self.repo),
+                    "command": "python3 -m pytest tests/test_smoke.py -q",
+                    "commandActions": [],
+                    "exitCode": 0,
+                    "aggregatedOutput": "1 passed",
+                },
+            },
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertNotIn("active_item", state)
+        self.assertEqual(state["recent_items"][-1]["tool"], "Bash")
+        self.assertIn("1 passed", state["recent_items"][-1]["output"])
+        self.assertEqual(server._codex_app_server_activity_fields(sid)["sidecar_tool"], "Thinking")
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/completed",
+            "params": {"threadId": sid, "turnId": "turn-active"},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertNotIn("active_item", state)
+        self.assertIsNone(server._codex_app_server_activity_fields(sid)["sidecar_tool"])
+
     def test_codex_app_server_wake_confirms_from_notification(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -8716,6 +8920,188 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["warning"], "turn accepted but no app-server events observed")
+
+    def test_codex_app_server_notifications_persist_state_snapshot(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        old_file = server.CODEX_APP_SERVER_STATE_FILE
+        state_file = pathlib.Path(self.tmp_home) / "codex-app-server-state.json"
+        server.CODEX_APP_SERVER_STATE_FILE = state_file
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+        try:
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "turn/started",
+                "params": {"threadId": sid, "turn": {"id": "turn-1"}},
+            })
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "thread/tokenUsage/updated",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-1",
+                    "tokenUsage": {"inputTokens": 10, "outputTokens": 2},
+                },
+            })
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "turn/completed",
+                "params": {"threadId": sid, "turnId": "turn-1"},
+            })
+            payload = json.loads(state_file.read_text())
+        finally:
+            server.CODEX_APP_SERVER_STATE_FILE = old_file
+
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertFalse(payload["authoritative"])
+        self.assertEqual(payload["source"], "codex-app-server-notifications")
+        thread = payload["threads"][sid]
+        self.assertEqual(thread["status"], "idle")
+        self.assertEqual(thread["last_completed_turn_id"], "turn-1")
+        self.assertEqual(thread["token_usage"], {"inputTokens": 10, "outputTokens": 2})
+        self.assertNotIn("active_turn_id", thread)
+
+    def test_codex_telemetry_append_writes_jsonl(self):
+        server = self.server
+        old_file = server.CODEX_TELEMETRY_FILE
+        telemetry_file = pathlib.Path(self.tmp_home) / "codex-telemetry.jsonl"
+        server.CODEX_TELEMETRY_FILE = telemetry_file
+        try:
+            server._codex_telemetry_append(
+                "codex_metric_test",
+                ok=True,
+                none_value=None,
+                latency_ms=1.5,
+            )
+            payload = json.loads(telemetry_file.read_text().strip())
+        finally:
+            server.CODEX_TELEMETRY_FILE = old_file
+
+        self.assertEqual(payload["event"], "codex_metric_test")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["latency_ms"], 1.5)
+        self.assertNotIn("none_value", payload)
+
+    def test_codex_app_server_wake_records_latency_telemetry(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        old_file = server.CODEX_TELEMETRY_FILE
+        telemetry_file = pathlib.Path(self.tmp_home) / "codex-telemetry.jsonl"
+        server.CODEX_TELEMETRY_FILE = telemetry_file
+
+        def fake_request(method, params=None, timeout=20):
+            if method == "thread/resume":
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}, "turns": []}}}
+            if method == "turn/start":
+                return {"result": {"turn": {"id": "turn-next"}}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        try:
+            with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+                 mock.patch.object(server, "_codex_app_server_is_live", return_value=True), \
+                 mock.patch.object(server, "_codex_app_server_transport_kind", return_value="managed"), \
+                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0"}):
+                result = server._codex_resume_or_steer_via_app_server(
+                    sid,
+                    "wake",
+                    cwd=str(self.repo),
+                    model="gpt-test",
+                )
+            events = [json.loads(line) for line in telemetry_file.read_text().splitlines()]
+        finally:
+            server.CODEX_TELEMETRY_FILE = old_file
+            server._CODEX_TELEMETRY_TURNS.pop("turn-next", None)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("resume_ms", result)
+        self.assertIn("turn_start_ms", result)
+        self.assertIn("confirm_ms", result)
+        wake = next(e for e in events if e["event"] == "codex_wake")
+        self.assertTrue(wake["ok"])
+        self.assertTrue(wake["app_server_warm"])
+        self.assertEqual(wake["transport"], "managed")
+        self.assertEqual(wake["session_id"], sid)
+        self.assertEqual(wake["turn_id"], "turn-next")
+        self.assertGreaterEqual(wake["resume_ms"], 0)
+        self.assertGreaterEqual(wake["turn_start_ms"], 0)
+        self.assertGreaterEqual(wake["total_ms"], wake["resume_ms"])
+
+    def test_codex_app_server_notification_records_visible_output_telemetry(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        old_file = server.CODEX_TELEMETRY_FILE
+        telemetry_file = pathlib.Path(self.tmp_home) / "codex-telemetry.jsonl"
+        server.CODEX_TELEMETRY_FILE = telemetry_file
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+        try:
+            server._codex_telemetry_register_turn(
+                sid,
+                "turn-1",
+                path="wake",
+                started_at_monotonic=time.monotonic() - 0.01,
+                transport="managed",
+                cwd=str(self.repo),
+                model="gpt-test",
+            )
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "item/agentMessage/delta",
+                "params": {"threadId": sid, "turnId": "turn-1", "delta": "hello"},
+            })
+            events = [json.loads(line) for line in telemetry_file.read_text().splitlines()]
+        finally:
+            server.CODEX_TELEMETRY_FILE = old_file
+            server._CODEX_TELEMETRY_TURNS.pop("turn-1", None)
+
+        self.assertEqual(
+            [e["event"] for e in events],
+            ["codex_turn_first_notification", "codex_turn_first_visible_output"],
+        )
+        self.assertEqual(events[0]["thread_id"], sid)
+        self.assertEqual(events[0]["turn_id"], "turn-1")
+        self.assertEqual(events[0]["transport"], "managed")
+        self.assertGreaterEqual(events[0]["latency_ms"], 0)
+
+    def test_codex_thread_registry_feeds_spawn_registry_fallback(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        old_file = server.CODEX_THREAD_REGISTRY_FILE
+        registry_file = pathlib.Path(self.tmp_home) / "codex-thread-registry.json"
+        server.CODEX_THREAD_REGISTRY_FILE = registry_file
+        try:
+            server._codex_thread_registry_upsert(
+                sid,
+                source="wt-workers",
+                visibility="worker",
+                transport_owner="wt-codex-exec",
+                transport="codex-exec",
+                cwd=str(self.repo),
+                repo_path=str(self.repo),
+                worker_id="q-12345678",
+                queue="Q",
+                ref="Q-1",
+                model="gpt-test",
+                wt={"worker_id": "q-12345678", "log": "/tmp/q.log"},
+            )
+            entries = server._spawn_registry_entries_by_session(engine="codex")
+        finally:
+            server.CODEX_THREAD_REGISTRY_FILE = old_file
+
+        self.assertIn(sid, entries)
+        self.assertTrue(entries[sid]["codex_thread_registry"])
+        self.assertEqual(entries[sid]["engine"], "codex")
+        self.assertEqual(entries[sid]["cwd"], str(self.repo))
+        self.assertEqual(entries[sid]["worker_id"], "q-12345678")
+        self.assertEqual(entries[sid]["queue"], "Q")
+        self.assertEqual(entries[sid]["ref"], "Q-1")
+        self.assertEqual(entries[sid]["model"], "gpt-test")
 
     def test_codex_app_server_prefers_managed_socket(self):
         server = self.server
@@ -11855,6 +12241,18 @@ class TestCodexStateWiring(unittest.TestCase):
         self.assertIn("flow-chip.offline", css)
         self.assertIn("conv-codex-state", css)
 
+    def test_outcome_banner_offers_codex_wakeup(self):
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent
+        js = (root / "static" / "app.js").read_text()
+        css = (root / "static" / "app.css").read_text()
+
+        self.assertIn("async function wakeCodexSession(sessionId, feedbackEl, opts)", js)
+        self.assertIn("renderConvWakeOutcome(opts.view, data);", js)
+        self.assertIn("data-role=\"outcome-wake-codex\"", js)
+        self.assertIn("wakeCodexSession(sid, wakeBtn, { view });", js)
+        self.assertIn(".conv-outcome-banner .cob-wake-btn", css)
+
 
 class TestSpawnReturnAddress(unittest.TestCase):
     """The 'return address' lets a spawned session report back to its
@@ -12317,6 +12715,58 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
         self.assertIn("--no-queue", argv)
         env = run.call_args[1].get("env") or {}
         self.assertEqual(env.get("WATCHTOWER_DELEGATE_URL"), "off")
+
+    def test_send_hook_requires_parseable_ok_json_for_delivered(self):
+        """A zero exit from `wt send --json` is not enough to call delivery
+        confirmed. CCC needs parseable JSON with ok:true; otherwise it falls
+        through to its native path instead of showing a delivered WT state."""
+        done = mock.Mock(returncode=0, stdout="not json")
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "wt"}), \
+             mock.patch("shutil.which", return_value="/usr/local/bin/wt"), \
+             mock.patch.object(self.server.subprocess, "run", return_value=done):
+            self.server._WT_CLI_PATH_CACHE = None
+            result = self.server._try_wt_send_for_headless_delivery("sid-123", "hi")
+        self.assertIsNone(result)
+
+    def test_send_hook_surfaces_wt_queued_json_as_queued_not_delivered(self):
+        """If WT ever reports queued, CCC must surface queued/outbox state and
+        must not convert that into via=wt-send delivered feedback."""
+        done = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "ok": False,
+                "queued": True,
+                "id": "msg-123",
+                "error": "session busy",
+            }),
+        )
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "wt"}), \
+             mock.patch("shutil.which", return_value="/usr/local/bin/wt"), \
+             mock.patch.object(self.server.subprocess, "run", return_value=done):
+            self.server._WT_CLI_PATH_CACHE = None
+            result = self.server._try_wt_send_for_headless_delivery("sid-123", "hi")
+        self.assertEqual(result["via"], "wt-send-queued")
+        self.assertTrue(result["queued"])
+        self.assertEqual(result["id"], "msg-123")
+        self.assertIn("session busy", result["queued_reason"])
+
+    def test_send_hook_maps_ok_json_to_wt_send_with_receipt(self):
+        done = mock.Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "ok": True,
+                "transport": "resume",
+                "receipt_id": "rcpt-123",
+            }),
+        )
+        with mock.patch.dict(os.environ, {"CCC_MESSAGING_BACKEND": "wt"}), \
+             mock.patch("shutil.which", return_value="/usr/local/bin/wt"), \
+             mock.patch.object(self.server.subprocess, "run", return_value=done):
+            self.server._WT_CLI_PATH_CACHE = None
+            result = self.server._try_wt_send_for_headless_delivery("sid-123", "hi")
+        self.assertEqual(result["via"], "wt-send")
+        self.assertEqual(result["transport"], "resume")
+        self.assertEqual(result["receipt_id"], "rcpt-123")
 
     def test_ask_hook_noop_when_wt_missing(self):
         """Flag on but wt not on PATH -> _try_wt_ask_for_headless_delivery
