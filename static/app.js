@@ -18347,6 +18347,63 @@
     }
   }
 
+  function _convShouldLiveRevealNewText(opts) {
+    if (opts && (opts.initialLoad || opts.prepending)) return false;
+    if (_convReplayActive) return false;
+    try {
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+    } catch (_) {}
+    return true;
+  }
+
+  function _convLiveRevealContainersForEvent(eventEl) {
+    if (!eventEl || !eventEl.classList || !eventEl.classList.contains('assistant')) return [];
+    return Array.from(eventEl.children || []).filter(el =>
+      el.classList && el.classList.contains('assistant-text')
+    );
+  }
+
+  function _convLiveRevealNewText(eventEl, paneId, opts) {
+    if (!_convShouldLiveRevealNewText(opts)) return;
+    _convLiveRevealContainersForEvent(eventEl).forEach(container => {
+      if (!container || container.dataset.liveWordsWrapped) return;
+      const plain = (container.textContent || '').trim();
+      if (!plain) return;
+      const { html, count } = _wrapReplayWordsInHtml(container.innerHTML, 'conv-live-word');
+      if (!count) return;
+      container.innerHTML = html;
+      container.dataset.liveWordsWrapped = '1';
+      container.dataset.liveWordCount = String(count);
+      container.classList.add('conv-live-word-reveal');
+      _convLiveRevealWords(container, paneId, 0);
+    });
+  }
+
+  function _convLiveRevealWords(container, paneId, wordIdx) {
+    if (!container || !container.isConnected) return;
+    const count = Number(container.dataset.liveWordCount || 0);
+    if (wordIdx >= count) {
+      container.classList.remove('conv-live-word-reveal');
+      return;
+    }
+
+    const $view = getConvViewForPane(paneId) || $conversationsView;
+    const shouldStick = $view && isConversationAtBottom($view);
+    const span = container.querySelector(`.conv-live-word[data-run-id="${wordIdx}"]`);
+    if (span) {
+      span.style.display = '';
+      span.classList.add('gc-typing-shimmer');
+    }
+    if (shouldStick && $view) scrollConversationToEnd($view);
+
+    const totalMs = Math.max(900, Math.min(4500, (container.textContent || '').length * 4));
+    const perWord = Math.max(12, Math.min(220, totalMs / Math.max(1, count)));
+    setTimeout(() => {
+      if (span) span.classList.remove('gc-typing-shimmer');
+      _convLiveRevealWords(container, paneId, wordIdx + 1);
+    }, perWord);
+  }
+
   function startConvReplay(paneId) {
     const targetPaneId = paneId || activePaneId();
     // Two open panes each showing a real conversation → one Replay drives
@@ -37773,6 +37830,7 @@
         _currentToolGroup = null;
         _currentToolCount = 0;
         $view.appendChild(div);
+        if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);
       }
     }
     // Defensive sweep: a tool group whose body has no events renders as a

@@ -17743,7 +17743,8 @@ body:has(.gc-reader) .pwa-install-banner {
   background: var(--accent);
   color: #fff;
 }
-.gc-replay-word.gc-typing-shimmer {
+.gc-replay-word.gc-typing-shimmer,
+.conv-live-word.gc-typing-shimmer {
   background: linear-gradient(90deg, var(--text) 30%, var(--accent) 50%, var(--text) 70%);
   background-size: 200% 100%;
   -webkit-background-clip: text;

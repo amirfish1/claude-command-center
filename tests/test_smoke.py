@@ -3746,6 +3746,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("top: 2px;", meta_css)
         self.assertIn(".conversations-view .event.assistant .msg-ts { right: 104px; }", app_css)
 
+    def test_new_assistant_text_reveals_word_by_word(self):
+        """New assistant rows should reveal prose word-by-word without
+        replaying old transcript loads."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function _convShouldLiveRevealNewText(opts)", app_js)
+        self.assertIn("if (opts && (opts.initialLoad || opts.prepending)) return false;", app_js)
+        self.assertIn("if (_convReplayActive) return false;", app_js)
+        self.assertIn("_wrapReplayWordsInHtml(container.innerHTML, 'conv-live-word')", app_js)
+        self.assertIn("if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);", app_js)
+        self.assertIn(".conv-live-word.gc-typing-shimmer", app_css)
+
     def test_codex_silent_result_is_labeled_as_no_visible_response(self):
         """Codex task_complete rows can lack any assistant text. Those should
         not render as ordinary Done answers, which makes empty turns look like
