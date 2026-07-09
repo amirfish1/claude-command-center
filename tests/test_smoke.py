@@ -3565,6 +3565,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".uxq-td-title", app_css)
         self.assertIn(".uxq-detail-meta", app_css)
 
+    def test_queue_state_badges_explain_stuck(self):
+        """Queue health badges should answer what each compact state means."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("STUCK means this queue has open claimable work assigned to a worker/session", app_js)
+        self.assertIn("Stuck means this auto-drain queue has claimable open tickets", app_js)
+        self.assertIn('" aria-label="\' + escapeAttr(badgeTip)', app_js)
+        self.assertIn('" aria-label="\' + escapeAttr(stateTip)', app_js)
+
     def test_queue_detail_uses_watchtower_timeline_contract(self):
         """Ticket detail should come from WT timeline, not CCC's old private
         progress_notes/answers reconstruction."""

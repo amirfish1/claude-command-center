@@ -24390,15 +24390,29 @@
         const claimable = (q && q.claimable != null) ? Number(q.claimable) : depth;
         // Pill is derived client-side from the row's data fields (depth/auto_drain/
         // stuck/claimable) — no new server states. Idle (0 open) reads "Ready".
-        let stateLabel, stateCls;
-        if (stuck) { stateLabel = 'Stuck'; stateCls = 'is-stuck'; }
-        else if (depth === 0) { stateLabel = 'Ready'; stateCls = 'is-ready'; }
-        else if (drainOn && claimable > 0) { stateLabel = 'Draining'; stateCls = 'is-draining'; }
-        else { stateLabel = 'Backlog'; stateCls = 'is-backlog'; }
+        let stateLabel, stateCls, stateTip;
+        if (stuck) {
+          stateLabel = 'Stuck';
+          stateCls = 'is-stuck';
+          stateTip = 'Stuck means this auto-drain queue has claimable open tickets but no live WatchTower worker is currently draining them.';
+        } else if (depth === 0) {
+          stateLabel = 'Ready';
+          stateCls = 'is-ready';
+          stateTip = 'Ready means this queue has no open tickets.';
+        } else if (drainOn && claimable > 0) {
+          stateLabel = 'Draining';
+          stateCls = 'is-draining';
+          stateTip = 'Draining means auto-drain is on and claimable tickets are waiting for a worker.';
+        } else {
+          stateLabel = 'Backlog';
+          stateCls = 'is-backlog';
+          stateTip = 'Backlog means this queue has open tickets, but auto-drain is off or no open tickets match the claim-type filter.';
+        }
         const progress = closed + '/' + total;
         const tip = label + ': ' + progress + ' done · ' + depth + ' open · '
           + workers + ' worker' + (workers === 1 ? '' : 's')
-          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + stateLabel;
+          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + stateLabel
+          + ' — ' + stateTip;
         const meta = '<span class="ceq-meta">'
           + '<span class="ceq-depth">' + escapeHtml(progress) + '</span>'
           + '<span class="ceq-sep">·</span>'
@@ -24406,7 +24420,7 @@
           + '<span class="ceq-sep">·</span>'
           + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
           + '</span>'
-          + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(stateLabel) + '</span>';
+          + '<span class="ceq-state ' + stateCls + '" title="' + escapeAttr(stateTip) + '" aria-label="' + escapeAttr(stateTip) + '">' + escapeHtml(stateLabel) + '</span>';
         return '<div class="conv-evergreen-queue-header" role="button" tabindex="0"'
           + ' data-queue-name="' + escapeAttr(label) + '"'
           + ' title="' + escapeAttr(tip + ' — click to open queue') + '">'
@@ -30999,18 +31013,19 @@
         const badgeText = reallyStuck ? 'STUCK'
           : (waiting ? 'WAITING'
              : (parked ? 'PARKED' : (drained ? 'CLEAR' : 'LIVE')));
+        const stuckTip = 'STUCK means this queue has open claimable work assigned to a worker/session, but no live WatchTower worker is currently draining it.';
         const badgeTip = reallyStuck
-          ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
-          : (waiting ? 'open tickets — no worker assigned yet'
-             : (parked ? depth + ' open, none claimable — filtered by claim types'
-                : (drained ? 'drained — recently active, no open tickets' : 'a worker is on it')));
+          ? (stuckTip + (canNudge ? ' Click to nudge that worker.' : ' No reachable worker is available to nudge.'))
+          : (waiting ? 'WAITING means this queue has open tickets, but no worker is assigned yet.'
+             : (parked ? 'PARKED means this queue has ' + depth + ' open ticket(s), but none match the current claim-type filter.'
+                : (drained ? 'CLEAR means this queue was recently active and now has no open tickets.' : 'LIVE means a WatchTower worker is currently draining this queue.')));
         const badgeCls = reallyStuck ? 'is-stuck'
           : (waiting ? 'is-waiting'
              : (parked ? 'is-clear' : (drained ? 'is-clear' : 'is-live')));
         const badge = '<span class="fq-health-badge ' + badgeCls
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
-          + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
+          + ' title="' + escapeAttr(badgeTip) + '" aria-label="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
         const autoDrain = _drainByQueue.has(project.toUpperCase())
           ? _drainByQueue.get(project.toUpperCase())
           : !!r.auto_drain;
