@@ -2494,15 +2494,23 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("annCaptureDomRegionB64(contextRect, captureElement)", persist_body)
         self.assertNotIn("annotationState.overlay.classList.add('ann-capturing')", persist_body)
 
-    def test_annotation_empty_pre_editor_capture_allows_native_fallback(self):
-        """A failed DOM/tab pre-capture should not suppress server screenshot fallback."""
+    def test_annotation_empty_pre_editor_capture_uses_capability_gated_native_fallback(self):
+        """A failed DOM/tab pre-capture falls back only when native screenshots exist."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         build_start = app_js.index("function annBuildPayload(note, screenshotB64)")
         build_body = app_js[build_start:app_js.index("function annStop()", build_start)]
-        self.assertIn("capture_screen: !screenshotB64,", build_body)
+        self.assertIn("const canNativeScreenshot = caps.screenshots !== false;", build_body)
+        self.assertIn("capture_screen: !screenshotB64 && canNativeScreenshot,", build_body)
         self.assertNotIn("capture_screen: !(annotationState && annotationState.preEditorCaptureAttempted)", build_body)
         self.assertNotIn("preEditorCaptureAttempted", build_body)
+
+    def test_annotation_controls_split_page_and_native_capture_capabilities(self):
+        """The page Annotate button stays available when native screenshots do not."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn(".ccc-no-screenshots #annotationScreenBtn", app_css)
+        self.assertIn(".ccc-no-annotate [data-flow-action=\"annotate\"]", app_css)
+        self.assertNotIn(".ccc-no-annotate #annotationStartBtn", app_css)
 
     def test_annotation_editor_previews_pre_dialog_screenshot(self):
         """The annotation editor should show the screenshot that was captured
@@ -4501,12 +4509,13 @@ class TestLinuxCapabilities(unittest.TestCase):
                     "openBrowser", "notifications"):
             self.assertTrue(caps[key], f"{key} should be True on Darwin")
 
-    def test_capabilities_all_false_on_linux(self):
+    def test_capabilities_hide_native_desktop_features_on_linux(self):
         server = self._server()
         with mock.patch.object(server.platform, "system", return_value="Linux"):
             caps = server._platform_capabilities()
         self.assertEqual(caps["platform"], "linux")
-        for key in ("screenshots", "annotate", "terminalJump", "launchTerminal",
+        self.assertTrue(caps["annotate"], "page annotations should be cross-platform")
+        for key in ("screenshots", "terminalJump", "launchTerminal",
                     "folderPicker", "desktopDeepLinks", "revealFile",
                     "openBrowser", "notifications"):
             self.assertFalse(caps[key], f"{key} should be False on Linux")

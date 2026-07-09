@@ -54171,19 +54171,18 @@ def compute_attention_items(repo_path, include_all=False):
 
 
 def _platform_capabilities():
-    """Desktop conveniences that only work on macOS today.
+    """Report platform-specific UI capabilities.
 
-    The frontend hides the matching control when a flag is false, so a
-    Linux / Windows / headless user never sees a button that does nothing.
-    Every flag is True on Darwin (no behavior change) and False elsewhere.
-    One flag drives both the server-side stub and the UI visibility, so there
-    is no per-desktop-environment code. See docs/linux-support-plan.md.
+    Page annotations are browser-native and can save URL / selector / text
+    anchors on any platform. Native desktop helpers remain macOS-only; the
+    frontend hides those controls when their flags are false so users never
+    see buttons that only return a stub.
     """
     is_mac = platform.system() == "Darwin"
     return {
         "platform": platform.system().lower(),
         "screenshots": is_mac,        # bug-report / annotation capture
-        "annotate": is_mac,           # Flow annotate (window capture)
+        "annotate": True,             # browser-page DOM picker
         "terminalJump": is_mac,       # bring the session's terminal to front
         "launchTerminal": is_mac,     # open a session in a visible terminal
         "folderPicker": is_mac,       # native GUI folder chooser

@@ -44519,6 +44519,8 @@
       bg_pid: _ls.bgPid || null,
       tty: _ls.tty || null,
     };
+    const caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
+    const canNativeScreenshot = caps.screenshots !== false;
     const payload = {
       note,
       url: window.location.href,
@@ -44531,7 +44533,7 @@
       screen,
       element: annElementSummary(element),
       live_status: liveStatusSnapshot,
-      capture_screen: !screenshotB64,
+      capture_screen: !screenshotB64 && canNativeScreenshot,
     };
     if (screenshotB64) payload.screenshot_b64 = screenshotB64;
     return payload;

@@ -16948,6 +16948,9 @@ body:has(.gc-reader) .pwa-install-banner {
 .ccc-no-screenshots #bugReportShotSection {
   display: none !important;
 }
+.ccc-no-screenshots #annotationScreenBtn {
+  display: none !important;
+}
 .ccc-no-annotate [data-flow-action="annotate"] {
   display: none !important;
 }
