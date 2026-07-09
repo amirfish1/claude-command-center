@@ -18365,6 +18365,14 @@
     return true;
   }
 
+  const CONV_LIVE_REVEAL_BOTTOM_EPSILON = 2;
+  function _convShouldLiveRevealStickToBottom(view) {
+    // Live reveal grows the transcript every few milliseconds. Use an exact
+    // tail check, not the generous normal bottom tolerance, so a manual scroll
+    // immediately releases auto-follow.
+    return !!(view && conversationDistanceFromBottom(view) <= CONV_LIVE_REVEAL_BOTTOM_EPSILON);
+  }
+
   function _convLiveRevealContainersForEvent(eventEl) {
     if (!eventEl || !eventEl.classList || !eventEl.classList.contains('assistant')) return [];
     return Array.from(eventEl.children || []).filter(el =>
@@ -18397,13 +18405,14 @@
     }
 
     const $view = getConvViewForPane(paneId) || $conversationsView;
-    const shouldStick = $view && isConversationAtBottom($view);
+    const shouldStick = _convShouldLiveRevealStickToBottom($view);
     const span = container.querySelector(`.conv-live-word[data-run-id="${wordIdx}"]`);
     if (span) {
       span.style.display = '';
       span.classList.add('gc-typing-shimmer');
     }
     if (shouldStick && $view) scrollConversationToEnd($view);
+    else if ($view) updateConversationEndAffordance($view);
 
     const totalMs = Math.max(900, Math.min(4500, (container.textContent || '').length * 4));
     const perWord = Math.max(12, Math.min(220, totalMs / Math.max(1, count)));

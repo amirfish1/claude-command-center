@@ -3771,6 +3771,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (opts && (opts.initialLoad || opts.prepending)) return false;", app_js)
         self.assertIn("if (_convReplayActive) return false;", app_js)
         self.assertIn("_wrapReplayWordsInHtml(container.innerHTML, 'conv-live-word')", app_js)
+        self.assertIn("const CONV_LIVE_REVEAL_BOTTOM_EPSILON = 2;", app_js)
+        self.assertIn("function _convShouldLiveRevealStickToBottom(view)", app_js)
+        self.assertIn("conversationDistanceFromBottom(view) <= CONV_LIVE_REVEAL_BOTTOM_EPSILON", app_js)
+        self.assertIn("const shouldStick = _convShouldLiveRevealStickToBottom($view);", app_js)
         self.assertIn("if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);", app_js)
         self.assertIn(".conv-live-word.gc-typing-shimmer", app_css)
 
