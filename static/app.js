@@ -24489,12 +24489,29 @@
       // place until a real (>5min) gap opens up.
       const _CUR_HYST_S = 5 * 60;
       const _CUR_ORDER_KEY = 'ccc-current-sessions-order';
-      const _curId = (c) => c.session_id || c.id;
+      const _currentSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+      const _currentSessionParentId = (c) =>
+        String((c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)) || '').trim();
+      const _currentSessionIsEndedSpawnChild = (c) => {
+        if (!_currentSessionParentId(c)) return false;
+        const source = String((c && c.source) || '').trim().toLowerCase();
+        const engine = String((c && c.engine) || '').trim().toLowerCase();
+        // Hermes continuation rows are conversation lineage, not spawned worker rows.
+        if (source === 'hermes' || engine === 'hermes') return false;
+        if (c.is_live || c.pending_spawn || c.sidecar_in_flight || c.needs_approval || c.question_waiting) return false;
+        const state = String((c && c.state) || '').trim().toLowerCase();
+        return state === 'ended' || (!state && c.is_live === false);
+      };
+      const _curId = _currentSessionId;
       let _curPrevOrder = {};
       try { _curPrevOrder = JSON.parse(localStorage.getItem(_CUR_ORDER_KEY) || '{}'); } catch (_) {}
       const _currentSessionSource = _ipSearchActive
         ? (_visibleSessionConvs || []).slice()
-        : (_visibleSessionConvs || []).filter(c => !_evergreenSessionIds.has(c.session_id || c.id || ''));
+        : (_visibleSessionConvs || []).filter(c => {
+          if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;
+          if (_currentSessionIsEndedSpawnChild(c)) return false;
+          return true;
+        });
       const _currentSessions = _ipSearchActive
         ? _currentSessionSource
         : _currentSessionSource
@@ -24516,9 +24533,6 @@
           localStorage.setItem(_CUR_ORDER_KEY, JSON.stringify(_o));
         } catch (_) {}
       }
-      const _currentSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
-      const _currentSessionParentId = (c) =>
-        String((c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)) || '').trim();
       const _currentSessionsTreeRows = (rows) => {
         const byId = new Map();
         (rows || []).forEach(c => {

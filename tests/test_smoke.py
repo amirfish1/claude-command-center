@@ -1580,7 +1580,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (cid) _evergreenSessionIds.add(cid);", app_js)
         self.assertIn("const _currentSessionSource = _ipSearchActive", app_js)
         self.assertIn("? (_visibleSessionConvs || []).slice()", app_js)
-        self.assertIn(": (_visibleSessionConvs || []).filter(c => !_evergreenSessionIds.has(c.session_id || c.id || ''));", app_js)
+        self.assertTrue(
+            "if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;" in app_js,
+            "Current Sessions should exclude rows rendered in Triggered Workers.",
+        )
         self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionSource\n        : _currentSessionSource", app_js)
 
     def test_current_sessions_respect_inprogress_window_filter(self):
@@ -1724,6 +1727,31 @@ class TestServerImports(unittest.TestCase):
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn("--current-child-indent: calc(var(--current-child-depth, 1) * 14px);", current_css)
         self.assertIn("--conv-icon-left: calc(10px + var(--current-child-indent));", current_css)
+
+    def test_current_sessions_hide_ended_spawned_child_rows(self):
+        """Ended spawned children should not flood the Current sessions band."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertTrue(
+            "const _currentSessionIsEndedSpawnChild = (c) => {" in app_js,
+            "Current Sessions should define the ended spawned-child filter.",
+        )
+        self.assertTrue(
+            "if (source === 'hermes' || engine === 'hermes') return false;" in app_js,
+            "Hermes continuation rows should be exempt by actual source/engine only.",
+        )
+        self.assertTrue(
+            "if (c.is_live || c.pending_spawn || c.sidecar_in_flight || c.needs_approval || c.question_waiting) return false;" in app_js,
+            "Only genuinely live or waiting spawned children should stay in Current Sessions.",
+        )
+        self.assertTrue(
+            "if (_currentSessionIsEndedSpawnChild(c)) return false;" in app_js,
+            "Current Sessions should suppress ended spawned children outside search.",
+        )
+        self.assertTrue(
+            "? (_visibleSessionConvs || []).slice()" in app_js,
+            "Search should keep the full visible source list.",
+        )
 
     def test_by_objects_current_sessions_can_group_by_object(self):
         """The Current sessions band should have its own by-object toggle."""
