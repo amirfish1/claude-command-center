@@ -8745,6 +8745,36 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.kind, "stdio")
 
+    def test_codex_app_server_transport_kind_labels_managed_and_stdio(self):
+        server = self.server
+
+        class FakeTransport:
+            def __init__(self, kind):
+                self.kind = kind
+
+            def alive(self):
+                return True
+
+        with server._CODEX_APP_SERVER_LOCK:
+            old_transport = server._CODEX_APP_SERVER_TRANSPORT
+            old_initialized = server._CODEX_APP_SERVER_INITIALIZED
+            try:
+                server._CODEX_APP_SERVER_INITIALIZED = True
+                server._CODEX_APP_SERVER_TRANSPORT = FakeTransport("managed-unix")
+                self.assertEqual(server._codex_app_server_transport_kind(), "managed")
+                server._CODEX_APP_SERVER_TRANSPORT = FakeTransport("stdio")
+                self.assertEqual(server._codex_app_server_transport_kind(), "stdio")
+                server._CODEX_APP_SERVER_INITIALIZED = False
+                self.assertIsNone(server._codex_app_server_transport_kind())
+            finally:
+                server._CODEX_APP_SERVER_TRANSPORT = old_transport
+                server._CODEX_APP_SERVER_INITIALIZED = old_initialized
+
+    def test_codex_managed_app_server_ui_label_is_present(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("managed app-server", app_js)
+        self.assertIn("codex_app_server_transport", pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8"))
+
     def test_resume_codex_prefers_app_server_before_queued_cli_resume(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"

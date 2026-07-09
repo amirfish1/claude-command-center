@@ -2399,7 +2399,7 @@
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
-  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false };
   let liveStatusTimer = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
   // Separate 1s tick that just re-renders the live-tool strip + inline
@@ -3053,7 +3053,7 @@
   let _liveStatusFetchingKey = '';
   async function refreshLiveStatus() {
     if (!currentSession.id) {
-      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false };
       updateJumpButton();
       updateInputBar();
       return;
@@ -3089,6 +3089,8 @@
         codexFresh: !!data.codex_fresh,
         codexStateReason: data.codex_state_reason || '',
         codexAppServer: !!data.codex_app_server,
+        codexAppServerTransport: data.codex_app_server_transport || null,
+        codexManagedAppServer: !!data.codex_managed_app_server,
         staleToolCall: !!data.stale_tool_call,
         staleToolAgeS: data.stale_tool_age_s || 0,
         questionWaiting: !!data.question_waiting,
@@ -3185,7 +3187,7 @@
         codex_state_reason: data.codex_state_reason || '',
       });
     } catch (err) {
-      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -3898,7 +3900,10 @@
     // Success via the Codex app-server turn: keep an alive "resuming" indicator
     // that clears when the reply streams in (clearOptimisticAgentIndicator).
     if (data.ok && via === 'codex-app-turn') {
-      setOptimisticAgentThinking($view, '⏳ Codex resuming&hellip;');
+      const managed = data.app_server_transport === 'managed' || !!data.managed_app_server;
+      setOptimisticAgentThinking($view, managed
+        ? '⏳ Codex resuming via managed app-server&hellip;'
+        : '⏳ Codex resuming&hellip;');
       const wakeSid = data.session_id || (currentSession && currentSession.id);
       startCodexWakeBreakdown($view, wakeSid);
       return true;
@@ -3946,6 +3951,13 @@
       default: return name;
     }
   }
+  function _codexWakeTransportLabel(data) {
+    const transport = String((data && data.app_server_transport) || '');
+    if (transport === 'managed' || (data && data.managed_app_server)) return 'managed app-server';
+    if (transport === 'stdio') return 'private app-server';
+    if (transport) return transport + ' app-server';
+    return '';
+  }
   function _wakeInt(n) {
     try { return Number(n).toLocaleString(); } catch (_) { return String(n); }
   }
@@ -3984,6 +3996,8 @@
     const readout = document.createElement('div');
     readout.className = 'wb-readout';
     const parts = [];
+    const transportLabel = _codexWakeTransportLabel(data);
+    if (transportLabel) parts.push(transportLabel);
     if (data.model) parts.push(data.model);
     if (data.effort) parts.push(data.effort);
     if (data.input_tokens != null || data.output_tokens != null) {
@@ -5746,10 +5760,14 @@
         if (!showAppSrv) activeCodexAppSrv.classList.remove('live');
         if (showAppSrv) {
           const appLive = !!liveStatus.codexAppServer;
+          const managed = liveStatus.codexAppServerTransport === 'managed' || !!liveStatus.codexManagedAppServer;
+          const label = appLive ? (managed ? 'managed app-server' : 'app-server') : 'exec';
           activeCodexAppSrv.classList.toggle('live', appLive);
-          if (activeCodexAppSrvLabel) activeCodexAppSrvLabel.textContent = appLive ? 'app-server' : 'exec';
+          if (activeCodexAppSrvLabel) activeCodexAppSrvLabel.textContent = label;
           activeCodexAppSrv.title = appLive
-            ? 'CCC is driving this Codex session via its app-server (JSON-RPC); /compact and follow-ups append to the loaded thread.'
+            ? (managed
+                ? "CCC is driving this Codex session via Codex's managed app-server Unix socket."
+                : 'CCC is driving this Codex session via its private app-server fallback.')
             : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.';
         }
       }
@@ -21746,9 +21764,13 @@
     // its JSON-RPC app-server; exec = one-shot fallback.
     if (currentSession && currentSession.source === 'codex') {
       const appLive = !!ls.codexAppServer;
-      el.innerHTML = pill0(appLive, false, appLive ? 'app-server' : 'exec',
+      const managed = ls.codexAppServerTransport === 'managed' || !!ls.codexManagedAppServer;
+      const label = appLive ? (managed ? 'managed app-server' : 'app-server') : 'exec';
+      el.innerHTML = pill0(appLive, false, label,
         appLive
-          ? 'CCC is driving this Codex session via its app-server (JSON-RPC); /compact and follow-ups append to the loaded thread.'
+          ? (managed
+              ? "CCC is driving this Codex session via Codex's managed app-server Unix socket."
+              : 'CCC is driving this Codex session via its private app-server fallback.')
           : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.');
       return;
     }

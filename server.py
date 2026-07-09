@@ -18218,6 +18218,22 @@ def _codex_app_server_is_live():
     )
 
 
+def _codex_app_server_transport_kind():
+    """Return the active app-server transport label for UI/status surfaces."""
+    transport = _CODEX_APP_SERVER_TRANSPORT
+    if not (
+        transport is not None
+        and transport.alive()
+        and _CODEX_APP_SERVER_INITIALIZED
+    ):
+        return None
+    if transport.kind == "managed-unix":
+        return "managed"
+    if transport.kind == "stdio":
+        return "stdio"
+    return transport.kind
+
+
 def _codex_user_input(text, image_paths=None):
     items = [{"type": "text", "text": str(text or "")}]
     for image_path in image_paths or []:
@@ -18476,6 +18492,7 @@ def _codex_resume_or_steer_via_app_server(
             "warning": confirmation.get("warning"),
             "turn_id": _turn_id,
             "session_id": session_id,
+            "app_server_transport": _codex_app_server_transport_kind(),
         }
     if _codex_error_is_not_steerable(started):
         _err = _codex_error_text(started)
@@ -22836,6 +22853,7 @@ def build_codex_wake_status(session_id):
 
     snap = _codex_wake_rollout_snapshot(session_id)
     app_state = _codex_app_server_thread_state(session_id)
+    app_transport = _codex_app_server_transport_kind()
     ctx_used = snap.get("context_used")
     ctx_win = snap.get("context_window")
     ctx_pct = snap.get("context_pct")
@@ -22931,6 +22949,8 @@ def build_codex_wake_status(session_id):
         "input_tokens": snap.get("input_tokens"),
         "output_tokens": snap.get("output_tokens"),
         "app_server_state": app_state,
+        "app_server_transport": app_transport,
+        "managed_app_server": app_transport == "managed",
         "warning": warn.get("warning") if warn and float(warn.get("epoch") or 0.0) >= attempt_epoch else None,
         "elapsed_s": round(now - attempt_epoch, 1) if attempt_epoch else None,
         "outcome": outcome,
@@ -47896,6 +47916,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # live app-server (a Codex action would then lazily spawn one /
                 # fall back to one-shot `codex exec`). Read-only, cheap.
                 status["codex_app_server"] = _codex_app_server_is_live()
+                transport = _codex_app_server_transport_kind()
+                status["codex_app_server_transport"] = transport
+                status["codex_managed_app_server"] = transport == "managed"
             elif is_gemini_status:
                 path = _resolve_gemini_chat_path(sid)
                 tail = _extract_gemini_tail_meta(path) if path else {}
