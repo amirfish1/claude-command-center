@@ -10403,6 +10403,213 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn(".conversations-view .gc-message-body.assistant-text", css)
         self.assertIn(".gc-reader-input-row .tts-btn", css)
 
+    # ── Codex desktop↔CCC single-writer coordination ────────────────────────
+    def test_parse_lsof_open_rollouts_maps_pids_and_filters(self):
+        """`lsof -Fpn` field output → {rollout path: pid}. Only paths under
+        `/sessions/` ending `.jsonl` survive; pids map to the paths opened
+        under them; garbage/pid-less lines are ignored."""
+        server = self.server
+        output = "\n".join([
+            "n/orphan/sessions/early.jsonl",           # no pid yet → dropped
+            "p100",
+            "n/home/.codex/sessions/thread-a.jsonl",   # kept → 100
+            "n/home/.codex/config.toml",               # no /sessions/ → dropped
+            "n/home/.codex/sessions/notes.txt",        # /sessions/ but not .jsonl → dropped
+            "xgarbage-line",                            # unknown tag → ignored
+            "p200",
+            "n/var/sessions/thread-b.jsonl",           # kept → 200
+            "p",                                        # empty pid → ValueError → pid None
+            "n/late/sessions/thread-c.jsonl",          # pid None → dropped
+        ])
+        self.assertEqual(
+            server._parse_lsof_open_rollouts(output),
+            {
+                "/home/.codex/sessions/thread-a.jsonl": 100,
+                "/var/sessions/thread-b.jsonl": 200,
+            },
+        )
+        self.assertEqual(server._parse_lsof_open_rollouts(""), {})
+
+    def test_codex_thread_writer_snapshot_attribution(self):
+        """Pure writer attribution via injection kwargs (no subprocess/RPC)."""
+        server = self.server
+        now = 1_800_000_000.0
+        path = "/home/.codex/sessions/thread.jsonl"
+        recent = {"path": path, "mtime_ns": int((now - 1) * 1e9)}
+        old = {"path": path, "mtime_ns": int((now - 300) * 1e9)}
+
+        # recent rollout + desktop-attached + quiet app-state → desktop writer
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent, app_state={},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "desktop")
+        self.assertTrue(snap["external_active"])
+        self.assertTrue(snap["desktop_attached"])
+
+        # same, but nothing attached to a desktop app-server → external writer
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent, app_state={},
+            attached={}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "external")
+        self.assertTrue(snap["external_active"])
+        self.assertFalse(snap["desktop_attached"])
+
+        # CCC owns an active turn → ccc writer, never external (even recent mtime)
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent, app_state={"active_turn_id": "t1"},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "ccc")
+        self.assertFalse(snap["external_active"])
+
+        # a CCC-spawned `codex exec` child owns the thread → ccc writer
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent, app_state={},
+            attached={}, exec_child=True,
+        )
+        self.assertEqual(snap["writer"], "ccc")
+        self.assertFalse(snap["external_active"])
+
+        # recent rollout but CCC's own events are fresh → quiet, not external
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent,
+            app_state={"last_activity_at": now - 2},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertIsNone(snap["writer"])
+        self.assertFalse(snap["external_active"])
+
+        # stale rollout + desktop-attached → attached, but no active writer
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=old, app_state={},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertIsNone(snap["writer"])
+        self.assertFalse(snap["external_active"])
+        self.assertTrue(snap["desktop_attached"])
+
+    def test_resume_or_steer_gate_blocks_external_desktop_writer(self):
+        """A desktop turn in flight gates the CCC send to fallback:queue and
+        never reaches the app-server RPC."""
+        server = self.server
+        sid = "test-sid-gate"
+        with mock.patch.object(
+            server, "_codex_thread_writer_snapshot",
+            return_value={"writer": "desktop", "desktop_attached": True, "external_active": True},
+        ), mock.patch.object(
+            server, "_codex_app_server_request",
+            side_effect=AssertionError("must not be called"),
+        ), mock.patch.object(server, "_resume_ledger_append"), \
+             mock.patch.object(server, "_codex_telemetry_append"), \
+             mock.patch.object(server, "_codex_coordination_event"):
+            result = server._codex_resume_or_steer_via_app_server(sid, "hello")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["fallback"], "queue")
+        self.assertEqual(result["stage"], "writer-gate")
+        self.assertEqual(result["writer"], "desktop")
+
+    def test_resume_or_steer_serializes_with_per_thread_mutex(self):
+        """Holding a thread's turn mutex forces a concurrent CCC send to
+        fallback:queue (writer attributed to ccc)."""
+        server = self.server
+        sid = "test-sid-lock"
+        lock = server._codex_thread_turn_lock(sid)
+        self.assertTrue(lock.acquire(blocking=False))
+        try:
+            with mock.patch.object(
+                server, "_codex_thread_writer_snapshot",
+                return_value={"writer": None, "external_active": False, "desktop_attached": False},
+            ), mock.patch.object(server, "_resume_ledger_append"), \
+                 mock.patch.object(server, "_codex_telemetry_append"), \
+                 mock.patch.object(server, "_codex_coordination_event"):
+                result = server._codex_resume_or_steer_via_app_server(sid, "hello")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["fallback"], "queue")
+            self.assertEqual(result["writer"], "ccc")
+        finally:
+            lock.release()
+
+    def test_resume_queue_engine_busy_short_circuits_on_external_writer(self):
+        """An external writer short-circuits busy=True without the app-server
+        activity RPC (the cheap stat+lsof path wins first)."""
+        server = self.server
+        sid = "test-sid-busy"
+        with mock.patch.object(server, "_is_codex_session", return_value=True), \
+             mock.patch.object(
+                 server, "_codex_thread_writer_snapshot",
+                 return_value={"writer": "desktop", "external_active": True, "desktop_attached": True},
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"), \
+             mock.patch.object(
+                 server, "_codex_app_server_thread_is_active",
+                 side_effect=AssertionError("must not be reached"),
+             ):
+            self.assertTrue(server._resume_queue_engine_busy(sid))
+
+    def test_coordination_events_are_durable_and_stable(self):
+        """A coordination event becomes a synthetic system/codex_coordination
+        conversation event with a STABLE line id (idempotent re-polls)."""
+        server = self.server
+        sid = "test-sid-coord"
+        prev_loaded = server._codex_coord_state_loaded
+        server._codex_coord_state_loaded = True  # skip disk load
+        try:
+            with mock.patch.object(server, "_save_codex_app_server_state_unlocked"):
+                server._codex_coordination_event(sid, "external_turn_started", writer="desktop")
+            events = server._get_codex_coordination_events_for_session(sid)
+            self.assertEqual(len(events), 1)
+            ev = events[0]
+            self.assertEqual(ev["type"], "system")
+            self.assertEqual(ev["subtype"], "codex_coordination")
+            self.assertTrue(ev["line"].startswith("coord-"))
+            self.assertTrue(ev["text"])
+            # re-poll must be idempotent: identical synthetic line ids
+            again = server._get_codex_coordination_events_for_session(sid)
+            self.assertEqual([e["line"] for e in events], [e["line"] for e in again])
+        finally:
+            server._codex_coord_state_loaded = prev_loaded
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
+
+    def test_app_server_state_payload_includes_coordination_events(self):
+        """The persisted app-server payload surfaces a thread's durable
+        coordination_events."""
+        server = self.server
+        sid = "test-sid-payload"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "coordination_events": [{"ts": 1.0, "kind": "input_queued"}],
+            }
+        try:
+            payload = server._codex_app_server_state_payload_unlocked()
+        finally:
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
+        thread = payload["threads"][sid]
+        self.assertIn("coordination_events", thread)
+        self.assertEqual(
+            thread["coordination_events"],
+            [{"ts": 1.0, "kind": "input_queued"}],
+        )
+
+    def test_codex_state_fields_external_desktop_overlay(self):
+        """With no CCC turn but a desktop writer active, the state chip reads
+        working/fresh and names the desktop writer."""
+        server = self.server
+        sid = "test-sid-state"
+        with mock.patch.object(server, "_codex_app_server_thread_state", return_value={}), \
+             mock.patch.object(
+                 server, "_codex_thread_writer_snapshot",
+                 return_value={"writer": "desktop", "desktop_attached": True, "external_active": True},
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"):
+            fields = server._codex_state_fields(sid)
+        self.assertEqual(fields["codex_state"], "working")
+        self.assertTrue(fields["codex_fresh"])
+        self.assertEqual(fields["codex_writer"], "desktop")
+        self.assertTrue(fields["codex_desktop_attached"])
+        self.assertIn("desktop", fields["codex_state_reason"])
+
 
 class TestModelPicker(unittest.TestCase):
     def test_short_model_alias_strips_claude_prefix_and_1m_suffix(self):

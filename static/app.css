@@ -18066,3 +18066,26 @@ body:has(.gc-reader) .pwa-install-banner {
 .fed-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .fed-inline-error { display: none; font-size: 12px; color: var(--red); }
 .fed-inline-error.visible { display: block; }
+/* ── Codex desktop↔CCC coordination ───────────────────────────────────
+   Surfaces who is writing a shared Codex thread (the desktop app / another
+   process vs CCC) and the durable coordination notes in the transcript.
+   Driven by updateCodexStateBadge + the codex_coordination event branch. */
+/* Working pill whose turn is being run by the Codex desktop app (or another
+   external process): tint the status dot a distinct blue/purple so it reads
+   apart from the normal gold "CCC is working" dot at a glance. */
+.conv-codex-state.writer-desktop .ccs-dot { background: #a389f4; }
+.conv-codex-state.writer-external .ccs-dot { background: #6ea8fe; }
+/* Quiet marker: this thread is also loaded in Codex desktop (even when idle). */
+.ccs-desktop-attached {
+  margin-left: 6px; font-size: 10px; opacity: 0.7;
+  color: var(--text-muted); white-space: nowrap;
+}
+/* Durable coordination note — a meta row, not transcript content. Keep it
+   compact, muted and border-free so it never competes with real messages. */
+.event.system.codex-coordination {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 2px 12px; font-size: 12px; color: var(--text-muted);
+  background: transparent; border-left-color: transparent;
+}
+.event.system.codex-coordination .ccoord-icon { flex: 0 0 auto; opacity: 0.85; }
+.event.system.codex-coordination .ccoord-text { flex: 1 1 auto; }

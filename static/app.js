@@ -2417,6 +2417,7 @@
     'needs_approval', 'needs_approval_message', 'question_waiting', 'question_text',
     'question_header', 'question_preamble', 'question_options', 'question_option_details',
     'codex_state', 'codex_fresh', 'codex_state_reason',
+    'codex_writer', 'codex_desktop_attached',
   ];
 
   function _liveOverlayFieldsFromRow(c) {
@@ -3091,6 +3092,11 @@
         codexAppServer: !!data.codex_app_server,
         codexAppServerTransport: data.codex_app_server_transport || null,
         codexManagedAppServer: !!data.codex_managed_app_server,
+        // Who last wrote this Codex thread ("ccc"|"desktop"|"external"|null) and
+        // whether the Codex desktop app has it loaded — drives the writer badge
+        // and the "queued because desktop is writing" send UX.
+        codexWriter: data.codex_writer || null,
+        codexDesktopAttached: !!data.codex_desktop_attached,
         staleToolCall: !!data.stale_tool_call,
         staleToolAgeS: data.stale_tool_age_s || 0,
         questionWaiting: !!data.question_waiting,
@@ -3156,6 +3162,8 @@
           row.codex_state = data.codex_state || null;
           row.codex_fresh = !!data.codex_fresh;
           row.codex_state_reason = data.codex_state_reason || '';
+          row.codex_writer = data.codex_writer || null;
+          row.codex_desktop_attached = !!data.codex_desktop_attached;
           row.question_waiting = !!data.question_waiting;
           row.question_text = data.question_text || '';
           row.question_header = data.question_header || '';
@@ -3185,9 +3193,11 @@
         codex_state: data.codex_state || null,
         codex_fresh: !!data.codex_fresh,
         codex_state_reason: data.codex_state_reason || '',
+        codex_writer: data.codex_writer || null,
+        codex_desktop_attached: !!data.codex_desktop_attached,
       });
     } catch (err) {
-      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false, codexWriter: null, codexDesktopAttached: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -4684,7 +4694,26 @@
     const reason = (st === 'stuck') ? (liveStatus.codexStateReason || '') : '';
     // Stuck or idle turns can be nudged awake; working/offline cannot.
     const wakeable = (st === 'stuck' || st === 'idle');
-    badge.className = 'conv-codex-state state-' + st + steady + (wakeable ? ' is-wakeable' : '');
+    // Desktop↔CCC coordination: when this thread is being written by the Codex
+    // desktop app (or another external process) mid-turn, relabel the working pill
+    // so it's obvious CCC sends will queue behind that writer. Only meaningful while
+    // working — an idle/stuck thread isn't holding a turn.
+    const writer = (st === 'working') ? (liveStatus.codexWriter || null) : null;
+    const writerCls = writer === 'desktop' ? ' writer-desktop' : (writer === 'external' ? ' writer-external' : '');
+    const writerTitle = writer === 'desktop'
+      ? 'Codex desktop is running a turn — messages sent from CCC will queue until it finishes'
+      : (writer === 'external'
+          ? 'Another Codex process is running a turn — messages sent from CCC will queue until it finishes'
+          : '');
+    let label = LABELS[st] || st;
+    if (writer === 'desktop') label = 'Desktop writing';
+    else if (writer === 'external') label = 'External writer';
+    // Not mid-turn but the desktop app still has the thread loaded — hang a quiet
+    // "⧉ desktop" marker off the pill so concurrent-edit risk stays visible.
+    const attachedSuffix = (st !== 'working' && liveStatus.codexDesktopAttached)
+      ? '<span class="ccs-desktop-attached" title="This thread is also open in Codex desktop">⧉ desktop</span>'
+      : '';
+    badge.className = 'conv-codex-state state-' + st + steady + writerCls + (wakeable ? ' is-wakeable' : '');
     if (wakeable) {
       badge.setAttribute('role', 'button');
       badge.setAttribute('tabindex', '0');
@@ -4696,9 +4725,10 @@
     }
     badge.title = wakeable
       ? ((reason || TITLES[st] || '') + ' — click to wake GPT')
-      : (reason || TITLES[st] || '');
-    badge.innerHTML = '<span class="ccs-dot"></span><span class="ccs-label">' + escapeHtml(LABELS[st] || st) + '</span>'
+      : (writerTitle || reason || TITLES[st] || '');
+    badge.innerHTML = '<span class="ccs-dot"></span><span class="ccs-label">' + escapeHtml(label) + '</span>'
       + (reason ? '<span class="ccs-reason">' + escapeHtml(reason) + '</span>' : '')
+      + attachedSuffix
       + (wakeable ? '<span class="ccs-wake" aria-hidden="true" title="Wake GPT">↻</span>' : '');
   }
 
@@ -37445,6 +37475,25 @@
             + (_ftMsg ? '<div class="hermes-failed-detail">' + escapeHtml(_ftMsg) + '</div>' : '')
             + (_ftReq ? '<div class="hermes-failed-reqid" title="Anthropic request id — quote this to support">'
                 + escapeHtml(_ftReq) + '</div>' : '');
+        } else if (ev.subtype === 'codex_coordination') {
+          // Durable desktop↔CCC coordination note (external turn started/ended,
+          // input queued, CCC turn started/completed). Meta, not transcript —
+          // render a quiet single-line row. `line` here is a synthetic string id,
+          // so no L-number span.
+          const _coordIcons = {
+            external_turn_started: '🖥',
+            external_turn_ended: '✓',
+            input_queued: '⏸',
+            ccc_turn_started: '▶',
+            ccc_turn_completed: '✓',
+          };
+          const _coordKind = String(ev.kind || '').replace(/[^a-z0-9_-]/gi, '');
+          const _coordIcon = _coordIcons[ev.kind] || '•';
+          div.classList.add('system-compact', 'codex-coordination');
+          if (_coordKind) div.classList.add('coord-' + _coordKind);
+          div.innerHTML = '<span class="ccoord-icon" aria-hidden="true">' + _coordIcon + '</span>'
+            + '<span class="ccoord-text">' + escapeHtml(ev.text || '') + '</span>'
+            + tsSpan(ev.ts);
         } else {
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'

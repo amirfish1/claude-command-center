@@ -19407,9 +19407,16 @@ def _get_codex_coordination_events_for_session(session_id):
         text = _CODEX_COORD_EVENT_TEXT.get(kind) or kind.replace("_", " ")
         if kind == "external_turn_started" and writer == "external":
             text = "Another Codex process started a turn on this thread"
+        # ts as ISO-8601: the frontend's tsSpan does `new Date(ts)`, which
+        # reads a bare number as epoch MILLISECONDS — raw epoch seconds
+        # would render as January 1970.
+        try:
+            ts_iso = datetime.fromtimestamp(float(ts), timezone.utc).isoformat().replace("+00:00", "Z")
+        except (TypeError, ValueError, OverflowError, OSError):
+            ts_iso = ""
         out.append({
             "line": f"coord-{session_id[:8]}-{int(float(ts or 0) * 1000)}-{kind}",
-            "ts": ts,
+            "ts": ts_iso,
             "type": "system",
             "subtype": "codex_coordination",
             "kind": kind,
