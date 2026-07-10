@@ -51171,6 +51171,39 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 fetch=(qs_fleet.get("fetch") or ["0"])[0] in ("1", "true"),
                 include_deploy=(qs_fleet.get("deploy") or ["1"])[0] not in ("0", "false"),
             ))
+        elif path == "/api/fleet/recommendations":
+            qs_fleet = urllib.parse.parse_qs(parsed.query)
+            inventory = _fleet_inventory_payload(
+                fetch=(qs_fleet.get("fetch") or ["0"])[0] in ("1", "true"))
+            self.send_json({
+                "ok": True,
+                "observed_at": inventory.get("observed_at"),
+                "nodes": inventory.get("nodes"),
+                "recommendations": _fleet_recommendations(inventory),
+            })
+        elif path == "/api/fleet/jobs":
+            jobs = []
+            try:
+                for jp in sorted(FLEET_JOBS_DIR.glob("*.json"),
+                                 key=lambda p: p.stat().st_mtime, reverse=True)[:20]:
+                    data = json.loads(jp.read_text())
+                    jobs.append({
+                        "plan_id": data.get("plan_id"),
+                        "status": data.get("status"),
+                        "created_at": data.get("created_at"),
+                        "finished_at": data.get("finished_at"),
+                        "actions": len(data.get("actions") or []),
+                    })
+            except (OSError, ValueError):
+                pass
+            self.send_json({"ok": True, "jobs": jobs})
+        elif path == "/api/fleet/job":
+            qs_fleet = urllib.parse.parse_qs(parsed.query)
+            job = _fleet_job_load((qs_fleet.get("id") or [""])[0])
+            if job:
+                self.send_json({"ok": True, "job": job})
+            else:
+                self.send_json({"ok": False, "error": "unknown_plan"}, 404)
         elif path == "/api/federation/handoff/status":
             qs_fed = urllib.parse.parse_qs(parsed.query)
             sid = (qs_fed.get("session_id") or [""])[0].strip()
@@ -51403,6 +51436,89 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(result, 200 if result.get("ok") else 400)
             except (ValueError, OSError) as e:
                 self.send_json({"ok": False, "error": f"invalid JSON: {e}"}, 400)
+            return
+
+        if path.startswith("/api/fleet/"):
+            # Fleet mutations: reviewed plan lifecycle + owner pings.
+            # Same-origin enforced above like every POST; cross-node steps
+            # arrive via the peer route envelope, not directly.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    self.send_json({"error": "expected JSON object"}, 400)
+                    return
+            except (ValueError, OSError) as e:
+                self.send_json({"error": f"invalid JSON: {e}"}, 400)
+                return
+            if path == "/api/fleet/plan":
+                self.send_json({"ok": True, "plan": _fleet_plan_create()})
+            elif path == "/api/fleet/execute":
+                payload, status = _fleet_execute_payload(
+                    str(data.get("plan_id") or ""),
+                    data.get("selected") or [])
+                self.send_json(payload, status)
+            elif path == "/api/fleet/job/resume":
+                payload, status = _fleet_resume_payload(
+                    str(data.get("plan_id") or ""))
+                self.send_json(payload, status)
+            elif path == "/api/fleet/step":
+                action = data.get("action")
+                if not isinstance(action, dict):
+                    self.send_json({"ok": False, "error": "bad_request",
+                                    "detail": "action object required"}, 400)
+                    return
+                if action.get("node_id") and action["node_id"] != federation.node_id():
+                    self.send_json({"ok": False, "error": "bad_request",
+                                    "detail": "step addressed to a different "
+                                              "node"}, 400)
+                    return
+                self.send_json(_fleet_execute_local_step(action))
+            elif path == "/api/fleet/ping-session":
+                ref = str(data.get("ref") or data.get("session_id") or "").strip()
+                text = str(data.get("message") or "").strip()
+                if not ref:
+                    self.send_json({"ok": False, "error": "bad_request",
+                                    "detail": "ref required"}, 400)
+                    return
+                if not text:
+                    kind = str(data.get("kind") or "commit")
+                    target = str(data.get("target") or "your workspace")
+                    text = (f"A fleet review needs your attention on {target}: "
+                            + ("please commit your files (git commit --only "
+                               "<your paths>) and reply DONE."
+                               if kind == "commit" else
+                               "please finish this slice — commit, push, and "
+                               "complete its PR."))
+                self.send_json(_inject_text_into_session(ref, text))
+            elif path == "/api/fleet/attribute":
+                node_id_param = str(data.get("node_id") or "").strip()
+                if node_id_param and node_id_param != federation.node_id():
+                    self.send_json(_federation_proxy_session_action(
+                        node_id_param, "attribute", {
+                            "identity": data.get("identity"),
+                            "repo_path": None,
+                            "path": data.get("path"),
+                        }, timeout=60.0))
+                    return
+                repo_path = data.get("repo_path")
+                if not repo_path and data.get("identity"):
+                    repo_path = federation.resolve_repo_path(
+                        str(data.get("identity")))
+                if not repo_path or not os.path.isdir(str(repo_path)):
+                    self.send_json({"ok": False, "error": "stale_mapping",
+                                    "detail": "no local repo for attribution"},
+                                   404)
+                    return
+                target = str(data.get("path") or "").strip()
+                if not target:
+                    self.send_json({"ok": False, "error": "bad_request",
+                                    "detail": "path required"}, 400)
+                    return
+                self.send_json(_fleet_attribute_path(str(repo_path), target))
+            else:
+                self.send_json({"ok": False, "error": "not_found"}, 404)
             return
 
         if path.startswith("/api/federation/"):
@@ -57862,6 +57978,19 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, f
         rc, out, _err = _git(["rev-parse", "HEAD"], wt_path)
         entry["head_sha"] = out.strip() if rc == 0 else None
         worktrees.append(entry)
+    default_view = _federation_default_branch_view(repo_path)
+    for entry in worktrees:
+        # Reachability PROOF for cleanup decisions: is this worktree's head
+        # already contained in the fetched view of origin's default branch?
+        head = entry.get("head_sha")
+        merged = None
+        if head and default_view.get("branch"):
+            rc, _o, _e = _git(["merge-base", "--is-ancestor", head,
+                               f"origin/{default_view['branch']}"], repo_path)
+            merged = rc == 0
+        entry["merged_into_default"] = merged
+        entry["is_primary_clone"] = (
+            os.path.realpath(entry.get("path") or "") == os.path.realpath(repo_path))
     return {
         "ok": True,
         "node_id": federation.node_id(),
@@ -57869,7 +57998,7 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, f
         "repo_path": repo_path,
         "repo_identity": ident.get("identity"),
         "repo_identity_kind": ident.get("kind"),
-        "default_branch": _federation_default_branch_view(repo_path),
+        "default_branch": default_view,
         "worktrees": worktrees,
         "orphan_prs": wt_payload.get("orphan_prs", []),
         "open_prs_count": wt_payload.get("open_prs_count", 0),
@@ -57916,6 +58045,8 @@ _FEDERATION_ROUTE_ACTIONS = {
     "group_chat_nudge": ("POST", "/api/group-chat/nudge", True),
     "group_chat_add": ("POST", "/api/group-chat/add", True),
     "group_chat_create": ("POST", "/api/coordinate", True),
+    "fleet_step": ("POST", "/api/fleet/step", True),
+    "attribute": ("POST", "/api/fleet/attribute", False),
 }
 
 
@@ -58251,10 +58382,13 @@ def _fleet_config():
         data = json.loads(FLEET_CONFIG_FILE.read_text())
         if isinstance(data, dict):
             return {"pinned": list(data.get("pinned") or []),
-                    "hidden": list(data.get("hidden") or [])}
+                    "hidden": list(data.get("hidden") or []),
+                    # automap=False restricts the fleet to explicitly mapped
+                    # repos (isolation for tests / minimal setups).
+                    "automap": bool(data.get("automap", True))}
     except (OSError, ValueError):
         pass
-    return {"pinned": [], "hidden": []}
+    return {"pinned": [], "hidden": [], "automap": True}
 
 
 _FLEET_PRS_CACHE = {}
@@ -58397,14 +58531,15 @@ def _fleet_local_inventory(fetch=False, include_deploy=True):
     node. Known repos are auto-mapped by identity as a side effect so a
     freshly-paired fleet needs no hand mapping."""
     repo_map = dict(federation.load_repo_map())
-    for rp in _known_repo_paths():
-        ident = _fleet_repo_identity_cached(rp)
-        if ident and ident["identity"] not in repo_map:
-            try:
-                federation.map_repo(ident["identity"], rp)
-                repo_map[ident["identity"]] = rp
-            except (OSError, ValueError):
-                pass
+    if _fleet_config().get("automap", True):
+        for rp in _known_repo_paths():
+            ident = _fleet_repo_identity_cached(rp)
+            if ident and ident["identity"] not in repo_map:
+                try:
+                    federation.map_repo(ident["identity"], rp)
+                    repo_map[ident["identity"]] = rp
+                except (OSError, ValueError):
+                    pass
     out = {}
     for identity_key, path in sorted(repo_map.items()):
         if not os.path.isdir(path):
@@ -58497,6 +58632,694 @@ def _fleet_inventory_payload(fetch=False, include_deploy=True):
         "observed_at": time.time(),
         "nodes": nodes,
         "repos": repo_list,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fleet recommendations — deterministic rules over the inventory
+#
+# Pure function: inventory in, ordered action list out. Every action carries
+# its reason and EVERY unmet gate as an explicit blocker; nothing destructive
+# is ever recommended without objective proof (clean tree + head provably
+# reachable from origin's default branch, or a merged PR). Evidence over
+# guesses: attribution is separate and never fabricates a single owner.
+# ---------------------------------------------------------------------------
+
+
+def _fleet_action(kind, repo_identity, node, *, target=None, reason="",
+                  evidence=None, blockers=None, destructive=False,
+                  command_intent="", requires=None):
+    node_id = node.get("node_id") if isinstance(node, dict) else node
+    ident_slug = re.sub(r"[^A-Za-z0-9]+", "-", repo_identity or "repo")
+    target_slug = re.sub(r"[^A-Za-z0-9]+", "-", str(target or ""))[:60]
+    return {
+        "id": f"{kind}:{ident_slug}:{(node_id or '')[:8]}:{target_slug}",
+        "kind": kind,
+        "repo_identity": repo_identity,
+        "node_id": node_id,
+        "node_name": node.get("name") if isinstance(node, dict) else None,
+        "target": target,
+        "reason": reason,
+        "evidence": evidence or {},
+        "blockers": blockers or [],
+        "destructive": destructive,
+        "command_intent": command_intent,
+        "requires": requires or [],
+        "ready": not (blockers or []),
+    }
+
+
+def _fleet_recommendations(inventory):
+    """Build deterministic recommendations from a fleet inventory payload."""
+    actions = []
+    nodes_by_id = {n["node_id"]: n for n in inventory.get("nodes", [])}
+    for repo in inventory.get("repos", []):
+        ident = repo.get("identity")
+        entries = repo.get("nodes", {})
+        # Which node (if any) has published the newest origin default head?
+        for node_id, entry in entries.items():
+            node = nodes_by_id.get(node_id, {"node_id": node_id})
+            if not isinstance(entry, dict) or not entry.get("ok"):
+                if isinstance(entry, dict) and entry.get("error"):
+                    actions.append(_fleet_action(
+                        "investigate_source", ident, node,
+                        target=entry.get("error"),
+                        reason=f"inventory for this repo failed on "
+                               f"{node.get('name') or node_id[:8]}: "
+                               f"{entry.get('detail') or entry.get('error')}",
+                        command_intent="fix the collection error, then refresh"))
+                continue
+            if entry.get("stale"):
+                actions.append(_fleet_action(
+                    "investigate_source", ident, node, target="stale",
+                    reason="data for this node is stale (peer unreachable) — "
+                           "conclusions below may be outdated",
+                    command_intent="restore connectivity, then refresh"))
+            default_branch = (entry.get("default_branch") or {}).get("branch")
+            default_sha = (entry.get("default_branch") or {}).get("sha")
+            prs = entry.get("prs") or {}
+            prs_by_branch = {p.get("branch"): p for p in prs.get("open", [])}
+            sessions = entry.get("sessions") or []
+            for wt in entry.get("worktrees", []):
+                actions.extend(_fleet_worktree_actions(
+                    ident, node, entry, wt, default_branch, default_sha,
+                    prs_by_branch, sessions))
+            # PR-level actions (independent of local worktrees)
+            for pr in prs.get("open", []):
+                actions.extend(_fleet_pr_actions(ident, node, entry, pr))
+            # Deployment is its own dimension: a failed deploy of a pushed
+            # commit is NEVER solved by another push.
+            deploy = entry.get("deployment") or {}
+            if (deploy.get("state") or "").upper() == "ERROR":
+                actions.append(_fleet_action(
+                    "investigate_deploy", ident, node,
+                    target=deploy.get("commit_sha"),
+                    reason="production deployment failed for commit "
+                           f"{deploy.get('commit_sha') or '?'} — Git state is "
+                           "complete; investigate the deployment itself",
+                    evidence={"deployment": deploy},
+                    command_intent="inspect provider logs / run the deploy "
+                                   "fix flow; do NOT push again"))
+    # Dependency ordering: commits before pushes before pulls/PR actions
+    # before cleanup.
+    order = {"ask_commit": 0, "publish_branch": 1, "push": 1, "pull_ff": 2,
+             "mark_ready": 3, "merge_pr": 4, "remove_worktree": 5,
+             "finish_worktree": 3, "investigate_deploy": 3,
+             "investigate_source": 0, "review_orphan": 4,
+             "flag_for_human": 6}
+    actions.sort(key=lambda a: (a["repo_identity"] or "", order.get(a["kind"], 9),
+                                a["node_id"] or ""))
+    return actions
+
+
+def _fleet_worktree_actions(ident, node, entry, wt, default_branch,
+                            default_sha, prs_by_branch, sessions):
+    out = []
+    wt_path = wt.get("path")
+    branch = wt.get("branch")
+    wt_sessions = [s for s in sessions
+                   if (s.get("cwd") or "").rstrip("/") == (wt_path or "").rstrip("/")]
+    if wt.get("dirty"):
+        candidates = wt_sessions or sessions
+        out.append(_fleet_action(
+            "ask_commit", ident, node, target=wt_path,
+            reason=f"{wt.get('dirty_files')} dirty file(s) on branch "
+                   f"{branch or '(detached)'} — work should be committed by "
+                   "whoever owns it, never swept blindly",
+            evidence={
+                "dirty_files": wt.get("dirty_files"),
+                "staged": wt.get("staged"),
+                "untracked": wt.get("untracked"),
+                "candidate_sessions": candidates[:5],
+                "attribution": ("session-cwd match" if wt_sessions
+                                else ("repo-level candidates only" if sessions
+                                      else "unknown — no session evidence")),
+            },
+            command_intent="ping the owning session to commit "
+                           "(git commit --only <its paths>)"))
+    unpublished = wt.get("unpublished_commits")
+    if unpublished:
+        blockers = []
+        if wt.get("dirty"):
+            blockers.append({"code": "dirty_worktree",
+                             "detail": "commit or clean the tree first"})
+        if not branch:
+            blockers.append({"code": "detached_head",
+                             "detail": "create a branch before publishing"})
+        out.append(_fleet_action(
+            "push", ident, node, target=branch or wt_path,
+            reason=f"{unpublished} commit(s) on {branch or 'detached HEAD'} "
+                   "are unreachable from origin — only this node has them",
+            evidence={"unpublished_commits": unpublished,
+                      "head_sha": wt.get("head_sha")},
+            blockers=blockers,
+            command_intent=f"git push origin {branch or 'HEAD'}"))
+    if (wt.get("is_primary_clone") and branch and default_branch
+            and branch == default_branch and default_sha
+            and wt.get("head_sha") and wt["head_sha"] != default_sha
+            and not unpublished):
+        blockers = []
+        if wt.get("dirty"):
+            blockers.append({"code": "dirty_worktree",
+                             "detail": "clean the tree before pulling"})
+        out.append(_fleet_action(
+            "pull_ff", ident, node, target=branch,
+            reason=f"origin/{default_branch} moved (another node pushed) — "
+                   "this clone is behind",
+            evidence={"local_head": wt.get("head_sha"),
+                      "origin_head": default_sha},
+            blockers=blockers,
+            command_intent=f"git merge --ff-only origin/{default_branch}"))
+    # Cleanup / preservation for secondary worktrees
+    if not wt.get("is_primary_clone"):
+        merged = wt.get("merged_into_default")
+        pr = prs_by_branch.get(branch)
+        if not wt.get("dirty") and merged is True and not unpublished:
+            out.append(_fleet_action(
+                "remove_worktree", ident, node, target=wt_path,
+                reason=f"worktree is clean and its head is provably reachable "
+                       f"from origin/{default_branch} — the work is merged",
+                evidence={"head_sha": wt.get("head_sha"),
+                          "merged_into_default": True,
+                          "proof": f"git merge-base --is-ancestor "
+                                   f"{(wt.get('head_sha') or '')[:12]} "
+                                   f"origin/{default_branch}"},
+                destructive=True,
+                command_intent=f"git worktree remove {wt_path} "
+                               "(branch deletion is a separate action)"))
+        elif wt.get("dirty") or unpublished or merged is False:
+            why = []
+            if wt.get("dirty"):
+                why.append(f"{wt.get('dirty_files')} dirty file(s)")
+            if unpublished:
+                why.append(f"{unpublished} unpublished commit(s)")
+            if merged is False:
+                why.append("head not reachable from the default branch")
+            out.append(_fleet_action(
+                "finish_worktree", ident, node, target=wt_path,
+                reason="worktree must be preserved (" + ", ".join(why) + ") — "
+                       "offer a finish path instead of deletion",
+                evidence={
+                    "candidate_sessions": wt_sessions[:5],
+                    "pr": {"number": pr.get("number"), "url": pr.get("url")}
+                    if pr else None,
+                },
+                blockers=[{"code": "unmerged_or_dirty",
+                           "detail": "never delete unproven work"}],
+                command_intent="wake the owning session or spawn a focused "
+                               "finishing session in this worktree"))
+    return out
+
+
+def _fleet_pr_actions(ident, node, entry, pr):
+    out = []
+    checks_ok = not pr.get("checks_failing") and not pr.get("checks_pending")
+    gates = []
+    if pr.get("checks_failing"):
+        gates.append({"code": "checks_failing",
+                      "detail": f"failing checks: {', '.join(pr['checks_failing'][:5])}"})
+    if pr.get("checks_pending"):
+        gates.append({"code": "checks_pending",
+                      "detail": f"checks still running: {', '.join(pr['checks_pending'][:5])}"})
+    if (pr.get("mergeable") or "").upper() == "CONFLICTING":
+        gates.append({"code": "merge_conflict",
+                      "detail": "branch conflicts with the base"})
+    if pr.get("draft"):
+        out.append(_fleet_action(
+            "mark_ready", ident, node, target=f"#{pr.get('number')}",
+            reason=f"draft PR #{pr.get('number')} ({pr.get('branch')}) has "
+                   + ("green checks and no conflicts — ready for review"
+                      if checks_ok and not gates else "unmet gates"),
+            evidence={"pr": pr},
+            blockers=gates,
+            command_intent=f"gh pr ready {pr.get('number')}"))
+    else:
+        merge_gates = list(gates)
+        review = (pr.get("review_decision") or "").upper()
+        if review == "CHANGES_REQUESTED":
+            merge_gates.append({"code": "changes_requested",
+                                "detail": "review requested changes"})
+        elif review == "REVIEW_REQUIRED":
+            merge_gates.append({"code": "review_required",
+                                "detail": "required review is missing"})
+        out.append(_fleet_action(
+            "merge_pr", ident, node, target=f"#{pr.get('number')}",
+            reason=f"open PR #{pr.get('number')} ({pr.get('branch')})"
+                   + (" meets every objective gate" if not merge_gates
+                      else " has unmet gates"),
+            evidence={"pr": pr},
+            blockers=merge_gates,
+            command_intent=f"gh pr merge {pr.get('number')} --squash"))
+    if pr.get("checks_failing"):
+        out.append(_fleet_action(
+            "investigate_checks", ident, node, target=f"#{pr.get('number')}",
+            reason=f"PR #{pr.get('number')} has failing checks — investigate "
+                   "independently of Git state",
+            evidence={"failing": pr.get("checks_failing")},
+            command_intent="open the failing check logs"))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Fleet executor — reviewed plan, persisted resumable jobs
+#
+# "Resolve all" builds a dependency-ordered plan from the recommendations;
+# the user deselects, confirms ONCE, and the plan runs as a persisted job.
+# Every step revalidates its preconditions immediately before mutating (a
+# stale plan stops safely), checks whether the desired end state already
+# holds (restart/retry never repeats an external mutation), and cross-node
+# steps ride the idempotent route envelope. Never force-push, never merge
+# red checks, never delete dirty or unproven worktrees.
+# ---------------------------------------------------------------------------
+
+FLEET_JOBS_DIR = COMMAND_CENTER_STATE_DIR / "fleet-jobs"
+
+_FLEET_EXECUTABLE_KINDS = {
+    "push", "pull_ff", "remove_worktree", "mark_ready", "merge_pr",
+    "ask_commit", "finish_worktree",
+}
+_FLEET_JOBS_LOCK = threading.Lock()
+
+
+def _fleet_job_path(plan_id):
+    safe = re.sub(r"[^A-Za-z0-9-]", "", plan_id or "")
+    return FLEET_JOBS_DIR / f"{safe}.json"
+
+
+def _fleet_job_save(job):
+    FLEET_JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _fleet_job_path(job["plan_id"])
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(job, indent=1))
+    tmp.replace(path)
+
+
+def _fleet_job_load(plan_id):
+    try:
+        data = json.loads(_fleet_job_path(plan_id).read_text())
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _fleet_job_log(job, action, text, level="info"):
+    job.setdefault("log", []).append({
+        "t": time.time(), "action_id": action.get("id") if action else None,
+        "text": text, "level": level,
+    })
+    job["log"] = job["log"][-400:]
+
+
+def _fleet_plan_create():
+    """Resolve-all: fresh inventory → recommendations → reviewable plan."""
+    inventory = _fleet_inventory_payload(fetch=True)
+    recs = _fleet_recommendations(inventory)
+    actions = []
+    for rec in recs:
+        entry = dict(rec)
+        if rec["kind"] not in _FLEET_EXECUTABLE_KINDS:
+            entry["status"] = "manual"
+        elif rec["blockers"]:
+            entry["status"] = "blocked"
+        else:
+            entry["status"] = "proposed"
+        actions.append(entry)
+    job = {
+        "plan_id": str(uuid.uuid4()),
+        "created_at": time.time(),
+        "created_by_node": federation.node_id(),
+        "status": "draft",
+        "actions": actions,
+        "log": [],
+    }
+    _fleet_job_save(job)
+    return job
+
+
+def _fleet_revalidate_and_execute(action):
+    """Execute ONE action on its owning node, revalidating first. Cross-node
+    steps route through the idempotent peer envelope."""
+    me = federation.node_id()
+    if action.get("node_id") and action["node_id"] != me:
+        args = {"action": action,
+                "req_id": f"{action.get('plan_id', '')}:{action['id']}"}
+        return _federation_proxy_session_action(
+            action["node_id"], "fleet_step", args, timeout=180.0)
+    return _fleet_execute_local_step(action)
+
+
+def _fleet_execute_local_step(action):
+    """The single-step executor. Precondition → end-state-already? → mutate."""
+    kind = action.get("kind")
+    ident = action.get("repo_identity") or ""
+    repo_path = federation.resolve_repo_path(ident)
+    if kind in ("push", "pull_ff", "remove_worktree", "mark_ready",
+                "merge_pr") and not repo_path:
+        return {"ok": False, "error": "stale_mapping",
+                "detail": f"no local clone mapped for {ident}"}
+    if kind == "push":
+        branch = action.get("target")
+        wt_path = _fleet_find_worktree_for_branch(repo_path, branch) or repo_path
+        state = _handoff_git_state(wt_path)
+        if state["dirty_count"]:
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": "tree became dirty since the plan was built"}
+        if not state.get("unpublished_commits"):
+            return {"ok": True, "already": True,
+                    "detail": "nothing left to push — end state already holds"}
+        args = (["push", "origin", f"HEAD:{branch}"] if state["has_upstream"]
+                else ["push", "-u", "origin", branch])
+        rc, out, err = _git(args, wt_path, timeout=120)
+        if rc != 0:
+            return {"ok": False, "error": "push_failed",
+                    "detail": (err or out).strip()[:400]}
+        return {"ok": True, "pushed": state.get("unpublished_commits")}
+    if kind == "pull_ff":
+        branch = action.get("target")
+        state = _handoff_git_state(repo_path)
+        if state["dirty_count"]:
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": "tree became dirty — refusing to pull"}
+        if state["branch"] != branch:
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": f"clone moved to branch {state['branch']!r}"}
+        _git(["fetch", "--quiet", "origin"], repo_path, timeout=90)
+        rc, out, err = _git(["merge", "--ff-only", f"origin/{branch}"],
+                            repo_path, timeout=60)
+        if rc != 0:
+            return {"ok": False, "error": "pull_failed",
+                    "detail": (err or out).strip()[:400] or
+                              "fast-forward not possible (local diverged)"}
+        return {"ok": True, "merged": f"origin/{branch}"}
+    if kind == "remove_worktree":
+        wt_path = action.get("target")
+        if not wt_path or not os.path.isdir(wt_path):
+            return {"ok": True, "already": True,
+                    "detail": "worktree already absent"}
+        # Fresh proof, all three gates: clean, nothing unpublished,
+        # head reachable from origin's default branch.
+        state = _handoff_git_state(wt_path)
+        if state["dirty_count"]:
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": "worktree is dirty — never deleted"}
+        _git(["fetch", "--quiet", "origin"], repo_path, timeout=90)
+        rc, out, _e = _git(["rev-list", "--count", "HEAD", "--not",
+                            "--remotes=origin"], wt_path)
+        if not (rc == 0 and out.strip() == "0"):
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": "worktree has unpublished commits — never deleted"}
+        default = _federation_default_branch_view(repo_path)
+        head = state.get("commit")
+        if not (default.get("branch") and head):
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": "cannot prove merged-ness (no default branch/head)"}
+        rc, _o, _e = _git(["merge-base", "--is-ancestor", head,
+                           f"origin/{default['branch']}"], repo_path)
+        if rc != 0:
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": f"head {head[:12]} is NOT reachable from "
+                              f"origin/{default['branch']} — preserved"}
+        rc, out, err = _git(["worktree", "remove", wt_path], repo_path, timeout=60)
+        if rc != 0:
+            return {"ok": False, "error": "remove_failed",
+                    "detail": (err or out).strip()[:400]}
+        return {"ok": True, "removed": wt_path, "proof": {
+            "head": head, "reachable_from": f"origin/{default['branch']}"}}
+    if kind in ("mark_ready", "merge_pr"):
+        number = str(action.get("target") or "").lstrip("#")
+        if not number.isdigit():
+            return {"ok": False, "error": "bad_request",
+                    "detail": "missing PR number"}
+        try:
+            proc = subprocess.run(
+                ["gh", "pr", "view", number, "--json",
+                 "state,isDraft,mergeable,mergeStateStatus,reviewDecision,"
+                 "statusCheckRollup"],
+                cwd=repo_path, capture_output=True, text=True, timeout=15)
+            pr = json.loads(proc.stdout) if proc.returncode == 0 else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pr = None
+        if not pr:
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": "could not re-check the PR via gh"}
+        if (pr.get("state") or "").upper() == "MERGED":
+            return {"ok": True, "already": True, "detail": "PR already merged"}
+        failing = [c.get("name") for c in pr.get("statusCheckRollup") or []
+                   if isinstance(c, dict) and (c.get("conclusion") or "").upper()
+                   in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED")]
+        if kind == "mark_ready":
+            if not pr.get("isDraft"):
+                return {"ok": True, "already": True, "detail": "already ready"}
+            if failing:
+                return {"ok": False, "error": "revalidation_failed",
+                        "detail": f"checks failing now: {failing[:3]}"}
+            proc = subprocess.run(["gh", "pr", "ready", number], cwd=repo_path,
+                                  capture_output=True, text=True, timeout=15)
+            return ({"ok": True} if proc.returncode == 0 else
+                    {"ok": False, "error": "gh_failed",
+                     "detail": (proc.stderr or "").strip()[:300]})
+        # merge_pr — every objective gate re-checked at mutation time
+        if failing:
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": f"required checks failing: {failing[:3]} — "
+                              "never merged red"}
+        if (pr.get("mergeable") or "").upper() == "CONFLICTING":
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": "merge conflict appeared"}
+        if (pr.get("reviewDecision") or "").upper() in ("CHANGES_REQUESTED",
+                                                        "REVIEW_REQUIRED"):
+            return {"ok": False, "error": "revalidation_failed",
+                    "detail": f"review gate: {pr.get('reviewDecision')}"}
+        proc = subprocess.run(["gh", "pr", "merge", number, "--squash"],
+                              cwd=repo_path, capture_output=True, text=True,
+                              timeout=30)
+        return ({"ok": True, "merged": number} if proc.returncode == 0 else
+                {"ok": False, "error": "gh_failed",
+                 "detail": (proc.stderr or "").strip()[:300]})
+    if kind in ("ask_commit", "finish_worktree"):
+        candidates = (action.get("evidence") or {}).get("candidate_sessions") or []
+        if not candidates:
+            return {"ok": False, "error": "no_owner",
+                    "detail": "no session evidence — flagged for human review"}
+        target = candidates[0]
+        ref = target.get("ref") or target.get("session_id")
+        if kind == "ask_commit":
+            text = ("A fleet review found uncommitted work attributed to you in "
+                    f"{action.get('target')}. Please commit YOUR files only "
+                    "(git commit --only <your paths>) and reply DONE. If this "
+                    "work is not yours, say NOT MINE.")
+        else:
+            text = (f"A fleet review found your worktree {action.get('target')} "
+                    "unfinished (unmerged or dirty). Please finish the slice: "
+                    "commit, push, and open/complete its PR — or reply ABANDON "
+                    "if it should be preserved for someone else.")
+        result = _inject_text_into_session(ref, text)
+        return {"ok": bool(result.get("ok")), "pinged": ref,
+                "via": result.get("via"), "detail": result.get("error")}
+    return {"ok": False, "error": "unsupported_capability",
+            "detail": f"no executor for {kind!r}"}
+
+
+def _fleet_find_worktree_for_branch(repo_path, branch):
+    if not branch:
+        return None
+    rc, out, _err = _git(["worktree", "list", "--porcelain"], repo_path)
+    if rc != 0:
+        return None
+    current = None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            current = line.split(" ", 1)[1].strip()
+        elif line.startswith("branch ") and current:
+            if line.rsplit("/", 1)[-1].strip() == branch:
+                return current
+    return None
+
+
+def _fleet_run_job(plan_id):
+    """Background runner: executes every selected step in order, persisting
+    after each so a CCC restart can resume without repeating mutations."""
+    with _FLEET_JOBS_LOCK:
+        job = _fleet_job_load(plan_id)
+        if not job:
+            return
+        job["status"] = "running"
+        _fleet_job_save(job)
+    for action in job["actions"]:
+        if action.get("status") not in ("selected", "running"):
+            continue
+        action["plan_id"] = plan_id
+        action["status"] = "running"
+        _fleet_job_log(job, action, f"running {action['kind']} on "
+                       f"{action.get('node_name') or 'this node'}: "
+                       f"{action.get('target')}")
+        with _FLEET_JOBS_LOCK:
+            _fleet_job_save(job)
+        try:
+            result = _fleet_revalidate_and_execute(action)
+        except Exception as e:
+            result = {"ok": False, "error": "exception", "detail": str(e)[:300]}
+        action["result"] = result
+        if result.get("ok"):
+            action["status"] = "done"
+            _fleet_job_log(job, action,
+                           "already satisfied" if result.get("already")
+                           else "done", "ok")
+        elif result.get("error") == "revalidation_failed":
+            action["status"] = "stopped_stale"
+            _fleet_job_log(job, action,
+                           f"stopped safely: {result.get('detail')}", "warn")
+        else:
+            action["status"] = "failed"
+            _fleet_job_log(job, action,
+                           f"failed: {result.get('error')}: {result.get('detail')}",
+                           "error")
+        with _FLEET_JOBS_LOCK:
+            _fleet_job_save(job)
+    job["status"] = "finished"
+    job["finished_at"] = time.time()
+    with _FLEET_JOBS_LOCK:
+        _fleet_job_save(job)
+
+
+def _fleet_execute_payload(plan_id, selected_ids):
+    job = _fleet_job_load(plan_id)
+    if not job:
+        return {"ok": False, "error": "unknown_plan"}, 404
+    if job.get("status") == "running":
+        return {"ok": False, "error": "already_running"}, 409
+    selected = set(selected_ids or [])
+    chosen = 0
+    for action in job["actions"]:
+        if action["id"] in selected:
+            if action.get("status") in ("blocked", "manual"):
+                return {"ok": False, "error": "action_blocked",
+                        "detail": f"{action['id']} has unmet gates — it cannot "
+                                  "be selected",
+                        "blockers": action.get("blockers")}, 400
+            action["status"] = "selected"
+            chosen += 1
+        elif action.get("status") == "proposed":
+            action["status"] = "skipped"
+    if not chosen:
+        return {"ok": False, "error": "nothing_selected"}, 400
+    job["status"] = "confirmed"
+    job["confirmed_at"] = time.time()
+    _fleet_job_save(job)
+    threading.Thread(target=_fleet_run_job, args=(plan_id,), daemon=True).start()
+    return {"ok": True, "plan_id": plan_id, "selected": chosen}, 200
+
+
+def _fleet_resume_payload(plan_id):
+    """After a restart: re-run steps that never finished. Completed external
+    mutations are not repeated — every executor checks end state first."""
+    job = _fleet_job_load(plan_id)
+    if not job:
+        return {"ok": False, "error": "unknown_plan"}, 404
+    resumable = [a for a in job["actions"]
+                 if a.get("status") in ("selected", "running")]
+    if not resumable:
+        return {"ok": False, "error": "nothing_to_resume",
+                "detail": f"job status {job.get('status')}"}, 400
+    _fleet_job_log(job, None, f"resumed after restart: {len(resumable)} step(s)")
+    _fleet_job_save(job)
+    threading.Thread(target=_fleet_run_job, args=(plan_id,), daemon=True).start()
+    return {"ok": True, "plan_id": plan_id, "resuming": len(resumable)}, 200
+
+
+# ---------------------------------------------------------------------------
+# Fleet attribution — evidence hierarchy, never fabricated
+# ---------------------------------------------------------------------------
+
+
+def _fleet_attribute_path(repo_path, target_path):
+    """Who touched this path? Evidence hierarchy: hook write event >
+    worktree/session ownership > transcript tool path > timestamp
+    correlation. Returns every plausible candidate with confidence and
+    evidence; empty candidates = honest unknown."""
+    target_path = str(Path(target_path).expanduser())
+    if not os.path.isabs(target_path):
+        target_path = os.path.join(repo_path, target_path)
+    target_real = os.path.realpath(target_path)
+    wt_root = _git_toplevel_for_existing_dir(
+        target_path if os.path.isdir(target_path)
+        else os.path.dirname(target_path)) or repo_path
+    sessions = _fleet_sessions_for_repo(repo_path)
+    candidates = []
+    try:
+        file_mtime = os.path.getmtime(target_path)
+    except OSError:
+        file_mtime = None
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        evidence = []
+        confidence = None
+        # 1. Hook write event (live-state sidecar): strongest signal.
+        try:
+            sidecar = json.loads((SIDECAR_STATE_DIR / f"{sid}.json").read_text())
+            sfile = os.path.realpath(str(sidecar.get("file") or ""))
+            if sfile and (sfile == target_real or
+                          sfile.startswith(wt_root.rstrip("/") + "/")):
+                evidence.append({
+                    "kind": "hook_write_event",
+                    "detail": f"hook recorded a write to {sidecar.get('file')}",
+                    "at": sidecar.get("timestamp"),
+                })
+                confidence = "high"
+        except (OSError, ValueError):
+            pass
+        # 2. Worktree / session ownership.
+        s_cwd = (s.get("cwd") or "").rstrip("/")
+        if s_cwd == wt_root.rstrip("/"):
+            evidence.append({"kind": "worktree_ownership",
+                             "detail": f"session works in {wt_root}"})
+            confidence = confidence or "medium"
+        # 3. Transcript tool paths (bounded scan).
+        try:
+            file_paths, _cd = _scan_session_tool_paths(sid)
+            hits = [p for p in file_paths
+                    if os.path.realpath(p) == target_real]
+            if hits:
+                evidence.append({"kind": "transcript_tool_path",
+                                 "detail": f"session edited {target_path} "
+                                           f"({len(hits)} tool event(s))"})
+                confidence = "high"
+        except Exception:
+            pass
+        # 4. Timestamp correlation — weakest, corroboration only.
+        if file_mtime and s.get("timestamp"):
+            try:
+                delta = abs(file_mtime - float(s["timestamp"]) / 1000.0)
+                if delta < 1800:
+                    evidence.append({
+                        "kind": "timestamp_correlation",
+                        "detail": f"session active within {int(delta)}s of the "
+                                  "file's last change"})
+                    confidence = confidence or "low"
+            except (TypeError, ValueError):
+                pass
+        if evidence:
+            candidates.append({
+                "session_id": sid,
+                "ref": s.get("ref"),
+                "display_name": s.get("display_name"),
+                "node_id": federation.node_id(),
+                "confidence": confidence or "low",
+                "evidence": evidence,
+                "last_event": s.get("timestamp"),
+                "is_live": s.get("is_live"),
+            })
+    rank = {"high": 0, "medium": 1, "low": 2}
+    candidates.sort(key=lambda c: rank.get(c["confidence"], 3))
+    return {
+        "ok": True,
+        "path": target_path,
+        "worktree": wt_root,
+        "candidates": candidates,
+        "unknown": not candidates,
+        "observed_at": time.time(),
     }
 
 

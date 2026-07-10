@@ -68,6 +68,14 @@ class CCCNode:
     # -- lifecycle ----------------------------------------------------------
 
     def start(self, extra_env=None):
+        # Fleet isolation: never auto-map the host machine's repos (the
+        # server's own install dir counts as a known repo) — harness nodes
+        # only see repos explicitly mapped by the test.
+        state_dir = self.home / ".claude" / "command-center"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        fleet_cfg = state_dir / "fleet.json"
+        if not fleet_cfg.exists():
+            fleet_cfg.write_text('{"automap": false}\n')
         env = {
             **os.environ,
             "HOME": str(self.home),
