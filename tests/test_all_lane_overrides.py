@@ -47,3 +47,15 @@ def test_all_lane_drop_wiring_posts_to_persistent_endpoint():
     assert 'all_lane_override' in app_js
     assert 'path == "/api/conversations/all-lane"' in server_py
     assert 're.match(r"^/api/conversations/[^/]+/all-lane$"' in server_py
+
+
+def test_all_lane_drop_updates_render_state_immediately():
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert app_js.count("all_lane_override: c.all_lane_override || ''") >= 2
+    drop_handler = app_js[
+        app_js.index("const assignAllLaneFromDrop = async")
+        : app_js.index("$allHermesTabs.addEventListener('click'")
+    ]
+    assert "setLocalAllLaneOverride(sid, lane, row.id || '')" in drop_handler
+    assert "_convListRenderSig = null;" in drop_handler

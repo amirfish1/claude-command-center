@@ -25962,12 +25962,16 @@
         }
         return null;
       };
-      const setLocalAllLaneOverride = (sid, lane) => {
+      const setLocalAllLaneOverride = (sid, lane, convId) => {
         if (!sid) return;
+        const matchesRow = (c) => c && (
+          c.session_id === sid || c.id === sid
+          || (convId && (c.session_id === convId || c.id === convId))
+        );
         [_allTabConvs, conversationsData, archiveData].forEach(rows => {
           if (!Array.isArray(rows)) return;
           rows.forEach(c => {
-            if (c && (c.session_id === sid || c.id === sid)) c.all_lane_override = lane;
+            if (matchesRow(c)) c.all_lane_override = lane;
           });
         });
       };
@@ -26000,7 +26004,8 @@
           showOpToast('Lane move failed — row stays put (' + err.message + ')', 'error');
           return;
         }
-        rows.forEach(({ sid }) => setLocalAllLaneOverride(sid, lane));
+        rows.forEach(({ row, sid }) => setLocalAllLaneOverride(sid, lane, row.id || ''));
+        _convListRenderSig = null;
         try { localStorage.setItem('ccc-all-hermes-tab', lane); } catch (_) {}
         showOpToast(rows.length === 1
           ? 'Moved session to ' + laneLabel(lane)
@@ -42409,6 +42414,7 @@
           source_platform: c.source_platform || '',
           hermes_source: c.hermes_source || '',
           hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
+          all_lane_override: c.all_lane_override || '',
         });
       }
       const folderOrphan = (c.folder_path === c.slug);
@@ -42507,6 +42513,7 @@
         source_platform: c.source_platform || '',
         hermes_source: c.hermes_source || '',
         hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
+        all_lane_override: c.all_lane_override || '',
         // Codex current-goal (server reads ~/.codex/goals_1.sqlite). The shaped
         // object is an explicit allowlist, so goal must be copied through or the
         // goal chip never renders.
