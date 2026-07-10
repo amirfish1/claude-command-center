@@ -18036,6 +18036,7 @@ def _codex_app_server_state_payload_unlocked():
             "active_item",
             "last_item",
             "recent_items",
+            "coordination_events",
         ):
             if key in state:
                 public[key] = state[key]
@@ -18651,6 +18652,7 @@ def _codex_app_server_handle_notification(method, params):
         state["active_items"] = {}
         state.pop("active_item", None)
         state["status"] = "active"
+        _codex_coordination_event_unlocked(state, "ccc_turn_started", writer="ccc", now=now)
     elif method in (
         "item/started",
         "item/completed",
@@ -18688,6 +18690,7 @@ def _codex_app_server_handle_notification(method, params):
         state.pop("active_item", None)
         state.pop("active_items", None)
         state["status"] = "idle"
+        _codex_coordination_event_unlocked(state, "ccc_turn_completed", writer="ccc", now=now)
     _save_codex_app_server_state_unlocked()
     try:
         _codex_telemetry_note_notification(method, params, thread_id, turn_id)
@@ -19100,6 +19103,363 @@ def _codex_app_server_thread_is_active(session_id):
     return status == "active" or bool(_codex_latest_active_turn(thread)) or bool(state.get("active_turn_id"))
 
 
+# ── Codex desktop ↔ CCC single-writer coordination ──────────────────────────
+# Codex desktop (ChatGPT.app / Codex.app) runs its OWN `codex app-server`
+# process; turns it starts are invisible to CCC's app-server notifications.
+# Both processes append to the same rollout JSONL, so the rollout file is the
+# shared ground truth. The coordination model:
+#   * attachment  — the desktop app-server holds an open write fd on the
+#     rollout of every thread it has loaded (verified via lsof). Attachment
+#     alone does NOT mean activity: desktop keeps day-old threads open.
+#   * activity    — rollout mtime advanced within _CODEX_EXTERNAL_WRITER_WINDOW_S
+#     and the growth is not attributable to CCC's own app-server turn or a
+#     CCC-spawned `codex exec resume` child ⇒ an external writer (the desktop
+#     when attached, otherwise a CLI/TUI) is mid-turn.
+#   * write-gate  — CCC never issues turn/start while an external writer is
+#     active; the message falls into the existing durable pending-input queue
+#     (fallback:"queue") and the resume-queue watcher drains it once the
+#     thread goes quiet. A per-thread mutex serializes concurrent CCC sends.
+# Residual gap (documented, not fixable from CCC): the desktop's in-memory
+# copy of a thread does not reload CCC-originated turns until the desktop
+# itself refreshes the thread.
+_CODEX_DESKTOP_ATTACH_TTL_S = 10.0
+_CODEX_EXTERNAL_WRITER_WINDOW_S = 20.0
+_CODEX_COORD_EVENTS_MAX = 40
+_CODEX_COORD_EVENTS_TAIL = 8
+_codex_desktop_attach_cache = {"ts": 0.0, "rollouts": {}}
+_codex_desktop_attach_lock = threading.Lock()
+_codex_thread_turn_locks = {}
+_codex_thread_turn_locks_lock = threading.Lock()
+_codex_external_writer_last = {}
+_codex_external_writer_last_lock = threading.Lock()
+_codex_coord_state_loaded = False
+
+
+def _codex_thread_turn_lock(thread_id):
+    """Per-thread mutex so two CCC callers can't race resume→turn/start."""
+    with _codex_thread_turn_locks_lock:
+        lock = _codex_thread_turn_locks.get(thread_id)
+        if lock is None:
+            lock = threading.Lock()
+            _codex_thread_turn_locks[thread_id] = lock
+        return lock
+
+
+def _codex_desktop_app_server_procs():
+    """`codex app-server` processes owned by a desktop app bundle.
+
+    The desktop app's bundled binary lives inside `.app/Contents/…`, which
+    cleanly separates it from CCC's own stdio child (spawned from a bare CLI
+    path) and from wt/CLI processes. CCC's own child pid is excluded
+    explicitly as belt-and-braces.
+    """
+    procs = []
+    try:
+        own_pid = None
+        proc = _CODEX_APP_SERVER_PROC
+        if proc is not None:
+            own_pid = proc.pid
+        for p in find_live_codex_processes():
+            cmd = p.get("command") or ""
+            if "app-server" not in cmd:
+                continue
+            head = cmd.split()[0] if cmd.split() else ""
+            if ".app/Contents/" not in head:
+                continue
+            if own_pid and p.get("pid") == own_pid:
+                continue
+            procs.append(p)
+    except Exception:
+        return []
+    return procs
+
+
+def _parse_lsof_open_rollouts(output):
+    """Map rollout-jsonl path → pid from `lsof -Fpn` field output. Pure."""
+    rollouts = {}
+    pid = None
+    for line in (output or "").splitlines():
+        if not line:
+            continue
+        tag, rest = line[0], line[1:]
+        if tag == "p":
+            try:
+                pid = int(rest)
+            except ValueError:
+                pid = None
+        elif tag == "n" and pid is not None:
+            if "/sessions/" in rest and rest.endswith(".jsonl"):
+                rollouts[rest] = pid
+    return rollouts
+
+
+def _codex_desktop_attached_rollouts(now=None):
+    """rollout abs path → desktop app-server pid. One batched lsof, TTL-cached.
+
+    Perf gate compliance: at most one `lsof` subprocess per TTL window for the
+    whole server, never per session row.
+    """
+    now = time.time() if now is None else float(now)
+    with _codex_desktop_attach_lock:
+        if now - _codex_desktop_attach_cache["ts"] < _CODEX_DESKTOP_ATTACH_TTL_S:
+            return dict(_codex_desktop_attach_cache["rollouts"])
+        # Claim the window before the subprocess so concurrent callers reuse
+        # the (possibly slightly stale) map instead of piling up lsof forks.
+        _codex_desktop_attach_cache["ts"] = now
+    rollouts = {}
+    procs = _codex_desktop_app_server_procs()
+    if procs:
+        pid_list = ",".join(str(p.get("pid")) for p in procs if p.get("pid"))
+        if pid_list:
+            try:
+                out = subprocess.run(
+                    ["lsof", "-w", "-p", pid_list, "-Fpn"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=3.0,
+                    check=False,
+                ).stdout
+                rollouts = _parse_lsof_open_rollouts(out)
+            except (OSError, subprocess.SubprocessError):
+                rollouts = {}
+    with _codex_desktop_attach_lock:
+        _codex_desktop_attach_cache["rollouts"] = dict(rollouts)
+    return rollouts
+
+
+def _codex_ccc_exec_child_running(session_id):
+    """True when a CCC-spawned `codex exec resume` child owns this sid."""
+    try:
+        return any(
+            s.get("resumed_sid") == session_id and _poll_spawn_entry(s) is None
+            for s in _spawned_sessions
+            if s.get("engine") == "codex"
+        )
+    except Exception:
+        return False
+
+
+def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
+                                  app_state=None, attached=None,
+                                  exec_child=None):
+    """Attribute the current writer of one Codex thread.
+
+    Returns {writer, desktop_attached, external_active, mtime_age_s}:
+      writer ∈ "ccc" | "desktop" | "external" | None (quiet).
+    Keyword args exist for unit tests; production callers pass none of them.
+    """
+    now = time.time() if now is None else float(now)
+    snap = {"writer": None, "desktop_attached": False, "external_active": False}
+    if not session_id:
+        return snap
+    state = app_state if app_state is not None else _codex_app_server_thread_state(session_id)
+    state = state or {}
+    ccc_turn_active = bool(state.get("active_turn_id"))
+    ccc_recent = ccc_turn_active
+    if not ccc_recent:
+        try:
+            last_seen = float(state.get("last_activity_at") or state.get("last_event_at") or 0)
+            ccc_recent = (now - last_seen) < _CODEX_EXTERNAL_WRITER_WINDOW_S
+        except (TypeError, ValueError):
+            ccc_recent = False
+    if exec_child is None:
+        exec_child = _codex_ccc_exec_child_running(session_id)
+    if rollout is None:
+        rollout = _codex_rollout_stat(session_id)
+    path = (rollout or {}).get("path")
+    mtime_recent = False
+    if rollout:
+        try:
+            age = now - (float(rollout.get("mtime_ns") or 0) / 1e9)
+            snap["mtime_age_s"] = round(age, 1)
+            mtime_recent = age < _CODEX_EXTERNAL_WRITER_WINDOW_S
+        except (TypeError, ValueError):
+            pass
+    if path:
+        if attached is None:
+            attached = _codex_desktop_attached_rollouts(now)
+        snap["desktop_attached"] = str(path) in (attached or {})
+    if ccc_turn_active or exec_child:
+        snap["writer"] = "ccc"
+        return snap
+    if mtime_recent and not ccc_recent:
+        snap["external_active"] = True
+        snap["writer"] = "desktop" if snap["desktop_attached"] else "external"
+    return snap
+
+
+def _codex_load_coordination_state():
+    """Restore durable coordination events from the persisted app-server state.
+
+    Only coordination_events are restored — volatile fields (active_turn_id,
+    status) must never survive a restart, they would report phantom turns.
+    """
+    global _codex_coord_state_loaded
+    if _codex_coord_state_loaded:
+        return
+    _codex_coord_state_loaded = True
+    try:
+        with CODEX_APP_SERVER_STATE_FILE.open() as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+    threads = data.get("threads") if isinstance(data, dict) else None
+    if not isinstance(threads, dict):
+        return
+    with _CODEX_APP_SERVER_LOCK:
+        for sid, saved in threads.items():
+            if not isinstance(saved, dict):
+                continue
+            events = saved.get("coordination_events")
+            if not isinstance(events, list) or not events:
+                continue
+            state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(str(sid), {})
+            if not state.get("coordination_events"):
+                state["coordination_events"] = [
+                    e for e in events if isinstance(e, dict)
+                ][-_CODEX_COORD_EVENTS_MAX:]
+
+
+def _codex_coordination_event_unlocked(state, kind, writer=None, detail=None, now=None):
+    """Append one coordination event to a thread state dict.
+
+    Caller must hold _CODEX_APP_SERVER_LOCK (or own the dict exclusively) and
+    is responsible for persisting.
+    """
+    event = {"ts": float(now if now is not None else time.time()), "kind": str(kind)}
+    if writer:
+        event["writer"] = str(writer)
+    if detail:
+        event["detail"] = str(detail)[:240]
+    events = state.setdefault("coordination_events", [])
+    events.append(event)
+    del events[:-_CODEX_COORD_EVENTS_MAX]
+
+
+def _codex_coordination_event(session_id, kind, writer=None, detail=None, now=None):
+    """Append one durable coordination event to the thread's state + disk."""
+    if not session_id or not kind:
+        return
+    _codex_load_coordination_state()
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(str(session_id), {})
+        _codex_coordination_event_unlocked(state, kind, writer=writer, detail=detail, now=now)
+        _save_codex_app_server_state_unlocked()
+
+
+def _codex_note_external_writer_transition(session_id, snap):
+    """Record external-writer start/stop transitions as durable events."""
+    if not session_id or not isinstance(snap, dict):
+        return
+    cur = bool(snap.get("external_active"))
+    with _codex_external_writer_last_lock:
+        prev = _codex_external_writer_last.get(session_id)
+        if prev == cur:
+            return
+        _codex_external_writer_last[session_id] = cur
+        if prev is None and not cur:
+            return  # first observation of a quiet thread — nothing to record
+    writer = snap.get("writer") if cur else None
+    if cur:
+        label = "desktop" if writer == "desktop" else "an external Codex process"
+        _codex_coordination_event(
+            session_id, "external_turn_started", writer=writer,
+            detail=f"Turn detected from {label}",
+        )
+    else:
+        _codex_coordination_event(
+            session_id, "external_turn_ended",
+            detail="External turn went quiet; CCC may send again",
+        )
+
+
+_CODEX_COORD_EVENT_TEXT = {
+    "external_turn_started": "Codex desktop started a turn on this thread",
+    "external_turn_ended": "Desktop turn finished — thread is free",
+    "input_queued": "Message queued while another writer was active",
+    "ccc_turn_started": "CCC started a turn via the app-server",
+    "ccc_turn_completed": "CCC turn completed",
+}
+
+
+def _get_codex_coordination_events_for_session(session_id):
+    """Durable coordination events as synthetic conversation events.
+
+    Each event carries a STABLE synthetic `line` id so the frontend's
+    data-jsonl-line dedupe keeps re-polls idempotent.
+    """
+    if not session_id:
+        return []
+    _codex_load_coordination_state()
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.get(session_id) or {}
+        events = list(state.get("coordination_events") or [])
+    out = []
+    for ev in events[-_CODEX_COORD_EVENTS_TAIL:]:
+        if not isinstance(ev, dict):
+            continue
+        kind = str(ev.get("kind") or "")
+        ts = ev.get("ts")
+        writer = ev.get("writer")
+        text = _CODEX_COORD_EVENT_TEXT.get(kind) or kind.replace("_", " ")
+        if kind == "external_turn_started" and writer == "external":
+            text = "Another Codex process started a turn on this thread"
+        out.append({
+            "line": f"coord-{session_id[:8]}-{int(float(ts or 0) * 1000)}-{kind}",
+            "ts": ts,
+            "type": "system",
+            "subtype": "codex_coordination",
+            "kind": kind,
+            "writer": writer,
+            "text": ev.get("detail") or text,
+        })
+    return out
+
+
+def _codex_writer_gate_response(session_id, snap, *, stage="writer-gate",
+                                total_start=None, extra=None):
+    """Uniform fallback:"queue" response for a blocked CCC send."""
+    writer = snap.get("writer")
+    if writer == "desktop":
+        reason = (
+            "Codex desktop is running a turn on this thread — the message is "
+            "queued and CCC will send it when the desktop turn finishes"
+        )
+    elif writer == "ccc":
+        reason = "Another CCC send is already running a turn on this thread — queued"
+    else:
+        reason = "Another Codex process is writing this thread — queued until it goes quiet"
+    _resume_ledger_append(
+        "codex_wake_queued", sid=session_id, stage=stage, reason=reason,
+    )
+    _codex_telemetry_append(
+        "codex_wake",
+        ok=False,
+        via="codex-app-server",
+        fallback="queue",
+        fallback_reason=reason,
+        stage=stage,
+        writer=writer,
+        desktop_attached=bool(snap.get("desktop_attached")),
+        session_id=session_id,
+        total_ms=_codex_elapsed_ms(total_start) if total_start is not None else None,
+    )
+    _codex_coordination_event(session_id, "input_queued", writer=writer)
+    resp = {
+        "ok": False,
+        "via": "codex-app-server",
+        "stage": stage,
+        "fallback": "queue",
+        "error": reason,
+        "writer": writer,
+        "desktop_attached": bool(snap.get("desktop_attached")),
+    }
+    if extra:
+        resp.update(extra)
+    return resp
+
+
 def _codex_turn_params(thread_id, text, cwd=None, model=None, image_paths=None, effort=None):
     params = {
         "threadId": thread_id,
@@ -19456,6 +19816,51 @@ def _codex_resume_or_steer_via_app_server(
     allow_start=True,
     reasoning_effort=None,
 ):
+    """Write-gated wrapper: single-writer protocol for shared Codex threads.
+
+    Blocks turn/start while an external writer (Codex desktop, CLI) is
+    mid-turn on the thread, and serializes concurrent CCC sends with a
+    per-thread mutex. Blocked sends return fallback:"queue" — the caller
+    parks the text in the durable pending-input queue and the resume-queue
+    watcher retries once the thread goes quiet.
+    """
+    total_start = time.monotonic()
+    try:
+        snap = _codex_thread_writer_snapshot(session_id)
+    except Exception:
+        snap = {}
+    if snap.get("external_active"):
+        _codex_note_external_writer_transition(session_id, snap)
+        return _codex_writer_gate_response(session_id, snap, total_start=total_start)
+    lock = _codex_thread_turn_lock(session_id)
+    if not lock.acquire(blocking=False):
+        return _codex_writer_gate_response(
+            session_id, {"writer": "ccc", "desktop_attached": snap.get("desktop_attached")},
+            total_start=total_start,
+        )
+    try:
+        return _codex_resume_or_steer_via_app_server_locked(
+            session_id,
+            text,
+            cwd=cwd,
+            model=model,
+            image_paths=image_paths,
+            allow_start=allow_start,
+            reasoning_effort=reasoning_effort,
+        )
+    finally:
+        lock.release()
+
+
+def _codex_resume_or_steer_via_app_server_locked(
+    session_id,
+    text,
+    cwd=None,
+    model=None,
+    image_paths=None,
+    allow_start=True,
+    reasoning_effort=None,
+):
     if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
         _codex_telemetry_append(
             "codex_wake",
@@ -19625,6 +20030,21 @@ def _codex_resume_or_steer_via_app_server(
         pass
     baseline_state = _codex_app_server_thread_state(session_id)
     baseline_rollout = _codex_rollout_stat(session_id)
+    # Re-check the writer gate at the last possible moment: the thread/resume
+    # above takes seconds, plenty of time for the desktop user to hit enter.
+    # Attachment is TTL-cached; the ACTIVITY read (rollout stat) is fresh.
+    try:
+        snap = _codex_thread_writer_snapshot(
+            session_id, rollout=baseline_rollout, app_state=baseline_state,
+        )
+    except Exception:
+        snap = {}
+    if snap.get("external_active"):
+        _codex_note_external_writer_transition(session_id, snap)
+        return _codex_writer_gate_response(
+            session_id, snap, stage="turn/start-gate", total_start=total_start,
+            extra={"app_server_warm": app_server_warm, "resume_ms": resume_ms},
+        )
     turn_start_at = time.monotonic()
     started = _codex_app_server_request(
         "turn/start",
@@ -19778,6 +20198,25 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
             "via": "codex-steer",
             "code": "codex_steer_unavailable",
             "error": "Codex app-server disabled",
+        }
+    # A turn running in the DESKTOP's app-server cannot be steered from CCC's
+    # app-server — the resumed replica isn't the executing turn. Fail fast
+    # with the code the frontend already maps to its send-mode retry, which
+    # then hits the write-gate and queues durably.
+    try:
+        snap = _codex_thread_writer_snapshot(session_id)
+    except Exception:
+        snap = {}
+    if snap.get("external_active"):
+        _codex_note_external_writer_transition(session_id, snap)
+        writer = snap.get("writer")
+        label = "Codex desktop" if writer == "desktop" else "another Codex process"
+        return {
+            "ok": False,
+            "via": "codex-steer",
+            "code": "codex_steer_unavailable",
+            "writer": writer,
+            "error": f"Active turn belongs to {label}; steering from CCC is not possible",
         }
     resume_params = {
         "threadId": session_id,
@@ -22240,14 +22679,42 @@ def _codex_state_fields(sid, now=None):
     fields = {"codex_state": None, "codex_fresh": False}
     if not sid:
         return fields
+    now = now if now is not None else time.time()
+    snap = {}
     try:
         app_state = _codex_app_server_thread_state(sid)
+    except Exception:
+        app_state = {}
+    try:
+        # Writer attribution (desktop ↔ CCC coordination): one rollout stat +
+        # the TTL-cached desktop-attachment map. Also feeds the durable
+        # external-turn transition events.
+        snap = _codex_thread_writer_snapshot(sid, now, app_state=app_state)
+        _codex_note_external_writer_transition(sid, snap)
+        if snap.get("writer"):
+            fields["codex_writer"] = snap["writer"]
+        if snap.get("desktop_attached"):
+            fields["codex_desktop_attached"] = True
+    except Exception:
+        snap = {}
+    try:
         if app_state and (app_state.get("active_turn_id") or str(app_state.get("status") or "").lower() == "active"):
             fields["codex_state"] = "working"
             fields["codex_fresh"] = True
             return fields
     except Exception:
         pass
+    if snap.get("external_active"):
+        # A desktop/CLI turn is in flight: the session is live and busy even
+        # though CCC's own app-server has no active turn for it.
+        fields["codex_state"] = "working"
+        fields["codex_fresh"] = True
+        fields["codex_state_reason"] = (
+            "Codex desktop is writing this thread"
+            if snap.get("writer") == "desktop"
+            else "Another Codex process is writing this thread"
+        )
+        return fields
     try:
         path = _resolve_codex_rollout_path(sid)
         if not path:
@@ -22255,7 +22722,6 @@ def _codex_state_fields(sid, now=None):
         mtime = os.path.getmtime(path)
     except OSError:
         return fields
-    now = now if now is not None else time.time()
     if (now - mtime) > _codex_recent_window_s():
         return fields
     try:
@@ -23265,8 +23731,19 @@ def _resume_queue_engine_busy(sid):
         if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes")
     ):
         return True
-    if _is_codex_session(sid) and _codex_app_server_thread_is_active(sid):
-        return True
+    if _is_codex_session(sid):
+        # Cheap first: an external writer (Codex desktop / CLI) mid-turn on
+        # the thread means the queued message must keep waiting. One stat +
+        # a TTL-cached lsof map — no app-server RPC.
+        try:
+            snap = _codex_thread_writer_snapshot(sid)
+            _codex_note_external_writer_transition(sid, snap)
+            if snap.get("external_active"):
+                return True
+        except Exception:
+            pass
+        if _codex_app_server_thread_is_active(sid):
+            return True
     return False
 
 
@@ -23371,6 +23848,12 @@ def _verify_terminal_drain_receipts(now=None):
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once fire-and-watch engines or live terminal sessions go idle."""
     _load_pending_inputs()
+    # Restore durable Codex coordination events before any app-server
+    # notification persists (and would otherwise clobber) the state file.
+    try:
+        _codex_load_coordination_state()
+    except Exception:
+        pass
     def _watcher():
         while True:
             time.sleep(5)
@@ -32974,9 +33457,14 @@ never branch, and do NOT push unless explicitly asked.
 # permissive enough for any reasonable engine id. The value lands in prompt
 # text and a curl the spawned agent runs, so reject anything that could break
 # out of either: shell metachars, quotes, whitespace, control chars.
-_RETURN_ADDRESS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{7,127}$")
+# Optionally node-qualified: "<node-uuid>:<session-id>" — the federated
+# global reference form. A remote child reports to "<parent-node>:<sid>";
+# its own CCC parses the prefix and proxies the inject to the owning node.
+_RETURN_ADDRESS_RE = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}:)?[A-Za-z0-9][A-Za-z0-9_.-]{7,127}$")
 _RETURN_ADDRESS_FOOTER_RE = re.compile(
-    r"dispatched by another CCC session \(id `([A-Za-z0-9_.-]{8,128})`\)"
+    r"dispatched by another CCC session \(id `([A-Za-z0-9_.:-]{8,166})`\)"
 )
 _ANNOUNCED_FROM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. @:+/-]{0,79}$")
 
@@ -35548,12 +36036,19 @@ def _group_chat_latest_author_matches(content):
     return pat, list(pat.finditer(content or ""))
 
 
+def _group_chat_native_sid(sid):
+    """A participant entry may be a global ref ("<node>:<sid>") for a
+    session owned by another CCC node. Author headings and @mentions always
+    use the NATIVE session id, so match on that part."""
+    return (sid or "").split(":", 1)[-1]
+
+
 def _group_chat_addressed_sids(body, session_ids, name_map):
     addressed = set()
     lower_body = (body or "").lower()
     mentioned_hashes = {h.lower() for h in re.findall(r'@([0-9a-fA-F]{8})\b', body or "")}
     for sid in session_ids or []:
-        if sid[:8].lower() in mentioned_hashes:
+        if _group_chat_native_sid(sid)[:8].lower() in mentioned_hashes:
             addressed.add(sid)
             continue
         label = _group_chat_participant_label(sid, name_map, session_ids)
@@ -35585,7 +36080,7 @@ def _group_chat_auto_nudge_selection(content, session_ids, name_map):
     if author != "Human":
         author_hash = author.lower()
         for sid in session_ids or []:
-            if sid.lower().startswith(author_hash):
+            if _group_chat_native_sid(sid).lower().startswith(author_hash):
                 exclude_sid = sid
                 break
         targets = [sid for sid in (session_ids or []) if sid != exclude_sid]
@@ -35863,7 +36358,8 @@ def _group_chat_latest_message_snapshot(chat_path: str) -> str:
     return heading
 
 
-def _group_chat_inject_text(chat_path: str, topic: str, mode: str, sid: str) -> str:
+def _group_chat_inject_text(chat_path: str, topic: str, mode: str, sid: str,
+                            chat_uuid: str = "", remote_host_node: str = "") -> str:
     """Build the /group-chat injection with a tiny latest-post pointer.
 
     Previously inlined up to ~2KB of the last message body, which the
@@ -35871,8 +36367,30 @@ def _group_chat_inject_text(chat_path: str, topic: str, mode: str, sid: str) -> 
     every nudge. Now we send only the heading line (author + timestamp)
     as a "there's a new message; here's whose" pointer. The agent reads
     the chat file for actual content.
+
+    When the participant lives on ANOTHER CCC node (``remote_host_node`` =
+    this chat's host node id), the local file path is useless to it — the
+    check-in references the chat by stable uuid + host node instead, and
+    the participant reads/posts through its own CCC, which proxies to the
+    host.
     """
     safe_topic = (topic or "").replace('"', '\\"')
+    native_sid = _group_chat_native_sid(sid)
+    if remote_host_node:
+        text = (
+            "Group-chat check-in (cross-machine): you are a participant in a "
+            f'group chat titled "{safe_topic}" (mode={mode}) hosted on another '
+            f"CCC node. Your sid is \"{native_sid}\". Use YOUR OWN CCC's API "
+            "(base URL: http://127.0.0.1:$(cat ~/.claude/command-center/port.txt "
+            "2>/dev/null || echo 8090)) with these calls:\n"
+            f"- read: GET /api/group-chat/read?id={chat_uuid}&host_node={remote_host_node}\n"
+            f"- post: POST /api/group-chat/post with JSON "
+            f"{{\"id\": \"{chat_uuid}\", \"host_node\": \"{remote_host_node}\", "
+            f"\"session_id\": \"{native_sid[:8]}\", \"name\": \"<your name>\", "
+            "\"text\": \"<your message>\"}\n"
+            "Read the chat first, then reply once if you have something to add."
+        )
+        return text
     # No leading "/" (CCC-108): the slash form only dispatches in a live
     # Claude TUI. Codex and headless Claude receive it as literal text —
     # Codex's router used to bounce it outright, and headless models read
@@ -35900,6 +36418,21 @@ def _group_chat_inject_text(chat_path: str, topic: str, mode: str, sid: str) -> 
                 "Read the chat file before posting; the body is there."
             )
     return text
+
+
+def _group_chat_checkin_text(real_path, topic, mode, sid, meta=None):
+    """Check-in text for one participant — remote participants (global-ref
+    sids owned by another node) get the uuid+host_node API variant instead
+    of a machine-local file path."""
+    if meta is None:
+        meta = _load_group_chat_sidecar(real_path)
+    owner, _native = federation.parse_session_ref(sid)
+    remote = bool(owner and owner != federation.node_id())
+    return _group_chat_inject_text(
+        real_path, topic, mode, sid,
+        chat_uuid=(meta or {}).get("uuid") or "",
+        remote_host_node=((meta or {}).get("host_node") or federation.node_id())
+        if remote else "")
 
 
 def _coordinate_sessions(payload):
@@ -35974,8 +36507,13 @@ def _coordinate_sessions(payload):
         return {"ok": False, "error": f"cannot write chat file: {exc}"}
 
     results = []
+    self_node = federation.node_id()
     for sid in session_ids:
-        text = _group_chat_inject_text(chat_path, topic, mode, sid)
+        owner, _native = federation.parse_session_ref(sid)
+        remote = owner and owner != self_node
+        text = _group_chat_inject_text(
+            chat_path, topic, mode, sid, chat_uuid=chat_uuid,
+            remote_host_node=self_node if remote else "")
         inject_result = _inject_text_into_session(sid, text)
         results.append({
             "session_id": sid,
@@ -35995,6 +36533,10 @@ def _coordinate_sessions(payload):
         with open(sidecar_path, "w", encoding="utf-8") as fh:
             json.dump({
                 "uuid": chat_uuid,
+                # The node that owns this chat's files. Reads/posts/nudges
+                # for the chat proxy to the host; participants may live on
+                # other nodes (global-ref session ids).
+                "host_node": self_node,
                 "session_ids": session_ids,
                 "topic": topic,
                 "mode": mode,
@@ -36249,7 +36791,7 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
             pass
         if not message_key:
             message_key = f"manual:{time.time():.3f}"
-        text = _group_chat_inject_text(real_path, topic, mode, target_sid)
+        text = _group_chat_checkin_text(real_path, topic, mode, target_sid)
         r = _inject_text_into_session(target_sid, text)
         results.append({"session_id": target_sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
         # Reflect the manual nudge in the orchestrator panel: bump
@@ -36333,7 +36875,7 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
     for sid in target_sids:
         now_iso = datetime.now().astimezone().isoformat()
         label = _group_chat_participant_label(sid, name_map, session_ids)
-        text = _group_chat_inject_text(real_path, topic, mode, sid)
+        text = _group_chat_checkin_text(real_path, topic, mode, sid)
         r = _inject_text_into_session(sid, text)
         results.append({"session_id": sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
         log_entries.append({
@@ -36863,6 +37405,7 @@ def _list_group_chats(include_archived: bool = False, only_archived: bool = Fals
         out.append({
             "id": chat_uuid,
             "uuid": chat_uuid,
+            "host_node": meta.get("host_node") or federation.node_id(),
             "path": md_path,
             "path_tilde": "~/.claude/group-chats/" + os.path.basename(md_path),
             "topic": meta.get("topic", ""),
@@ -37287,7 +37830,7 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     # Existing participants get the check-in instruction too (CCC-114): the
     # join link doubles as a "go read the chat now" nudge, so re-adding is
     # idempotent for membership but still delivers the check-in.
-    text = _group_chat_inject_text(real_path, topic, mode, sid)
+    text = _group_chat_checkin_text(real_path, topic, mode, sid)
     inject_result = _inject_text_into_session(sid, text)
     if not already:
         added_label = _group_chat_participant_label(sid, name_map, session_ids)
@@ -38099,6 +38642,14 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         text = _strip_lone_surrogates(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+    # Global session reference ("<node>:<sid>")? Transparently proxy the
+    # inject to the owning CCC — the caller never writes SSH. Bare local
+    # ids keep today's behavior byte-for-byte.
+    session_id, owner_node = _federation_resolve_target(session_id)
+    if owner_node:
+        return _federation_proxy_session_action(owner_node, "inject", {
+            "session_id": session_id, "text": text, "mode": mode,
+        })
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
@@ -39039,6 +39590,14 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     """
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+
+    # Global session reference — proxy the whole ask to the owning CCC and
+    # relay its reply. Bare local ids keep today's behavior.
+    session_id, owner_node = _federation_resolve_target(session_id)
+    if owner_node:
+        return _federation_proxy_session_action(owner_node, "ask", {
+            "session_id": session_id, "text": text, "timeout_ms": timeout_ms,
+        }, timeout=min(660.0, max(60.0, timeout_ms / 1000.0 + 45.0)))
 
     engine = _detect_session_engine(session_id)
     if engine in ("codex", "gemini", "antigravity", "hermes"):
@@ -49104,6 +49663,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(_archive_load_snapshot())
         elif path == "/api/sessions":
             qs = urllib.parse.parse_qs(parsed.query)
+            if qs.get("federated", ["0"])[0] in ("1", "true"):
+                # Unified multi-node list: local + every paired peer, rows
+                # tagged with owning node + global ref, peers labeled
+                # stale/offline instead of silently missing.
+                try:
+                    fed_limit = int((qs.get("limit") or ["200"])[0])
+                except ValueError:
+                    fed_limit = 200
+                self.send_json(_federation_federated_sessions(limit=fed_limit))
+                return
             if qs.get("all", ["0"])[0] in ("1", "true"):
                 engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
                 rows, _from_cache = _archive_all_rows_cached({
@@ -50480,8 +51049,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs_params = urllib.parse.parse_qs(parsed.query)
             chat_path = (qs_params.get("path") or [""])[0]
             chat_uuid = (qs_params.get("id") or qs_params.get("uuid") or [""])[0]
+            host_node = (qs_params.get("host_node") or [""])[0].strip()
             if not chat_path and not chat_uuid:
                 self.send_json({"ok": False, "error": "missing path or id"})
+                return
+            if host_node and host_node != federation.node_id():
+                # The chat lives on another CCC node — proxy the read to its
+                # host instead of pretending the local path exists.
+                self.send_json(_federation_proxy_session_action(
+                    host_node, "group_chat_read", {"id": chat_uuid, "path": ""}))
                 return
             result, forbidden = _group_chat_read(chat_path, chat_uuid)
             if forbidden:
@@ -52525,6 +53101,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
+            # Placement: `node` (a paired peer's node_id or name) routes the
+            # spawn to that CCC. Return routing and hierarchy are rewritten
+            # to global refs so the child can report across machines.
+            target_node = str(payload.get("node") or "").strip()
+            if target_node and target_node != federation.node_id():
+                proxied, proxied_status = _federation_spawn_on_node(target_node, payload)
+                self.send_json(proxied, proxied_status)
+                return
             prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
             name = (payload.get("name") or "").strip() or None
             engine_raw = payload.get("engine")
@@ -54105,6 +54689,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if (not chat_path and not chat_uuid) or not session_id:
                 self.send_json({"ok": False, "error": "missing chat_id/chat_path or session_id"})
                 return
+            host_node = (payload.get("host_node") or "").strip()
+            if host_node and host_node != federation.node_id():
+                self.send_json(_federation_proxy_session_action(
+                    host_node, "group_chat_add", {
+                        "id": chat_uuid, "session_id": session_id,
+                        "display_name": display_name,
+                    }))
+                return
             result = _group_chat_add_participant(chat_path, session_id, display_name, chat_uuid)
             if result.get("error") == "forbidden":
                 self.send_json(result, 403)
@@ -54131,6 +54723,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if (not chat_path and not chat_uuid) or not text:
                 self.send_json({"ok": False, "error": "missing path/id or text"})
                 return
+            host_node = (payload.get("host_node") or "").strip()
+            if host_node and host_node != federation.node_id():
+                self.send_json(_federation_proxy_session_action(
+                    host_node, "group_chat_post", {
+                        "id": chat_uuid, "text": text,
+                        "session_id": post_session_id, "name": post_name,
+                        "emoji": post_emoji,
+                    }))
+                return
             result = _group_chat_post(
                 chat_path, text, chat_uuid,
                 session_id=post_session_id, name=post_name, emoji=post_emoji,
@@ -54151,6 +54752,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             target_sid = (payload.get("target_sid") or payload.get("sid") or "").strip()
             if not chat_path and not chat_uuid:
                 self.send_json({"ok": False, "error": "missing path or id"})
+                return
+            host_node = (payload.get("host_node") or "").strip()
+            if host_node and host_node != federation.node_id():
+                self.send_json(_federation_proxy_session_action(
+                    host_node, "group_chat_nudge",
+                    {"id": chat_uuid, "target_sid": target_sid}))
                 return
             result = _group_chat_nudge(chat_path, chat_uuid, target_sid=target_sid)
             if not result.get("ok") and result.get("error") == "forbidden":
@@ -56999,6 +57606,23 @@ def _federation_touch_peer(peer_node_id, **extra):
         pass
 
 
+def _federation_lease_owners():
+    """{session_id: owner_node} for every recorded handoff lease — one
+    directory listing, no per-row file probes."""
+    out = {}
+    try:
+        for path in (federation.leases_dir()).glob("*.json"):
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict) and data.get("owner_node"):
+                out[path.stem] = data["owner_node"]
+    except OSError:
+        pass
+    return out
+
+
 def _federation_sessions_inventory(limit=200):
     """Compact cross-repo session inventory for a peer aggregator. Served from
     the same response cache as /api/sessions?all=1 — no extra O(all) work."""
@@ -57009,12 +57633,16 @@ def _federation_sessions_inventory(limit=200):
         "resolve_effective": False,
         "resolve_worktree_dirty": False,
     })
+    leases = _federation_lease_owners()
     out = []
     for r in rows[: max(1, min(int(limit or 200), 1000))]:
         sid = r.get("session_id") or r.get("id")
         if not sid:
             continue
+        lease_owner = leases.get(sid)
         out.append({
+            "owned_here": lease_owner in (None, me),
+            "moved_to_node": lease_owner if lease_owner and lease_owner != me else None,
             "session_id": sid,
             "ref": federation.format_session_ref(me, sid),
             "node_id": me,
@@ -57036,6 +57664,83 @@ def _federation_sessions_inventory(limit=200):
         "sessions": out,
         "count": len(out),
     }
+
+
+# Per-peer session inventories: short TTL so the dashboard poll doesn't
+# hammer transports; failures serve the last good payload LABELED stale.
+_FEDERATED_SESSIONS_CACHE = {}
+_FEDERATED_SESSIONS_CACHE_LOCK = threading.Lock()
+_FEDERATED_SESSIONS_TTL = 10.0
+
+
+def _federation_fetch_peer_sessions(peer, limit):
+    node = peer["node_id"]
+    now = time.time()
+    with _FEDERATED_SESSIONS_CACHE_LOCK:
+        cached = _FEDERATED_SESSIONS_CACHE.get(node)
+        if cached and now - cached["ts"] < _FEDERATED_SESSIONS_TTL:
+            return {**cached["payload"], "stale": False}, None
+    try:
+        payload = federation.PeerClient(peer).request(
+            "GET", f"/api/federation/v1/sessions?limit={int(limit)}", timeout=20)
+    except federation.PeerError as e:
+        with _FEDERATED_SESSIONS_CACHE_LOCK:
+            cached = _FEDERATED_SESSIONS_CACHE.get(node)
+        if cached:
+            return {**cached["payload"], "stale": True}, {"error": e.kind, "detail": str(e)}
+        return None, {"error": e.kind, "detail": str(e)}
+    with _FEDERATED_SESSIONS_CACHE_LOCK:
+        _FEDERATED_SESSIONS_CACHE[node] = {"ts": now, "payload": payload}
+    _federation_touch_peer(node)
+    return {**payload, "stale": False}, None
+
+
+def _federation_federated_sessions(limit=200):
+    """One session list across every node: local + each paired peer, each
+    row carrying its owning node, global ref, and staleness."""
+    me = _federation_self_hello()
+    local = _federation_sessions_inventory(limit=limit)
+    sessions = []
+    for row in local["sessions"]:
+        row["node_name"] = me["display_name"]
+        row["stale"] = False
+        sessions.append(row)
+    nodes = [{
+        "node_id": me["node_id"], "name": me["display_name"], "self": True,
+        "ok": True, "observed_at": local["observed_at"], "stale": False,
+    }]
+    peers = federation.load_peers()
+    if peers:
+        def _one(peer):
+            return peer, _federation_fetch_peer_sessions(peer, limit)
+        with ThreadPoolExecutor(max_workers=min(4, len(peers))) as pool:
+            results = list(pool.map(_one, peers))
+        for peer, (payload, err) in results:
+            entry = {
+                "node_id": peer["node_id"],
+                "name": peer.get("name"),
+                "self": False,
+            }
+            if payload:
+                stale = bool(payload.get("stale"))
+                entry.update({
+                    "ok": err is None,
+                    "stale": stale,
+                    "observed_at": payload.get("observed_at"),
+                })
+                if err:
+                    entry.update(err)
+                for row in payload.get("sessions", []):
+                    row["node_name"] = peer.get("name")
+                    row["stale"] = stale
+                    sessions.append(row)
+            else:
+                entry.update({"ok": False, "stale": True,
+                              "observed_at": None, **(err or {})})
+            nodes.append(entry)
+    sessions.sort(key=lambda r: r.get("timestamp") or 0, reverse=True)
+    return {"ok": True, "sessions": sessions, "nodes": nodes,
+            "count": len(sessions)}
 
 
 def _federation_default_branch_view(repo_path):
@@ -57176,6 +57881,26 @@ def _federation_execute_route(envelope):
         # Placement was decided by the routing node; the owning node always
         # executes locally (never re-forwards to its own CCC_SSH_HOST).
         args = {**args, "remote": False}
+        # Cross-node spawns carry the stable repo identity — THIS node maps
+        # it to its own clone path (paths never travel between machines).
+        ident_key = str(args.pop("repo_identity", "") or "").strip()
+        if ident_key and not args.get("repo_path") and not args.get("cwd"):
+            mapped = federation.resolve_repo_path(ident_key)
+            if not mapped:
+                for candidate in _known_repo_paths():
+                    try:
+                        cand = federation.repo_identity(candidate)
+                    except Exception:
+                        cand = None
+                    if cand and cand["identity"] == ident_key:
+                        federation.map_repo(ident_key, candidate)
+                        mapped = candidate
+                        break
+            if not mapped:
+                return {"ok": False, "error": "stale_mapping",
+                        "detail": f"no local clone mapped for {ident_key} on "
+                                  "this node"}, 404
+            args["repo_path"] = mapped
     timeout = 60.0
     if action == "ask":
         try:
@@ -57189,6 +57914,104 @@ def _federation_execute_route(envelope):
     if mutating and req_id:
         federation.record_request_result(req_id, result)
     return {"ok": True, "result": result}, 200
+
+
+def _federation_proxy_session_action(owner_node, action, args, timeout=60.0):
+    """Proxy an inject/ask/spawn to the CCC that owns the session. Returns the
+    remote action's own result dict (typed errors on transport failure)."""
+    peer = federation.get_peer(owner_node)
+    if not peer:
+        return {"ok": False, "error": "unpaired_peer",
+                "detail": f"session owner {owner_node[:13]}… is not a paired peer "
+                          "of this node"}
+    envelope = federation.make_route_envelope(action, args)
+    try:
+        routed = federation.PeerClient(peer).request(
+            "POST", "/api/federation/v1/route", envelope, timeout=timeout)
+    except federation.PeerError as e:
+        return {"ok": False, "error": e.kind, "detail": str(e),
+                "owner_node": owner_node}
+    inner = routed.get("result") if isinstance(routed, dict) else None
+    if not isinstance(inner, dict):
+        return {"ok": False, "error": "bad_response",
+                "detail": "peer returned no action result", "owner_node": owner_node}
+    inner.setdefault("routed_to", owner_node)
+    return inner
+
+
+def _federation_resolve_target(session_ref):
+    """Split a possibly node-qualified session reference.
+    Returns (native_session_id, owner_node_or_None-if-local)."""
+    node, native = federation.parse_session_ref(session_ref or "")
+    if node and node != federation.node_id():
+        return native, node
+    return native, None
+
+
+def _federation_find_peer(node_ref):
+    """Look a peer up by node_id or display name."""
+    peer = federation.get_peer(node_ref)
+    if peer:
+        return peer
+    for p in federation.load_peers():
+        if (p.get("name") or "").strip().lower() == node_ref.strip().lower():
+            return p
+    return None
+
+
+def _federation_globalize_ref(value):
+    """Qualify a bare local session id with this node's identity."""
+    if not value:
+        return value
+    node, _native = federation.parse_session_ref(value)
+    return value if node else federation.format_session_ref(federation.node_id(), value)
+
+
+def _federation_spawn_on_node(node_ref, payload):
+    """Route a spawn request to a paired peer. Returns (payload, status).
+
+    - repo_path/cwd are THIS node's paths; they are translated to the stable
+      repo identity and re-resolved by the target node's own mapping.
+    - report_to / parent_session_id become global refs so the child's
+      completion report and hierarchy survive the machine boundary.
+    """
+    peer = _federation_find_peer(node_ref)
+    if not peer:
+        return {"ok": False, "error": "unpaired_peer",
+                "detail": f"no paired peer {node_ref!r}"}, 404
+    args = {k: v for k, v in payload.items() if k not in ("node",)}
+    repo_identity_key = str(args.pop("repo", "") or args.pop("repo_identity", "") or "").strip()
+    local_hint = args.pop("repo_path", None) or args.pop("cwd", None)
+    if not repo_identity_key and local_hint:
+        top = _git_toplevel_for_existing_dir(str(local_hint))
+        ident = federation.repo_identity(top) if top else None
+        if not ident:
+            return {"ok": False, "error": "stale_mapping",
+                    "detail": f"cannot derive a repository identity from "
+                              f"{local_hint!r} to place the spawn on the peer"}, 400
+        repo_identity_key = ident["identity"]
+    if not repo_identity_key:
+        return {"ok": False, "error": "bad_request",
+                "detail": "cross-node spawn needs repo (identity) or a local "
+                          "repo_path/cwd to translate"}, 400
+    args["repo_identity"] = repo_identity_key
+    for key in ("report_to", "return_to", "reply_to", "parent_session_id",
+                "parentSessionId", "parent_sid"):
+        if args.get(key):
+            args[key] = _federation_globalize_ref(str(args[key]))
+    result = _federation_proxy_session_action(
+        peer["node_id"], "spawn", args, timeout=120.0)
+    status = 200 if result.get("ok") else 502
+    if isinstance(result, dict):
+        result.setdefault("node_id", peer["node_id"])
+        result.setdefault("node_name", peer.get("name"))
+        sid = result.get("session_id")
+        if sid:
+            result.setdefault("ref", federation.format_session_ref(peer["node_id"], sid))
+        if result.get("spawn_id"):
+            result.setdefault("spawn_ref", federation.format_session_ref(
+                peer["node_id"], str(result["spawn_id"])))
+    return result, status
 
 
 def _federation_handle_pair_request(data):

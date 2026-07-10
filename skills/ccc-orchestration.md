@@ -90,6 +90,43 @@ You can manage group chats programmatically via the API endpoints or manually vi
 3. Enter the topic, search/select the participant sessions by UUID, and click **Create/Start**.
 
 
+## 2.5 Federation — sessions on other machines
+
+CCC instances can be **paired across machines** (Settings → Nodes & peers…).
+You never write SSH commands — your local CCC routes everything.
+
+- **Global session reference:** `"<node_id>:<session_id>"`. Anywhere a
+  `session_id` is accepted (Inject, Ask, `report_to`, group-chat targets),
+  a global ref transparently proxies to the owning CCC. A bare `session_id`
+  always means "this node" — existing calls are unchanged.
+- **Discover nodes (GET):** `/api/federation/peers` → `{"self": {"node_id",
+  "display_name", ...}, "peers": [{"node_id", "name", "transport", ...}]}`.
+- **Federated list (GET):** `/api/sessions?federated=1` → one list across all
+  nodes. Each row carries `node_id`, `node_name`, `ref` (the global
+  reference), and `stale` (true when served from cache because the peer is
+  unreachable). The `nodes` array reports per-peer health — treat
+  `ok: false` peers as offline, not empty.
+- **Spawn on another node:** add `"node": "<node_id or peer name>"` to the
+  spawn payload. Keep passing YOUR local `repo_path` — CCC translates it to
+  the stable repo identity and the target node maps it to its own clone
+  (paths never travel). Response gains `node_id`, `ref`, and `spawn_ref`.
+  Pass `"report_to": "<your bare session id>"` as usual; CCC globalizes it
+  so the child's completion report crosses machines back to you.
+- **Group chats across machines:** chat rows include `host_node` (the node
+  owning the chat files). If a chat's `host_node` is not your node, do NOT
+  touch its path — call your own CCC with the id + host:
+  read `GET /api/group-chat/read?id=<uuid>&host_node=<node_id>`;
+  post/nudge/add: include `"host_node": "<node_id>"` in the JSON payload.
+- **Ownership (handoff) errors:** a 409 `not_owner` with `owner_node` means
+  the conversation was handed to another machine — re-address it as
+  `"<owner_node>:<session_id>"`. `GET /api/federation/handoff/status?session_id=`
+  shows the lease.
+- **Typed federation errors:** `peer_offline` (node unreachable), `timeout`
+  (work may still continue there), `unpaired_peer` (pair first),
+  `stale_mapping` (repo not mapped on that node), `unsupported_capability`,
+  `routing_loop`. Report these truthfully; do not retry `unpaired_peer` or
+  `unsupported_capability`.
+
 ## 3. Strict Rules
 - **No one-shot tasks:** Use the built-in `Task` tool for quick delegation.
 - **No tight polling:** `/api/ask` blocks until a reply or timeout.
