@@ -110,96 +110,96 @@
 ## Stages
 
 ### Stage 1 — contracts + identities (foundations)
-- [ ] `federation.py` module (stdlib-only): node identity, repo identity
+- [x] `federation.py` module (stdlib-only): node identity, repo identity
       parsing/normalization, global session refs, peer registry load/save,
       pairing token generation, transport abstraction (ssh + loopback),
       request envelope + idempotency ring.
-- [ ] Contract tests: `tests/test_federation_identity.py` (repo identity
+- [x] Contract tests: `tests/test_federation_identity.py` (repo identity
       normalization matrix, session ref parse/format, peer registry round-trip,
       manifest schema validation).
-- [ ] Commit: `feat(federation): node identity, repo identity, peer registry`
+- [x] Commit: `feat(federation): node identity, repo identity, peer registry`
 
 ### Stage 2 — federation foundation (server wiring)
-- [ ] `/api/federation/v1/hello|health|sessions|repo-inventory|route` in
+- [x] `/api/federation/v1/hello|health|sessions|repo-inventory|route` in
       server.py; pairing endpoints `/api/federation/peers` (GET list,
       POST pair, POST remove, POST rename, POST test, POST map-repo).
-- [ ] Peer transport client (`federation.PeerClient.request(path, payload)`)
+- [x] Peer transport client (`federation.PeerClient.request(path, payload)`)
       with ssh + loopback; staleness cache with observed_at.
-- [ ] Node badges + peer setup UI (sidebar modal): list peers, add (ssh host or
+- [x] Node badges + peer setup UI (sidebar modal): list peers, add (ssh host or
       loopback port), test connection, rename, map repo paths, remove.
-- [ ] Tests: pairing handshake (loopback, two temp state dirs), unpaired 403,
+- [x] Tests: pairing handshake (loopback, two temp state dirs), unpaired 403,
       idempotent route dedupe, hop limit.
-- [ ] Commit(s): `feat(federation): peer protocol + pairing`,
+- [x] Commit(s): `feat(federation): peer protocol + pairing`,
       `feat(federation): peer setup UI`
 
 ### Stage 3 — session handoff
-- [ ] Export: bundle builder + manifest (claude engine), capability error for
+- [x] Export: bundle builder + manifest (claude engine), capability error for
       others.
-- [ ] Import: staging, hash validation, path rewrite + audit, atomic activate,
+- [x] Import: staging, hash validation, path rewrite + audit, atomic activate,
       divergence refusal.
-- [ ] Git preflight + plan; ownership lease both sides; reverse handoff.
-- [ ] `Continue on…` toolbar action in UI (destination picker, preflight plan
+- [x] Git preflight + plan; ownership lease both sides; reverse handoff.
+- [x] `Continue on…` toolbar action in UI (destination picker, preflight plan
       display, single confirm).
-- [ ] Tests: round-trip handoff between two temp homes, dirty-guard, failed
+- [x] Tests: round-trip handoff between two temp homes, dirty-guard, failed
       import leaves destination intact, lease blocks double-resume, force
       takeover, reverse handoff with divergence detection.
-- [ ] Commits: `feat(handoff): session export/import with manifest`,
+- [x] Commits: `feat(handoff): session export/import with manifest`,
       `feat(handoff): git preflight + ownership lease`, `feat(handoff): UI`
 
 ### Stage 4 — orchestration routing + group chats
-- [ ] Global refs accepted by `/api/sessions/spawn` (`node` param /
+- [x] Global refs accepted by `/api/sessions/spawn` (`node` param /
       placement), `/api/inject-input`, `/api/ask`; proxy via `route`.
-- [ ] Federated session list (`/api/sessions?federated=1` or new
+- [x] Federated session list (`/api/sessions?federated=1` or new
       `/api/federation/sessions`) with owning node + stale flags.
-- [ ] Cross-machine `report_to` (route completion back to parent's node).
-- [ ] Group chats: `host_node` in sidecar, global participant refs
+- [x] Cross-machine `report_to` (route completion back to parent's node).
+- [x] Group chats: `host_node` in sidecar, global participant refs
       (`node_id:sid`), proxied read/post/nudge through host / owner; local flow
       unchanged; truthful host-unreachable state.
-- [ ] Update `skills/ccc-orchestration` skill for global refs.
-- [ ] Distinguishable errors: `peer_offline`, `unknown_session`, `timeout`,
+- [x] Update `skills/ccc-orchestration` skill for global refs.
+- [x] Distinguishable errors: `peer_offline`, `unknown_session`, `timeout`,
       `unpaired_peer`, `stale_mapping`, `unsupported_capability`.
-- [ ] Tests: spawn/inject/ask across two-node harness, remote child →
+- [x] Tests: spawn/inject/ask across two-node harness, remote child →
       local parent report, cross-node group chat post + nudge routing,
       host-offline read failure shape.
-- [ ] Commits: `feat(federation): global refs for spawn/inject/ask`,
+- [x] Commits: `feat(federation): global refs for spawn/inject/ask`,
       `feat(group-chat): cross-node hosting`, `docs(skills): global refs`
 
 ### Stage 5 — fleet inventory
-- [ ] Local repo inventory collector (git worktrees, dirty, ahead/behind,
+- [x] Local repo inventory collector (git worktrees, dirty, ahead/behind,
       unpublished, default-branch SHA) reusing existing helpers; per-node via
       peer protocol; PR + deployment dimensions from existing gh/vercel code.
-- [ ] `/api/fleet/inventory` with freshness + per-source errors; provenance
+- [x] `/api/fleet/inventory` with freshness + per-source errors; provenance
       hook + index + backfill; session association.
-- [ ] Fleet UI view: repo × node matrix, state chips per dimension,
+- [ ] Fleet UI view: repo × node matrix (agent in flight), state chips per dimension,
       observation times, stale badges.
-- [ ] Tests: inventory correctness on temp repos (dirty/unpublished/ahead),
+- [x] Tests: inventory correctness on temp repos (dirty/unpublished/ahead),
       unpublished-commit detection across two clones + bare origin, freshness
       labels, provenance scoring unit tests.
-- [ ] Commits: `feat(fleet): multi-node repo inventory`,
+- [x] Commits: `feat(fleet): multi-node repo inventory`,
       `feat(fleet): provenance index + attribution`, `feat(fleet): fleet view`
 
 ### Stage 6 — recommendations + reviewed executor
-- [ ] Deterministic recommendation rules + gate explanations.
-- [ ] Resolve-all plan builder (dependency-ordered, grouped repo × node);
+- [x] Deterministic recommendation rules + gate explanations.
+- [x] Resolve-all plan builder (dependency-ordered, grouped repo × node);
       deselect + one confirm; persisted resumable job; precondition
       revalidation; worktree-removal safety proof; ping-owner / ask-to-finish
       routed actions.
-- [ ] UI: plan review modal, job progress, per-step logs.
-- [ ] Tests: gates (merge blocked on red checks, no dirty deletion,
+- [x] UI: plan review modal, job progress, per-step logs.
+- [x] Tests: gates (merge blocked on red checks, no dirty deletion,
       reachability proof), job resume after simulated restart, revalidation
       stops stale plan, idempotent re-run of completed step.
-- [ ] Commits: `feat(fleet): recommendations`, `feat(fleet): reviewed
+- [x] Commits: `feat(fleet): recommendations`, `feat(fleet): reviewed
       execution plan + persisted jobs`
 
 ### Stage 7 — hardening + evidence
-- [ ] Two-node integration harness `tests/two_node_harness.py` (temp HOMEs,
+- [x] Two-node integration harness `tests/two_node_harness.py` (temp HOMEs,
       two server processes, bare origin, two clones) + scenario tests.
-- [ ] Peer-offline / stale-cache / timeout / duplicate-request / failed-import
+- [x] Peer-offline / stale-cache / timeout / duplicate-request / failed-import
       / divergent-history / restart tests; security boundary tests (no bind
       change, unpaired rejection, path escape).
-- [ ] `node snapshot.js` UI verification; perf budget respected.
-- [ ] `changelog.d/added-federated-fleet-2026-07-10.md`; docs page.
-- [ ] Fresh evidence for all 12 acceptance scenarios; completion report.
+- [ ] `node snapshot.js` UI verification (after Fleet UI); perf budget: DONE (24 passed).
+- [x] `changelog.d/added-federated-fleet-2026-07-10.md`; docs page.
+- [ ] Fresh evidence run for all 12 acceptance scenarios; completion report.
 
 ## Acceptance scenario → evidence map
 

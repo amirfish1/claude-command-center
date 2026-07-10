@@ -57814,6 +57814,21 @@ def _federation_sessions_inventory(limit=200):
         "resolve_worktree_dirty": False,
     })
     leases = _federation_lease_owners()
+    # Reverse repo map (path -> stable identity) so every row carries the
+    # cross-machine repository identity, not just this node's local path.
+    path_to_identity = {}
+    for ident_key, mapped_path in federation.load_repo_map().items():
+        path_to_identity[mapped_path.rstrip("/")] = ident_key
+
+    def _identity_for_cwd(cwd):
+        cwd = (cwd or "").rstrip("/")
+        while cwd and cwd != "/":
+            hit = path_to_identity.get(cwd)
+            if hit:
+                return hit
+            cwd = os.path.dirname(cwd)
+        return None
+
     out = []
     for r in rows[: max(1, min(int(limit or 200), 1000))]:
         sid = r.get("session_id") or r.get("id")
@@ -57823,6 +57838,7 @@ def _federation_sessions_inventory(limit=200):
         out.append({
             "owned_here": lease_owner in (None, me),
             "moved_to_node": lease_owner if lease_owner and lease_owner != me else None,
+            "repo_identity": _identity_for_cwd(r.get("session_cwd") or r.get("cwd")),
             "session_id": sid,
             "ref": federation.format_session_ref(me, sid),
             "node_id": me,
