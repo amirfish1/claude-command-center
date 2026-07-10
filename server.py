@@ -4539,7 +4539,12 @@ def build_live_sessions_activity():
 
 def _build_live_sessions_activity_uncached():
     out = {}
-    for sid in _discover_live_session_ids():
+    # Pool-model Codex threads (desktop app-server) never appear in the
+    # resume-arg/sidecar discovery scan — union the cached sqlite candidacy
+    # set (same pattern as _auto_unarchive_live_sessions, CCC-435) so a turn
+    # running in Codex desktop lights up its WIP chip too.
+    candidates = _discover_live_session_ids() | _codex_pool_candidate_sids()
+    for sid in candidates:
         if not _archive_session_is_live(sid):
             continue
         raw = _live_activity_entry_for_session(sid)
