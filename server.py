@@ -22682,16 +22682,31 @@ def _codex_state_fields(sid, now=None):
     if not sid:
         return fields
     now = now if now is not None else time.time()
+    # Resolve + stat the rollout ONCE (the thread-row lookup behind
+    # _resolve_codex_rollout_path is a sqlite query — this function sits on
+    # liveness paths, so it must not pay it twice).
+    path = None
+    rollout = {}
+    mtime = None
+    try:
+        path = _resolve_codex_rollout_path(sid)
+        if path:
+            st = Path(path).stat()
+            mtime = st.st_mtime
+            rollout = {"path": str(path), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    except OSError:
+        path = None
+        rollout = {}
     snap = {}
     try:
         app_state = _codex_app_server_thread_state(sid)
     except Exception:
         app_state = {}
     try:
-        # Writer attribution (desktop ↔ CCC coordination): one rollout stat +
-        # the TTL-cached desktop-attachment map. Also feeds the durable
-        # external-turn transition events.
-        snap = _codex_thread_writer_snapshot(sid, now, app_state=app_state)
+        # Writer attribution (desktop ↔ CCC coordination): reuses the rollout
+        # stat above + the TTL-cached desktop-attachment map. Also feeds the
+        # durable external-turn transition events.
+        snap = _codex_thread_writer_snapshot(sid, now, app_state=app_state, rollout=rollout)
         _codex_note_external_writer_transition(sid, snap)
         if snap.get("writer"):
             fields["codex_writer"] = snap["writer"]
@@ -22717,12 +22732,7 @@ def _codex_state_fields(sid, now=None):
             else "Another Codex process is writing this thread"
         )
         return fields
-    try:
-        path = _resolve_codex_rollout_path(sid)
-        if not path:
-            return fields
-        mtime = os.path.getmtime(path)
-    except OSError:
+    if not path or mtime is None:
         return fields
     if (now - mtime) > _codex_recent_window_s():
         return fields
