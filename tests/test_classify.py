@@ -1196,6 +1196,32 @@ class TestCodexConversationAdapter(unittest.TestCase):
         finally:
             con.close()
 
+    def _codex_title_preview(self, session_id):
+        db_path = Path(self.tmp_home) / ".codex" / "state_5.sqlite"
+        con = sqlite3.connect(db_path)
+        try:
+            cols = {
+                row[1]
+                for row in con.execute("PRAGMA table_info(threads)").fetchall()
+            }
+            selected = ["title", "first_user_message"]
+            if "preview" in cols:
+                selected.insert(1, "preview")
+            row = con.execute(
+                f"SELECT {', '.join(selected)} FROM threads WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return None
+            values = dict(zip(selected, row))
+            return (
+                values.get("title"),
+                values.get("preview"),
+                values.get("first_user_message"),
+            )
+        finally:
+            con.close()
+
     def _set_codex_updated_at(self, session_id, updated_at):
         db_path = Path(self.tmp_home) / ".codex" / "state_5.sqlite"
         con = sqlite3.connect(db_path)
@@ -1286,7 +1312,24 @@ class TestCodexConversationAdapter(unittest.TestCase):
         self.assertEqual(entry["session_id"], CODEX_SESSION_ID)
         self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
         self.assertEqual(self._codex_source(CODEX_SESSION_ID), "vscode")
+        meta = self._codex_rollout_meta()
+        self.assertEqual(meta.get("thread_source"), "user")
+        self.assertEqual(meta.get("source"), "vscode")
         update_registry.assert_called_once_with(9090, CODEX_SESSION_ID)
+
+    def test_codex_user_rename_updates_thread_title(self):
+        result = self.server.rename_session(
+            CODEX_SESSION_ID,
+            "Transition to my system",
+            source="user",
+        )
+
+        self.assertTrue(result["ok"])
+        title, preview, first_user_message = self._codex_title_preview(CODEX_SESSION_ID)
+        self.assertEqual(title, "Transition to my system")
+        if preview is not None:
+            self.assertEqual(preview, "Transition to my system")
+        self.assertEqual(first_user_message, "please edit README.md")
 
     def test_codex_sidebar_backfill_marks_recent_ccc_logs_only(self):
         self._set_codex_thread_source(CODEX_SESSION_ID, None)
@@ -1325,6 +1368,33 @@ class TestCodexConversationAdapter(unittest.TestCase):
         self.assertIsNone(self._codex_thread_source(CODEX_TRAILER_SESSION_ID))
         self.assertEqual(self._codex_source(CODEX_TRAILER_SESSION_ID), "exec")
         self.assertEqual(self.rollout.stat().st_mtime, 1777680005)
+
+    def test_codex_sidebar_backfill_repairs_recent_db_exec_row_without_log(self):
+        self._set_codex_thread_source(CODEX_SESSION_ID, None)
+        self._set_codex_thread_source(CODEX_TRAILER_SESSION_ID, None)
+        self._set_codex_source(CODEX_SESSION_ID, "exec")
+        self._set_codex_source(CODEX_TRAILER_SESSION_ID, "exec")
+        self._set_codex_updated_at(CODEX_SESSION_ID, 1777680005)
+        self._set_codex_updated_at(CODEX_TRAILER_SESSION_ID, 1)
+        now = 1777680100
+
+        with mock.patch.object(
+            self.server,
+            "_append_codex_sidebar_project_roots",
+            return_value=0,
+        ):
+            result = self.server.backfill_codex_sidebar_visibility(
+                days=7,
+                repo_paths=[str(self.fake_repo)],
+                now=now,
+            )
+
+        self.assertEqual(result["found"], 1)
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(self._codex_thread_source(CODEX_SESSION_ID), "user")
+        self.assertEqual(self._codex_source(CODEX_SESSION_ID), "vscode")
+        self.assertIsNone(self._codex_thread_source(CODEX_TRAILER_SESSION_ID))
+        self.assertEqual(self._codex_source(CODEX_TRAILER_SESSION_ID), "exec")
 
     def test_codex_sidebar_backfill_scans_recent_codex_cwds(self):
         self._set_codex_thread_source(CODEX_SESSION_ID, None)

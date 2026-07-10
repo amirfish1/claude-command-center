@@ -800,8 +800,23 @@
   .conv-outcome-banner .cob-icon { font-size: 15px; line-height: 1.3; flex: 0 0 auto; }
   .conv-outcome-banner.conv-outcome-error .cob-icon { color: var(--red); }
   .conv-outcome-banner.conv-outcome-incomplete .cob-icon { color: var(--orange, #d29922); }
-  .conv-outcome-banner .cob-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .conv-outcome-banner .cob-body { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
   .conv-outcome-banner .cob-detail { color: var(--text-muted); font-size: 12px; word-break: break-word; }
+  .conv-outcome-banner .cob-wake-btn {
+    flex: 0 0 auto; align-self: center;
+    border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent);
+    background: rgba(57, 210, 192, 0.10); color: var(--cyan);
+    border-radius: 4px; padding: 5px 9px;
+    font-size: 12px; font-weight: 700; line-height: 1.1;
+    cursor: pointer; white-space: nowrap;
+  }
+  .conv-outcome-banner .cob-wake-btn:hover:not(:disabled) {
+    background: rgba(57, 210, 192, 0.16);
+    border-color: color-mix(in srgb, var(--cyan) 70%, transparent);
+  }
+  .conv-outcome-banner .cob-wake-btn:disabled {
+    cursor: default; opacity: 0.65;
+  }
 
   .event.user_text.pending {
     font-style: italic; opacity: 0.62;
@@ -16079,6 +16094,41 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-tab.is-active .conv-tab-count {
   background: rgba(88,166,255,0.18); color: var(--accent, #58a6ff);
 }
+.conv-all-hermes-tabs {
+  display: inline-flex;
+  gap: 2px;
+  margin: 2px 8px 8px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.conv-all-hermes-tab {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.conv-all-hermes-tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.conv-all-hermes-tab.is-active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent, #58a6ff) 18%, transparent);
+}
+.conv-all-hermes-tab.is-active .conv-tab-count {
+  background: color-mix(in srgb, var(--accent, #58a6ff) 22%, transparent);
+  color: var(--accent, #58a6ff);
+}
 /* Section headers double as collapse toggles; inside a tab the section
    label is redundant with the tab itself but harmless — keep for tools
    (1d/7d, grouping) that live in the header. */
@@ -16932,6 +16982,9 @@ body:has(.gc-reader) .pwa-install-banner {
 .ccc-no-screenshots #bugReportShotSection {
   display: none !important;
 }
+.ccc-no-screenshots #annotationScreenBtn {
+  display: none !important;
+}
 .ccc-no-annotate [data-flow-action="annotate"] {
   display: none !important;
 }
@@ -17724,7 +17777,8 @@ body:has(.gc-reader) .pwa-install-banner {
   background: var(--accent);
   color: #fff;
 }
-.gc-replay-word.gc-typing-shimmer {
+.gc-replay-word.gc-typing-shimmer,
+.conv-live-word.gc-typing-shimmer {
   background: linear-gradient(90deg, var(--text) 30%, var(--accent) 50%, var(--text) 70%);
   background-size: 200% 100%;
   -webkit-background-clip: text;

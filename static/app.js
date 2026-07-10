@@ -2399,7 +2399,7 @@
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
-  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false };
   let liveStatusTimer = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
   // Separate 1s tick that just re-renders the live-tool strip + inline
@@ -3053,7 +3053,7 @@
   let _liveStatusFetchingKey = '';
   async function refreshLiveStatus() {
     if (!currentSession.id) {
-      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false };
       updateJumpButton();
       updateInputBar();
       return;
@@ -3089,6 +3089,8 @@
         codexFresh: !!data.codex_fresh,
         codexStateReason: data.codex_state_reason || '',
         codexAppServer: !!data.codex_app_server,
+        codexAppServerTransport: data.codex_app_server_transport || null,
+        codexManagedAppServer: !!data.codex_managed_app_server,
         staleToolCall: !!data.stale_tool_call,
         staleToolAgeS: data.stale_tool_age_s || 0,
         questionWaiting: !!data.question_waiting,
@@ -3185,7 +3187,7 @@
         codex_state_reason: data.codex_state_reason || '',
       });
     } catch (err) {
-      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -3836,8 +3838,10 @@
     return true;
   }
   function clearOptimisticAgentIndicator($view) {
-    const el = ($view || document).querySelector('.conv-live-tool-inline.optimistic');
-    if (el) el.remove();
+    const root = $view || document;
+    root.querySelectorAll('.conv-live-tool-inline.optimistic').forEach(el => el.remove());
+    _removePriorWakeStatus(root);
+    stopCodexWakeBreakdown(true);
     if (_optimisticAgentTimer) {
       clearTimeout(_optimisticAgentTimer);
       _optimisticAgentTimer = null;
@@ -3857,7 +3861,26 @@
   }
   function _removePriorWakeStatus($view) {
     if (!$view) return;
-    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status').forEach(n => n.remove());
+    $view.querySelectorAll('.conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown').forEach(n => n.remove());
+  }
+  function clearLiveGeneratingIndicator($view) {
+    ($view || document).querySelectorAll('.conv-live-tool-inline.is-generating').forEach(n => n.remove());
+  }
+  function getSingleLiveToolInline($view) {
+    if (!$view) return null;
+    const nodes = Array.from($view.querySelectorAll('.conv-live-tool-inline:not(.optimistic):not(.is-wake-status):not(.wake-breakdown)'));
+    if (!nodes.length) return null;
+    const keep = nodes[nodes.length - 1];
+    nodes.forEach(node => { if (node !== keep) node.remove(); });
+    return keep;
+  }
+  function _anchorWakeBreakdown($view) {
+    if (!$view) return;
+    const optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
+    const breakdown = $view.querySelector('.conv-live-tool-inline.wake-breakdown');
+    if (optimistic && breakdown && breakdown.previousElementSibling !== optimistic) {
+      optimistic.parentNode.insertBefore(breakdown, optimistic.nextSibling);
+    }
   }
   // Transient status (queued / resuming). Not dismissible — it clears when
   // activity streams in or a re-render swaps in the durable transcript.
@@ -3898,7 +3921,10 @@
     // Success via the Codex app-server turn: keep an alive "resuming" indicator
     // that clears when the reply streams in (clearOptimisticAgentIndicator).
     if (data.ok && via === 'codex-app-turn') {
-      setOptimisticAgentThinking($view, '⏳ Codex resuming&hellip;');
+      const managed = data.app_server_transport === 'managed' || !!data.managed_app_server;
+      setOptimisticAgentThinking($view, managed
+        ? '⏳ Codex resuming via managed app-server&hellip;'
+        : '⏳ Codex resuming&hellip;');
       const wakeSid = data.session_id || (currentSession && currentSession.id);
       startCodexWakeBreakdown($view, wakeSid);
       return true;
@@ -3946,6 +3972,13 @@
       default: return name;
     }
   }
+  function _codexWakeTransportLabel(data) {
+    const transport = String((data && data.app_server_transport) || '');
+    if (transport === 'managed' || (data && data.managed_app_server)) return 'managed app-server';
+    if (transport === 'stdio') return 'private app-server';
+    if (transport) return transport + ' app-server';
+    return '';
+  }
   function _wakeInt(n) {
     try { return Number(n).toLocaleString(); } catch (_) { return String(n); }
   }
@@ -3962,6 +3995,7 @@
         $view.appendChild(el);
       }
     }
+    _anchorWakeBreakdown($view);
     const stages = Array.isArray(data.stages) ? data.stages : [];
     const currentIdx = stages.findIndex(s => !s.done);
     const checklist = document.createElement('div');
@@ -3984,6 +4018,8 @@
     const readout = document.createElement('div');
     readout.className = 'wb-readout';
     const parts = [];
+    const transportLabel = _codexWakeTransportLabel(data);
+    if (transportLabel) parts.push(transportLabel);
     if (data.model) parts.push(data.model);
     if (data.effort) parts.push(data.effort);
     if (data.input_tokens != null || data.output_tokens != null) {
@@ -4469,7 +4505,7 @@
       const _doneAge = _liveStripLastLiveTime ? (Date.now() - _liveStripLastLiveTime) : 9999999;
       if (_doneAge < 4000) {
         document.querySelectorAll('.conv-live-tool-strip').forEach(n => n.remove());
-        let _doneInline = $view.querySelector('.conv-live-tool-inline:not(.optimistic)');
+        let _doneInline = getSingleLiveToolInline($view);
         if (!_doneInline) {
           _doneInline = document.createElement('div');
           _doneInline.className = 'conv-live-tool-inline';
@@ -4497,7 +4533,7 @@
     // Match only the *real* inline indicator — leave the optimistic
     // twin alone so it lingers until either real data lands or its
     // own 60s safety timeout fires.
-    let inline = $view.querySelector('.conv-live-tool-inline:not(.optimistic)');
+    let inline = getSingleLiveToolInline($view);
     const tool = liveStatus.sidecarTool;
     const ts = liveStatus.sidecarTs || 0;
     const ageSec = ts ? Math.max(0, Math.floor(Date.now() / 1000 - ts)) : 9999;
@@ -4517,6 +4553,7 @@
     // end; the age cap covers a stale sidecar that never got cleared.
     const isGenerating = (liveStatus.live || codexStateWorking) && !tool
       && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking);
+    const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');
     const shouldShow = (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
       && (ageSec < 300 || isQuestion) && !_headlessQuestion)
       || isGenerating;
@@ -4528,6 +4565,12 @@
     }
     // "Generating…" — session is live but no tool is executing yet/anymore
     if (isGenerating) {
+      if (hasWakeProgress) {
+        if (inline) inline.remove();
+        updateLiveStripOffset($view, null);
+        _liveStripShown = false;
+        return;
+      }
       if (!inline) {
         inline = document.createElement('div');
         inline.className = 'conv-live-tool-inline';
@@ -4536,6 +4579,9 @@
       inline.className = 'conv-live-tool-inline is-generating';
       inline.innerHTML = '<span class="cl-pulse"></span><span class="cl-tool">Generating…</span>';
       inline.title = 'Session is live — model is generating';
+      if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
+        $view.appendChild(inline);
+      }
       _liveStripShown = true;
       return;
     }
@@ -5746,10 +5792,14 @@
         if (!showAppSrv) activeCodexAppSrv.classList.remove('live');
         if (showAppSrv) {
           const appLive = !!liveStatus.codexAppServer;
+          const managed = liveStatus.codexAppServerTransport === 'managed' || !!liveStatus.codexManagedAppServer;
+          const label = appLive ? (managed ? 'managed app-server' : 'app-server') : 'exec';
           activeCodexAppSrv.classList.toggle('live', appLive);
-          if (activeCodexAppSrvLabel) activeCodexAppSrvLabel.textContent = appLive ? 'app-server' : 'exec';
+          if (activeCodexAppSrvLabel) activeCodexAppSrvLabel.textContent = label;
           activeCodexAppSrv.title = appLive
-            ? 'CCC is driving this Codex session via its app-server (JSON-RPC); /compact and follow-ups append to the loaded thread.'
+            ? (managed
+                ? "CCC is driving this Codex session via Codex's managed app-server Unix socket."
+                : 'CCC is driving this Codex session via its private app-server fallback.')
             : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.';
         }
       }
@@ -7421,6 +7471,14 @@
     return null;
   }
 
+  function isPendingSendEchoElement(el) {
+    if (!el || !el.classList) return false;
+    return el.classList.contains('pending')
+      || el.classList.contains('send-queued')
+      || el.classList.contains('send-delivered')
+      || el.classList.contains('not-acknowledged');
+  }
+
   function lastMessageTtsData(paneId) {
     const view = getConvViewForPane(paneId || activePaneId()) || getConvView();
     if (!view) return null;
@@ -7438,6 +7496,7 @@
       } else if (el.classList.contains('assistant')) {
         nodesToExtract = Array.from(el.querySelectorAll('.assistant-text'));
       } else if (el.classList.contains('user_text')) {
+        if (isPendingSendEchoElement(el)) continue;
         const msg = el.querySelector('.user-msg');
         if (msg) nodesToExtract = [msg];
       } else if (el.classList.contains('assistant-text')) {
@@ -14553,7 +14612,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
+        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);
         if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
           selectConversation(placeholder.id);
         }
@@ -18329,6 +18388,72 @@
     }
   }
 
+  function _convShouldLiveRevealNewText(opts) {
+    if (opts && (opts.initialLoad || opts.prepending)) return false;
+    if (_convReplayActive) return false;
+    try {
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+    } catch (_) {}
+    return true;
+  }
+
+  const CONV_LIVE_REVEAL_BOTTOM_EPSILON = 2;
+  function _convShouldLiveRevealStickToBottom(view) {
+    // Live reveal grows the transcript every few milliseconds. Use an exact
+    // tail check, not the generous normal bottom tolerance, so a manual scroll
+    // immediately releases auto-follow.
+    return !!(view && conversationDistanceFromBottom(view) <= CONV_LIVE_REVEAL_BOTTOM_EPSILON);
+  }
+
+  function _convLiveRevealContainersForEvent(eventEl) {
+    if (!eventEl || !eventEl.classList || !eventEl.classList.contains('assistant')) return [];
+    return Array.from(eventEl.children || []).filter(el =>
+      el.classList && el.classList.contains('assistant-text')
+    );
+  }
+
+  function _convLiveRevealNewText(eventEl, paneId, opts) {
+    if (!_convShouldLiveRevealNewText(opts)) return;
+    _convLiveRevealContainersForEvent(eventEl).forEach(container => {
+      if (!container || container.dataset.liveWordsWrapped) return;
+      const plain = (container.textContent || '').trim();
+      if (!plain) return;
+      const { html, count } = _wrapReplayWordsInHtml(container.innerHTML, 'conv-live-word');
+      if (!count) return;
+      container.innerHTML = html;
+      container.dataset.liveWordsWrapped = '1';
+      container.dataset.liveWordCount = String(count);
+      container.classList.add('conv-live-word-reveal');
+      _convLiveRevealWords(container, paneId, 0);
+    });
+  }
+
+  function _convLiveRevealWords(container, paneId, wordIdx) {
+    if (!container || !container.isConnected) return;
+    const count = Number(container.dataset.liveWordCount || 0);
+    if (wordIdx >= count) {
+      container.classList.remove('conv-live-word-reveal');
+      return;
+    }
+
+    const $view = getConvViewForPane(paneId) || $conversationsView;
+    const shouldStick = _convShouldLiveRevealStickToBottom($view);
+    const span = container.querySelector(`.conv-live-word[data-run-id="${wordIdx}"]`);
+    if (span) {
+      span.style.display = '';
+      span.classList.add('gc-typing-shimmer');
+    }
+    if (shouldStick && $view) scrollConversationToEnd($view);
+    else if ($view) updateConversationEndAffordance($view);
+
+    const totalMs = Math.max(900, Math.min(4500, (container.textContent || '').length * 4));
+    const perWord = Math.max(12, Math.min(220, totalMs / Math.max(1, count)));
+    setTimeout(() => {
+      if (span) span.classList.remove('gc-typing-shimmer');
+      _convLiveRevealWords(container, paneId, wordIdx + 1);
+    }, perWord);
+  }
+
   function startConvReplay(paneId) {
     const targetPaneId = paneId || activePaneId();
     // Two open panes each showing a real conversation → one Replay drives
@@ -21622,12 +21747,13 @@
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error(data.error || 'spawn_failed');
-          if (data.pid) {
+          const realSpawnId = data.spawn_id || data.pid;
+          if (realSpawnId) {
             const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
             if (placeholder) {
-              placeholder.spawn_pid = data.pid;
+              placeholder.spawn_pid = realSpawnId;
               pendingSpawns.delete(tempPid);
-              pendingSpawns.set(data.pid, placeholder);
+              pendingSpawns.set(realSpawnId, placeholder);
             }
           }
           // Fire-and-forget: signal to GitHub that this issue is being worked on
@@ -21746,9 +21872,13 @@
     // its JSON-RPC app-server; exec = one-shot fallback.
     if (currentSession && currentSession.source === 'codex') {
       const appLive = !!ls.codexAppServer;
-      el.innerHTML = pill0(appLive, false, appLive ? 'app-server' : 'exec',
+      const managed = ls.codexAppServerTransport === 'managed' || !!ls.codexManagedAppServer;
+      const label = appLive ? (managed ? 'managed app-server' : 'app-server') : 'exec';
+      el.innerHTML = pill0(appLive, false, label,
         appLive
-          ? 'CCC is driving this Codex session via its app-server (JSON-RPC); /compact and follow-ups append to the loaded thread.'
+          ? (managed
+              ? "CCC is driving this Codex session via Codex's managed app-server Unix socket."
+              : 'CCC is driving this Codex session via its private app-server fallback.')
           : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.');
       return;
     }
@@ -22010,7 +22140,7 @@
     }
   }
 
-  async function wakeCodexSession(sessionId, feedbackEl) {
+  async function wakeCodexSession(sessionId, feedbackEl, opts) {
     if (!sessionId) return;
     const originalText = feedbackEl ? feedbackEl.textContent : '';
     const originalTitle = feedbackEl ? feedbackEl.title : '';
@@ -22029,6 +22159,9 @@
         data = await postInjectInput(sessionId, CODEX_WAKE_TEXT, 'send');
       }
       if (!data.ok) throw new Error(data.error || 'wake failed');
+      if (opts && opts.view) {
+        renderConvWakeOutcome(opts.view, data);
+      }
       touchSessionOptimistically(sessionId);
       showOpToast(data.via === 'codex-steer' ? 'Wake sent to running Codex turn.' : 'Wake sent to Codex.');
       setTimeout(refreshConversationList, 1500);
@@ -24368,15 +24501,29 @@
         const claimable = (q && q.claimable != null) ? Number(q.claimable) : depth;
         // Pill is derived client-side from the row's data fields (depth/auto_drain/
         // stuck/claimable) — no new server states. Idle (0 open) reads "Ready".
-        let stateLabel, stateCls;
-        if (stuck) { stateLabel = 'Stuck'; stateCls = 'is-stuck'; }
-        else if (depth === 0) { stateLabel = 'Ready'; stateCls = 'is-ready'; }
-        else if (drainOn && claimable > 0) { stateLabel = 'Draining'; stateCls = 'is-draining'; }
-        else { stateLabel = 'Backlog'; stateCls = 'is-backlog'; }
+        let stateLabel, stateCls, stateTip;
+        if (stuck) {
+          stateLabel = 'Stuck';
+          stateCls = 'is-stuck';
+          stateTip = 'Stuck means this auto-drain queue has claimable open tickets but no live WatchTower worker is currently draining them.';
+        } else if (depth === 0) {
+          stateLabel = 'Ready';
+          stateCls = 'is-ready';
+          stateTip = 'Ready means this queue has no open tickets.';
+        } else if (drainOn && claimable > 0) {
+          stateLabel = 'Draining';
+          stateCls = 'is-draining';
+          stateTip = 'Draining means auto-drain is on and claimable tickets are waiting for a worker.';
+        } else {
+          stateLabel = 'Backlog';
+          stateCls = 'is-backlog';
+          stateTip = 'Backlog means this queue has open tickets, but auto-drain is off or no open tickets match the claim-type filter.';
+        }
         const progress = closed + '/' + total;
         const tip = label + ': ' + progress + ' done · ' + depth + ' open · '
           + workers + ' worker' + (workers === 1 ? '' : 's')
-          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + stateLabel;
+          + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + stateLabel
+          + ' — ' + stateTip;
         const meta = '<span class="ceq-meta">'
           + '<span class="ceq-depth">' + escapeHtml(progress) + '</span>'
           + '<span class="ceq-sep">·</span>'
@@ -24384,7 +24531,7 @@
           + '<span class="ceq-sep">·</span>'
           + '<span class="ceq-drain ' + (drainOn ? 'is-on' : 'is-off') + '">drain ' + (drainOn ? 'on' : 'off') + '</span>'
           + '</span>'
-          + '<span class="ceq-state ' + stateCls + '">' + escapeHtml(stateLabel) + '</span>';
+          + '<span class="ceq-state ' + stateCls + '" title="' + escapeAttr(stateTip) + '" aria-label="' + escapeAttr(stateTip) + '">' + escapeHtml(stateLabel) + '</span>';
         return '<div class="conv-evergreen-queue-header" role="button" tabindex="0"'
           + ' data-queue-name="' + escapeAttr(label) + '"'
           + ' title="' + escapeAttr(tip + ' — click to open queue') + '">'
@@ -25206,7 +25353,66 @@
     const _trashConvs = _archivedConvs.filter(c => !c.pinned);
     const _pinnedArchived = _archivedConvs.filter(c => c.pinned);
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
-    const _arcHasFolderChips = _allTabConvs.concat(_trashConvs).some(c => c.folder_label_chip);
+    try { _ensureEvergreenQueuesFresh(); } catch (_) {}
+    const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
+    const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
+      && (Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim());
+    const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);
+    const _wtWorkerSessionIds = new Set();
+    const _wtWorkerQueues = new Set();
+    try {
+      ((_uxqHealthCache && _uxqHealthCache.worker_session_ids) || [])
+        .forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
+      ((_wtWorkersCache && _wtWorkersCache.workers) || []).forEach(w => {
+        if (!w) return;
+        if (w.session_id) _wtWorkerSessionIds.add(String(w.session_id));
+        if (w.queue) _wtWorkerQueues.add(String(w.queue).trim().toUpperCase());
+      });
+      ((_uxqHealthCache && _uxqHealthCache.queues) || []).forEach(q => {
+        if (q && q.queue) _wtWorkerQueues.add(String(q.queue).trim().toUpperCase());
+      });
+      Object.keys(_wtWorkerConvsCache || {}).forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
+    } catch (_) {}
+    const _looksLikeWtWorkerTitle = (c) => {
+      const raw = String((c && (c.display_name || c.ai_title || c.title || c.name)) || '').trim();
+      if (!raw) return false;
+      const plain = raw.replace(/^🧵\s*/, '').trim();
+      const low = plain.toLowerCase();
+      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*\s+worker(?::|\s*$)/.test(plain)) return true;
+      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*#\d+\b/.test(plain)) return true;
+      if (/^drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b/.test(low)) return true;
+      if (!_wtWorkerQueues.size) return false;
+      for (const q of _wtWorkerQueues) {
+        const qlow = q.toLowerCase();
+        if (low === qlow + ' queue worker' || low === qlow + ' worker' || low.startsWith(qlow + ' worker:')) return true;
+        if (low.startsWith(qlow + '#')) return true;
+      }
+      return false;
+    };
+    const _isWatchTowerWorkerRow = (c) => {
+      if (!c) return false;
+      const sid = String(c.session_id || c.id || '').trim();
+      return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
+    };
+    const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c) && !_isWatchTowerWorkerRow(c));
+    const _allTabWatchTowerWorkerConvs = _allTabConvs.filter(c => !_isHermesWorkerRow(c) && _isWatchTowerWorkerRow(c));
+    const _allTabHermesWorkerConvs = _allTabConvs.filter(_isHermesWorkerRow);
+    const _allTabWorkerConvs = _allTabHermesWorkerConvs.concat(_allTabWatchTowerWorkerConvs);
+    const _allTabHermesMessageConvs = _allTabConvs.filter(_isHermesMessageRow);
+    const _allTabHasHermesSplit = _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
+    const _allTabView = (() => {
+      if (!_allTabHasHermesSplit) return 'coding';
+      try {
+        const v = localStorage.getItem('ccc-all-hermes-tab');
+        return (v === 'workers' || v === 'messages') ? v : 'coding';
+      } catch (_) { return 'coding'; }
+    })();
+    const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
+      ? _allTabWorkerConvs
+      : ((_allTabHasHermesSplit && _allTabView === 'messages')
+        ? _allTabHermesMessageConvs
+        : _allTabCodingConvs);
+    const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
       : (Array.isArray(_archivedGroupChats)
@@ -25253,7 +25459,7 @@
       // groups (they're not project-scoped). Sort folders by their
       // most-recent archived-row mtime, descending.
       const _byFolder = new Map();
-      for (const c of _allTabConvs) {
+      for (const c of _allTabMainConvs) {
         const key = c.folder_label_chip || c.folder_path || '(unknown)';
         if (!_byFolder.has(key)) _byFolder.set(key, []);
         _byFolder.get(key).push(c);
@@ -25277,12 +25483,12 @@
       }).join('');
       // Archived group chats live in the Trash section (CCC-468), so the
       // flat tail below the folder groups carries only unarchived chats.
-      _arcRows = _folderRowsHtml + (_gcItems || []).map(it => it.html).join('');
+      _arcRows = _folderRowsHtml + (_allTabView === 'coding' ? (_gcItems || []).map(it => it.html).join('') : '');
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length + _trashConvs.length;
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
-      for (const c of _allTabConvs) {
+      for (const c of _allTabMainConvs) {
         _archivedItems.push({
           type: 'session',
           card: c,
@@ -25293,8 +25499,10 @@
       // Archived group chats live in the Trash section (CCC-468).
       // Active/paused/closed (unarchived) group chats still interleave here
       // so they appear in the All view, not just in Current Sessions.
-      for (const gci of (_gcItems || [])) {
-        _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
+      if (_allTabView === 'coding') {
+        for (const gci of (_gcItems || [])) {
+          _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
+        }
       }
       _archivedItems.sort((a, b) => {
         if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
@@ -25362,6 +25570,21 @@
       _arcRows = _arcChunks.join('');
       _arcCount = _archivedItems.length + _archivedGroupChatsForRender.length + _trashConvs.length;
     }
+    const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + ((_gcItems || []).length || 0) + _trashConvs.length;
+    _arcCount = _allTabTotalCount;
+    const _allHermesTabBarHtml = _allTabHasHermesSplit
+      ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '">'
+        +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + ((_gcItems || []).length || 0)) + '</span>'
+        + '</button>'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '">'
+        +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
+        + '</button>'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '">'
+        +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
+        + '</button>'
+        + '</div>'
+      : '';
 
     // Trash section (CCC-468): archived sessions + archived group chats,
     // flat and recency-sorted, in a collapsed-by-default section at the very
@@ -25442,6 +25665,7 @@
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
         + _arcTools
+        + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + _trashHtml
         + '</div>';
@@ -25721,6 +25945,18 @@
         const value = opt.getAttribute('data-window');
         if (value !== '1d' && value !== '7d' && value !== 'all') return;
         try { localStorage.setItem(ARCHIVE_WINDOW_KEY, value); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    const $allHermesTabs = $convList.querySelector('[data-role="all-hermes-tabs"]');
+    if ($allHermesTabs) {
+      $allHermesTabs.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (!opt) return;
+        const raw = opt.getAttribute('data-all-hermes-tab');
+        const value = raw === 'workers' || raw === 'messages' ? raw : 'coding';
+        try { localStorage.setItem('ccc-all-hermes-tab', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
@@ -27161,12 +27397,13 @@
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || !data.ok) throw new Error(data.error || 'spawn_failed');
-            if (data.pid) {
+            const realSpawnId = data.spawn_id || data.pid;
+            if (realSpawnId) {
               const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
               if (placeholder) {
-                placeholder.spawn_pid = data.pid;
+                placeholder.spawn_pid = realSpawnId;
                 pendingSpawns.delete(tempPid);
-                pendingSpawns.set(data.pid, placeholder);
+                pendingSpawns.set(realSpawnId, placeholder);
               }
             }
             if (issueNum && spawnRepoPath) {
@@ -28859,6 +29096,8 @@
     }
     if (!kind) return;
 
+    const wakeSessionId = (currentSession && currentSession.id) ? String(currentSession.id) : '';
+    const canWakeCodex = !!(wakeSessionId && currentSession && currentSession.source === 'codex');
     const banner = document.createElement('div');
     banner.className = 'conv-outcome-banner conv-outcome-' + kind;
     banner.setAttribute('role', 'status');
@@ -28867,7 +29106,22 @@
       '<span class="cob-icon" aria-hidden="true">' + icon + '</span>'
       + '<span class="cob-body"><strong>' + escapeHtml(title) + '</strong>'
       + (detail ? '<span class="cob-detail">' + escapeHtml(detail) + '</span>' : '')
-      + '</span>';
+      + '</span>'
+      + (canWakeCodex
+        ? '<button type="button" class="cob-wake-btn" data-role="outcome-wake-codex"'
+          + ' data-session-id="' + escapeAttr(wakeSessionId) + '"'
+          + ' title="Wake Codex with a status check">Wake up</button>'
+        : '');
+    const wakeBtn = banner.querySelector('[data-role="outcome-wake-codex"]');
+    if (wakeBtn) {
+      wakeBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = wakeBtn.getAttribute('data-session-id') || '';
+        if (!sid) return;
+        wakeCodexSession(sid, wakeBtn, { view });
+      });
+    }
     view.appendChild(banner);
   }
 
@@ -30941,18 +31195,19 @@
         const badgeText = reallyStuck ? 'STUCK'
           : (waiting ? 'WAITING'
              : (parked ? 'PARKED' : (drained ? 'CLEAR' : 'LIVE')));
+        const stuckTip = 'STUCK means this queue has open claimable work assigned to a worker/session, but no live WatchTower worker is currently draining it.';
         const badgeTip = reallyStuck
-          ? (canNudge ? 'stuck — click to nudge the worker' : 'stuck — no reachable worker')
-          : (waiting ? 'open tickets — no worker assigned yet'
-             : (parked ? depth + ' open, none claimable — filtered by claim types'
-                : (drained ? 'drained — recently active, no open tickets' : 'a worker is on it')));
+          ? (stuckTip + (canNudge ? ' Click to nudge that worker.' : ' No reachable worker is available to nudge.'))
+          : (waiting ? 'WAITING means this queue has open tickets, but no worker is assigned yet.'
+             : (parked ? 'PARKED means this queue has ' + depth + ' open ticket(s), but none match the current claim-type filter.'
+                : (drained ? 'CLEAR means this queue was recently active and now has no open tickets.' : 'LIVE means a WatchTower worker is currently draining this queue.')));
         const badgeCls = reallyStuck ? 'is-stuck'
           : (waiting ? 'is-waiting'
              : (parked ? 'is-clear' : (drained ? 'is-clear' : 'is-live')));
         const badge = '<span class="fq-health-badge ' + badgeCls
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
-          + ' title="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
+          + ' title="' + escapeAttr(badgeTip) + '" aria-label="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
         const autoDrain = _drainByQueue.has(project.toUpperCase())
           ? _drainByQueue.get(project.toUpperCase())
           : !!r.auto_drain;
@@ -37700,6 +37955,7 @@
         _currentToolGroup = null;
         _currentToolCount = 0;
         $view.appendChild(div);
+        if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);
       }
     }
     // Defensive sweep: a tool group whose body has no events renders as a
@@ -37732,6 +37988,7 @@
     if (compactBoundary) {
       // The compact boundary proves the pending compact turn is over.
       clearOptimisticAgentIndicator($view);
+      clearLiveGeneratingIndicator($view);
       if (currentSession.id) clearSessionSending(currentSession.id);
       const sid = compactBoundary.session || (currentSession && currentSession.id) || '';
       if (sid && currentSession && currentSession.id === sid) fetchSessionUsage(sid);
@@ -37765,12 +38022,14 @@
     );
     if (_agentReplied) {
       clearOptimisticAgentIndicator($view);
+      clearLiveGeneratingIndicator($view);
       if (currentSession.id) clearSessionSending(currentSession.id);
     } else {
       const _optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
       if (_optimistic && _optimistic !== $view.lastElementChild) {
         $view.appendChild(_optimistic);
       }
+      _anchorWakeBreakdown($view);
     }
     // Re-evaluate the end-of-session outcome banner now that the latest
     // events are painted (covers error tool-results and mid-action stops).
@@ -41959,6 +42218,9 @@
           pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
           model: c.model || '',
           engine: c.engine || c.source || '',
+          source_platform: c.source_platform || '',
+          hermes_source: c.hermes_source || '',
+          hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
         });
       }
       const folderOrphan = (c.folder_path === c.slug);
@@ -42054,6 +42316,9 @@
         pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
         model: c.model || '',
         engine: c.engine || c.source || '',
+        source_platform: c.source_platform || '',
+        hermes_source: c.hermes_source || '',
+        hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
         // Codex current-goal (server reads ~/.codex/goals_1.sqlite). The shaped
         // object is an explicit allowlist, so goal must be copied through or the
         // goal chip never renders.
@@ -42916,19 +43181,20 @@
         if (data.ok) {
           $kptNewSession.value = '';
           $kptRunBtn.textContent = engine === 'antigravity' ? 'Started!' : 'Spawned!';
-          // Swap the temp-pid key for the real pid so the next /api/sessions
+          // Swap the temp-pid key for the real spawn id so the next /api/sessions
           // poll can match by spawn_pid and replace the placeholder with the
           // real card. Without this the placeholder sits on the board until
           // the 30s auto-cleanup fires.
-          if (data.pid) {
+          const realSpawnId = data.spawn_id || data.pid;
+          if (realSpawnId) {
             const placeholder = conversationsData.find(x => x.id === 'spawning-' + tempPid);
             if (placeholder) {
-              placeholder.spawn_pid = data.pid;
+              placeholder.spawn_pid = realSpawnId;
               // Fire-and-watch engines stash the log path so the
               // right-pane renderer can fetch /api/sessions/spawned/<pid>/log.
               if (spawnUsesLogPlaceholder(engine) && data.log) placeholder.agent_log_path = data.log;
               pendingSpawns.delete(tempPid);
-              pendingSpawns.set(data.pid, placeholder);
+              pendingSpawns.set(realSpawnId, placeholder);
             }
           }
           // Tight poll schedule so the real card replaces the placeholder fast.
@@ -44455,6 +44721,8 @@
       bg_pid: _ls.bgPid || null,
       tty: _ls.tty || null,
     };
+    const caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
+    const canNativeScreenshot = caps.screenshots !== false;
     const payload = {
       note,
       url: window.location.href,
@@ -44467,7 +44735,7 @@
       screen,
       element: annElementSummary(element),
       live_status: liveStatusSnapshot,
-      capture_screen: !screenshotB64,
+      capture_screen: !screenshotB64 && canNativeScreenshot,
     };
     if (screenshotB64) payload.screenshot_b64 = screenshotB64;
     return payload;
@@ -47368,7 +47636,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        insertPendingSpawnCard(data.pid, subject, false, null, {
+        insertPendingSpawnCard(data.spawn_id || data.pid, subject, false, null, {
           first_message: body,
           repo_path: repoPath,
           folder_path: repoPath,
@@ -47563,7 +47831,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        const placeholder = adoptPendingSpawnPid(tempPid, data.pid, data.log);
+        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);
         assignSpawnedSessionToDefaultObject(data);
         // Fire-and-watch engines can stream their spawn log once the real pid
         // is known. Re-select the same placeholder id so fetchConversationEvents
