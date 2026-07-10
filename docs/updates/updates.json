@@ -1,0 +1,21 @@
+{
+  "updates": [
+    {
+      "slug": "project-tree-by-objects",
+      "title": "Group your agent sessions the way you think about the work",
+      "summary": "A flat list of sessions stops meaning anything past a dozen. The project tree groups them under nestable objects, so strategy stays above the churn.",
+      "date": "2026-06-25",
+      "version": "5.4.0",
+      "problem_family": "organize",
+      "family_label": "Organize",
+      "url": "https://ccc.amirfish.ai/updates/project-tree-by-objects.html",
+      "og_image": "https://ccc.amirfish.ai/images/social-preview.png",
+      "tags": [
+        "organize",
+        "project-tree",
+        "objects",
+        "sessions"
+      ]
+    }
+  ]
+}

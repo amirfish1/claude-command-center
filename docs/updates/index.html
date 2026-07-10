@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Updates · Claude Command Center</title>
+<meta name="description" content="Product updates for CCC: each release told as the pain it removed, with proof and how to try it.">
+<link rel="canonical" href="https://ccc.amirfish.ai/updates/">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="Claude Command Center · Updates">
+<meta property="og:description" content="Each CCC release, told as the pain it removed, with proof and how to try it.">
+<meta property="og:url" content="https://ccc.amirfish.ai/updates/">
+<meta property="og:image" content="https://ccc.amirfish.ai/updates/assets/og-default.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://ccc.amirfish.ai/updates/assets/og-default.png">
+
+<link rel="alternate" type="application/atom+xml" title="CCC Updates" href="feed.xml">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="../brand/tokens.css">
+</head>
+<body>
+<header class="u-top">
+  <a class="u-brand" href="https://ccc.amirfish.ai">Claude Command Center</a>
+  <a class="u-back" href="https://ccc.amirfish.ai">Home →</a>
+</header>
+<main class="u-wrap">
+  <div class="u-hero">
+    <h1>Updates</h1>
+    <p>Every release, told as the pain it removed. Proof included. Subscribe below.</p>
+  </div>
+  <div class="u-controls">
+    <input id="u-search" type="search" placeholder="Search updates"
+           aria-label="Search updates" autocomplete="off">
+    <div class="u-chips" role="group" aria-label="Filter by problem family">
+      <button class="u-chip is-active" data-family="all">All</button><button class="u-chip" data-family="organize">Organize</button>
+    </div>
+  </div>
+  <div id="u-list" class="u-grid">
+    <article class="u-card" data-family="organize"
+         data-text="group your agent sessions the way you think about the work a flat list of sessions stops meaning anything past a dozen. the project tree groups them under nestable objects, so strategy stays above the churn. organize organize project-tree objects sessions 5.4.0">
+  <a class="u-card-link" href="project-tree-by-objects.html">
+    <div class="u-meta">
+      <span class="u-pill u-fam">Organize</span>
+      <span class="u-pill u-ver">v5.4.0</span>
+      <time datetime="2026-06-25T00:00:00Z">June 25, 2026</time>
+    </div>
+    <h2>Group your agent sessions the way you think about the work</h2>
+    <p>A flat list of sessions stops meaning anything past a dozen. The project tree groups them under nestable objects, so strategy stays above the churn.</p>
+    <span class="u-more">Read update →</span>
+  </a>
+</article>
+  </div>
+  <p id="u-empty" class="u-empty" hidden>No updates match that filter yet.</p>
+  <section class="u-subscribe" aria-labelledby="sub-h">
+  <h2 id="sub-h">Get the next update</h2>
+  <form class="u-sub-form"
+        action="https://buttondown.com/api/emails/embed-subscribe/USERNAME-TODO-PENDING-APPROVAL"
+        method="post" target="popupwindow" onsubmit="return false;">
+    <input type="email" name="email" placeholder="you@example.com"
+           aria-label="Email address" autocomplete="email" disabled>
+    <button type="submit" disabled>Subscribe</button>
+  </form>
+  <p class="u-sub-note">Email updates launching soon.</p>
+  <ul class="u-sub-alts">
+    <li><a href="feed.xml">Subscribe by RSS / Atom</a>. Works today, in any reader.</li>
+    <li><a href="https://github.com/amirfish1/claude-command-center/releases" target="_blank" rel="noopener">Watch releases on GitHub</a>.
+        Get a notification on every release in the meantime.</li>
+  </ul>
+  <p class="u-sub-privacy">No tracking pixels. Your email is used only for product
+     updates, and you can unsubscribe at any time.</p>
+</section>
+</main>
+<footer class="u-foot">
+  <a href="https://ccc.amirfish.ai">ccc.amirfish.ai</a> ·
+  <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener">Source on GitHub</a> ·
+  <a href="feed.xml">Atom feed</a>
+</footer>
+<script>
+(function () {
+  var search = document.getElementById('u-search');
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.u-chip'));
+  var cards = Array.prototype.slice.call(document.querySelectorAll('.u-card'));
+  var empty = document.getElementById('u-empty');
+  var family = 'all';
+
+  function fromQuery() {
+    var m = /[?&]family=([^&]+)/.exec(location.search);
+    if (m) {
+      var f = decodeURIComponent(m[1]);
+      chips.forEach(function (c) {
+        var on = c.getAttribute('data-family') === f;
+        c.classList.toggle('is-active', on);
+        if (on) family = f;
+      });
+      if (!chips.some(function (c) { return c.classList.contains('is-active'); })) {
+        family = 'all';
+        chips[0].classList.add('is-active');
+      }
+    }
+  }
+
+  function apply() {
+    var q = (search.value || '').trim().toLowerCase();
+    var shown = 0;
+    cards.forEach(function (card) {
+      var okFam = family === 'all' || card.getAttribute('data-family') === family;
+      var okText = !q || (card.getAttribute('data-text') || '').indexOf(q) !== -1;
+      var show = okFam && okText;
+      card.style.display = show ? '' : 'none';
+      if (show) shown++;
+    });
+    empty.hidden = shown !== 0;
+  }
+
+  chips.forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      chips.forEach(function (c) { c.classList.remove('is-active'); });
+      chip.classList.add('is-active');
+      family = chip.getAttribute('data-family');
+      apply();
+    });
+  });
+  search.addEventListener('input', apply);
+  fromQuery();
+  apply();
+})();
+</script>
+</body>
+</html>
