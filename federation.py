@@ -300,8 +300,11 @@ def upsert_peer(entry: dict[str, Any]) -> dict[str, Any]:
     if not entry.get("node_id"):
         raise ValueError("peer entry requires node_id")
     transport = entry.get("transport") or {}
-    if transport.get("type") not in ("ssh", "loopback"):
-        raise ValueError("peer transport must be ssh or loopback")
+    # "unconfigured" = we know the peer (it paired with us) but have no route
+    # back to it yet; calls raise unsupported_capability until the user
+    # configures a transport.
+    if transport.get("type") not in ("ssh", "loopback", "unconfigured"):
+        raise ValueError("peer transport must be ssh, loopback, or unconfigured")
     with _STATE_LOCK:
         peers = load_peers()
         now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -492,6 +495,11 @@ class PeerClient:
             result = self._request_loopback(method, path, body, headers, timeout)
         elif ttype == "ssh":
             result = self._request_ssh(method, path, body, headers, timeout)
+        elif ttype == "unconfigured":
+            raise PeerError(
+                "unsupported_capability",
+                "no transport configured back to this peer — set one up in peer settings",
+            )
         else:
             raise PeerError("unsupported_capability", f"unknown transport {ttype!r}")
         status = result.get("status", 0)
@@ -570,12 +578,21 @@ class PeerClient:
         return ssh_multiplexer.SSHMultiplexer(config)
 
     def _request_ssh(self, method, path, body, headers, timeout) -> dict[str, Any]:
+        result = self._request_ssh_once(method, path, body, headers, timeout,
+                                        self.transport.get("port"))
+        if result.get("status") == 0 and self.transport.get("port"):
+            # Pinned port may be stale after a peer restart — retry once via
+            # the peer's own port.txt discovery.
+            result = self._request_ssh_once(method, path, body, headers, timeout, None)
+        return result
+
+    def _request_ssh_once(self, method, path, body, headers, timeout, port) -> dict[str, Any]:
         envelope = json.dumps({
             "method": method,
             "path": path,
             "headers": headers,
             "body": body,
-            "port": self.transport.get("port"),
+            "port": port,
             "timeout": timeout,
         })
         try:
