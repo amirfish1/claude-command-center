@@ -136,3 +136,6 @@ throughput_*.png
 
 # COO board personal sidecar (curated session list/analysis) — local only
 /static/coo-notes.json
+
+# Product-story proof videos ship with the GitHub Pages site (exception to *.mp4)
+!docs/product-story/assets/video/*.mp4
