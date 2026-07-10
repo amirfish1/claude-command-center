@@ -5881,8 +5881,8 @@
           activeModelSelect.style.display = 'none';
         } else {
           const engine = getSpawnEngine();
-          const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
           const defaultModel = _defaultModelsByEngine[engine] || '';
+          const options = modelOptionsForSpawnEngine(engine, defaultModel, true);
           activeModelSelect.style.display = (options.length === 0 && !defaultModel) ? 'none' : '';
         }
       }
@@ -25399,9 +25399,14 @@
     // CCC-468: archived rows no longer interleave with the live rows in the
     // All tab — "archive" hid nothing there. They render in a collapsed
     // "Trash" section pinned to the very bottom instead. Pinned archived
-    // rows are exempt (a pin is an explicit ask to keep it visible).
-    const _trashConvs = _archivedConvs.filter(c => !c.pinned);
-    const _pinnedArchived = _archivedConvs.filter(c => c.pinned);
+    // rows and lane-overridden rows are exempt: both are explicit asks to
+    // keep the session visible in the main All lanes.
+    const _allTabLaneOverride = (c) => {
+      const lane = String((c && c.all_lane_override) || '').trim();
+      return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
+    };
+    const _trashConvs = _archivedConvs.filter(c => !c.pinned && !_allTabLaneOverride(c));
+    const _pinnedArchived = _archivedConvs.filter(c => c.pinned || _allTabLaneOverride(c));
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
     try { _ensureEvergreenQueuesFresh(); } catch (_) {}
     const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
@@ -25444,12 +25449,17 @@
       const sid = String(c.session_id || c.id || '').trim();
       return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
     };
-    const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c) && !_isWatchTowerWorkerRow(c));
-    const _allTabWatchTowerWorkerConvs = _allTabConvs.filter(c => !_isHermesWorkerRow(c) && _isWatchTowerWorkerRow(c));
-    const _allTabHermesWorkerConvs = _allTabConvs.filter(_isHermesWorkerRow);
-    const _allTabWorkerConvs = _allTabHermesWorkerConvs.concat(_allTabWatchTowerWorkerConvs);
-    const _allTabHermesMessageConvs = _allTabConvs.filter(_isHermesMessageRow);
-    const _allTabHasHermesSplit = _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
+    const _allTabNaturalLane = (c) => {
+      if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c)) return 'workers';
+      if (_isHermesMessageRow(c)) return 'messages';
+      return 'coding';
+    };
+    const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);
+    const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
+    const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
+    const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
+    const _allTabHasLaneOverride = _allTabConvs.some(c => !!_allTabLaneOverride(c));
+    const _allTabHasHermesSplit = _allTabHasLaneOverride || _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
     const _allTabView = (() => {
       if (!_allTabHasHermesSplit) return 'coding';
       try {
@@ -25624,13 +25634,13 @@
     _arcCount = _allTabTotalCount;
     const _allHermesTabBarHtml = _allTabHasHermesSplit
       ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '" title="Drop a session here to show it under Coding">'
         +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + ((_gcItems || []).length || 0)) + '</span>'
         + '</button>'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '" title="Drop a session here to show it under Workers">'
         +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
         + '</button>'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '" title="Drop a session here to show it under Messages">'
         +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
         + '</button>'
         + '</div>'
@@ -26000,6 +26010,84 @@
     }
     const $allHermesTabs = $convList.querySelector('[data-role="all-hermes-tabs"]');
     if ($allHermesTabs) {
+      const laneLabel = (lane) => lane === 'workers' ? 'Workers' : (lane === 'messages' ? 'Messages' : 'Coding');
+      const clearTabDropTargets = () => {
+        $allHermesTabs.querySelectorAll('.conv-all-hermes-tab').forEach(tab => tab.classList.remove('is-drop-target'));
+      };
+      const rowForAllLaneId = (id) => {
+        if (!id) return null;
+        const pools = [
+          _allTabConvs,
+          (Array.isArray(conversationsData) ? conversationsData : []),
+          (Array.isArray(archiveData) ? archiveData : []),
+        ];
+        for (const rows of pools) {
+          const row = rows.find(c => c && (c.id === id || c.session_id === id));
+          if (row) return row;
+        }
+        return null;
+      };
+      const setLocalAllLaneOverride = (sid, lane, convId) => {
+        if (!sid) return;
+        const matchesRow = (c) => c && (
+          c.session_id === sid || c.id === sid
+          || (convId && (c.session_id === convId || c.id === convId))
+        );
+        [_allTabConvs, conversationsData, archiveData].forEach(rows => {
+          if (!Array.isArray(rows)) return;
+          rows.forEach(c => {
+            if (matchesRow(c)) c.all_lane_override = lane;
+          });
+        });
+      };
+      const expandAllLaneDestinationGroup = (row) => {
+        if (!row) return;
+        try {
+          [row.folder_path, row.folder_label_chip, row.folder_label].forEach(key => {
+            if (key) localStorage.removeItem(_folderGroupStorageKey('archived', key));
+          });
+        } catch (_) {}
+      };
+      const assignAllLaneFromDrop = async (ev, lane) => {
+        const rawIds = readConvIdsFromDrop(ev);
+        const ids = rawIds.length ? rawIds : (dragSourceId ? [dragSourceId] : []);
+        const rows = [];
+        const seen = new Set();
+        ids.forEach(id => {
+          const row = rowForAllLaneId(id);
+          if (!row || row.source === 'backlog' || row.source === 'github_pr') return;
+          const sid = row.session_id || row.id;
+          if (!sid || seen.has(sid)) return;
+          seen.add(sid);
+          rows.push({ row, sid });
+        });
+        if (!rows.length) {
+          showOpToast('Drag a real session row to assign it to a lane', 'error');
+          return;
+        }
+        try {
+          await Promise.all(rows.map(({ row, sid }) =>
+            ccPostJson('/api/conversations/all-lane', {
+              session_id: sid,
+              conversation_id: row.id || sid,
+              lane,
+            })
+          ));
+        } catch (err) {
+          showOpToast('Lane move failed — row stays put (' + err.message + ')', 'error');
+          return;
+        }
+        rows.forEach(({ row, sid }) => {
+          setLocalAllLaneOverride(sid, lane, row.id || '');
+          expandAllLaneDestinationGroup(row);
+        });
+        _convListRenderSig = null;
+        try { localStorage.setItem('ccc-all-hermes-tab', lane); } catch (_) {}
+        showOpToast(rows.length === 1
+          ? 'Moved session to ' + laneLabel(lane)
+          : 'Moved ' + rows.length + ' sessions to ' + laneLabel(lane));
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+      };
       $allHermesTabs.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const opt = ev.target.closest('[data-all-hermes-tab]');
@@ -26008,6 +26096,30 @@
         const value = raw === 'workers' || raw === 'messages' ? raw : 'coding';
         try { localStorage.setItem('ccc-all-hermes-tab', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+      $allHermesTabs.addEventListener('dragover', (ev) => {
+        if (!dragSourceId) return;
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (!opt) return;
+        ev.preventDefault();
+        try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        clearTabDropTargets();
+        opt.classList.add('is-drop-target');
+      });
+      $allHermesTabs.addEventListener('dragleave', (ev) => {
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (opt && !opt.contains(ev.relatedTarget)) opt.classList.remove('is-drop-target');
+      });
+      $allHermesTabs.addEventListener('drop', (ev) => {
+        if (!dragSourceId) return;
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (!opt) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const raw = opt.getAttribute('data-all-hermes-tab');
+        const lane = raw === 'workers' || raw === 'messages' ? raw : 'coding';
+        clearTabDropTargets();
+        assignAllLaneFromDrop(ev, lane);
       });
     }
     const $archivedExpandAll = $convList.querySelector('[data-role="archived-expand-all"]');
@@ -35564,10 +35676,10 @@
     if (typeof _renderInlineAdvisorNudge === 'function') _renderInlineAdvisorNudge();
   }
 
-  // Curated per-engine model lists. Free-text "Other…" handles unreleased
-  // models without a code change. The `oneM` flag controls whether the
-  // 1M-context toggle is offered for that model (Claude only — current 1M
-  // variants are Opus 4.7/4.8; Sonnet remains 200k).
+  // Bootstrap per-engine model lists. /api/engines/models hydrates these from
+  // the server-owned catalog; this local copy keeps the UI usable if that fetch
+  // fails during startup. The `oneM` flag controls whether the 1M-context
+  // toggle is offered for that model.
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
       { id: 'fable-5',   label: 'fable-5',   oneM: false },
@@ -35576,13 +35688,13 @@
       { id: 'haiku-4-5', label: 'haiku-4-5', oneM: false },
     ],
     codex: [
-      { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
-      { id: 'gpt-5.4',      label: 'gpt-5.4 (1M-capable)' },
-      { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
-      { id: 'o4',           label: 'o4' },
-      { id: 'o4-mini',      label: 'o4-mini' },
-      { id: 'o3',           label: 'o3' },
-      { id: 'o3-mini',      label: 'o3-mini' },
+      { id: 'gpt-5.5',              label: '5.5' },
+      { id: 'gpt-5.6-sol',          label: '5.6 Sol' },
+      { id: 'gpt-5.6-terra',        label: '5.6 Terra' },
+      { id: 'gpt-5.6-luna',         label: '5.6 Luna' },
+      { id: 'gpt-5.4',              label: '5.4' },
+      { id: 'gpt-5.4-mini',         label: '5.4 Mini' },
+      { id: 'gpt-5.3-codex-spark',  label: '5.3 Codex Spark' },
     ],
     cursor: [
       { id: 'auto',                          label: 'Auto (default)' },
@@ -35628,6 +35740,15 @@
     ],
   };
 
+  const ENGINE_SUPPORTS_CUSTOM_MODEL = {
+    claude: true,
+    codex: false,
+    cursor: true,
+    antigravity: true,
+    kilo: true,
+    hermes: true,
+  };
+
   // Codex's own switcher pairs a Model choice with a separate Reasoning
   // effort choice (`model_reasoning_effort` config value: low/medium/high/
   // xhigh) — mirror that as a second section in our Codex model picker.
@@ -35640,6 +35761,91 @@
 
   function _normalizeModelId(s) {
     return (s || '').replace(/^claude-/, '').replace(/\[1m\]/i, '').trim().toLowerCase();
+  }
+
+  function _knownModelForEngine(engine, model) {
+    const norm = _normalizeModelId(model);
+    return !!norm && (MODEL_OPTIONS_BY_ENGINE[engine] || []).some(o => _normalizeModelId(o.id) === norm);
+  }
+
+  function _modelUnavailableReason(engine, model) {
+    const norm = _normalizeModelId(model);
+    if (!norm) return '';
+    const opt = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => _normalizeModelId(o.id) === norm);
+    if (opt && opt.available === false) {
+      return opt.availability_reason || opt.reason || 'Model is not available in this harness.';
+    }
+    return '';
+  }
+
+  function _knownModelForOtherEngine(engine, model) {
+    const norm = _normalizeModelId(model);
+    if (!norm) return false;
+    return Object.keys(MODEL_OPTIONS_BY_ENGINE).some(other => {
+      if (other === engine) return false;
+      return (MODEL_OPTIONS_BY_ENGINE[other] || []).some(o => _normalizeModelId(o.id) === norm);
+    });
+  }
+
+  function _engineSupportsCustomModel(engine) {
+    return ENGINE_SUPPORTS_CUSTOM_MODEL[engine] !== false;
+  }
+
+  function _modelAllowedForEngine(engine, model) {
+    const value = String(model == null ? '' : model).trim();
+    if (value === '__other__') return false;
+    if (!value) return engine === 'antigravity';
+    if (_knownModelForEngine(engine, value)) return !_modelUnavailableReason(engine, value);
+    if (!_engineSupportsCustomModel(engine)) return false;
+    return !_knownModelForOtherEngine(engine, value);
+  }
+
+  function _mergeModelOptionsForEngine(engine, models) {
+    if (!engine || !Array.isArray(models)) return;
+    const existing = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+    const byNorm = new Map();
+    existing.forEach((opt) => byNorm.set(_normalizeModelId(opt.id), Object.assign({}, opt)));
+    const merged = [];
+    models.forEach((row) => {
+      if (!row || typeof row !== 'object') return;
+      const id = String(row.id == null ? '' : row.id).trim();
+      if (!id) return;
+      const norm = _normalizeModelId(id);
+      const prev = byNorm.get(norm) || {};
+      const next = Object.assign({}, prev, {
+        id,
+        label: String(row.label || prev.label || id),
+      });
+      if (row.oneM != null) next.oneM = !!row.oneM;
+      if (row.available !== undefined) next.available = !!row.available;
+      if (row.availability_reason) next.availability_reason = String(row.availability_reason);
+      if (row.sources) next.sources = row.sources;
+      byNorm.set(norm, next);
+      if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(next);
+    });
+    existing.forEach((opt) => {
+      const norm = _normalizeModelId(opt.id);
+      if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(byNorm.get(norm) || opt);
+    });
+    MODEL_OPTIONS_BY_ENGINE[engine] = merged;
+  }
+
+  async function loadEngineModelCatalog() {
+    try {
+      const res = await fetch('/api/engines/models', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const catalog = data && data.catalog && typeof data.catalog === 'object' ? data.catalog : {};
+      Object.keys(catalog).forEach((engine) => {
+        const info = catalog[engine] || {};
+        _mergeModelOptionsForEngine(engine, info.models || []);
+        if (typeof info.supports_custom === 'boolean') {
+          ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom;
+        }
+      });
+      return data;
+    } catch (_) {
+      return null;
+    }
   }
 
   let _modelPickerEl = null;
@@ -35845,17 +36051,8 @@
       });
   }
 
-  // The Claude `/model` menu, replicated 1:1 from Claude Code's native picker.
-  // Each row carries the bare alias in `id` plus its 1M / legacy flags. Numbers
-  // mirror the native keyboard shortcuts (1-7).
-  const CLAUDE_MODEL_MENU = [
-    { id: 'fable-5',   label: 'Fable 5',             num: '1' },
-    { id: 'sonnet-5',  label: 'Sonnet 5',             num: '2' },
-    { id: 'opus-4-8',  label: 'Opus 4.8',             num: '3', context_1m: true },
-    { id: 'haiku-4-5', label: 'Haiku 4.5',            num: '4' },
-  ];
   // Claude Code's current shipped default model. Shown in the menu's top
-  // "· Default" row.
+  // "· Default" row; the rest of the menu is built from MODEL_OPTIONS_BY_ENGINE.
   const CLAUDE_DEFAULT_MODEL = 'fable-5';
 
   // Map a model alias/id to the menu's friendly label ("opus-4-8" → "Opus 4.8").
@@ -35870,6 +36067,17 @@
     const bare = n.match(/^(opus|sonnet|haiku|fable)$/);
     if (bare) return bare[1][0].toUpperCase() + bare[1].slice(1);
     return id || n;
+  }
+
+  function _claudeModelMenuOptions() {
+    const options = MODEL_OPTIONS_BY_ENGINE.claude || [];
+    return options.map((opt, idx) => ({
+      id: opt.id,
+      label: opt.menuLabel || _claudeFriendlyModelName(opt.id),
+      num: idx < 9 ? String(idx + 1) : '',
+      context_1m: !!opt.oneM,
+      legacy: !!opt.legacy,
+    }));
   }
 
   function _buildClaudeModelMenuHtml(currentNorm, currentIs1M) {
@@ -35888,7 +36096,7 @@
       +   '<span class="mp-check">' + (defaultActive ? '✓' : '') + '</span>'
       + '</button>'
       + '<div class="mp-divider"></div>';
-    CLAUDE_MODEL_MENU.forEach((opt) => {
+    _claudeModelMenuOptions().forEach((opt) => {
       const ctx1m = !!opt.context_1m;
       const isActive = _normalizeModelId(opt.id) === currentNorm && ctx1m === !!currentIs1M;
       html += '<button type="button" class="mp-row mp-claude-row' + (isActive ? ' active' : '') + '"'
@@ -35900,6 +36108,11 @@
         + '<span class="mp-num">' + escapeHtml(opt.num) + '</span>'
         + '</button>';
     });
+    html += '<div class="mp-divider"></div>'
+      + '<div class="mp-other">'
+      + '<input type="text" placeholder="Other model…" data-mp-other-input>'
+      + '<button type="button" data-mp-other-apply>Apply</button>'
+      + '</div>';
     // Fast mode exists only on Opus models (4.6/4.7/4.8) — hide the toggle
     // elsewhere (Fable, Sonnet, Haiku) so users can't trigger an
     // "invalid mode" error from the CLI.
@@ -35956,7 +36169,10 @@
         const isActive = _normalizeModelId(opt.id) === currentNorm;
         const oneM = !!opt.oneM;
         const oneMOn = isActive && currentIs1M;
-        html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + '" data-model="' + escapeHtml(opt.id) + '">'
+        const unavailable = opt.available === false;
+        const unavailableReason = opt.availability_reason || opt.reason || '';
+        html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + (unavailable ? ' disabled' : '') + '" data-model="' + escapeHtml(opt.id) + '"'
+          + (unavailable ? ' disabled title="' + escapeHtml(unavailableReason || 'Model unavailable') + '"' : '') + '>'
           + escapeHtml(opt.label || opt.id);
         if (oneM) {
           html += '<span class="mp-1m-toggle' + (oneMOn ? ' on' : '') + '" data-1m-toggle title="1M context (anthropic-beta: context-1m)">1M</span>';
@@ -35976,11 +36192,13 @@
         });
         html += '<div class="mp-divider"></div>';
       }
-      html += '<div class="mp-other">'
-        + '<input type="text" placeholder="Other model…" data-mp-other-input>'
-        + '<button type="button" data-mp-other-apply>Apply</button>'
-        + '</div>';
-      html += '<div class="mp-divider"></div>';
+      if (_engineSupportsCustomModel(engine)) {
+        html += '<div class="mp-other">'
+          + '<input type="text" placeholder="Other model…" data-mp-other-input>'
+          + '<button type="button" data-mp-other-apply>Apply</button>'
+          + '</div>';
+        html += '<div class="mp-divider"></div>';
+      }
       html += '<button type="button" class="mp-row mp-reset" data-mp-reset>↺ Reset to session default</button>';
       html += '<div class="mp-status" data-mp-status></div>';
     }
@@ -36054,6 +36272,7 @@
     // wired separately (it clears the override rather than pinning a model).
     pop.querySelectorAll('.mp-row[data-model]:not([data-mp-reset])').forEach((row) => {
       row.addEventListener('click', (ev) => {
+        if (row.disabled) return;
         const t = ev.target;
         if (t && t.matches && t.matches('[data-1m-toggle]')) {
           // Click the 1M chip without selecting the row: just toggle the chip.
@@ -42298,6 +42517,7 @@
           source_platform: c.source_platform || '',
           hermes_source: c.hermes_source || '',
           hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
+          all_lane_override: c.all_lane_override || '',
         });
       }
       const folderOrphan = (c.folder_path === c.slug);
@@ -42396,6 +42616,7 @@
         source_platform: c.source_platform || '',
         hermes_source: c.hermes_source || '',
         hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
+        all_lane_override: c.all_lane_override || '',
         // Codex current-goal (server reads ~/.codex/goals_1.sqlite). The shaped
         // object is an explicit allowlist, so goal must be copied through or the
         // goal chip never renders.
@@ -42807,20 +43028,26 @@
     const base = MODEL_OPTIONS_BY_ENGINE[engine] || [];
     const out = [];
     const seen = new Set();
-    const add = (id, label) => {
+    const add = (id, label, attrs) => {
       const key = String(id == null ? '' : id);
       const dedupe = key.toLowerCase();
       if (seen.has(dedupe)) return;
       seen.add(dedupe);
-      out.push({ id: key, label: label || key });
+      const opt = { id: key, label: label || key };
+      if (attrs && attrs.disabled) opt.disabled = true;
+      if (attrs && attrs.reason) opt.reason = attrs.reason;
+      out.push(opt);
     };
     if (engine === 'antigravity') add('', 'Use AGY configured model');
     const cur = String(currentModel == null ? '' : currentModel).trim();
-    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur))) {
+    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && _modelAllowedForEngine(engine, cur)) {
       add(cur, cur + ' (default)');
     }
-    base.forEach(opt => add(opt.id, opt.label || opt.id));
-    if (includeOther) add(SPAWN_DEFAULT_OTHER, 'Other...');
+    base.forEach(opt => add(opt.id, opt.label || opt.id, {
+      disabled: opt.available === false,
+      reason: opt.availability_reason || opt.reason || '',
+    }));
+    if (includeOther && _engineSupportsCustomModel(engine)) add(SPAWN_DEFAULT_OTHER, 'Other...');
     return out;
   }
 
@@ -42861,18 +43088,37 @@
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     if (engine === 'hermes' && !value) value = 'auto';
+    const unavailableReason = _modelUnavailableReason(engine, value);
+    if (value && unavailableReason) {
+      if (typeof showOpToast === 'function') showOpToast(unavailableReason, 'error');
+      console.warn('[spawn] ignoring unavailable model "' + value + '" for engine "' + engine + '": ' + unavailableReason);
+      syncSpawnEngineDependentUi();
+      return;
+    }
     // Reject a value from a different engine's model family before it can
     // poison _defaultModelsByEngine[engine] (CCC-503) -- if the model
     // <select>'s options were ever rebuilt for a different engine than the
     // one getSpawnEngine() now reports (a boot/timing desync), the change
     // handler here would otherwise attribute e.g. Claude's opus-4-8 to the
     // Codex slot, and the next spawn ships an invalid model to the wrong CLI.
-    if (value && engine !== 'antigravity') {
-      const engineModelIds = (MODEL_OPTIONS_BY_ENGINE[engine] || []).map(o => _normalizeModelId(o.id));
-      if (!engineModelIds.includes(_normalizeModelId(value))) {
-        console.warn('[spawn] ignoring "' + value + '" for engine "' + engine + '" (not one of its models); resyncing UI instead');
-        syncSpawnEngineDependentUi();
-        return;
+    if (value && !_modelAllowedForEngine(engine, value)) {
+      if (_knownModelForOtherEngine(engine, value)) {
+        console.warn('[spawn] ignoring "' + value + '" for engine "' + engine + '" (known model for another engine); resyncing UI instead');
+      } else {
+        console.warn('[spawn] ignoring "' + value + '" for engine "' + engine + '" (custom models disabled); resyncing UI instead');
+      }
+      syncSpawnEngineDependentUi();
+      return;
+    }
+    if (!value && engine !== 'antigravity') {
+      syncSpawnEngineDependentUi();
+      return;
+    }
+    if (value && !_knownModelForEngine(engine, value) && _engineSupportsCustomModel(engine)) {
+      const existing = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+      if (!existing.some(o => _normalizeModelId(o.id) === _normalizeModelId(value))) {
+        existing.unshift({ id: value, label: value + ' (custom)' });
+        MODEL_OPTIONS_BY_ENGINE[engine] = existing;
       }
     }
     spawnDefaultsState.models[engine] = value;
@@ -42914,7 +43160,7 @@
 
     if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect) {
       const defaultModel = _defaultModelsByEngine[engine] || '';
-      const allModels = modelOptionsForSpawnEngine(engine, defaultModel, false);
+      const allModels = modelOptionsForSpawnEngine(engine, defaultModel, true);
 
       $convInputModelSelect.innerHTML = '';
       const isNewSession = (typeof currentConversation !== 'undefined' && currentConversation === '__new__');
@@ -42926,12 +43172,18 @@
           const el = document.createElement('option');
           el.value = opt.id;
           el.textContent = opt.label || opt.id;
+          if (opt.disabled) {
+            el.disabled = true;
+            if (opt.reason) el.title = opt.reason;
+          }
           $convInputModelSelect.appendChild(el);
         });
-        if (defaultModel) {
+        const defaultOpt = allModels.find(opt => opt.id === defaultModel && !opt.disabled);
+        const fallbackOpt = allModels.find(opt => !opt.disabled) || allModels[0];
+        if (defaultModel && defaultOpt) {
           $convInputModelSelect.value = defaultModel;
-        } else if (allModels.length > 0) {
-          $convInputModelSelect.value = allModels[0].id;
+        } else if (fallbackOpt) {
+          $convInputModelSelect.value = fallbackOpt.id;
         }
       }
     }
@@ -42978,10 +43230,24 @@
   });
   if ($convInputModelSelect) {
     $convInputModelSelect.addEventListener('change', () => {
-      setSpawnDefaultModel(getSpawnEngine(), $convInputModelSelect.value);
+      const engine = getSpawnEngine();
+      if ($convInputModelSelect.value === SPAWN_DEFAULT_OTHER) {
+        let model = '';
+        try {
+          model = (window.prompt('Model ID for ' + spawnEngineLabel(engine) + ':', _defaultModelsByEngine[engine] || '') || '').trim();
+        } catch (_) {
+          model = '';
+        }
+        if (model) setSpawnDefaultModel(engine, model);
+        else syncSpawnEngineDependentUi();
+        return;
+      }
+      setSpawnDefaultModel(engine, $convInputModelSelect.value);
     });
   }
+  const modelCatalogReady = loadEngineModelCatalog();
   const spawnDefaultsReady = loadSpawnDefaults();
+  modelCatalogReady.finally(syncSpawnEngineDependentUi);
   syncSpawnEngineDependentUi();
   { const $ia = document.getElementById('convInputIssueAction');
     if ($ia) $ia.addEventListener('change', () => updateInputBar()); }
@@ -45996,10 +46262,15 @@
       const el = document.createElement('option');
       el.value = opt.id;
       el.textContent = opt.label || opt.id;
+      if (opt.disabled) {
+        el.disabled = true;
+        if (opt.reason) el.title = opt.reason;
+      }
       $spawnDefaultsModel.appendChild(el);
     });
-    const hasCurrent = options.some(opt => opt.id === currentModel);
-    $spawnDefaultsModel.value = hasCurrent ? currentModel : SPAWN_DEFAULT_OTHER;
+    const currentOpt = options.find(opt => opt.id === currentModel && !opt.disabled);
+    const fallbackOpt = options.find(opt => !opt.disabled);
+    $spawnDefaultsModel.value = currentOpt ? currentModel : (fallbackOpt ? fallbackOpt.id : SPAWN_DEFAULT_OTHER);
     if ($spawnDefaultsOtherModel) {
       const other = $spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER;
       $spawnDefaultsOtherModel.style.display = other ? '' : 'none';
@@ -46046,6 +46317,11 @@
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
     if ((engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
       spawnDefaultsModalError('Claude, Codex, and Cursor need an explicit default model.');
+      return;
+    }
+    const unavailableReason = _modelUnavailableReason(engine, model);
+    if (unavailableReason) {
+      spawnDefaultsModalError(unavailableReason);
       return;
     }
     $spawnDefaultsSaveBtn.disabled = true;
@@ -48866,12 +49142,10 @@
         // engine's model family (e.g. the select still holding a Claude
         // model id right after switching to Codex) ever reaching the
         // wrong CLI, which produced a hard "model not supported" spawn
-        // failure (CCC-503). Only forward the model if it's actually one
-        // of this engine's own options; otherwise drop it and let the
-        // server apply its own per-engine fallback default.
-        const engineModelIds = (MODEL_OPTIONS_BY_ENGINE[engine] || []).map(o => _normalizeModelId(o.id));
-        const isValidForEngine = (engine === 'antigravity' && pickedModel === '')
-          || engineModelIds.includes(_normalizeModelId(pickedModel));
+        // failure (CCC-503). Known values from a different engine are still
+        // dropped, but unknown custom IDs are allowed for engines that accept
+        // free-form model strings.
+        const isValidForEngine = _modelAllowedForEngine(engine, pickedModel);
         if (isValidForEngine) {
           spawnBody.model = pickedModel;
         } else {

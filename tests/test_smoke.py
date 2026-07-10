@@ -921,11 +921,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabConvs = ", app_js)
         # CCC-468: archived rows still replay in the All tab, but demoted to a
         # collapsed "Trash" section at the bottom instead of interleaving with
-        # live rows (pinned archived rows stay in the main flow).
+        # live rows. Pinned and lane-overridden archived rows stay in the main
+        # flow because both are explicit visibility requests.
         all_start = app_js.index("const _allTabConvs = ")
         all_block = app_js[all_start:app_js.index("const _arcHasFolderChips", all_start)]
         self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived)", all_block)
-        self.assertIn("const _trashConvs = _archivedConvs.filter(c => !c.pinned);", app_js)
+        self.assertIn("const _trashConvs = _archivedConvs.filter(c => !c.pinned && !_allTabLaneOverride(c));", app_js)
+        self.assertIn("const _pinnedArchived = _archivedConvs.filter(c => c.pinned || _allTabLaneOverride(c));", app_js)
         self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);", app_js)
         self.assertIn("for (const c of _allTabMainConvs)", app_js)
         self.assertIn('data-role="trash-section"', app_js)
@@ -950,15 +952,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);", app_js)
         self.assertIn("_uxqHealthCache && _uxqHealthCache.worker_session_ids", app_js)
         self.assertIn("c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c)", app_js)
-        self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c) && !_isWatchTowerWorkerRow(c));", app_js)
-        self.assertIn("const _allTabWorkerConvs = _allTabHermesWorkerConvs.concat(_allTabWatchTowerWorkerConvs);", app_js)
-        self.assertIn("const _allTabHasHermesSplit = _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;", app_js)
+        self.assertIn("const _allTabLaneOverride = (c) => {", app_js)
+        self.assertIn("const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);", app_js)
+        self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
+        self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
+        self.assertIn("const _allTabHasHermesSplit = _allTabHasLaneOverride || _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;", app_js)
         self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
         self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
         self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
         self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
+        self.assertIn("/all-lane", app_js)
         self.assertIn(".conv-all-hermes-tabs", app_css)
+        self.assertIn(".conv-all-hermes-tab.is-drop-target", app_css)
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
         """Cross-repo Ready to merge should not surface PRs from unknown repos."""
@@ -2286,6 +2292,133 @@ class TestServerImports(unittest.TestCase):
                     self.assertEqual(server._spawn_fallback_model_for_engine("codex"), "gpt-5.4")
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
+
+    def test_engine_model_catalog_merges_local_codex_sources(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            codex_home = root / ".codex"
+            codex_home.mkdir()
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-5.6-luna"\n',
+                encoding="utf-8",
+            )
+            (codex_home / "models_cache.json").write_text(json.dumps({
+                "models": [
+                    {
+                        "slug": "gpt-5.4-mini",
+                        "display_name": "GPT-5.4 Mini",
+                        "visibility": "list",
+                        "priority": 23,
+                        "supported_reasoning_levels": [{"effort": "low"}],
+                    },
+                    {
+                        "slug": "o3",
+                        "display_name": "O3",
+                        "visibility": "list",
+                    },
+                    {
+                        "slug": "codex-hidden-test",
+                        "display_name": "Hidden",
+                        "visibility": "hide",
+                    },
+                ],
+            }), encoding="utf-8")
+
+            old_file = server.SPAWN_DEFAULTS_FILE
+            old_cache = dict(server._MODEL_CATALOG_CACHE)
+            server.SPAWN_DEFAULTS_FILE = root / "spawn-defaults.json"
+            try:
+                with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False), \
+                     mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
+                     mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                    payload = server._build_engine_model_catalog(force_refresh=True)
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+                server._MODEL_CATALOG_CACHE.clear()
+                server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        codex_ids = payload["engines"]["codex"]
+        self.assertEqual(codex_ids, [
+            "gpt-5.5",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex-spark",
+        ])
+        self.assertNotIn("o3", codex_ids)
+        self.assertNotIn("codex-hidden-test", codex_ids)
+        self.assertEqual(payload["enforced"], [])
+        self.assertFalse(payload["catalog"]["codex"]["supports_custom"])
+        labels = [m["label"] for m in payload["catalog"]["codex"]["models"]]
+        self.assertEqual(labels[:4], ["5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
+        mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
+        self.assertIn("codex-cache", mini["sources"])
+        self.assertEqual(mini["reasoning_efforts"], ["low"])
+
+    def test_codex_model_catalog_marks_missing_cli_models_unavailable(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        fake_debug_models = {
+            "available": True,
+            "records": [
+                {"id": "gpt-5.5", "label": "GPT-5.5", "source": "codex-cli"},
+                {"id": "gpt-5.4", "label": "GPT-5.4", "source": "codex-cli"},
+                {"id": "gpt-5.4-mini", "label": "GPT-5.4-Mini", "source": "codex-cli"},
+                {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3-Codex-Spark", "source": "codex-cli"},
+            ],
+            "command": ["codex", "debug", "models"],
+        }
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        try:
+            with mock.patch.object(server, "_harness_model_list_result", return_value=fake_debug_models), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+                codex_models = payload["catalog"]["codex"]["models"]
+                luna = next(m for m in codex_models if m["id"] == "gpt-5.6-luna")
+                self.assertFalse(luna["available"])
+                self.assertIn("codex update", luna["availability_reason"])
+                self.assertTrue(next(m for m in codex_models if m["id"] == "gpt-5.5")["available"])
+                model, error = server._validate_codex_model("gpt-5.6-luna", require_available=True)
+                self.assertEqual(model, "gpt-5.6-luna")
+                self.assertIn("unavailable", error)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+    def test_codex_model_validation_enforces_picker_models(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        self.assertEqual(server._validate_codex_model("gpt-5.6-luna"), ("gpt-5.6-luna", None))
+        self.assertEqual(server._validate_codex_model("gpt-5.5-codex"), ("gpt-5.5", None))
+        model, error = server._validate_codex_model("gpt-5.6-preview")
+        self.assertEqual(model, "gpt-5.6-preview")
+        self.assertIn("unsupported codex model", error)
+
+    def test_static_model_picker_uses_server_catalog_and_codex_allowlist(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+
+        self.assertIn("fetch('/api/engines/models'", app_js)
+        self.assertIn("function _modelAllowedForEngine", app_js)
+        self.assertIn("gpt-5.6-sol", app_js)
+        self.assertIn("gpt-5.6-terra", app_js)
+        self.assertIn("gpt-5.6-luna", app_js)
+        self.assertIn("opt.disabled", app_js)
+        self.assertIn("_modelUnavailableReason", app_js)
+        self.assertIn("if (_engineSupportsCustomModel(engine))", app_js)
+        self.assertIn("ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom", app_js)
 
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False

@@ -2880,6 +2880,15 @@
     width: 100%;
   }
   .model-picker-pop .mp-row:hover { background: var(--surface-2); }
+  .model-picker-pop .mp-row:disabled,
+  .model-picker-pop .mp-row.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .model-picker-pop .mp-row:disabled:hover,
+  .model-picker-pop .mp-row.disabled:hover {
+    background: transparent;
+  }
   .model-picker-pop .mp-row.active {
     color: var(--accent); background: rgba(88,166,255,0.10); font-weight: 600;
   }
@@ -16120,6 +16129,12 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-all-hermes-tab:hover {
   color: var(--text);
   background: var(--surface-2);
+}
+.conv-all-hermes-tab.is-drop-target {
+  color: var(--text);
+  background: rgba(88,166,255,0.14);
+  outline: 2px dashed var(--accent, #58a6ff);
+  outline-offset: -2px;
 }
 .conv-all-hermes-tab.is-active {
   color: var(--text);
