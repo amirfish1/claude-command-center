@@ -19212,10 +19212,14 @@ def _codex_desktop_attached_rollouts(now=None):
     procs = _codex_desktop_app_server_procs()
     if procs:
         pid_list = ",".join(str(p.get("pid")) for p in procs if p.get("pid"))
-        if pid_list:
+        # lsof lives in /usr/sbin, which the LaunchAgent's PATH does not
+        # include — a bare "lsof" raises FileNotFoundError inside the service
+        # and the attachment map silently stays empty.
+        lsof_bin = shutil.which("lsof") or "/usr/sbin/lsof"
+        if pid_list and os.path.isfile(lsof_bin):
             try:
                 out = subprocess.run(
-                    ["lsof", "-w", "-p", pid_list, "-Fpn"],
+                    [lsof_bin, "-w", "-p", pid_list, "-Fpn"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     text=True,
