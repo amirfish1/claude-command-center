@@ -243,6 +243,30 @@ class TwoNodeFleet:
             git(self.base, "clone", "-q", str(self.origin), str(repo))
         return self.origin
 
+    def make_extra_repo(self, name: str):
+        """A second origin + per-node clones, for multi-repo fleet scenarios.
+        Returns (origin, clone_a, clone_b)."""
+        origin = self.base / f"{name}.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)],
+                       check=True, capture_output=True,
+                       env={**os.environ, **GIT_ENV})
+        git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+        seed = self.base / f"seed-{name}"
+        seed.mkdir()
+        git(self.base, "clone", "-q", str(origin), str(seed))
+        (seed / "README.md").write_text(f"# {name}\n")
+        git(seed, "add", "README.md")
+        git(seed, "commit", "-q", "-m", "init: seed")
+        git(seed, "branch", "-M", "main")
+        git(seed, "push", "-q", "origin", "main")
+        shutil.rmtree(seed)
+        clone_a = self.node_a.home / "repos" / name
+        clone_b = self.node_b.home / "repos" / name
+        for clone in (clone_a, clone_b):
+            clone.parent.mkdir(parents=True, exist_ok=True)
+            git(self.base, "clone", "-q", str(origin), str(clone))
+        return origin, clone_a, clone_b
+
     def commit_on(self, repo: Path, filename: str, content: str, message: str,
                   push: bool = False):
         (repo / filename).write_text(content)

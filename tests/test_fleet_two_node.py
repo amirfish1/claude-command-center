@@ -30,6 +30,13 @@ class TestFleetTwoNode(unittest.TestCase):
                            (cls.fleet.node_b, cls.fleet.repo_b)):
             node.post("/api/federation/repo-map", {
                 "identity": cls.identity, "local_path": str(repo)})
+        # Second repository: the Fleet view is multi-repo by design.
+        _origin2, extra_a, extra_b = cls.fleet.make_extra_repo("second-app")
+        cls.identity2 = federation.repo_identity(str(extra_a))["identity"]
+        for node, repo in ((cls.fleet.node_a, extra_a),
+                           (cls.fleet.node_b, extra_b)):
+            node.post("/api/federation/repo-map", {
+                "identity": cls.identity2, "local_path": str(repo)})
 
     @classmethod
     def tearDownClass(cls):
@@ -53,6 +60,13 @@ class TestFleetTwoNode(unittest.TestCase):
         node_ids = {n["node_id"] for n in inv["nodes"]}
         self.assertIn(self.fleet.node_a.node_id, node_ids)
         self.assertIn(self.fleet.node_b.node_id, node_ids)
+        # Several repositories, one view — each with entries for both nodes.
+        identities = {r["identity"] for r in inv["repos"]}
+        self.assertIn(self.identity, identities)
+        self.assertIn(self.identity2, identities)
+        second = next(r for r in inv["repos"] if r["identity"] == self.identity2)
+        self.assertEqual(set(second["nodes"].keys()),
+                         {self.fleet.node_a.node_id, self.fleet.node_b.node_id})
         for node_id in (self.fleet.node_a.node_id, self.fleet.node_b.node_id):
             entry = self._repo_entry(inv, node_id)
             self.assertIsNotNone(entry, f"no entry for {node_id}")
