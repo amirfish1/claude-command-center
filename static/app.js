@@ -25990,8 +25990,9 @@
         }
         try {
           await Promise.all(rows.map(({ row, sid }) =>
-            ccPostJson('/api/conversations/' + encodeURIComponent(row.id || sid) + '/all-lane', {
+            ccPostJson('/api/conversations/all-lane', {
               session_id: sid,
+              conversation_id: row.id || sid,
               lane,
             })
           ));

@@ -43,6 +43,7 @@ def test_all_lane_drop_wiring_posts_to_persistent_endpoint():
 
     assert "assignAllLaneFromDrop" in app_js
     assert "data-all-hermes-tab" in app_js
-    assert "/all-lane" in app_js
+    assert "/api/conversations/all-lane" in app_js
     assert 'all_lane_override' in app_js
+    assert 'path == "/api/conversations/all-lane"' in server_py
     assert 're.match(r"^/api/conversations/[^/]+/all-lane$"' in server_py

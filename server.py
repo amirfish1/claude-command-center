@@ -53614,15 +53614,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
-        elif re.match(r"^/api/conversations/[^/]+/all-lane$", path):
-            conv_id = urllib.parse.unquote(path.split("/")[-2])
+        elif path == "/api/conversations/all-lane" or re.match(r"^/api/conversations/[^/]+/all-lane$", path):
+            conv_id = "" if path == "/api/conversations/all-lane" else urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 payload = {}
-            sid = (payload.get("session_id") or conv_id or "").strip()
+            sid = (payload.get("session_id") or payload.get("conversation_id") or conv_id or "").strip()
             lane_raw = payload.get("lane")
             lane = _normalize_session_lane(lane_raw)
             if lane_raw not in (None, "") and not lane:
