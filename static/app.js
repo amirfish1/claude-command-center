@@ -46261,6 +46261,7 @@
     }
     networkRenderTailnet(data.tailnet);
     networkRenderEnvNotice(runtime.env_overrides);
+    try { cloudRelay.build(); cloudRelay.refresh(); } catch (_) {}
   }
   function networkClose() {
     if ($networkModal) $networkModal.classList.remove('open');
@@ -46314,6 +46315,196 @@
     $networkSaveBtn.textContent = 'Restarting…';
     setTimeout(() => { try { location.reload(); } catch (_) {} }, 1200);
   }
+
+  // ── CCC Cloud (outbound relay) ──────────────────────────────────────────
+  // Injected into the Network access modal (index.html is not edited here).
+  // Optional, outbound-only device pairing with the hosted relay. It does NOT
+  // change local or Tailscale access — pairing/enable POSTs are localhost-only.
+  const cloudRelay = (() => {
+    let built = false;
+    const el = {};
+    const DEFAULT_RELAY = 'http://127.0.0.1:8790';
+
+    function build() {
+      if (built || !$networkModal) return;
+      const dialog = $networkModal.querySelector('.upd-dialog');
+      const anchor = document.getElementById('networkError');
+      if (!dialog || !anchor) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'cloud-relay-section';
+      wrap.innerHTML =
+        '<div class="cloud-relay-title">CCC Cloud</div>' +
+        '<div class="cloud-relay-copy">Optional. Outbound-only. Does not change ' +
+        'local or Tailscale access. No account required for local use.</div>' +
+        '<div class="cloud-relay-status" id="cloudRelayStatus">Loading…</div>' +
+        '<div id="cloudRelayPair" class="cloud-relay-pair" style="display:none;">' +
+          '<label class="bug-label" for="cloudRelayCode">Pairing code</label>' +
+          '<input type="text" id="cloudRelayCode" class="bug-input" autocomplete="off" ' +
+            'placeholder="8-character code from CCC Cloud">' +
+          '<label class="bug-label" for="cloudRelayUrl" style="margin-top:8px;">Relay URL</label>' +
+          '<input type="text" id="cloudRelayUrl" class="bug-input" autocomplete="off" ' +
+            'placeholder="' + DEFAULT_RELAY + '">' +
+          '<div class="cloud-relay-actions">' +
+            '<button type="button" class="upd-btn upd-primary" id="cloudRelayPairBtn">Pair…</button>' +
+          '</div>' +
+        '</div>' +
+        '<div id="cloudRelayConfirm" class="cloud-relay-confirm" style="display:none;">' +
+          '<div id="cloudRelayConfirmMsg" class="cloud-relay-copy"></div>' +
+          '<div class="cloud-relay-actions">' +
+            '<button type="button" class="upd-btn upd-primary" id="cloudRelayConfirmBtn">Confirm</button>' +
+            '<button type="button" class="upd-btn" id="cloudRelayCancelBtn">Cancel</button>' +
+          '</div>' +
+        '</div>' +
+        '<div id="cloudRelayPaired" class="cloud-relay-paired" style="display:none;">' +
+          '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px;">' +
+            '<input type="checkbox" id="cloudRelayEnabled"><span>Enabled</span></label>' +
+          '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-top:8px;">' +
+            '<input type="checkbox" id="cloudRelayShareTitles" style="margin-top:3px;"><span>' +
+            'Share session titles with CCC Cloud (redacted). Off sends opaque labels.</span></label>' +
+          '<div class="cloud-relay-actions">' +
+            '<button type="button" class="upd-btn" id="cloudRelayUnpairBtn">Unpair</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="cloud-relay-error" id="cloudRelayError"></div>';
+      dialog.insertBefore(wrap, anchor);
+      el.status = wrap.querySelector('#cloudRelayStatus');
+      el.pair = wrap.querySelector('#cloudRelayPair');
+      el.code = wrap.querySelector('#cloudRelayCode');
+      el.url = wrap.querySelector('#cloudRelayUrl');
+      el.pairBtn = wrap.querySelector('#cloudRelayPairBtn');
+      el.confirm = wrap.querySelector('#cloudRelayConfirm');
+      el.confirmMsg = wrap.querySelector('#cloudRelayConfirmMsg');
+      el.confirmBtn = wrap.querySelector('#cloudRelayConfirmBtn');
+      el.cancelBtn = wrap.querySelector('#cloudRelayCancelBtn');
+      el.paired = wrap.querySelector('#cloudRelayPaired');
+      el.enabled = wrap.querySelector('#cloudRelayEnabled');
+      el.share = wrap.querySelector('#cloudRelayShareTitles');
+      el.unpairBtn = wrap.querySelector('#cloudRelayUnpairBtn');
+      el.error = wrap.querySelector('#cloudRelayError');
+      el.pairBtn.addEventListener('click', doPair);
+      el.confirmBtn.addEventListener('click', doConfirm);
+      el.cancelBtn.addEventListener('click', doAbandon);
+      el.unpairBtn.addEventListener('click', doUnpair);
+      el.enabled.addEventListener('change', () => postConfig({ enabled: el.enabled.checked }));
+      el.share.addEventListener('change', () => postConfig({ share_titles: el.share.checked }));
+      built = true;
+    }
+
+    function showError(msg) {
+      if (el.error) { el.error.textContent = msg || ''; el.error.style.display = msg ? '' : 'none'; }
+    }
+
+    async function post(path, body) {
+      const r = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      const data = await r.json().catch(() => ({}));
+      return { ok: r.ok, data };
+    }
+
+    async function refresh() {
+      if (!built) return;
+      showError('');
+      let s;
+      try {
+        const r = await fetch('/api/cloud-relay/status', { cache: 'no-store' });
+        s = await r.json();
+      } catch (e) {
+        if (el.status) el.status.textContent = 'CCC Cloud status unavailable.';
+        return;
+      }
+      render(s || {});
+    }
+
+    function loopLabel(state) {
+      return ({ online: 'Online', offline: 'Offline', error: 'Error',
+        connecting: 'Connecting…', disabled: 'Disabled', off: 'Offline' }[state]) || state || '';
+    }
+
+    function render(s) {
+      // Pending confirm state is UI-local (start_pairing already ran); status
+      // reflects persisted state, so a pending flag is tracked separately.
+      const paired = !!s.paired;
+      const env = !!s.env_disabled;
+      el.pair.style.display = (!paired && !pendingMask) ? '' : 'none';
+      el.confirm.style.display = pendingMask ? '' : 'none';
+      el.paired.style.display = (paired && !pendingMask) ? '' : 'none';
+      if (pendingMask) {
+        el.confirmMsg.textContent = 'Pair this computer with ' + pendingMask + '?';
+      }
+      if (!el.url.value) el.url.value = s.relay_url || DEFAULT_RELAY;
+      if (paired) {
+        el.enabled.checked = !!s.enabled;
+        el.share.checked = s.share_titles !== false;
+      }
+      let line;
+      if (env) {
+        line = 'Disabled by CCC_CLOUD_DISABLED for this run.';
+      } else if (pendingMask) {
+        line = 'Pairing… confirm below.';
+      } else if (!paired) {
+        line = 'Not paired.' + (s.disabled_reason ? ' (' + networkEsc(s.disabled_reason) + ')' : '');
+      } else {
+        const who = s.account_email_masked || 'this account';
+        const ls = (s.loop && s.loop.state) || (s.enabled ? 'connecting' : 'off');
+        line = 'Paired as ' + networkEsc(who) + (s.enabled ? ' — ' + loopLabel(ls) : ' — Disabled');
+        if (s.loop && s.loop.last_error && ls === 'error') line += ' (' + networkEsc(s.loop.last_error) + ')';
+      }
+      el.status.textContent = line;
+    }
+
+    let pendingMask = '';
+
+    async function doPair() {
+      showError('');
+      const code = (el.code.value || '').trim();
+      const url = (el.url.value || '').trim() || DEFAULT_RELAY;
+      if (!code) { showError('Enter the pairing code from CCC Cloud.'); return; }
+      el.pairBtn.disabled = true;
+      const { ok, data } = await post('/api/cloud-relay/pair', { pair_code: code, relay_url: url });
+      el.pairBtn.disabled = false;
+      if (!ok || !data.ok) { showError('Pairing failed: ' + (data.error || 'unknown')); return; }
+      pendingMask = data.masked_email || '(unknown email)';
+      refresh();
+    }
+
+    async function doConfirm() {
+      showError('');
+      el.confirmBtn.disabled = true;
+      const { ok, data } = await post('/api/cloud-relay/pair/confirm', {});
+      el.confirmBtn.disabled = false;
+      if (!ok || !data.ok) { showError('Confirm failed: ' + (data.error || 'unknown')); return; }
+      pendingMask = '';
+      if (el.code) el.code.value = '';
+      refresh();
+    }
+
+    async function doAbandon() {
+      await post('/api/cloud-relay/pair/abandon', {});
+      pendingMask = '';
+      refresh();
+    }
+
+    async function doUnpair() {
+      showError('');
+      const { ok, data } = await post('/api/cloud-relay/unpair', {});
+      if (!ok || !data.ok) { showError('Unpair failed: ' + (data.error || 'unknown')); return; }
+      refresh();
+    }
+
+    async function postConfig(patch) {
+      showError('');
+      const { ok, data } = await post('/api/cloud-relay/config', patch);
+      if (!ok || !data.ok) {
+        showError('Could not save: ' + (data.error === 'not_paired' ? 'pair first.' : (data.error || 'unknown')));
+      }
+      refresh();
+    }
+
+    return { build, refresh };
+  })();
 
   if ($networkBtn) $networkBtn.addEventListener('click', () => {
     if ($settingsPopover) $settingsPopover.classList.remove('open');

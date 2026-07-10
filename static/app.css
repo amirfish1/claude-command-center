@@ -8792,6 +8792,20 @@
     white-space: pre-wrap; word-break: break-word; }
   .upd-error.visible { display: block; }
 
+  /* ── CCC Cloud (relay) section, injected into the Network access modal ── */
+  .cloud-relay-section { border-top: 1px solid var(--border, rgba(255,255,255,0.1));
+    margin-top: 14px; padding-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .cloud-relay-title { font-weight: 600; font-size: 13px; }
+  .cloud-relay-copy { font-size: 12px; color: var(--text-muted); }
+  .cloud-relay-status { font-size: 12.5px; margin: 4px 0; }
+  .cloud-relay-pair, .cloud-relay-confirm, .cloud-relay-paired {
+    display: flex; flex-direction: column; gap: 2px; }
+  .cloud-relay-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .cloud-relay-error { font-size: 12px; color: var(--red);
+    background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.3);
+    border-radius: 6px; padding: 6px 9px; display: none; margin-top: 6px;
+    white-space: pre-wrap; word-break: break-word; }
+
   /* ── Car Mode modal ─────────────────────────────────────────
      Reuses the .upd-* shell; these add the capability banner + the
      cost / graceful-degradation callouts. */

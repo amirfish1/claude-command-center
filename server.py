@@ -59,6 +59,12 @@ import model_advisor
 # docs/superpowers/plans/2026-07-10-federated-ccc-fleet-plan.md.
 import federation
 
+# CCC Cloud Relay (stdlib-only sibling module): outbound-only device client for
+# the hosted relay — pushes a minimized state snapshot and executes relayed
+# commands against this server's own loopback API. Disabled by default; the
+# relay never widens local network trust. See docs/cloud-relay/PROTOCOL.md.
+import cloud_relay
+
 # Tool's own assets live next to this file. Repos are never process-global:
 # every repo-scoped request must carry a concrete repo path, cwd, or session id.
 CCC_ROOT = Path(__file__).resolve().parent
@@ -8201,6 +8207,25 @@ except (TypeError, ValueError):
 # called at runtime can reach it without threading the value through every
 # call site.
 BIND_HOST = "127.0.0.1"
+
+# CCC Cloud Relay manager — lazily created, one per process. Holds pairing
+# state and the outbound loop. Disabled by default; nothing leaves the host
+# until the user pairs and enables it from the dashboard (localhost-only).
+_CLOUD_RELAY_MANAGER = None
+_CLOUD_RELAY_LOCK = threading.Lock()
+
+
+def cloud_relay_manager():
+    """Return the process-wide CloudRelayManager, creating it on first use.
+    The GET handlers can create it lazily; main() creates it up front so the
+    loop can start at boot when the user has already enabled it."""
+    global _CLOUD_RELAY_MANAGER
+    if _CLOUD_RELAY_MANAGER is None:
+        with _CLOUD_RELAY_LOCK:
+            if _CLOUD_RELAY_MANAGER is None:
+                _CLOUD_RELAY_MANAGER = cloud_relay.CloudRelayManager(
+                    PORT, ccc_version=__version__)
+    return _CLOUD_RELAY_MANAGER
 # Optional title-prefix noise stripper. Comma-separated prefixes.
 # Empty by default; set `CCC_TITLE_STRIP=ACME,FOO` to strip `[ACME ...]` and `[FOO ...]` from titles.
 TITLE_STRIP_PREFIXES = [p for p in os.environ.get("CCC_TITLE_STRIP", "").split(",") if p]
@@ -48903,6 +48928,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 "total": len(rows)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/cloud-relay/status":
+            # Read-only status for the CCC Cloud settings panel. No secrets:
+            # device_id is opaque, the email is pre-masked.
+            try:
+                self.send_json(cloud_relay_manager().status())
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/cloud-relay/config":
+            try:
+                self.send_json({"ok": True, **cloud_relay_manager().get_config()})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/telemetry/status":
             # Anonymous-telemetry opt-in state. Drives the dashboard bar:
             # only render when opt_in is null (never asked) AND not env-disabled.
@@ -50639,6 +50676,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_json({"error": error, "origin": origin}, 403)
         return False
 
+    def _require_localhost_origin(self, label):
+        """SECURITY: localhost-only gate for privilege-sensitive POSTs — even a
+        trusted tailnet peer (which passes the same-origin check above) must NOT
+        be able to pair/enable cloud relay or exfiltrate credentials. Mirrors
+        the /api/network-config gate verbatim. Returns True when allowed; sends
+        a 403 and returns False otherwise."""
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin:
+            ok = False
+            for host in ("localhost", "127.0.0.1", "[::1]"):
+                for scheme in ("http", "https"):
+                    if origin == f"{scheme}://{host}:{PORT}" or origin == f"{scheme}://{host}":
+                        ok = True
+                        break
+                if ok:
+                    break
+            if not ok:
+                self.send_json({"error": f"{label} is localhost-only", "origin": origin}, 403)
+                return False
+        return True
+
     def do_POST(self):
         if not self._check_same_origin():
             return
@@ -51159,6 +51217,47 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
             _schedule_restart()
+            return
+        if path in ("/api/cloud-relay/config", "/api/cloud-relay/pair",
+                    "/api/cloud-relay/pair/confirm", "/api/cloud-relay/pair/abandon",
+                    "/api/cloud-relay/unpair"):
+            # SECURITY: localhost-only — enabling/pairing cloud relay or wiping
+            # credentials is privilege-sensitive; a trusted tailnet peer must
+            # not be able to do it. Same gate as /api/network-config.
+            if not self._require_localhost_origin("cloud-relay"):
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            try:
+                mgr = cloud_relay_manager()
+                if path == "/api/cloud-relay/config":
+                    result = mgr.set_config(
+                        enabled=payload.get("enabled"),
+                        share_titles=payload.get("share_titles"),
+                    )
+                elif path == "/api/cloud-relay/pair":
+                    result = mgr.start_pairing(
+                        payload.get("pair_code") or "",
+                        payload.get("relay_url") or "",
+                    )
+                elif path == "/api/cloud-relay/pair/confirm":
+                    result = mgr.confirm_pairing()
+                elif path == "/api/cloud-relay/pair/abandon":
+                    result = mgr.abandon_pairing()
+                else:  # /api/cloud-relay/unpair
+                    result = mgr.unpair()
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            self.send_json(result, 200 if result.get("ok") else 400)
             return
         if path == "/api/spawn-defaults":
             length = int(self.headers.get("Content-Length", "0"))
@@ -58858,6 +58957,16 @@ def main():
         _throughput_week_rankings()
     if _should_prewarm_throughput_on_startup():
         threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
+    # CCC Cloud Relay — outbound-only device loop. Disabled by default: starts
+    # ONLY if the user has already paired and enabled it, and never when
+    # CCC_CLOUD_DISABLED=1. Nothing leaves the host otherwise. Pass the actual
+    # bound port so relayed commands hit this process's own loopback API.
+    try:
+        mgr = cloud_relay_manager()
+        if mgr.maybe_start():
+            print("  [cloud-relay] outbound loop started (paired + enabled)")
+    except Exception as e:
+        print(f"  [cloud-relay] not started: {e}")
     print()
     try:
         server.serve_forever()
