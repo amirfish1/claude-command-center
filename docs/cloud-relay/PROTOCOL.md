@@ -226,3 +226,26 @@ pair_code_expired, session_not_found, handoff_leased`.
 `min_supported` in `426` responses; the device advertises its protocol version
 in `/v1/state`. Additive fields are non-breaking. This file is the changelog
 anchor for the protocol.
+
+## Appendix A — v1 clarifications (2026-07-10, Fable rulings)
+
+1. **Rotation trigger.** The relay may set `"rotate_requested": true` on any
+   `/v1/state` or `/v1/poll` response; the client then performs §2 rotation.
+2. **Device-side unpair.** `POST /v1/device/self-revoke` (device-authed)
+   tombstones the calling device. Local unpair calls it best-effort, then
+   wipes local credentials regardless of the outcome.
+3. **Idempotency ordering.** For a request_id already recorded, the device
+   returns the recorded result immediately after version+capability checks
+   (a legit retry carries the same seq and must not be rejected as replay).
+   New request_ids validate expiry → seq → payload, in that order.
+4. **Worker fields.** `depth` = total items in the queue, `open` = unclosed
+   items, `workers_live` = live worker count.
+5. **Attention kind mapping (canonical).** Local classifier → wire enum:
+   question_blocked / soft_block / sidecar_waiting → `question`;
+   pending_tool / stale_tool_call / needs-approval states → `approval`;
+   stuck queues/workers → `stuck`; session died mid-question or job failed →
+   `failed`; pushed_open / committed_not_pushed / uncommitted_edits /
+   open_backlog / needs_attention_label → `completed` (finished work awaiting
+   human follow-up); device offline items are cloud-computed → `offline`.
+6. **Capability tokens.** The §4.1 capability list may additionally include
+   `session_detail` when the device supports on-demand detail windows.
