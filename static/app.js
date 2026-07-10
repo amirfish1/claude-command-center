@@ -5831,8 +5831,8 @@
           activeModelSelect.style.display = 'none';
         } else {
           const engine = getSpawnEngine();
-          const options = MODEL_OPTIONS_BY_ENGINE[engine] || [];
           const defaultModel = _defaultModelsByEngine[engine] || '';
+          const options = modelOptionsForSpawnEngine(engine, defaultModel, true);
           activeModelSelect.style.display = (options.length === 0 && !defaultModel) ? 'none' : '';
         }
       }
@@ -35494,10 +35494,10 @@
     if (typeof _renderInlineAdvisorNudge === 'function') _renderInlineAdvisorNudge();
   }
 
-  // Curated per-engine model lists. Free-text "Other…" handles unreleased
-  // models without a code change. The `oneM` flag controls whether the
-  // 1M-context toggle is offered for that model (Claude only — current 1M
-  // variants are Opus 4.7/4.8; Sonnet remains 200k).
+  // Bootstrap per-engine model lists. /api/engines/models hydrates these from
+  // the server-owned catalog; this local copy keeps the UI usable if that fetch
+  // fails during startup. The `oneM` flag controls whether the 1M-context
+  // toggle is offered for that model.
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
       { id: 'fable-5',   label: 'fable-5',   oneM: false },
@@ -35506,6 +35506,7 @@
       { id: 'haiku-4-5', label: 'haiku-4-5', oneM: false },
     ],
     codex: [
+      { id: 'gpt-5.6',      label: 'gpt-5.6' },
       { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
       { id: 'gpt-5.4',      label: 'gpt-5.4 (1M-capable)' },
       { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
@@ -35558,6 +35559,15 @@
     ],
   };
 
+  const ENGINE_SUPPORTS_CUSTOM_MODEL = {
+    claude: true,
+    codex: true,
+    cursor: true,
+    antigravity: true,
+    kilo: true,
+    hermes: true,
+  };
+
   // Codex's own switcher pairs a Model choice with a separate Reasoning
   // effort choice (`model_reasoning_effort` config value: low/medium/high/
   // xhigh) — mirror that as a second section in our Codex model picker.
@@ -35570,6 +35580,79 @@
 
   function _normalizeModelId(s) {
     return (s || '').replace(/^claude-/, '').replace(/\[1m\]/i, '').trim().toLowerCase();
+  }
+
+  function _knownModelForEngine(engine, model) {
+    const norm = _normalizeModelId(model);
+    return !!norm && (MODEL_OPTIONS_BY_ENGINE[engine] || []).some(o => _normalizeModelId(o.id) === norm);
+  }
+
+  function _knownModelForOtherEngine(engine, model) {
+    const norm = _normalizeModelId(model);
+    if (!norm) return false;
+    return Object.keys(MODEL_OPTIONS_BY_ENGINE).some(other => {
+      if (other === engine) return false;
+      return (MODEL_OPTIONS_BY_ENGINE[other] || []).some(o => _normalizeModelId(o.id) === norm);
+    });
+  }
+
+  function _engineSupportsCustomModel(engine) {
+    return ENGINE_SUPPORTS_CUSTOM_MODEL[engine] !== false;
+  }
+
+  function _modelAllowedForEngine(engine, model) {
+    const value = String(model == null ? '' : model).trim();
+    if (value === '__other__') return false;
+    if (!value) return engine === 'antigravity';
+    if (_knownModelForEngine(engine, value)) return true;
+    if (!_engineSupportsCustomModel(engine)) return false;
+    return !_knownModelForOtherEngine(engine, value);
+  }
+
+  function _mergeModelOptionsForEngine(engine, models) {
+    if (!engine || !Array.isArray(models)) return;
+    const existing = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+    const byNorm = new Map();
+    existing.forEach((opt) => byNorm.set(_normalizeModelId(opt.id), Object.assign({}, opt)));
+    const merged = [];
+    models.forEach((row) => {
+      if (!row || typeof row !== 'object') return;
+      const id = String(row.id == null ? '' : row.id).trim();
+      if (!id) return;
+      const norm = _normalizeModelId(id);
+      const prev = byNorm.get(norm) || {};
+      const next = Object.assign({}, prev, {
+        id,
+        label: String(row.label || prev.label || id),
+      });
+      if (row.oneM != null) next.oneM = !!row.oneM;
+      if (row.sources) next.sources = row.sources;
+      byNorm.set(norm, next);
+      if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(next);
+    });
+    existing.forEach((opt) => {
+      const norm = _normalizeModelId(opt.id);
+      if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(byNorm.get(norm) || opt);
+    });
+    MODEL_OPTIONS_BY_ENGINE[engine] = merged;
+  }
+
+  async function loadEngineModelCatalog() {
+    try {
+      const res = await fetch('/api/engines/models', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      const catalog = data && data.catalog && typeof data.catalog === 'object' ? data.catalog : {};
+      Object.keys(catalog).forEach((engine) => {
+        const info = catalog[engine] || {};
+        _mergeModelOptionsForEngine(engine, info.models || []);
+        if (typeof info.supports_custom === 'boolean') {
+          ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom;
+        }
+      });
+      return data;
+    } catch (_) {
+      return null;
+    }
   }
 
   let _modelPickerEl = null;
@@ -35775,17 +35858,8 @@
       });
   }
 
-  // The Claude `/model` menu, replicated 1:1 from Claude Code's native picker.
-  // Each row carries the bare alias in `id` plus its 1M / legacy flags. Numbers
-  // mirror the native keyboard shortcuts (1-7).
-  const CLAUDE_MODEL_MENU = [
-    { id: 'fable-5',   label: 'Fable 5',             num: '1' },
-    { id: 'sonnet-5',  label: 'Sonnet 5',             num: '2' },
-    { id: 'opus-4-8',  label: 'Opus 4.8',             num: '3', context_1m: true },
-    { id: 'haiku-4-5', label: 'Haiku 4.5',            num: '4' },
-  ];
   // Claude Code's current shipped default model. Shown in the menu's top
-  // "· Default" row.
+  // "· Default" row; the rest of the menu is built from MODEL_OPTIONS_BY_ENGINE.
   const CLAUDE_DEFAULT_MODEL = 'fable-5';
 
   // Map a model alias/id to the menu's friendly label ("opus-4-8" → "Opus 4.8").
@@ -35800,6 +35874,17 @@
     const bare = n.match(/^(opus|sonnet|haiku|fable)$/);
     if (bare) return bare[1][0].toUpperCase() + bare[1].slice(1);
     return id || n;
+  }
+
+  function _claudeModelMenuOptions() {
+    const options = MODEL_OPTIONS_BY_ENGINE.claude || [];
+    return options.map((opt, idx) => ({
+      id: opt.id,
+      label: opt.menuLabel || _claudeFriendlyModelName(opt.id),
+      num: idx < 9 ? String(idx + 1) : '',
+      context_1m: !!opt.oneM,
+      legacy: !!opt.legacy,
+    }));
   }
 
   function _buildClaudeModelMenuHtml(currentNorm, currentIs1M) {
@@ -35818,7 +35903,7 @@
       +   '<span class="mp-check">' + (defaultActive ? '✓' : '') + '</span>'
       + '</button>'
       + '<div class="mp-divider"></div>';
-    CLAUDE_MODEL_MENU.forEach((opt) => {
+    _claudeModelMenuOptions().forEach((opt) => {
       const ctx1m = !!opt.context_1m;
       const isActive = _normalizeModelId(opt.id) === currentNorm && ctx1m === !!currentIs1M;
       html += '<button type="button" class="mp-row mp-claude-row' + (isActive ? ' active' : '') + '"'
@@ -35830,6 +35915,11 @@
         + '<span class="mp-num">' + escapeHtml(opt.num) + '</span>'
         + '</button>';
     });
+    html += '<div class="mp-divider"></div>'
+      + '<div class="mp-other">'
+      + '<input type="text" placeholder="Other model…" data-mp-other-input>'
+      + '<button type="button" data-mp-other-apply>Apply</button>'
+      + '</div>';
     // Fast mode exists only on Opus models (4.6/4.7/4.8) — hide the toggle
     // elsewhere (Fable, Sonnet, Haiku) so users can't trigger an
     // "invalid mode" error from the CLI.
@@ -42776,12 +42866,24 @@
     // one getSpawnEngine() now reports (a boot/timing desync), the change
     // handler here would otherwise attribute e.g. Claude's opus-4-8 to the
     // Codex slot, and the next spawn ships an invalid model to the wrong CLI.
-    if (value && engine !== 'antigravity') {
-      const engineModelIds = (MODEL_OPTIONS_BY_ENGINE[engine] || []).map(o => _normalizeModelId(o.id));
-      if (!engineModelIds.includes(_normalizeModelId(value))) {
-        console.warn('[spawn] ignoring "' + value + '" for engine "' + engine + '" (not one of its models); resyncing UI instead');
-        syncSpawnEngineDependentUi();
-        return;
+    if (value && !_modelAllowedForEngine(engine, value)) {
+      if (_knownModelForOtherEngine(engine, value)) {
+        console.warn('[spawn] ignoring "' + value + '" for engine "' + engine + '" (known model for another engine); resyncing UI instead');
+      } else {
+        console.warn('[spawn] ignoring "' + value + '" for engine "' + engine + '" (custom models disabled); resyncing UI instead');
+      }
+      syncSpawnEngineDependentUi();
+      return;
+    }
+    if (!value && engine !== 'antigravity') {
+      syncSpawnEngineDependentUi();
+      return;
+    }
+    if (value && !_knownModelForEngine(engine, value) && _engineSupportsCustomModel(engine)) {
+      const existing = MODEL_OPTIONS_BY_ENGINE[engine] || [];
+      if (!existing.some(o => _normalizeModelId(o.id) === _normalizeModelId(value))) {
+        existing.unshift({ id: value, label: value + ' (custom)' });
+        MODEL_OPTIONS_BY_ENGINE[engine] = existing;
       }
     }
     spawnDefaultsState.models[engine] = value;
@@ -42823,7 +42925,7 @@
 
     if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect) {
       const defaultModel = _defaultModelsByEngine[engine] || '';
-      const allModels = modelOptionsForSpawnEngine(engine, defaultModel, false);
+      const allModels = modelOptionsForSpawnEngine(engine, defaultModel, true);
 
       $convInputModelSelect.innerHTML = '';
       const isNewSession = (typeof currentConversation !== 'undefined' && currentConversation === '__new__');
@@ -42887,10 +42989,24 @@
   });
   if ($convInputModelSelect) {
     $convInputModelSelect.addEventListener('change', () => {
-      setSpawnDefaultModel(getSpawnEngine(), $convInputModelSelect.value);
+      const engine = getSpawnEngine();
+      if ($convInputModelSelect.value === SPAWN_DEFAULT_OTHER) {
+        let model = '';
+        try {
+          model = (window.prompt('Model ID for ' + spawnEngineLabel(engine) + ':', _defaultModelsByEngine[engine] || '') || '').trim();
+        } catch (_) {
+          model = '';
+        }
+        if (model) setSpawnDefaultModel(engine, model);
+        else syncSpawnEngineDependentUi();
+        return;
+      }
+      setSpawnDefaultModel(engine, $convInputModelSelect.value);
     });
   }
+  const modelCatalogReady = loadEngineModelCatalog();
   const spawnDefaultsReady = loadSpawnDefaults();
+  modelCatalogReady.finally(syncSpawnEngineDependentUi);
   syncSpawnEngineDependentUi();
   { const $ia = document.getElementById('convInputIssueAction');
     if ($ia) $ia.addEventListener('change', () => updateInputBar()); }
@@ -47360,12 +47476,10 @@
         // engine's model family (e.g. the select still holding a Claude
         // model id right after switching to Codex) ever reaching the
         // wrong CLI, which produced a hard "model not supported" spawn
-        // failure (CCC-503). Only forward the model if it's actually one
-        // of this engine's own options; otherwise drop it and let the
-        // server apply its own per-engine fallback default.
-        const engineModelIds = (MODEL_OPTIONS_BY_ENGINE[engine] || []).map(o => _normalizeModelId(o.id));
-        const isValidForEngine = (engine === 'antigravity' && pickedModel === '')
-          || engineModelIds.includes(_normalizeModelId(pickedModel));
+        // failure (CCC-503). Known values from a different engine are still
+        // dropped, but unknown custom IDs are allowed for engines that accept
+        // free-form model strings.
+        const isValidForEngine = _modelAllowedForEngine(engine, pickedModel);
         if (isValidForEngine) {
           spawnBody.model = pickedModel;
         } else {

@@ -2250,6 +2250,75 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
+    def test_engine_model_catalog_merges_local_codex_sources(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            codex_home = root / ".codex"
+            codex_home.mkdir()
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-5.6"\n',
+                encoding="utf-8",
+            )
+            (codex_home / "models_cache.json").write_text(json.dumps({
+                "models": [
+                    {
+                        "slug": "gpt-5.4-mini",
+                        "display_name": "GPT-5.4 Mini",
+                        "visibility": "list",
+                        "priority": 23,
+                        "supported_reasoning_levels": [{"effort": "low"}],
+                    },
+                    {
+                        "slug": "codex-hidden-test",
+                        "display_name": "Hidden",
+                        "visibility": "hide",
+                    },
+                ],
+            }), encoding="utf-8")
+
+            old_file = server.SPAWN_DEFAULTS_FILE
+            old_cache = dict(server._MODEL_CATALOG_CACHE)
+            server.SPAWN_DEFAULTS_FILE = root / "spawn-defaults.json"
+            try:
+                with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False), \
+                     mock.patch.object(server, "_harness_model_list_records", return_value=[]), \
+                     mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                    payload = server._build_engine_model_catalog(force_refresh=True)
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+                server._MODEL_CATALOG_CACHE.clear()
+                server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        codex_ids = payload["engines"]["codex"]
+        self.assertIn("gpt-5.6", codex_ids)
+        self.assertIn("gpt-5.4-mini", codex_ids)
+        self.assertNotIn("codex-hidden-test", codex_ids)
+        self.assertEqual(payload["enforced"], [])
+        self.assertTrue(payload["catalog"]["codex"]["supports_custom"])
+        mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
+        self.assertIn("codex-cache", mini["sources"])
+        self.assertEqual(mini["reasoning_efforts"], ["low"])
+
+    def test_codex_model_validation_allows_new_model_ids(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        self.assertEqual(server._validate_codex_model("gpt-5.6-preview"), ("gpt-5.6-preview", None))
+        self.assertEqual(server._validate_codex_model("gpt-5.5-codex"), ("gpt-5.5", None))
+
+    def test_static_model_picker_uses_server_catalog_and_custom_escape_hatch(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+
+        self.assertIn("fetch('/api/engines/models'", app_js)
+        self.assertIn("function _modelAllowedForEngine", app_js)
+        self.assertIn("gpt-5.6", app_js)
+        self.assertIn("'Other...'", app_js)
+
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False
         no matter what CCC_ENABLE_MORNING says."""

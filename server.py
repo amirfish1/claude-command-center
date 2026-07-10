@@ -49,6 +49,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    tomllib = None
+
 # Model-drift advisor (stdlib-only, no back-reference to this module). Lives
 # next to server.py; recommends cheaper/stronger models per live session. See
 # /api/model-advisor and model_advisor.py.
@@ -2985,34 +2990,80 @@ def _spawn_fallback_model_for_engine(engine):
     return ""
 
 
-# Discovery/reference copy of the UI's model picker (static/app.js
-# MODEL_OPTIONS_BY_ENGINE) so scripted callers (the ccc-orchestration skill,
-# curl, etc.) don't have to guess a model id blind (CCC-503). Informational
-# for most engines -- only codex is hard-validated below, since claude's
-# --model flag legitimately accepts bare family names ("opus") and other
-# forms _cli_model_flag() normalizes, and cursor/kilo/hermes/antigravity pass
-# through CLI-specific strings CCC doesn't fully enumerate here.
-_ENGINE_KNOWN_MODELS = {
-    "claude": ("fable-5", "sonnet-5", "opus-4-8", "haiku-4-5"),
-    "codex": ("gpt-5.5", "gpt-5.4", "gpt-5-codex", "o4", "o4-mini", "o3", "o3-mini"),
+# Curated model picker fallback. The server owns this so the browser, scripted
+# callers, and validation logic cannot drift from each other. Runtime discovery
+# merges additional local sources into this list at /api/engines/models.
+_ENGINE_CURATED_MODELS = {
+    "claude": (
+        {"id": "fable-5", "label": "fable-5", "oneM": False},
+        {"id": "sonnet-5", "label": "sonnet-5", "oneM": False},
+        {"id": "opus-4-8", "label": "opus-4-8", "oneM": True},
+        {"id": "haiku-4-5", "label": "haiku-4-5", "oneM": False},
+    ),
+    "codex": (
+        {"id": "gpt-5.6", "label": "gpt-5.6"},
+        {"id": "gpt-5.5", "label": "gpt-5.5 (default)"},
+        {"id": "gpt-5.4", "label": "gpt-5.4 (1M-capable)"},
+        {"id": "gpt-5-codex", "label": "gpt-5-codex"},
+        {"id": "o4", "label": "o4"},
+        {"id": "o4-mini", "label": "o4-mini"},
+        {"id": "o3", "label": "o3"},
+        {"id": "o3-mini", "label": "o3-mini"},
+    ),
     "cursor": (
-        "auto", "composer-2.5-fast", "gpt-5.3-codex", "gpt-5.3-codex-high",
-        "claude-opus-4-8-thinking-high", "composer-2.5",
+        {"id": "auto", "label": "Auto (default)"},
+        {"id": "composer-2.5-fast", "label": "composer-2.5-fast"},
+        {"id": "gpt-5.3-codex", "label": "gpt-5.3-codex"},
+        {"id": "gpt-5.3-codex-high", "label": "gpt-5.3-codex-high"},
+        {"id": "claude-opus-4-8-thinking-high", "label": "claude-opus-4-8-thinking-high"},
+        {"id": "composer-2.5", "label": "composer-2.5"},
     ),
     "antigravity": (
-        "Gemini 3.5 Pro (High)", "Gemini 3.5 Pro (Medium)", "Gemini 3.5 Pro (Low)",
-        "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Medium)",
-        "Gemini 3.1 Pro (High)", "Gemini 3.1 Pro (Low)",
-        "Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)",
-        "GPT-OSS 120B (Medium)",
+        {"id": "Gemini 3.5 Pro (High)", "label": "Gemini 3.5 Pro (High)"},
+        {"id": "Gemini 3.5 Pro (Medium)", "label": "Gemini 3.5 Pro (Medium)"},
+        {"id": "Gemini 3.5 Pro (Low)", "label": "Gemini 3.5 Pro (Low)"},
+        {"id": "Gemini 3.5 Flash (High)", "label": "Gemini 3.5 Flash (High)"},
+        {"id": "Gemini 3.5 Flash (Medium)", "label": "Gemini 3.5 Flash (Medium)"},
+        {"id": "Gemini 3.1 Pro (High)", "label": "Gemini 3.1 Pro (High)"},
+        {"id": "Gemini 3.1 Pro (Low)", "label": "Gemini 3.1 Pro (Low)"},
+        {"id": "Claude Sonnet 4.6 (Thinking)", "label": "Claude Sonnet 4.6 (Thinking)"},
+        {"id": "Claude Opus 4.6 (Thinking)", "label": "Claude Opus 4.6 (Thinking)"},
+        {"id": "GPT-OSS 120B (Medium)", "label": "GPT-OSS 120B (Medium)"},
     ),
     "kilo": (
-        "kilo/stepfun/step-3.8-flash:free", "kilo/stepfun/step-3.7-flash:free",
-        "kilo/anthropic/claude-sonnet-4.8", "kilo/anthropic/claude-opus-4.8",
-        "kilo/anthropic/claude-sonnet-4.6", "kilo/openai/gpt-6.0", "kilo/openai/gpt-5.5",
+        {"id": "kilo/stepfun/step-3.8-flash:free", "label": "step-3.8-flash (free)"},
+        {"id": "kilo/stepfun/step-3.7-flash:free", "label": "step-3.7-flash (free, default)"},
+        {"id": "kilo/anthropic/claude-sonnet-4.8", "label": "claude-sonnet-4.8"},
+        {"id": "kilo/anthropic/claude-opus-4.8", "label": "claude-opus-4.8"},
+        {"id": "kilo/anthropic/claude-sonnet-4.6", "label": "claude-sonnet-4.6"},
+        {"id": "kilo/openai/gpt-6.0", "label": "gpt-6.0"},
+        {"id": "kilo/openai/gpt-5.5", "label": "gpt-5.5"},
     ),
-    "hermes": ("auto", "hermes-3-llama-3.1-405b", "hermes-3-llama-3.1-70b", "hermes-2-pro-llama-3-8b"),
+    "hermes": (
+        {"id": "auto", "label": "Auto (default)"},
+        {"id": "hermes-3-llama-3.1-405b", "label": "hermes-3-llama-3.1-405b"},
+        {"id": "hermes-3-llama-3.1-70b", "label": "hermes-3-llama-3.1-70b"},
+        {"id": "hermes-2-pro-llama-3-8b", "label": "hermes-2-pro-llama-3-8b"},
+    ),
 }
+
+# Backward-compatible ID-only view used by older scripts and error payloads.
+_ENGINE_KNOWN_MODELS = {
+    engine: tuple(str(opt["id"]) for opt in options)
+    for engine, options in _ENGINE_CURATED_MODELS.items()
+}
+
+_ENGINE_SUPPORTS_CUSTOM_MODELS = {
+    "claude": True,
+    "codex": True,
+    "cursor": True,
+    "antigravity": True,
+    "kilo": True,
+    "hermes": True,
+}
+
+_MODEL_CATALOG_CACHE = {"ts": 0.0, "data": None}
+_MODEL_CATALOG_TTL_SEC = 30.0
 
 # Known typo/guess patterns for a model id that doesn't exist -- e.g. an
 # agent assuming codex model names always end in "-codex" (they don't; the
@@ -3022,12 +3073,360 @@ _CODEX_MODEL_ALIASES = {
 }
 
 
-def _validate_codex_model(model):
-    """Catch codex model-id typos before a headless `codex exec --model`
-    spawn silently reports ok:true and then fails async (CCC-503).
+def _model_catalog_key(model):
+    return _clean_spawn_default_model(model).lower()
 
-    Returns (resolved_model, error). `error` is None when `model` is empty
-    (caller falls back to the default), a known alias, or already valid.
+
+def _model_catalog_add(catalog, engine, model, *, label=None, source="observed", **attrs):
+    engine = _normalize_orchestration_spawn_engine(engine)
+    if engine not in _ORCHESTRATION_SPAWN_ENGINES:
+        return
+    model = _clean_spawn_default_model(model)
+    if not model:
+        return
+    bucket = catalog.setdefault(engine, {
+        "default": _spawn_fallback_model_for_engine(engine),
+        "supports_custom": _ENGINE_SUPPORTS_CUSTOM_MODELS.get(engine, True),
+        "models": [],
+        "_index": {},
+    })
+    key = _model_catalog_key(model)
+    index = bucket.setdefault("_index", {})
+    entry = index.get(key)
+    if entry is None:
+        entry = {
+            "id": model,
+            "label": _clean_spawn_default_model(label) or model,
+            "sources": [],
+        }
+        bucket.setdefault("models", []).append(entry)
+        index[key] = entry
+    elif label and (not entry.get("label") or entry.get("label") == entry.get("id")):
+        entry["label"] = _clean_spawn_default_model(label)
+    if source and source not in entry["sources"]:
+        entry["sources"].append(source)
+    for key, value in attrs.items():
+        if value in (None, ""):
+            continue
+        if key == "oneM":
+            entry[key] = bool(value)
+        elif key not in entry:
+            entry[key] = value
+
+
+def _codex_home():
+    return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+
+
+def _codex_configured_model():
+    path = _codex_home() / "config.toml"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    if tomllib is not None:
+        try:
+            data = tomllib.loads(raw)
+        except tomllib.TOMLDecodeError:
+            data = {}
+        if isinstance(data, dict):
+            return _clean_spawn_default_model(data.get("model"))
+    # Python < 3.11 fallback: only read a simple top-level model = "..."
+    # assignment. That is enough for Codex's current config shape.
+    for line in raw.splitlines():
+        m = re.match(r'^\s*model\s*=\s*["\']([^"\']+)["\']\s*(?:#.*)?$', line)
+        if m:
+            return _clean_spawn_default_model(m.group(1))
+    return ""
+
+
+def _model_records_from_json(value, *, source, skip_hidden=False):
+    if isinstance(value, dict):
+        rows = value.get("models")
+        if rows is None:
+            rows = value.get("data")
+        if rows is None:
+            rows = value.get("available_models")
+    else:
+        rows = value
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for row in rows:
+        if isinstance(row, str):
+            model = row
+            label = row
+            extra = {}
+        elif isinstance(row, dict):
+            if skip_hidden and str(row.get("visibility") or "").lower() == "hide":
+                continue
+            model = (
+                row.get("id") or row.get("slug") or row.get("model")
+                or row.get("name") or row.get("value")
+            )
+            label = (
+                row.get("label") or row.get("display_name")
+                or row.get("displayName") or row.get("name") or model
+            )
+            extra = {}
+            if row.get("description"):
+                extra["description"] = str(row.get("description"))
+            if row.get("priority") is not None:
+                extra["priority"] = row.get("priority")
+            levels = row.get("supported_reasoning_levels")
+            if isinstance(levels, list):
+                extra["reasoning_efforts"] = [
+                    str(x.get("effort") if isinstance(x, dict) else x)
+                    for x in levels
+                    if (x.get("effort") if isinstance(x, dict) else x)
+                ]
+            if row.get("default_reasoning_level"):
+                extra["default_reasoning_effort"] = str(row.get("default_reasoning_level"))
+        else:
+            continue
+        model = _clean_spawn_default_model(model)
+        if model:
+            out.append({
+                "id": model,
+                "label": _clean_spawn_default_model(label) or model,
+                "source": source,
+                **extra,
+            })
+    return out
+
+
+def _codex_models_cache_records():
+    path = _codex_home() / "models_cache.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return _model_records_from_json(data, source="codex-cache", skip_hidden=True)
+
+
+def _resolve_harness_bin(engine):
+    if engine == "codex":
+        info = _resolve_codex_bin()
+    elif engine == "claude":
+        info = _resolve_claude_bin()
+    else:
+        return None
+    if not info.get("available") or not info.get("bin"):
+        return None
+    return info["bin"]
+
+
+def _harness_model_list_records(engine):
+    """Best-effort future hook for harnesses that add JSON model discovery.
+
+    Current Codex/Claude CLIs expose only free-form --model flags. If a future
+    release adds one of these machine-readable commands, CCC starts merging it
+    without a browser-side change. Failures are ignored and cached by the outer
+    catalog builder.
+    """
+    engine = _normalize_orchestration_spawn_engine(engine)
+    if engine not in ("codex", "claude"):
+        return []
+    bin_path = _resolve_harness_bin(engine)
+    if not bin_path:
+        return []
+    candidates = []
+    if engine == "codex":
+        candidates = [
+            [bin_path, "models", "list", "--json"],
+            [bin_path, "model", "list", "--json"],
+        ]
+    elif engine == "claude":
+        candidates = [
+            [bin_path, "models", "--json"],
+            [bin_path, "models", "list", "--json"],
+            [bin_path, "model", "list", "--json"],
+        ]
+    for cmd in candidates:
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if proc.returncode != 0:
+            continue
+        text = (proc.stdout or "").strip()
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        rows = _model_records_from_json(data, source=f"{engine}-cli")
+        if rows:
+            return rows
+    return []
+
+
+def _observed_model_records():
+    rows = []
+
+    def add(engine, model, source):
+        model = _clean_spawn_default_model(model)
+        if model:
+            rows.append({"engine": engine, "id": model, "label": model, "source": source})
+
+    try:
+        for entry in _load_session_overrides().values():
+            if isinstance(entry, dict):
+                add(entry.get("engine") or "claude", entry.get("model"), "session-override")
+    except Exception:
+        pass
+    try:
+        for entry in _load_spawn_registry():
+            if isinstance(entry, dict):
+                add(entry.get("engine") or "claude", entry.get("model"), "spawn-registry")
+    except Exception:
+        pass
+    try:
+        for entry in _codex_thread_registry_entries().values():
+            if isinstance(entry, dict):
+                add("codex", entry.get("model"), "codex-registry")
+    except Exception:
+        pass
+    try:
+        for entry in _spawned_sessions:
+            if isinstance(entry, dict):
+                add(entry.get("engine") or "claude", entry.get("model"), "live-spawn")
+    except Exception:
+        pass
+    try:
+        for meta in _conv_meta_cache.values():
+            if isinstance(meta, dict):
+                add("claude", meta.get("model"), "transcript-cache")
+    except Exception:
+        pass
+    return rows
+
+
+def _build_engine_model_catalog(force_refresh=False):
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _MODEL_CATALOG_CACHE["data"] is not None
+        and now - _MODEL_CATALOG_CACHE["ts"] < _MODEL_CATALOG_TTL_SEC
+    ):
+        return copy.deepcopy(_MODEL_CATALOG_CACHE["data"])
+
+    catalog = {}
+    for engine in _ORCHESTRATION_SPAWN_ENGINES:
+        catalog[engine] = {
+            "default": _spawn_fallback_model_for_engine(engine),
+            "supports_custom": _ENGINE_SUPPORTS_CUSTOM_MODELS.get(engine, True),
+            "models": [],
+            "_index": {},
+        }
+        for opt in _ENGINE_CURATED_MODELS.get(engine, ()):
+            attrs = {}
+            if "oneM" in opt:
+                attrs["oneM"] = opt["oneM"]
+            _model_catalog_add(
+                catalog,
+                engine,
+                opt.get("id"),
+                label=opt.get("label"),
+                source="curated",
+                **attrs,
+            )
+
+    try:
+        defaults = _load_spawn_defaults()
+        for engine, model in (defaults.get("models") or {}).items():
+            _model_catalog_add(catalog, engine, model, source="spawn-default")
+            norm = _normalize_orchestration_spawn_engine(engine)
+            if norm in catalog and model:
+                catalog[norm]["default"] = _clean_spawn_default_model(model)
+    except Exception:
+        pass
+
+    env_defaults = {
+        "claude": os.environ.get("CCC_CLAUDE_MODEL"),
+        "codex": os.environ.get("CCC_CODEX_MODEL"),
+        "gemini": os.environ.get("CCC_GEMINI_MODEL"),
+        "cursor": os.environ.get("CCC_CURSOR_MODEL"),
+        "antigravity": os.environ.get("CCC_ANTIGRAVITY_MODEL"),
+        "kilo": os.environ.get("CCC_KILO_MODEL"),
+        "hermes": os.environ.get("CCC_HERMES_MODEL"),
+    }
+    for engine, model in env_defaults.items():
+        _model_catalog_add(catalog, engine, model, source="env")
+
+    _model_catalog_add(catalog, "codex", _codex_configured_model(), source="harness-config")
+    _model_catalog_add(catalog, "antigravity", _antigravity_cli_configured_model(), source="harness-config")
+
+    for row in _codex_models_cache_records():
+        _model_catalog_add(
+            catalog,
+            "codex",
+            row.get("id"),
+            label=row.get("label"),
+            source=row.get("source") or "codex-cache",
+            description=row.get("description"),
+            priority=row.get("priority"),
+            reasoning_efforts=row.get("reasoning_efforts"),
+            default_reasoning_effort=row.get("default_reasoning_effort"),
+        )
+
+    for engine in ("claude", "codex"):
+        for row in _harness_model_list_records(engine):
+            _model_catalog_add(
+                catalog,
+                engine,
+                row.get("id"),
+                label=row.get("label"),
+                source=row.get("source") or f"{engine}-cli",
+                description=row.get("description"),
+                priority=row.get("priority"),
+                reasoning_efforts=row.get("reasoning_efforts"),
+                default_reasoning_effort=row.get("default_reasoning_effort"),
+            )
+
+    for row in _observed_model_records():
+        _model_catalog_add(
+            catalog,
+            row.get("engine"),
+            row.get("id"),
+            label=row.get("label"),
+            source=row.get("source") or "observed",
+        )
+
+    for bucket in catalog.values():
+        bucket.pop("_index", None)
+        bucket["models"] = [
+            entry for entry in bucket.get("models", [])
+            if entry.get("id")
+        ]
+
+    payload = {
+        "catalog": catalog,
+        "engines": {
+            engine: [entry["id"] for entry in bucket.get("models", [])]
+            for engine, bucket in catalog.items()
+        },
+        "enforced": [],
+    }
+    _MODEL_CATALOG_CACHE["ts"] = now
+    _MODEL_CATALOG_CACHE["data"] = copy.deepcopy(payload)
+    return payload
+
+
+def _validate_codex_model(model):
+    """Resolve known Codex model-id aliases without blocking new model IDs.
+
+    Older CCC builds rejected any Codex model absent from the curated list.
+    That made newly released models unusable until CCC shipped a patch. Codex's
+    CLI accepts a free-form --model and reports real failures at launch, so the
+    server now allows unknown IDs and only normalizes known typo patterns.
     """
     if not model:
         return model, None
@@ -3035,12 +3434,7 @@ def _validate_codex_model(model):
     alias = _CODEX_MODEL_ALIASES.get(key)
     if alias:
         return alias, None
-    if key in _ENGINE_KNOWN_MODELS["codex"]:
-        return model, None
-    return model, (
-        f"unknown codex model: {model!r}. Known codex models: "
-        + ", ".join(_ENGINE_KNOWN_MODELS["codex"])
-    )
+    return model, None
 
 
 def _load_spawn_defaults():
@@ -50042,14 +50436,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "last_updated": _ccc_last_updated_iso(),
             })
         elif path == "/api/engines/models":
-            # Discovery endpoint (CCC-503) so scripted spawn callers (the
-            # ccc-orchestration skill, curl, etc.) can look up valid model
-            # ids per engine instead of guessing. Only "codex" is hard
-            # enforced at spawn time -- see _validate_codex_model.
-            self.send_json({
-                "engines": {k: list(v) for k, v in _ENGINE_KNOWN_MODELS.items()},
-                "enforced": ["codex"],
-            })
+            # Server-owned model catalog. `engines` preserves the original
+            # id-only shape for scripts; `catalog` is the richer UI contract
+            # populated from curated fallbacks plus local harness/default state.
+            self.send_json(_build_engine_model_catalog())
         elif path == "/api/search-history":
             # Read window onto ~/.claude-index/index.db, populated by the
             # bundled _history_index indexer. Returns BM25-ranked matches
