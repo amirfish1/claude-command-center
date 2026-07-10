@@ -16111,6 +16111,12 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--text);
   background: var(--surface-2);
 }
+.conv-all-hermes-tab.is-drop-target {
+  color: var(--text);
+  background: rgba(88,166,255,0.14);
+  outline: 2px dashed var(--accent, #58a6ff);
+  outline-offset: -2px;
+}
 .conv-all-hermes-tab.is-active {
   color: var(--text);
   background: color-mix(in srgb, var(--accent, #58a6ff) 18%, transparent);

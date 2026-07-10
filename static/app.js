@@ -25380,12 +25380,21 @@
       const sid = String(c.session_id || c.id || '').trim();
       return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
     };
-    const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c) && !_isWatchTowerWorkerRow(c));
-    const _allTabWatchTowerWorkerConvs = _allTabConvs.filter(c => !_isHermesWorkerRow(c) && _isWatchTowerWorkerRow(c));
-    const _allTabHermesWorkerConvs = _allTabConvs.filter(_isHermesWorkerRow);
-    const _allTabWorkerConvs = _allTabHermesWorkerConvs.concat(_allTabWatchTowerWorkerConvs);
-    const _allTabHermesMessageConvs = _allTabConvs.filter(_isHermesMessageRow);
-    const _allTabHasHermesSplit = _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
+    const _allTabLaneOverride = (c) => {
+      const lane = String((c && c.all_lane_override) || '').trim();
+      return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
+    };
+    const _allTabNaturalLane = (c) => {
+      if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c)) return 'workers';
+      if (_isHermesMessageRow(c)) return 'messages';
+      return 'coding';
+    };
+    const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);
+    const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
+    const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
+    const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
+    const _allTabHasLaneOverride = _allTabConvs.some(c => !!_allTabLaneOverride(c));
+    const _allTabHasHermesSplit = _allTabHasLaneOverride || _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
     const _allTabView = (() => {
       if (!_allTabHasHermesSplit) return 'coding';
       try {
@@ -25560,13 +25569,13 @@
     _arcCount = _allTabTotalCount;
     const _allHermesTabBarHtml = _allTabHasHermesSplit
       ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '" title="Drop a session here to show it under Coding">'
         +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + ((_gcItems || []).length || 0)) + '</span>'
         + '</button>'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '" title="Drop a session here to show it under Workers">'
         +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
         + '</button>'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '">'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '" title="Drop a session here to show it under Messages">'
         +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
         + '</button>'
         + '</div>'
@@ -25936,6 +25945,67 @@
     }
     const $allHermesTabs = $convList.querySelector('[data-role="all-hermes-tabs"]');
     if ($allHermesTabs) {
+      const laneLabel = (lane) => lane === 'workers' ? 'Workers' : (lane === 'messages' ? 'Messages' : 'Coding');
+      const clearTabDropTargets = () => {
+        $allHermesTabs.querySelectorAll('.conv-all-hermes-tab').forEach(tab => tab.classList.remove('is-drop-target'));
+      };
+      const rowForAllLaneId = (id) => {
+        if (!id) return null;
+        const pools = [
+          _allTabConvs,
+          (Array.isArray(conversationsData) ? conversationsData : []),
+          (Array.isArray(archiveData) ? archiveData : []),
+        ];
+        for (const rows of pools) {
+          const row = rows.find(c => c && (c.id === id || c.session_id === id));
+          if (row) return row;
+        }
+        return null;
+      };
+      const setLocalAllLaneOverride = (sid, lane) => {
+        if (!sid) return;
+        [_allTabConvs, conversationsData, archiveData].forEach(rows => {
+          if (!Array.isArray(rows)) return;
+          rows.forEach(c => {
+            if (c && (c.session_id === sid || c.id === sid)) c.all_lane_override = lane;
+          });
+        });
+      };
+      const assignAllLaneFromDrop = async (ev, lane) => {
+        const rawIds = readConvIdsFromDrop(ev);
+        const ids = rawIds.length ? rawIds : (dragSourceId ? [dragSourceId] : []);
+        const rows = [];
+        const seen = new Set();
+        ids.forEach(id => {
+          const row = rowForAllLaneId(id);
+          if (!row || row.source === 'backlog' || row.source === 'github_pr') return;
+          const sid = row.session_id || row.id;
+          if (!sid || seen.has(sid)) return;
+          seen.add(sid);
+          rows.push({ row, sid });
+        });
+        if (!rows.length) {
+          showOpToast('Drag a real session row to assign it to a lane', 'error');
+          return;
+        }
+        try {
+          await Promise.all(rows.map(({ row, sid }) =>
+            ccPostJson('/api/conversations/' + encodeURIComponent(row.id || sid) + '/all-lane', {
+              session_id: sid,
+              lane,
+            })
+          ));
+        } catch (err) {
+          showOpToast('Lane move failed — row stays put (' + err.message + ')', 'error');
+          return;
+        }
+        rows.forEach(({ sid }) => setLocalAllLaneOverride(sid, lane));
+        try { localStorage.setItem('ccc-all-hermes-tab', lane); } catch (_) {}
+        showOpToast(rows.length === 1
+          ? 'Moved session to ' + laneLabel(lane)
+          : 'Moved ' + rows.length + ' sessions to ' + laneLabel(lane));
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+      };
       $allHermesTabs.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const opt = ev.target.closest('[data-all-hermes-tab]');
@@ -25944,6 +26014,30 @@
         const value = raw === 'workers' || raw === 'messages' ? raw : 'coding';
         try { localStorage.setItem('ccc-all-hermes-tab', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+      $allHermesTabs.addEventListener('dragover', (ev) => {
+        if (!dragSourceId) return;
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (!opt) return;
+        ev.preventDefault();
+        try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        clearTabDropTargets();
+        opt.classList.add('is-drop-target');
+      });
+      $allHermesTabs.addEventListener('dragleave', (ev) => {
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (opt && !opt.contains(ev.relatedTarget)) opt.classList.remove('is-drop-target');
+      });
+      $allHermesTabs.addEventListener('drop', (ev) => {
+        if (!dragSourceId) return;
+        const opt = ev.target.closest('[data-all-hermes-tab]');
+        if (!opt) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const raw = opt.getAttribute('data-all-hermes-tab');
+        const lane = raw === 'workers' || raw === 'messages' ? raw : 'coding';
+        clearTabDropTargets();
+        assignAllLaneFromDrop(ev, lane);
       });
     }
     const $archivedExpandAll = $convList.querySelector('[data-role="archived-expand-all"]');

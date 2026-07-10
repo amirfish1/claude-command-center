@@ -941,15 +941,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);", app_js)
         self.assertIn("_uxqHealthCache && _uxqHealthCache.worker_session_ids", app_js)
         self.assertIn("c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c)", app_js)
-        self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c) && !_isWatchTowerWorkerRow(c));", app_js)
-        self.assertIn("const _allTabWorkerConvs = _allTabHermesWorkerConvs.concat(_allTabWatchTowerWorkerConvs);", app_js)
-        self.assertIn("const _allTabHasHermesSplit = _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;", app_js)
+        self.assertIn("const _allTabLaneOverride = (c) => {", app_js)
+        self.assertIn("const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);", app_js)
+        self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
+        self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
+        self.assertIn("const _allTabHasHermesSplit = _allTabHasLaneOverride || _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;", app_js)
         self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
         self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
         self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
         self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
+        self.assertIn("/all-lane", app_js)
         self.assertIn(".conv-all-hermes-tabs", app_css)
+        self.assertIn(".conv-all-hermes-tab.is-drop-target", app_css)
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
         """Cross-repo Ready to merge should not surface PRs from unknown repos."""

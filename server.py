@@ -1638,6 +1638,7 @@ def _append_custom_repo(path_str):
 # Used when a session was launched in repo A but the work logically belongs
 # under repo B and the user wants the row to appear there for scanning.
 _REPO_PINS_FILE = Path.home() / ".claude" / "command-center" / "repo-pins.json"
+_SESSION_LANE_VALUES = {"coding", "workers", "messages"}
 
 
 def _load_repo_pins():
@@ -1657,6 +1658,80 @@ def _save_repo_pins(pins):
     with open(tmp, "w") as f:
         json.dump(pins, f, indent=2, sort_keys=True)
     tmp.replace(_REPO_PINS_FILE)
+
+
+def _normalize_session_lane(lane):
+    lane = str(lane or "").strip().lower()
+    return lane if lane in _SESSION_LANE_VALUES else ""
+
+
+def _load_session_lane_overrides():
+    """Return {session_id: all-tab lane override}."""
+    try:
+        with open(SESSION_LANE_OVERRIDES_FILE) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for sid, lane in data.items():
+        clean = _normalize_session_lane(lane)
+        if isinstance(sid, str) and sid and clean:
+            out[sid] = clean
+    return out
+
+
+def _save_session_lane_overrides(overrides):
+    SESSION_LANE_OVERRIDES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SESSION_LANE_OVERRIDES_FILE.with_suffix(".json.tmp")
+    clean = {}
+    for sid, lane in (overrides or {}).items():
+        clean_lane = _normalize_session_lane(lane)
+        if sid and clean_lane:
+            clean[str(sid)] = clean_lane
+    with open(tmp, "w") as f:
+        json.dump(clean, f, indent=2, sort_keys=True)
+    tmp.replace(SESSION_LANE_OVERRIDES_FILE)
+    return clean
+
+
+def _get_session_lane_override(session_id):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return ""
+    return _load_session_lane_overrides().get(sid, "")
+
+
+def _set_session_lane_override(session_id, lane):
+    """Persist an All-tab lane override. Empty/invalid lane clears it."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise ValueError("missing session_id")
+    clean = _normalize_session_lane(lane)
+    overrides = _load_session_lane_overrides()
+    if clean:
+        overrides[sid] = clean
+    else:
+        overrides.pop(sid, None)
+    _save_session_lane_overrides(overrides)
+    return clean
+
+
+def _apply_session_lane_overrides(rows, overrides=None):
+    """Stamp per-session All-tab lane overrides onto any row shape."""
+    if overrides is None:
+        try:
+            overrides = _load_session_lane_overrides()
+        except Exception:
+            overrides = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("session_id") or row.get("id")
+        if sid:
+            row["all_lane_override"] = overrides.get(str(sid), "")
+    return rows
 
 
 def _load_session_overrides():
@@ -5998,6 +6073,7 @@ def find_all_conversations(
     # was clipped at self-rename time (e.g. "CCC#496: ...sc…") never got the
     # unclipped rest attached — it just looked permanently truncated here.
     _apply_watchtower_worker_display_names(out)
+    _apply_session_lane_overrides(out)
     return out
 
 
@@ -6270,6 +6346,13 @@ except ValueError:
 _archive_serve_cache = {}      # key -> {"ts", "rows"}
 _archive_serve_lock = threading.Lock()
 _archive_serve_refreshing = set()  # keys with a background refresh in flight
+
+
+def _clear_archive_serve_cache():
+    with _archive_serve_lock:
+        _archive_serve_cache.clear()
+        _archive_serve_refreshing.clear()
+
 
 # Coalescing cache for the spawned-session list on the ?all=1 hot path.
 # list_spawned_sessions() runs best-effort desktop-visibility/registry side
@@ -6632,6 +6715,7 @@ def _rehydrate_archive_cached_rows(rows):
     _apply_pinned_conversation_fields(hydrated, pinned_list)
     hydrated.sort(key=lambda r: r.get("mtime") or r.get("modified") or 0, reverse=True)
     _sort_pinned_conversations_first(hydrated, pinned_list)
+    _apply_session_lane_overrides(hydrated)
     _stamp_archive_state(hydrated)
     # Layer the current codex goal on every rehydrate (one batched, cached read)
     # so the stale_ok serve the dashboard polls reflects goal set/clear without
@@ -9197,6 +9281,7 @@ def _log_archive_event(action, sid, reason=""):
         pass
 PINNED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "pinned-conversations.json"  # [session_id,...]
 VERIFIED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
+SESSION_LANE_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-lane-overrides.json"  # {session_id: coding|workers|messages}
 # {session_id: epoch_seconds} — last time the user interacted with this card
 # from the UI (typed a message, clicked Approve/Deny, etc.). Drag-drop and
 # auto-events do NOT count.
@@ -15594,6 +15679,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
         sid = c.get("session_id")
         if sid is not None:
             c["is_live"] = sid in _reg_live_sids
+    _apply_session_lane_overrides(conversations)
     _dec_inflight()
     return conversations
 
@@ -16245,6 +16331,7 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         _pinned_list = []
     _apply_pinned_conversation_fields(conversations, _pinned_list)
     _sort_pinned_conversations_first(conversations, _pinned_list)
+    _apply_session_lane_overrides(conversations)
 
     if progress:
         progress(
@@ -53525,6 +53612,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "pinned": now_pinned,
                     "pin_rank": 0 if now_pinned else None,
                 })
+            except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[^/]+/all-lane$", path):
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = (payload.get("session_id") or conv_id or "").strip()
+            lane_raw = payload.get("lane")
+            lane = _normalize_session_lane(lane_raw)
+            if lane_raw not in (None, "") and not lane:
+                self.send_json({"ok": False, "error": "invalid lane"}, 400)
+                return
+            try:
+                lane = _set_session_lane_override(sid, lane)
+                _clear_archive_serve_cache()
+                self.send_json({
+                    "ok": True,
+                    "session_id": sid,
+                    "lane": lane,
+                })
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[^/]+/archive$", path):
