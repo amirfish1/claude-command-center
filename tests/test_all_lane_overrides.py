@@ -19,6 +19,23 @@ def test_session_lane_override_roundtrip(monkeypatch, tmp_path):
     assert server._load_session_lane_overrides() == {}
 
 
+def test_session_lane_override_persists_row_aliases(monkeypatch, tmp_path):
+    lane_file = tmp_path / "session-lane-overrides.json"
+    monkeypatch.setattr(server, "SESSION_LANE_OVERRIDES_FILE", lane_file)
+
+    lane, ids = server._set_session_lane_overrides(["sid-1", "row-1", "sid-1"], "coding")
+
+    assert lane == "coding"
+    assert ids == ["sid-1", "row-1"]
+    assert server._load_session_lane_overrides() == {"sid-1": "coding", "row-1": "coding"}
+
+    lane, ids = server._set_session_lane_overrides(["sid-1", "row-1"], "")
+
+    assert lane == ""
+    assert ids == ["sid-1", "row-1"]
+    assert server._load_session_lane_overrides() == {}
+
+
 def test_apply_session_lane_overrides_clears_cached_stale_fields(monkeypatch, tmp_path):
     lane_file = tmp_path / "session-lane-overrides.json"
     lane_file.write_text('{"sid-1": "messages", "sid-2": "invalid"}')
@@ -59,3 +76,11 @@ def test_all_lane_drop_updates_render_state_immediately():
     ]
     assert "setLocalAllLaneOverride(sid, lane, row.id || '')" in drop_handler
     assert "_convListRenderSig = null;" in drop_handler
+
+
+def test_all_lane_override_keeps_terminal_rows_in_lanes():
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "const _trashConvs = _archivedConvs.filter(c => !c.pinned && !_allTabLaneOverride(c));" in app_js
+    assert "const _pinnedArchived = _archivedConvs.filter(c => c.pinned || _allTabLaneOverride(c));" in app_js
+    assert "expandAllLaneDestinationGroup(row);" in app_js

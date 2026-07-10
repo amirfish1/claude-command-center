@@ -1718,6 +1718,29 @@ def _set_session_lane_override(session_id, lane):
     return clean
 
 
+def _set_session_lane_overrides(session_ids, lane):
+    """Persist an All-tab lane override for every known alias of a row."""
+    ids = []
+    seen = set()
+    for raw in session_ids or []:
+        sid = str(raw or "").strip()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        ids.append(sid)
+    if not ids:
+        raise ValueError("missing session_id")
+    clean = _normalize_session_lane(lane)
+    overrides = _load_session_lane_overrides()
+    for sid in ids:
+        if clean:
+            overrides[sid] = clean
+        else:
+            overrides.pop(sid, None)
+    _save_session_lane_overrides(overrides)
+    return clean, ids
+
+
 def _apply_session_lane_overrides(rows, overrides=None):
     """Stamp per-session All-tab lane overrides onto any row shape."""
     if overrides is None:
@@ -53629,11 +53652,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "invalid lane"}, 400)
                 return
             try:
-                lane = _set_session_lane_override(sid, lane)
+                lane, saved_ids = _set_session_lane_overrides([
+                    payload.get("session_id"),
+                    payload.get("conversation_id"),
+                    conv_id,
+                ], lane)
                 _clear_archive_serve_cache()
                 self.send_json({
                     "ok": True,
                     "session_id": sid,
+                    "session_ids": saved_ids,
                     "lane": lane,
                 })
             except ValueError as e:

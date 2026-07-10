@@ -25335,9 +25335,14 @@
     // CCC-468: archived rows no longer interleave with the live rows in the
     // All tab — "archive" hid nothing there. They render in a collapsed
     // "Trash" section pinned to the very bottom instead. Pinned archived
-    // rows are exempt (a pin is an explicit ask to keep it visible).
-    const _trashConvs = _archivedConvs.filter(c => !c.pinned);
-    const _pinnedArchived = _archivedConvs.filter(c => c.pinned);
+    // rows and lane-overridden rows are exempt: both are explicit asks to
+    // keep the session visible in the main All lanes.
+    const _allTabLaneOverride = (c) => {
+      const lane = String((c && c.all_lane_override) || '').trim();
+      return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
+    };
+    const _trashConvs = _archivedConvs.filter(c => !c.pinned && !_allTabLaneOverride(c));
+    const _pinnedArchived = _archivedConvs.filter(c => c.pinned || _allTabLaneOverride(c));
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
     try { _ensureEvergreenQueuesFresh(); } catch (_) {}
     const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
@@ -25379,10 +25384,6 @@
       if (!c) return false;
       const sid = String(c.session_id || c.id || '').trim();
       return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c));
-    };
-    const _allTabLaneOverride = (c) => {
-      const lane = String((c && c.all_lane_override) || '').trim();
-      return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
     };
     const _allTabNaturalLane = (c) => {
       if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c)) return 'workers';
@@ -25975,6 +25976,14 @@
           });
         });
       };
+      const expandAllLaneDestinationGroup = (row) => {
+        if (!row) return;
+        try {
+          [row.folder_path, row.folder_label_chip, row.folder_label].forEach(key => {
+            if (key) localStorage.removeItem(_folderGroupStorageKey('archived', key));
+          });
+        } catch (_) {}
+      };
       const assignAllLaneFromDrop = async (ev, lane) => {
         const rawIds = readConvIdsFromDrop(ev);
         const ids = rawIds.length ? rawIds : (dragSourceId ? [dragSourceId] : []);
@@ -26004,7 +26013,10 @@
           showOpToast('Lane move failed — row stays put (' + err.message + ')', 'error');
           return;
         }
-        rows.forEach(({ row, sid }) => setLocalAllLaneOverride(sid, lane, row.id || ''));
+        rows.forEach(({ row, sid }) => {
+          setLocalAllLaneOverride(sid, lane, row.id || '');
+          expandAllLaneDestinationGroup(row);
+        });
         _convListRenderSig = null;
         try { localStorage.setItem('ccc-all-hermes-tab', lane); } catch (_) {}
         showOpToast(rows.length === 1
