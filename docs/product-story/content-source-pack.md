@@ -64,10 +64,9 @@ V-01 (scan the fleet: list, board, live rows).
 
 **LinkedIn version.**
 
-A user of a competing tool said it better than I ever could: "Parallel
-sessions are the single biggest productivity unlock of this product, and
-today they're also the single biggest source of confusion." (From a public
-issue thread.)
+There is a public issue on a major coding-agent CLI titled, in full:
+"Parallel agents vanish with used context/ rate limts". Typo and all, it is
+the most honest sentence in that tracker.
 
 I hit the same wall. Nine terminal tabs, each holding a coding agent
 mid-task. I could not say which one had finished, which one was stuck, or

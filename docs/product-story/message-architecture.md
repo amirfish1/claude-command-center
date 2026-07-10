@@ -21,10 +21,11 @@ ago and nobody noticed. One is silently waiting on a question. One is about to
 run out of context mid-refactor. They realize the bottleneck is no longer the
 model. It is them.
 
-Real users say it in these words (verbatim, collected from public issues and
-posts): "Parallel sessions are the single biggest productivity unlock of this
-product, and today they're also the single biggest source of confusion."
-"I lost track of which were blocked on me." "tmux stopped scaling."
+Real users say it in these words (verbatim, verified 2026-07-10): "Parallel
+agents vanish" (public issue title, openai/codex); "parallel sessions
+currently conflict on the working tree" (public issue title,
+anthropics/claude-code). And the founder's own words: "I lost track of which
+were blocked on me." "tmux stopped scaling."
 
 ## 2. Category sentence
 
@@ -75,8 +76,8 @@ Defined canonically in `pain-feature-proof.md` section 1. For copy purposes:
    the actual transcript. Queue health is judged from ticket and worker state,
    not from an agent saying "done." Verification closes issues with a commit
    SHA, not a claim.
-3. **Local, readable, dependency-free.** One stdlib Python server, one HTML
-   page, no build step, no accounts, no cloud, MIT. Trust by inspection.
+3. **Local, readable, dependency-free.** A stdlib-only Python server and a
+   no-build vanilla-JS UI, no accounts, no cloud, MIT. Trust by inspection.
    (Never say "read it in an afternoon"; the honest form is "no runtime
    dependencies, nothing hidden.")
 

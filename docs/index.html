@@ -511,8 +511,8 @@
 
       <div class="moment-grid stagger-grid">
         <div class="quote-card">
-          <blockquote>"Parallel sessions are the single biggest productivity unlock of this product, and today they're also the single biggest source of confusion."</blockquote>
-          <div class="attr">public issue, openai/codex</div>
+          <blockquote>"Parallel agents vanish"</blockquote>
+          <div class="attr">public issue title, openai/codex</div>
         </div>
         <div class="quote-card">
           <blockquote>"The bottleneck stopped being the models. It became me."</blockquote>
@@ -801,7 +801,7 @@
       <div class="section-eyebrow fade-target">Honest comparison</div>
       <h2 class="fade-target">How CCC differs from the <span class="orange">other tools</span>.</h2>
       <p class="section-lede fade-target">
-        Tools in this category make different bets. Here is where each one wins and where each one loses. We listed where CCC loses too.
+        Tools in this category make different bets. Here is where each one wins and where each one loses, as of July 2026. We listed where CCC loses too.
       </p>
 
       <div class="compare-wrap fade-target">
@@ -825,7 +825,7 @@
             </tr>
             <tr>
               <td>Multi-engine dashboard</td>
-              <td class="yes">&#10003; Claude, Codex, Cursor, Antigravity, Kilo</td>
+              <td class="yes">&#10003; 5 engines, Claude Code first-class</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
@@ -860,7 +860,7 @@
             </tr>
             <tr>
               <td>Readable source, no build step</td>
-              <td class="yes">&#10003; stdlib Python + one HTML page</td>
+              <td class="yes">&#10003; stdlib Python, no-build UI</td>
               <td class="partial">Go</td>
               <td class="no">closed</td>
               <td class="no">docs only</td>
@@ -942,7 +942,7 @@ brew install ccc</pre>
           </p>
         </div>
         <ul class="why-list fade-target">
-          <li><strong>Architecture</strong>One Python file (stdlib only, no pip installs). One HTML page (vanilla JS, no build). Nothing hidden, nothing to audit but the source in front of you.</li>
+          <li><strong>Architecture</strong>A stdlib-only Python server and a no-build vanilla-JS browser UI. No pip installs, no bundler, no framework. Nothing hidden, nothing to audit but the source in front of you.</li>
           <li><strong>State</strong>Human-readable JSON sidecars under <code>~/.claude/command-center/</code>. Rewriteable by hand.</li>
           <li><strong>Workers</strong>No required background jobs. The optional queue watcher only runs when you use the work queue.</li>
           <li><strong>Telemetry</strong>Anonymous, opt-in, off by default. Five fields, all bounded. Inspectable locally. Source of the worker is in the repo.</li>

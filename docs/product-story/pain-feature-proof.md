@@ -32,7 +32,7 @@ Six families. Every public claim belongs to exactly one.
 
 ## 2. Canonical pain table
 
-The public-facing story. 26 rows, each verified. "Proof asset" IDs resolve in
+The public-facing story. 30 rows, each verified. "Proof asset" IDs resolve in
 the asset ledger (section 4).
 
 | # | Painful moment | CCC solution | User outcome | Proof asset | Status | Primary audience |
@@ -149,8 +149,10 @@ it wrong publicly.
 2. Compare table says CCC is "macOS + headless Linux" while hero and install
    show Windows. Windows native install shipped in v5.6.0. Fix the table.
 3. "Source you can read in an afternoon" overstates: `app.js` is about 1 MB and
-   `server.py` about 59k lines. Reframe honestly: no build step, no runtime
-   dependencies, two files, stdlib only. Do not claim afternoon-readability.
+   `server.py` about 59k lines, plus helper modules (federation.py,
+   model_advisor.py, ux_fixes_queue.py and others). Reframe honestly: no build
+   step, no runtime dependencies, stdlib only. Do not claim
+   afternoon-readability and do not claim a file count.
 4. "Workers: Zero. No background jobs" sits on the same page as the Watchtower
    watcher card. Reframe: no required background jobs; the queue watcher is
    part of the optional queue feature.
@@ -176,7 +178,7 @@ release.
 | S-OVR | Screenshot | 1 | Full dashboard, mixed live/PR/waiting rows, 3 repos | Demo bundle, board view | Planned |
 | S-F1a | Screenshot | 2 | Board with terminal-launched and dashboard-launched rows coexisting | Demo bundle | Planned |
 | S-F1b | Screenshot | 3 | Time-gap markers and dormant/archived rows | Demo bundle | Planned |
-| S-F1c | Screenshot | 4 | Engine badges across Claude/Codex/Gemini rows | Demo bundle | Planned |
+| S-F1c | Screenshot | 4 | Engine badges across Claude/Codex/Antigravity rows | Demo bundle | Planned |
 | S-F2a | Screenshot | 6 | Needs-attention lane with question-waiting session | Demo bundle | Planned |
 | S-F2b | Screenshot | 7 | Context meters incl. one in danger zone | Demo bundle | Planned |
 | S-F2c | Screenshot | 8 | Usage windows and pace | Local server, synthetic | Planned |
