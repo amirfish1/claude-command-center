@@ -572,6 +572,7 @@
               <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
               <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
               <button class="pop-item" type="button" id="federationPeersBtn"><span class="pop-icon">&#128279;</span><span>Nodes &amp; peers…</span></button>
+              <button class="pop-item" type="button" id="fleetViewBtn"><span class="pop-icon">&#128506;</span><span>Fleet…</span></button>
               <button class="pop-item" type="button" id="carModeMenuBtn"><span class="pop-icon">🚗</span><span>Car Mode…</span></button>
               <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
               <!-- Launchers for third-party plugin dashboards. Hidden by
@@ -1562,6 +1563,57 @@
         <button type="button" class="upd-btn" id="handoffCloseBtn">Close</button>
         <button type="button" class="upd-btn fed-btn" id="handoffRecheckBtn" hidden>Re-check</button>
         <button type="button" class="upd-btn upd-primary fed-btn" id="handoffConfirmBtn" hidden disabled>Hand off</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fleet view: the repo × node matrix. Opened from the settings popover
+       (openFleetView in app.js). Each repo card shows every node's independent
+       dimensions (worktrees / default branch / PRs / deployment / sessions),
+       each carrying its own freshness. "Resolve all…" opens the plan modal
+       below. Reuses the .upd-* modal shell + fed- primitives. -->
+  <div id="fleetModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="fleetTitle">
+    <div class="upd-backdrop" id="fleetBackdrop"></div>
+    <div class="upd-dialog fleet-dialog" style="width:min(1120px,96vw);max-height:90vh;overflow-y:auto;">
+      <div class="fleet-header">
+        <div class="fleet-header-titles">
+          <div class="upd-title" id="fleetTitle">Fleet</div>
+          <div class="upd-versions">
+            Every repo across every paired node — worktrees, branches, PRs,
+            deployments, and sessions as independent dimensions, each with its
+            own freshness.
+          </div>
+        </div>
+        <div class="fleet-header-actions">
+          <span class="fleet-refresh-time" id="fleetRefreshTime"></span>
+          <button type="button" class="upd-btn fed-btn" id="fleetRefreshBtn"><span class="fleet-spinner" id="fleetRefreshSpinner" hidden></span><span>Refresh</span></button>
+          <button type="button" class="upd-btn upd-primary fed-btn" id="fleetResolveBtn">Resolve all…</button>
+          <button type="button" class="upd-btn" id="fleetCloseBtn">Close</button>
+        </div>
+      </div>
+      <div class="fleet-health-strip" id="fleetHealthStrip"></div>
+      <div class="upd-error" id="fleetError"></div>
+      <div class="fleet-matrix" id="fleetMatrix"></div>
+    </div>
+  </div>
+
+  <!-- Resolve-all plan / job modal. openFleetPlan() POSTs /api/fleet/plan and
+       renders the reviewable actions (checkboxes, kind + destructive badges,
+       reasons, evidence, blockers). Confirm POSTs /api/fleet/execute, then the
+       same body switches to a live job view polling /api/fleet/job. -->
+  <div id="fleetPlanModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="fleetPlanTitle">
+    <div class="upd-backdrop" id="fleetPlanBackdrop"></div>
+    <div class="upd-dialog" style="width:min(780px,94vw);max-height:88vh;overflow-y:auto;">
+      <div class="upd-title" id="fleetPlanTitle">Resolve all</div>
+      <div class="upd-versions" id="fleetPlanSubtitle">
+        Review the proposed actions. Destructive steps are outlined in red.
+        Nothing runs until you confirm.
+      </div>
+      <div class="fleet-plan-body" id="fleetPlanBody"></div>
+      <div class="upd-error" id="fleetPlanError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="fleetPlanCancel">Cancel</button>
+        <button type="button" class="upd-btn upd-primary fed-btn" id="fleetPlanConfirm" disabled>Confirm</button>
       </div>
     </div>
   </div>
