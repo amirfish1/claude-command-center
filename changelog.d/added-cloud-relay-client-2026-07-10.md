@@ -1,0 +1,1 @@
+- CCC Cloud Relay (opt-in): pair this machine to a CCC Cloud account and see sessions, attention items, workers, and waiting questions from a phone anywhere — outbound-only connection, local-first and Tailscale access unchanged. New `cloud_relay.py` client, settings section in the Network modal, and open protocol spec in `docs/cloud-relay/PROTOCOL.md`.
