@@ -3228,23 +3228,24 @@ def _resolve_harness_bin(engine):
     return info["bin"]
 
 
-def _harness_model_list_records(engine):
+def _harness_model_list_result(engine):
     """Best-effort future hook for harnesses that add JSON model discovery.
 
-    Current Codex/Claude CLIs expose only free-form --model flags. If a future
-    release adds one of these machine-readable commands, CCC starts merging it
-    without a browser-side change. Failures are ignored and cached by the outer
-    catalog builder.
+    Codex exposes its raw catalog through `codex debug models`; Claude is still
+    only a free-form --model flag today. If either harness adds another
+    machine-readable command, CCC starts merging it without a browser-side
+    change. Failures are ignored and cached by the outer catalog builder.
     """
     engine = _normalize_orchestration_spawn_engine(engine)
     if engine not in ("codex", "claude"):
-        return []
+        return {"available": False, "records": []}
     bin_path = _resolve_harness_bin(engine)
     if not bin_path:
-        return []
+        return {"available": False, "records": []}
     candidates = []
     if engine == "codex":
         candidates = [
+            [bin_path, "debug", "models"],
             [bin_path, "models", "list", "--json"],
             [bin_path, "model", "list", "--json"],
         ]
@@ -3261,7 +3262,7 @@ def _harness_model_list_records(engine):
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
-                timeout=2,
+                timeout=4,
             )
         except (OSError, subprocess.SubprocessError):
             continue
@@ -3274,10 +3275,69 @@ def _harness_model_list_records(engine):
             data = json.loads(text)
         except json.JSONDecodeError:
             continue
-        rows = _model_records_from_json(data, source=f"{engine}-cli")
+        rows = _model_records_from_json(data, source=f"{engine}-cli", skip_hidden=True)
         if rows:
-            return rows
-    return []
+            return {"available": True, "records": rows, "command": cmd}
+    return {"available": False, "records": []}
+
+
+def _harness_model_list_records(engine):
+    result = _harness_model_list_result(engine)
+    return result.get("records") or []
+
+
+def _codex_mark_model_availability(catalog, harness_result):
+    if not (harness_result or {}).get("available"):
+        return
+    rows = harness_result.get("records") or []
+    listed = {
+        _model_catalog_key(row.get("id"))
+        for row in rows
+        if isinstance(row, dict) and row.get("id")
+    }
+    if not listed:
+        return
+    bucket = catalog.get("codex")
+    if not isinstance(bucket, dict):
+        return
+    bucket["availability_source"] = "codex-cli"
+    bucket["availability_command"] = " ".join(harness_result.get("command") or [])
+    for entry in bucket.get("models") or []:
+        key = _model_catalog_key(entry.get("id"))
+        available = key in listed
+        entry["available"] = available
+        if not available:
+            entry["availability_reason"] = "Not available in this Codex CLI. Run `codex update`."
+    default_key = _model_catalog_key(bucket.get("default"))
+    if default_key and default_key not in listed:
+        for entry in bucket.get("models") or []:
+            if entry.get("available") is not False and entry.get("id"):
+                bucket["default"] = entry["id"]
+                bucket["default_unavailable_reason"] = (
+                    "Saved Codex default is not available in this CLI."
+                )
+                break
+
+
+def _codex_model_availability_error(model):
+    model = _clean_spawn_default_model(model)
+    if not model:
+        return None
+    try:
+        result = _harness_model_list_result("codex")
+    except Exception:
+        return None
+    if not result.get("available"):
+        return None
+    target = _model_catalog_key(model)
+    listed = {
+        _model_catalog_key(row.get("id"))
+        for row in result.get("records") or []
+        if isinstance(row, dict) and row.get("id")
+    }
+    if target not in listed:
+        return f"{model} is unavailable: Not available in this Codex CLI. Run `codex update`."
+    return None
 
 
 def _observed_model_records():
@@ -3389,8 +3449,11 @@ def _build_engine_model_catalog(force_refresh=False):
             default_reasoning_effort=row.get("default_reasoning_effort"),
         )
 
+    harness_results = {}
     for engine in ("claude", "codex"):
-        for row in _harness_model_list_records(engine):
+        harness_result = _harness_model_list_result(engine)
+        harness_results[engine] = harness_result
+        for row in harness_result.get("records") or []:
             _model_catalog_add(
                 catalog,
                 engine,
@@ -3402,6 +3465,8 @@ def _build_engine_model_catalog(force_refresh=False):
                 reasoning_efforts=row.get("reasoning_efforts"),
                 default_reasoning_effort=row.get("default_reasoning_effort"),
             )
+
+    _codex_mark_model_availability(catalog, harness_results.get("codex"))
 
     for row in _observed_model_records():
         _model_catalog_add(
@@ -3432,7 +3497,7 @@ def _build_engine_model_catalog(force_refresh=False):
     return payload
 
 
-def _validate_codex_model(model):
+def _validate_codex_model(model, *, require_available=False):
     """Resolve known Codex aliases and enforce CCC's picker allowlist."""
     if not model:
         return model, None
@@ -3440,12 +3505,16 @@ def _validate_codex_model(model):
     alias = _CODEX_MODEL_ALIASES.get(key)
     if alias:
         model = alias
-    if _model_catalog_allows_model("codex", model):
-        return model, None
-    return model, (
-        f"unsupported codex model: {model!r}. Supported codex models: "
-        + ", ".join(_ENGINE_KNOWN_MODELS["codex"])
-    )
+    if not _model_catalog_allows_model("codex", model):
+        return model, (
+            f"unsupported codex model: {model!r}. Supported codex models: "
+            + ", ".join(_ENGINE_KNOWN_MODELS["codex"])
+        )
+    if require_available:
+        unavailable = _codex_model_availability_error(model)
+        if unavailable:
+            return model, unavailable
+    return model, None
 
 
 def _load_spawn_defaults():
@@ -24625,6 +24694,15 @@ def resume_session_codex(session_id, text, *, steer=False):
     override_model = (override or {}).get("model") if override else None
     reasoning_effort = (override or {}).get("reasoning_effort") or ""
     model = override_model or os.environ.get("CCC_CODEX_MODEL") or row.get("model") or _spawn_fallback_model_for_engine("codex")
+    if override_model:
+        model, model_error = _validate_codex_model(model, require_available=True)
+        if model_error:
+            return {
+                "ok": False,
+                "error": model_error,
+                "code": "codex_model_unavailable",
+                "known_codex_models": list(_ENGINE_KNOWN_MODELS["codex"]),
+            }
     _resume_ledger_append(
         "codex_wake_attempt", sid=session_id,
         cwd=cwd, model=model, steer=bool(steer),
@@ -38748,6 +38826,15 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None):
     if not session_id or not model:
         return {"ok": False, "error": "missing session_id or model"}
     engine = _detect_session_engine(session_id)
+    if engine == "codex":
+        model, model_error = _validate_codex_model(model, require_available=True)
+        if model_error:
+            return {
+                "ok": False,
+                "error": model_error,
+                "code": "codex_model_unavailable",
+                "known_codex_models": list(_ENGINE_KNOWN_MODELS["codex"]),
+            }
     if reasoning_effort is None:
         reasoning_effort = (_get_session_override(session_id) or {}).get("reasoning_effort") or ""
     _set_session_override(session_id, model, context_1m, engine, reasoning_effort)
@@ -52618,7 +52705,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             engine, model = _spawn_request_engine_and_model(payload)
             model_error = None
             if engine == "codex":
-                model, model_error = _validate_codex_model(model)
+                model, model_error = _validate_codex_model(model, require_available=True)
             report_to, report_to_error = _normalize_return_address(payload)
             parent_session_id, parent_session_error = _normalize_spawn_parent_session_id(
                 payload,
@@ -52830,20 +52917,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
+            model, model_error = _validate_codex_model(
+                _spawn_model_for_engine("codex", model),
+                require_available=True,
+            )
             if not prompt:
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
             elif cwd_error:
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
+            elif model_error:
+                self.send_json({
+                    "ok": False,
+                    "error": model_error,
+                    "known_codex_models": list(_ENGINE_KNOWN_MODELS["codex"]),
+                }, 400)
             else:
                 try:
-                    model, model_error = _validate_codex_model(model)
-                    if model_error:
-                        self.send_json({
-                            "ok": False,
-                            "error": model_error,
-                            "known_codex_models": list(_ENGINE_KNOWN_MODELS["codex"]),
-                        }, 400)
-                        return
                     result = spawn_session_codex(
                         prompt,
                         name=name,

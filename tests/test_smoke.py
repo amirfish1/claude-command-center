@@ -2290,7 +2290,7 @@ class TestServerImports(unittest.TestCase):
             server.SPAWN_DEFAULTS_FILE = root / "spawn-defaults.json"
             try:
                 with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False), \
-                     mock.patch.object(server, "_harness_model_list_records", return_value=[]), \
+                     mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
                      mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
                     payload = server._build_engine_model_catalog(force_refresh=True)
             finally:
@@ -2318,6 +2318,41 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
 
+    def test_codex_model_catalog_marks_missing_cli_models_unavailable(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        fake_debug_models = {
+            "available": True,
+            "records": [
+                {"id": "gpt-5.5", "label": "GPT-5.5", "source": "codex-cli"},
+                {"id": "gpt-5.4", "label": "GPT-5.4", "source": "codex-cli"},
+                {"id": "gpt-5.4-mini", "label": "GPT-5.4-Mini", "source": "codex-cli"},
+                {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3-Codex-Spark", "source": "codex-cli"},
+            ],
+            "command": ["codex", "debug", "models"],
+        }
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        try:
+            with mock.patch.object(server, "_harness_model_list_result", return_value=fake_debug_models), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+                codex_models = payload["catalog"]["codex"]["models"]
+                luna = next(m for m in codex_models if m["id"] == "gpt-5.6-luna")
+                self.assertFalse(luna["available"])
+                self.assertIn("codex update", luna["availability_reason"])
+                self.assertTrue(next(m for m in codex_models if m["id"] == "gpt-5.5")["available"])
+                model, error = server._validate_codex_model("gpt-5.6-luna", require_available=True)
+                self.assertEqual(model, "gpt-5.6-luna")
+                self.assertIn("unavailable", error)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
     def test_codex_model_validation_enforces_picker_models(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
@@ -2337,7 +2372,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("gpt-5.6-sol", app_js)
         self.assertIn("gpt-5.6-terra", app_js)
         self.assertIn("gpt-5.6-luna", app_js)
-        self.assertIn("'Other...'", app_js)
+        self.assertIn("opt.disabled", app_js)
+        self.assertIn("_modelUnavailableReason", app_js)
+        self.assertIn("if (_engineSupportsCustomModel(engine))", app_js)
+        self.assertIn("ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom", app_js)
 
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False

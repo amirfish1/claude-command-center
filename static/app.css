@@ -2880,6 +2880,15 @@
     width: 100%;
   }
   .model-picker-pop .mp-row:hover { background: var(--surface-2); }
+  .model-picker-pop .mp-row:disabled,
+  .model-picker-pop .mp-row.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .model-picker-pop .mp-row:disabled:hover,
+  .model-picker-pop .mp-row.disabled:hover {
+    background: transparent;
+  }
   .model-picker-pop .mp-row.active {
     color: var(--accent); background: rgba(88,166,255,0.10); font-weight: 600;
   }

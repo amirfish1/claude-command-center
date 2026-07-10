@@ -35586,6 +35586,16 @@
     return !!norm && (MODEL_OPTIONS_BY_ENGINE[engine] || []).some(o => _normalizeModelId(o.id) === norm);
   }
 
+  function _modelUnavailableReason(engine, model) {
+    const norm = _normalizeModelId(model);
+    if (!norm) return '';
+    const opt = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => _normalizeModelId(o.id) === norm);
+    if (opt && opt.available === false) {
+      return opt.availability_reason || opt.reason || 'Model is not available in this harness.';
+    }
+    return '';
+  }
+
   function _knownModelForOtherEngine(engine, model) {
     const norm = _normalizeModelId(model);
     if (!norm) return false;
@@ -35603,7 +35613,7 @@
     const value = String(model == null ? '' : model).trim();
     if (value === '__other__') return false;
     if (!value) return engine === 'antigravity';
-    if (_knownModelForEngine(engine, value)) return true;
+    if (_knownModelForEngine(engine, value)) return !_modelUnavailableReason(engine, value);
     if (!_engineSupportsCustomModel(engine)) return false;
     return !_knownModelForOtherEngine(engine, value);
   }
@@ -35625,6 +35635,8 @@
         label: String(row.label || prev.label || id),
       });
       if (row.oneM != null) next.oneM = !!row.oneM;
+      if (row.available !== undefined) next.available = !!row.available;
+      if (row.availability_reason) next.availability_reason = String(row.availability_reason);
       if (row.sources) next.sources = row.sources;
       byNorm.set(norm, next);
       if (!merged.some(o => _normalizeModelId(o.id) === norm)) merged.push(next);
@@ -35975,7 +35987,10 @@
         const isActive = _normalizeModelId(opt.id) === currentNorm;
         const oneM = !!opt.oneM;
         const oneMOn = isActive && currentIs1M;
-        html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + '" data-model="' + escapeHtml(opt.id) + '">'
+        const unavailable = opt.available === false;
+        const unavailableReason = opt.availability_reason || opt.reason || '';
+        html += '<button type="button" class="mp-row' + (isActive ? ' active' : '') + (unavailable ? ' disabled' : '') + '" data-model="' + escapeHtml(opt.id) + '"'
+          + (unavailable ? ' disabled title="' + escapeHtml(unavailableReason || 'Model unavailable') + '"' : '') + '>'
           + escapeHtml(opt.label || opt.id);
         if (oneM) {
           html += '<span class="mp-1m-toggle' + (oneMOn ? ' on' : '') + '" data-1m-toggle title="1M context (anthropic-beta: context-1m)">1M</span>';
@@ -35995,11 +36010,13 @@
         });
         html += '<div class="mp-divider"></div>';
       }
-      html += '<div class="mp-other">'
-        + '<input type="text" placeholder="Other model…" data-mp-other-input>'
-        + '<button type="button" data-mp-other-apply>Apply</button>'
-        + '</div>';
-      html += '<div class="mp-divider"></div>';
+      if (_engineSupportsCustomModel(engine)) {
+        html += '<div class="mp-other">'
+          + '<input type="text" placeholder="Other model…" data-mp-other-input>'
+          + '<button type="button" data-mp-other-apply>Apply</button>'
+          + '</div>';
+        html += '<div class="mp-divider"></div>';
+      }
       html += '<button type="button" class="mp-row mp-reset" data-mp-reset>↺ Reset to session default</button>';
       html += '<div class="mp-status" data-mp-status></div>';
     }
@@ -36073,6 +36090,7 @@
     // wired separately (it clears the override rather than pinning a model).
     pop.querySelectorAll('.mp-row[data-model]:not([data-mp-reset])').forEach((row) => {
       row.addEventListener('click', (ev) => {
+        if (row.disabled) return;
         const t = ev.target;
         if (t && t.matches && t.matches('[data-1m-toggle]')) {
           // Click the 1M chip without selecting the row: just toggle the chip.
@@ -42805,19 +42823,25 @@
     const base = MODEL_OPTIONS_BY_ENGINE[engine] || [];
     const out = [];
     const seen = new Set();
-    const add = (id, label) => {
+    const add = (id, label, attrs) => {
       const key = String(id == null ? '' : id);
       const dedupe = key.toLowerCase();
       if (seen.has(dedupe)) return;
       seen.add(dedupe);
-      out.push({ id: key, label: label || key });
+      const opt = { id: key, label: label || key };
+      if (attrs && attrs.disabled) opt.disabled = true;
+      if (attrs && attrs.reason) opt.reason = attrs.reason;
+      out.push(opt);
     };
     if (engine === 'antigravity') add('', 'Use AGY configured model');
     const cur = String(currentModel == null ? '' : currentModel).trim();
     if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && _modelAllowedForEngine(engine, cur)) {
       add(cur, cur + ' (default)');
     }
-    base.forEach(opt => add(opt.id, opt.label || opt.id));
+    base.forEach(opt => add(opt.id, opt.label || opt.id, {
+      disabled: opt.available === false,
+      reason: opt.availability_reason || opt.reason || '',
+    }));
     if (includeOther && _engineSupportsCustomModel(engine)) add(SPAWN_DEFAULT_OTHER, 'Other...');
     return out;
   }
@@ -42859,6 +42883,13 @@
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
     if (engine === 'hermes' && !value) value = 'auto';
+    const unavailableReason = _modelUnavailableReason(engine, value);
+    if (value && unavailableReason) {
+      if (typeof showOpToast === 'function') showOpToast(unavailableReason, 'error');
+      console.warn('[spawn] ignoring unavailable model "' + value + '" for engine "' + engine + '": ' + unavailableReason);
+      syncSpawnEngineDependentUi();
+      return;
+    }
     // Reject a value from a different engine's model family before it can
     // poison _defaultModelsByEngine[engine] (CCC-503) -- if the model
     // <select>'s options were ever rebuilt for a different engine than the
@@ -42936,12 +42967,18 @@
           const el = document.createElement('option');
           el.value = opt.id;
           el.textContent = opt.label || opt.id;
+          if (opt.disabled) {
+            el.disabled = true;
+            if (opt.reason) el.title = opt.reason;
+          }
           $convInputModelSelect.appendChild(el);
         });
-        if (defaultModel && allModels.some(opt => opt.id === defaultModel)) {
+        const defaultOpt = allModels.find(opt => opt.id === defaultModel && !opt.disabled);
+        const fallbackOpt = allModels.find(opt => !opt.disabled) || allModels[0];
+        if (defaultModel && defaultOpt) {
           $convInputModelSelect.value = defaultModel;
-        } else if (allModels.length > 0) {
-          $convInputModelSelect.value = allModels[0].id;
+        } else if (fallbackOpt) {
+          $convInputModelSelect.value = fallbackOpt.id;
         }
       }
     }
@@ -46020,10 +46057,15 @@
       const el = document.createElement('option');
       el.value = opt.id;
       el.textContent = opt.label || opt.id;
+      if (opt.disabled) {
+        el.disabled = true;
+        if (opt.reason) el.title = opt.reason;
+      }
       $spawnDefaultsModel.appendChild(el);
     });
-    const hasCurrent = options.some(opt => opt.id === currentModel);
-    $spawnDefaultsModel.value = hasCurrent ? currentModel : SPAWN_DEFAULT_OTHER;
+    const currentOpt = options.find(opt => opt.id === currentModel && !opt.disabled);
+    const fallbackOpt = options.find(opt => !opt.disabled);
+    $spawnDefaultsModel.value = currentOpt ? currentModel : (fallbackOpt ? fallbackOpt.id : SPAWN_DEFAULT_OTHER);
     if ($spawnDefaultsOtherModel) {
       const other = $spawnDefaultsModel.value === SPAWN_DEFAULT_OTHER;
       $spawnDefaultsOtherModel.style.display = other ? '' : 'none';
@@ -46070,6 +46112,11 @@
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
     if ((engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
       spawnDefaultsModalError('Claude, Codex, and Cursor need an explicit default model.');
+      return;
+    }
+    const unavailableReason = _modelUnavailableReason(engine, model);
+    if (unavailableReason) {
+      spawnDefaultsModalError(unavailableReason);
       return;
     }
     $spawnDefaultsSaveBtn.disabled = true;
