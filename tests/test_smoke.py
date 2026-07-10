@@ -2260,7 +2260,7 @@ class TestServerImports(unittest.TestCase):
             codex_home = root / ".codex"
             codex_home.mkdir()
             (codex_home / "config.toml").write_text(
-                'model = "gpt-5.6"\n',
+                'model = "gpt-5.6-luna"\n',
                 encoding="utf-8",
             )
             (codex_home / "models_cache.json").write_text(json.dumps({
@@ -2271,6 +2271,11 @@ class TestServerImports(unittest.TestCase):
                         "visibility": "list",
                         "priority": 23,
                         "supported_reasoning_levels": [{"effort": "low"}],
+                    },
+                    {
+                        "slug": "o3",
+                        "display_name": "O3",
+                        "visibility": "list",
                     },
                     {
                         "slug": "codex-hidden-test",
@@ -2294,29 +2299,44 @@ class TestServerImports(unittest.TestCase):
                 server._MODEL_CATALOG_CACHE.update(old_cache)
 
         codex_ids = payload["engines"]["codex"]
-        self.assertIn("gpt-5.6", codex_ids)
-        self.assertIn("gpt-5.4-mini", codex_ids)
+        self.assertEqual(codex_ids, [
+            "gpt-5.5",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex-spark",
+        ])
+        self.assertNotIn("o3", codex_ids)
         self.assertNotIn("codex-hidden-test", codex_ids)
         self.assertEqual(payload["enforced"], [])
-        self.assertTrue(payload["catalog"]["codex"]["supports_custom"])
+        self.assertFalse(payload["catalog"]["codex"]["supports_custom"])
+        labels = [m["label"] for m in payload["catalog"]["codex"]["models"]]
+        self.assertEqual(labels[:4], ["5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
         mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
 
-    def test_codex_model_validation_allows_new_model_ids(self):
+    def test_codex_model_validation_enforces_picker_models(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
 
-        self.assertEqual(server._validate_codex_model("gpt-5.6-preview"), ("gpt-5.6-preview", None))
+        self.assertEqual(server._validate_codex_model("gpt-5.6-luna"), ("gpt-5.6-luna", None))
         self.assertEqual(server._validate_codex_model("gpt-5.5-codex"), ("gpt-5.5", None))
+        model, error = server._validate_codex_model("gpt-5.6-preview")
+        self.assertEqual(model, "gpt-5.6-preview")
+        self.assertIn("unsupported codex model", error)
 
-    def test_static_model_picker_uses_server_catalog_and_custom_escape_hatch(self):
+    def test_static_model_picker_uses_server_catalog_and_codex_allowlist(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 
         self.assertIn("fetch('/api/engines/models'", app_js)
         self.assertIn("function _modelAllowedForEngine", app_js)
-        self.assertIn("gpt-5.6", app_js)
+        self.assertIn("gpt-5.6-sol", app_js)
+        self.assertIn("gpt-5.6-terra", app_js)
+        self.assertIn("gpt-5.6-luna", app_js)
         self.assertIn("'Other...'", app_js)
 
     def test_morning_disabled_when_plugin_absent(self):

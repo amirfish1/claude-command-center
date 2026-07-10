@@ -3001,14 +3001,13 @@ _ENGINE_CURATED_MODELS = {
         {"id": "haiku-4-5", "label": "haiku-4-5", "oneM": False},
     ),
     "codex": (
-        {"id": "gpt-5.6", "label": "gpt-5.6"},
-        {"id": "gpt-5.5", "label": "gpt-5.5 (default)"},
-        {"id": "gpt-5.4", "label": "gpt-5.4 (1M-capable)"},
-        {"id": "gpt-5-codex", "label": "gpt-5-codex"},
-        {"id": "o4", "label": "o4"},
-        {"id": "o4-mini", "label": "o4-mini"},
-        {"id": "o3", "label": "o3"},
-        {"id": "o3-mini", "label": "o3-mini"},
+        {"id": "gpt-5.5", "label": "5.5"},
+        {"id": "gpt-5.6-sol", "label": "5.6 Sol"},
+        {"id": "gpt-5.6-terra", "label": "5.6 Terra"},
+        {"id": "gpt-5.6-luna", "label": "5.6 Luna"},
+        {"id": "gpt-5.4", "label": "5.4"},
+        {"id": "gpt-5.4-mini", "label": "5.4 Mini"},
+        {"id": "gpt-5.3-codex-spark", "label": "5.3 Codex Spark"},
     ),
     "cursor": (
         {"id": "auto", "label": "Auto (default)"},
@@ -3055,12 +3054,16 @@ _ENGINE_KNOWN_MODELS = {
 
 _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "claude": True,
-    "codex": True,
+    "codex": False,
     "cursor": True,
     "antigravity": True,
     "kilo": True,
     "hermes": True,
 }
+
+_CODEX_PICKER_MODEL_IDS = frozenset(
+    str(opt["id"]).strip().lower() for opt in _ENGINE_CURATED_MODELS["codex"]
+)
 
 _MODEL_CATALOG_CACHE = {"ts": 0.0, "data": None}
 _MODEL_CATALOG_TTL_SEC = 30.0
@@ -3077,12 +3080,21 @@ def _model_catalog_key(model):
     return _clean_spawn_default_model(model).lower()
 
 
+def _model_catalog_allows_model(engine, model):
+    engine = _normalize_orchestration_spawn_engine(engine)
+    if engine == "codex":
+        return _model_catalog_key(model) in _CODEX_PICKER_MODEL_IDS
+    return True
+
+
 def _model_catalog_add(catalog, engine, model, *, label=None, source="observed", **attrs):
     engine = _normalize_orchestration_spawn_engine(engine)
     if engine not in _ORCHESTRATION_SPAWN_ENGINES:
         return
     model = _clean_spawn_default_model(model)
     if not model:
+        return
+    if not _model_catalog_allows_model(engine, model):
         return
     bucket = catalog.setdefault(engine, {
         "default": _spawn_fallback_model_for_engine(engine),
@@ -3344,7 +3356,7 @@ def _build_engine_model_catalog(force_refresh=False):
         for engine, model in (defaults.get("models") or {}).items():
             _model_catalog_add(catalog, engine, model, source="spawn-default")
             norm = _normalize_orchestration_spawn_engine(engine)
-            if norm in catalog and model:
+            if norm in catalog and model and _model_catalog_allows_model(norm, model):
                 catalog[norm]["default"] = _clean_spawn_default_model(model)
     except Exception:
         pass
@@ -3421,20 +3433,19 @@ def _build_engine_model_catalog(force_refresh=False):
 
 
 def _validate_codex_model(model):
-    """Resolve known Codex model-id aliases without blocking new model IDs.
-
-    Older CCC builds rejected any Codex model absent from the curated list.
-    That made newly released models unusable until CCC shipped a patch. Codex's
-    CLI accepts a free-form --model and reports real failures at launch, so the
-    server now allows unknown IDs and only normalizes known typo patterns.
-    """
+    """Resolve known Codex aliases and enforce CCC's picker allowlist."""
     if not model:
         return model, None
     key = model.strip().lower()
     alias = _CODEX_MODEL_ALIASES.get(key)
     if alias:
-        return alias, None
-    return model, None
+        model = alias
+    if _model_catalog_allows_model("codex", model):
+        return model, None
+    return model, (
+        f"unsupported codex model: {model!r}. Supported codex models: "
+        + ", ".join(_ENGINE_KNOWN_MODELS["codex"])
+    )
 
 
 def _load_spawn_defaults():
@@ -52825,6 +52836,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             else:
                 try:
+                    model, model_error = _validate_codex_model(model)
+                    if model_error:
+                        self.send_json({
+                            "ok": False,
+                            "error": model_error,
+                            "known_codex_models": list(_ENGINE_KNOWN_MODELS["codex"]),
+                        }, 400)
+                        return
                     result = spawn_session_codex(
                         prompt,
                         name=name,

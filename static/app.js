@@ -35506,14 +35506,13 @@
       { id: 'haiku-4-5', label: 'haiku-4-5', oneM: false },
     ],
     codex: [
-      { id: 'gpt-5.6',      label: 'gpt-5.6' },
-      { id: 'gpt-5.5',      label: 'gpt-5.5 (default)' },
-      { id: 'gpt-5.4',      label: 'gpt-5.4 (1M-capable)' },
-      { id: 'gpt-5-codex',  label: 'gpt-5-codex' },
-      { id: 'o4',           label: 'o4' },
-      { id: 'o4-mini',      label: 'o4-mini' },
-      { id: 'o3',           label: 'o3' },
-      { id: 'o3-mini',      label: 'o3-mini' },
+      { id: 'gpt-5.5',              label: '5.5' },
+      { id: 'gpt-5.6-sol',          label: '5.6 Sol' },
+      { id: 'gpt-5.6-terra',        label: '5.6 Terra' },
+      { id: 'gpt-5.6-luna',         label: '5.6 Luna' },
+      { id: 'gpt-5.4',              label: '5.4' },
+      { id: 'gpt-5.4-mini',         label: '5.4 Mini' },
+      { id: 'gpt-5.3-codex-spark',  label: '5.3 Codex Spark' },
     ],
     cursor: [
       { id: 'auto',                          label: 'Auto (default)' },
@@ -35561,7 +35560,7 @@
 
   const ENGINE_SUPPORTS_CUSTOM_MODEL = {
     claude: true,
-    codex: true,
+    codex: false,
     cursor: true,
     antigravity: true,
     kilo: true,
@@ -42815,11 +42814,11 @@
     };
     if (engine === 'antigravity') add('', 'Use AGY configured model');
     const cur = String(currentModel == null ? '' : currentModel).trim();
-    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur))) {
+    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && _modelAllowedForEngine(engine, cur)) {
       add(cur, cur + ' (default)');
     }
     base.forEach(opt => add(opt.id, opt.label || opt.id));
-    if (includeOther) add(SPAWN_DEFAULT_OTHER, 'Other...');
+    if (includeOther && _engineSupportsCustomModel(engine)) add(SPAWN_DEFAULT_OTHER, 'Other...');
     return out;
   }
 
@@ -42939,7 +42938,7 @@
           el.textContent = opt.label || opt.id;
           $convInputModelSelect.appendChild(el);
         });
-        if (defaultModel) {
+        if (defaultModel && allModels.some(opt => opt.id === defaultModel)) {
           $convInputModelSelect.value = defaultModel;
         } else if (allModels.length > 0) {
           $convInputModelSelect.value = allModels[0].id;
