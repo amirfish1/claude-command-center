@@ -622,6 +622,277 @@ def peer_client(peer_node_id: str) -> PeerClient:
 
 
 # ---------------------------------------------------------------------------
+# Session handoff — leases, bundle build, staged import
+# ---------------------------------------------------------------------------
+
+MAX_BUNDLE_BYTES = 256 * 1024 * 1024
+_SESSION_ID_SAFE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{3,127}$")
+
+
+def encode_project_slug(path: str) -> str:
+    """Claude Code's project-directory encoding for a cwd.
+
+    Mirror of server._encode_project_slug — every non-alphanumeric char
+    becomes '-'. Duplicated here (one regex) so the pure handoff layer has
+    no server.py dependency; keep the two in sync.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
+def _sha256_bytes(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def leases_dir() -> Path:
+    return federation_dir() / "leases"
+
+
+def read_lease(session_id: str) -> dict[str, Any] | None:
+    if not _SESSION_ID_SAFE_RE.match(session_id or ""):
+        return None
+    data = _read_json(leases_dir() / f"{session_id}.json", None)
+    return data if isinstance(data, dict) and data.get("owner_node") else None
+
+
+def lease_owner(session_id: str) -> str | None:
+    lease = read_lease(session_id)
+    return lease.get("owner_node") if lease else None
+
+
+def write_lease(session_id: str, owner_node: str, *, transfer_id: str = "",
+                transcript_sha: str = "", note: str = "") -> dict[str, Any]:
+    """Record who owns a session after a handoff. Keeps an audit history so
+    force-takeovers and return handoffs are reconstructable."""
+    if not _SESSION_ID_SAFE_RE.match(session_id or ""):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    with _STATE_LOCK:
+        existing = _read_json(leases_dir() / f"{session_id}.json", None)
+        history = existing.get("history", []) if isinstance(existing, dict) else []
+        history.append({
+            "owner_node": owner_node,
+            "transfer_id": transfer_id,
+            "transcript_sha": transcript_sha,
+            "note": note,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        })
+        lease = {
+            "session_id": session_id,
+            "owner_node": owner_node,
+            "transfer_id": transfer_id,
+            "transcript_sha": transcript_sha,
+            "acquired_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "history": history[-20:],
+        }
+        _write_json(leases_dir() / f"{session_id}.json", lease)
+        return lease
+
+
+def rewrite_transcript(raw: bytes, source_cwd: str, dest_cwd: str) -> tuple[bytes, dict[str, Any]]:
+    """Rewrite path-bearing transcript METADATA (per-line top-level "cwd")
+    from the source repo root to the destination's. Message content is
+    history and is left untouched. Returns (new_bytes, audit)."""
+    source_cwd = source_cwd.rstrip("/")
+    dest_cwd = dest_cwd.rstrip("/")
+    rewrites = 0
+    foreign_cwds: set[str] = set()
+    out_lines: list[bytes] = []
+    for line in raw.split(b"\n"):
+        if not line.strip():
+            out_lines.append(line)
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            out_lines.append(line)
+            continue
+        changed = False
+        if isinstance(obj, dict):
+            cwd = obj.get("cwd")
+            if isinstance(cwd, str) and cwd:
+                if cwd == source_cwd or cwd.startswith(source_cwd + "/"):
+                    obj["cwd"] = dest_cwd + cwd[len(source_cwd):]
+                    rewrites += 1
+                    changed = True
+                else:
+                    foreign_cwds.add(cwd)
+        if changed:
+            out_lines.append(json.dumps(obj, ensure_ascii=False).encode())
+        else:
+            out_lines.append(line)
+    audit = {
+        "cwd_rewrites": rewrites,
+        "source_cwd": source_cwd,
+        "dest_cwd": dest_cwd,
+        "warnings": sorted(
+            f"transcript references a cwd outside the handed-off repo: {c}"
+            for c in foreign_cwds
+        )[:20],
+    }
+    return b"\n".join(out_lines), audit
+
+
+def build_transfer_bundle(*, engine: str, session_id: str, transcript_path: str,
+                          source_cwd: str, dest_cwd: str, repo_identity: str,
+                          source_node: str, dest_node: str, branch: str | None,
+                          commit: str | None,
+                          sidecars: dict[str, Any] | None = None,
+                          rewrite_from: str | None = None,
+                          rewrite_to: str | None = None) -> dict[str, Any]:
+    """Build a session-transfer bundle: versioned manifest + file bytes.
+
+    Only the native transcript travels as a file; CCC sidecar values (title,
+    model override, parent link) ride in the manifest and are applied to the
+    destination's own state files on import. Never repository contents.
+
+    ``rewrite_from``/``rewrite_to`` are the path prefixes swapped inside the
+    transcript (default: the session cwds). Pass the repo roots when the
+    session lived in a subdirectory or worktree so every in-repo cwd maps."""
+    if engine != "claude":
+        raise PeerError(
+            "unsupported_capability",
+            f"engine {engine!r} has no safe native-store migration yet — "
+            "orchestrate it through its owning CCC instead",
+        )
+    if not _SESSION_ID_SAFE_RE.match(session_id or ""):
+        raise ValueError(f"unsafe session id {session_id!r}")
+    raw = Path(transcript_path).read_bytes()
+    if len(raw) > MAX_BUNDLE_BYTES:
+        raise ValueError(f"transcript exceeds bundle cap ({len(raw)} bytes)")
+    rewritten, audit = rewrite_transcript(
+        raw, rewrite_from or source_cwd, rewrite_to or dest_cwd)
+    files = {"transcript.jsonl": rewritten}
+    manifest = {
+        "manifest_version": TRANSFER_MANIFEST_VERSION,
+        "transfer_id": str(uuid.uuid4()),
+        "engine": engine,
+        "session_id": session_id,
+        "source_node": source_node,
+        "dest_node": dest_node,
+        "repo_identity": repo_identity,
+        "source_cwd": source_cwd,
+        "dest_cwd": dest_cwd,
+        "branch": branch,
+        "commit": commit,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "rewrites": audit,
+        "sidecars": sidecars or {},
+        "files": [
+            {
+                "name": name,
+                "role": "transcript" if name == "transcript.jsonl" else "sidecar",
+                "bytes": len(data),
+                "sha256": _sha256_bytes(data),
+            }
+            for name, data in files.items()
+        ],
+    }
+    return {"manifest": manifest, "files": files}
+
+
+def stage_and_import_bundle(manifest: dict[str, Any], files: dict[str, bytes],
+                            *, projects_root: Path,
+                            allow_overwrite: bool = False) -> dict[str, Any]:
+    """Import a transfer bundle on the destination node.
+
+    Everything lands in a staging directory first and is validated there
+    (manifest schema, hashes, size, name safety); only then is the transcript
+    renamed atomically into ~/.claude/projects/<dest-slug>/. A failed import
+    leaves any existing destination session untouched.
+    """
+    problems = validate_transfer_manifest(manifest)
+    if problems:
+        return {"ok": False, "error": "invalid_manifest", "problems": problems}
+    session_id = manifest["session_id"]
+    if not _SESSION_ID_SAFE_RE.match(session_id):
+        return {"ok": False, "error": "invalid_manifest",
+                "problems": [f"unsafe session id {session_id!r}"]}
+    declared = {f["name"]: f for f in manifest["files"]}
+    if set(declared) != set(files):
+        return {"ok": False, "error": "invalid_manifest",
+                "problems": ["file set does not match manifest"]}
+    total = 0
+    for name, data in files.items():
+        total += len(data)
+        if len(data) != declared[name]["bytes"]:
+            return {"ok": False, "error": "hash_mismatch",
+                    "problems": [f"{name}: size mismatch"]}
+        if _sha256_bytes(data) != declared[name]["sha256"]:
+            return {"ok": False, "error": "hash_mismatch",
+                    "problems": [f"{name}: sha256 mismatch"]}
+    if total > MAX_BUNDLE_BYTES:
+        return {"ok": False, "error": "invalid_manifest",
+                "problems": [f"bundle too large ({total} bytes)"]}
+
+    # The destination slug is derived by encoding dest_cwd — the encoding
+    # strips every path separator, so the target can never escape
+    # projects_root regardless of what the manifest claims.
+    dest_slug = encode_project_slug(manifest["dest_cwd"])
+    dest_dir = projects_root / dest_slug
+    dest_transcript = dest_dir / f"{session_id}.jsonl"
+    existing_sha = None
+    if dest_transcript.exists():
+        existing_sha = _sha256_bytes(dest_transcript.read_bytes())
+        incoming_sha = declared["transcript.jsonl"]["sha256"]
+        if existing_sha == incoming_sha:
+            # Retried import of identical content — idempotent success.
+            return {
+                "ok": True,
+                "already_present": True,
+                "session_id": session_id,
+                "transfer_id": manifest["transfer_id"],
+                "transcript_path": str(dest_transcript),
+                "transcript_sha256": existing_sha,
+                "dest_slug": dest_slug,
+            }
+        if not allow_overwrite:
+            return {
+                "ok": False,
+                "error": "session_exists",
+                "existing_sha256": existing_sha,
+                "detail": "destination already has this session with different "
+                          "content; divergence review required",
+            }
+
+    staging = federation_dir() / "staging" / manifest["transfer_id"]
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        for name, data in files.items():
+            target = staging / name
+            # names were validated (no abs, no ..) but belt-and-braces:
+            if not str(target.resolve()).startswith(str(staging.resolve())):
+                return {"ok": False, "error": "invalid_manifest",
+                        "problems": [f"{name}: escapes staging"]}
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        # Re-verify from disk, then activate atomically.
+        staged_transcript = staging / "transcript.jsonl"
+        if _sha256_bytes(staged_transcript.read_bytes()) != declared["transcript.jsonl"]["sha256"]:
+            return {"ok": False, "error": "hash_mismatch",
+                    "problems": ["staged transcript re-verify failed"]}
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        os.replace(staged_transcript, dest_transcript)
+        imported_sha = declared["transcript.jsonl"]["sha256"]
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "transfer_id": manifest["transfer_id"],
+            "transcript_path": str(dest_transcript),
+            "transcript_sha256": imported_sha,
+            "replaced_existing_sha256": existing_sha,
+            "dest_slug": dest_slug,
+        }
+    finally:
+        try:
+            import shutil
+
+            shutil.rmtree(staging, ignore_errors=True)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Session-transfer manifest (handoff contract)
 # ---------------------------------------------------------------------------
 

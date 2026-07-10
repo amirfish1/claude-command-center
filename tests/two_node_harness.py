@@ -176,7 +176,10 @@ class TwoNodeFleet:
     """Two paired CCC nodes plus a temp bare origin and per-node clones."""
 
     def __init__(self):
-        self.base = Path(tempfile.mkdtemp(prefix="ccc-two-node-"))
+        # resolve(): macOS tempdirs live under /var -> /private/var; the
+        # server canonicalizes request paths, so the harness must too or
+        # every path comparison fails on the symlink.
+        self.base = Path(tempfile.mkdtemp(prefix="ccc-two-node-")).resolve()
         self.node_a = CCCNode("a", self.base)
         self.node_b = CCCNode("b", self.base)
         self.origin = self.base / "origin.git"

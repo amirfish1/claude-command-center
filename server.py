@@ -48570,6 +48570,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/federation/peers":
             # Local management view (browser). Secrets are never included.
             self.send_json(_federation_peers_public())
+        elif path == "/api/federation/handoff/status":
+            qs_fed = urllib.parse.parse_qs(parsed.query)
+            sid = (qs_fed.get("session_id") or [""])[0].strip()
+            lease = federation.read_lease(sid) if sid else None
+            self.send_json({
+                "ok": True,
+                "session_id": sid,
+                "lease": lease,
+                "owned_here": (lease or {}).get("owner_node") in (None, federation.node_id()),
+                "node_id": federation.node_id(),
+            })
         elif re.match(r"^/api/morning/goals/[A-Za-z0-9_-]+$", path):
             slug = path.rsplit("/", 1)[-1]
             detail = morning.get_goal_detail(slug)
@@ -52387,6 +52398,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "invalid mode"}, 400)
             elif announced_from_error:
                 self.send_json({"ok": False, "error": announced_from_error}, 400)
+            elif _handoff_lease_guard(sid):
+                # Session was handed to another node — never fork the
+                # transcript by resuming the stale local copy.
+                self.send_json(_handoff_lease_guard(sid), 409)
             else:
                 # Stamp interaction up-front: the user clicked/typed on this
                 # card, which is the whole signal we want — independent of
@@ -52537,8 +52552,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not sid or not text:
                 self.send_json({"ok": False, "error": "missing session_id or text"})
             else:
-                result = ask_session_and_wait(sid, text, timeout_ms=timeout_ms, cwd=cwd or None)
-                self.send_json(result)
+                guard = _handoff_lease_guard(sid)
+                if guard:
+                    self.send_json(guard, 409)
+                else:
+                    result = ask_session_and_wait(sid, text, timeout_ms=timeout_ms, cwd=cwd or None)
+                    self.send_json(result)
         elif path == "/api/launch-terminal":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -55339,6 +55358,474 @@ def _federation_test_peer(peer_node_id):
     }, 200
 
 
+# ---------------------------------------------------------------------------
+# Session handoff — "Continue on another machine"
+#
+# GitHub transports code; CCC transports session state. The source pushes,
+# the destination fetches and prepares a checkout (or isolated worktree),
+# then the native transcript travels as a hash-verified bundle, gets its
+# path-bearing metadata rewritten to the destination's repo mapping, and is
+# activated atomically. An ownership lease on both sides prevents two nodes
+# from independently resuming the same conversation.
+# ---------------------------------------------------------------------------
+
+
+def _handoff_locate(session_id):
+    """Resolve everything the handoff needs to know about a local session.
+    Returns (info, None) or (None, (payload, status))."""
+    if not session_id:
+        return None, ({"ok": False, "error": "bad_request",
+                       "detail": "session_id required"}, 400)
+    engine = _detect_session_engine(session_id) or "claude"
+    if engine != "claude":
+        return None, ({"ok": False, "error": "unsupported_capability",
+                       "detail": f"engine {engine!r} has no safe native-store "
+                                 "migration yet — use cross-machine orchestration "
+                                 "through its owning CCC instead"}, 400)
+    jsonl = _find_session_jsonl(session_id)
+    if jsonl is None:
+        return None, ({"ok": False, "error": "unknown_session",
+                       "detail": f"no transcript for {session_id}"}, 404)
+    cwd = find_session_cwd(session_id)
+    if not cwd or not os.path.isdir(cwd):
+        return None, ({"ok": False, "error": "unknown_session",
+                       "detail": "session cwd no longer exists — cannot map paths"}, 409)
+    repo_top = _git_toplevel_for_existing_dir(cwd)
+    if not repo_top:
+        return None, ({"ok": False, "error": "bad_request",
+                       "detail": f"session cwd {cwd} is not inside a git repository"}, 409)
+    ident = federation.repo_identity(repo_top)
+    if not ident:
+        return None, ({"ok": False, "error": "bad_request",
+                       "detail": f"cannot derive a repository identity for {repo_top}"}, 409)
+    return {
+        "session_id": session_id,
+        "engine": engine,
+        "transcript_path": str(jsonl),
+        "session_cwd": cwd,
+        "repo_top": repo_top,
+        "repo_identity": ident["identity"],
+        "repo_identity_kind": ident["kind"],
+    }, None
+
+
+def _handoff_git_state(repo_top):
+    """Source-side git facts for the preflight — each dimension separate."""
+    rc, out, _ = _git(["status", "--porcelain"], repo_top)
+    dirty_files = [ln for ln in out.splitlines() if ln.strip()] if rc == 0 else []
+    rc, out, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_top)
+    branch = out.strip() if rc == 0 else ""
+    detached = branch == "HEAD"
+    rc, out, _ = _git(["rev-parse", "HEAD"], repo_top)
+    commit = out.strip() if rc == 0 else None
+    rc, out, _ = _git(["rev-list", "--count", "@{u}..HEAD"], repo_top)
+    if rc == 0:
+        unpushed = int(out.strip() or 0)
+        has_upstream = True
+    else:
+        unpushed = None
+        has_upstream = False
+    return {
+        "branch": None if detached else branch,
+        "detached": detached,
+        "commit": commit,
+        "dirty_files": dirty_files[:50],
+        "dirty_count": len(dirty_files),
+        "has_upstream": has_upstream,
+        "unpublished_commits": unpushed,
+    }
+
+
+def _handoff_preflight_payload(session_id, dest_node_id):
+    """Build the exact plan for a handoff, with blockers. Read-only."""
+    peer = federation.get_peer(dest_node_id or "")
+    if not peer:
+        return {"ok": False, "error": "unpaired_peer",
+                "detail": f"no paired peer {dest_node_id!r}"}, 404
+    info, err = _handoff_locate(session_id)
+    if err:
+        return err
+    me = federation.node_id()
+    lease = federation.read_lease(session_id)
+    if lease and lease.get("owner_node") not in (None, me):
+        return {"ok": False, "error": "not_owner",
+                "owner_node": lease.get("owner_node"),
+                "detail": "this session was already handed to another node"}, 409
+    git_state = _handoff_git_state(info["repo_top"])
+    live = session_live_status(session_id, info["session_cwd"]) or {}
+    is_live = bool(live.get("running") or live.get("is_live"))
+    blockers = []
+    if git_state["dirty_count"]:
+        blockers.append({
+            "code": "dirty_worktree",
+            "detail": f"{git_state['dirty_count']} dirty file(s) in {info['repo_top']} — "
+                      "commit (or ask the owning session to commit) first; "
+                      "CCC never copies dirty files between machines",
+            "files": git_state["dirty_files"][:10],
+        })
+    if is_live:
+        blockers.append({
+            "code": "source_process_running",
+            "detail": "the session process is still running on this machine — "
+                      "stop it before handing off so the transcript stops moving",
+        })
+    if git_state["detached"] and not git_state["commit"]:
+        blockers.append({"code": "no_commit", "detail": "repository has no HEAD commit"})
+    steps = [
+        {"step": "push", "detail": (
+            f"push {git_state['unpublished_commits']} unpublished commit(s) on "
+            f"branch {git_state['branch']}" if git_state.get("unpublished_commits")
+            else ("publish branch to origin (no upstream yet)"
+                  if not git_state["has_upstream"] else "nothing to push")),
+         "needed": bool(git_state.get("unpublished_commits")) or not git_state["has_upstream"]},
+        {"step": "prepare_destination", "detail": (
+            f"fetch on {peer.get('name')} and check out "
+            f"{git_state['branch'] or git_state['commit']} "
+            "(isolated worktree if the clone is busy)"), "needed": True},
+        {"step": "transfer_session", "detail": (
+            "export transcript + title/model sidecar values, rewrite "
+            f"{info['repo_top']} → destination path, verify hashes, "
+            "import atomically"), "needed": True},
+        {"step": "flip_ownership", "detail": (
+            f"lease the conversation to {peer.get('name')} — this node stops "
+            "resuming it"), "needed": True},
+    ]
+    return {
+        "ok": True,
+        "session": info,
+        "git": git_state,
+        "source_live": is_live,
+        "dest_node": {"node_id": peer["node_id"], "name": peer.get("name")},
+        "blockers": blockers,
+        "steps": steps,
+        "ready": not blockers,
+    }, 200
+
+
+def _handoff_collect_sidecars(session_id):
+    """CCC metadata worth carrying: title, per-session overrides. Values only
+    — the destination applies them to its own state files."""
+    sidecars = {}
+    try:
+        name = _load_session_name_overrides().get(session_id)
+        if name:
+            sidecars["display_name"] = name
+    except Exception:
+        pass
+    try:
+        overrides = _load_session_overrides().get(session_id)
+        if isinstance(overrides, dict) and overrides:
+            sidecars["session_overrides"] = overrides
+    except Exception:
+        pass
+    return sidecars
+
+
+def _handoff_start_payload(session_id, dest_node_id, allow_overwrite=False):
+    """Execute the handoff plan. Revalidates the preflight first."""
+    preflight, status = _handoff_preflight_payload(session_id, dest_node_id)
+    if status != 200:
+        return preflight, status
+    if preflight["blockers"]:
+        return {"ok": False, "error": "preflight_blocked",
+                "blockers": preflight["blockers"], "plan": preflight}, 409
+    info = preflight["session"]
+    git_state = preflight["git"]
+    peer = federation.get_peer(dest_node_id)
+    client = federation.PeerClient(peer)
+    log = []
+
+    # 1. Publish source commits (the only code transport is git).
+    branch = git_state["branch"]
+    if git_state.get("unpublished_commits") or not git_state["has_upstream"]:
+        if not branch:
+            return {"ok": False, "error": "preflight_blocked",
+                    "detail": "detached HEAD with unpublished commits — "
+                              "create a branch first"}, 409
+        push_args = ["push", "origin", f"HEAD:{branch}"]
+        if not git_state["has_upstream"]:
+            push_args = ["push", "-u", "origin", branch]
+        rc, out, errout = _git(push_args, info["repo_top"], timeout=120)
+        if rc != 0:
+            return {"ok": False, "error": "push_failed",
+                    "detail": (errout or out).strip()[:400]}, 502
+        log.append({"step": "push", "ok": True})
+    else:
+        log.append({"step": "push", "ok": True, "skipped": "nothing to push"})
+    recheck = _handoff_git_state(info["repo_top"])
+    if recheck["dirty_count"] or (recheck.get("unpublished_commits") or 0) > 0:
+        return {"ok": False, "error": "preflight_blocked",
+                "detail": "repository state changed during handoff — re-run preflight"}, 409
+
+    # 2. Destination prepares a checkout and tells us the mapped path.
+    try:
+        prep = client.request("POST", "/api/federation/v1/handoff/prepare", {
+            "repo_identity": info["repo_identity"],
+            "branch": branch,
+            "commit": git_state["commit"],
+        }, timeout=180)
+    except federation.PeerError as e:
+        return {"ok": False, "error": e.kind,
+                "detail": f"destination prepare failed: {e}"}, 502
+    if not prep.get("ok"):
+        return {"ok": False, "error": prep.get("error") or "prepare_failed",
+                "detail": prep.get("detail"), "prepare": prep}, 502
+    dest_root = prep["dest_cwd"]
+    log.append({"step": "prepare_destination", "ok": True, "dest_cwd": dest_root,
+                "method": prep.get("method")})
+
+    # 3. Build the bundle (path rewrite repo-root → repo-root so worktree /
+    #    subdirectory cwds map too).
+    rel = os.path.relpath(info["session_cwd"], info["repo_top"])
+    dest_session_cwd = dest_root if rel == "." else os.path.join(dest_root, rel)
+    try:
+        bundle = federation.build_transfer_bundle(
+            engine=info["engine"],
+            session_id=session_id,
+            transcript_path=info["transcript_path"],
+            source_cwd=info["session_cwd"],
+            dest_cwd=dest_session_cwd,
+            repo_identity=info["repo_identity"],
+            source_node=federation.node_id(),
+            dest_node=peer["node_id"],
+            branch=branch,
+            commit=git_state["commit"],
+            sidecars=_handoff_collect_sidecars(session_id),
+            rewrite_from=info["repo_top"],
+            rewrite_to=dest_root,
+        )
+    except (OSError, ValueError, federation.PeerError) as e:
+        kind = getattr(e, "kind", "export_failed")
+        return {"ok": False, "error": kind, "detail": str(e)}, 502
+
+    # 4. Ship it. The import is staged + hash-verified + atomic on the peer.
+    files_b64 = {name: base64.b64encode(data).decode("ascii")
+                 for name, data in bundle["files"].items()}
+    try:
+        imported = client.request("POST", "/api/federation/v1/handoff/import", {
+            "manifest": bundle["manifest"],
+            "files": files_b64,
+            "allow_overwrite": bool(allow_overwrite),
+        }, timeout=300)
+    except federation.PeerError as e:
+        return {"ok": False, "error": e.kind,
+                "detail": f"destination import failed: {e}"}, 502
+    if not imported.get("ok"):
+        return {"ok": False, "error": imported.get("error") or "import_failed",
+                "detail": imported.get("detail"),
+                "import": imported}, 409 if imported.get("error") == "session_exists" else 502
+    transcript_sha = imported.get("transcript_sha256") or ""
+    log.append({"step": "transfer_session", "ok": True,
+                "transcript_sha256": transcript_sha,
+                "rewrites": bundle["manifest"]["rewrites"],
+                "already_present": imported.get("already_present", False)})
+
+    # 5. Flip ownership. From here the destination is self-sufficient.
+    # The lease records the sha of THIS node's local transcript at handoff
+    # time, so a future return handoff can prove our copy never moved and
+    # overwrite it safely (divergence otherwise blocks the import).
+    try:
+        local_sha = hashlib.sha256(
+            Path(info["transcript_path"]).read_bytes()).hexdigest()
+    except OSError:
+        local_sha = ""
+    lease = federation.write_lease(
+        session_id, peer["node_id"],
+        transfer_id=bundle["manifest"]["transfer_id"],
+        transcript_sha=local_sha,
+        note=f"handed off to {peer.get('name')}",
+    )
+    log.append({"step": "flip_ownership", "ok": True, "owner_node": peer["node_id"]})
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "dest_node": {"node_id": peer["node_id"], "name": peer.get("name")},
+        "dest_cwd": dest_session_cwd,
+        "transfer_id": bundle["manifest"]["transfer_id"],
+        "transcript_sha256": transcript_sha,
+        "rewrites": bundle["manifest"]["rewrites"],
+        "log": log,
+        "lease": lease,
+        "resume_hint": f"claude --resume {session_id} (run on the destination, "
+                       f"cwd {dest_session_cwd})",
+    }, 200
+
+
+def _handoff_prepare_payload(data, peer):
+    """Destination side: make the repo ready for the incoming session.
+    Fetch origin, verify the commit arrived, then fast-forward the clone if
+    it is already on the branch — otherwise create an isolated worktree.
+    Never resets, never force-checkouts, never touches dirty files."""
+    ident = str(data.get("repo_identity") or "").strip()
+    branch = (data.get("branch") or "").strip() or None
+    commit = (data.get("commit") or "").strip() or None
+    if not ident or not commit:
+        return {"ok": False, "error": "bad_request",
+                "detail": "repo_identity and commit are required"}, 400
+    local = federation.resolve_repo_path(ident)
+    if not local:
+        # Best-effort auto-map: scan known repos for a matching identity.
+        for candidate in _known_repo_paths():
+            try:
+                cand_ident = federation.repo_identity(candidate)
+            except Exception:
+                cand_ident = None
+            if cand_ident and cand_ident["identity"] == ident:
+                federation.map_repo(ident, candidate)
+                local = candidate
+                break
+    if not local or not os.path.isdir(local):
+        return {"ok": False, "error": "stale_mapping",
+                "detail": f"no local clone mapped for {ident} on this node — "
+                          "map it in peer settings"}, 404
+    rc, out, errout = _git(["fetch", "--quiet", "origin"], local, timeout=120)
+    fetched = rc == 0
+    rc, _out, _err = _git(["cat-file", "-e", f"{commit}^{{commit}}"], local)
+    if rc != 0:
+        return {"ok": False, "error": "commit_not_found",
+                "detail": f"commit {commit[:12]} not present after fetch — "
+                          "was it pushed on the source?"}, 409
+    state = _handoff_git_state(local)
+    if branch and state["branch"] == branch and not state["dirty_count"]:
+        rc, out, errout = _git(["merge", "--ff-only", commit], local, timeout=60)
+        if rc == 0:
+            return {"ok": True, "dest_cwd": local, "method": "clone_ff",
+                    "fetched": fetched, "branch": branch, "commit": commit}, 200
+        # fall through to a worktree — the clone diverged; never reset it
+    wt_slug = re.sub(r"[^A-Za-z0-9]+", "-", branch or commit[:12]).strip("-").lower()
+    base = f"{local}-wt-{wt_slug}"
+    wt_path = base
+    for i in range(2, 6):
+        if not os.path.exists(wt_path):
+            break
+        reuse_state = _handoff_git_state(wt_path)
+        if (branch and reuse_state["branch"] == branch
+                and not reuse_state["dirty_count"]):
+            rc, _o, _e = _git(["merge", "--ff-only", commit], wt_path, timeout=60)
+            if rc == 0:
+                return {"ok": True, "dest_cwd": wt_path, "method": "worktree_reuse",
+                        "fetched": fetched, "branch": branch, "commit": commit}, 200
+        wt_path = f"{base}-{i}"
+    if os.path.exists(wt_path):
+        return {"ok": False, "error": "worktree_conflict",
+                "detail": f"no free worktree path near {base}"}, 409
+    if branch:
+        rc, out, errout = _git(["rev-parse", "--verify", "--quiet", branch], local)
+        if rc == 0:
+            args = ["worktree", "add", wt_path, branch]
+        else:
+            args = ["worktree", "add", "--track", "-b", branch, wt_path,
+                    f"origin/{branch}"]
+    else:
+        args = ["worktree", "add", "--detach", wt_path, commit]
+    rc, out, errout = _git(args, local, timeout=60)
+    if rc != 0:
+        return {"ok": False, "error": "prepare_failed",
+                "detail": (errout or out).strip()[:400]}, 502
+    if branch:
+        rc, _o, _e = _git(["merge", "--ff-only", commit], wt_path, timeout=60)
+        if rc != 0:
+            return {"ok": False, "error": "prepare_failed",
+                    "detail": f"worktree branch {branch} would not fast-forward "
+                              f"to {commit[:12]}"}, 409
+    return {"ok": True, "dest_cwd": wt_path, "method": "worktree_new",
+            "fetched": fetched, "branch": branch, "commit": commit}, 200
+
+
+def _handoff_import_payload(data, peer):
+    """Destination side: staged, verified, atomic session import."""
+    manifest = data.get("manifest")
+    files_b64 = data.get("files")
+    if not isinstance(manifest, dict) or not isinstance(files_b64, dict):
+        return {"ok": False, "error": "bad_request",
+                "detail": "manifest and files are required"}, 400
+    try:
+        files = {str(name): base64.b64decode(str(blob), validate=True)
+                 for name, blob in files_b64.items()}
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "error": "bad_request",
+                "detail": f"files must be base64: {e}"}, 400
+    # The destination cwd must belong to the same repository identity the
+    # manifest claims — the owning node validates its own filesystem.
+    dest_cwd = str(manifest.get("dest_cwd") or "")
+    dest_top = _git_toplevel_for_existing_dir(dest_cwd) if os.path.isdir(dest_cwd) else None
+    if not dest_top:
+        return {"ok": False, "error": "bad_request",
+                "detail": f"dest_cwd {dest_cwd!r} is not an existing git checkout "
+                          "on this node — run handoff/prepare first"}, 409
+    local_ident = federation.repo_identity(dest_top)
+    if not local_ident or local_ident["identity"] != manifest.get("repo_identity"):
+        return {"ok": False, "error": "stale_mapping",
+                "detail": "dest_cwd does not belong to the manifest's repository"}, 409
+    divergence_guard = None
+    lease = federation.read_lease(str(manifest.get("session_id") or ""))
+    if lease and lease.get("transcript_sha"):
+        divergence_guard = lease["transcript_sha"]
+    result = federation.stage_and_import_bundle(
+        manifest, files,
+        projects_root=PROJECTS_ROOT,
+        allow_overwrite=bool(data.get("allow_overwrite")),
+    )
+    if not result.get("ok"):
+        if (result.get("error") == "session_exists" and divergence_guard
+                and result.get("existing_sha256") == divergence_guard):
+            # Existing copy is exactly what we handed out earlier — a return
+            # handoff may safely overwrite it.
+            result = federation.stage_and_import_bundle(
+                manifest, files, projects_root=PROJECTS_ROOT, allow_overwrite=True)
+        if not result.get("ok"):
+            status = 409 if result.get("error") in ("session_exists",) else 400
+            return result, status
+    # Apply CCC sidecar values to this node's own state files.
+    sidecars = manifest.get("sidecars") or {}
+    try:
+        if sidecars.get("display_name"):
+            _save_session_name_override(result["session_id"], sidecars["display_name"])
+        if isinstance(sidecars.get("session_overrides"), dict):
+            _handoff_apply_session_overrides(result["session_id"],
+                                             sidecars["session_overrides"])
+    except Exception as e:
+        result["sidecar_warning"] = f"sidecar apply failed: {e}"
+    federation.write_lease(
+        result["session_id"], federation.node_id(),
+        transfer_id=result["transfer_id"],
+        transcript_sha=result["transcript_sha256"],
+        note=f"imported from {manifest.get('source_node', '')[:8]}",
+    )
+    result["owner_node"] = federation.node_id()
+    return result, 200
+
+
+def _handoff_apply_session_overrides(session_id, overrides):
+    try:
+        current = _load_session_overrides()
+    except Exception:
+        current = {}
+    entry = current.get(session_id) or {}
+    entry.update({k: v for k, v in overrides.items() if v is not None})
+    current[session_id] = entry
+    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SESSION_OVERRIDES_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(current, indent=2))
+    tmp.replace(SESSION_OVERRIDES_FILE)
+
+
+def _handoff_lease_guard(session_id):
+    """409 payload when this node no longer owns the session, else None."""
+    owner = federation.lease_owner(session_id or "")
+    if owner and owner != federation.node_id():
+        peer = federation.get_peer(owner)
+        return {
+            "ok": False,
+            "error": "not_owner",
+            "owner_node": owner,
+            "owner_name": (peer or {}).get("name"),
+            "detail": "this conversation was handed to another node — "
+                      "address it there (or force-takeover to reclaim)",
+        }
+    return None
+
+
 def _federation_handle_post(path, data, handler):
     """Dispatch every /api/federation/* POST. Returns (payload, status)."""
     # ---- peer-facing v1 protocol -----------------------------------------
@@ -55356,7 +55843,41 @@ def _federation_handle_post(path, data, handler):
             return None, None
         _federation_touch_peer(peer["node_id"])
         return _federation_execute_route(data)
+    if path == "/api/federation/v1/handoff/prepare":
+        peer = _federation_require_peer(handler)
+        if peer is None:
+            return None, None
+        return _handoff_prepare_payload(data, peer)
+    if path == "/api/federation/v1/handoff/import":
+        peer = _federation_require_peer(handler)
+        if peer is None:
+            return None, None
+        return _handoff_import_payload(data, peer)
     # ---- local management (browser UI) ------------------------------------
+    if path == "/api/federation/handoff/preflight":
+        return _handoff_preflight_payload(
+            str(data.get("session_id") or "").strip(),
+            str(data.get("dest_node_id") or "").strip())
+    if path == "/api/federation/handoff/start":
+        return _handoff_start_payload(
+            str(data.get("session_id") or "").strip(),
+            str(data.get("dest_node_id") or "").strip(),
+            allow_overwrite=bool(data.get("allow_overwrite")))
+    if path == "/api/federation/handoff/takeover":
+        sid = str(data.get("session_id") or "").strip()
+        if not sid:
+            return {"ok": False, "error": "bad_request",
+                    "detail": "session_id required"}, 400
+        prior = federation.read_lease(sid)
+        lease = federation.write_lease(
+            sid, federation.node_id(),
+            transcript_sha=(prior or {}).get("transcript_sha", ""),
+            note=f"FORCE TAKEOVER: {str(data.get('reason') or 'unspecified')[:200]}",
+        )
+        print(f"  [federation] Force takeover of session {sid[:8]}… "
+              f"(was {((prior or {}).get('owner_node') or 'unleased')[:8]})")
+        return {"ok": True, "lease": lease,
+                "previous_owner": (prior or {}).get("owner_node")}, 200
     if path == "/api/federation/peers/pair":
         return _federation_pair_initiate(data)
     if path == "/api/federation/peers/remove":
