@@ -1,0 +1,74 @@
+title: "[Q&A] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for asking. A few short answers help a lot, and they make the
+        answer useful to the next person who hits the same wall. Skip anything
+        that does not apply.
+
+        If you think you have found a bug (something broke, a stack trace, a
+        clear defect), open an [Issue](https://github.com/amirfish1/claude-command-center/issues/new/choose)
+        instead. Questions and "how do I" belong here.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+      description: Describe the goal and what you see instead. Concrete beats vague.
+      placeholder: "I launched a Codex session from a terminal. It runs, but it never shows up on the board."
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you already tried?
+      description: Even "nothing yet" is a useful answer. It tells us where to start.
+      placeholder: "Refreshed the board, restarted ./run.sh, checked that the session is in ~/.claude."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine?
+      description: CCC attaches to several. Claude Code is first-class. The others each have a documented gap.
+      options:
+        - Claude Code
+        - Codex
+        - Cursor
+        - Antigravity
+        - Kilo Code
+        - More than one
+        - Not sure
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: CCC version
+      description: The version pill in the UI, or the output of `curl -s localhost:$PORT/api/version`.
+      placeholder: "v5.6.0"
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and how you installed
+      description: macOS is first-class. Linux runs headless. Windows native install shipped in v5.6.0.
+      placeholder: "macOS 15.4, installed via the curl one-liner"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you post
+      options:
+        - label: I searched existing discussions and did not find an answer.
+          required: false
+        - label: This is a question, not a bug report. Bugs go to Issues.
+          required: false
