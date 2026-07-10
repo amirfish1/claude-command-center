@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 300" role="img" aria-label="CCC — the coding-agent command center">
+  <title>CCC wordmark with descriptor</title>
+  <desc>The CCC wordmark above the descriptor line "the coding-agent command center". Dark-first. Transparent background.</desc>
+
+  <!-- Wordmark (reused arcs, scaled and centered) -->
+  <g transform="translate(166 26) scale(0.6)">
+    <g fill="none" stroke-width="40" stroke-linecap="round">
+      <path d="M 123.25 47.45 A 54 54 0 1 0 123.25 132.55" stroke="#6e8caf"/>
+      <path d="M 283.25 47.45 A 54 54 0 1 0 283.25 132.55" stroke="#f5a623"/>
+      <path d="M 443.25 47.45 A 54 54 0 1 0 443.25 132.55" stroke="#6e8caf"/>
+    </g>
+  </g>
+
+  <!-- Divider: hairline with a short amber accent segment -->
+  <rect x="180" y="168" width="260" height="2" rx="1" fill="#30363d"/>
+  <rect x="180" y="168" width="44"  height="2" rx="1" fill="#f5a623"/>
+
+  <!-- Descriptor -->
+  <text x="310" y="214" text-anchor="middle"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="26" font-weight="600" letter-spacing="3.4" fill="#c9d1d9">THE CODING-AGENT</text>
+  <text x="310" y="248" text-anchor="middle"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="26" font-weight="600" letter-spacing="3.4" fill="#c9d1d9">COMMAND CENTER</text>
+</svg>

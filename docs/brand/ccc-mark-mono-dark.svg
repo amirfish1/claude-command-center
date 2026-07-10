@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CCC mark, monochrome for light backgrounds">
+  <title>CCC mark, mono dark</title>
+  <desc>Single-color mark for light backgrounds. Three calm sessions are outlined; the one that needs you is filled. Transparent background.</desc>
+  <!-- One ink color: #0d1117. Place on any light surface. -->
+  <g fill="none" stroke="#0d1117">
+    <rect x="10" y="10" width="492" height="492" rx="110" stroke-width="10"/>
+    <rect x="96"  y="96"  width="144" height="144" rx="30" stroke-width="16"/>
+    <rect x="96"  y="272" width="144" height="144" rx="30" stroke-width="16"/>
+    <rect x="272" y="272" width="144" height="144" rx="30" stroke-width="16"/>
+  </g>
+  <rect x="272" y="96" width="144" height="144" rx="30" fill="#0d1117"/>
+</svg>

@@ -1,0 +1,137 @@
+/* ============================================================================
+   CCC brand tokens
+   The coding-agent command center.
+
+   Single source of truth for color, type, and shape in CCC brand surfaces
+   (site, headers, thumbnails, decks). Dark-first: the default :root values are
+   tuned for near-black backgrounds. A light override block follows.
+
+   These values mirror the running app (static/app.css) on purpose. The audit
+   found three conflicting accent identities across surfaces; this file retires
+   the coral and standardizes on the in-app slate-blue plus an amber accent.
+
+   Contrast notes are inline. AA = WCAG 2.1 AA (4.5:1 normal text, 3:1 large).
+   All text-token pairings below were verified against the stated background.
+   ============================================================================ */
+
+:root {
+  /* ---- Surfaces (dark-first) ------------------------------------------- */
+  --ccc-bg:          #0d1117; /* near-black base (GitHub-dark)              */
+  --ccc-surface:     #161b22; /* raised panel / card                        */
+  --ccc-surface-2:   #21262d; /* higher raise / hover                       */
+  --ccc-border:      #30363d; /* hairline dividers                          */
+
+  /* ---- Text ------------------------------------------------------------ */
+  --ccc-text:        #c9d1d9; /* body. 11.4:1 on --ccc-bg. AA+.             */
+  --ccc-text-muted:  #8b949e; /* secondary. 5.3:1 on --ccc-bg. AA.         */
+  --ccc-text-strong: #e6ebf2; /* headings. 15.0:1 on --ccc-bg. AA+.        */
+
+  /* ---- Primary: slate-blue ramp (built around the in-app #6e8caf) ------ */
+  --ccc-blue-100: #dce6f1;
+  --ccc-blue-200: #b9cbe0;
+  --ccc-blue-300: #9ab3ce; /* light accent on dark. 8.7:1 on --ccc-bg. AA+ */
+  --ccc-blue-400: #829ebd;
+  --ccc-blue-500: #6e8caf; /* BASE. the in-app accent. 5.4:1 on --ccc-bg.  */
+  --ccc-blue-600: #587498;
+  --ccc-blue-700: #46607f; /* text on light. 6.3:1 on #ffffff. AA.         */
+  --ccc-blue-800: #35495f;
+  --ccc-blue-900: #26333f;
+
+  --ccc-primary:    var(--ccc-blue-500);
+  /* Use this for slate-blue TEXT on the default dark background (AA normal) */
+  --ccc-primary-text: var(--ccc-blue-500);
+
+  /* ---- Accent: amber (secondary, for highlight / "needs you") ---------- */
+  --ccc-accent:     #f5a623; /* 9.3:1 on --ccc-bg. AA+ as text on dark.     */
+  --ccc-accent-600: #d9910f; /* darker amber for light backgrounds          */
+  /* Amber is a HIGHLIGHT/graphic color. On white it is 2.0:1 = graphics    */
+  /* only, never body text. Use --ccc-accent-600 or darker for text/light.  */
+
+  /* ---- Semantic -------------------------------------------------------- */
+  --ccc-success: #3fb950; /* 6.9:1 on --ccc-bg. AA.                          */
+  --ccc-warn:    #d29922; /* amber-adjacent; 7.0:1 on --ccc-bg. AA.         */
+  --ccc-danger:  #f85149; /* 5.2:1 on --ccc-bg. AA.                          */
+  --ccc-info:    var(--ccc-blue-400);
+
+  /* ---- Type ------------------------------------------------------------ */
+  --ccc-font-ui:   'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --ccc-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* Modular scale, 1.25 (major third), 16px base. rem assumes 16px root.   */
+  --ccc-text-xs:   0.75rem;   /* 12px  captions, legal                      */
+  --ccc-text-sm:   0.875rem;  /* 14px  fine print                           */
+  --ccc-text-base: 1rem;      /* 16px  body                                 */
+  --ccc-text-md:   1.125rem;  /* 18px  lead body                            */
+  --ccc-text-lg:   1.25rem;   /* 20px  subheads                             */
+  --ccc-text-xl:   1.5rem;    /* 24px                                       */
+  --ccc-text-2xl:  1.875rem;  /* 30px                                       */
+  --ccc-text-3xl:  2.25rem;   /* 36px  section titles                       */
+  --ccc-text-4xl:  3rem;      /* 48px  hero                                 */
+  --ccc-text-5xl:  3.75rem;   /* 60px  display                              */
+
+  --ccc-weight-regular: 400;
+  --ccc-weight-medium:  500;
+  --ccc-weight-semi:    600;
+  --ccc-weight-bold:    700;
+  --ccc-weight-black:   800; /* wordmark / display                          */
+
+  --ccc-tracking-tight: -0.02em; /* display headings                        */
+  --ccc-tracking-wide:   0.12em; /* uppercase eyebrows / descriptor         */
+
+  /* ---- Radii ----------------------------------------------------------- */
+  --ccc-radius-sm:   4px;
+  --ccc-radius-md:   8px;
+  --ccc-radius-lg:   12px;
+  --ccc-radius-xl:   16px;
+  --ccc-radius-2xl:  24px;
+  --ccc-radius-full: 999px;
+  /* App-tile radius is ~22% of side (matches the mark and static/icon.svg) */
+  --ccc-radius-tile: 22%;
+
+  /* ---- Elevation (screenshot treatment) -------------------------------- */
+  --ccc-shadow-card:       0 1px 2px rgba(0,0,0,.30);
+  --ccc-shadow-screenshot: 0 8px 30px rgba(0,0,0,.35);
+}
+
+/* ---- Light override -------------------------------------------------------
+   Applies when the OS/theme requests light, or when [data-theme="light"] is
+   set explicitly (the toggle wins over the media query in both directions).
+   The primary slate-blue shifts to blue-700 so text still clears AA on white.
+--------------------------------------------------------------------------- */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --ccc-bg:          #ffffff;
+    --ccc-surface:     #f6f8fa;
+    --ccc-surface-2:   #eaeef2;
+    --ccc-border:      #d0d7de;
+    --ccc-text:        #1f2328; /* 15.3:1 on #ffffff. AA+.                   */
+    --ccc-text-muted:  #57606a; /* 5.9:1 on #ffffff. AA.                     */
+    --ccc-text-strong: #0d1117;
+
+    --ccc-primary:      var(--ccc-blue-700);
+    --ccc-primary-text: var(--ccc-blue-700); /* 6.3:1 on #ffffff. AA.        */
+    /* The running app uses GitHub-blue #0969da as its light accent; that is */
+    /* an acceptable in-app equivalent. Brand surfaces prefer the slate ramp.*/
+
+    --ccc-success: #1a7f37;
+    --ccc-warn:    #9a6700;
+    --ccc-danger:  #cf222e;
+    --ccc-info:    var(--ccc-blue-700);
+  }
+}
+
+:root[data-theme="light"] {
+  --ccc-bg:          #ffffff;
+  --ccc-surface:     #f6f8fa;
+  --ccc-surface-2:   #eaeef2;
+  --ccc-border:      #d0d7de;
+  --ccc-text:        #1f2328;
+  --ccc-text-muted:  #57606a;
+  --ccc-text-strong: #0d1117;
+  --ccc-primary:      var(--ccc-blue-700);
+  --ccc-primary-text: var(--ccc-blue-700);
+  --ccc-success: #1a7f37;
+  --ccc-warn:    #9a6700;
+  --ccc-danger:  #cf222e;
+  --ccc-info:    var(--ccc-blue-700);
+}

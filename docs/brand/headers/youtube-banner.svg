@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 1152" role="img" aria-label="CCC — Start the next while Claude builds the first. ccc.amirfish.ai">
+  <title>CCC YouTube banner</title>
+  <desc>YouTube channel banner, 2048 by 1152 (minimum all-device size).</desc>
+
+  <!-- ==========================================================================
+       SAFE AREA (all devices, incl. mobile): 1235 x 338, centered.
+       x: 406.5 .. 1641.5   |   y: 407 .. 745
+       Every text/logo element below is kept inside this box. Decorative
+       tiles live OUTSIDE it, in the desktop/TV crop margins.
+       ========================================================================== -->
+  <rect width="2048" height="1152" fill="#0d1117"/>
+
+  <!-- Decorative board texture (crop margins only, low opacity) -->
+  <g fill="#6e8caf" opacity="0.10">
+    <rect x="150"  y="430" width="96" height="96" rx="18"/>
+    <rect x="262"  y="430" width="96" height="96" rx="18"/>
+    <rect x="150"  y="542" width="96" height="96" rx="18"/>
+    <rect x="262"  y="542" width="96" height="96" rx="18"/>
+    <rect x="1690" y="430" width="96" height="96" rx="18"/>
+    <rect x="1802" y="430" width="96" height="96" rx="18"/>
+    <rect x="1690" y="542" width="96" height="96" rx="18"/>
+    <rect x="1802" y="542" width="96" height="96" rx="18"/>
+  </g>
+
+  <!-- Lockup: board mark + wordmark, centered -->
+  <g transform="translate(840 420) scale(0.234)">
+    <rect x="2" y="2" width="508" height="508" rx="114" fill="#161b22" stroke="#30363d" stroke-width="4"/>
+    <rect x="96"  y="96"  width="144" height="144" rx="30" fill="#6e8caf"/>
+    <rect x="96"  y="272" width="144" height="144" rx="30" fill="#6e8caf"/>
+    <rect x="272" y="272" width="144" height="144" rx="30" fill="#6e8caf"/>
+    <rect x="272" y="96"  width="144" height="144" rx="30" fill="#f5a623"/>
+    <circle cx="386" cy="126" r="15" fill="#0d1117"/>
+  </g>
+  <g transform="translate(982 436) scale(0.49)">
+    <g fill="none" stroke-width="40" stroke-linecap="round">
+      <path d="M 123.25 47.45 A 54 54 0 1 0 123.25 132.55" stroke="#6e8caf"/>
+      <path d="M 283.25 47.45 A 54 54 0 1 0 283.25 132.55" stroke="#f5a623"/>
+      <path d="M 443.25 47.45 A 54 54 0 1 0 443.25 132.55" stroke="#6e8caf"/>
+    </g>
+  </g>
+
+  <!-- Tagline, centered inside the safe box -->
+  <text x="1024" y="640" text-anchor="middle"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-weight="800" font-size="40" fill="#e6ebf2">Start <tspan fill="#f5a623">the next</tspan> while Claude builds the first.</text>
+
+  <!-- URL -->
+  <text x="1024" y="708" text-anchor="middle"
+        font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace"
+        font-size="26" fill="#8b949e">ccc.amirfish.ai</text>
+</svg>
