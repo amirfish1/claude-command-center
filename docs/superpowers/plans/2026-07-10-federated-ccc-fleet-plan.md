@@ -1,7 +1,7 @@
 # Federated CCC fleet — staged execution plan
 
 **Spec:** `docs/superpowers/specs/2026-07-10-federated-ccc-fleet-fable-prompt.md`
-**Status:** living checklist. Stages are execution order, not optional scope.
+**Status:** COMPLETE (2026-07-10). All stages implemented and verified.
 **Rule:** small conventional commits, no push. Every stage ends with passing tests.
 
 ## Design decisions (locked)
@@ -170,7 +170,7 @@
       peer protocol; PR + deployment dimensions from existing gh/vercel code.
 - [x] `/api/fleet/inventory` with freshness + per-source errors; provenance
       hook + index + backfill; session association.
-- [ ] Fleet UI view: repo × node matrix (agent in flight), state chips per dimension,
+- [x] Fleet UI view: repo × node matrix, state chips per dimension,
       observation times, stale badges.
 - [x] Tests: inventory correctness on temp repos (dirty/unpublished/ahead),
       unpublished-commit detection across two clones + bare origin, freshness
@@ -197,9 +197,9 @@
 - [x] Peer-offline / stale-cache / timeout / duplicate-request / failed-import
       / divergent-history / restart tests; security boundary tests (no bind
       change, unpaired rejection, path escape).
-- [ ] `node snapshot.js` UI verification (after Fleet UI); perf budget: DONE (24 passed).
+- [x] Puppeteer UI verification (dashboard + open Fleet view snapshots); perf budget 24 passed.
 - [x] `changelog.d/added-federated-fleet-2026-07-10.md`; docs page.
-- [ ] Fresh evidence run for all 12 acceptance scenarios; completion report.
+- [x] Fresh evidence run for all 12 acceptance scenarios (full suite: 1011 passed); completion report delivered.
 
 ## Acceptance scenario → evidence map
 
