@@ -2836,7 +2836,27 @@
           + '>' + label + suffix + '</button>';
       }
     }
+    // "Continue on…" — hand this session off to a paired federation node.
+    // Shown for any real session; non-Claude engines surface the backend's
+    // unsupported_capability error inside the modal rather than being hidden.
+    if (sid) {
+      html += '<div class="com-divider"></div>';
+      html += '<button type="button" class="com-item" data-handoff-continue>'
+        + '<span>Continue on…</span></button>';
+    }
     $convOverflowMenu.innerHTML = html;
+    const $handoffContinueBtn = $convOverflowMenu.querySelector('[data-handoff-continue]');
+    if ($handoffContinueBtn) {
+      $handoffContinueBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _closeConvOverflow();
+        const sidNow = sid || (currentSession && currentSession.id);
+        if (!sidNow) return;
+        const row = openConvRow();
+        const name = (row && typeof paneTitleForRow === 'function') ? paneTitleForRow(row) : '';
+        if (typeof openHandoffModal === 'function') openHandoffModal(sidNow, name || '');
+      });
+    }
     $convOverflowMenu.querySelectorAll('button[data-target]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -28798,6 +28818,7 @@
           + uxBadge
           + procSlot
           + sidChip
+          + (typeof window._cccHandoffMovedChipHtml === 'function' ? window._cccHandoffMovedChipHtml(row) : '')
           + (title ? '<span class="ccc-breadcrumb-title">' + escapeHtml(title) + '</span>' : '')
           // Transcript size lives in the pane titlebar (.conv-pane-size) already;
           // duplicating it here just crowded the narrow breadcrumb and forced the
@@ -30300,6 +30321,9 @@
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null)
       || null;
     updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
+    // Federation handoff ownership — one-shot fetch (no polling); paints a
+    // "Moved to <node>" chip in the breadcrumb if owned elsewhere now.
+    try { if (id && id !== '__new__' && typeof window._cccFetchHandoffStatus === 'function') window._cccFetchHandoffStatus(id); } catch (_) {}
     if (selectedRow && selectedRow.source === 'backlog' && selectedRow.issue_number) {
       await renderIssueInConvPane(selectedRow.issue_number, rowRepoPath(selectedRow), selectedRow.id);
       return;
@@ -46680,6 +46704,351 @@
     const btn = e.target.closest('button[data-fed-repo-remove]');
     if (btn) fedRepoRemove(btn.dataset.fedRepoRemove);
   });
+
+
+  // ── "Continue on…" session handoff ────────────────────────────────
+  // Hands the open session off to a paired federation node: pick a peer,
+  // preview the preflight plan (git facts + steps + blockers), then POST
+  // the handoff and surface the destination cwd / rewrites / resume hint.
+  // Reuses the fed* helpers (fedEsc/fedShortId) and the .upd-* modal shell.
+  const $handoffModal = document.getElementById('handoffModal');
+  const $handoffBackdrop = document.getElementById('handoffBackdrop');
+  const $handoffCloseBtn = document.getElementById('handoffCloseBtn');
+  const $handoffSubtitle = document.getElementById('handoffSubtitle');
+  const $handoffDest = document.getElementById('handoffDest');
+  const $handoffPreflightBtn = document.getElementById('handoffPreflightBtn');
+  const $handoffNoPeers = document.getElementById('handoffNoPeers');
+  const $handoffOpenPeers = document.getElementById('handoffOpenPeers');
+  const $handoffPlan = document.getElementById('handoffPlan');
+  const $handoffError = document.getElementById('handoffError');
+  const $handoffRecheckBtn = document.getElementById('handoffRecheckBtn');
+  const $handoffConfirmBtn = document.getElementById('handoffConfirmBtn');
+  let handoffSessionId = null;
+  let handoffPeers = [];
+  let handoffReady = false;
+
+  function handoffSetError(msg) {
+    if (!$handoffError) return;
+    $handoffError.textContent = msg || '';
+    $handoffError.classList.toggle('visible', !!msg);
+  }
+  // Raw POST that returns the full payload (status + body) without throwing,
+  // so structured error shapes (not_owner + owner_node, preflight_blocked +
+  // blockers) can be rendered rather than collapsed to a message string.
+  async function handoffPost(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await r.json().catch(() => ({}));
+    return { status: r.status, data: data || {} };
+  }
+  function handoffRewriteCount(rw) {
+    const v = rw && rw.cwd_rewrites;
+    if (Array.isArray(v)) return v.length;
+    return Number(v || 0);
+  }
+
+  async function handoffLoadPeers() {
+    if (!$handoffDest) return;
+    $handoffDest.innerHTML = '';
+    try {
+      const r = await fetch('/api/federation/peers', { cache: 'no-store' });
+      const data = await r.json().catch(() => ({}));
+      handoffPeers = (data && data.peers) || [];
+    } catch (_) {
+      handoffPeers = [];
+    }
+    const hasPeers = handoffPeers.length > 0;
+    if ($handoffNoPeers) $handoffNoPeers.hidden = hasPeers;
+    if ($handoffDest) $handoffDest.style.display = hasPeers ? '' : 'none';
+    if ($handoffPreflightBtn) $handoffPreflightBtn.style.display = hasPeers ? '' : 'none';
+    if (!hasPeers) return;
+    $handoffDest.innerHTML = handoffPeers.map((p) =>
+      '<option value="' + fedEsc(p.node_id) + '">'
+      + fedEsc((p.name || '(unnamed)') + ' · ' + fedShortId(p.node_id))
+      + '</option>'
+    ).join('');
+  }
+
+  function handoffDestName() {
+    const opt = $handoffDest && $handoffDest.selectedOptions && $handoffDest.selectedOptions[0];
+    if (opt && opt.textContent) return opt.textContent;
+    const peer = handoffPeers.find((p) => p.node_id === ($handoffDest && $handoffDest.value));
+    return (peer && peer.name) || 'the destination node';
+  }
+
+  function handoffRenderHardError(data) {
+    // 404 unpaired_peer / 409 not_owner / 400 unsupported_capability, or any
+    // {ok:false,error,detail}. not_owner also carries owner_node.
+    let msg = (data.detail || data.error || 'Handoff failed');
+    if (data.error === 'not_owner' && data.owner_node) {
+      msg += '\nCurrent owner: ' + data.owner_node;
+    }
+    handoffSetError(msg);
+    if ($handoffPlan) { $handoffPlan.hidden = true; $handoffPlan.innerHTML = ''; }
+    if ($handoffConfirmBtn) { $handoffConfirmBtn.hidden = true; $handoffConfirmBtn.disabled = true; }
+    if ($handoffRecheckBtn) $handoffRecheckBtn.hidden = false;
+    handoffReady = false;
+  }
+
+  function handoffRenderPlan(data) {
+    if (!$handoffPlan) return;
+    const git = data.git || {};
+    const steps = Array.isArray(data.steps) ? data.steps : [];
+    const blockers = Array.isArray(data.blockers) ? data.blockers : [];
+    let html = '';
+
+    // Git facts row.
+    html += '<div class="handoff-git">'
+      + 'branch <strong>' + fedEsc(git.branch || '—') + '</strong>'
+      + ' · <span class="handoff-commit">' + fedEsc((git.commit || '').slice(0, 8) || '—') + '</span>'
+      + ' · ' + fedEsc(git.dirty_count != null ? git.dirty_count : 0) + ' uncommitted'
+      + ' · ' + fedEsc(git.unpublished_commits != null ? git.unpublished_commits : 0) + ' unpushed'
+      + (git.has_upstream === false ? ' · <span class="handoff-warn-text">no upstream</span>' : '')
+      + '</div>';
+
+    // Plan steps — "needed" ones highlighted.
+    if (steps.length) {
+      html += '<div class="fed-section-title">Plan</div><div class="handoff-steps">';
+      for (const s of steps) {
+        const needed = !!s.needed;
+        html += '<div class="handoff-step' + (needed ? ' is-needed' : '') + '">'
+          + '<span class="handoff-step-name">' + fedEsc(s.step || '') + '</span>'
+          + (s.detail ? '<span class="handoff-step-detail">' + fedEsc(s.detail) + '</span>' : '')
+          + '</div>';
+      }
+      html += '</div>';
+    }
+
+    // Blockers in red — code + detail + first files.
+    if (blockers.length) {
+      html += '<div class="handoff-blockers">';
+      for (const b of blockers) {
+        const files = Array.isArray(b.files) ? b.files : [];
+        html += '<div class="handoff-blocker">'
+          + '<span class="handoff-blocker-code">' + fedEsc(b.code || 'blocked') + '</span>'
+          + (b.detail ? '<span class="handoff-blocker-detail">' + fedEsc(b.detail) + '</span>' : '')
+          + (files.length
+            ? '<span class="handoff-blocker-files">' + fedEsc(files.slice(0, 5).join(', ')) + (files.length > 5 ? ' …' : '') + '</span>'
+            : '')
+          + '</div>';
+      }
+      html += '</div>';
+    }
+
+    $handoffPlan.innerHTML = html;
+    $handoffPlan.hidden = false;
+    handoffReady = !!data.ready;
+    if ($handoffConfirmBtn) {
+      $handoffConfirmBtn.hidden = false;
+      $handoffConfirmBtn.disabled = !handoffReady;
+      $handoffConfirmBtn.textContent = 'Hand off';
+    }
+    if ($handoffRecheckBtn) $handoffRecheckBtn.hidden = false;
+  }
+
+  function handoffRenderSuccess(data) {
+    if (!$handoffPlan) return;
+    const rw = data.rewrites || {};
+    const warnings = Array.isArray(rw.warnings) ? rw.warnings : [];
+    let html = '<div class="handoff-success">';
+    html += '<div class="handoff-success-title">✓ Handed off to <strong>'
+      + fedEsc(handoffDestName()) + '</strong></div>';
+    html += '<div class="handoff-kv"><span>Destination path</span><code>'
+      + fedEsc(data.dest_cwd || '—') + '</code></div>';
+    html += '<div class="handoff-kv"><span>Path rewrites</span><span>'
+      + fedEsc(handoffRewriteCount(rw)) + '</span></div>';
+    if (warnings.length) {
+      html += '<div class="handoff-warnings">';
+      for (const w of warnings) html += '<div>⚠ ' + fedEsc(w) + '</div>';
+      html += '</div>';
+    }
+    if (data.resume_hint) {
+      html += '<div class="handoff-resume"><span>Resume with</span>'
+        + '<code class="handoff-copy" data-handoff-copy="' + fedEsc(data.resume_hint) + '"'
+        + ' title="Click to copy">' + fedEsc(data.resume_hint) + '</code></div>';
+    }
+    html += '</div>';
+    $handoffPlan.innerHTML = html;
+    $handoffPlan.hidden = false;
+    handoffSetError('');
+    if ($handoffConfirmBtn) $handoffConfirmBtn.hidden = true;
+    if ($handoffRecheckBtn) $handoffRecheckBtn.hidden = true;
+    if ($handoffPreflightBtn) $handoffPreflightBtn.disabled = false;
+    if ($handoffDest) $handoffDest.disabled = false;
+    showOpToast('Session handed off to ' + handoffDestName(), 'ok');
+    // The source session is no longer owned here — refresh the moved chip.
+    if (handoffSessionId) {
+      _handoffMovedBySid[handoffSessionId] = { owner: handoffDestName() };
+      refreshHandoffMovedChip();
+    }
+  }
+
+  async function handoffPreflight() {
+    const dest = $handoffDest && $handoffDest.value;
+    if (!handoffSessionId || !dest) return;
+    handoffSetError('');
+    handoffReady = false;
+    if ($handoffConfirmBtn) { $handoffConfirmBtn.hidden = true; $handoffConfirmBtn.disabled = true; }
+    if ($handoffRecheckBtn) $handoffRecheckBtn.hidden = true;
+    if ($handoffPreflightBtn) { $handoffPreflightBtn.disabled = true; $handoffPreflightBtn.textContent = 'Checking…'; }
+    if ($handoffPlan) { $handoffPlan.hidden = false; $handoffPlan.innerHTML = '<div class="fed-empty">Running preflight…</div>'; }
+    try {
+      const { data } = await handoffPost('/api/federation/handoff/preflight', {
+        session_id: handoffSessionId, dest_node_id: dest,
+      });
+      if (data.ok === false || (data.error && data.ready === undefined)) {
+        handoffRenderHardError(data);
+      } else {
+        handoffRenderPlan(data);
+      }
+    } catch (e) {
+      handoffRenderHardError({ error: 'request_failed', detail: (e && e.message) || 'Preflight request failed' });
+    }
+    if ($handoffPreflightBtn) { $handoffPreflightBtn.disabled = false; $handoffPreflightBtn.textContent = 'Preflight'; }
+  }
+
+  async function handoffStart() {
+    const dest = $handoffDest && $handoffDest.value;
+    if (!handoffReady || !handoffSessionId || !dest) return;
+    handoffSetError('');
+    if ($handoffConfirmBtn) { $handoffConfirmBtn.disabled = true; $handoffConfirmBtn.textContent = 'Handing off…'; }
+    if ($handoffPreflightBtn) $handoffPreflightBtn.disabled = true;
+    if ($handoffDest) $handoffDest.disabled = true;
+    try {
+      const { data } = await handoffPost('/api/federation/handoff/start', {
+        session_id: handoffSessionId, dest_node_id: dest,
+      });
+      if (data.ok === false || data.error) {
+        if (data.error === 'preflight_blocked') {
+          handoffRenderPlan({
+            ready: false,
+            blockers: data.blockers || [],
+            steps: data.steps || [],
+            git: data.git || {},
+          });
+          handoffSetError('Preflight blocked — resolve the blockers, then re-check.');
+        } else {
+          handoffRenderHardError(data);
+        }
+        if ($handoffConfirmBtn) { $handoffConfirmBtn.textContent = 'Hand off'; $handoffConfirmBtn.disabled = !handoffReady; }
+        if ($handoffPreflightBtn) $handoffPreflightBtn.disabled = false;
+        if ($handoffDest) $handoffDest.disabled = false;
+        return;
+      }
+      handoffRenderSuccess(data);
+    } catch (e) {
+      handoffSetError((e && e.message) || 'Handoff request failed');
+      if ($handoffConfirmBtn) { $handoffConfirmBtn.textContent = 'Hand off'; $handoffConfirmBtn.disabled = !handoffReady; }
+      if ($handoffPreflightBtn) $handoffPreflightBtn.disabled = false;
+      if ($handoffDest) $handoffDest.disabled = false;
+    }
+  }
+
+  function openHandoffModal(sessionId, displayName) {
+    if (!$handoffModal) return;
+    handoffSessionId = sessionId || null;
+    handoffReady = false;
+    handoffSetError('');
+    if ($handoffSubtitle) {
+      $handoffSubtitle.textContent = displayName
+        ? 'Move "' + displayName + '" to a paired node — its git state and working copy travel with it.'
+        : 'Move this session to a paired node — its git state and working copy travel with it.';
+    }
+    if ($handoffPlan) { $handoffPlan.hidden = true; $handoffPlan.innerHTML = ''; }
+    if ($handoffConfirmBtn) { $handoffConfirmBtn.hidden = true; $handoffConfirmBtn.disabled = true; $handoffConfirmBtn.textContent = 'Hand off'; }
+    if ($handoffRecheckBtn) $handoffRecheckBtn.hidden = true;
+    if ($handoffPreflightBtn) { $handoffPreflightBtn.disabled = false; $handoffPreflightBtn.textContent = 'Preflight'; }
+    if ($handoffDest) $handoffDest.disabled = false;
+    $handoffModal.classList.add('open');
+    handoffLoadPeers();
+  }
+  function handoffClose() {
+    if ($handoffModal) $handoffModal.classList.remove('open');
+  }
+
+  if ($handoffBackdrop) $handoffBackdrop.addEventListener('click', handoffClose);
+  if ($handoffCloseBtn) $handoffCloseBtn.addEventListener('click', handoffClose);
+  if ($handoffPreflightBtn) $handoffPreflightBtn.addEventListener('click', handoffPreflight);
+  if ($handoffRecheckBtn) $handoffRecheckBtn.addEventListener('click', handoffPreflight);
+  if ($handoffConfirmBtn) $handoffConfirmBtn.addEventListener('click', handoffStart);
+  if ($handoffDest) $handoffDest.addEventListener('change', handoffPreflight);
+  if ($handoffOpenPeers) $handoffOpenPeers.addEventListener('click', () => {
+    handoffClose();
+    if (typeof openFederationPeersModal === 'function') openFederationPeersModal();
+  });
+  if ($handoffPlan) $handoffPlan.addEventListener('click', (e) => {
+    const code = e.target.closest('[data-handoff-copy]');
+    if (!code) return;
+    const text = code.getAttribute('data-handoff-copy') || '';
+    try {
+      navigator.clipboard.writeText(text);
+      showOpToast('Resume command copied', 'ok');
+    } catch (_) {}
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $handoffModal && $handoffModal.classList.contains('open')) {
+      handoffClose();
+    }
+  });
+
+  // "Moved to <node>" chip — when a conversation is opened, fetch its handoff
+  // ownership once (no polling). If it's owned elsewhere now, mark it so the
+  // breadcrumb renders a small warning chip. Keyed by session id so the chip
+  // survives breadcrumb rebuilds (updatePaneHeader re-includes it each pass).
+  const _handoffMovedBySid = {};
+  const _handoffStatusFetched = new Set();
+  function handoffMovedChipHtml(row) {
+    if (!row) return '';
+    // Look up by both keys: the status fetch keys by the conversation id
+    // (usually the session UUID), while rows may expose session_id too.
+    const moved = _handoffMovedBySid[row.id] || _handoffMovedBySid[row.session_id];
+    if (!moved) return '';
+    const owner = moved.owner || 'another node';
+    return '<span class="handoff-moved-chip" title="Owned by ' + escapeAttr(owner) + '">Moved to another node</span>';
+  }
+  function refreshHandoffMovedChip() {
+    const bc = document.getElementById('cccBreadcrumb');
+    if (!bc) return;
+    const existing = bc.querySelector('.handoff-moved-chip');
+    if (existing) existing.remove();
+    const row = (typeof _statusRailActiveRow !== 'undefined' && _statusRailActiveRow)
+      ? _statusRailActiveRow : (typeof openConvRow === 'function' ? openConvRow() : null);
+    const html = handoffMovedChipHtml(row);
+    if (!html) return;
+    const tmp = document.createElement('template');
+    tmp.innerHTML = html.trim();
+    const chip = tmp.content.firstChild;
+    if (!chip) return;
+    const title = bc.querySelector('.ccc-breadcrumb-title');
+    if (title) bc.insertBefore(chip, title);
+    else bc.appendChild(chip);
+  }
+  async function fetchHandoffStatusForConv(sid) {
+    if (!sid || !/^[0-9a-f-]{8,}$/i.test(sid)) return;
+    if (_handoffStatusFetched.has(sid)) { refreshHandoffMovedChip(); return; }
+    _handoffStatusFetched.add(sid);
+    try {
+      const r = await fetch('/api/federation/handoff/status?session_id=' + encodeURIComponent(sid), { cache: 'no-store' });
+      const data = await r.json().catch(() => ({}));
+      if (data && data.ok !== false && data.owned_here === false) {
+        _handoffMovedBySid[sid] = { owner: (data.lease && data.lease.owner_node) || data.node_id || 'another node' };
+      } else {
+        delete _handoffMovedBySid[sid];
+      }
+    } catch (_) {
+      // Federation may be disabled / status endpoint absent — leave no chip.
+      _handoffStatusFetched.delete(sid);
+    }
+    if (typeof currentConversation !== 'undefined' && currentConversation === sid) {
+      refreshHandoffMovedChip();
+    }
+  }
+  // Expose for updatePaneHeader (breadcrumb build) and selectConversation.
+  window._cccHandoffMovedChipHtml = handoffMovedChipHtml;
+  window._cccFetchHandoffStatus = fetchHandoffStatusForConv;
 
   // If we just finished restarting, briefly acknowledge the trigger.
   try {

@@ -1531,6 +1531,41 @@
     </div>
   </div>
 
+  <!-- "Continue on…" session handoff. Opened from the conversation overflow
+       (⋯) menu via openHandoffModal(sessionId, displayName). Picks a paired
+       peer, previews the git/plan/blocker preflight, then POSTs the handoff.
+       Reuses the .upd-* modal shell and the fed- section primitives. -->
+  <div id="handoffModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="handoffTitle">
+    <div class="upd-backdrop" id="handoffBackdrop"></div>
+    <div class="upd-dialog" style="width:min(620px,94vw);max-height:88vh;overflow-y:auto;">
+      <div class="upd-title" id="handoffTitle">Continue on another node</div>
+      <div class="upd-versions" id="handoffSubtitle">
+        Move this session to a paired node — its git state and working copy
+        travel with it.
+      </div>
+
+      <div class="fed-section">
+        <div class="fed-section-title">Destination</div>
+        <div class="fed-add-row">
+          <select id="handoffDest" class="bug-input" style="flex:1;min-width:160px;" aria-label="Destination node"></select>
+          <button type="button" class="upd-btn fed-btn" id="handoffPreflightBtn">Preflight</button>
+        </div>
+        <div class="handoff-no-peers" id="handoffNoPeers" hidden>
+          No paired nodes — <button type="button" class="handoff-link" id="handoffOpenPeers">set one up in Nodes &amp; peers…</button>
+        </div>
+      </div>
+
+      <div class="handoff-plan" id="handoffPlan" hidden></div>
+
+      <div class="upd-error" id="handoffError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="handoffCloseBtn">Close</button>
+        <button type="button" class="upd-btn fed-btn" id="handoffRecheckBtn" hidden>Re-check</button>
+        <button type="button" class="upd-btn upd-primary fed-btn" id="handoffConfirmBtn" hidden disabled>Hand off</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Car Mode: hands-free voice operator. Explains the feature + cost, lets the
        user store optional API keys, and starts/stops the ccc-voice agent. Keys
        POST to /api/car-mode/config (localhost-only); start/stop/status hit

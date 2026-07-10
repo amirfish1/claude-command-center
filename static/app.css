@@ -18065,7 +18065,59 @@ body:has(.gc-reader) .pwa-install-banner {
 .fed-empty { font-size: 12px; color: var(--text-muted); padding: 4px 2px; }
 .fed-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .fed-inline-error { display: none; font-size: 12px; color: var(--red); }
+
 .fed-inline-error.visible { display: block; }
+
+/* ── "Continue on…" session handoff modal ───────────────────
+   Opened from the conversation overflow (⋯) menu via openHandoffModal.
+   Reuses the .upd-* modal shell and fed- section primitives; only the
+   handoff- plan/step/blocker/success primitives below are new. */
+.handoff-no-peers { font-size: 12px; color: var(--text-muted); }
+.handoff-link { background: none; border: none; padding: 0; color: var(--accent);
+  font: inherit; cursor: pointer; text-decoration: underline; }
+.handoff-plan { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.handoff-git { font-size: 12px; color: var(--text-muted); line-height: 1.6;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; overflow-wrap: anywhere; }
+.handoff-git strong { color: var(--text); font-weight: 600; }
+.handoff-commit { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; }
+.handoff-warn-text { color: var(--orange, #d29922); font-weight: 600; }
+.handoff-steps { display: flex; flex-direction: column; gap: 4px; }
+.handoff-step { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.handoff-step.is-needed { border-color: var(--accent); background: rgba(88,166,255,0.08); }
+.handoff-step-name { font-weight: 600; color: var(--text); }
+.handoff-step-detail { font-size: 12px; color: var(--text-muted); }
+.handoff-blockers { display: flex; flex-direction: column; gap: 6px; }
+.handoff-blocker { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
+  border: 1px solid rgba(248,81,73,0.4); border-radius: 6px;
+  background: rgba(248,81,73,0.08); }
+.handoff-blocker-code { font-weight: 700; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--red); }
+.handoff-blocker-detail { font-size: 12px; color: var(--text); }
+.handoff-blocker-files { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere;
+  font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; }
+.handoff-success { display: flex; flex-direction: column; gap: 8px; }
+.handoff-success-title { font-size: 14px; color: var(--green); }
+.handoff-success-title strong { color: var(--text); }
+.handoff-kv { display: flex; align-items: baseline; gap: 8px; font-size: 12px;
+  color: var(--text-muted); flex-wrap: wrap; }
+.handoff-resume { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+  color: var(--text-muted); }
+.handoff-kv code, .handoff-resume code {
+  font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; font-size: 12px;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 6px; overflow-wrap: anywhere; }
+.handoff-copy { cursor: pointer; }
+.handoff-copy:hover { border-color: var(--accent); }
+.handoff-warnings { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+  color: var(--orange, #d29922); }
+/* "Moved to another node" chip in the conversation breadcrumb. */
+.handoff-moved-chip { font-size: 10px; font-weight: 600; padding: 1px 7px;
+  border-radius: 999px; white-space: nowrap; vertical-align: middle; cursor: help;
+  color: var(--orange, #d29922); border: 1px solid var(--orange, #d29922);
+  background: rgba(210,153,34,0.12); }
+
 /* ── Codex desktop↔CCC coordination ───────────────────────────────────
    Surfaces who is writing a shared Codex thread (the desktop app / another
    process vs CCC) and the durable coordination notes in the transcript.
