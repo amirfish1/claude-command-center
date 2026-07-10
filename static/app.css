@@ -8777,6 +8777,25 @@
     white-space: pre-wrap; word-break: break-word; }
   .upd-error.visible { display: block; }
 
+  /* ── Car Mode modal ─────────────────────────────────────────
+     Reuses the .upd-* shell; these add the capability banner + the
+     cost / graceful-degradation callouts. */
+  .car-mode-banner { font-size: 12px; border-radius: 6px; padding: 8px 10px;
+    line-height: 1.5; border: 1px solid var(--border); background: var(--bg); }
+  .car-mode-banner.ok { color: var(--text);
+    background: rgba(63,185,80,0.10); border-color: rgba(63,185,80,0.30); }
+  .car-mode-banner.warn { color: var(--text);
+    background: rgba(210,153,34,0.10); border-color: rgba(210,153,34,0.30); }
+  .car-mode-banner.running { color: var(--text);
+    background: rgba(88,166,255,0.10); border-color: rgba(88,166,255,0.30); }
+  .car-mode-cost, .car-mode-degrade { font-size: 12px; color: var(--text-muted);
+    line-height: 1.5; border-radius: 6px; padding: 8px 10px;
+    background: var(--bg); border: 1px solid var(--border); }
+  .car-mode-cost strong, .car-mode-degrade strong { color: var(--text); }
+  /* Sidebar Car Mode launch button: tint the car glyph green while running. */
+  #sidebarCarModeBtn.car-mode-running { border-color: rgba(63,185,80,0.5); }
+  #sidebarCarModeBtn.car-mode-running > span[aria-hidden="true"] { filter: none; }
+
   /* ── Bug-report link + modal ─────────────────────────────────
      Subtle "Report a bug" link in the topbar. Opens a modal that
      reuses the .upd-overlay / .upd-dialog / .upd-btn shells. */

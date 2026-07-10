@@ -455,6 +455,7 @@
         <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" title="Create a new empty group chat — drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view"><span aria-hidden="true">&#9654;</span></button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarManageGroupChatsBtn" title="Manage existing group chats — pause / unpause orchestration" aria-label="Manage group chats">&#8801;</button>
+        <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarCarModeBtn" title="Car Mode — drive your agents hands-free by voice" aria-label="Car Mode"><span aria-hidden="true">🚗</span></button>
       </div>
     </div>
     <div id="convSearchStatus" class="conv-search-status" data-role="conv-search-status" hidden aria-live="polite">SEARCHING...</div>
@@ -570,6 +571,7 @@
               <button class="pop-item" type="button" id="runOnboardingBtn"><span class="pop-icon">🚀</span><span>Run onboarding</span></button>
               <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
               <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
+              <button class="pop-item" type="button" id="carModeMenuBtn"><span class="pop-icon">🚗</span><span>Car Mode…</span></button>
               <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
               <!-- Launchers for third-party plugin dashboards. Hidden by
                    default; shown only when /api/features confirms the plugin
@@ -1458,6 +1460,72 @@
       <div class="upd-actions">
         <button type="button" class="upd-btn" id="networkCancelBtn">Cancel</button>
         <button type="button" class="upd-btn upd-primary" id="networkSaveBtn">Save &amp; restart</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Car Mode: hands-free voice operator. Explains the feature + cost, lets the
+       user store optional API keys, and starts/stops the ccc-voice agent. Keys
+       POST to /api/car-mode/config (localhost-only); start/stop/status hit
+       /api/car-mode/*. Server never echoes key values. -->
+  <div id="carModeModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="carModeTitle">
+    <div class="upd-backdrop" id="carModeBackdrop"></div>
+    <div class="upd-dialog" style="width:min(640px,94vw);">
+      <div class="upd-title" id="carModeTitle">🚗 Car Mode — drive your agents by voice</div>
+      <div class="upd-versions">
+        A hands-free voice operator for CCC. A dispatcher reads you your fleet,
+        you say <em>"take me into the ads session"</em> to talk to that agent, then
+        <em>"back to the dashboard"</em>. Built for when you're away from the
+        keyboard (driving, walking). Runs locally in a Terminal-style window.
+      </div>
+
+      <!-- Live capability banner — filled by JS from /api/car-mode/status. -->
+      <div id="carModeStatusBanner" class="car-mode-banner" style="display:none;"></div>
+
+      <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
+        <div>
+          <label class="bug-label" for="carModeAnthropicKey">Anthropic API key <span style="color:var(--text-muted);font-weight:400;">(required — the dispatcher brain)</span></label>
+          <input type="password" id="carModeAnthropicKey" class="bug-input" autocomplete="off" placeholder="sk-ant-…  (leave blank to keep the stored one)">
+        </div>
+        <div>
+          <label class="bug-label" for="carModeDeepgramKey">Deepgram API key <span style="color:var(--text-muted);font-weight:400;">(optional — enables speech in + out)</span></label>
+          <input type="password" id="carModeDeepgramKey" class="bug-input" autocomplete="off" placeholder="leave blank to keep the stored one">
+        </div>
+        <div style="color:var(--text-muted);font-size:12px;">
+          Keys are stored locally in <code>~/.claude/command-center/car-mode.json</code>
+          (owner-only, never shown again). CCC also reads <code>ccc-voice/.env</code> if you
+          prefer to manage them there.
+        </div>
+
+        <!-- Cost disclosure. -->
+        <div class="car-mode-cost">
+          <strong>What it costs</strong>
+          <div style="margin-top:4px;">
+            About <strong>$0.35/hr</strong> to run: routing agent on Claude Haiku 4.5
+            (~$0.10/hr), Deepgram speech-to-text (~$0.08–0.10/hr) and text-to-speech
+            (~$0.15/hr). Near-free if you skip Deepgram and use your Mac's built-in
+            speech. Your CCC sessions bill separately as usual.
+          </div>
+        </div>
+
+        <!-- Graceful-degradation notice. -->
+        <div id="carModeDegradeNotice" class="car-mode-degrade">
+          <strong>If a key is missing</strong> — Car Mode degrades instead of breaking:
+          <ul style="margin:6px 0 0 18px;padding:0;">
+            <li>No Deepgram key → hands-free voice is off, but CCC's built-in browser
+              mic and read-aloud (free, no key) still let you work by voice in the UI.</li>
+            <li>No Anthropic key → Car Mode can't start; it tells you what's needed
+              instead of erroring.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="upd-error" id="carModeError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="carModeCancelBtn">Close</button>
+        <button type="button" class="upd-btn" id="carModeSaveBtn">Save keys</button>
+        <button type="button" class="upd-btn upd-primary" id="carModeStartBtn">Start Car Mode</button>
+        <button type="button" class="upd-btn" id="carModeStopBtn" style="display:none;">Stop</button>
       </div>
     </div>
   </div>

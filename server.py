@@ -11,7 +11,7 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
-__version__ = "5.6.0"
+__version__ = "5.7.0"
 
 import ast
 import base64
@@ -53,6 +53,11 @@ from pathlib import Path
 # next to server.py; recommends cheaper/stronger models per live session. See
 # /api/model-advisor and model_advisor.py.
 import model_advisor
+
+# CCC federation (stdlib-only sibling module): stable node identity, paired
+# peers, and the transport for calling a peer CCC on its own loopback. See
+# docs/superpowers/plans/2026-07-10-federated-ccc-fleet-plan.md.
+import federation
 
 # Tool's own assets live next to this file. Repos are never process-global:
 # every repo-scoped request must carry a concrete repo path, cwd, or session id.
@@ -7808,6 +7813,76 @@ def _save_network_config(config):
     return payload
 
 
+# Car Mode key names -> the env var each maps to when we launch the voice agent.
+_CAR_MODE_KEYS = {
+    "anthropic_api_key": "ANTHROPIC_API_KEY",
+    "deepgram_api_key": "DEEPGRAM_API_KEY",
+}
+
+
+def _load_car_mode_config():
+    """Read stored Car Mode API keys. Missing/malformed file -> empty dict (the
+    keys then fall back to os.environ / ccc-voice/.env at launch)."""
+    try:
+        raw = json.loads(CAR_MODE_CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key in _CAR_MODE_KEYS:
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = val.strip()
+    return out
+
+
+def _save_car_mode_config(config):
+    """Persist only the known Car Mode keys (never smuggle extra fields to disk).
+    An empty string clears that key. Returns the set of key names now stored."""
+    existing = _load_car_mode_config()
+    for key in _CAR_MODE_KEYS:
+        if key not in (config or {}):
+            continue  # not in this request -> leave as-is
+        val = config.get(key)
+        if isinstance(val, str) and val.strip():
+            existing[key] = val.strip()
+        else:
+            existing.pop(key, None)  # blank -> clear
+    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CAR_MODE_CONFIG_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2, sort_keys=True)
+        f.write("\n")
+    tmp.replace(CAR_MODE_CONFIG_FILE)
+    try:
+        os.chmod(CAR_MODE_CONFIG_FILE, 0o600)  # keys are secrets — owner-only
+    except OSError:
+        pass
+    return set(existing.keys())
+
+
+def _car_mode_effective_keys():
+    """Which Car Mode keys are available from EITHER stored config or the
+    environment. Returns {"anthropic": bool, "deepgram": bool}. Never returns the
+    values themselves. The launcher also honours ccc-voice/.env, so a user with
+    keys only in that file still works — this just drives the UI's capability copy."""
+    cfg = _load_car_mode_config()
+    return {
+        "anthropic": bool(cfg.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")),
+        "deepgram": bool(cfg.get("deepgram_api_key") or os.environ.get("DEEPGRAM_API_KEY")),
+    }
+
+
+def _car_mode_status_mode(keys):
+    """Map available keys -> capability mode string (see /api/car-mode/status)."""
+    if not keys["anthropic"]:
+        return "unavailable_no_anthropic"
+    if not keys["deepgram"]:
+        return "degraded_no_deepgram"  # dispatcher works, but no STT/TTS -> no hands-free voice
+    return "voice"
+
+
 def _detect_tailnet_origins(port):
     """Return ({available, running, hostname, ips, origins}) describing the
     local Tailscale node, or `available=False` when the CLI is missing.
@@ -8711,6 +8786,12 @@ FIX_DEPLOY_SPAWNED_FILE = COMMAND_CENTER_STATE_DIR / "fix-deploy-spawned.json"  
 # every restart. Empty/missing = loopback-only (the safe default). Loaded by
 # `_load_network_config`, written by `_save_network_config`. See SECURITY.md.
 NETWORK_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "network.json"
+# Car Mode (hands-free voice operator) config: optional API keys the user can
+# store from the UI instead of hand-editing ccc-voice/.env. Plaintext on disk
+# like the rest of the state dir (see SECURITY.md — chmod 700 is the mitigation).
+# GET /api/car-mode/status returns only booleans, never the key values. Loaded by
+# `_load_car_mode_config`, written by `_save_car_mode_config`.
+CAR_MODE_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "car-mode.json"
 # Server-side defaults for new sessions spawned from the UI or by
 # ccc-orchestration. Kept out of browser localStorage so scripted callers
 # inherit the same engine/model choices the UI shows.
@@ -46536,6 +46617,110 @@ def _set_voice_focus(session_id: str) -> dict:
     return dict(_VOICE_FOCUS)
 
 
+# --- Car Mode (hands-free voice operator) process control ---------------------
+# Single-instance service, tracked in one module-level slot (mirrors _VOICE_FOCUS,
+# not the multi-spawn list). The actual voice loop lives in ccc-voice/ and is
+# launched detached with keys injected from car-mode.json (or the environment).
+_CAR_MODE = {"pid": None, "proc": None, "started_at": None, "log": None, "mode": None}
+_CAR_MODE_DIR = CCC_ROOT / "ccc-voice"
+
+
+def _car_mode_running() -> bool:
+    proc = _CAR_MODE.get("proc")
+    if proc is not None:
+        return proc.poll() is None
+    pid = _CAR_MODE.get("pid")
+    return bool(pid) and _pid_alive(pid)
+
+
+def _car_mode_snapshot() -> dict:
+    """UI-facing status. Never leaks key values — only availability booleans."""
+    keys = _car_mode_effective_keys()
+    running = _car_mode_running()
+    if not running:
+        # clear stale slot so a crashed run doesn't look alive
+        _CAR_MODE.update({"pid": None, "proc": None, "started_at": None})
+    return {
+        "ok": True,
+        "running": running,
+        "mode": _car_mode_status_mode(keys),
+        "anthropic_key_set": keys["anthropic"],
+        "deepgram_key_set": keys["deepgram"],
+        "pid": _CAR_MODE.get("pid") if running else None,
+        "started_at": _CAR_MODE.get("started_at") if running else None,
+        "launcher_present": (_CAR_MODE_DIR / "run.sh").exists(),
+    }
+
+
+def _car_mode_start() -> dict:
+    """Launch the voice operator detached, injecting stored keys into its env.
+    Idempotent (returns the live instance if already running). Refuses with a
+    clear message when the required keys aren't available — graceful degradation,
+    not a crash."""
+    if _car_mode_running():
+        return {**_car_mode_snapshot(), "already_running": True}
+
+    keys = _car_mode_effective_keys()
+    mode = _car_mode_status_mode(keys)
+    if mode == "unavailable_no_anthropic":
+        return {"ok": False, "error": "Car Mode needs an Anthropic API key (the dispatcher brain). "
+                "Add one in Car Mode settings.", "mode": mode, "running": False}
+    if mode == "degraded_no_deepgram":
+        return {"ok": False, "error": "Hands-free voice needs a Deepgram API key (speech in + out). "
+                "Add one in Car Mode settings (about $0.35/hr), or use CCC's built-in browser "
+                "mic and read-aloud, which are free.", "mode": mode, "running": False}
+
+    launcher = _CAR_MODE_DIR / "run.sh"
+    if not launcher.exists():
+        return {"ok": False, "error": f"launcher not found at {launcher}", "running": False}
+
+    env = dict(os.environ)
+    for key, env_name in _CAR_MODE_KEYS.items():
+        val = _load_car_mode_config().get(key)
+        if val:
+            env[env_name] = val
+    env["CCC_BASE_URL"] = f"http://127.0.0.1:{PORT}"
+
+    log_dir = COMMAND_CENTER_STATE_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"car-mode-{int(time.time())}.log"
+    try:
+        lf = open(log_path, "w")
+        proc = subprocess.Popen(
+            ["bash", str(launcher)],
+            stdout=lf, stderr=subprocess.STDOUT,
+            cwd=str(_CAR_MODE_DIR),
+            start_new_session=True,  # own process group -> killpg on stop
+            env=env,
+        )
+    except OSError as e:
+        return {"ok": False, "error": f"failed to launch: {e}", "running": False}
+    _CAR_MODE.update({
+        "pid": proc.pid, "proc": proc,
+        "started_at": time.time(), "log": str(log_path), "mode": mode,
+    })
+    return {**_car_mode_snapshot(), "started": True, "log": str(log_path)}
+
+
+def _car_mode_stop() -> dict:
+    """SIGTERM the voice operator's process group (falls back to the bare pid)."""
+    pid = _CAR_MODE.get("pid")
+    if not pid or not _car_mode_running():
+        _CAR_MODE.update({"pid": None, "proc": None, "started_at": None})
+        return {"ok": True, "running": False, "stopped": False}
+    try:
+        os.killpg(int(pid), signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except (PermissionError, OSError, ValueError):
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError, ValueError):
+            pass
+    _CAR_MODE.update({"pid": None, "proc": None, "started_at": None})
+    return {"ok": True, "running": False, "stopped": True}
+
+
 class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
@@ -46563,6 +46748,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/voice-focus":
             # Current remote-focus target (set via POST). O(1) in-memory poll.
             self.send_json(dict(_VOICE_FOCUS))
+        elif path == "/api/car-mode/status":
+            # Car Mode running state + capability mode + which keys are set
+            # (booleans only — never the key values). O(1).
+            self.send_json(_car_mode_snapshot())
         elif path == "/api/attention":
             qs = urllib.parse.parse_qs(parsed.query)
             include_all = qs.get("all", ["0"])[0] in ("1", "true")
@@ -48341,7 +48530,46 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "port": PORT,
                 "pid": os.getpid(),
                 "version": __version__,
+                "node_id": federation.node_identity()["node_id"],
             })
+        elif path == "/api/federation/v1/hello":
+            # Unauthenticated identity card — pairing preflight. No secrets.
+            self.send_json(_federation_self_hello())
+        elif path == "/api/federation/v1/health":
+            peer = _federation_require_peer(self)
+            if peer is None:
+                return
+            _federation_touch_peer(peer["node_id"])
+            self.send_json({
+                "ok": True,
+                "node_id": federation.node_id(),
+                "version": __version__,
+                "time": time.time(),
+            })
+        elif path == "/api/federation/v1/sessions":
+            peer = _federation_require_peer(self)
+            if peer is None:
+                return
+            qs_fed = urllib.parse.parse_qs(parsed.query)
+            try:
+                fed_limit = int((qs_fed.get("limit") or ["200"])[0])
+            except ValueError:
+                fed_limit = 200
+            self.send_json(_federation_sessions_inventory(limit=fed_limit))
+        elif path == "/api/federation/v1/repo-inventory":
+            peer = _federation_require_peer(self)
+            if peer is None:
+                return
+            qs_fed = urllib.parse.parse_qs(parsed.query)
+            payload, status = _federation_repo_inventory_payload(
+                repo_path=(qs_fed.get("repo_path") or [None])[0],
+                repo_identity_key=(qs_fed.get("repo") or [None])[0],
+                fetch=(qs_fed.get("fetch") or ["0"])[0] in ("1", "true"),
+            )
+            self.send_json(payload, status)
+        elif path == "/api/federation/peers":
+            # Local management view (browser). Secrets are never included.
+            self.send_json(_federation_peers_public())
         elif re.match(r"^/api/morning/goals/[A-Za-z0-9_-]+$", path):
             slug = path.rsplit("/", 1)[-1]
             detail = morning.get_goal_detail(slug)
@@ -48457,6 +48685,60 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 400)
             return
 
+        if path == "/api/car-mode/start":
+            # Launch the hands-free voice operator (idempotent, graceful refusal
+            # if required keys are missing). Same-origin already checked above.
+            try:
+                result = _car_mode_start()
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e), "running": False}, 500)
+                return
+            self.send_json(result, 200 if result.get("ok", True) is not False else 400)
+            return
+
+        if path == "/api/car-mode/stop":
+            try:
+                self.send_json(_car_mode_stop())
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if path == "/api/car-mode/config":
+            # Stores optional API keys. SECURITY: localhost-only — a trusted
+            # tailnet peer (allowlisted for same-origin) must NOT be able to
+            # write/exfiltrate secrets. Mirror the /api/network-config gate.
+            origin = (self.headers.get("Origin") or "").strip()
+            if origin:
+                ok = False
+                for host in ("localhost", "127.0.0.1", "[::1]"):
+                    for scheme in ("http", "https"):
+                        if origin == f"{scheme}://{host}:{PORT}" or origin == f"{scheme}://{host}":
+                            ok = True
+                            break
+                    if ok:
+                        break
+                if not ok:
+                    self.send_json({"error": "car-mode config is localhost-only", "origin": origin}, 403)
+                    return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"error": "expected JSON object"}, 400)
+                return
+            try:
+                _save_car_mode_config(payload)  # never log/echo the values
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            # Return status (booleans only), so the UI can re-render capability copy.
+            self.send_json({**_car_mode_snapshot(), "saved": True})
+            return
+
         if path == "/api/client-log":
             # Beacon sink for client-side perf warnings (poller overrun,
             # longtask). The Mac app is a WKWebView with no inspector, so
@@ -48509,6 +48791,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(result, 200 if result.get("ok") else 400)
             except (ValueError, OSError) as e:
                 self.send_json({"ok": False, "error": f"invalid JSON: {e}"}, 400)
+            return
+
+        if path.startswith("/api/federation/"):
+            # Federation POSTs: peer-facing v1 protocol (pair/unpair/route —
+            # route validates the pairing secret; pair trusts the transport,
+            # since reaching this loopback already implies user-level access)
+            # plus local peer-management calls from the browser UI. CSRF is
+            # covered by do_POST's _check_same_origin like every other POST.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                if not isinstance(data, dict):
+                    self.send_json({"error": "expected JSON object"}, 400)
+                    return
+            except (ValueError, OSError) as e:
+                self.send_json({"error": f"invalid JSON: {e}"}, 400)
+                return
+            payload, status = _federation_handle_post(path, data, self)
+            if payload is not None:
+                self.send_json(payload, status)
             return
 
         if path == "/api/coo/tracked":
@@ -54657,6 +54960,455 @@ def ensure_hooks_installed():
         except OSError as e:
             print(f"  [hooks] Failed to write settings.json: {e}")
             tmp_path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# CCC federation — cross-machine node identity, pairing, and peer protocol
+#
+# One CCC installation (one HOME) = one federation node. Peers are other CCC
+# installations, typically on other machines, reached over SSH (executing a
+# tiny HTTP client on the peer so the request hits the peer CCC on ITS OWN
+# loopback — the command API is never exposed to a network) or over direct
+# loopback for a second isolated CCC on this machine. Pairing establishes a
+# shared secret; every peer-facing endpoint except hello/pair validates it.
+# The trust model is unchanged: anything that can reach a node's loopback
+# (which SSH-as-the-user grants) already has user-level control there.
+# ---------------------------------------------------------------------------
+
+
+def _federation_self_hello():
+    """This node's identity card — safe to serve unauthenticated (contains no
+    secrets; loopback callers already have user-level access)."""
+    ident = federation.node_identity()
+    return {
+        "ok": True,
+        "proto": federation.FEDERATION_PROTO_VERSION,
+        "node_id": ident["node_id"],
+        "display_name": ident.get("display_name") or "",
+        "version": __version__,
+        "port": PORT,
+        "caps": federation.capability_manifest(__version__, list(_ORCHESTRATION_SPAWN_ENGINES)),
+        "time": time.time(),
+    }
+
+
+def _federation_require_peer(handler):
+    """Validate the pairing headers on a peer-facing request. Sends the 403
+    itself and returns None when unpaired; returns the peer entry when OK."""
+    peer_id = (handler.headers.get("X-CCC-Peer") or "").strip()
+    token = (handler.headers.get("X-CCC-Peer-Token") or "").strip()
+    peer = federation.validate_peer_auth(peer_id, token)
+    if peer is None:
+        handler.send_json({"ok": False, "error": "unpaired_peer"}, 403)
+        return None
+    return peer
+
+
+def _federation_touch_peer(peer_node_id, **extra):
+    try:
+        federation.update_peer(
+            peer_node_id,
+            last_seen=datetime.now().astimezone().isoformat(timespec="seconds"),
+            **extra,
+        )
+    except OSError:
+        pass
+
+
+def _federation_sessions_inventory(limit=200):
+    """Compact cross-repo session inventory for a peer aggregator. Served from
+    the same response cache as /api/sessions?all=1 — no extra O(all) work."""
+    me = federation.node_id()
+    rows, _from_cache = _archive_all_rows_cached({
+        "include_prs": False,
+        "resolve_pr_states": False,
+        "resolve_effective": False,
+        "resolve_worktree_dirty": False,
+    })
+    out = []
+    for r in rows[: max(1, min(int(limit or 200), 1000))]:
+        sid = r.get("session_id") or r.get("id")
+        if not sid:
+            continue
+        out.append({
+            "session_id": sid,
+            "ref": federation.format_session_ref(me, sid),
+            "node_id": me,
+            "engine": r.get("engine") or r.get("source") or "claude",
+            "source": r.get("source"),
+            "display_name": r.get("display_name") or "",
+            "first_message": (r.get("first_message") or "")[:160],
+            "cwd": r.get("session_cwd") or r.get("cwd") or "",
+            "branch": r.get("effective_branch") or r.get("branch") or "",
+            "is_live": bool(r.get("is_live")),
+            "timestamp": r.get("timestamp") or r.get("mtime"),
+            "model": r.get("model"),
+            "parent_session_id": r.get("parent_session_id"),
+        })
+    return {
+        "ok": True,
+        "node_id": me,
+        "observed_at": time.time(),
+        "sessions": out,
+        "count": len(out),
+    }
+
+
+def _federation_default_branch_view(repo_path):
+    """Origin default-branch name + this clone's fetched view of its SHA."""
+    rc, out, _err = _git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], repo_path)
+    default_ref = out.strip() if rc == 0 and out.strip() else ""
+    branch = default_ref.rsplit("/", 1)[-1] if default_ref else ""
+    if not branch:
+        for cand in ("main", "master"):
+            rc, _out, _err = _git(["rev-parse", "--verify", "--quiet", f"origin/{cand}"], repo_path)
+            if rc == 0:
+                branch = cand
+                break
+    if not branch:
+        return {"branch": None, "sha": None}
+    rc, out, _err = _git(["rev-parse", f"origin/{branch}"], repo_path)
+    return {"branch": branch, "sha": out.strip() if rc == 0 else None}
+
+
+def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, fetch=False):
+    """Git/worktree inventory for ONE repo on THIS node. Path is validated
+    here — the node that owns the filesystem does the checking."""
+    if not repo_path and repo_identity_key:
+        repo_path = federation.resolve_repo_path(repo_identity_key)
+        if not repo_path:
+            return {"ok": False, "error": "stale_mapping",
+                    "detail": f"no local mapping for {repo_identity_key}"}, 404
+    try:
+        repo_path = resolve_repo_path(repo_path)
+    except RepoContextError as e:
+        return {"ok": False, "error": e.code, "detail": str(e)}, e.status
+    ident = federation.repo_identity(repo_path) or {}
+    if fetch:
+        # The one explicitly-requested mutation-adjacent step a scan may do:
+        # refresh remote refs. Never touches the working tree.
+        _git(["fetch", "--quiet", "--prune", "origin"], repo_path, timeout=60)
+    wt_payload = list_repo_worktrees(repo_path)
+    worktrees = []
+    for wt in wt_payload.get("worktrees", []):
+        entry = dict(wt)
+        wt_path = entry.get("path") or ""
+        rc, out, _err = _git(["status", "--porcelain"], wt_path)
+        status_lines = [ln for ln in out.splitlines() if ln.strip()] if rc == 0 else []
+        entry["dirty_files"] = len(status_lines)
+        entry["staged"] = sum(1 for ln in status_lines if ln[:1].strip())
+        entry["untracked"] = sum(1 for ln in status_lines if ln.startswith("??"))
+        unpushed = _count_unpushed_commits(wt_path)
+        entry["unpublished_commits"] = unpushed if unpushed is not None else None
+        rc, out, _err = _git(["rev-parse", "HEAD"], wt_path)
+        entry["head_sha"] = out.strip() if rc == 0 else None
+        worktrees.append(entry)
+    return {
+        "ok": True,
+        "node_id": federation.node_id(),
+        "observed_at": time.time(),
+        "repo_path": repo_path,
+        "repo_identity": ident.get("identity"),
+        "repo_identity_kind": ident.get("kind"),
+        "default_branch": _federation_default_branch_view(repo_path),
+        "worktrees": worktrees,
+        "orphan_prs": wt_payload.get("orphan_prs", []),
+        "open_prs_count": wt_payload.get("open_prs_count", 0),
+    }, 200
+
+
+def _federation_self_api(method, api_path, body=None, query=None, timeout=60.0):
+    """Call one of THIS server's own endpoints over loopback. Used by the
+    route executor so peer-routed actions run through exactly the same
+    validation as local callers."""
+    url = f"http://127.0.0.1:{PORT}{api_path}"
+    if query:
+        pairs = {k: v for k, v in query.items() if v is not None}
+        if pairs:
+            url += "?" + urllib.parse.urlencode(pairs)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        try:
+            parsed = json.loads(e.read().decode("utf-8", "replace"))
+        except ValueError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            parsed.setdefault("ok", False)
+            parsed.setdefault("status", e.code)
+            return parsed
+        return {"ok": False, "status": e.code, "error": str(parsed)[:200]}
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": f"self-api call failed: {e}"}
+
+
+# action -> (method, path, mutating). Mutating actions are deduped by req_id
+# so a retried route envelope never double-executes an external effect.
+_FEDERATION_ROUTE_ACTIONS = {
+    "spawn": ("POST", "/api/sessions/spawn", True),
+    "inject": ("POST", "/api/inject-input", True),
+    "ask": ("POST", "/api/ask", False),
+    "group_chat_read": ("GET", "/api/group-chat/read", False),
+    "group_chat_post": ("POST", "/api/group-chat/post", True),
+    "group_chat_nudge": ("POST", "/api/group-chat/nudge", True),
+    "group_chat_add": ("POST", "/api/group-chat/add", True),
+    "group_chat_create": ("POST", "/api/coordinate", True),
+}
+
+
+def _federation_execute_route(envelope):
+    """Execute a routed action envelope on this node. Returns (payload, status)."""
+    if not isinstance(envelope, dict):
+        return {"ok": False, "error": "bad_request", "detail": "expected envelope object"}, 400
+    action = envelope.get("action") or ""
+    args = envelope.get("args") or {}
+    if not isinstance(args, dict):
+        return {"ok": False, "error": "bad_request", "detail": "args must be an object"}, 400
+    spec = _FEDERATION_ROUTE_ACTIONS.get(action)
+    if spec is None:
+        return {"ok": False, "error": "unsupported_capability",
+                "detail": f"unknown route action {action!r}"}, 400
+    try:
+        hops = int(envelope.get("hops", 0))
+    except (TypeError, ValueError):
+        hops = 0
+    if hops <= 0:
+        return {"ok": False, "error": "routing_loop",
+                "detail": "hop limit exhausted"}, 400
+    method, api_path, mutating = spec
+    req_id = str(envelope.get("req_id") or "")
+    if mutating and req_id:
+        prior = federation.check_and_record_request(req_id)
+        if prior is not None:
+            if "result" in prior:
+                return {"ok": True, "duplicate": True, "result": prior["result"]}, 200
+            return {"ok": False, "error": "duplicate_request_in_progress",
+                    "detail": "same req_id seen but no recorded result"}, 409
+    if action == "spawn":
+        # Placement was decided by the routing node; the owning node always
+        # executes locally (never re-forwards to its own CCC_SSH_HOST).
+        args = {**args, "remote": False}
+    timeout = 60.0
+    if action == "ask":
+        try:
+            timeout = min(630.0, max(30.0, float(args.get("timeout_ms") or 30000) / 1000.0 + 30.0))
+        except (TypeError, ValueError):
+            timeout = 60.0
+    if method == "GET":
+        result = _federation_self_api(method, api_path, query=args, timeout=timeout)
+    else:
+        result = _federation_self_api(method, api_path, body=args, timeout=timeout)
+    if mutating and req_id:
+        federation.record_request_result(req_id, result)
+    return {"ok": True, "result": result}, 200
+
+
+def _federation_handle_pair_request(data):
+    """Inbound pairing: a peer (which already proved loopback/SSH access)
+    introduces itself with a shared secret. Store it; return our identity."""
+    peer_node = str(data.get("node_id") or "").strip()
+    secret = str(data.get("secret") or "").strip()
+    if not peer_node or not secret:
+        return {"ok": False, "error": "bad_request",
+                "detail": "node_id and secret are required"}, 400
+    if peer_node == federation.node_id():
+        return {"ok": False, "error": "bad_request", "detail": "cannot pair with self"}, 400
+    transport = data.get("transport") or {"type": "unconfigured"}
+    try:
+        federation.upsert_peer({
+            "node_id": peer_node,
+            "name": str(data.get("display_name") or "peer")[:80],
+            "transport": transport,
+            "secret": secret,
+            "version": data.get("version"),
+            "caps": data.get("caps"),
+            "paired_by": "inbound",
+            "last_seen": datetime.now().astimezone().isoformat(timespec="seconds"),
+        })
+    except ValueError as e:
+        return {"ok": False, "error": "bad_request", "detail": str(e)}, 400
+    print(f"  [federation] Paired with node {peer_node[:8]}… ({data.get('display_name')})")
+    return {**_federation_self_hello(), "paired": True}, 200
+
+
+def _federation_pair_initiate(data):
+    """Outbound pairing: probe the peer's hello, generate a secret, register
+    ourselves with the peer, then store the peer locally."""
+    transport = data.get("transport") or {}
+    ttype = transport.get("type")
+    if ttype not in ("ssh", "loopback"):
+        return {"ok": False, "error": "bad_request",
+                "detail": "transport.type must be ssh or loopback"}, 400
+    if ttype == "loopback":
+        try:
+            port = int(transport.get("port") or 0)
+        except (TypeError, ValueError):
+            port = 0
+        if not port:
+            return {"ok": False, "error": "bad_request",
+                    "detail": "loopback transport requires a port"}, 400
+        if port == PORT:
+            return {"ok": False, "error": "bad_request",
+                    "detail": "that port is this server"}, 400
+    if ttype == "ssh" and not (transport.get("host") or "").strip():
+        return {"ok": False, "error": "bad_request",
+                "detail": "ssh transport requires a host"}, 400
+    probe = federation.PeerClient({"node_id": "pending", "transport": transport, "secret": ""})
+    try:
+        hello = probe.request("GET", "/api/federation/v1/hello", timeout=20)
+    except federation.PeerError as e:
+        return {"ok": False, "error": e.kind, "detail": str(e)}, 502
+    peer_node = hello.get("node_id")
+    if not peer_node:
+        return {"ok": False, "error": "bad_response",
+                "detail": "peer hello carried no node_id"}, 502
+    if peer_node == federation.node_id():
+        return {"ok": False, "error": "bad_request",
+                "detail": "that address is this node"}, 400
+    secret = federation.generate_pairing_secret()
+    reverse = data.get("reverse_transport")
+    if not reverse and ttype == "loopback":
+        reverse = {"type": "loopback", "port": PORT}
+    if not reverse:
+        reverse = {"type": "unconfigured"}
+    me = _federation_self_hello()
+    try:
+        probe.request("POST", "/api/federation/v1/pair", {
+            "node_id": me["node_id"],
+            "display_name": me["display_name"],
+            "secret": secret,
+            "version": me["version"],
+            "caps": me["caps"],
+            "transport": reverse,
+        }, timeout=20)
+    except federation.PeerError as e:
+        return {"ok": False, "error": e.kind, "detail": f"pair handshake failed: {e}"}, 502
+    stored_transport = dict(transport)
+    if not stored_transport.get("port") and hello.get("port"):
+        stored_transport["port"] = hello["port"]
+    entry = federation.upsert_peer({
+        "node_id": peer_node,
+        "name": str(data.get("name") or hello.get("display_name") or "peer")[:80],
+        "transport": stored_transport,
+        "secret": secret,
+        "version": hello.get("version"),
+        "caps": hello.get("caps"),
+        "paired_by": "outbound",
+        "last_seen": datetime.now().astimezone().isoformat(timespec="seconds"),
+    })
+    return {"ok": True, "peer": _federation_public_peer(entry)}, 200
+
+
+def _federation_public_peer(peer):
+    """Peer entry safe to hand to the browser — never leaks the secret."""
+    out = {k: v for k, v in peer.items() if k != "secret"}
+    out["has_secret"] = bool(peer.get("secret"))
+    return out
+
+
+def _federation_peers_public():
+    return {
+        "ok": True,
+        "self": _federation_self_hello(),
+        "peers": [_federation_public_peer(p) for p in federation.load_peers()],
+        "repo_map": federation.load_repo_map(),
+    }
+
+
+def _federation_test_peer(peer_node_id):
+    peer = federation.get_peer(peer_node_id)
+    if not peer:
+        return {"ok": False, "error": "unpaired_peer",
+                "detail": f"no paired peer {peer_node_id}"}, 404
+    client = federation.PeerClient(peer)
+    started = time.time()
+    try:
+        health = client.request("GET", "/api/federation/v1/health", timeout=20)
+    except federation.PeerError as e:
+        return {"ok": False, "error": e.kind, "detail": str(e),
+                "latency_ms": int((time.time() - started) * 1000)}, 502
+    _federation_touch_peer(peer_node_id, version=health.get("version"))
+    return {
+        "ok": True,
+        "health": health,
+        "latency_ms": int((time.time() - started) * 1000),
+    }, 200
+
+
+def _federation_handle_post(path, data, handler):
+    """Dispatch every /api/federation/* POST. Returns (payload, status)."""
+    # ---- peer-facing v1 protocol -----------------------------------------
+    if path == "/api/federation/v1/pair":
+        return _federation_handle_pair_request(data)
+    if path == "/api/federation/v1/unpair":
+        peer = _federation_require_peer(handler)
+        if peer is None:
+            return None, None
+        federation.remove_peer(peer["node_id"])
+        return {"ok": True, "unpaired": peer["node_id"]}, 200
+    if path == "/api/federation/v1/route":
+        peer = _federation_require_peer(handler)
+        if peer is None:
+            return None, None
+        _federation_touch_peer(peer["node_id"])
+        return _federation_execute_route(data)
+    # ---- local management (browser UI) ------------------------------------
+    if path == "/api/federation/peers/pair":
+        return _federation_pair_initiate(data)
+    if path == "/api/federation/peers/remove":
+        peer_node = str(data.get("node_id") or "").strip()
+        peer = federation.get_peer(peer_node)
+        if peer:
+            # Best-effort reciprocal unpair; local removal always proceeds.
+            try:
+                federation.PeerClient(peer).request(
+                    "POST", "/api/federation/v1/unpair", {}, timeout=10)
+            except federation.PeerError:
+                pass
+        removed = federation.remove_peer(peer_node)
+        return {"ok": True, "removed": removed}, 200
+    if path == "/api/federation/peers/rename":
+        peer_node = str(data.get("node_id") or "").strip()
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "bad_request", "detail": "name required"}, 400
+        updated = federation.update_peer(peer_node, name=name[:80])
+        if not updated:
+            return {"ok": False, "error": "unpaired_peer"}, 404
+        return {"ok": True, "peer": _federation_public_peer(updated)}, 200
+    if path == "/api/federation/peers/test":
+        return _federation_test_peer(str(data.get("node_id") or "").strip())
+    if path == "/api/federation/repo-map":
+        identity_key = str(data.get("identity") or "").strip()
+        local_path = data.get("local_path")
+        if not identity_key:
+            return {"ok": False, "error": "bad_request", "detail": "identity required"}, 400
+        try:
+            if local_path:
+                candidate = str(Path(str(local_path)).expanduser().resolve())
+                resolved = resolve_repo_path(candidate)
+                federation.map_repo(identity_key, resolved)
+            else:
+                federation.unmap_repo(identity_key)
+        except RepoContextError as e:
+            return {"ok": False, "error": e.code, "detail": str(e)}, e.status
+        except ValueError as e:
+            return {"ok": False, "error": "bad_request", "detail": str(e)}, 400
+        return {"ok": True, "repo_map": federation.load_repo_map()}, 200
+    if path == "/api/federation/node":
+        name = str(data.get("display_name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "bad_request", "detail": "display_name required"}, 400
+        try:
+            ident = federation.set_node_display_name(name)
+        except ValueError as e:
+            return {"ok": False, "error": "bad_request", "detail": str(e)}, 400
+        return {"ok": True, "node": ident}, 200
+    return {"ok": False, "error": "not_found"}, 404
 
 
 # ---------------------------------------------------------------------------

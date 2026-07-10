@@ -45746,6 +45746,140 @@
   if ($spawnDefaultsBackdrop) $spawnDefaultsBackdrop.addEventListener('click', closeSpawnDefaultsModal);
   if ($spawnDefaultsCancelBtn) $spawnDefaultsCancelBtn.addEventListener('click', closeSpawnDefaultsModal);
   if ($spawnDefaultsSaveBtn) $spawnDefaultsSaveBtn.addEventListener('click', saveSpawnDefaultsDraft);
+
+  // ── Car Mode (hands-free voice operator) ──────────────────────────────
+  // Explainer + cost + optional key setup + start/stop. Status/keys go through
+  // /api/car-mode/*; the server never echoes key values, only booleans.
+  const $carModeModal = document.getElementById('carModeModal');
+  const $carModeBackdrop = document.getElementById('carModeBackdrop');
+  const $carModeBanner = document.getElementById('carModeStatusBanner');
+  const $carModeAnthropicKey = document.getElementById('carModeAnthropicKey');
+  const $carModeDeepgramKey = document.getElementById('carModeDeepgramKey');
+  const $carModeError = document.getElementById('carModeError');
+  const $carModeCancelBtn = document.getElementById('carModeCancelBtn');
+  const $carModeSaveBtn = document.getElementById('carModeSaveBtn');
+  const $carModeStartBtn = document.getElementById('carModeStartBtn');
+  const $carModeStopBtn = document.getElementById('carModeStopBtn');
+  const $sidebarCarModeBtn = document.getElementById('sidebarCarModeBtn');
+  const $carModeMenuBtn = document.getElementById('carModeMenuBtn');
+  let carModePollTimer = null;
+
+  function carModeError(text) {
+    if (!$carModeError) return;
+    $carModeError.textContent = text || '';
+    $carModeError.classList.toggle('visible', !!text);
+  }
+  function renderCarModeStatus(d) {
+    d = d || {};
+    if ($sidebarCarModeBtn) $sidebarCarModeBtn.classList.toggle('car-mode-running', !!d.running);
+    if (!$carModeBanner) return;
+    let cls = 'warn', msg = '';
+    if (d.running) {
+      cls = 'running';
+      msg = '● Car Mode is running. Talk to it in the voice window, or press Stop.';
+    } else if (d.mode === 'voice') {
+      cls = 'ok';
+      msg = '✓ Ready for hands-free voice (both keys set). Press Start Car Mode.';
+    } else if (d.mode === 'degraded_no_deepgram') {
+      cls = 'warn';
+      msg = "Anthropic key set, Deepgram key missing → hands-free voice is off. Add a Deepgram key below, or use CCC's built-in browser mic / read-aloud (free).";
+    } else {
+      cls = 'warn';
+      msg = 'Add an Anthropic API key below to enable Car Mode (the dispatcher brain).';
+    }
+    $carModeBanner.className = 'car-mode-banner ' + cls;
+    $carModeBanner.textContent = msg;
+    $carModeBanner.style.display = '';
+    if ($carModeStartBtn) {
+      $carModeStartBtn.style.display = d.running ? 'none' : '';
+      $carModeStartBtn.disabled = d.mode !== 'voice';
+    }
+    if ($carModeStopBtn) $carModeStopBtn.style.display = d.running ? '' : 'none';
+    if ($carModeAnthropicKey) $carModeAnthropicKey.placeholder = d.anthropic_key_set ? 'stored ✓ — leave blank to keep it' : 'sk-ant-… (required)';
+    if ($carModeDeepgramKey) $carModeDeepgramKey.placeholder = d.deepgram_key_set ? 'stored ✓ — leave blank to keep it' : 'optional — enables hands-free voice';
+  }
+  async function fetchCarModeStatus() {
+    try {
+      const res = await fetch('/api/car-mode/status', { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      renderCarModeStatus(d);
+      return d;
+    } catch (_) { return null; }
+  }
+  function openCarModeModal() {
+    if (!$carModeModal) return;
+    carModeError('');
+    if ($carModeAnthropicKey) $carModeAnthropicKey.value = '';
+    if ($carModeDeepgramKey) $carModeDeepgramKey.value = '';
+    fetchCarModeStatus();
+    $carModeModal.classList.add('open');
+    if (carModePollTimer) clearInterval(carModePollTimer);
+    carModePollTimer = setInterval(fetchCarModeStatus, 3000);
+  }
+  function closeCarModeModal() {
+    if ($carModeModal) $carModeModal.classList.remove('open');
+    if (carModePollTimer) { clearInterval(carModePollTimer); carModePollTimer = null; }
+  }
+  async function saveCarModeKeys() {
+    carModeError('');
+    const payload = {};
+    if ($carModeAnthropicKey && $carModeAnthropicKey.value.trim()) payload.anthropic_api_key = $carModeAnthropicKey.value.trim();
+    if ($carModeDeepgramKey && $carModeDeepgramKey.value.trim()) payload.deepgram_api_key = $carModeDeepgramKey.value.trim();
+    if (!Object.keys(payload).length) { carModeError('Enter a key to save (blank fields keep the stored key).'); return; }
+    if ($carModeSaveBtn) { $carModeSaveBtn.disabled = true; $carModeSaveBtn.textContent = 'Saving…'; }
+    try {
+      const res = await fetch('/api/car-mode/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((d && d.error) || ('HTTP ' + res.status));
+      if ($carModeAnthropicKey) $carModeAnthropicKey.value = '';
+      if ($carModeDeepgramKey) $carModeDeepgramKey.value = '';
+      renderCarModeStatus(d);
+      showOpToast('Car Mode keys saved', 'ok');
+    } catch (err) {
+      carModeError((err && err.message) || 'Save failed.');
+    } finally {
+      if ($carModeSaveBtn) { $carModeSaveBtn.disabled = false; $carModeSaveBtn.textContent = 'Save keys'; }
+    }
+  }
+  async function startCarMode() {
+    carModeError('');
+    if ($carModeStartBtn) { $carModeStartBtn.disabled = true; $carModeStartBtn.textContent = 'Starting…'; }
+    try {
+      const res = await fetch('/api/car-mode/start', { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (d && d.ok === false) { carModeError(d.error || 'Could not start Car Mode.'); renderCarModeStatus(d); return; }
+      renderCarModeStatus(d);
+      showOpToast('Car Mode starting — the voice window will open', 'ok');
+    } catch (err) {
+      carModeError((err && err.message) || 'Start failed.');
+    } finally {
+      if ($carModeStartBtn) { $carModeStartBtn.textContent = 'Start Car Mode'; }
+      fetchCarModeStatus();
+    }
+  }
+  async function stopCarMode() {
+    carModeError('');
+    try {
+      const res = await fetch('/api/car-mode/stop', { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      renderCarModeStatus(d);
+      showOpToast('Car Mode stopped', 'ok');
+    } catch (err) {
+      carModeError((err && err.message) || 'Stop failed.');
+    } finally { fetchCarModeStatus(); }
+  }
+  if ($sidebarCarModeBtn) $sidebarCarModeBtn.addEventListener('click', openCarModeModal);
+  if ($carModeMenuBtn) $carModeMenuBtn.addEventListener('click', () => {
+    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    openCarModeModal();
+  });
+  if ($carModeBackdrop) $carModeBackdrop.addEventListener('click', closeCarModeModal);
+  if ($carModeCancelBtn) $carModeCancelBtn.addEventListener('click', closeCarModeModal);
+  if ($carModeSaveBtn) $carModeSaveBtn.addEventListener('click', saveCarModeKeys);
+  if ($carModeStartBtn) $carModeStartBtn.addEventListener('click', startCarMode);
+  if ($carModeStopBtn) $carModeStopBtn.addEventListener('click', stopCarMode);
+  // One status read at load so the sidebar 🚗 reflects a running instance.
+  fetchCarModeStatus();
   if ($spawnDefaultsEngine) $spawnDefaultsEngine.addEventListener('change', () => {
     if (!spawnDefaultsDraft) return;
     updateSpawnDefaultsDraftModelFromControls();
