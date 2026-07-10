@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CCC: Start the next while Claude builds the first</title>
-<meta name="description" content="One local dashboard for every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session. Spawn in parallel, ship in parallel. Local, open source, MIT.">
+<title>CCC: Your coding agents outgrew your terminal</title>
+<meta name="description" content="CCC puts every coding-agent session, every engine, however you launched it, on one local board and tells you which one needs you. Local, open source, MIT.">
 <link rel="canonical" href="https://ccc.amirfish.ai">
 
-<meta property="og:title" content="CCC: Start the next while Claude builds the first">
-<meta property="og:description" content="One local dashboard for Claude Code, Codex, Cursor, Antigravity, and Kilo Code sessions. Spawn in parallel, ship in parallel.">
+<meta property="og:title" content="CCC: Your coding agents outgrew your terminal">
+<meta property="og:description" content="Every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on one local board. See what needs you, steer any session, let work run unattended.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://ccc.amirfish.ai">
 <meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=5">
@@ -23,7 +23,7 @@
     --bg-4: #1c232b;
     --fg: #e6ebf2;
     --fg-dim: #9aa3ad;
-    --fg-mute: #6b727c;
+    --fg-mute: #7f8791;
     --line: #232830;
     --line-strong: #2e343d;
     --orange: #f5a623;
@@ -59,7 +59,7 @@
   .brand { font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 10px; }
   .brand .dot { display: inline-block; width: 8px; height: 8px; background: var(--orange); border-radius: 50%; box-shadow: 0 0 12px var(--orange); }
   .brand .version { font-size: 11px; color: var(--orange); background: var(--orange-soft); padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(245, 166, 35, 0.4); }
-  .nav-links { display: flex; gap: 22px; font-size: 14px; }
+  .nav-links { display: flex; gap: 22px; font-size: 14px; align-items: center; }
   .nav-links a { text-decoration: none; color: var(--fg-dim); }
   .nav-links a:hover { color: var(--fg); }
   .nav-links a.star {
@@ -87,7 +87,7 @@
   .eyebrow {
     font-family: var(--mono); font-size: 12px; color: var(--green-bright);
     letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 22px;
-    display: inline-flex; align-items: center; gap: 8px;
+    display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
   }
   .eyebrow .badge {
     background: var(--orange); color: #0a0d11;
@@ -98,12 +98,14 @@
     font-size: clamp(40px, 6vw, 68px);
     line-height: 1.02; letter-spacing: -0.025em;
     margin: 0 auto 24px; font-weight: 700;
-    max-width: 22ch;
+    max-width: 20ch;
   }
   h1.hero-title .orange { color: var(--orange); }
   h1.hero-title .green { color: var(--green-bright); }
-  .lede { font-size: 20px; color: var(--fg-dim); max-width: 60ch; margin: 0 auto 36px; }
+  .lede { font-size: 20px; color: var(--fg-dim); max-width: 62ch; margin: 0 auto 12px; }
+  .lede .tag { color: var(--fg); }
   .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  .hero .cta-row { margin-top: 24px; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 13px 22px; border-radius: 8px;
@@ -139,7 +141,7 @@
   .install-meta { margin-top: 14px; color: var(--fg-mute); font-size: 13px; font-family: var(--mono); }
   .install-meta .sep { color: var(--line-strong); margin: 0 8px; }
 
-  /* Demo block */
+  /* Demo block + shared framed media */
   .demo {
     margin: 60px auto 0; border: 1px solid var(--line);
     border-radius: 14px; overflow: hidden;
@@ -147,17 +149,17 @@
     box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.7);
     max-width: 1080px;
   }
-  .demo-bar {
+  .demo-bar, .frame-bar {
     display: flex; align-items: center; gap: 8px;
     padding: 11px 16px; background: var(--bg-3);
     border-bottom: 1px solid var(--line);
   }
-  .demo-bar .lights { display: flex; gap: 6px; }
-  .demo-bar .light { width: 12px; height: 12px; border-radius: 50%; }
-  .demo-bar .light.red { background: #ff5f57; }
-  .demo-bar .light.yel { background: #febc2e; }
-  .demo-bar .light.grn { background: #28c840; }
-  .demo-bar .url {
+  .demo-bar .lights, .frame-bar .lights { display: flex; gap: 6px; }
+  .demo-bar .light, .frame-bar .light { width: 12px; height: 12px; border-radius: 50%; }
+  .light.red { background: #ff5f57; }
+  .light.yel { background: #febc2e; }
+  .light.grn { background: #28c840; }
+  .demo-bar .url, .frame-bar .url {
     margin-left: 16px; font-family: var(--mono); font-size: 12px;
     color: var(--fg-mute);
   }
@@ -176,11 +178,7 @@
     100% { box-shadow: 0 0 0 0 rgba(77, 213, 153, 0); }
   }
   .demo-body { position: relative; aspect-ratio: 16 / 9; background: #0a0c0f; }
-  .demo-body img { display: block; width: 100%; height: 100%; object-fit: contain; background: #0a0c0f; }
-  .demo-placeholder {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: var(--fg-mute); font-family: var(--mono); font-size: 13px; text-align: center; padding: 24px;
-  }
+  .demo-body img, .demo-body video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; background: #0a0c0f; }
   .demo-link {
     text-align: center; margin-top: 16px;
     color: var(--fg-dim); font-size: 14px;
@@ -194,67 +192,88 @@
     letter-spacing: -0.015em; font-weight: 700;
   }
   section h2 .orange { color: var(--orange); }
-  section .section-lede { color: var(--fg-dim); max-width: 60ch; margin: 0 0 44px; font-size: 17px; }
+  section .section-lede { color: var(--fg-dim); max-width: 62ch; margin: 0 0 44px; font-size: 17px; }
   .section-eyebrow {
     font-family: var(--mono); font-size: 12px; color: var(--orange);
     letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 18px;
   }
 
-  /* What's new cards */
-  .news-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
-  @media (max-width: 860px) { .news-grid { grid-template-columns: 1fr; } }
-  .news-card {
-    padding: 28px; background: var(--bg-2);
+  /* The moment */
+  .moment-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  @media (max-width: 860px) { .moment-grid { grid-template-columns: 1fr; } }
+  .quote-card {
+    padding: 26px; background: var(--bg-2);
     border: 1px solid var(--line); border-radius: 12px;
-    display: flex; flex-direction: column; gap: 14px;
-    position: relative;
-    transition: border-color 120ms, transform 120ms;
+    display: flex; flex-direction: column;
   }
-  .news-card:hover { border-color: var(--line-strong); transform: translateY(-2px); }
-  .news-card.headline { border-color: rgba(245, 166, 35, 0.5); background: linear-gradient(180deg, var(--orange-soft), var(--bg-2)); }
-  .news-card .pill {
-    align-self: flex-start; font-family: var(--mono); font-size: 11px;
-    color: var(--orange); background: var(--orange-soft);
-    padding: 3px 10px; border-radius: 999px;
-    border: 1px solid rgba(245, 166, 35, 0.4);
-    letter-spacing: 0.05em;
-  }
-  .news-card h3 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
-  .news-card p { margin: 0; color: var(--fg-dim); font-size: 15px; }
-  .news-card .sub { color: var(--fg-mute); font-size: 12px; font-family: var(--mono); margin-top: auto; padding-top: 8px; }
+  .quote-card blockquote { margin: 0; font-size: 16px; line-height: 1.5; color: var(--fg); }
+  .quote-card .attr { margin-top: 16px; padding-top: 12px; font-family: var(--mono); font-size: 12px; color: var(--fg-mute); }
+  .moment-close { margin: 40px 0 0; font-size: 19px; color: var(--fg-dim); text-align: center; }
+  .moment-close strong { color: var(--fg); font-weight: 600; }
 
-  /* Features */
-  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
-  @media (max-width: 860px) { .features { grid-template-columns: 1fr; } }
-  .feature {
-    padding: 28px; background: var(--bg-2);
-    border: 1px solid var(--line); border-radius: 12px;
-    display: flex; flex-direction: column; gap: 14px;
-    transition: border-color 120ms, transform 120ms;
-  }
-  .feature:hover { border-color: var(--line-strong); transform: translateY(-2px); }
-  .feature .num {
+  /* Families intro */
+  .families-intro h2 .orange { color: var(--orange); }
+
+  /* Chapters */
+  .chapter { padding: 60px 0; border-top: 1px solid var(--line); }
+  .chapter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 52px; align-items: center; }
+  @media (max-width: 860px) { .chapter-grid { grid-template-columns: 1fr; gap: 28px; } }
+  @media (min-width: 861px) { .chapter--media-left .chapter-media { order: -1; } }
+  .chapter-eyebrow {
     font-family: var(--mono); font-size: 12px; color: var(--orange);
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 14px;
   }
-  .feature h3 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
-  .feature p { margin: 0; color: var(--fg-dim); font-size: 15px; }
-  .feature pre {
-    margin: 0; padding: 12px; background: var(--code-bg);
-    border: 1px solid var(--line); border-radius: 6px;
-    font-size: 12.5px; overflow-x: auto; color: var(--fg-dim);
-  }
+  .chapter-title { font-size: clamp(25px, 3.3vw, 35px); margin: 0 0 12px; letter-spacing: -0.015em; font-weight: 700; }
+  .chapter-promise { color: var(--fg-dim); font-size: 17px; margin: 0; max-width: 48ch; }
+  .chapter-highlights { list-style: none; margin: 22px 0 0; padding: 0; }
+  .chapter-highlights li { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.5; }
+  .chapter-highlights li:last-child { border-bottom: 0; }
+  .hl-pain { color: var(--fg); font-weight: 600; }
+  .hl-out { color: var(--fg-dim); }
 
-  /* Use cases */
-  .use-cases { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; }
-  @media (max-width: 860px) { .use-cases { grid-template-columns: 1fr; } }
-  .use-case {
-    padding: 28px; background: var(--bg-2);
-    border: 1px solid var(--line); border-radius: 12px;
+  .chapter-details { margin-top: 18px; border-top: 1px solid var(--line); }
+  .chapter-details summary {
+    cursor: pointer; padding: 14px 0 0; font-family: var(--mono);
+    font-size: 13px; color: var(--fg-dim);
   }
-  .use-case .who { font-family: var(--mono); font-size: 12px; color: var(--green-bright); letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 14px; }
-  .use-case h3 { margin: 0 0 10px; font-size: 18px; letter-spacing: -0.01em; }
-  .use-case p { margin: 0; color: var(--fg-dim); font-size: 15px; }
+  .chapter-details summary:hover { color: var(--fg); }
+  .chapter-details[open] summary { color: var(--orange); }
+  .mini-wrap { overflow-x: auto; }
+  table.mini { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; }
+  table.mini td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.mini tr:last-child td { border-bottom: 0; }
+  table.mini td:first-child { color: var(--fg); width: 44%; }
+  table.mini td:last-child { color: var(--fg-dim); }
+
+  /* Framed chapter media */
+  .chapter-frame {
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    background: var(--bg-2); box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.7);
+  }
+  .frame-bar { padding: 9px 14px; }
+  .frame-bar .light { width: 10px; height: 10px; }
+  .frame-bar .url { margin-left: 12px; font-size: 11px; }
+  .frame-body { position: relative; aspect-ratio: 16 / 9; background: #0a0c0f; }
+  .frame-body img, .frame-body video {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; object-position: top left; display: block;
+  }
+  .frame-video[hidden] { display: none; }
+  .media-cap {
+    margin-top: 12px; font-family: var(--mono); font-size: 12px;
+    color: var(--fg-mute); display: flex; align-items: center; gap: 8px;
+  }
+  .media-cap .play { color: var(--orange); }
+
+  /* F6 phone + side shot */
+  .f6-media { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .phone-frame {
+    width: 196px; max-width: 58%; flex: 0 0 auto;
+    border: 8px solid var(--bg-4); border-radius: 30px; overflow: hidden;
+    background: #0a0c0f; box-shadow: 0 30px 60px -28px rgba(0, 0, 0, 0.85);
+  }
+  .phone-frame img { display: block; width: 100%; height: auto; }
+  .f6-side { flex: 1 1 240px; min-width: 220px; }
 
   /* Comparison table */
   .compare-wrap { overflow-x: auto; }
@@ -295,11 +314,6 @@
     font-size: 13.5px; line-height: 1.55;
   }
   .install-block .req { margin-top: 14px; color: var(--fg-mute); font-size: 13px; }
-  .install-block .coming-soon {
-    display: inline-block; padding: 3px 8px; background: var(--bg-3);
-    color: var(--fg-mute); font-family: var(--mono); font-size: 11px;
-    border-radius: 4px; margin-left: 6px;
-  }
   .comment { color: var(--fg-mute); }
 
   /* Why block */
@@ -317,6 +331,16 @@
   .why-list li:last-child { border-bottom: 0; }
   .why-list li strong { color: var(--fg); display: block; margin-bottom: 4px; font-weight: 600; font-size: 14px; font-family: var(--mono); }
 
+  /* What's new strip */
+  .whats-new-strip { border-top: 1px solid var(--line); }
+  .wn-inner { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 22px 0; font-size: 14px; color: var(--fg-dim); }
+  .wn-inner .ver {
+    font-family: var(--mono); color: var(--orange); font-size: 12px;
+    border: 1px solid rgba(245, 166, 35, 0.4); background: var(--orange-soft);
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .wn-inner a { color: var(--orange); white-space: nowrap; }
+
   /* CTA banner */
   .cta-banner {
     text-align: center;
@@ -331,7 +355,7 @@
   /* Footer */
   footer { padding: 56px 0 80px; color: var(--fg-mute); font-size: 14px; }
   footer .foot-row { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
-  footer .links { display: flex; gap: 22px; }
+  footer .links { display: flex; gap: 22px; flex-wrap: wrap; }
   footer a { color: var(--fg-mute); text-decoration: none; }
   footer a:hover { color: var(--fg); }
   .star-line { margin-top: 28px; padding-top: 28px; border-top: 1px dashed var(--line); color: var(--fg-mute); font-size: 13px; }
@@ -399,6 +423,7 @@
       filter: none !important;
       animation: none !important;
     }
+    .demo-bar .live .pulse { animation: none !important; }
   }
 </style>
 </head>
@@ -409,15 +434,15 @@
     <div class="brand">
       <span class="dot"></span>
       <span>claude command center</span>
-      <span class="version">v5.5</span>
+      <span class="version">v5.6</span>
     </div>
     <nav class="nav-links">
-      <a href="#whats-new">What's new</a>
-      <a href="#features">Features</a>
+      <a href="#moment">The problem</a>
+      <a href="#families">What it solves</a>
       <a href="#compare">Compare</a>
       <a href="#install">Install</a>
       <a class="gh" href="/demo" rel="noopener">Demo</a>
-      <a class="star" href="https://github.com/amirfish1/claude-command-center" rel="noopener">★ Star on GitHub</a>
+      <a class="star" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; Star on GitHub</a>
     </nav>
   </div>
 </header>
@@ -426,34 +451,34 @@
   <section class="hero" style="border-top: 0;">
     <div class="wrap hero-inner">
       <div class="eyebrow fade-target">
-        <span class="badge">v5.5</span>
-        <span>Claude Code, Codex, Cursor, Antigravity, and Kilo Code</span>
+        <span class="badge">v5.6</span>
+        <span>Local &middot; Open source &middot; MIT &middot; For developers running many coding agents</span>
       </div>
       <h1 class="hero-title fade-target">
-        Start the next while <span class="orange">Claude</span> builds the first.
+        Your coding agents <span class="orange">outgrew</span> your terminal.
       </h1>
       <p class="lede fade-target">
-        One local dashboard for every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session. Spawn in parallel, ship in parallel, and keep the board attached to sessions you started anywhere.
+        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. <span class="tag">Start the next while Claude builds the first.</span>
       </p>
 
       <div class="cta-row fade-target">
-        <a class="btn btn-primary" href="#install">
-          Install <span class="arrow">&darr;</span>
+        <a class="btn btn-primary" href="/demo">
+          Tour the live demo <span class="arrow">&rarr;</span>
         </a>
-        <a class="btn btn-soft" href="/demo">Try the live demo</a>
-        <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">★ GitHub</a>
+        <a class="btn btn-soft" href="#install">Install</a>
+        <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; GitHub</a>
       </div>
 
       <div class="quick-install fade-target" id="quickInstall">
         <code id="quickCmd">curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing bash</code>
-        <button class="copy" type="button" data-target="quickCmd">copy</button>
+        <button class="copy" type="button" data-target="quickCmd" aria-live="polite">copy</button>
       </div>
 
       <div class="install-meta fade-target">
-        Or use <a href="#install" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">Homebrew / DMG</a> <span class="sep">·</span> macOS + Linux + Windows <span class="sep">·</span> No telemetry by default <span class="sep">·</span> MIT
+        Or use <a href="#install" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">Homebrew / DMG</a> <span class="sep">&middot;</span> macOS + Linux + Windows <span class="sep">&middot;</span> No telemetry by default <span class="sep">&middot;</span> MIT
       </div>
 
-      <div class="demo boot-target" aria-label="CCC dashboard demo">
+      <div class="demo boot-target" aria-label="CCC dashboard, fleet scan">
         <div class="demo-bar">
           <div class="lights">
             <span class="light red"></span>
@@ -461,127 +486,311 @@
             <span class="light grn"></span>
           </div>
           <span class="url">localhost:8090</span>
-          <span class="live"><span class="pulse"></span>3 sessions live · 12 total</span>
+          <span class="live"><span class="pulse"></span>3 sessions live &middot; 12 total</span>
         </div>
         <div class="demo-body">
-          <img src="./images/demo.png?v=7" alt="CCC dashboard showing Claude, Codex, Cursor, and Antigravity sessions in one view" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-          <div class="demo-placeholder" style="display:none;">
-            Open the read-only demo to see seeded sessions and workflows.
-          </div>
+          <img class="frame-fallback" src="./images/demo.png?v=7" alt="CCC dashboard listing Claude Code, Codex, Cursor, and Antigravity sessions across three repositories on one board" onerror="this.onerror=null; this.src='./images/demo.png';">
+          <video class="frame-video" poster="./product-story/assets/video/posters/V-01.png" muted loop playsinline preload="none" hidden aria-label="CCC fleet scan: the board, the kanban, and engine badges across live and waiting sessions">
+            <source src="./product-story/assets/video/V-01-fleet-scan.mp4" type="video/mp4">
+          </video>
         </div>
       </div>
       <div class="demo-link fade-target">
-        Or skip install, <a href="/demo">tour the read-only demo with seeded data &rarr;</a>
+        Nothing to install. All data in the demo is fake. <a href="/demo">Tour the read-only demo &rarr;</a>
       </div>
     </div>
   </section>
 
-  <section id="whats-new">
+  <section id="moment">
     <div class="wrap">
-      <div class="section-eyebrow fade-target">What's new · v5.5 · June 2026</div>
-      <h2 class="fade-target">The fleet runs <span class="orange">itself</span>.</h2>
+      <div class="section-eyebrow fade-target">The problem</div>
+      <h2 class="fade-target">The moment CCC is built for.</h2>
       <p class="section-lede fade-target">
-        v5.5 ships three capabilities that move CCC from "dashboard you watch" to "dashboard that works while you sleep": multi-agent group chats, an autonomous task queue, and a canvas that maps the whole operation.
+        Mid-afternoon, five terminals open. One agent finished an hour ago and nobody noticed. One is silently waiting on a question. One is about to run out of context mid-refactor. The bottleneck is no longer the model.
       </p>
 
-      <div class="news-grid stagger-grid">
-        <div class="news-card headline">
-          <span class="pill">★ Headline</span>
-          <h3>Group-chat coordination</h3>
-          <p>Multiple agent sessions read the same shared chat file and respond in turn. Drop a topic, add participants, and let the agents discuss, delegate, and deliver. No orchestration code.</p>
-          <div class="sub">// ~/.claude/group-chats/*.md</div>
+      <div class="moment-grid stagger-grid">
+        <div class="quote-card">
+          <blockquote>"Parallel sessions are the single biggest productivity unlock of this product, and today they're also the single biggest source of confusion."</blockquote>
+          <div class="attr">public issue, openai/codex</div>
         </div>
-        <div class="news-card">
-          <span class="pill">Watchtower</span>
-          <h3>Autonomous task queue</h3>
-          <p>Drop a ticket into the queue. A bound agent worker claims it, fixes it, commits, and moves to the next. A background watcher keeps the health strip green — stuck workers get nudged automatically.</p>
-          <div class="sub">// wt claim -q CCC --worker &lt;id&gt; --json</div>
+        <div class="quote-card">
+          <blockquote>"The bottleneck stopped being the models. It became me."</blockquote>
+          <div class="attr">every developer past three parallel sessions</div>
         </div>
-        <div class="news-card">
-          <span class="pill">Flow</span>
-          <h3>Canvas workspace</h3>
-          <p>Drag repos, sessions, group chats, and objects onto an infinite canvas. Edge-link related nodes. The board remembers your layout. Pan, zoom, and see the whole fleet at a glance.</p>
-          <div class="sub">// ?ccc_popout=flow</div>
+        <div class="quote-card">
+          <blockquote>"Used to find 8 orphaned sessions I'd forgotten about."</blockquote>
+          <div class="attr">CCC's author, before CCC</div>
         </div>
+      </div>
+
+      <p class="moment-close fade-target">If you have felt this, <strong>the rest of this page is for you.</strong></p>
+    </div>
+  </section>
+
+  <section id="families" class="families-intro">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">What it solves</div>
+      <h2 class="fade-target">Six problems that arrive in <span class="orange">order</span>.</h2>
+      <p class="section-lede fade-target">
+        The list grows the same way for everyone. First you cannot see every session. Then you cannot tell which one needs you. Then the flat list itself stops making sense. CCC answers them in that order, and each answer is a real capture from seeded demo data below.
+      </p>
+    </div>
+  </section>
+
+  <!-- F1 -->
+  <section class="chapter chapter--media-left" id="f1" aria-labelledby="f1-title">
+    <div class="wrap chapter-grid">
+      <div class="chapter-copy fade-target">
+        <div class="chapter-eyebrow">01 &middot; See everything</div>
+        <h2 class="chapter-title" id="f1-title">Nine terminals, five engines, one board.</h2>
+        <p class="chapter-promise">Every coding-agent session on your machine, on one local board, however you launched it.</p>
+        <ul class="chapter-highlights">
+          <li><span class="hl-pain">Resume a session by hand</span> <span class="hl-out">and it still appears. CCC reads each engine's on-disk state as truth, so it sees sessions it never spawned.</span></li>
+          <li><span class="hl-pain">One board for five engines.</span> <span class="hl-out">Claude Code is first-class; Codex, Cursor, Antigravity, and Kilo Code spawn and ingest with documented gaps.</span></li>
+          <li><span class="hl-pain">Close the dashboard</span> <span class="hl-out">and sessions keep running. Reopen tomorrow and everything reattaches.</span></li>
+          <li><span class="hl-pain">Forgotten work resurfaces.</span> <span class="hl-out">Dormant and archived sessions stay in the inventory with time-gap markers, so nothing is silently lost.</span></li>
+        </ul>
+        <details class="chapter-details">
+          <summary>Every way CCC helps here</summary>
+          <div class="mini-wrap">
+            <table class="mini">
+              <tr><td>Nine terminal tabs, no idea which session is which.</td><td>One local board listing every coding-agent session on the machine.</td></tr>
+              <tr><td>You resume a session by hand and your dashboard goes blind.</td><td>CCC reads each engine's on-disk state as truth; hand-launched and hand-resumed sessions appear automatically.</td></tr>
+              <tr><td>Old sessions pile up invisibly; you rediscover forgotten work weeks later.</td><td>Full inventory including dormant and archived sessions, with time-gap markers.</td></tr>
+              <tr><td>Work split across Claude Code, Codex, Cursor, Antigravity, and Kilo Code.</td><td>One board across engines. Claude Code is first-class; the other four spawn and ingest with documented gaps.</td></tr>
+              <tr><td>Closing the dashboard feels dangerous, so a tab stays open forever.</td><td>Sessions run independently; close the board, reopen tomorrow, everything reattaches.</td></tr>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div class="chapter-media fade-target">
+        <div class="chapter-frame">
+          <div class="frame-bar">
+            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+            <span class="url">localhost:8090</span>
+          </div>
+          <div class="frame-body">
+            <img class="frame-fallback" src="./product-story/assets/shots/S-OVR.png" alt="CCC board showing mixed live, waiting, and pull-request rows across three repositories with engine badges" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+            <video class="frame-video" poster="./product-story/assets/video/posters/V-01.png" muted loop playsinline preload="none" hidden aria-label="Scanning the fleet: list view, board view, engine badges, and live rows">
+              <source src="./product-story/assets/video/V-01-fleet-scan.mp4" type="video/mp4">
+            </video>
+          </div>
+        </div>
+        <div class="media-cap"><span class="play">&#9654;</span> Watch a 20-second fleet scan</div>
       </div>
     </div>
   </section>
 
-  <section id="features">
-    <div class="wrap">
-      <div class="section-eyebrow fade-target">What it does</div>
-      <h2 class="fade-target">Three things every other orchestrator <span class="orange">misses</span>.</h2>
-      <p class="section-lede fade-target">
-        Most tools want to own execution. You launch agents through them, and the moment you open a terminal and resume something by hand, the dashboard goes blind. CCC works the other way.
-      </p>
-
-      <div class="features stagger-grid">
-        <article class="feature">
-          <div class="num">01</div>
-          <h3>Sees every session, not just the ones it spawned.</h3>
-          <p>
-            CCC reads each engine's on-disk state as the source of truth. Open a terminal, resume a Claude or Codex session, or spawn from Cursor, Antigravity, or Kilo Code, and the row appears. Close the dashboard, sessions keep running.
-          </p>
-          <pre>~/.claude/projects/*.jsonl
-~/.claude/sessions/&lt;pid&gt;.json
-~/.claude/command-center/live-state/</pre>
-        </article>
-
-        <article class="feature">
-          <div class="num">02</div>
-          <h3>Pin strategy on top, fan out sub-sessions below.</h3>
-          <p>
-            Pin five strategy sessions at the top. Each one spawns sub-sessions for execution. Strategy stays visible. Execution fans out under it. The workflow most people invent the hard way after their tenth session.
-          </p>
-          <pre>📌 launch coordination    [CLAUDE]
-📌 product roadmap        [CLAUDE]
-  └─ draft post           [CLAUDE]
-  └─ render video         [AGY]
-  └─ QC draft             [CODEX]</pre>
-        </article>
-
-        <article class="feature">
-          <div class="num">03</div>
-          <h3>GitHub and headless built in.</h3>
-          <p>
-            One click turns a GitHub issue into a session. Verify closes the issue with a commit-SHA comment. Spawn headless agent sessions from the dashboard and keep typing at them from the browser.
-          </p>
-          <pre>gh issue → session → PR → verify
-claude -p --input-format stream-json
-agy --conversation &lt;sid&gt;</pre>
-        </article>
+  <!-- F2 -->
+  <section class="chapter" id="f2" aria-labelledby="f2-title">
+    <div class="wrap chapter-grid">
+      <div class="chapter-copy fade-target">
+        <div class="chapter-eyebrow">02 &middot; Know what needs you</div>
+        <h2 class="chapter-title" id="f2-title">An agent asked you a question 40 minutes ago.</h2>
+        <p class="chapter-promise">Questions waiting, context running out, limits approaching. Surfaced, not discovered.</p>
+        <ul class="chapter-highlights">
+          <li><span class="hl-pain">An agent asked and nobody saw.</span> <span class="hl-out">The needs-attention lane flags sessions ending on a real question, including plain-prose ones, with desktop notifications on macOS.</span></li>
+          <li><span class="hl-pain">A context window fills silently.</span> <span class="hl-out">A per-session meter warns at danger levels before it costs you a session, with one click through to compact.</span></li>
+          <li><span class="hl-pain">Rate limits sneak up.</span> <span class="hl-out">Usage windows for Claude plans and Codex limits project your pace so you budget the day.</span></li>
+          <li><span class="hl-pain">Every session runs the same model.</span> <span class="hl-out">The model advisor scores reasoning load and suggests an up- or downgrade.</span></li>
+        </ul>
+        <details class="chapter-details">
+          <summary>Every way CCC helps here</summary>
+          <div class="mini-wrap">
+            <table class="mini">
+              <tr><td>An agent asked "want me to proceed?" 40 minutes ago and you never saw it.</td><td>Attention detection flags sessions ending on a real question, including plain-prose ones, plus desktop notifications on macOS.</td></tr>
+              <tr><td>A session dies mid-task because its context window silently filled.</td><td>Per-session context meter with warning and danger levels; click through to compact.</td></tr>
+              <tr><td>No idea how close you are to your plan's rate limits.</td><td>Usage windows for Claude plans and Codex limits, with pace projections.</td></tr>
+              <tr><td>Every session runs the same model whether the task needs it or not.</td><td>Model advisor scores transcript reasoning load and suggests up- or downgrades.</td></tr>
+              <tr><td>You cannot say what your agent fleet actually produced this week.</td><td>Throughput view: token-weighted output over time, per engine, week by week.</td></tr>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div class="chapter-media fade-target">
+        <div class="chapter-frame">
+          <div class="frame-bar">
+            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+            <span class="url">localhost:8090 &middot; needs attention</span>
+          </div>
+          <div class="frame-body">
+            <img class="frame-fallback" src="./product-story/assets/shots/S-F2a.png" alt="The needs-attention lane with a session flagged as waiting on a question, next to per-session context meters" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+          </div>
+        </div>
+        <div class="media-cap">Needs-attention lane with a question-waiting session</div>
       </div>
     </div>
   </section>
 
-  <section id="use-cases">
-    <div class="wrap">
-      <div class="section-eyebrow fade-target">Who it's for</div>
-      <h2 class="fade-target">If you've felt this, CCC is for you.</h2>
-      <p class="section-lede fade-target">
-        The audience is anyone who tried to run more than 10 agent sessions and felt the bottleneck stop being the model and start being them.
-      </p>
+  <!-- F3 -->
+  <section class="chapter chapter--media-left" id="f3" aria-labelledby="f3-title">
+    <div class="wrap chapter-grid">
+      <div class="chapter-copy fade-target">
+        <div class="chapter-eyebrow">03 &middot; Organize the fleet</div>
+        <h2 class="chapter-title" id="f3-title">Thirty sessions is not a list problem.</h2>
+        <p class="chapter-promise">Pin strategy, nest execution, arrange the whole operation on a canvas.</p>
+        <ul class="chapter-highlights">
+          <li><span class="hl-pain">Thirty rows in a flat list mean nothing.</span> <span class="hl-out">Kanban states, a project tree, and a Flow canvas give the operation a shape.</span></li>
+          <li><span class="hl-pain">Strategy sinks under execution.</span> <span class="hl-out">Pin strategy sessions to the top and spawned sub-sessions nest beneath them.</span></li>
+          <li><span class="hl-pain">Comparing two transcripts is window Tetris.</span> <span class="hl-out">Split pane puts two conversations side by side, each with its own input bar.</span></li>
+          <li><span class="hl-pain">"What did I decide last week?"</span> <span class="hl-out">Search across all session history from the sidebar returns it in seconds.</span></li>
+        </ul>
+        <details class="chapter-details">
+          <summary>Every way CCC helps here</summary>
+          <div class="mini-wrap">
+            <table class="mini">
+              <tr><td>Strategy sessions sink under a pile of execution sessions.</td><td>Pin sessions to the top; spawned sub-sessions nest underneath them.</td></tr>
+              <tr><td>Thirty rows in a flat list mean nothing.</td><td>Kanban states (Working, Review, In Testing, Verified, Archived) with drag-and-drop and multi-select.</td></tr>
+              <tr><td>Sessions belong to projects and features, not just columns.</td><td>Project tree: group sessions under nestable named objects.</td></tr>
+              <tr><td>You want the whole operation laid out spatially, like a whiteboard.</td><td>Flow canvas: drag repos, sessions, group chats, and objects on an infinite zoomable board with edges.</td></tr>
+              <tr><td>Comparing two transcripts means window Tetris.</td><td>Split pane: two conversations side by side, each with its own input bar.</td></tr>
+              <tr><td>"What did I decide about this last week?" takes minutes of grep.</td><td>Search across all session history from the sidebar.</td></tr>
+              <tr><td>Auto-generated session titles are useless slugs.</td><td>One-click AI-regenerated titles.</td></tr>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div class="chapter-media fade-target">
+        <div class="chapter-frame">
+          <div class="frame-bar">
+            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+            <span class="url">localhost:8090 &middot; flow</span>
+          </div>
+          <div class="frame-body">
+            <img class="frame-fallback" src="./product-story/assets/shots/S-F3d.png" alt="The Flow canvas with repos, sessions, and group chats arranged as nodes with edges drawn between them" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+            <video class="frame-video" poster="./product-story/assets/video/posters/V-07.png" muted loop playsinline preload="none" hidden aria-label="Flow canvas: panning, zooming, dragging a node, and drawing an edge">
+              <source src="./product-story/assets/video/V-07-flow-canvas.mp4" type="video/mp4">
+            </video>
+          </div>
+        </div>
+        <div class="media-cap"><span class="play">&#9654;</span> Watch the Flow canvas pan, zoom, and link</div>
+      </div>
+    </div>
+  </section>
 
-      <div class="use-cases stagger-grid">
-        <div class="use-case">
-          <div class="who">Solo product builder</div>
-          <h3>Shipping two products in parallel</h3>
-          <p>Two repos in flight. Claude builds feature A while Codex refactors feature B while Cursor or Antigravity drafts the migration. You pin the two strategy sessions and the sub-sessions are visible across both.</p>
+  <!-- F4 -->
+  <section class="chapter" id="f4" aria-labelledby="f4-title">
+    <div class="wrap chapter-grid">
+      <div class="chapter-copy fade-target">
+        <div class="chapter-eyebrow">04 &middot; Steer without orchestration code</div>
+        <h2 class="chapter-title" id="f4-title">Steer every agent from one composer.</h2>
+        <p class="chapter-promise">Type into any session. Let agents talk in group chats. No orchestrator to write.</p>
+        <ul class="chapter-highlights">
+          <li><span class="hl-pain">A dormant session needs one more instruction.</span> <span class="hl-out">Type into any session from the browser and dormant ones auto-resume to receive it.</span></li>
+          <li><span class="hl-pain">You want agents to divide work.</span> <span class="hl-out">Group chats let multiple sessions share a thread and auto-ping each other to respond in turn.</span></li>
+          <li><span class="hl-pain">Headless spawning loses the follow-up.</span> <span class="hl-out">Dashboard-spawned headless sessions keep their input open, so fire-and-forget becomes fire-and-steer.</span></li>
+          <li><span class="hl-pain">Retyping the same kickoff prompt.</span> <span class="hl-out">A template gallery makes consistent spawns one click.</span></li>
+        </ul>
+        <details class="chapter-details">
+          <summary>Every way CCC helps here</summary>
+          <div class="mini-wrap">
+            <table class="mini">
+              <tr><td>A dormant session needs one more instruction; reopening a terminal is a chore.</td><td>Type into any session from the browser; dormant ones auto-resume to receive it.</td></tr>
+              <tr><td>You want agents to discuss and divide work, without writing an orchestrator.</td><td>Group chats: multiple sessions share a chat and are auto-pinged to respond in turn.</td></tr>
+              <tr><td>One agent needs another agent's answer right now.</td><td>Sessions can ask a sibling synchronously over a local API and get the reply back.</td></tr>
+              <tr><td>Headless spawning means losing the ability to follow up.</td><td>Dashboard-spawned headless sessions keep input open; keep typing at them from the browser.</td></tr>
+              <tr><td>You retype the same kickoff prompt for every new session.</td><td>Template gallery for reusable spawn prompts.</td></tr>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div class="chapter-media fade-target">
+        <div class="chapter-frame">
+          <div class="frame-bar">
+            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+            <span class="url">localhost:8090 &middot; group chat</span>
+          </div>
+          <div class="frame-body">
+            <img class="frame-fallback" src="./product-story/assets/shots/S-F4b.png" alt="A group chat with several agent sessions taking turns in one shared thread" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+          </div>
         </div>
-        <div class="use-case">
-          <div class="who">Agency lead</div>
-          <h3>Orchestrating four client codebases</h3>
-          <p>Each client gets a pinned strategy session. Spawn sub-sessions per ticket from their GitHub issues. The "All repos" view shows everything in flight across every client, with PR badges and time-gap markers.</p>
+        <div class="media-cap">Group chat with multiple agent participants</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- F5 -->
+  <section class="chapter chapter--media-left" id="f5" aria-labelledby="f5-title">
+    <div class="wrap chapter-grid">
+      <div class="chapter-copy fade-target">
+        <div class="chapter-eyebrow">05 &middot; Let work run unattended</div>
+        <h2 class="chapter-title" id="f5-title">Tickets in. Verified closures out.</h2>
+        <p class="chapter-promise">Queues that drain, issues that close verified, deploys that fix themselves.</p>
+        <ul class="chapter-highlights">
+          <li><span class="hl-pain">Drop tickets in a queue overnight.</span> <span class="hl-out">A bound worker claims, fixes, verifies, and closes them while you sleep.</span></li>
+          <li><span class="hl-pain">A worker gets stuck and nothing notices.</span> <span class="hl-out">A queue-health watcher judges stuck queues from ground truth and nudges workers automatically.</span></li>
+          <li><span class="hl-pain">A GitHub issue should become a session in one click.</span> <span class="hl-out">It does, and verify closes the issue with a commit-SHA comment.</span></li>
+          <li><span class="hl-pain">Production breaks while you sleep.</span> <span class="hl-out">Optional Vercel watch spawns a fix session on a failed deploy. Opt-in, requires the Vercel CLI.</span></li>
+        </ul>
+        <details class="chapter-details">
+          <summary>Every way CCC helps here</summary>
+          <div class="mini-wrap">
+            <table class="mini">
+              <tr><td>You want to drop tickets in a queue and have agents drain it overnight.</td><td>Work queue with claim, fix, verify, close lifecycle and bound agent workers.</td></tr>
+              <tr><td>A worker got stuck an hour ago and nothing noticed.</td><td>Queue-health watcher flags stuck queues from ground truth and nudges workers automatically.</td></tr>
+              <tr><td>Filing a bug from your running app takes ten steps.</td><td>Annotate mode: click an element in your app, type a note, it becomes a queue ticket.</td></tr>
+              <tr><td>A GitHub issue should become a working session with one click.</td><td>Issue board: one click spawns a session on the issue; verify closes it with a commit-SHA comment. Requires the gh CLI.</td></tr>
+              <tr><td>Parallel agents on one repo clobber each other's working tree.</td><td>One-click fresh git worktrees per task, with optional repo init scripts.</td></tr>
+              <tr><td>Production breaks while you sleep.</td><td>Optional Vercel watch: new failed prod deploys auto-spawn a fix session, deduped by commit. Opt-in, requires the Vercel CLI.</td></tr>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div class="chapter-media fade-target">
+        <div class="chapter-frame">
+          <div class="frame-bar">
+            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+            <span class="url">localhost:8090 &middot; work queue</span>
+          </div>
+          <div class="frame-body">
+            <img class="frame-fallback" src="./product-story/assets/shots/S-F5a.png" alt="The work queue with tickets moving through claimed, fixing, verified, and closed states" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+          </div>
         </div>
-        <div class="use-case">
-          <div class="who">Research engineer</div>
-          <h3>Running multi-agent experiments</h3>
-          <p>Spawn a research swarm: 10 parallel Claude sessions each evaluating a different hypothesis. Per-turn auto-summaries let you scan 10 transcripts in two minutes instead of reading each one. Group-chat sessions coordinate.</p>
-        </div>
-        <div class="use-case">
-          <div class="who">Open source maintainer</div>
-          <h3>Turning issues into PRs faster</h3>
-          <p>Triage issues into the kanban. One click spawns a headless session against the issue. Rows move Working → Review → In Testing automatically as the agent ships. Then you review, not write.</p>
+        <div class="media-cap">Work queue with tickets across its lifecycle</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- F6 -->
+  <section class="chapter" id="f6" aria-labelledby="f6-title">
+    <div class="wrap chapter-grid">
+      <div class="chapter-copy fade-target">
+        <div class="chapter-eyebrow">06 &middot; Work from anywhere</div>
+        <h2 class="chapter-title" id="f6-title">The fleet stays home. You don't have to.</h2>
+        <p class="chapter-promise">Phone in hand or a different machine entirely. The fleet does not care where you are.</p>
+        <ul class="chapter-highlights">
+          <li><span class="hl-pain">Phone in hand.</span> <span class="hl-out">A responsive mobile UI shows the whole fleet and lets you steer any session from your network.</span></li>
+          <li><span class="hl-pain">A different machine entirely.</span> <span class="hl-out">Continue-on-another-machine hands a session off atomically, repo state and transcript included, to a paired peer.</span></li>
+          <li><span class="hl-pain">The fleet does not care where you are.</span> <span class="hl-out">Check it from the couch, pick it up at another desk.</span></li>
+        </ul>
+        <details class="chapter-details">
+          <summary>Every way CCC helps here</summary>
+          <div class="mini-wrap">
+            <table class="mini">
+              <tr><td>You stepped away; the fleet kept going; your phone shows nothing.</td><td>Responsive mobile UI: monitor and steer sessions from a phone on your network.</td></tr>
+              <tr><td>The session you need lives on the other machine.</td><td>Continue-on-another-machine: atomic handoff of a session, repo state and transcript included, to a paired peer.</td></tr>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div class="chapter-media fade-target">
+        <div class="f6-media">
+          <div class="phone-frame">
+            <img src="./product-story/assets/mobile/M-01.png" alt="CCC session list on a phone-width screen, showing live and waiting sessions" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+          </div>
+          <div class="f6-side">
+            <div class="chapter-frame">
+              <div class="frame-bar">
+                <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+                <span class="url">handoff</span>
+              </div>
+              <div class="frame-body">
+                <img class="frame-fallback" src="./product-story/assets/shots/S-F6a.png" alt="The continue-on-another-machine handoff dialog, ready to move a session to a paired peer" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+              </div>
+            </div>
+            <div class="media-cap">Continue on another machine, atomically</div>
+          </div>
         </div>
       </div>
     </div>
@@ -600,7 +809,7 @@ agy --conversation &lt;sid&gt;</pre>
           <thead>
             <tr>
               <th></th>
-              <th class="us">CCC v5.5</th>
+              <th class="us">CCC v5.6</th>
               <th>claude-squad</th>
               <th>Conductor</th>
               <th>Sculptor</th>
@@ -609,64 +818,64 @@ agy --conversation &lt;sid&gt;</pre>
           <tbody>
             <tr>
               <td>Sees terminal sessions you didn't spawn</td>
-              <td class="yes">✓</td>
+              <td class="yes">&#10003;</td>
               <td class="no">no</td>
               <td class="no">no</td>
               <td class="no">no</td>
             </tr>
             <tr>
               <td>Multi-engine dashboard</td>
-              <td class="yes">✓ Claude, Codex, Cursor, Antigravity, Kilo</td>
+              <td class="yes">&#10003; Claude, Codex, Cursor, Antigravity, Kilo</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
               <td class="partial">Claude + Codex</td>
             </tr>
             <tr>
               <td>Antigravity app-session input (local RPC)</td>
-              <td class="yes">✓</td>
+              <td class="yes">&#10003;</td>
               <td class="no">no</td>
               <td class="no">no</td>
               <td class="no">no</td>
             </tr>
             <tr>
               <td>Row pinning + sub-session hierarchy</td>
-              <td class="yes">✓</td>
+              <td class="yes">&#10003;</td>
               <td class="no">no</td>
               <td class="no">no</td>
               <td class="no">no</td>
             </tr>
             <tr>
-              <td>GitHub issue → session in one click</td>
-              <td class="yes">✓</td>
+              <td>GitHub issue to session in one click</td>
+              <td class="yes">&#10003;</td>
               <td class="no">no</td>
               <td class="no">no</td>
               <td class="no">no</td>
             </tr>
             <tr>
               <td>Local. Survives dashboard close.</td>
-              <td class="yes">✓</td>
-              <td class="yes">✓</td>
-              <td class="yes">✓</td>
-              <td class="yes">✓</td>
+              <td class="yes">&#10003;</td>
+              <td class="yes">&#10003;</td>
+              <td class="yes">&#10003;</td>
+              <td class="yes">&#10003;</td>
             </tr>
             <tr>
-              <td>Source you can read in an afternoon</td>
-              <td class="yes">✓ stdlib</td>
+              <td>Readable source, no build step</td>
+              <td class="yes">&#10003; stdlib Python + one HTML page</td>
               <td class="partial">Go</td>
               <td class="no">closed</td>
               <td class="no">docs only</td>
             </tr>
             <tr>
               <td>Native-ish install path</td>
-              <td class="yes">✓ DMG + Homebrew</td>
+              <td class="yes">&#10003; DMG + Homebrew</td>
               <td class="no">CLI</td>
-              <td class="yes">✓</td>
-              <td class="yes">✓</td>
+              <td class="yes">&#10003;</td>
+              <td class="yes">&#10003;</td>
             </tr>
             <tr>
               <td>Windows / Linux</td>
-              <td class="partial">macOS + headless Linux</td>
-              <td class="yes">✓</td>
+              <td class="partial">macOS first-class, Linux headless, native Windows install (v5.6)</td>
+              <td class="yes">&#10003;</td>
               <td class="no">macOS</td>
               <td class="partial">macOS + Linux</td>
             </tr>
@@ -710,7 +919,7 @@ open http://localhost:8090
 <span class="comment"># or via Homebrew</span>
 brew tap amirfish1/ccc
 brew install ccc</pre>
-          <p class="req">DMG is notarized and signed by Apple — drag, drop, double-click. Homebrew installs the <code>ccc</code> command and can run CCC as a background service.</p>
+          <p class="req">DMG is notarized and signed by Apple. Drag, drop, double-click. Homebrew installs the <code>ccc</code> command and can run CCC as a background service.</p>
         </div>
       </div>
     </div>
@@ -733,12 +942,22 @@ brew install ccc</pre>
           </p>
         </div>
         <ul class="why-list fade-target">
-          <li><strong>Architecture</strong>One Python file (stdlib HTTP server). One HTML file (vanilla JS, no build). Read the whole product in an afternoon.</li>
+          <li><strong>Architecture</strong>One Python file (stdlib only, no pip installs). One HTML page (vanilla JS, no build). Nothing hidden, nothing to audit but the source in front of you.</li>
           <li><strong>State</strong>Human-readable JSON sidecars under <code>~/.claude/command-center/</code>. Rewriteable by hand.</li>
-          <li><strong>Workers</strong>Zero. Every API request rescans Claude's session directories and returns a flat list. No background jobs to babysit.</li>
+          <li><strong>Workers</strong>No required background jobs. The optional queue watcher only runs when you use the work queue.</li>
           <li><strong>Telemetry</strong>Anonymous, opt-in, off by default. Five fields, all bounded. Inspectable locally. Source of the worker is in the repo.</li>
-          <li><strong>Scope</strong>Local dev tool. macOS desktop and headless Linux. No hosted multi-user control plane. Expose it only on trusted loopback or a private network.</li>
+          <li><strong>Scope</strong>Local dev tool. macOS desktop, headless Linux, native Windows install. No hosted multi-user control plane. Expose it only on trusted loopback or a private network.</li>
         </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="whats-new-strip" id="whats-new" style="padding: 0;">
+    <div class="wrap">
+      <div class="wn-inner fade-target">
+        <span class="ver">v5.6.0</span>
+        <span>2026-07-08 &middot; Native Windows install, Codex reasoning-effort picker, faster history loading.</span>
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Full changelog &rarr;</a>
       </div>
     </div>
   </section>
@@ -747,10 +966,10 @@ brew install ccc</pre>
 <section class="cta-banner">
   <div class="wrap-narrow">
     <h2 class="fade-target">Stop staring at the spinner.</h2>
-    <p class="fade-target">If you've ever forgotten which Claude tab was waiting on you, you already know why this exists. Two-line install. Local. Open source.</p>
+    <p class="fade-target">Every session on one local board, and the one that needs you surfaced. Start the next while Claude builds the first. Two-line install, local, open source.</p>
     <div class="cta-row fade-target">
       <a class="btn btn-primary" href="#install">Install <span class="arrow">&rarr;</span></a>
-      <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">★ Star on GitHub</a>
+      <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; Star on GitHub</a>
     </div>
   </div>
 </section>
@@ -765,6 +984,7 @@ brew install ccc</pre>
       <div class="links">
         <a href="https://github.com/amirfish1/claude-command-center">GitHub</a>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/product-story/pain-feature-proof.md">Product story</a>
         <a href="https://github.com/amirfish1/claude-command-center/issues">Issues</a>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md">Telemetry</a>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md">Security</a>
@@ -779,6 +999,7 @@ brew install ccc</pre>
 </footer>
 
 <script>
+  // Copy-to-clipboard on the quick-install command.
   document.querySelectorAll('.copy[data-target]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const target = document.getElementById(btn.dataset.target);
@@ -799,13 +1020,24 @@ brew install ccc</pre>
     });
   });
 
-  // Scroll-reveal: add .is-visible when an element enters the viewport.
-  // Fires once per element, then unobserves.
   document.addEventListener('DOMContentLoaded', () => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Reveal video over its fallback poster once it actually starts playing.
+    const frameVideos = document.querySelectorAll('.frame-video');
+    frameVideos.forEach(v => {
+      v.addEventListener('playing', () => {
+        v.hidden = false;
+        const fb = v.parentElement.querySelector('.frame-fallback');
+        if (fb) fb.style.opacity = '0';
+      });
+    });
+
+    // Scroll-reveal: add .is-visible when an element enters the viewport.
     const targets = document.querySelectorAll('.fade-target, .boot-target, .wipe-target, .stagger-grid');
 
-    if (reduceMotion) {
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      // Reduced motion: everything visible, no video autoplay (posters stay).
       targets.forEach(el => el.classList.add('is-visible'));
       return;
     }
@@ -820,6 +1052,22 @@ brew install ccc</pre>
     }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
 
     targets.forEach(el => observer.observe(el));
+
+    // Play videos only while visible; pause when they scroll away. If a source
+    // is missing, play() rejects and the fallback screenshot stays in place.
+    const videoObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        const v = entry.target;
+        if (entry.isIntersecting) {
+          const p = v.play();
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        } else if (!v.paused) {
+          v.pause();
+        }
+      });
+    }, { threshold: 0.35 });
+
+    frameVideos.forEach(v => videoObserver.observe(v));
   });
 </script>
 </body>
