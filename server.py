@@ -3549,6 +3549,8 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
     "codex_state",
     "codex_fresh",
     "codex_state_reason",
+    "codex_writer",
+    "codex_desktop_attached",
     "needs_approval",
     "needs_approval_message",
     "question_waiting",
@@ -23301,6 +23303,14 @@ def _get_queued_events_for_session(session_id):
             "images": [],
             "pending": True
         })
+    # Codex threads also surface durable desktop↔CCC coordination events
+    # (external turn detected, input queued, CCC turn boundaries) so the
+    # ownership story is part of the conversation, not just transient status.
+    try:
+        if _detect_session_engine(session_id) == "codex":
+            events.extend(_get_codex_coordination_events_for_session(session_id))
+    except Exception:
+        pass
     return events
 
 _BUSY_SESSION_STATUSES = {"busy", "running"}
@@ -24808,12 +24818,17 @@ def resume_session_codex(session_id, text, *, steer=False):
     if app_result.get("ok"):
         return app_result
     if app_result.get("fallback") == "queue":
-        return _queue_codex_resume(
+        queued = _queue_codex_resume(
             session_id,
             text,
             pid=(active_resume_entry or {}).get("pid"),
             reason=app_result.get("error"),
         )
+        if app_result.get("writer"):
+            queued["writer"] = app_result["writer"]
+        if app_result.get("desktop_attached"):
+            queued["desktop_attached"] = True
+        return queued
     if active_resume_entry is not None:
         return _queue_codex_resume(session_id, text, pid=active_resume_entry.get("pid"))
     if cwd_error is not None:
@@ -57788,7 +57803,13 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, f
         entry["staged"] = sum(1 for ln in status_lines if ln[:1].strip())
         entry["untracked"] = sum(1 for ln in status_lines if ln.startswith("??"))
         unpushed = _count_unpushed_commits(wt_path)
-        entry["unpublished_commits"] = unpushed if unpushed is not None else None
+        if unpushed is None:
+            # No upstream configured — count commits unreachable from EVERY
+            # origin ref, the honest definition of "unpublished".
+            rc, out, _err = _git(["rev-list", "--count", "HEAD",
+                                  "--not", "--remotes=origin"], wt_path)
+            unpushed = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
+        entry["unpublished_commits"] = unpushed
         rc, out, _err = _git(["rev-parse", "HEAD"], wt_path)
         entry["head_sha"] = out.strip() if rc == 0 else None
         worktrees.append(entry)
