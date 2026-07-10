@@ -46060,6 +46060,310 @@
     }
   });
 
+  // Federation "Nodes & peers" modal — manage this node's identity, the
+  // paired peers (SSH / loopback transports) and the repo-identity →
+  // local-path map. Backend: /api/federation/* (see federation.py). The
+  // modal fetches fresh state on open and simply re-fetches after every
+  // mutation; pairing secrets never reach the browser (has_secret only).
+  const $fedBtn = document.getElementById('federationPeersBtn');
+  const $fedModal = document.getElementById('fedPeersModal');
+  const $fedBackdrop = document.getElementById('fedPeersBackdrop');
+  const $fedCloseBtn = document.getElementById('fedPeersCloseBtn');
+  const $fedError = document.getElementById('fedPeersError');
+  const $fedSelfName = document.getElementById('fedSelfName');
+  const $fedSelfNameSave = document.getElementById('fedSelfNameSave');
+  const $fedSelfMeta = document.getElementById('fedSelfMeta');
+  const $fedPeersList = document.getElementById('fedPeersList');
+  const $fedPairMode = document.getElementById('fedPairMode');
+  const $fedPairSshHost = document.getElementById('fedPairSshHost');
+  const $fedPairPort = document.getElementById('fedPairPort');
+  const $fedPairName = document.getElementById('fedPairName');
+  const $fedPairBtn = document.getElementById('fedPairBtn');
+  const $fedPairError = document.getElementById('fedPairError');
+  const $fedRepoMapList = document.getElementById('fedRepoMapList');
+  const $fedRepoIdentity = document.getElementById('fedRepoIdentity');
+  const $fedRepoPath = document.getElementById('fedRepoPath');
+  const $fedRepoAddBtn = document.getElementById('fedRepoAddBtn');
+  const $fedRepoError = document.getElementById('fedRepoError');
+  let fedPeersCache = [];
+
+  function fedEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
+  }
+  function fedShortId(id) {
+    return String(id || '').slice(0, 8);
+  }
+  function fedLastSeen(v) {
+    // last_seen is an ISO-8601 string written by the server.
+    const ms = Date.parse(v || '');
+    return isFinite(ms) ? 'seen ' + relativeTime(ms / 1000) : 'never seen';
+  }
+  function fedSetError(el, msg) {
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('visible', !!msg);
+  }
+  async function fedPost(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) {
+      throw new Error((data && (data.detail || data.error)) || ('request failed (' + r.status + ')'));
+    }
+    return data;
+  }
+  function fedTransportSummary(t) {
+    const type = t && t.type;
+    if (type === 'ssh') return 'ssh ' + (t.host || '');
+    if (type === 'loopback') return 'loopback :' + (t.port || '?');
+    return 'no route back';
+  }
+
+  function fedRenderSelf(self) {
+    if (!self) return;
+    if ($fedSelfName) $fedSelfName.value = self.display_name || '';
+    if ($fedSelfMeta) {
+      $fedSelfMeta.innerHTML =
+        '<span class="fed-node-id" title="' + fedEsc(self.node_id) + '">' + fedEsc(fedShortId(self.node_id)) + '</span>' +
+        (self.version ? ' · v' + fedEsc(self.version) : '') +
+        (self.port ? ' · port ' + fedEsc(self.port) : '');
+    }
+  }
+  function fedRenderPeers(peers) {
+    if (!$fedPeersList) return;
+    if (!peers || !peers.length) {
+      $fedPeersList.innerHTML = '<div class="fed-empty">No paired peers yet — add one below.</div>';
+      return;
+    }
+    $fedPeersList.innerHTML = peers.map((p) => {
+      const t = p.transport || {};
+      const chip = (!t.type || t.type === 'unconfigured')
+        ? ' <span class="fed-chip-warn" title="This peer has no transport configured back to this node — it can be called but cannot call back.">no route back</span>'
+        : '';
+      return '<div class="fed-row" data-fed-node="' + fedEsc(p.node_id) + '">' +
+        '<div class="fed-row-main">' +
+          '<span class="fed-peer-name">' + fedEsc(p.name || '(unnamed)') + chip + '</span>' +
+          '<div class="fed-meta">' +
+            fedEsc(fedTransportSummary(t)) +
+            ' · <span class="fed-node-id" title="' + fedEsc(p.node_id) + '">' + fedEsc(fedShortId(p.node_id)) + '</span>' +
+            ' · ' + fedEsc(fedLastSeen(p.last_seen)) +
+            (p.version ? ' · v' + fedEsc(p.version) : '') +
+          '</div>' +
+          '<span class="fed-test-result" data-fed-test-result></span>' +
+        '</div>' +
+        '<div class="fed-row-actions">' +
+          '<button type="button" class="upd-btn fed-btn" data-fed-act="test">Test</button>' +
+          '<button type="button" class="upd-btn fed-btn" data-fed-act="rename">Rename</button>' +
+          '<button type="button" class="upd-btn fed-btn" data-fed-act="remove">Remove</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+  function fedRenderRepoMap(map) {
+    if (!$fedRepoMapList) return;
+    const identities = Object.keys(map || {}).sort();
+    if (!identities.length) {
+      $fedRepoMapList.innerHTML = '<div class="fed-empty">No mappings yet.</div>';
+      return;
+    }
+    $fedRepoMapList.innerHTML = identities.map((identity) =>
+      '<div class="fed-row">' +
+        '<div class="fed-row-main">' +
+          '<span class="fed-peer-name">' + fedEsc(identity) + '</span>' +
+          '<div class="fed-meta">' + fedEsc(map[identity]) + '</div>' +
+        '</div>' +
+        '<div class="fed-row-actions">' +
+          '<button type="button" class="upd-btn fed-btn" data-fed-repo-remove="' + fedEsc(identity) + '">Remove</button>' +
+        '</div>' +
+      '</div>'
+    ).join('');
+  }
+
+  async function fedRefresh() {
+    fedSetError($fedError, '');
+    let data, ok;
+    try {
+      const r = await fetch('/api/federation/peers', { cache: 'no-store' });
+      ok = r.ok;
+      data = await r.json();
+    } catch (e) {
+      fedSetError($fedError, 'Could not load peers: ' + ((e && e.message) || 'unknown'));
+      return;
+    }
+    if (!ok || !data || data.ok === false) {
+      fedSetError($fedError, 'Could not load peers: ' + ((data && (data.detail || data.error)) || 'unknown'));
+      return;
+    }
+    fedPeersCache = data.peers || [];
+    fedRenderSelf(data.self);
+    fedRenderPeers(fedPeersCache);
+    fedRenderRepoMap(data.repo_map || {});
+  }
+
+  function openFederationPeersModal() {
+    if (!$fedModal) return;
+    fedSetError($fedError, '');
+    fedSetError($fedPairError, '');
+    fedSetError($fedRepoError, '');
+    if ($fedPeersList) $fedPeersList.innerHTML = '<div class="fed-empty">Loading…</div>';
+    if ($fedRepoMapList) $fedRepoMapList.innerHTML = '';
+    $fedModal.classList.add('open');
+    fedRefresh();
+  }
+  function fedClose() {
+    if ($fedModal) $fedModal.classList.remove('open');
+  }
+
+  async function fedSaveSelfName() {
+    const name = (($fedSelfName && $fedSelfName.value) || '').trim();
+    if (!name) return;
+    if ($fedSelfNameSave) { $fedSelfNameSave.disabled = true; $fedSelfNameSave.textContent = 'Saving…'; }
+    try {
+      await fedPost('/api/federation/node', { display_name: name });
+      await fedRefresh();
+      showOpToast('Node name saved', 'ok');
+    } catch (e) {
+      fedSetError($fedError, 'Could not save the node name: ' + e.message);
+    }
+    if ($fedSelfNameSave) { $fedSelfNameSave.disabled = false; $fedSelfNameSave.textContent = 'Save'; }
+  }
+
+  async function fedHandlePeerAction(act, nodeId, rowEl) {
+    const peer = fedPeersCache.find((p) => p.node_id === nodeId) || {};
+    if (act === 'test') {
+      const $res = rowEl.querySelector('[data-fed-test-result]');
+      if ($res) { $res.textContent = 'testing…'; $res.className = 'fed-test-result'; }
+      try {
+        const data = await fedPost('/api/federation/peers/test', { node_id: nodeId });
+        if ($res) {
+          $res.textContent = '✓ ' + (data.latency_ms != null ? data.latency_ms + 'ms' : 'ok');
+          $res.classList.add('ok');
+        }
+      } catch (e) {
+        if ($res) { $res.textContent = '✗ ' + e.message; $res.classList.add('err'); }
+      }
+      return;
+    }
+    if (act === 'rename') {
+      const name = prompt('New name for this peer:', peer.name || '');
+      if (name == null || !name.trim()) return;
+      try {
+        await fedPost('/api/federation/peers/rename', { node_id: nodeId, name: name.trim() });
+        await fedRefresh();
+      } catch (e) {
+        fedSetError($fedError, 'Rename failed: ' + e.message);
+      }
+      return;
+    }
+    if (act === 'remove') {
+      if (!confirm('Remove peer "' + (peer.name || fedShortId(nodeId)) + '"? This also asks the peer to forget this node.')) return;
+      try {
+        await fedPost('/api/federation/peers/remove', { node_id: nodeId });
+        await fedRefresh();
+      } catch (e) {
+        fedSetError($fedError, 'Remove failed: ' + e.message);
+      }
+    }
+  }
+
+  async function fedPair() {
+    fedSetError($fedPairError, '');
+    const mode = ($fedPairMode && $fedPairMode.value) || 'ssh';
+    let transport;
+    if (mode === 'loopback') {
+      const port = parseInt(($fedPairPort && $fedPairPort.value) || '', 10);
+      if (!port) { fedSetError($fedPairError, "Enter the peer's local port (e.g. 8091)."); return; }
+      transport = { type: 'loopback', port };
+    } else {
+      const host = (($fedPairSshHost && $fedPairSshHost.value) || '').trim();
+      if (!host) { fedSetError($fedPairError, 'Enter an SSH destination like user@host.'); return; }
+      transport = { type: 'ssh', host };
+    }
+    const body = { transport };
+    const name = (($fedPairName && $fedPairName.value) || '').trim();
+    if (name) body.name = name;
+    if ($fedPairBtn) { $fedPairBtn.disabled = true; $fedPairBtn.textContent = 'Pairing…'; }
+    try {
+      await fedPost('/api/federation/peers/pair', body);
+      if ($fedPairSshHost) $fedPairSshHost.value = '';
+      if ($fedPairPort) $fedPairPort.value = '';
+      if ($fedPairName) $fedPairName.value = '';
+      showOpToast('Peer paired', 'ok');
+      await fedRefresh();
+    } catch (e) {
+      fedSetError($fedPairError, e.message);
+    }
+    if ($fedPairBtn) { $fedPairBtn.disabled = false; $fedPairBtn.textContent = 'Pair'; }
+  }
+
+  async function fedRepoAdd() {
+    fedSetError($fedRepoError, '');
+    const identity = (($fedRepoIdentity && $fedRepoIdentity.value) || '').trim();
+    const localPath = (($fedRepoPath && $fedRepoPath.value) || '').trim();
+    if (!identity || !localPath) {
+      fedSetError($fedRepoError, 'Both the repo identity and a local path are required.');
+      return;
+    }
+    if ($fedRepoAddBtn) $fedRepoAddBtn.disabled = true;
+    try {
+      await fedPost('/api/federation/repo-map', { identity, local_path: localPath });
+      if ($fedRepoIdentity) $fedRepoIdentity.value = '';
+      if ($fedRepoPath) $fedRepoPath.value = '';
+      await fedRefresh();
+    } catch (e) {
+      fedSetError($fedRepoError, e.message);
+    }
+    if ($fedRepoAddBtn) $fedRepoAddBtn.disabled = false;
+  }
+  async function fedRepoRemove(identity) {
+    fedSetError($fedRepoError, '');
+    try {
+      await fedPost('/api/federation/repo-map', { identity, local_path: '' });
+      await fedRefresh();
+    } catch (e) {
+      fedSetError($fedRepoError, e.message);
+    }
+  }
+
+  if ($fedBtn) $fedBtn.addEventListener('click', () => {
+    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    openFederationPeersModal();
+  });
+  if ($fedBackdrop) $fedBackdrop.addEventListener('click', fedClose);
+  if ($fedCloseBtn) $fedCloseBtn.addEventListener('click', fedClose);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $fedModal && $fedModal.classList.contains('open')) {
+      fedClose();
+    }
+  });
+  if ($fedSelfNameSave) $fedSelfNameSave.addEventListener('click', fedSaveSelfName);
+  if ($fedSelfName) $fedSelfName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') fedSaveSelfName();
+  });
+  if ($fedPairMode) $fedPairMode.addEventListener('change', () => {
+    const loop = $fedPairMode.value === 'loopback';
+    if ($fedPairSshHost) $fedPairSshHost.style.display = loop ? 'none' : '';
+    if ($fedPairPort) $fedPairPort.style.display = loop ? '' : 'none';
+  });
+  if ($fedPairBtn) $fedPairBtn.addEventListener('click', fedPair);
+  if ($fedPeersList) $fedPeersList.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-fed-act]');
+    if (!btn) return;
+    const row = btn.closest('[data-fed-node]');
+    if (!row) return;
+    fedHandlePeerAction(btn.dataset.fedAct, row.dataset.fedNode, row);
+  });
+  if ($fedRepoAddBtn) $fedRepoAddBtn.addEventListener('click', fedRepoAdd);
+  if ($fedRepoMapList) $fedRepoMapList.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-fed-repo-remove]');
+    if (btn) fedRepoRemove(btn.dataset.fedRepoRemove);
+  });
+
   // If we just finished restarting, briefly acknowledge the trigger.
   try {
     if (sessionStorage.getItem('ccc-restarting')) {

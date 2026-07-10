@@ -17981,3 +17981,34 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-pane[data-conv-bg="stitch"] .conversations-view::-webkit-scrollbar-thumb:hover {
   background: #839493;
 }
+
+/* ── Federation "Nodes & peers" modal ─────────────────────────────────
+   Opened from the settings popover (openFederationPeersModal in app.js).
+   Reuses the .upd-overlay / .upd-dialog shell and .bug-input fields;
+   only the fed- section/row primitives below are new. */
+.fed-section { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.fed-section-title { font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.fed-self-row { display: flex; align-items: center; gap: 8px; }
+.fed-list { display: flex; flex-direction: column; gap: 6px; }
+.fed-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); }
+.fed-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fed-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.fed-btn { padding: 4px 10px; font-size: 12px; }
+.fed-peer-name { font-weight: 600; color: var(--text); }
+.fed-meta { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.fed-node-id { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  font-size: 11px; cursor: help; }
+.fed-chip-warn { font-size: 10px; font-weight: 600; padding: 1px 6px;
+  border-radius: 999px; vertical-align: middle; white-space: nowrap;
+  color: var(--orange, #d29922); border: 1px solid var(--orange, #d29922);
+  background: rgba(210, 153, 34, 0.12); }
+.fed-test-result { font-size: 12px; }
+.fed-test-result.ok { color: var(--green); }
+.fed-test-result.err { color: var(--red); }
+.fed-empty { font-size: 12px; color: var(--text-muted); padding: 4px 2px; }
+.fed-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fed-inline-error { display: none; font-size: 12px; color: var(--red); }
+.fed-inline-error.visible { display: block; }

@@ -571,6 +571,7 @@
               <button class="pop-item" type="button" id="runOnboardingBtn"><span class="pop-icon">🚀</span><span>Run onboarding</span></button>
               <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
               <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
+              <button class="pop-item" type="button" id="federationPeersBtn"><span class="pop-icon">&#128279;</span><span>Nodes &amp; peers…</span></button>
               <button class="pop-item" type="button" id="carModeMenuBtn"><span class="pop-icon">🚗</span><span>Car Mode…</span></button>
               <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
               <!-- Launchers for third-party plugin dashboards. Hidden by
@@ -1460,6 +1461,72 @@
       <div class="upd-actions">
         <button type="button" class="upd-btn" id="networkCancelBtn">Cancel</button>
         <button type="button" class="upd-btn upd-primary" id="networkSaveBtn">Save &amp; restart</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Federation "Nodes & peers" modal. Opened from the settings popover
+       (openFederationPeersModal in app.js). Manages this node's identity,
+       paired peers (SSH / loopback transports), and the repo-identity →
+       local-path map. All calls hit /api/federation/* on this server;
+       pairing secrets never reach the browser (has_secret only). -->
+  <div id="fedPeersModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="fedPeersTitle">
+    <div class="upd-backdrop" id="fedPeersBackdrop"></div>
+    <div class="upd-dialog" style="width:min(700px,94vw);max-height:86vh;overflow-y:auto;">
+      <div class="upd-title" id="fedPeersTitle">Nodes &amp; peers</div>
+      <div class="upd-versions">
+        Pair this CCC with another node — over SSH or a local port — to browse
+        and route work across machines. Peers only ever talk to each other's
+        loopback API; nothing here opens a network listener.
+      </div>
+
+      <div class="fed-section">
+        <div class="fed-section-title">This node</div>
+        <div class="fed-self-row">
+          <input type="text" id="fedSelfName" class="bug-input" style="max-width:220px;" placeholder="Display name" autocomplete="off">
+          <button type="button" class="upd-btn fed-btn" id="fedSelfNameSave">Save</button>
+          <span class="fed-meta" id="fedSelfMeta"></span>
+        </div>
+      </div>
+
+      <div class="fed-section">
+        <div class="fed-section-title">Paired peers</div>
+        <div id="fedPeersList" class="fed-list"></div>
+      </div>
+
+      <div class="fed-section">
+        <div class="fed-section-title">Add peer</div>
+        <div class="fed-add-row">
+          <select id="fedPairMode" class="bug-input" style="width:auto;flex:0 0 auto;">
+            <option value="ssh">SSH</option>
+            <option value="loopback">Loopback port</option>
+          </select>
+          <input type="text" id="fedPairSshHost" class="bug-input" style="flex:1;min-width:120px;" placeholder="user@host" autocomplete="off" spellcheck="false">
+          <input type="number" id="fedPairPort" class="bug-input" style="display:none;width:110px;flex:0 0 auto;" placeholder="8091" min="1" max="65535">
+          <input type="text" id="fedPairName" class="bug-input" style="width:150px;flex:0 0 auto;" placeholder="Name (optional)" autocomplete="off">
+          <button type="button" class="upd-btn upd-primary fed-btn" id="fedPairBtn">Pair</button>
+        </div>
+        <div class="fed-inline-error" id="fedPairError"></div>
+      </div>
+
+      <div class="fed-section">
+        <div class="fed-section-title">Repository mapping</div>
+        <div style="color:var(--text-muted);font-size:12px;">
+          Maps a repo identity (<code>host/owner/repo</code>) to the local
+          checkout peers should use on this machine.
+        </div>
+        <div id="fedRepoMapList" class="fed-list"></div>
+        <div class="fed-add-row">
+          <input type="text" id="fedRepoIdentity" class="bug-input" style="flex:1;min-width:120px;" placeholder="github.com/owner/repo" autocomplete="off" spellcheck="false">
+          <input type="text" id="fedRepoPath" class="bug-input" style="flex:1;min-width:120px;" placeholder="/path/to/local/checkout" autocomplete="off" spellcheck="false">
+          <button type="button" class="upd-btn fed-btn" id="fedRepoAddBtn">Add</button>
+        </div>
+        <div class="fed-inline-error" id="fedRepoError"></div>
+      </div>
+
+      <div class="upd-error" id="fedPeersError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="fedPeersCloseBtn">Close</button>
       </div>
     </div>
   </div>
