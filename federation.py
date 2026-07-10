@@ -230,6 +230,8 @@ def map_repo(identity: str, local_path: str) -> dict[str, str]:
         raise ValueError("repo identity required")
     with _STATE_LOCK:
         data = load_repo_map()
+        if data.get(identity) == local_path:
+            return data  # unchanged — skip the disk write
         data[identity] = local_path
         _write_json(_repo_map_file(), data)
     return data

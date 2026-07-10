@@ -51127,6 +51127,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/federation/peers":
             # Local management view (browser). Secrets are never included.
             self.send_json(_federation_peers_public())
+        elif path == "/api/federation/v1/fleet-inventory":
+            peer = _federation_require_peer(self)
+            if peer is None:
+                return
+            qs_fed = urllib.parse.parse_qs(parsed.query)
+            self.send_json({
+                "ok": True,
+                "node_id": federation.node_id(),
+                "observed_at": time.time(),
+                "repos": _fleet_local_inventory(
+                    fetch=(qs_fed.get("fetch") or ["0"])[0] in ("1", "true"),
+                    include_deploy=(qs_fed.get("deploy") or ["1"])[0] not in ("0", "false"),
+                ),
+            })
+        elif path == "/api/fleet/inventory":
+            # The Fleet view: repo × node matrix, every dimension separate,
+            # every source carrying observed_at + explicit errors. fetch=1
+            # is the one allowed mutation-adjacent step (git fetch origin).
+            qs_fleet = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_fleet_inventory_payload(
+                fetch=(qs_fleet.get("fetch") or ["0"])[0] in ("1", "true"),
+                include_deploy=(qs_fleet.get("deploy") or ["1"])[0] not in ("0", "false"),
+            ))
         elif path == "/api/federation/handoff/status":
             qs_fed = urllib.parse.parse_qs(parsed.query)
             sid = (qs_fed.get("session_id") or [""])[0].strip()
@@ -57802,8 +57825,13 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, f
         entry["dirty_files"] = len(status_lines)
         entry["staged"] = sum(1 for ln in status_lines if ln[:1].strip())
         entry["untracked"] = sum(1 for ln in status_lines if ln.startswith("??"))
-        unpushed = _count_unpushed_commits(wt_path)
-        if unpushed is None:
+        # Computed fresh (not via the 60s _unpushed_cache): an inventory scan
+        # is explicitly a "look now" operation and stale counts here would
+        # make the whole fleet view lie.
+        rc, out, _err = _git(["rev-list", "--count", "@{u}..HEAD"], wt_path)
+        if rc == 0 and out.strip().isdigit():
+            unpushed = int(out.strip())
+        else:
             # No upstream configured — count commits unreachable from EVERY
             # origin ref, the honest definition of "unpublished".
             rc, out, _err = _git(["rev-list", "--count", "HEAD",
@@ -58165,6 +58193,290 @@ def _federation_test_peer(peer_node_id):
         "health": health,
         "latency_ms": int((time.time() - started) * 1000),
     }, 200
+
+
+# ---------------------------------------------------------------------------
+# Fleet — multi-node repository inventory
+#
+# One repo × node matrix with INDEPENDENT state dimensions: worktree state,
+# unpublished commits, origin default-branch view, PRs, production
+# deployment, and associated sessions. Every dimension carries its own
+# observed_at and its own error — a clean tree, a pushed commit, a merged PR
+# and a green deploy are different facts and never collapse into one flag.
+# ---------------------------------------------------------------------------
+
+FLEET_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "fleet.json"
+
+_REPO_IDENTITY_MEMO = {}
+_REPO_IDENTITY_MEMO_TTL = 300.0
+
+
+def _fleet_repo_identity_cached(repo_path):
+    now = time.time()
+    hit = _REPO_IDENTITY_MEMO.get(repo_path)
+    if hit and now - hit[0] < _REPO_IDENTITY_MEMO_TTL:
+        return hit[1]
+    ident = None
+    try:
+        ident = federation.repo_identity(repo_path)
+    except Exception:
+        ident = None
+    _REPO_IDENTITY_MEMO[repo_path] = (now, ident)
+    return ident
+
+
+def _fleet_config():
+    try:
+        data = json.loads(FLEET_CONFIG_FILE.read_text())
+        if isinstance(data, dict):
+            return {"pinned": list(data.get("pinned") or []),
+                    "hidden": list(data.get("hidden") or [])}
+    except (OSError, ValueError):
+        pass
+    return {"pinned": [], "hidden": []}
+
+
+_FLEET_PRS_CACHE = {}
+_FLEET_PRS_TTL = 30.0
+
+
+def _fleet_prs(repo_path, repo_kind):
+    """Open-PR dimension with an explicit error channel (unlike the UI's
+    best-effort cache, a fleet scan must distinguish 'no PRs' from 'gh
+    failed')."""
+    if repo_kind != "remote":
+        return {"skipped": "no remote host", "observed_at": time.time()}
+    now = time.time()
+    hit = _FLEET_PRS_CACHE.get(repo_path)
+    if hit and now - hit[0] < _FLEET_PRS_TTL:
+        return hit[1]
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "list", "--state", "open", "--limit", "100", "--json",
+             "number,title,headRefName,headRefOid,isDraft,url,updatedAt,"
+             "statusCheckRollup,mergeable,mergeStateStatus,reviewDecision"],
+            cwd=repo_path, capture_output=True, text=True, timeout=12,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        payload = {"error": str(e), "observed_at": now}
+        _FLEET_PRS_CACHE[repo_path] = (now, payload)
+        return payload
+    if proc.returncode != 0:
+        payload = {"error": (proc.stderr or proc.stdout or "gh failed").strip()[:300],
+                   "observed_at": now}
+        _FLEET_PRS_CACHE[repo_path] = (now, payload)
+        return payload
+    try:
+        prs = json.loads(proc.stdout or "[]")
+    except ValueError:
+        prs = []
+    out = []
+    for pr in prs if isinstance(prs, list) else []:
+        checks = pr.get("statusCheckRollup") or []
+        failing = [c.get("name") for c in checks
+                   if isinstance(c, dict) and (c.get("conclusion") or "").upper()
+                   in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED")]
+        pending = [c.get("name") for c in checks
+                   if isinstance(c, dict) and not c.get("conclusion")
+                   and (c.get("status") or "").upper() in ("IN_PROGRESS", "QUEUED", "PENDING")]
+        out.append({
+            "number": pr.get("number"),
+            "title": pr.get("title"),
+            "branch": pr.get("headRefName"),
+            "head_sha": pr.get("headRefOid"),
+            "draft": bool(pr.get("isDraft")),
+            "url": pr.get("url"),
+            "updated_at": pr.get("updatedAt"),
+            "mergeable": pr.get("mergeable"),
+            "merge_state": pr.get("mergeStateStatus"),
+            "review_decision": pr.get("reviewDecision"),
+            "checks_failing": failing,
+            "checks_pending": pending,
+            "checks_total": len(checks),
+        })
+    payload = {"open": out, "observed_at": now}
+    _FLEET_PRS_CACHE[repo_path] = (now, payload)
+    return payload
+
+
+_FLEET_DEPLOY_CACHE = {}
+_FLEET_DEPLOY_TTL = 60.0
+
+
+def _fleet_deployment(repo_path):
+    """Production-deployment dimension — separate from Git facts. Only
+    consulted when the repo has a Vercel project configured."""
+    project = _resolve_vercel_project(repo_path)
+    now = time.time()
+    if not project:
+        return {"skipped": "no deployment provider configured",
+                "observed_at": now}
+    hit = _FLEET_DEPLOY_CACHE.get(repo_path)
+    if hit and now - hit[0] < _FLEET_DEPLOY_TTL:
+        return hit[1]
+    try:
+        status = vercel_deploy_status(repo_path)
+    except Exception as e:
+        status = {"error": str(e)}
+    payload = {"provider": "vercel", "observed_at": now, **(status or {})}
+    _FLEET_DEPLOY_CACHE[repo_path] = (now, payload)
+    return payload
+
+
+def _fleet_sessions_for_repo(repo_path):
+    """Sessions associated with this repo's clone or sibling worktrees —
+    from the cached archive rows, no extra scanning."""
+    try:
+        rows, _fc = _archive_all_rows_cached({
+            "include_prs": False, "resolve_pr_states": False,
+            "resolve_effective": False, "resolve_worktree_dirty": False,
+        })
+    except Exception:
+        return []
+    me = federation.node_id()
+    prefix = repo_path.rstrip("/")
+    out = []
+    for r in rows:
+        cwd = (r.get("session_cwd") or "").rstrip("/")
+        if not cwd:
+            continue
+        if cwd == prefix or cwd.startswith(prefix + "/") or cwd.startswith(prefix + "-wt-"):
+            out.append({
+                "session_id": r.get("session_id"),
+                "ref": federation.format_session_ref(me, r.get("session_id") or ""),
+                "display_name": r.get("display_name") or "",
+                "cwd": cwd,
+                "branch": r.get("effective_branch") or r.get("branch"),
+                "is_live": bool(r.get("is_live")),
+                "timestamp": r.get("timestamp"),
+            })
+        if len(out) >= 20:
+            break
+    return out
+
+
+def _fleet_local_repo_entry(repo_path, fetch=False, include_deploy=True):
+    """Every dimension for ONE repo on THIS node."""
+    payload, status = _federation_repo_inventory_payload(
+        repo_path=repo_path, fetch=fetch)
+    if status != 200:
+        return {"ok": False, "node_id": federation.node_id(),
+                "repo_path": repo_path, "observed_at": time.time(),
+                "error": payload.get("error"), "detail": payload.get("detail")}
+    payload["prs"] = _fleet_prs(payload["repo_path"],
+                                payload.get("repo_identity_kind"))
+    payload["deployment"] = (_fleet_deployment(payload["repo_path"])
+                             if include_deploy else {"skipped": "excluded"})
+    payload["sessions"] = _fleet_sessions_for_repo(payload["repo_path"])
+    return payload
+
+
+def _fleet_local_inventory(fetch=False, include_deploy=True):
+    """{identity: entry} for every repo mapped (or discoverable) on this
+    node. Known repos are auto-mapped by identity as a side effect so a
+    freshly-paired fleet needs no hand mapping."""
+    repo_map = dict(federation.load_repo_map())
+    for rp in _known_repo_paths():
+        ident = _fleet_repo_identity_cached(rp)
+        if ident and ident["identity"] not in repo_map:
+            try:
+                federation.map_repo(ident["identity"], rp)
+                repo_map[ident["identity"]] = rp
+            except (OSError, ValueError):
+                pass
+    out = {}
+    for identity_key, path in sorted(repo_map.items()):
+        if not os.path.isdir(path):
+            out[identity_key] = {"ok": False, "error": "stale_mapping",
+                                 "detail": f"mapped path missing: {path}",
+                                 "observed_at": time.time()}
+            continue
+        out[identity_key] = _fleet_local_repo_entry(
+            path, fetch=fetch, include_deploy=include_deploy)
+    return out
+
+
+_FLEET_PEER_CACHE = {}
+_FLEET_PEER_CACHE_LOCK = threading.Lock()
+_FLEET_PEER_TTL = 15.0
+
+
+def _fleet_fetch_peer_inventory(peer, fetch=False):
+    node = peer["node_id"]
+    now = time.time()
+    with _FLEET_PEER_CACHE_LOCK:
+        hit = _FLEET_PEER_CACHE.get(node)
+        if hit and now - hit["ts"] < _FLEET_PEER_TTL and not fetch:
+            return {**hit["payload"], "stale": False}, None
+    try:
+        payload = federation.PeerClient(peer).request(
+            "GET", f"/api/federation/v1/fleet-inventory?fetch={1 if fetch else 0}",
+            timeout=120 if fetch else 45)
+    except federation.PeerError as e:
+        with _FLEET_PEER_CACHE_LOCK:
+            hit = _FLEET_PEER_CACHE.get(node)
+        if hit:
+            return {**hit["payload"], "stale": True}, {"error": e.kind, "detail": str(e)}
+        return None, {"error": e.kind, "detail": str(e)}
+    with _FLEET_PEER_CACHE_LOCK:
+        _FLEET_PEER_CACHE[node] = {"ts": now, "payload": payload}
+    _federation_touch_peer(node)
+    return {**payload, "stale": False}, None
+
+
+def _fleet_inventory_payload(fetch=False, include_deploy=True):
+    """The Fleet view's data: repo × node matrix with per-source freshness."""
+    me = _federation_self_hello()
+    local = _fleet_local_inventory(fetch=fetch, include_deploy=include_deploy)
+    nodes = [{"node_id": me["node_id"], "name": me["display_name"],
+              "self": True, "ok": True, "stale": False,
+              "observed_at": time.time()}]
+    repos = {}
+    for identity_key, entry in local.items():
+        repos.setdefault(identity_key, {"identity": identity_key, "nodes": {}})
+        repos[identity_key]["nodes"][me["node_id"]] = entry
+        if entry.get("repo_identity_kind"):
+            repos[identity_key]["kind"] = entry["repo_identity_kind"]
+    peers = federation.load_peers()
+    if peers:
+        def _one(peer):
+            return peer, _fleet_fetch_peer_inventory(peer, fetch=fetch)
+        with ThreadPoolExecutor(max_workers=min(4, len(peers))) as pool:
+            results = list(pool.map(_one, peers))
+        for peer, (payload, err) in results:
+            node_entry = {"node_id": peer["node_id"], "name": peer.get("name"),
+                          "self": False}
+            if payload:
+                stale = bool(payload.get("stale"))
+                node_entry.update({"ok": err is None, "stale": stale,
+                                   "observed_at": payload.get("observed_at")})
+                if err:
+                    node_entry.update(err)
+                for identity_key, entry in (payload.get("repos") or {}).items():
+                    if isinstance(entry, dict):
+                        entry["stale"] = stale
+                    repos.setdefault(identity_key,
+                                     {"identity": identity_key, "nodes": {}})
+                    repos[identity_key]["nodes"][peer["node_id"]] = entry
+            else:
+                node_entry.update({"ok": False, "stale": True,
+                                   "observed_at": None, **(err or {})})
+            nodes.append(node_entry)
+    config = _fleet_config()
+    repo_list = []
+    for identity_key in sorted(repos):
+        if identity_key in config["hidden"]:
+            continue
+        item = repos[identity_key]
+        item["pinned"] = identity_key in config["pinned"]
+        repo_list.append(item)
+    repo_list.sort(key=lambda r: (not r["pinned"], r["identity"]))
+    return {
+        "ok": True,
+        "observed_at": time.time(),
+        "nodes": nodes,
+        "repos": repo_list,
+    }
 
 
 # ---------------------------------------------------------------------------
