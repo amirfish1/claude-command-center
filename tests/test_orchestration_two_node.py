@@ -225,6 +225,40 @@ class TestOrchestrationTwoNode(unittest.TestCase):
         results = nudged.get("results") or []
         self.assertTrue(any(r.get("ok") for r in results), nudged)
 
+    def test_07_chat_ownership_moves_between_nodes(self):
+        # Host the chat on B instead: identity (uuid) survives, the old
+        # host's copy becomes a transparent proxy stub.
+        status, moved = self.node_a.post("/api/group-chats/move-host", {
+            "id": self.chat_id, "node_id": self.node_b.node_id})
+        self.assertTrue(moved.get("ok"), moved)
+        self.assertEqual(moved["host_node"], self.node_b.node_id)
+
+        # B now physically hosts it.
+        b_sidecars = [json.loads(p.read_text())
+                      for p in self.node_b.group_chats_dir.glob("*.json")]
+        hosted = [s for s in b_sidecars if s.get("uuid") == self.chat_id]
+        self.assertEqual(len(hosted), 1)
+        self.assertEqual(hosted[0]["host_node"], self.node_b.node_id)
+
+        # Reading through A (no explicit host) transparently proxies to B.
+        status, read = self.node_a.request(
+            "GET", f"/api/group-chat/read?id={self.chat_id}")
+        self.assertEqual(status, 200, read)
+        self.assertTrue(read.get("ok"), read)
+        self.assertIn("hello from node B", read.get("content", ""))
+
+        # Posting through A lands on B's copy, not the stub.
+        status, posted = self.node_a.post("/api/group-chat/post", {
+            "id": self.chat_id, "text": "posted after the move",
+            "name": "human-a"})
+        self.assertTrue(posted.get("ok"), posted)
+        b_md = next(p for p in self.node_b.group_chats_dir.glob("*.md")
+                    if self.chat_id in
+                    json.loads(p.with_suffix(".json").read_text()).get("uuid", ""))
+        self.assertIn("posted after the move", b_md.read_text())
+        a_md = list(self.node_a.group_chats_dir.glob("*.md"))[0]
+        self.assertNotIn("posted after the move", a_md.read_text())
+
     def test_99_chat_host_offline_is_truthful(self):
         self.node_a.stop()
         time.sleep(0.3)

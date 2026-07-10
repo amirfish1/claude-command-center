@@ -36461,6 +36461,112 @@ def _group_chat_inject_text(chat_path: str, topic: str, mode: str, sid: str,
     return text
 
 
+def _group_chat_foreign_host(raw_path="", raw_uuid=""):
+    """When a locally-resolvable chat's sidecar says another node hosts it
+    (ownership was moved), return that host's node_id — reads/posts must
+    proxy there instead of touching the stale local copy."""
+    real_path = _resolve_group_chat_ref(raw_path, raw_uuid)
+    if not real_path:
+        return None
+    host = (_load_group_chat_sidecar(real_path) or {}).get("host_node")
+    if host and host != federation.node_id():
+        return host
+    return None
+
+
+def _group_chat_import_payload(data, peer):
+    """Peer-facing: receive chat ownership (markdown + sidecar). The chat's
+    identity is its uuid — the filename is re-derived locally, never trusted
+    from the wire."""
+    sidecar = data.get("sidecar")
+    md_b64 = data.get("md_b64")
+    if not isinstance(sidecar, dict) or not md_b64:
+        return {"ok": False, "error": "bad_request",
+                "detail": "sidecar and md_b64 required"}, 400
+    chat_uuid = str(sidecar.get("uuid") or "").strip().lower()
+    if not _valid_group_chat_uuid(chat_uuid):
+        return {"ok": False, "error": "bad_request",
+                "detail": "sidecar carries no valid uuid"}, 400
+    try:
+        md_bytes = base64.b64decode(str(md_b64), validate=True)
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "error": "bad_request",
+                "detail": f"md_b64 invalid: {e}"}, 400
+    if len(md_bytes) > 8 * 1024 * 1024:
+        return {"ok": False, "error": "bad_request",
+                "detail": "chat transcript too large"}, 400
+    existing = _resolve_group_chat_ref("", chat_uuid)
+    if existing and not data.get("overwrite"):
+        return {"ok": False, "error": "chat_exists",
+                "detail": "chat with this uuid already exists here"}, 409
+    group_chats_dir = os.path.expanduser("~/.claude/group-chats")
+    os.makedirs(group_chats_dir, exist_ok=True)
+    if existing:
+        md_path = existing
+    else:
+        slug = re.sub(r"[^a-z0-9]+", "-",
+                      str(sidecar.get("topic") or "chat").lower()).strip("-")[:60] or "chat"
+        md_path = os.path.join(
+            group_chats_dir,
+            f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md")
+    tmp = md_path + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(md_bytes)
+    os.replace(tmp, md_path)
+    new_sidecar = dict(sidecar)
+    new_sidecar["host_node"] = federation.node_id()
+    new_sidecar.pop("moved_to", None)
+    sidecar_path = md_path[:-3] + ".json"
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(new_sidecar, fh)
+    if not new_sidecar.get("archived") and not new_sidecar.get("closed_at"):
+        _register_coordination(md_path)
+    _group_chat_log_system(md_path, "chat ownership moved to this node")
+    return {"ok": True, "uuid": chat_uuid, "host_node": federation.node_id(),
+            "path": md_path}, 200
+
+
+def _group_chat_move_host_payload(data):
+    """Local: hand this chat's ownership to a paired peer. The uuid stays
+    the chat's identity; the local copy becomes a proxy stub."""
+    chat_uuid = str(data.get("id") or data.get("uuid") or "").strip()
+    dest_node = str(data.get("node_id") or data.get("dest_node_id") or "").strip()
+    real_path = _resolve_group_chat_ref(str(data.get("path") or ""), chat_uuid)
+    if not real_path:
+        return {"ok": False, "error": "not_found"}, 404
+    peer = federation.get_peer(dest_node)
+    if not peer:
+        return {"ok": False, "error": "unpaired_peer",
+                "detail": f"no paired peer {dest_node!r}"}, 404
+    meta = _load_group_chat_sidecar(real_path) or {}
+    if meta.get("host_node") not in (None, "", federation.node_id()):
+        return {"ok": False, "error": "not_owner",
+                "owner_node": meta.get("host_node"),
+                "detail": "this node does not host the chat"}, 409
+    try:
+        md_b64 = base64.b64encode(Path(real_path).read_bytes()).decode("ascii")
+    except OSError as e:
+        return {"ok": False, "error": "read_failed", "detail": str(e)}, 500
+    try:
+        result = federation.PeerClient(peer).request(
+            "POST", "/api/federation/v1/group-chat/import",
+            {"sidecar": meta, "md_b64": md_b64,
+             "overwrite": bool(data.get("overwrite"))}, timeout=60)
+    except federation.PeerError as e:
+        return {"ok": False, "error": e.kind, "detail": str(e)}, 502
+    if not result.get("ok"):
+        return result, 502
+    # Local copy becomes a stub: host_node points at the new owner; the
+    # watcher stops nudging from here; reads/posts proxy transparently.
+    _update_group_chat_sidecar(real_path, host_node=peer["node_id"],
+                               moved_at=time.time())
+    with _coord_lock:
+        _active_coordinations.pop(real_path, None)
+    _group_chat_log_system(real_path,
+                           f"chat ownership moved to node {peer['node_id'][:8]}")
+    return {"ok": True, "uuid": chat_uuid, "host_node": peer["node_id"]}, 200
+
+
 def _group_chat_checkin_text(real_path, topic, mode, sid, meta=None):
     """Check-in text for one participant — remote participants (global-ref
     sids owned by another node) get the uuid+host_node API variant instead
@@ -51094,6 +51200,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not chat_path and not chat_uuid:
                 self.send_json({"ok": False, "error": "missing path or id"})
                 return
+            if not host_node:
+                # Ownership may have been MOVED: a local stub whose sidecar
+                # names another host proxies transparently.
+                host_node = _group_chat_foreign_host(chat_path, chat_uuid) or ""
             if host_node and host_node != federation.node_id():
                 # The chat lives on another CCC node — proxy the read to its
                 # host instead of pretending the local path exists.
@@ -54869,7 +54979,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if (not chat_path and not chat_uuid) or not session_id:
                 self.send_json({"ok": False, "error": "missing chat_id/chat_path or session_id"})
                 return
-            host_node = (payload.get("host_node") or "").strip()
+            host_node = ((payload.get("host_node") or "").strip()
+                         or _group_chat_foreign_host(chat_path, chat_uuid) or "")
             if host_node and host_node != federation.node_id():
                 self.send_json(_federation_proxy_session_action(
                     host_node, "group_chat_add", {
@@ -54903,7 +55014,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if (not chat_path and not chat_uuid) or not text:
                 self.send_json({"ok": False, "error": "missing path/id or text"})
                 return
-            host_node = (payload.get("host_node") or "").strip()
+            host_node = ((payload.get("host_node") or "").strip()
+                         or _group_chat_foreign_host(chat_path, chat_uuid) or "")
             if host_node and host_node != federation.node_id():
                 self.send_json(_federation_proxy_session_action(
                     host_node, "group_chat_post", {
@@ -54933,7 +55045,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not chat_path and not chat_uuid:
                 self.send_json({"ok": False, "error": "missing path or id"})
                 return
-            host_node = (payload.get("host_node") or "").strip()
+            host_node = ((payload.get("host_node") or "").strip()
+                         or _group_chat_foreign_host(chat_path, chat_uuid) or "")
             if host_node and host_node != federation.node_id():
                 self.send_json(_federation_proxy_session_action(
                     host_node, "group_chat_nudge",
@@ -54944,6 +55057,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(result, 403)
             else:
                 self.send_json(result)
+        elif path == "/api/group-chats/move-host":
+            # Move chat ownership to a paired node: the uuid stays the chat's
+            # identity; the local copy becomes a proxying stub.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            result, status_code = _group_chat_move_host_payload(payload)
+            self.send_json(result, status_code)
         elif path == "/api/group-chats/archive":
             # Persistently archive a group chat: flips sidecar archived flag
             # to True and drops it from _active_coordinations so the watcher
@@ -59948,6 +60072,11 @@ def _federation_handle_post(path, data, handler):
         if peer is None:
             return None, None
         return _handoff_import_payload(data, peer)
+    if path == "/api/federation/v1/group-chat/import":
+        peer = _federation_require_peer(handler)
+        if peer is None:
+            return None, None
+        return _group_chat_import_payload(data, peer)
     # ---- local management (browser UI) ------------------------------------
     if path == "/api/federation/handoff/preflight":
         return _handoff_preflight_payload(
