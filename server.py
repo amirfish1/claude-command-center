@@ -17552,6 +17552,7 @@ def _parse_conversation_event(ev, line_num):
                 if tin or tout:
                     out_ev["tokens_in"] = tin
                     out_ev["tokens_out"] = tout
+                    out_ev["tokens_cached"] = int(usage.get("cache_read_input_tokens") or 0)
                     out_ev["token_usage"] = {
                         "input_tokens": int(usage.get("input_tokens") or 0),
                         "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens") or 0),
@@ -31773,6 +31774,7 @@ def _parse_antigravity_event(ev, line_num, usage_map=None):
                     out["tokens_in"] = usage.get("in", 0)
                     out["tokens_out"] = usage.get("out", 0)
                     out["tokens_thinking"] = usage.get("thinking", 0)
+                    out["tokens_cached"] = usage.get("cache_read", 0)
                     out["model"] = usage.get("model") or ""
                     out["token_usage"] = {
                         "input_tokens": usage.get("in", 0),

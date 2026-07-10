@@ -35230,15 +35230,17 @@
     return (Math.floor(n / 100) / 10).toFixed(1) + 'k';
   }
 
-  // Build "11.2k in | 2.6k out | 1.0k thinking" the way Antigravity does.
+  // Build "11.2k in | 8.4k cached | 2.6k out | 1.0k thinking" the way Antigravity does.
   // Drops the thinking segment when it's effectively zero (non-reasoning
   // models commonly emit 0 here and the chip looks noisier with it on).
-  function _formatAntigravityTokenChips(tIn, tOut, tThinking) {
+  function _formatAntigravityTokenChips(tIn, tOut, tThinking, tCached) {
     tIn = Number(tIn) || 0;
     tOut = Number(tOut) || 0;
     tThinking = Number(tThinking) || 0;
+    tCached = Number(tCached) || 0;
     const parts = [];
     if (tIn) parts.push(_formatTokensAntigravity(tIn) + ' in');
+    if (tCached) parts.push(_formatTokensAntigravity(tCached) + ' cached');
     if (tOut) parts.push(_formatTokensAntigravity(tOut) + ' out');
     if (tThinking >= 100) parts.push(_formatTokensAntigravity(tThinking) + ' thinking');
     return parts.join(' | ');
@@ -37806,10 +37808,12 @@
         // rather than leave an empty row (or a lone token line).
         const hadTool = lastToolPartIdx >= 0;
         const renderedSomething = hadTool || hasNonTool;
-        if (renderedSomething && (ev.tokens_in || ev.tokens_out || ev.tokens_thinking)) {
-          const chipText = _formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking);
+        if (renderedSomething && (ev.tokens_in || ev.tokens_out || ev.tokens_thinking || ev.tokens_cached)) {
+          const chipCached = Number(ev.tokens_cached || (ev.token_usage && (ev.token_usage.cache_read_input_tokens || ev.token_usage.cached_input_tokens)) || 0);
+          const chipText = _formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking, chipCached);
           if (chipText) {
             const chipTitle = 'Input:    ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' tokens'
+              + '\nCached input:    ' + chipCached.toLocaleString() + ' tokens'
               + '\nOutput:   ' + (Number(ev.tokens_out) || 0).toLocaleString() + ' tokens'
               + '\nThinking: ' + (Number(ev.tokens_thinking) || 0).toLocaleString() + ' tokens';
             if (lastToolPartIdx >= 0) {

@@ -549,6 +549,15 @@ class TestServerImports(unittest.TestCase):
                 server._ship_jobs.clear()
                 server._ship_jobs.update(old_jobs)
 
+    def test_antigravity_turn_token_chips_show_cached_input(self):
+        """Per-turn chips should expose cache reads, not only raw in/out counts."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _formatAntigravityTokenChips(tIn, tOut, tThinking, tCached)", app_js)
+        self.assertIn("if (tCached) parts.push(_formatTokensAntigravity(tCached) + ' cached')", app_js)
+        self.assertIn("const chipCached = Number(ev.tokens_cached || (ev.token_usage && (ev.token_usage.cache_read_input_tokens || ev.token_usage.cached_input_tokens)) || 0);", app_js)
+        self.assertIn("_formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking, chipCached)", app_js)
+        self.assertIn("Cached input:    ' + chipCached.toLocaleString() + ' tokens", app_js)
+
     def test_system_health_gui_app_contract(self):
         """GUI app-server engines are visible but never reapable. Their only
         server-side control is a fixed graceful AppleScript quit command."""
@@ -11225,7 +11234,7 @@ class TestModelPicker(unittest.TestCase):
 
         usage_map = {
             13: {"in": 11200, "out": 2600, "thinking": 1000,
-                 "cache_read": 0, "cache_create": 0, "model": "agy-1"},
+                 "cache_read": 8400, "cache_create": 0, "model": "agy-1"},
         }
         ev_with_step = {
             "type": "PLANNER_RESPONSE",
@@ -11241,6 +11250,7 @@ class TestModelPicker(unittest.TestCase):
         self.assertEqual(out["tokens_in"], 11200)
         self.assertEqual(out["tokens_out"], 2600)
         self.assertEqual(out["tokens_thinking"], 1000)
+        self.assertEqual(out["tokens_cached"], 8400)
 
         # Step index with no matching trajectory entry → no token fields,
         # so the frontend falls back to the no-chip render path.
