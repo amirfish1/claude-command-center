@@ -1,6 +1,23 @@
 {
   "updates": [
     {
+      "slug": "one-board-every-session",
+      "title": "Every coding-agent session on your machine, on one board",
+      "summary": "Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.",
+      "date": "2026-07-10",
+      "version": "5.6.0",
+      "problem_family": "see-everything",
+      "family_label": "See everything",
+      "url": "https://ccc.amirfish.ai/updates/one-board-every-session.html",
+      "og_image": "https://ccc.amirfish.ai/images/social-preview.png",
+      "tags": [
+        "see-everything",
+        "board",
+        "attach",
+        "fleet"
+      ]
+    },
+    {
       "slug": "project-tree-by-objects",
       "title": "Group your agent sessions the way you think about the work",
       "summary": "A flat list of sessions stops meaning anything past a dozen. The project tree groups them under nestable objects, so strategy stays above the churn.",

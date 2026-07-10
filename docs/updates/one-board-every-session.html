@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Every coding-agent session on your machine, on one board · CCC Updates</title>
+<meta name="description" content="Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.">
+<link rel="canonical" href="https://ccc.amirfish.ai/updates/one-board-every-session.html">
+
+<meta property="og:type" content="article">
+<meta property="og:title" content="Every coding-agent session on your machine, on one board">
+<meta property="og:description" content="Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.">
+<meta property="og:url" content="https://ccc.amirfish.ai/updates/one-board-every-session.html">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png">
+<meta property="article:published_time" content="2026-07-10T00:00:00Z">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Every coding-agent session on your machine, on one board">
+<meta name="twitter:description" content="Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.">
+<meta name="twitter:image" content="https://ccc.amirfish.ai/images/social-preview.png">
+
+<link rel="alternate" type="application/atom+xml" title="CCC Updates" href="feed.xml">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="../brand/tokens.css">
+</head>
+<body>
+<header class="u-top">
+  <a class="u-back" href="index.html">← All updates</a>
+  <a class="u-brand" href="https://ccc.amirfish.ai">Claude Command Center</a>
+</header>
+<main class="u-wrap">
+  <article class="u-article">
+    <div class="u-meta">
+      <a class="u-pill u-fam" href="index.html?family=see-everything"
+         data-family="see-everything">See everything</a>
+      <span class="u-pill u-ver">v5.6.0</span>
+      <time datetime="2026-07-10T00:00:00Z">July 10, 2026</time>
+    </div>
+    <h1>Every coding-agent session on your machine, on one board</h1>
+    <p class="u-lede">Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.</p>
+    <section class="u-sec u-pain"><h2>The pain</h2><p>You know the mid-afternoon moment: nine terminal tabs open, several coding agents running, and no quick way to tell which tab is which session. One finished an hour ago. One is waiting on you. You cannot see the fleet, so you cycle through tabs hoping to land on the one that matters.</p></section><section class="u-sec u-why"><h2>Why workarounds fail</h2><p>More tabs, more tmux panes, more discipline: each buys you a little, then stops. A terminal shows you one session at a time, and the tools that do hand you a dashboard usually own the sessions they launched. Resume one by hand, or start one in a plain terminal, and their board goes blind to it.</p></section><section class="u-sec u-solution"><h2>What CCC does</h2><p>CCC attaches instead of owning. It reads each engine's on-disk state as the source of truth, so every session shows up on one local board no matter how you launched it, hand-started terminals included. Claude Code is first-class; Codex, Cursor, Antigravity, and Kilo Code spawn and appear too, each with a documented gap, so it is one board for several engines rather than identical support across all of them.</p></section><section class="u-sec u-proof"><h2>Proof</h2><p>The capture is the CCC board running on seeded demo data. Columns carry GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live transcript open on the right and a header that reads "for Claude, Codex, Cursor, and Anti-Gravity." Every row is fake seeded data, nothing real, but it is the actual dashboard chrome: the whole operation on one screen.</p><div class="u-media"><figure class="u-figure"><img src="/product-story/assets/shots/S-OVR.png" alt="The CCC board on seeded demo data: columns for GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live session transcript open in a right-hand pane and a header reading 'for Claude, Codex, Cursor, and Anti-Gravity.'" loading="lazy"><figcaption>The whole operation on one local board. All data is seeded and fake.</figcaption></figure></div></section><section class="u-sec u-howto"><h2>How to try</h2><p>Open the live demo, no install required, and scan the board: issues waiting, sessions in progress, the one flagged for your attention. Running CCC already? Every coding-agent session on the machine appears automatically, including ones you started from a plain terminal. Nothing to wire up.</p></section><section class="u-sec u-limits"><h2>Limitations</h2><p>The board is a lens over state the engines already write, not a runtime: it does not run your agents and does not replace your terminal. Multi-engine support is real but uneven, Claude Code is deepest and some engines are fire-and-forget, so read the README matrix before you lean on a specific one. Desktop notifications and terminal focus are macOS-only.</p></section><section class="u-sec u-related"><h2>Related</h2><p>Pairs with attention detection, which tells you which of these sessions is waiting on you, and with the kanban and project-tree views when you want to organize the fleet instead of just seeing it.</p></section>
+    <p class="u-cta-wrap"><a class="u-cta" href="https://ccc.amirfish.ai/demo">Tour the live demo</a></p>
+    <details class="u-changelog"><summary>Full changelog for v5.6.0</summary><p>The complete list of changes in v5.6.0 lives in the <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md#5-6-0" target="_blank" rel="noopener">CHANGELOG</a>. This page is the story; the changelog is the record.</p></details>
+  </article>
+  <section class="u-subscribe" aria-labelledby="sub-h">
+  <h2 id="sub-h">Get the next update</h2>
+  <form class="u-sub-form"
+        action="https://buttondown.com/api/emails/embed-subscribe/USERNAME-TODO-PENDING-APPROVAL"
+        method="post" target="popupwindow" onsubmit="return false;">
+    <input type="email" name="email" placeholder="you@example.com"
+           aria-label="Email address" autocomplete="email" disabled>
+    <button type="submit" disabled>Subscribe</button>
+  </form>
+  <p class="u-sub-note">Email updates launching soon.</p>
+  <ul class="u-sub-alts">
+    <li><a href="feed.xml">Subscribe by RSS / Atom</a>. Works today, in any reader.</li>
+    <li><a href="https://github.com/amirfish1/claude-command-center/releases" target="_blank" rel="noopener">Watch releases on GitHub</a>.
+        Get a notification on every release in the meantime.</li>
+  </ul>
+  <p class="u-sub-privacy">No tracking pixels. Your email is used only for product
+     updates, and you can unsubscribe at any time.</p>
+</section>
+</main>
+<footer class="u-foot">
+  <a href="https://ccc.amirfish.ai">ccc.amirfish.ai</a> ·
+  <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener">Source on GitHub</a> ·
+  <a href="feed.xml">Atom feed</a>
+</footer>
+</body>
+</html>
