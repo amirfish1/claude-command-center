@@ -8,6 +8,8 @@ listed by the destination CCC) is what's asserted here.
 """
 
 import json
+import os
+import stat
 import sys
 import time
 import unittest
@@ -19,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import federation
 from two_node_harness import TwoNodeFleet, git
+
+FAKE_CLAUDE = Path(__file__).resolve().parent / "fake_claude.py"
 
 
 def _fabricate_claude_session(home: Path, cwd: str, sid: str, n_turns=3):
@@ -52,8 +56,13 @@ class TestHandoffTwoNode(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        os.chmod(FAKE_CLAUDE, os.stat(FAKE_CLAUDE).st_mode | stat.S_IEXEC)
         cls.fleet = TwoNodeFleet()
-        cls.fleet.start()
+        fake_env = {"CCC_CLAUDE_BIN": str(FAKE_CLAUDE)}
+        cls.fleet.node_a.start(extra_env=fake_env)
+        cls.fleet.node_b.start(extra_env=fake_env)
+        cls.fleet.node_a.wait_ready()
+        cls.fleet.node_b.wait_ready()
         cls.fleet.pair()
         cls.fleet.make_origin_and_clones()
         cls.repo_identity = federation.repo_identity(str(cls.fleet.repo_a))["identity"]
@@ -95,6 +104,10 @@ class TestHandoffTwoNode(unittest.TestCase):
             self.assertFalse(pf["ready"])
             codes = [b["code"] for b in pf["blockers"]]
             self.assertIn("dirty_worktree", codes)
+            dirty_blocker = next(b for b in pf["blockers"]
+                                 if b["code"] == "dirty_worktree")
+            # Scenario 4: the guard identifies likely owning session(s).
+            self.assertIn("candidate_sessions", dirty_blocker)
 
             status, started = self.node_a.post(
                 "/api/federation/handoff/start",
@@ -258,6 +271,17 @@ class TestHandoffTwoNode(unittest.TestCase):
         self.assertGreaterEqual(len(turns), 6)
         self.assertTrue(all(t["cwd"] == str(self.fleet.repo_b)
                             for t in turns if "cwd" in t))
+        # ...and the conversation actually CONTINUES on B (resume via the
+        # fake Claude CLI appends to the imported transcript) while the
+        # source machine is dead.
+        status, reply = self.node_b.post("/api/ask", {
+            "session_id": sid2, "text": "ping after handoff",
+            "timeout_ms": 30000})
+        self.assertTrue(reply.get("ok"), reply)
+        self.assertIn("FAKE-PONG", reply.get("text") or "")
+        continued = dest.read_text()
+        self.assertIn("ping after handoff", continued)
+        self.assertIn("user turn 0", continued)  # original history intact
 
 
 if __name__ == "__main__":

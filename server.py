@@ -58528,6 +58528,12 @@ def _fleet_local_repo_entry(repo_path, fetch=False, include_deploy=True):
     payload["deployment"] = (_fleet_deployment(payload["repo_path"])
                              if include_deploy else {"skipped": "excluded"})
     payload["sessions"] = _fleet_sessions_for_repo(payload["repo_path"])
+    # Fold current hook markers into the persisted provenance index while
+    # we're already looking at these sessions (fleet scans are off the
+    # dashboard hot path).
+    _provenance_harvest_sidecars([s.get("session_id")
+                                  for s in payload["sessions"]
+                                  if s.get("session_id")])
     return payload
 
 
@@ -59236,6 +59242,75 @@ def _fleet_resume_payload(plan_id):
 # Fleet attribution — evidence hierarchy, never fabricated
 # ---------------------------------------------------------------------------
 
+# Per-node provenance index: hook write events (and transcript backfill
+# hits) accumulate here so attribution survives sidecar rotation. Appended
+# during fleet scans and attribution lookups — never on the dashboard hot
+# path.
+PROVENANCE_INDEX_FILE = COMMAND_CENTER_STATE_DIR / "federation" / "provenance.jsonl"
+_PROVENANCE_SEEN = set()
+_PROVENANCE_LOCK = threading.Lock()
+_PROVENANCE_CAP = 6000
+
+
+def _provenance_append(records):
+    if not records:
+        return
+    with _PROVENANCE_LOCK:
+        try:
+            PROVENANCE_INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with PROVENANCE_INDEX_FILE.open("a", encoding="utf-8") as fh:
+                for rec in records:
+                    fh.write(json.dumps(rec) + "\n")
+            # Bounded: compact to the newest half when the cap is exceeded.
+            if PROVENANCE_INDEX_FILE.stat().st_size > _PROVENANCE_CAP * 200:
+                lines = PROVENANCE_INDEX_FILE.read_text().splitlines()
+                if len(lines) > _PROVENANCE_CAP:
+                    tmp = PROVENANCE_INDEX_FILE.with_suffix(".jsonl.tmp")
+                    tmp.write_text("\n".join(lines[-_PROVENANCE_CAP // 2:]) + "\n")
+                    tmp.replace(PROVENANCE_INDEX_FILE)
+        except OSError:
+            pass
+
+
+def _provenance_harvest_sidecars(session_ids):
+    """Fold the CURRENT live-state hook markers into the persisted index.
+    Sidecars only remember the last tool per session; the index keeps the
+    history."""
+    records = []
+    for sid in session_ids:
+        try:
+            sc = json.loads((SIDECAR_STATE_DIR / f"{sid}.json").read_text())
+        except (OSError, ValueError):
+            continue
+        fpath = sc.get("file")
+        ts = sc.get("timestamp")
+        if not fpath or not ts:
+            continue
+        key = (sid, fpath, ts)
+        if key in _PROVENANCE_SEEN:
+            continue
+        _PROVENANCE_SEEN.add(key)
+        records.append({"sid": sid, "path": fpath, "ts": ts,
+                        "kind": "hook_write", "tool": sc.get("tool")})
+    _provenance_append(records)
+
+
+def _provenance_lookup(target_real):
+    """Indexed events for one path — bounded read, newest last."""
+    hits = []
+    try:
+        with PROVENANCE_INDEX_FILE.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if os.path.realpath(str(rec.get("path") or "")) == target_real:
+                    hits.append(rec)
+    except OSError:
+        pass
+    return hits[-20:]
+
 
 def _fleet_attribute_path(repo_path, target_path):
     """Who touched this path? Evidence hierarchy: hook write event >
@@ -59250,6 +59325,12 @@ def _fleet_attribute_path(repo_path, target_path):
         target_path if os.path.isdir(target_path)
         else os.path.dirname(target_path)) or repo_path
     sessions = _fleet_sessions_for_repo(repo_path)
+    _provenance_harvest_sidecars([s.get("session_id") for s in sessions
+                                  if s.get("session_id")])
+    indexed = _provenance_lookup(target_real)
+    indexed_by_sid = {}
+    for rec in indexed:
+        indexed_by_sid.setdefault(rec.get("sid"), []).append(rec)
     candidates = []
     try:
         file_mtime = os.path.getmtime(target_path)
@@ -59261,7 +59342,8 @@ def _fleet_attribute_path(repo_path, target_path):
             continue
         evidence = []
         confidence = None
-        # 1. Hook write event (live-state sidecar): strongest signal.
+        # 1. Hook write event — live sidecar OR the persisted provenance
+        #    index (which outlives sidecar rotation): strongest signal.
         try:
             sidecar = json.loads((SIDECAR_STATE_DIR / f"{sid}.json").read_text())
             sfile = os.path.realpath(str(sidecar.get("file") or ""))
@@ -59275,13 +59357,22 @@ def _fleet_attribute_path(repo_path, target_path):
                 confidence = "high"
         except (OSError, ValueError):
             pass
+        for rec in indexed_by_sid.get(sid, [])[-3:]:
+            evidence.append({
+                "kind": "hook_write_event",
+                "detail": f"provenance index: {rec.get('tool') or 'tool'} "
+                          f"touched {rec.get('path')}",
+                "at": rec.get("ts"),
+            })
+            confidence = "high"
         # 2. Worktree / session ownership.
         s_cwd = (s.get("cwd") or "").rstrip("/")
         if s_cwd == wt_root.rstrip("/"):
             evidence.append({"kind": "worktree_ownership",
                              "detail": f"session works in {wt_root}"})
             confidence = confidence or "medium"
-        # 3. Transcript tool paths (bounded scan).
+        # 3. Transcript tool paths (bounded scan) — hits are backfilled into
+        #    the provenance index so future lookups are cheap.
         try:
             file_paths, _cd = _scan_session_tool_paths(sid)
             hits = [p for p in file_paths
@@ -59291,6 +59382,12 @@ def _fleet_attribute_path(repo_path, target_path):
                                  "detail": f"session edited {target_path} "
                                            f"({len(hits)} tool event(s))"})
                 confidence = "high"
+                key = (sid, target_path, "backfill")
+                if key not in _PROVENANCE_SEEN:
+                    _PROVENANCE_SEEN.add(key)
+                    _provenance_append([{
+                        "sid": sid, "path": target_path, "ts": time.time(),
+                        "kind": "transcript_backfill", "hits": len(hits)}])
         except Exception:
             pass
         # 4. Timestamp correlation — weakest, corroboration only.
@@ -59426,12 +59523,24 @@ def _handoff_preflight_payload(session_id, dest_node_id):
     is_live = bool(live.get("running") or live.get("is_live"))
     blockers = []
     if git_state["dirty_count"]:
+        # Identify the likely owning session(s) so the guard is actionable:
+        # the UI offers "ask to commit" routed at these, never a blind sweep.
+        dirty_owner_candidates = []
+        try:
+            first_dirty = (git_state["dirty_files"][0] or "")[3:].strip()
+            if first_dirty:
+                attribution = _fleet_attribute_path(
+                    info["repo_top"], os.path.join(info["repo_top"], first_dirty))
+                dirty_owner_candidates = attribution.get("candidates", [])[:3]
+        except Exception:
+            dirty_owner_candidates = []
         blockers.append({
             "code": "dirty_worktree",
             "detail": f"{git_state['dirty_count']} dirty file(s) in {info['repo_top']} — "
                       "commit (or ask the owning session to commit) first; "
                       "CCC never copies dirty files between machines",
             "files": git_state["dirty_files"][:10],
+            "candidate_sessions": dirty_owner_candidates,
         })
     if is_live:
         blockers.append({
