@@ -4676,7 +4676,13 @@
             + '<button type="button" class="cl-approval-btn is-negative" data-decision="decline">Deny</button>'
             + '<button type="button" class="cl-approval-btn is-negative" data-decision="cancel">Cancel</button>'
             + '</span>'
-          : '');
+          // Dead-zone escape hatch: this approval is owned by an external
+          // writer (mobile/desktop) and has no app-server request id CCC can
+          // answer. Without a control here the thread is a true dead end, so
+          // offer Grab back — reclaim into CCC and deny the pending approval.
+          : '<span class="cl-approval-actions">'
+            + '<button type="button" class="ccs-grab-back" title="This approval is owned by another Codex writer and can\'t be answered from CCC — reclaim the thread and deny the pending approval">Grab back</button>'
+            + '</span>');
       inline.title = msg;
       if (canApprove) {
         inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
@@ -4687,6 +4693,16 @@
             if (sid) respondCodexApproval(sid, btn.dataset.decision || 'accept', btn);
           });
         });
+      } else {
+        const gb = inline.querySelector('.ccs-grab-back');
+        if (gb) {
+          gb.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const sid = currentSession && currentSession.id;
+            if (sid) grabBackCodexSession(sid, gb);
+          });
+        }
       }
       if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
         $view.appendChild(inline);
@@ -4862,10 +4878,16 @@
       : '';
     // "Grab back" — reclaim a thread that drifted to an external writer (mobile /
     // desktop Codex holding the turn). Reapplies the noninteractive CCC-worker
-    // profile and interrupts the external turn so CCC becomes the single writer
-    // again. Only offered while an external/desktop writer is mid-turn.
-    const grabBackHtml = (writer === 'external' || writer === 'desktop')
-      ? '<button type="button" class="ccs-grab-back" title="Reclaim this thread into CCC control — reapply approvalPolicy:never and interrupt the external turn">Grab back</button>'
+    // profile, denies any in-flight approval, and interrupts the external turn so
+    // CCC becomes the single writer again. Offered whenever the thread is held by
+    // an external/desktop writer, is still attached in Codex desktop, OR is
+    // dead-ended on an approval CCC can't answer — not only while a writer is
+    // mid-turn. That last case is the grab-back dead-zone: a blocked approval
+    // owned externally leaves no other actionable control.
+    const externalWriter = liveStatus.codexWriter === 'external' || liveStatus.codexWriter === 'desktop';
+    const canGrabBack = externalWriter || !!liveStatus.codexDesktopAttached || !!liveStatus.needsApproval;
+    const grabBackHtml = canGrabBack
+      ? '<button type="button" class="ccs-grab-back" title="Reclaim this thread into CCC control — reapply approvalPolicy:never, deny any pending approval, and interrupt the external turn">Grab back</button>'
       : '';
     badge.className = 'conv-codex-state state-' + st + steady + writerCls + (wakeable ? ' is-wakeable' : '');
     if (wakeable) {
@@ -18212,7 +18234,28 @@
 
     msgEl.classList.add('gc-replay-hero-target');
     document.body.appendChild(backdrop);
-    _gcReplayHero = { backdrop, hero, target: msgEl, replayIdx, landing: false, fallbackTimer: null };
+    _gcReplayHero = { backdrop, hero, target: msgEl, replayIdx, holding: false, landing: false, fallbackTimer: null };
+  }
+
+  function _gcReplayMessagePauseMs(msg) {
+    const totalChars = msg && msg.rawBody ? msg.rawBody.length : 100;
+    return Math.max(2500, Math.min(4500, totalChars * 6)) / _gcReplaySpeed;
+  }
+
+  function _gcReplayHoldThenLandHero(msgEl, msg, replayIdx) {
+    const state = _gcReplayHero;
+    if (!state || state.target !== msgEl || state.replayIdx !== replayIdx || state.landing) return;
+
+    // Pausing replay clears the shared timeout. On resume, restart this
+    // readability hold instead of leaving the fully-revealed hero stranded.
+    if (state.holding && _gcReplayTimeout) return;
+    state.holding = true;
+    _gcReplayTimeout = setTimeout(() => {
+      _gcReplayTimeout = null;
+      if (_gcReplayHero !== state || !_gcReplayActive || _gcReplayPaused) return;
+      state.holding = false;
+      _gcReplayLandHero(msgEl, replayIdx);
+    }, _gcReplayMessagePauseMs(msg));
   }
 
   function _gcReplayLandHero(msgEl, replayIdx) {
@@ -18220,16 +18263,17 @@
     if (!state || state.target !== msgEl || state.replayIdx !== replayIdx || state.landing) return;
     state.landing = true;
 
+    const heroRect = state.hero.getBoundingClientRect();
     const targetRect = msgEl.getBoundingClientRect();
+    const heroCenterX = heroRect.left + heroRect.width / 2;
     const targetCenterX = targetRect.left + targetRect.width / 2;
-    const targetCenterY = targetRect.top + targetRect.height / 2;
-    const dx = window.innerWidth / 2 - targetCenterX;
-    const dy = window.innerHeight / 2 - targetCenterY;
+    const dx = heroCenterX - targetCenterX;
+    const dy = heroRect.top - targetRect.top;
     const duration = Math.max(180, 620 / _gcReplaySpeed);
 
-    // Rebase the centered clone onto the target's coordinate system without
-    // moving it visually. The next frame can then transition both the 2x
-    // scale and center offset cleanly to the real card's scale and position.
+    // Rebase the lower-third clone onto the target's coordinate system without
+    // moving it visually. Both use a top-center origin, so the top edge remains
+    // stable while text reveals and then follows a clean path into the slot.
     state.hero.style.transition = 'none';
     state.hero.style.left = targetRect.left + 'px';
     state.hero.style.top = targetRect.top + 'px';
@@ -18241,6 +18285,7 @@
     const finish = () => {
       if (finished || _gcReplayHero !== state) return;
       finished = true;
+      state.target.dataset.replayHeroLanded = 'true';
       _gcReplayClearHero();
       if (_gcReplayActive) playNextReplayStep();
     };
@@ -18410,9 +18455,9 @@
       }
     } else {
       if (_gcReplayHero && _gcReplayHero.replayIdx === _gcReplayMsgIndex) {
-        if (!_gcReplayHero.landing) {
+        if (!_gcReplayHero.landing && (!_gcReplayHero.holding || !_gcReplayTimeout)) {
           body.scrollTop = body.scrollHeight;
-          _gcReplayLandHero(msgEl, _gcReplayMsgIndex);
+          _gcReplayHoldThenLandHero(msgEl, msg, _gcReplayMsgIndex);
         }
         return;
       }
@@ -18426,9 +18471,11 @@
 
       body.scrollTop = body.scrollHeight;
 
-      const totalChars = msg.rawBody ? msg.rawBody.length : 100;
-      let delay = Math.max(2500, Math.min(4500, totalChars * 6));
-      delay = delay / _gcReplaySpeed;
+      // Participant cards already held at full size before flying into place;
+      // don't repeat the old between-turn reading pause after they land.
+      const heroLanded = msgEl.dataset.replayHeroLanded === 'true';
+      if (heroLanded) delete msgEl.dataset.replayHeroLanded;
+      const delay = heroLanded ? Math.max(60, 140 / _gcReplaySpeed) : _gcReplayMessagePauseMs(msg);
 
       _gcReplayMsgIndex++;
       _gcReplayTimeout = setTimeout(() => {
@@ -22670,7 +22717,7 @@
       const res = await fetch('/api/codex/grab-back', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, mode: 'restore_ccc_worker_mode' }),
+        body: JSON.stringify({ session_id: sessionId, mode: 'restore_ccc_worker_mode', deny_pending_approval: true }),
       });
       let data = {};
       try { data = await res.json(); } catch (_) { data = {}; }
@@ -22679,6 +22726,7 @@
       }
       const bits = [];
       if (data.settings_applied) bits.push('CCC worker mode restored');
+      if (data.approval_denied) bits.push('pending approval denied');
       if (data.interrupted) bits.push('external turn interrupted');
       if (data.queued) bits.push('your message queued');
       showOpToast(data.message || ('Grabbed back into CCC' + (bits.length ? ' — ' + bits.join(', ') : '')) + '.');

@@ -9637,6 +9637,23 @@
     background: color-mix(in srgb, #f85149 8%, transparent 92%);
     color: #ffb3ad;
   }
+  /* Grab-back escape hatch shown in the approval strip when the approval is
+     owned externally and can't be answered from CCC. Match the approval-button
+     sizing so the dead-end always has one styled, actionable control. */
+  .conv-live-tool-inline .ccs-grab-back {
+    border: 1px solid color-mix(in srgb, #6ea8fe 55%, var(--border) 45%);
+    background: transparent;
+    color: #6ea8fe;
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 11px;
+    line-height: 1.4;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .conv-live-tool-inline .ccs-grab-back:hover { background: color-mix(in srgb, #6ea8fe 14%, transparent 86%); }
+  .conv-live-tool-inline .ccs-grab-back:disabled,
+  .conv-live-tool-inline .ccs-grab-back.is-busy { opacity: 0.55; cursor: default; }
   @media (max-width: 700px) {
     .conv-live-tool-inline {
       align-items: center;
@@ -17865,7 +17882,7 @@ body:has(.gc-reader) .pwa-install-banner {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
-/* Group-chat replay presents each participant message as a centered, 2x
+/* Group-chat replay presents each participant message as a lower-third, 2x
    "hero" card while its words arrive, then flies that card into the slot
    already reserved by the hidden transcript copy. System lifecycle entries
    stay in the transcript and retain their quieter word reveal. */
@@ -17886,14 +17903,16 @@ body:has(.gc-reader) .pwa-install-banner {
 .gc-message.gc-replay-hero {
   position: fixed;
   left: 50%;
-  top: 50%;
+  /* Keep the header in the lower part of the viewport, with enough room on
+     short screens for the body to grow down instead of shifting upward. */
+  top: min(62vh, calc(100vh - 220px));
   z-index: 1;
   max-width: none;
   margin: 0 !important;
   pointer-events: none;
   background: var(--bg);
-  transform: translate(-50%, -50%) scale(2);
-  transform-origin: center center;
+  transform: translateX(-50%) scale(2);
+  transform-origin: top center;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58), 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
   will-change: transform;
 }

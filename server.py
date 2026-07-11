@@ -22101,7 +22101,9 @@ def _codex_grab_back_settings_params(session_id, cwd=None, model=None, reasoning
     return params
 
 
-def _codex_grab_back_via_app_server(session_id, cwd=None, model=None, reasoning_effort=None):
+def _codex_grab_back_via_app_server(
+    session_id, cwd=None, model=None, reasoning_effort=None, deny_pending_approval=False
+):
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "via": "codex-grab-back", "error": "missing session_id"}
@@ -22114,6 +22116,20 @@ def _codex_grab_back_via_app_server(session_id, cwd=None, model=None, reasoning_
         }
     if not cwd:
         cwd = find_session_cwd(sid)
+    # If the thread is dead-ended on an in-flight approval that this reclaim is
+    # meant to escape, decline it first — otherwise the stuck "Needs approval"
+    # prompt can survive the interrupt + settings-reapply below. Only attempt
+    # when a pending approval actually exists; best-effort (an externally-owned
+    # approval with no app-server request id simply can't be answered here).
+    approval_denied = False
+    approval_decline = None
+    if deny_pending_approval:
+        with _CODEX_APP_SERVER_LOCK:
+            state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) if sid else None
+            has_pending = _codex_app_server_pending_approval_item(state or {}) is not None
+        if has_pending:
+            approval_decline = _codex_app_server_resolve_approval(sid, "decline")
+            approval_denied = bool(approval_decline.get("ok"))
     settings_params = _codex_grab_back_settings_params(
         sid,
         cwd=cwd,
@@ -22131,7 +22147,7 @@ def _codex_grab_back_via_app_server(session_id, cwd=None, model=None, reasoning_
     no_active_turn = (interrupt.get("code") == "codex_no_active_turn")
     _codex_app_server_refresh_thread_status(sid, max_age=0)
     public = _codex_app_server_thread_public_status(sid)
-    ok = bool(settings_ok or interrupt.get("ok") or no_active_turn)
+    ok = bool(settings_ok or interrupt.get("ok") or no_active_turn or approval_denied)
     result = {
         "ok": ok,
         "via": "codex-grab-back",
@@ -22139,6 +22155,7 @@ def _codex_grab_back_via_app_server(session_id, cwd=None, model=None, reasoning_
         "settings_applied": bool(settings_ok),
         "interrupted": bool(interrupt.get("ok")),
         "no_active_turn": bool(no_active_turn),
+        "approval_denied": bool(approval_denied),
         "codex_app_server": _codex_app_server_is_live(),
         "codex_app_server_transport": _codex_app_server_transport_kind(),
         "codex_managed_app_server": _codex_app_server_transport_kind() == "managed",
@@ -22147,6 +22164,8 @@ def _codex_grab_back_via_app_server(session_id, cwd=None, model=None, reasoning_
     }
     if cwd:
         result["cwd"] = cwd
+    if approval_decline is not None and not approval_denied:
+        result["approval_decline_error"] = approval_decline.get("error") or "approval decline failed"
     if not settings_ok:
         result["settings_error"] = _codex_app_server_response_error(
             settings_response,
@@ -57456,12 +57475,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             reasoning_effort = (
                 (payload.get("reasoning_effort") or payload.get("effort") or "").strip()
             )
+            deny_pending_approval = bool(payload.get("deny_pending_approval"))
             _record_interaction(sid)
             result = _codex_grab_back_via_app_server(
                 sid,
                 cwd=cwd or None,
                 model=model or None,
                 reasoning_effort=reasoning_effort or None,
+                deny_pending_approval=deny_pending_approval,
             )
             status_code = 200 if result.get("ok") else 503
             if result.get("error") == "missing session_id":
