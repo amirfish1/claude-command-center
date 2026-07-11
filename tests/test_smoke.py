@@ -5972,6 +5972,39 @@ class TestRepoContextHelpers(unittest.TestCase):
         inject.assert_called_once_with("ttys009", "Terminal", "hello")
         resume.assert_not_called()
 
+    def test_codex_live_terminal_falls_back_to_resume_when_keystroke_fails(self):
+        # Regression: inject_input_via_keystroke is osascript-only, so it always
+        # fails on Linux (no AppleScript driver, terminal_app is None). A live
+        # Codex tty send must then fall back to resume delivery instead of
+        # returning the failure — otherwise the terminal-queue drain re-parks the
+        # message every 60s forever ("Queued: the session is busy").
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": True, "tty": "pts/2", "terminal_app": None},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "inject_input_via_keystroke",
+                 return_value={"ok": False, "via": "terminal-control", "error": "osascript not found"},
+             ) as inject, \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "via": "codex-resume"},
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid, "hello", _from_terminal_queue=True
+            )
+
+        self.assertTrue(result["ok"])
+        inject.assert_called_once()
+        resume.assert_called_once_with(sid, "hello")
+
     def test_codex_slash_idle_terminal_submits_with_return(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \

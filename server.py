@@ -41000,6 +41000,22 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         if answering_tty_question:
             _drop_matching_terminal_queue_entries(session_id, text)
         keystroke_result = inject_input_via_keystroke(tty, term_app or "Terminal", text)
+        # Codex/Cursor fallback: their TUIs accept input through their own
+        # resume/steer delivery, so when keystroke injection ISN'T viable —
+        # inject_input_via_keystroke is osascript-only, so it always fails on
+        # Linux (no AppleScript driver, terminal_app is None), and can also fail
+        # on macOS (permission denied / tab unreachable) — deliver via resume
+        # instead of returning the failure. Without this, a terminal-queue drain
+        # (`_from_terminal_queue=True`, which skips the tty-unreachable re-queue
+        # below) re-parks the message every 60s forever ("Queued: the session is
+        # busy" that never clears). Answering a native tty PICKER still needs the
+        # keystroke, so that path is left alone.
+        if (isinstance(keystroke_result, dict) and not keystroke_result.get("ok")
+                and not answering_tty_question):
+            if is_codex:
+                return resume_session_codex(session_id, text)
+            if is_cursor:
+                return resume_session_cursor(session_id, text)
         # If the AppleScript can't find the terminal tab (user switched
         # apps, tab hidden, fullscreen-elsewhere, permission denied),
         # queue the text instead of bouncing the message. The queue
