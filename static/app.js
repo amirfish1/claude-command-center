@@ -50316,6 +50316,8 @@
     let _chatFindRanges = [];
     let _chatFindMatchIndex = 0;
     let _chatFindLastBuiltQuery = '';
+    let _chatFindInputTimer = null;
+    let _chatFindBuildGeneration = 0;
 
     function chatFindGetRoot() {
       try {
@@ -50360,7 +50362,8 @@
         const parent = node.parentElement;
         if (!parent) continue;
         if (parent.closest(
-          '#chatFindModal, script, style, textarea, input, select, button, .conv-input-bar'
+          '#chatFindModal, script, style, textarea, input, select, button, .conv-input-bar,'
+          + ' [hidden], [aria-hidden="true"]'
         )) continue;
         const hay = node.nodeValue || '';
         if (!hay) continue;
@@ -50373,12 +50376,25 @@
             const r = document.createRange();
             r.setStart(node, at);
             r.setEnd(node, at + query.length);
-            ranges.push(r);
+            // The transcript keeps collapsed tool details and replay-future
+            // messages in the DOM. Those text nodes used to count as hits even
+            // though stepping to them could not show the word on screen.
+            if (r.getClientRects().length) ranges.push(r);
           } catch (_) {}
           from = at + needle.length;
         }
       }
       return ranges;
+    }
+
+    async function chatFindLoadFullTranscript() {
+      const paneId = activePaneId();
+      const root = chatFindGetRoot();
+      const pane = paneByPaneId(paneId);
+      if (!root || !pane || !root.querySelector('.conv-load-earlier')) return;
+      pane.wantFull = true;
+      pane.lastLine = 0;
+      await fetchConversationEvents(paneId);
     }
 
     function chatFindScrollToRange(range) {
@@ -50409,12 +50425,17 @@
 
     // DOM + CSS Highlight search — never calls window.find(), so WebKit
     // cannot move focus or selection out of the find field.
-    function chatFindStep(opts) {
+    async function chatFindStep(opts) {
       opts = opts || {};
       const query = $chatFindInput.value;
       if (!query) {
         chatFindClear();
         return;
+      }
+      const generation = ++_chatFindBuildGeneration;
+      if (opts.rebuild) {
+        try { await chatFindLoadFullTranscript(); } catch (_) {}
+        if (generation !== _chatFindBuildGeneration || query !== $chatFindInput.value) return;
       }
       const root = chatFindGetRoot();
       if (!root) return;
@@ -50436,6 +50457,9 @@
     refreshChatFind = chatFindStep;
 
     function closeChatFindModal() {
+      if (_chatFindInputTimer) clearTimeout(_chatFindInputTimer);
+      _chatFindInputTimer = null;
+      _chatFindBuildGeneration++;
       if ($chatFindModal) $chatFindModal.style.display = 'none';
       chatFindClear();
       _flushDeferredSidebarRenderIfAny();
@@ -50447,6 +50471,8 @@
     $chatFindInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         e.preventDefault();
+        if (_chatFindInputTimer) clearTimeout(_chatFindInputTimer);
+        _chatFindInputTimer = null;
         chatFindStep({ backward: e.shiftKey });
       }
       if (e.key === 'ArrowDown') {
@@ -50464,11 +50490,19 @@
       }
     });
     $chatFindInput.addEventListener('input', () => {
+      if (_chatFindInputTimer) clearTimeout(_chatFindInputTimer);
       if (!$chatFindInput.value) {
+        _chatFindInputTimer = null;
+        _chatFindBuildGeneration++;
         chatFindClear();
         return;
       }
-      chatFindStep({ rebuild: true });
+      // Large transcripts can contain tens of thousands of text nodes. Wait
+      // for a short typing pause instead of rescanning after every character.
+      _chatFindInputTimer = setTimeout(() => {
+        _chatFindInputTimer = null;
+        chatFindStep({ rebuild: true });
+      }, 300);
     });
     if ($chatFindNext) {
       $chatFindNext.addEventListener('click', () => chatFindStep({ backward: false }));

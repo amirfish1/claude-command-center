@@ -1,0 +1,1 @@
+- Make in-conversation find search the full transcript after a short typing pause and skip matches hidden inside collapsed content.
