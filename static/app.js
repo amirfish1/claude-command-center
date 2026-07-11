@@ -18114,7 +18114,8 @@
       if (msg.isHuman) {
         // Already "typed" it into the input box above — the bubble itself
         // appears complete at once (one-shot submit), not word-by-word.
-        msgEl.querySelectorAll('.gc-replay-word').forEach(w => { w.style.display = ''; });
+        _replayRevealAllShells(msgEl);
+        msgEl.querySelectorAll('.gc-replay-word').forEach(w => { _replayRevealRun(w); });
         _gcReplayWordIndex = msg.wordCount;
       } else {
         _gcReplayWordIndex = 0;
@@ -18125,7 +18126,7 @@
     if (_gcReplayWordIndex < msg.wordCount) {
       const wordSpan = msgEl.querySelector(`.gc-replay-word[data-run-id="${_gcReplayWordIndex}"]`);
       if (wordSpan) {
-        wordSpan.style.display = '';
+        _replayRevealRun(wordSpan);
         wordSpan.classList.add('gc-typing-shimmer');
         body.scrollTop = body.scrollHeight;
 
@@ -18179,7 +18180,35 @@
   // `display:none` collapses a hidden run to zero size, so revealed text
   // grows the block as it goes. `<pre>`/`<code>` blocks are kept as a
   // single run — revealing a code block or an inline ref word-by-word
-  // reads as broken, not "typed".
+  // reads as broken, not "typed". Markdown shells that have their own
+  // visible chrome (`li` bullets, blockquote rails, table boxes) are hidden
+  // until their first wrapped run is reached, otherwise empty bullets/boxes
+  // print ahead of the word cursor.
+  function _replayRunId(runEl) {
+    const n = Number(runEl && runEl.dataset ? runEl.dataset.runId : NaN);
+    return Number.isFinite(n) ? n : null;
+  }
+  function _replayRevealShellsForRun(runEl) {
+    const runId = _replayRunId(runEl);
+    if (runId == null) return;
+    let node = runEl.parentElement;
+    while (node) {
+      if (node.dataset && node.dataset.replayShellFirstRunId != null) {
+        const firstRun = Number(node.dataset.replayShellFirstRunId);
+        if (Number.isFinite(firstRun) && firstRun <= runId) node.style.display = '';
+      }
+      node = node.parentElement;
+    }
+  }
+  function _replayRevealRun(runEl) {
+    if (!runEl) return;
+    _replayRevealShellsForRun(runEl);
+    runEl.style.display = '';
+  }
+  function _replayRevealAllShells(container) {
+    if (!container) return;
+    container.querySelectorAll('[data-replay-shell-first-run-id]').forEach(el => { el.style.display = ''; });
+  }
   function _wrapReplayWordsInHtml(htmlContent, spanClass) {
     const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
     const textNodes = [];
@@ -18214,6 +18243,14 @@
       }
       node.replaceWith(fragment);
     }
+
+    const shellSelector = 'p, li, ul, ol, blockquote, table, thead, tbody, tr, th, td, h1, h2, h3, h4, h5, h6';
+    doc.body.querySelectorAll(shellSelector).forEach(el => {
+      const firstRun = el.querySelector('[data-run-id]');
+      if (!firstRun || !firstRun.dataset) return;
+      el.dataset.replayShellFirstRunId = firstRun.dataset.runId;
+      el.style.display = 'none';
+    });
 
     return { html: doc.body.innerHTML, count: runId };
   }
@@ -18426,7 +18463,8 @@
   // never get stuck with some words still hidden.
   function _convReplayRevealAllWordsInstantly(container) {
     if (!container) return;
-    container.querySelectorAll('.conv-replay-word').forEach(span => { span.style.display = ''; });
+    _replayRevealAllShells(container);
+    container.querySelectorAll('.conv-replay-word').forEach(span => { _replayRevealRun(span); });
   }
 
   function _convReplayClearWordReveal() {
@@ -18453,7 +18491,7 @@
     _convReplayWordContainer = container;
     _convReplayWordIdx = wordIdx;
     const span = container.querySelector(`[data-run-id="${wordIdx}"]`);
-    if (span) span.style.display = '';
+    if (span) _replayRevealRun(span);
     _scrollConvReplayToBottom(item.paneId);
     // Budget the whole message's type-in to roughly the old flat per-message
     // delay (charCount * 4, clamped 1.2-3.5s), spread across its words —
@@ -18526,7 +18564,7 @@
     const shouldStick = _convShouldLiveRevealStickToBottom($view);
     const span = container.querySelector(`.conv-live-word[data-run-id="${wordIdx}"]`);
     if (span) {
-      span.style.display = '';
+      _replayRevealRun(span);
       span.classList.add('gc-typing-shimmer');
     }
     if (shouldStick && $view) scrollConversationToEnd($view);
