@@ -32026,7 +32026,13 @@
   // CCC session can be told "show WT here" without hunting for a WT session.
   const _UXQ_SCOPE_LS = 'ccc-uxq-scope';
   function _uxqScopeKey() {
-    try { const r = openConvRow(); return (r && (r.id || r.session_id)) || ''; } catch (_) { return ''; }
+    try {
+      const r = openConvRow();
+      const rowKey = r && (r.id || r.session_id);
+      if (rowKey) return rowKey;
+      if (typeof currentConversation !== 'undefined' && currentConversation) return currentConversation;
+      return '__queue_global__';
+    } catch (_) { return '__queue_global__'; }
   }
   function _uxqLoadScopeMap() {
     try { return JSON.parse(localStorage.getItem(_UXQ_SCOPE_LS) || '{}') || {}; } catch (_) { return {}; }

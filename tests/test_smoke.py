@@ -2843,6 +2843,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _UXQ_PROJECT_ALIASES = { CC: 'CCC' };", app_js)
         self.assertIn("return _UXQ_PROJECT_ALIASES[key] || key;", key_body)
 
+    def test_queue_scope_key_survives_missing_open_row(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        key_start = app_js.index("function _uxqScopeKey()")
+        key_body = app_js[key_start:app_js.index("function _uxqLoadScopeMap()", key_start)]
+        self.assertIn("const rowKey = r && (r.id || r.session_id);", key_body)
+        self.assertIn("if (rowKey) return rowKey;", key_body)
+        self.assertIn("if (typeof currentConversation !== 'undefined' && currentConversation) return currentConversation;", key_body)
+        self.assertIn("return '__queue_global__';", key_body)
+
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         fn_start = app_js.index("function _uxFixesPlausibleSessionId(value)")
