@@ -38857,6 +38857,39 @@
     // the agent hasn't drained the queued input yet would otherwise bury the
     // message the user is still waiting to have acknowledged, stranding it
     // mid-transcript instead of right above the input box (CCC-515).
+    //
+    // Self-heal first: a STEERed message lands in the rollout almost
+    // immediately (mid-turn), so its durable `user_text` can render in an
+    // earlier batch than the moment the optimistic echo is created. When that
+    // happens the reconciliation pass at the top of this render (which only
+    // fires while PROCESSING a matching user_text event) never sees the echo,
+    // so the "✓ Steered" ghost stays pinned to the tail forever — the user
+    // sees their message twice (once in place, once floating at the bottom).
+    // Before re-anchoring, drop any echo whose text already exists as a
+    // durable (non-echo) row on screen: the real message is proven present,
+    // so the optimistic copy is redundant.
+    if (_pendingSends.length) {
+      const _durableUserTexts = [];
+      for (const el of $view.querySelectorAll(
+          '.event.user_text:not(.pending):not(.send-queued)'
+          + ':not(.send-delivered):not(.not-acknowledged)')) {
+        const um = el.querySelector('.user-msg');
+        if (um) _durableUserTexts.push(_normSend(um.getAttribute('data-raw-text') || um.textContent));
+      }
+      if (_durableUserTexts.length) {
+        for (const p of _pendingSends.slice()) {
+          if (!p || !p.text) continue;
+          if (_durableUserTexts.indexOf(_normSend(p.text)) < 0) continue;
+          if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
+          if (p.timer) clearTimeout(p.timer);
+          if (p.sid) clearSessionSending(p.sid);
+          const _i = _pendingSends.indexOf(p);
+          if (_i >= 0) _pendingSends.splice(_i, 1);
+          const _pane = paneByPaneId(paneId);
+          if (_pane && currentConversation) syncPendingSendsMapForConv(_pane, currentConversation);
+        }
+      }
+    }
     for (const p of _pendingSends) {
       if (p.element && p.element.parentNode === $view && p.element !== $view.lastElementChild) {
         $view.appendChild(p.element);
