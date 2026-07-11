@@ -17835,6 +17835,38 @@ body:has(.gc-reader) .pwa-install-banner {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+/* Group-chat replay presents each participant message as a centered, 2x
+   "hero" card while its words arrive, then flies that card into the slot
+   already reserved by the hidden transcript copy. System lifecycle entries
+   stay in the transcript and retain their quieter word reveal. */
+.gc-replay-hero-target {
+  opacity: 0;
+}
+.gc-replay-hero-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10010;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.38);
+  transition: background-color 240ms ease;
+}
+.gc-replay-hero-backdrop.is-landing {
+  background: transparent;
+}
+.gc-message.gc-replay-hero {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  max-width: none;
+  margin: 0 !important;
+  pointer-events: none;
+  background: var(--bg);
+  transform: translate(-50%, -50%) scale(2);
+  transform-origin: center center;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58), 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  will-change: transform;
+}
 .gc-in-replay .gc-message-receipts-row,
 .gc-in-replay .gc-message-nudged-row {
   margin-top: 4px;

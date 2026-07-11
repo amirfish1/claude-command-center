@@ -17552,6 +17552,12 @@
   let _gcReplayAllNonSys = [];
   let _gcReplaySpeakersAfter = [];
   let _onReplayKeyDownRef = null;
+  // While a replay message is being read, a presentation clone sits at 2x
+  // scale in the viewport center. Once the message is complete, the clone
+  // flies into the real transcript slot and hands visibility back to it.
+  // Keeping the clone separate lets the transcript reserve its final layout
+  // (and continue auto-scrolling) without the user seeing two copies.
+  let _gcReplayHero = null;
   // Human replay messages "type" into the real reply box instead of
   // revealing word-by-word in a bubble (annotation: make it look like the
   // human is actually typing, then it submits in one shot). Progress is
@@ -17792,6 +17798,7 @@
 
   function startReplay(data) {
     if (!data || !data.content) return;
+    _gcReplayClearHero();
     _gcReplayActive = true;
     _gcReplayPaused = false;
     _gcReplaySpeed = 1;
@@ -17975,6 +17982,7 @@
   function exitReplayMode() {
     _gcReplayActive = false;
     _gcReplayPaused = false;
+    _gcReplayClearHero();
     if (_gcReplayTimeout) {
       clearTimeout(_gcReplayTimeout);
       _gcReplayTimeout = null;
@@ -18005,6 +18013,80 @@
 
     _gcLastMtime = null;
     pollGroupChatReader();
+  }
+
+  function _gcReplayClearHero() {
+    if (!_gcReplayHero) return;
+    if (_gcReplayHero.fallbackTimer) clearTimeout(_gcReplayHero.fallbackTimer);
+    if (_gcReplayHero.target) _gcReplayHero.target.classList.remove('gc-replay-hero-target');
+    if (_gcReplayHero.backdrop) _gcReplayHero.backdrop.remove();
+    _gcReplayHero = null;
+  }
+
+  function _gcReplayCreateHero(msgEl, replayIdx) {
+    if (!msgEl || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+    _gcReplayClearHero();
+
+    const rect = msgEl.getBoundingClientRect();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'gc-replay-hero-backdrop';
+    backdrop.setAttribute('aria-hidden', 'true');
+
+    const hero = msgEl.cloneNode(true);
+    hero.removeAttribute('data-replay-idx');
+    hero.classList.remove('gc-replay-hero-target');
+    hero.classList.add('gc-replay-hero');
+    hero.style.width = rect.width + 'px';
+    backdrop.appendChild(hero);
+
+    msgEl.classList.add('gc-replay-hero-target');
+    document.body.appendChild(backdrop);
+    _gcReplayHero = { backdrop, hero, target: msgEl, replayIdx, landing: false, fallbackTimer: null };
+  }
+
+  function _gcReplayLandHero(msgEl, replayIdx) {
+    const state = _gcReplayHero;
+    if (!state || state.target !== msgEl || state.replayIdx !== replayIdx || state.landing) return;
+    state.landing = true;
+
+    const targetRect = msgEl.getBoundingClientRect();
+    const targetCenterX = targetRect.left + targetRect.width / 2;
+    const targetCenterY = targetRect.top + targetRect.height / 2;
+    const dx = window.innerWidth / 2 - targetCenterX;
+    const dy = window.innerHeight / 2 - targetCenterY;
+    const duration = Math.max(180, 620 / _gcReplaySpeed);
+
+    // Rebase the centered clone onto the target's coordinate system without
+    // moving it visually. The next frame can then transition both the 2x
+    // scale and center offset cleanly to the real card's scale and position.
+    state.hero.style.transition = 'none';
+    state.hero.style.left = targetRect.left + 'px';
+    state.hero.style.top = targetRect.top + 'px';
+    state.hero.style.width = targetRect.width + 'px';
+    state.hero.style.transform = `translate(${dx}px, ${dy}px) scale(2)`;
+    void state.hero.offsetWidth;
+
+    let finished = false;
+    const finish = () => {
+      if (finished || _gcReplayHero !== state) return;
+      finished = true;
+      _gcReplayClearHero();
+      if (_gcReplayActive) playNextReplayStep();
+    };
+    state.hero.addEventListener('transitionend', (event) => {
+      if (event.propertyName === 'transform') finish();
+    }, { once: true });
+    state.fallbackTimer = setTimeout(finish, duration + 120);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (_gcReplayHero !== state) return;
+        state.backdrop.classList.add('is-landing');
+        state.hero.style.transition = `transform ${duration}ms cubic-bezier(.2,.8,.2,1), box-shadow ${duration}ms ease`;
+        state.hero.style.transform = 'translate(0, 0) scale(1)';
+        state.hero.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.28)';
+      });
+    });
   }
 
   // Drives the "human is typing this reply" illusion for one replay tick.
@@ -18121,6 +18203,7 @@
         _gcReplayWordIndex = 0;
       }
       body.scrollTop = body.scrollHeight;
+      if (!msg.isSystem) _gcReplayCreateHero(msgEl, _gcReplayMsgIndex);
     }
 
     if (_gcReplayWordIndex < msg.wordCount) {
@@ -18128,6 +18211,13 @@
       if (wordSpan) {
         _replayRevealRun(wordSpan);
         wordSpan.classList.add('gc-typing-shimmer');
+        const heroWord = _gcReplayHero && _gcReplayHero.replayIdx === _gcReplayMsgIndex
+          ? _gcReplayHero.hero.querySelector(`.gc-replay-word[data-run-id="${_gcReplayWordIndex}"]`)
+          : null;
+        if (heroWord) {
+          _replayRevealRun(heroWord);
+          heroWord.classList.add('gc-typing-shimmer');
+        }
         body.scrollTop = body.scrollHeight;
 
         // Budget the whole message's type-in to roughly its old flat
@@ -18139,6 +18229,7 @@
 
         _gcReplayTimeout = setTimeout(() => {
           wordSpan.classList.remove('gc-typing-shimmer');
+          if (heroWord) heroWord.classList.remove('gc-typing-shimmer');
           _gcReplayWordIndex++;
           playNextReplayStep();
         }, delay);
@@ -18147,6 +18238,14 @@
         playNextReplayStep();
       }
     } else {
+      if (_gcReplayHero && _gcReplayHero.replayIdx === _gcReplayMsgIndex) {
+        if (!_gcReplayHero.landing) {
+          body.scrollTop = body.scrollHeight;
+          _gcReplayLandHero(msgEl, _gcReplayMsgIndex);
+        }
+        return;
+      }
+
       const footer = msgEl.querySelector('.gc-message-footer');
       if (footer && !footer.innerHTML) {
         const alertsHtml = msg.isSystem ? '' : _gcReplayAlertsHtml(msg.rawBody, msg.originalIndex, msg.when);
