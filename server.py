@@ -21193,6 +21193,7 @@ def _codex_spawn_via_app_server(
     spawn_cwd,
     repo_for_logs,
     model_to_use,
+    reasoning_effort="",
     image_paths=None,
     parent_session_id=None,
     timestamp=None,
@@ -21278,6 +21279,7 @@ def _codex_spawn_via_app_server(
             "name": session_name,
             "cwd": spawn_cwd,
             "model": model_to_use or "",
+            "reasoning_effort": reasoning_effort or "",
             "transport": _codex_app_server_transport_kind(),
         }, sort_keys=True) + "\n")
         if rename_warning:
@@ -21300,6 +21302,7 @@ def _codex_spawn_via_app_server(
                 cwd=spawn_cwd,
                 model=model_to_use,
                 image_paths=image_paths,
+                effort=reasoning_effort or None,
             ),
             timeout=20,
         )
@@ -21450,6 +21453,7 @@ def _codex_spawn_via_app_server(
             "worktree_branch": worktree_branch or "",
         },
     )
+    _set_session_override(thread_id, model_to_use, False, "codex", reasoning_effort)
     resp = {
         "ok": True,
         "pid": spawn_id,
@@ -35984,7 +35988,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None):
     """Spawn a headless Codex run and return tracking info.
 
     Prefer the Codex app-server for fresh durable threads when available. If
@@ -36040,6 +36044,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         spawn_cwd=spawn_cwd,
         repo_for_logs=repo_for_logs,
         model_to_use=model_to_use,
+        reasoning_effort=reasoning_effort,
         image_paths=image_paths,
         parent_session_id=parent_session_id,
         timestamp=timestamp,
@@ -36075,6 +36080,8 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         "--model", model_to_use,
         "--cd", spawn_cwd,
     ]
+    if reasoning_effort:
+        cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
     for image_path in image_paths:
         cmd.extend(["--image", image_path])
     cmd.extend(["--", prompt])
@@ -55819,6 +55826,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
+            reasoning_effort = str(payload.get("reasoning_effort") or "").strip().lower()
+            if reasoning_effort not in CODEX_REASONING_EFFORTS:
+                reasoning_effort = ""
             model, model_error = _validate_codex_model(
                 _spawn_model_for_engine("codex", model),
                 require_available=True,
@@ -55842,6 +55852,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         repo_path=payload.get("repo_path"),
                         worktree=bool(payload.get("worktree")),
                         model=model,
+                        reasoning_effort=reasoning_effort,
                     )
                     # Resolver-side failures (binary not found, CCC_CODEX_BIN
                     # misconfigured) carry a stable `"code": "codex_unavailable"`

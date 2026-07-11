@@ -11690,6 +11690,18 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("const currentReasoning = btn.dataset.reasoning || '';", js)
         self.assertIn("const isActive = lvl.id === currentReasoning;", js)
 
+    def test_new_codex_session_composer_sends_selected_reasoning_effort(self):
+        """New Codex sessions need an effort picker alongside their model picker."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+
+        self.assertIn('id="convInputEffortSelect"', html)
+        self.assertIn("const $convInputEffortSelect", js)
+        self.assertIn("spawnBody.reasoning_effort = $convInputEffortSelect.value", js)
+        self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", server_py)
+        self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', server_py)
+
     def test_context_footer_renders_token_optimizer_quality_score(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()

@@ -5444,6 +5444,7 @@
       codexAppSrvLabel: q('.codex-appsrv-label') || (root === $convInputBar ? $convCodexAppSrvLabel : null),
       engineSelect: q('.engine-select') || (root === $convInputBar ? document.getElementById('convInputEngineSelect') : null),
       modelSelect: q('.model-select') || (root === $convInputBar ? document.getElementById('convInputModelSelect') : null),
+      effortSelect: q('.effort-select') || (root === $convInputBar ? document.getElementById('convInputEffortSelect') : null),
     };
   }
   // Guards the Compact button while a compaction request is in flight so a
@@ -5844,6 +5845,7 @@
     const activeCodexAppSrvLabel = activeInputControls.codexAppSrvLabel;
     const activeEngineSelect = activeInputControls.engineSelect;
     const activeModelSelect = activeInputControls.modelSelect;
+    const activeEffortSelect = activeInputControls.effortSelect;
     const isPkood = currentSession.source === 'pkood';
     const isCodex = currentSession.source === 'codex';
     const isGemini = currentSession.source === 'gemini';
@@ -6049,6 +6051,9 @@
           const options = modelOptionsForSpawnEngine(engine, defaultModel, true);
           activeModelSelect.style.display = (options.length === 0 && !defaultModel) ? 'none' : '';
         }
+      }
+      if (activeEffortSelect) {
+        activeEffortSelect.style.display = isNewSession && getSpawnEngine() === 'codex' ? '' : 'none';
       }
     } else {
       _activeInputBar.classList.remove('visible');
@@ -43551,6 +43556,7 @@
   // is the canonical read used by every spawn handler.
   const $convInputEngineSelect = document.getElementById('convInputEngineSelect');
   const $convInputModelSelect = document.getElementById('convInputModelSelect');
+  const $convInputEffortSelect = document.getElementById('convInputEffortSelect');
   const $kptToolbarEngineSelect = document.getElementById('kptToolbarEngineSelect');
   function getSpawnEngine() {
     return normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
@@ -49724,6 +49730,9 @@
         }
       }
       if (spawnSupportsWorktree(engine)) spawnBody.worktree = useWorktree;
+      if (engine === 'codex' && $convInputEffortSelect && $convInputEffortSelect.value) {
+        spawnBody.reasoning_effort = $convInputEffortSelect.value;
+      }
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(spawnBody),
