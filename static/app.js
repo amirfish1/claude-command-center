@@ -35537,6 +35537,7 @@
     const ovrNorm = ovr ? _normalizeModelId(ovr.model) : '';
     const liveNorm = _normalizeModelId(liveModel);
     const queued = !!ovr && ovrNorm && ovrNorm !== liveNorm;
+    const currentReasoningEffort = (ovr && ovr.reasoning_effort) || u.reasoning_effort || '';
     // Chip names the queued target unless the pill itself already does
     // (no live model yet → the override IS the pill text, chip says "next").
     const shortOvrModel = ovr
@@ -35560,6 +35561,7 @@
           ? engine + ' (model unknown — latest event was synthesized by the client; the next real turn will populate this)'
           : displayModel)
         + (isOneM ? '\n(1M context window — anthropic-beta: context-1m)' : '')
+        + (currentReasoningEffort ? '\nReasoning effort: ' + currentReasoningEffort : '')
         + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued — applies on the session\'s next CCC-resumed ask)' : '')
         + (engine === 'antigravity' ? '' : '\n\nClick to change model');
       const modelInner = escapeHtml(shortModel)
@@ -35575,7 +35577,7 @@
           + ' data-engine="' + escapeHtml(engine) + '"'
           + ' data-current="' + escapeHtml(displayModel) + '"'
           + ' data-1m="' + (isOneM ? '1' : '0') + '"'
-          + ' data-reasoning="' + escapeHtml((ovr && ovr.reasoning_effort) || '') + '"'
+          + ' data-reasoning="' + escapeHtml(currentReasoningEffort) + '"'
           + ' title="' + escapeHtml(modelTip) + '">'
           + modelInner
           + '</button>';

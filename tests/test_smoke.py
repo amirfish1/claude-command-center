@@ -11159,6 +11159,13 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("'calc'", js)
         self.assertIn("' · /ctx '", js)
 
+    def test_codex_model_picker_marks_current_reasoning_effort(self):
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("const currentReasoningEffort = (ovr && ovr.reasoning_effort) || u.reasoning_effort || '';", js)
+        self.assertIn('data-reasoning="\' + escapeHtml(currentReasoningEffort) + \'"', js)
+        self.assertIn("const currentReasoning = btn.dataset.reasoning || '';", js)
+        self.assertIn("const isActive = lvl.id === currentReasoning;", js)
+
     def test_context_footer_renders_token_optimizer_quality_score(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
@@ -12238,6 +12245,48 @@ class TestThroughputCacheAdjusted(unittest.TestCase):
         self.assertEqual(summary["total_output_tokens"], 160)
         self.assertEqual(summary["total_effective_input_tokens"], 570)
         self.assertGreater(summary["cost_usd"], 0)
+
+    def test_codex_usage_extracts_reasoning_effort(self):
+        sid = "codex-usage-effort-session"
+        path = pathlib.Path(self.tmp) / "rollout-codex-effort.jsonl"
+        events = [
+            {
+                "type": "turn_context",
+                "timestamp": "2026-07-11T03:00:00.000Z",
+                "payload": {"model": "gpt-5.6-sol", "effort": "high"},
+            },
+            {
+                "type": "event_msg",
+                "timestamp": "2026-07-11T03:00:01.000Z",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "model_context_window": 353_000,
+                        "last_token_usage": {
+                            "input_tokens": 61_000,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 120,
+                        },
+                        "total_token_usage": {
+                            "input_tokens": 61_000,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 120,
+                        },
+                    },
+                },
+            },
+        ]
+        with path.open("w", encoding="utf-8") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+
+        with mock.patch.object(self.server, "_resolve_codex_rollout_path", return_value=path), \
+             mock.patch.object(self.server, "_codex_thread_row", return_value={}), \
+             mock.patch.object(self.server, "_get_session_override", return_value=None):
+            usage = self.server._extract_codex_usage(sid)
+
+        self.assertEqual(usage["model"], "gpt-5.6-sol")
+        self.assertEqual(usage["reasoning_effort"], "high")
 
     def test_claude_throughput_dedupes_message_snapshots(self):
         sid = "00000000-0000-4000-8000-000000000abf"

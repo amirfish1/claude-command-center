@@ -25534,6 +25534,7 @@ def _extract_codex_usage(session_id):
         "total_cache_creation_tokens": 0,
         "total_cache_read_tokens": 0,
         "model": "",
+        "reasoning_effort": "",
         "context_limit": 0,
         "cost_usd": 0.0,
         "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
@@ -25548,6 +25549,7 @@ def _extract_codex_usage(session_id):
     peak = 0
     context_limit = 0
     model = row.get("model") or ""
+    reasoning_effort = row.get("reasoning_effort") or ""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -25558,6 +25560,13 @@ def _extract_codex_usage(session_id):
                 payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
                 if ev.get("type") == "turn_context":
                     model = payload.get("model") or model
+                    settings = ((payload.get("collaboration_mode") or {}).get("settings") or {})
+                    effort = (
+                        payload.get("effort")
+                        or payload.get("reasoning_effort")
+                        or (settings.get("reasoning_effort") if isinstance(settings, dict) else None)
+                    )
+                    reasoning_effort = effort or reasoning_effort
                 if payload.get("type") != "token_count":
                     continue
                 info = payload.get("info") or {}
@@ -25591,6 +25600,7 @@ def _extract_codex_usage(session_id):
         "total_cache_creation_tokens": 0,
         "total_cache_read_tokens": cache_read,
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "context_limit": context_limit,
         "cost_usd": 0.0,
         "override": _get_session_override(session_id),
