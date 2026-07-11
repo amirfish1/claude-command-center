@@ -25416,7 +25416,7 @@ def resume_session_codex(session_id, text, *, steer=False):
             }
     _resume_ledger_append(
         "codex_wake_attempt", sid=session_id,
-        cwd=cwd, model=model, steer=bool(steer),
+        cwd=cwd, model=model, effort=reasoning_effort, steer=bool(steer),
     )
     if steer:
         return _codex_steer_via_app_server(

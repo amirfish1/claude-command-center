@@ -4014,6 +4014,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (hasWakeProgress) {", app_js)
         self.assertIn("clearLiveGeneratingIndicator($view);", app_js)
 
+    def test_codex_wake_breakdown_starts_during_dormant_send(self):
+        """Dormant Codex sends should expose wake progress before inject-input returns."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+
+        self.assertIn("startCodexWakeBreakdown($wv, sid);", app_js)
+        self.assertIn("appendStageRow('Waiting for wake request', false, true);", app_js)
+        self.assertIn("waiting for server wake log", app_js)
+        self.assertIn("warning: ' + data.warning", app_js)
+        self.assertIn("detail: ' + data.outcome_detail", app_js)
+        self.assertIn("effort=reasoning_effort", server_py)
+        self.assertIn("overflow-wrap: anywhere;", app_css)
+
     def test_mobile_live_command_indicator_collapses_command_detail(self):
         """Mobile should show a compact Bash/tool pill instead of a multi-line
         command block at the bottom of the conversation pane."""

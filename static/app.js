@@ -3979,10 +3979,11 @@
     return false;
   }
   // ── Live Codex wake/turn breakdown ────────────────────────────────────────
-  // While "⏳ Codex resuming…" is up, poll /api/codex-wake-status and render a
-  // moment-to-moment breakdown (stage checklist + live token/context readout)
-  // beneath the status line — so the user sees what's happening, and sees when
-  // a turn produces nothing because the session is at its context limit.
+  // While a dormant Codex thread is waking/resuming, poll
+  // /api/codex-wake-status and render a moment-to-moment breakdown (stage
+  // checklist + live token/context readout) beneath the status line — so the
+  // user sees what's happening, and sees when a turn produces nothing because
+  // the session is at its context limit.
   let _codexWakePoll = null;
   let _codexWakePollSid = null;
   function stopCodexWakeBreakdown(removeEl) {
@@ -4031,9 +4032,7 @@
     const currentIdx = stages.findIndex(s => !s.done);
     const checklist = document.createElement('div');
     checklist.className = 'wb-stages';
-    stages.forEach((s, i) => {
-      const done = !!s.done;
-      const isCurrent = !done && i === currentIdx;
+    const appendStageRow = (labelText, done, isCurrent) => {
       const row = document.createElement('div');
       row.className = 'wb-stage' + (done ? ' is-done' : (isCurrent ? ' is-current' : ' is-pending'));
       const icon = document.createElement('span');
@@ -4041,11 +4040,19 @@
       if (done) icon.textContent = '✓';
       const label = document.createElement('span');
       label.className = 'wb-label';
-      label.textContent = _wakeStageLabel(s.name, data);
+      label.textContent = labelText;
       row.appendChild(icon);
       row.appendChild(label);
       checklist.appendChild(row);
-    });
+    };
+    if (stages.length) {
+      stages.forEach((s, i) => {
+        const done = !!s.done;
+        appendStageRow(_wakeStageLabel(s.name, data), done, !done && i === currentIdx);
+      });
+    } else {
+      appendStageRow('Waiting for wake request', false, true);
+    }
     const readout = document.createElement('div');
     readout.className = 'wb-readout';
     const parts = [];
@@ -4062,6 +4069,9 @@
       parts.push('context ' + _wakeInt(data.context_used) + '/' + _wakeInt(data.context_window) + ' (' + pct + '%)');
     }
     if (data.elapsed_s != null) parts.push(data.elapsed_s + 's');
+    if (!stages.length && !data.outcome) parts.push('waiting for server wake log');
+    if (data.warning) parts.push('warning: ' + data.warning);
+    if (data.outcome_detail && data.outcome !== 'reply') parts.push('detail: ' + data.outcome_detail);
     readout.textContent = parts.join(' · ');
     if (pct != null && pct >= 99) readout.classList.add('is-red');
     else if (pct != null && pct >= 90) readout.classList.add('is-amber');
@@ -6919,6 +6929,9 @@
     if (!compactCommand && !clearCommand && looksDormantNoProcess()) {
       const $wv = getConvViewForPane(paneId || activePaneId()) || getConvView();
       setOptimisticAgentThinking($wv, '⏻ Waking up&hellip;');
+      if (currentSession.source === 'codex') {
+        startCodexWakeBreakdown($wv, sid);
+      }
     }
     if (_ttsActive) await stopTextToSpeech();
     try {

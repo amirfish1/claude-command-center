@@ -9538,6 +9538,7 @@
     font-size: 11px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
     padding-top: 2px;
     border-top: 1px solid rgba(139,148,158,0.18);
   }
