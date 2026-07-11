@@ -4199,7 +4199,7 @@ def _live_activity_entry_for_session(session_id):
         tail = _extract_codex_tail_meta(path) if path else {}
         entry.update(_codex_activity_fields_from_tail(tail, True))
         app_activity = _codex_app_server_activity_fields(session_id)
-        if app_activity.get("sidecar_status"):
+        if app_activity.get("sidecar_status") and not _codex_app_activity_superseded_by_tail(app_activity, tail):
             entry.update(app_activity)
         entry["pending_tool"] = tail.get("pending_tool")
         entry["pending_file"] = tail.get("pending_file")
@@ -16914,13 +16914,37 @@ def _session_has_pending_input(session_id):
     return False
 
 
+def _session_has_dynamic_conversation_overlay(session_id):
+    """True when /api/conversations has synthetic rows outside the JSONL.
+
+    Pre-serialized response bodies are keyed on rollout mtime/size. That is fine
+    for pure transcript rows, but dynamic overlays such as queued inputs and
+    Codex app-server notifications can change while the rollout file does not.
+    """
+    if _session_has_pending_input(session_id):
+        return True
+    try:
+        state = _codex_app_server_thread_state(session_id)
+    except Exception:
+        state = {}
+    if not state:
+        return False
+    if state.get("coordination_events"):
+        return True
+    if state.get("active_item") or state.get("active_items"):
+        return True
+    if state.get("recent_items") or state.get("last_item"):
+        return True
+    return False
+
+
 def _conv_response_bytes_get(conversation_id, after_line):
     mtime = _conv_parse_jsonl_mtime(conversation_id)
     if mtime[0] <= 0:
         return None
-    # Queued injects are not in the JSONL yet; a pre-baked response from
-    # before the queue grew would omit them until mtime changes.
-    if _session_has_pending_input(conversation_id):
+    # Dynamic overlays are not in the JSONL yet; a pre-baked response from
+    # before they changed would omit them until mtime changes.
+    if _session_has_dynamic_conversation_overlay(conversation_id):
         return None
     key = (conversation_id, int(after_line), mtime)
     with _CONV_BYTES_CACHE_LOCK:
@@ -18328,7 +18352,7 @@ CODEX_GOALS_DB_CANDIDATES = (
     Path.home() / ".codex" / "sqlite" / "goals_1.sqlite",
 )
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
-_CODEX_META_VERSION = 3
+_CODEX_META_VERSION = 4
 CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
@@ -18357,6 +18381,8 @@ _CODEX_APP_SERVER_RESPONSES = {}
 _CODEX_APP_SERVER_EVENT_SEQ = 0
 _CODEX_APP_SERVER_THREAD_STATE = {}
 _CODEX_APP_SERVER_TURN_THREAD = {}
+_CODEX_APP_SERVER_WARMUP_LOCK = threading.Lock()
+_CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_TELEMETRY_TURNS = {}
 _CODEX_APP_SERVER_RECENT_ITEM_MAX = 24
 _CODEX_APP_SERVER_ITEM_TEXT_MAX = 1200
@@ -18617,6 +18643,8 @@ def _codex_app_server_state_payload_unlocked():
         for key in (
             "thread_id",
             "status",
+            "active_flags",
+            "thread_needs_approval",
             "event_seq",
             "last_event",
             "last_event_at",
@@ -18625,6 +18653,8 @@ def _codex_app_server_state_payload_unlocked():
             "active_turn_id",
             "last_completed_turn_id",
             "token_usage",
+            "thread_settings",
+            "pending_approval_request",
             "active_item",
             "last_item",
             "recent_items",
@@ -18861,7 +18891,7 @@ def _resolve_codex_bin():
 
 
 def _codex_notification_thread_id(method, params):
-    for key in ("threadId", "thread_id"):
+    for key in ("threadId", "thread_id", "conversationId", "conversation_id"):
         value = params.get(key) if isinstance(params, dict) else None
         if value:
             return str(value)
@@ -18890,13 +18920,90 @@ def _codex_notification_turn_id(method, params):
     return None
 
 
+def _codex_app_server_request_thread_id(method, params):
+    return _codex_notification_thread_id(method, params)
+
+
+def _codex_app_server_request_turn_id(method, params):
+    return _codex_notification_turn_id(method, params)
+
+
+def _codex_app_server_flag_token(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    return re.sub(r"[^a-zA-Z0-9]+", "_", text).strip("_").lower()
+
+
+def _codex_app_server_flags_need_approval(flags):
+    if not isinstance(flags, (list, tuple, set)):
+        flags = [flags] if flags else []
+    tokens = {_codex_app_server_flag_token(flag) for flag in flags if flag}
+    return bool(tokens & {
+        "waiting_on_approval",
+        "waiting_for_approval",
+        "approval_required",
+        "approval_requested",
+        "needs_approval",
+        "requires_approval",
+        "permission_required",
+        "waiting_on_permission",
+    })
+
+
+def _codex_app_server_status_fields(status_obj):
+    if isinstance(status_obj, dict):
+        status = status_obj.get("type") or status_obj.get("status") or status_obj.get("state")
+        flags = (
+            status_obj.get("activeFlags")
+            or status_obj.get("active_flags")
+            or status_obj.get("flags")
+            or []
+        )
+    else:
+        status = status_obj
+        flags = []
+    if not isinstance(flags, list):
+        flags = [flags] if flags else []
+    return {
+        "status": str(status or ""),
+        "active_flags": [str(flag) for flag in flags if flag],
+        "thread_needs_approval": _codex_app_server_flags_need_approval(flags),
+    }
+
+
+def _codex_app_server_thread_needs_approval(state):
+    if not isinstance(state, dict):
+        return False
+    if state.get("thread_needs_approval"):
+        return True
+    return _codex_app_server_flags_need_approval(state.get("active_flags") or [])
+
+
+def _codex_app_server_thread_approval_message(state):
+    if not isinstance(state, dict):
+        return "Codex is waiting for approval"
+    last_item = state.get("last_item") if isinstance(state.get("last_item"), dict) else {}
+    command = (last_item or {}).get("command")
+    if command:
+        return _codex_app_server_trim_text(
+            f"Codex is waiting for approval after: {_shell_command_activity_label(command, max_len=200)}",
+            240,
+        )
+    return "Codex is waiting for approval"
+
+
 def _codex_app_server_record_thread(thread_id, thread):
     if not thread_id or not isinstance(thread, dict):
         return
-    status = (thread.get("status") or {}).get("type") if isinstance(thread.get("status"), dict) else thread.get("status")
+    status_fields = _codex_app_server_status_fields(thread.get("status"))
+    status = status_fields.get("status")
     state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
     if status:
         state["status"] = status
+    state["active_flags"] = status_fields.get("active_flags") or []
+    state["thread_needs_approval"] = bool(status_fields.get("thread_needs_approval"))
     state["thread_id"] = thread_id
     state["last_event_at"] = time.time()
     turns = thread.get("turns") or []
@@ -18909,6 +19016,8 @@ def _codex_app_server_record_thread(thread_id, thread):
         _CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
     elif str(status or "").lower() == "idle":
         state.pop("active_turn_id", None)
+        state["thread_needs_approval"] = False
+        state["active_flags"] = []
     for turn in turns:
         if isinstance(turn, dict) and turn.get("id"):
             _CODEX_APP_SERVER_TURN_THREAD[str(turn["id"])] = thread_id
@@ -18965,6 +19074,194 @@ def _codex_app_server_file_change_detail(changes):
     return ", ".join(parts)
 
 
+def _codex_app_server_command_text(command):
+    if isinstance(command, list):
+        try:
+            return shlex.join([str(part) for part in command])
+        except Exception:
+            return " ".join(str(part) for part in command)
+    return "" if command is None else str(command)
+
+
+def _codex_app_server_file_changes_preview(changes):
+    if isinstance(changes, list):
+        return _codex_app_server_file_change_detail(changes)
+    if not isinstance(changes, dict):
+        return ""
+    parts = []
+    items = list(changes.items())
+    for path, change in items[:6]:
+        kind = "update"
+        if isinstance(change, dict):
+            raw_kind = change.get("type") or change.get("kind")
+            if isinstance(raw_kind, dict):
+                raw_kind = raw_kind.get("type")
+            if raw_kind:
+                kind = str(raw_kind)
+        parts.append(f"{kind} {path}")
+    if len(items) > 6:
+        parts.append(f"+{len(items) - 6} more")
+    return ", ".join(parts)
+
+
+_CODEX_APP_SERVER_APPROVAL_ITEM_TYPES = {
+    "commandExecution",
+    "fileChange",
+    "mcpToolCall",
+    "dynamicToolCall",
+    "collabAgentToolCall",
+    "permissions",
+}
+_CODEX_APP_SERVER_COMMAND_APPROVAL_METHODS = {
+    "item/commandExecution/requestApproval",
+    "execCommandApproval",
+}
+_CODEX_APP_SERVER_FILE_APPROVAL_METHODS = {
+    "item/fileChange/requestApproval",
+    "applyPatchApproval",
+}
+_CODEX_APP_SERVER_PERMISSION_APPROVAL_METHODS = {
+    "item/permissions/requestApproval",
+}
+_CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = (
+    _CODEX_APP_SERVER_COMMAND_APPROVAL_METHODS
+    | _CODEX_APP_SERVER_FILE_APPROVAL_METHODS
+    | _CODEX_APP_SERVER_PERMISSION_APPROVAL_METHODS
+)
+_CODEX_APP_SERVER_APPROVAL_STATUSES = {
+    "approval_required",
+    "approval_requested",
+    "awaiting_approval",
+    "blocked_on_approval",
+    "needs_approval",
+    "pending_approval",
+    "permission_required",
+    "permission_requested",
+    "requires_approval",
+    "requires_permission",
+    "waiting_for_approval",
+    "waiting_for_permission",
+}
+_CODEX_APP_SERVER_APPROVAL_BOOL_KEYS = (
+    "approvalRequired",
+    "approval_required",
+    "requiresApproval",
+    "requires_approval",
+    "needsApproval",
+    "needs_approval",
+    "permissionRequired",
+    "permission_required",
+)
+_CODEX_APP_SERVER_APPROVAL_MESSAGE_KEYS = (
+    "approvalMessage",
+    "approval_message",
+    "approvalPrompt",
+    "approval_prompt",
+    "permissionMessage",
+    "permission_message",
+    "justification",
+    "message",
+    "prompt",
+    "reason",
+)
+
+
+def _codex_app_server_status_text(value):
+    if isinstance(value, dict):
+        for key in ("type", "status", "state", "name"):
+            if value.get(key):
+                return str(value[key])
+        return ""
+    return str(value or "")
+
+
+def _codex_app_server_status_token(value):
+    text = _codex_app_server_status_text(value).strip()
+    if not text:
+        return ""
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", text)
+    return re.sub(r"[^a-zA-Z0-9]+", "_", text).strip("_").lower()
+
+
+def _codex_app_server_truthy_approval_flag(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in ("", "0", "false", "no", "none", "null", "off"):
+        return False
+    return True
+
+
+def _codex_app_server_approval_dicts(item, params=None):
+    params = params if isinstance(params, dict) else {}
+    for obj in (item, params):
+        if not isinstance(obj, dict):
+            continue
+        yield obj
+        for key in ("approval", "permission", "permissions", "confirmation", "sandbox"):
+            child = obj.get(key)
+            if isinstance(child, dict):
+                yield child
+
+
+def _codex_app_server_item_needs_approval(item, params=None):
+    if not isinstance(item, dict):
+        item = {}
+    params = params if isinstance(params, dict) else {}
+    typ = str(item.get("type") or params.get("itemType") or params.get("item_type") or "")
+    if typ not in _CODEX_APP_SERVER_APPROVAL_ITEM_TYPES:
+        return False
+    status = item.get("status") if "status" in item else params.get("status")
+    if _codex_app_server_status_token(status) in _CODEX_APP_SERVER_APPROVAL_STATUSES:
+        return True
+    for obj in _codex_app_server_approval_dicts(item, params):
+        for key in _CODEX_APP_SERVER_APPROVAL_BOOL_KEYS:
+            if key in obj and _codex_app_server_truthy_approval_flag(obj.get(key)):
+                return True
+        for key in ("status", "state", "type"):
+            if _codex_app_server_status_token(obj.get(key)) in _CODEX_APP_SERVER_APPROVAL_STATUSES:
+                return True
+    actions = []
+    for obj in (item, params):
+        if not isinstance(obj, dict):
+            continue
+        for key in ("commandActions", "actions", "availableActions", "approvalActions"):
+            value = obj.get(key)
+            if isinstance(value, list):
+                actions.extend(value)
+    for action in actions:
+        if isinstance(action, dict):
+            text = " ".join(
+                str(action.get(key) or "")
+                for key in ("id", "type", "kind", "name", "label")
+            ).lower()
+        else:
+            text = str(action or "").lower()
+        if any(marker in text for marker in ("approval", "approve", "permission", "allow command", "deny")):
+            return True
+    return False
+
+
+def _codex_app_server_approval_message(item, params=None, fallback=""):
+    if not isinstance(item, dict):
+        item = {}
+    params = params if isinstance(params, dict) else {}
+    for obj in _codex_app_server_approval_dicts(item, params):
+        for key in _CODEX_APP_SERVER_APPROVAL_MESSAGE_KEYS:
+            value = obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return _codex_app_server_trim_text(value, 240)
+    command = item.get("command") or params.get("command")
+    if command:
+        label = _shell_command_activity_label(command, max_len=220)
+        return _codex_app_server_trim_text(f"Approval required for: {label}", 240)
+    return _codex_app_server_trim_text(fallback or "Codex is waiting for approval", 240)
+
+
 def _codex_app_server_item_summary(item, params=None, *, in_flight=None, now=None):
     """Compact a Codex app-server ThreadItem into CCC live-activity fields.
 
@@ -18978,8 +19275,11 @@ def _codex_app_server_item_summary(item, params=None, *, in_flight=None, now=Non
     typ = str(item.get("type") or params.get("itemType") or params.get("item_type") or "")
     status = item.get("status") or params.get("status") or ""
     item_id = _codex_app_server_item_id(item, params)
+    needs_approval = _codex_app_server_item_needs_approval(item, params)
     if in_flight is None:
-        in_flight = str(status or "").lower() in ("", "inprogress", "in_progress", "running", "pending")
+        in_flight = _codex_app_server_status_token(status) in ("", "inprogress", "in_progress", "running", "pending")
+    if needs_approval:
+        in_flight = True
     ts_ms = params.get("startedAtMs") or params.get("completedAtMs") or params.get("timestampMs")
     try:
         ts = float(ts_ms) / 1000.0 if ts_ms else float(now if now is not None else time.time())
@@ -19054,7 +19354,7 @@ def _codex_app_server_item_summary(item, params=None, *, in_flight=None, now=Non
         "type": typ,
         "tool": _codex_app_server_trim_text(tool, 120),
         "detail": _codex_app_server_trim_text(detail, 240),
-        "status": str(status or ("inProgress" if in_flight else "completed")),
+        "status": _codex_app_server_status_text(status) or ("approvalRequired" if needs_approval else ("inProgress" if in_flight else "completed")),
         "in_flight": bool(in_flight),
         "ts": ts,
         "updated_at": float(now if now is not None else time.time()),
@@ -19065,6 +19365,9 @@ def _codex_app_server_item_summary(item, params=None, *, in_flight=None, now=Non
         summary["output"] = _codex_app_server_trim_text(output, 600)
     if is_error:
         summary["is_error"] = True
+    if needs_approval:
+        summary["needs_approval"] = True
+        summary["approval_message"] = _codex_app_server_approval_message(item, params, fallback=detail or output)
     return summary
 
 
@@ -19076,6 +19379,39 @@ def _codex_app_server_latest_active_item(state):
     if not items:
         return None
     return max(items, key=lambda x: float(x.get("updated_at") or x.get("ts") or 0))
+
+
+def _codex_app_server_pending_approval_item(state):
+    if not isinstance(state, dict):
+        return None
+    candidates = []
+    pending = state.get("pending_approval_request") if isinstance(state.get("pending_approval_request"), dict) else None
+    if pending:
+        candidates.append(pending)
+    active_item = state.get("active_item") if isinstance(state.get("active_item"), dict) else None
+    if active_item:
+        candidates.append(active_item)
+    active_items = state.get("active_items") if isinstance(state.get("active_items"), dict) else {}
+    for item in active_items.values():
+        if isinstance(item, dict):
+            candidates.append(item)
+    if state.get("active_turn_id") or str(state.get("status") or "").lower() == "active":
+        last_item = state.get("last_item") if isinstance(state.get("last_item"), dict) else None
+        if last_item:
+            candidates.append(last_item)
+    seen = set()
+    deduped = []
+    for item in candidates:
+        key = item.get("id") or id(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    deduped.sort(key=lambda x: float(x.get("updated_at") or x.get("ts") or 0), reverse=True)
+    for item in deduped:
+        if item.get("needs_approval"):
+            return item
+    return None
 
 
 def _codex_app_server_push_recent_item(state, item):
@@ -19164,6 +19500,155 @@ def _codex_app_server_record_item_notification(state, method, params, now):
         state["last_item"] = current
 
 
+def _codex_app_server_approval_request_summary(request_id, method, params, now):
+    if not isinstance(params, dict):
+        params = {}
+    raw_request_id = request_id
+    request_id = str(request_id or "").strip()
+    approval_id = params.get("approvalId") or params.get("approval_id") or ""
+    item_id = (
+        params.get("itemId")
+        or params.get("item_id")
+        or params.get("callId")
+        or params.get("call_id")
+        or approval_id
+        or request_id
+    )
+    turn_id = _codex_app_server_request_turn_id(method, params) or ""
+    try:
+        ts = float(params.get("startedAtMs") or 0) / 1000.0
+    except (TypeError, ValueError):
+        ts = 0.0
+    if not ts:
+        ts = float(now or time.time())
+
+    tool = "Approval"
+    typ = "approval"
+    detail = ""
+    command = ""
+    message = str(params.get("reason") or "").strip()
+    can_approve = False
+
+    if method in _CODEX_APP_SERVER_COMMAND_APPROVAL_METHODS:
+        typ = "commandExecution"
+        tool = "Bash"
+        command = _codex_app_server_command_text(params.get("command"))
+        detail = _shell_command_activity_label(command, max_len=240) if command else ""
+        message = message or (f"Approve command: {detail}" if detail else "Codex is waiting for command approval")
+        can_approve = True
+    elif method in _CODEX_APP_SERVER_FILE_APPROVAL_METHODS:
+        typ = "fileChange"
+        tool = "apply_patch"
+        detail = (
+            _codex_app_server_file_changes_preview(params.get("changes"))
+            or _codex_app_server_file_changes_preview(params.get("fileChanges"))
+            or str(params.get("grantRoot") or "").strip()
+        )
+        if params.get("grantRoot") and not message:
+            message = f"Approve file writes under {params.get('grantRoot')}"
+        message = message or (f"Approve file changes: {detail}" if detail else "Codex is waiting for file-change approval")
+        can_approve = True
+    elif method in _CODEX_APP_SERVER_PERMISSION_APPROVAL_METHODS:
+        typ = "permissions"
+        tool = "Permissions"
+        permissions = params.get("permissions")
+        detail = (
+            str(params.get("cwd") or "").strip()
+            or _codex_app_server_json_preview(permissions)
+        )
+        message = message or "Codex is requesting additional permissions"
+        can_approve = isinstance(permissions, dict)
+    else:
+        return None
+
+    summary = {
+        "id": str(item_id or request_id),
+        "type": typ,
+        "tool": tool,
+        "detail": _codex_app_server_trim_text(detail, 240),
+        "status": "waiting_for_approval",
+        "in_flight": True,
+        "needs_approval": True,
+        "approval_message": _codex_app_server_trim_text(message, 240),
+        "request_id": request_id,
+        "request_id_raw": raw_request_id,
+        "approval_method": method,
+        "item_id": str(item_id or ""),
+        "turn_id": str(turn_id or ""),
+        "approval_id": str(approval_id or ""),
+        "can_approve": bool(can_approve),
+        "ts": ts,
+        "updated_at": float(now or time.time()),
+    }
+    if command:
+        summary["command"] = _codex_app_server_trim_text(command)
+    available = params.get("availableDecisions") or params.get("available_decisions")
+    if isinstance(available, list):
+        summary["available_decisions"] = available
+    if method in _CODEX_APP_SERVER_PERMISSION_APPROVAL_METHODS and isinstance(params.get("permissions"), dict):
+        summary["requested_permissions"] = params.get("permissions")
+    return summary
+
+
+def _codex_app_server_record_server_request(request_id, method, params):
+    global _CODEX_APP_SERVER_EVENT_SEQ
+    if not isinstance(params, dict):
+        params = {}
+    thread_id = _codex_app_server_request_thread_id(method, params)
+    turn_id = _codex_app_server_request_turn_id(method, params)
+    if thread_id and turn_id:
+        _CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
+    if not thread_id:
+        return False
+    if method not in _CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS:
+        return False
+
+    _CODEX_APP_SERVER_EVENT_SEQ += 1
+    now = time.time()
+    state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
+    state.update({
+        "thread_id": thread_id,
+        "event_seq": _CODEX_APP_SERVER_EVENT_SEQ,
+        "last_event": method,
+        "last_event_at": now,
+        "last_activity_at": now,
+        "status": "active",
+        "thread_needs_approval": True,
+    })
+    if turn_id:
+        state["last_turn_id"] = turn_id
+        state["active_turn_id"] = turn_id
+    flags = [str(flag) for flag in (state.get("active_flags") or []) if flag]
+    if "waitingOnApproval" not in flags:
+        flags.append("waitingOnApproval")
+    state["active_flags"] = flags
+
+    summary = _codex_app_server_approval_request_summary(request_id, method, params, now)
+    if summary:
+        active = state.setdefault("active_items", {})
+        if not isinstance(active, dict):
+            active = {}
+            state["active_items"] = active
+        item_key = summary.get("id") or summary.get("request_id")
+        if item_key:
+            active[item_key] = summary
+        state["pending_approval_request"] = summary
+        state["active_item"] = summary
+        state["last_item"] = summary
+    _save_codex_app_server_state_unlocked()
+    try:
+        _codex_telemetry_note_notification(method, params, thread_id, turn_id)
+    except Exception:
+        pass
+    return True
+
+
+def _codex_app_server_handle_server_request(request_id, method, params):
+    if method in _CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS:
+        return _codex_app_server_record_server_request(request_id, method, params)
+    return False
+
+
 def _codex_app_server_activity_fields(session_id):
     fields = {
         "sidecar_status": None,
@@ -19172,9 +19657,38 @@ def _codex_app_server_activity_fields(session_id):
         "sidecar_file": None,
         "sidecar_ts": 0,
         "sidecar_in_flight": False,
+        "needs_approval": False,
+        "needs_approval_message": "",
     }
     state = _codex_app_server_thread_state(session_id)
     if not state:
+        return fields
+    approval_item = _codex_app_server_pending_approval_item(state)
+    if approval_item:
+        message = approval_item.get("approval_message") or approval_item.get("detail") or approval_item.get("output") or ""
+        fields.update({
+            "sidecar_status": "active",
+            "sidecar_has_writes": False,
+            "sidecar_tool": approval_item.get("tool") or "Approval",
+            "sidecar_file": message,
+            "sidecar_ts": approval_item.get("ts") or state.get("last_activity_at") or time.time(),
+            "sidecar_in_flight": True,
+            "needs_approval": True,
+            "needs_approval_message": message or "Codex is waiting for approval",
+        })
+        return fields
+    if _codex_app_server_thread_needs_approval(state):
+        message = _codex_app_server_thread_approval_message(state)
+        fields.update({
+            "sidecar_status": "active",
+            "sidecar_has_writes": False,
+            "sidecar_tool": "Approval",
+            "sidecar_file": message,
+            "sidecar_ts": state.get("last_activity_at") or state.get("last_event_at") or time.time(),
+            "sidecar_in_flight": True,
+            "needs_approval": True,
+            "needs_approval_message": message,
+        })
         return fields
     status = str(state.get("status") or "").lower()
     active = bool(state.get("active_turn_id") or status == "active")
@@ -19228,15 +19742,22 @@ def _codex_app_server_handle_notification(method, params):
     if thread:
         _codex_app_server_record_thread(thread_id, thread)
     if method == "thread/status/changed":
-        status = params.get("status")
-        if isinstance(status, dict):
-            status = status.get("type")
+        status_fields = _codex_app_server_status_fields(params.get("status"))
+        status = status_fields.get("status")
         if status:
             state["status"] = str(status)
+            state["active_flags"] = status_fields.get("active_flags") or []
+            state["thread_needs_approval"] = bool(status_fields.get("thread_needs_approval"))
             if str(status).lower() == "idle":
                 state.pop("active_turn_id", None)
                 state.pop("active_item", None)
                 state.pop("active_items", None)
+                state["thread_needs_approval"] = False
+                state["active_flags"] = []
+    elif method == "thread/settings/updated":
+        settings = params.get("threadSettings") or params.get("thread_settings")
+        if isinstance(settings, dict):
+            state["thread_settings"] = settings
     elif method == "turn/started":
         if turn_id:
             state["active_turn_id"] = turn_id
@@ -19294,6 +19815,15 @@ def _codex_app_server_handle_message(payload):
     if not isinstance(payload, dict):
         return
     with _CODEX_APP_SERVER_LOCK:
+        method = payload.get("method")
+        if "id" in payload and method:
+            _codex_app_server_handle_server_request(
+                payload.get("id"),
+                str(method),
+                payload.get("params") or {},
+            )
+            _CODEX_APP_SERVER_LOCK.notify_all()
+            return
         if "id" in payload:
             result = payload.get("result")
             if isinstance(result, dict):
@@ -19304,7 +19834,6 @@ def _codex_app_server_handle_message(payload):
             _CODEX_APP_SERVER_RESPONSES[payload.get("id")] = payload
             _CODEX_APP_SERVER_LOCK.notify_all()
             return
-        method = payload.get("method")
         if method:
             _codex_app_server_handle_notification(str(method), payload.get("params") or {})
             _CODEX_APP_SERVER_LOCK.notify_all()
@@ -19315,6 +19844,179 @@ def _codex_app_server_thread_state(session_id):
         return {}
     with _CODEX_APP_SERVER_LOCK:
         return dict(_CODEX_APP_SERVER_THREAD_STATE.get(session_id) or {})
+
+
+def _codex_app_server_int(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _codex_app_server_pick_int(obj, *keys):
+    if not isinstance(obj, dict):
+        return None
+    for key in keys:
+        value = _codex_app_server_int(obj.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _codex_app_server_token_breakdown_public(raw):
+    if not isinstance(raw, dict):
+        raw = {}
+    input_tokens = _codex_app_server_pick_int(raw, "input_tokens", "inputTokens", "input")
+    cached_input_tokens = _codex_app_server_pick_int(
+        raw,
+        "cached_input_tokens",
+        "cachedInputTokens",
+        "cache_read_input_tokens",
+        "cacheReadInputTokens",
+        "cached",
+    )
+    output_tokens = _codex_app_server_pick_int(raw, "output_tokens", "outputTokens", "output")
+    reasoning_output_tokens = _codex_app_server_pick_int(
+        raw,
+        "reasoning_output_tokens",
+        "reasoningOutputTokens",
+        "reasoning",
+    )
+    total_tokens = _codex_app_server_pick_int(raw, "total_tokens", "totalTokens", "total")
+    if total_tokens is None:
+        total_tokens = (input_tokens or 0) + (output_tokens or 0)
+    return {
+        "input_tokens": input_tokens or 0,
+        "cached_input_tokens": cached_input_tokens or 0,
+        "output_tokens": output_tokens or 0,
+        "reasoning_output_tokens": reasoning_output_tokens or 0,
+        "total_tokens": total_tokens or 0,
+    }
+
+
+def _codex_app_server_token_usage_public(raw):
+    if not isinstance(raw, dict) or not raw:
+        return None
+    last_raw = raw.get("last") or raw.get("last_token_usage") or raw.get("lastTokenUsage")
+    total_raw = raw.get("total") or raw.get("total_token_usage") or raw.get("totalTokenUsage")
+    if not isinstance(last_raw, dict):
+        last_raw = {}
+    if not isinstance(total_raw, dict):
+        total_raw = raw
+    last = _codex_app_server_token_breakdown_public(last_raw)
+    total = _codex_app_server_token_breakdown_public(total_raw)
+    context_limit = _codex_app_server_pick_int(
+        raw,
+        "modelContextWindow",
+        "model_context_window",
+        "context_limit",
+        "contextLimit",
+    )
+    used_percent = None
+    if context_limit and context_limit > 0:
+        used_percent = round((total.get("total_tokens") or 0) * 100.0 / context_limit, 1)
+    public = dict(total)
+    public.update({
+        "context_limit": context_limit or 0,
+        "used_percent": used_percent,
+        "last": last,
+        "total": total,
+    })
+    return public
+
+
+def _codex_app_server_item_public(item):
+    if not isinstance(item, dict) or not item:
+        return None
+    public = {}
+    for key in (
+        "id",
+        "type",
+        "tool",
+        "detail",
+        "status",
+        "command",
+        "output",
+        "approval_message",
+        "request_id",
+        "approval_method",
+        "approval_id",
+        "turn_id",
+        "item_id",
+    ):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            public[key] = value
+    for key in ("in_flight", "needs_approval", "is_error", "can_approve"):
+        if key in item:
+            public[key] = bool(item.get(key))
+    available = item.get("available_decisions")
+    if isinstance(available, list):
+        public["available_decisions"] = available
+    for key in ("ts", "updated_at"):
+        try:
+            public[key] = float(item.get(key) or 0)
+        except (TypeError, ValueError):
+            public[key] = 0
+    return public or None
+
+
+def _codex_app_server_active_item_public(state):
+    if not isinstance(state, dict) or not state:
+        return None
+    approval_item = _codex_app_server_pending_approval_item(state)
+    if approval_item:
+        return _codex_app_server_item_public(approval_item)
+    active_item = state.get("active_item") if isinstance(state.get("active_item"), dict) else None
+    if active_item:
+        return _codex_app_server_item_public(active_item)
+    latest = _codex_app_server_latest_active_item(state)
+    if latest:
+        return _codex_app_server_item_public(latest)
+    status = str(state.get("status") or "").lower()
+    if state.get("active_turn_id") or status == "active":
+        ts = state.get("last_activity_at") or state.get("last_event_at") or time.time()
+        return {
+            "id": "",
+            "type": "reasoning",
+            "tool": "Thinking",
+            "detail": "",
+            "status": "inProgress",
+            "in_flight": True,
+            "needs_approval": False,
+            "ts": float(ts or 0),
+            "updated_at": float(ts or 0),
+        }
+    return None
+
+
+def _codex_app_server_thread_public_status(session_id):
+    """Small status payload for UI polling; no transcript/file reads."""
+    state = _codex_app_server_thread_state(session_id)
+    if not state:
+        return {
+            "event_seq": 0,
+            "last_activity_at": 0,
+            "last_event_at": 0,
+            "last_item_id": "",
+            "active_item": None,
+            "token_usage": None,
+        }
+    last_item = state.get("last_item") if isinstance(state.get("last_item"), dict) else {}
+    active_item = _codex_app_server_active_item_public(state)
+    item = active_item or last_item
+    return {
+        "event_seq": int(state.get("event_seq") or 0),
+        "last_activity_at": float(state.get("last_activity_at") or 0),
+        "last_event_at": float(state.get("last_event_at") or 0),
+        "last_item_id": str((item or {}).get("id") or ""),
+        "active_item": active_item,
+        "token_usage": _codex_app_server_token_usage_public(state.get("token_usage")),
+    }
 
 
 def _codex_app_server_reader(transport):
@@ -19428,7 +20130,47 @@ def _codex_app_server_request(method, params=None, timeout=20):
     return _codex_app_server_request_to_transport(transport, method, params=params, timeout=timeout)
 
 
-def _ensure_codex_app_server():
+def _codex_app_server_refresh_thread_status(session_id, *, max_age=2.0):
+    """Refresh app-server thread status flags from `thread/list`.
+
+    Some approval blockers only appear as thread-level `activeFlags` such as
+    `waitingOnApproval`; no item/started notification is emitted. Refreshing the
+    compact thread list lets CCC match Codex mobile/desktop status without
+    loading the full rollout or starting a turn.
+    """
+    if not session_id:
+        return False
+    now = time.time()
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(str(session_id), {})
+        try:
+            last = float(state.get("thread_status_refreshed_at") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        if now - last < max_age:
+            return False
+        state["thread_status_refreshed_at"] = now
+    try:
+        response = _codex_app_server_request("thread/list", {}, timeout=3)
+    except Exception:
+        return False
+    data = ((response or {}).get("result") or {}).get("data")
+    if not isinstance(data, list):
+        return False
+    changed = False
+    with _CODEX_APP_SERVER_LOCK:
+        for thread in data:
+            if not isinstance(thread, dict) or not thread.get("id"):
+                continue
+            _codex_app_server_record_thread(str(thread["id"]), thread)
+            if str(thread["id"]) == str(session_id):
+                changed = True
+        if changed:
+            _save_codex_app_server_state_unlocked()
+    return changed
+
+
+def _ensure_codex_app_server(*, allow_stdio=True):
     """Start and initialize a persistent Codex app-server if needed."""
     global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT, _CODEX_APP_SERVER_READER
     global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
@@ -19454,7 +20196,8 @@ def _ensure_codex_app_server():
     managed_path = _codex_managed_app_server_socket_path()
     if _codex_managed_app_server_enabled() and managed_path.exists():
         candidates.append(("managed-unix", managed_path))
-    candidates.append(("stdio", None))
+    if allow_stdio:
+        candidates.append(("stdio", None))
 
     for kind, arg in candidates:
         transport = None
@@ -19576,6 +20319,41 @@ def _codex_app_server_transport_kind():
     if transport.kind == "stdio":
         return "stdio"
     return transport.kind
+
+
+def _schedule_codex_managed_app_server_warmup():
+    """Kick managed app-server attach in the background, never on a poll path."""
+    global _CODEX_APP_SERVER_WARMUP_LAST
+    if _codex_app_server_is_live():
+        return False
+    if not _codex_managed_app_server_enabled():
+        return False
+    try:
+        if not _codex_managed_app_server_socket_path().exists():
+            return False
+    except Exception:
+        return False
+    with _CODEX_APP_SERVER_LOCK:
+        if _CODEX_APP_SERVER_INITIALIZING:
+            return False
+    now = time.time()
+    with _CODEX_APP_SERVER_WARMUP_LOCK:
+        if now - _CODEX_APP_SERVER_WARMUP_LAST < 2.0:
+            return False
+        _CODEX_APP_SERVER_WARMUP_LAST = now
+
+    def _warm():
+        try:
+            _ensure_codex_app_server(allow_stdio=False)
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=_warm,
+        daemon=True,
+        name="codex-managed-app-server-warmup",
+    ).start()
+    return True
 
 
 def _codex_user_input(text, image_paths=None):
@@ -19979,6 +20757,13 @@ _CODEX_COORD_EVENT_TEXT = {
 }
 
 
+def _codex_synthetic_event_ts_iso(ts):
+    try:
+        return datetime.fromtimestamp(float(ts), timezone.utc).isoformat().replace("+00:00", "Z")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
 def _get_codex_coordination_events_for_session(session_id):
     """Durable coordination events as synthetic conversation events.
 
@@ -20004,10 +20789,7 @@ def _get_codex_coordination_events_for_session(session_id):
         # ts as ISO-8601: the frontend's tsSpan does `new Date(ts)`, which
         # reads a bare number as epoch MILLISECONDS — raw epoch seconds
         # would render as January 1970.
-        try:
-            ts_iso = datetime.fromtimestamp(float(ts), timezone.utc).isoformat().replace("+00:00", "Z")
-        except (TypeError, ValueError, OverflowError, OSError):
-            ts_iso = ""
+        ts_iso = _codex_synthetic_event_ts_iso(ts)
         out.append({
             "line": f"coord-{session_id[:8]}-{int(float(ts or 0) * 1000)}-{kind}",
             "ts": ts_iso,
@@ -20017,6 +20799,114 @@ def _get_codex_coordination_events_for_session(session_id):
             "writer": writer,
             "text": ev.get("detail") or text,
         })
+    return out
+
+
+def _codex_app_server_item_line(session_id, item, active=False):
+    item_id = str((item or {}).get("id") or "").strip()
+    if not item_id:
+        try:
+            item_id = str(int(float((item or {}).get("ts") or 0) * 1000))
+        except (TypeError, ValueError, OverflowError):
+            item_id = "unknown"
+    suffix = "active" if active else "done"
+    return f"appitem-{session_id[:8]}-{item_id}-{suffix}"
+
+
+def _codex_app_server_item_event(session_id, item, *, active=False):
+    if not session_id or not isinstance(item, dict):
+        return None
+    tool = str(item.get("tool") or item.get("type") or "").strip()
+    detail = str(item.get("detail") or "").strip()
+    output = str(item.get("output") or "").strip()
+    item_type = str(item.get("type") or "").strip()
+    needs_approval = bool(item.get("needs_approval"))
+    overlay_item_types = _CODEX_APP_SERVER_APPROVAL_ITEM_TYPES | {
+        "webSearch",
+        "imageView",
+        "imageGeneration",
+        "subAgentActivity",
+    }
+    if not needs_approval and item_type not in overlay_item_types:
+        return None
+    if item_type == "reasoning" and tool == "Thinking" and not detail and not output:
+        return None
+    if not (tool or detail or output):
+        return None
+    ts = item.get("updated_at") or item.get("ts") or time.time()
+    status = str(item.get("status") or ("inProgress" if active else "completed"))
+    approval_message = str(item.get("approval_message") or "").strip()
+    text_bits = []
+    label = tool or item_type or "Codex"
+    if needs_approval:
+        text_bits.append(f"App-server live: {label} needs approval")
+    elif active:
+        text_bits.append(f"App-server live: {label} running")
+    elif item.get("is_error"):
+        text_bits.append(f"App-server live: {label} failed")
+    else:
+        text_bits.append(f"App-server live: {label} completed")
+    if approval_message:
+        text_bits.append(approval_message)
+    elif detail:
+        text_bits.append(detail)
+    elif output:
+        text_bits.append(output)
+    return {
+        "line": _codex_app_server_item_line(session_id, item, active=active),
+        "ts": _codex_synthetic_event_ts_iso(ts),
+        "type": "system",
+        "subtype": "codex_app_server_item",
+        "item_type": item_type,
+        "tool": tool,
+        "detail": detail,
+        "output": output,
+        "status": status,
+        "in_flight": bool(active or item.get("in_flight")),
+        "is_error": bool(item.get("is_error")),
+        "needs_approval": needs_approval,
+        "approval_message": approval_message,
+        "text": " - ".join(text_bits),
+    }
+
+
+def _get_codex_app_server_item_events_for_session(session_id):
+    """Recent app-server item notifications as synthetic conversation rows.
+
+    These are intentionally marked as app-server live overlays, not durable
+    transcript rows. The rollout JSONL remains authoritative history, but these
+    rows expose tool/message notifications that can arrive before the rollout
+    tail flushes.
+    """
+    if not session_id:
+        return []
+    state = _codex_app_server_thread_state(session_id)
+    if not state:
+        return []
+    out = []
+    seen = set()
+
+    def add(item, *, active=False):
+        ev = _codex_app_server_item_event(session_id, item, active=active)
+        if not ev:
+            return
+        key = ev.get("line")
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(ev)
+
+    recent = state.get("recent_items")
+    if isinstance(recent, list):
+        for item in recent[-8:]:
+            add(item, active=False)
+    active_item = state.get("active_item") if isinstance(state.get("active_item"), dict) else None
+    if active_item:
+        add(active_item, active=True)
+    try:
+        out.sort(key=lambda ev: datetime.fromisoformat(str(ev.get("ts") or "").replace("Z", "+00:00")).timestamp())
+    except Exception:
+        pass
     return out
 
 
@@ -20111,6 +21001,163 @@ def _codex_app_server_response_error(response, default="Codex app-server request
     if not isinstance(response, dict):
         return default
     return _codex_error_text(response) or str(response.get("error") or default)
+
+
+def _codex_app_server_normalize_approval_decision(decision):
+    raw = str(decision or "").strip()
+    token = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
+    mapping = {
+        "accept": "accept",
+        "approve": "accept",
+        "approved": "accept",
+        "yes": "accept",
+        "acceptforsession": "acceptForSession",
+        "accept_for_session": "acceptForSession",
+        "approve_session": "acceptForSession",
+        "approved_for_session": "acceptForSession",
+        "session": "acceptForSession",
+        "decline": "decline",
+        "deny": "decline",
+        "denied": "decline",
+        "no": "decline",
+        "cancel": "cancel",
+        "abort": "cancel",
+    }
+    return mapping.get(token) or mapping.get(raw) or ""
+
+
+def _codex_app_server_approval_result_payload(method, decision, pending):
+    canonical = _codex_app_server_normalize_approval_decision(decision)
+    if not canonical:
+        return None, "invalid approval decision"
+    if method in _CODEX_APP_SERVER_COMMAND_APPROVAL_METHODS or method in _CODEX_APP_SERVER_FILE_APPROVAL_METHODS:
+        if method in ("execCommandApproval", "applyPatchApproval"):
+            legacy = {
+                "accept": "approved",
+                "acceptForSession": "approved_for_session",
+                "decline": "denied",
+                "cancel": "abort",
+            }
+            return {"decision": legacy[canonical]}, ""
+        return {"decision": canonical}, ""
+    if method in _CODEX_APP_SERVER_PERMISSION_APPROVAL_METHODS:
+        scope = "session" if canonical == "acceptForSession" else "turn"
+        permissions = pending.get("requested_permissions") if isinstance(pending, dict) else None
+        if canonical in ("decline", "cancel"):
+            permissions = {}
+        if not isinstance(permissions, dict):
+            return None, "permission approval request did not include a grantable permissions profile"
+        return {"permissions": permissions, "scope": scope}, ""
+    return None, f"unsupported approval method: {method}"
+
+
+def _codex_app_server_resolve_approval(session_id, decision):
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "via": "codex-approval", "error": "missing session_id"}
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) if sid else None
+        pending = _codex_app_server_pending_approval_item(state or {})
+        if not pending:
+            return {
+                "ok": False,
+                "via": "codex-approval",
+                "code": "codex_no_pending_approval",
+                "error": "No pending Codex approval request for this session",
+            }
+        request_id = pending.get("request_id_raw")
+        if request_id is None:
+            request_id = pending.get("request_id")
+        method = pending.get("approval_method") or ""
+        if request_id is None or (isinstance(request_id, str) and not request_id.strip()):
+            return {
+                "ok": False,
+                "via": "codex-approval",
+                "code": "codex_approval_not_actionable",
+                "error": "Codex approval is visible but does not include an app-server request id",
+            }
+        result, error = _codex_app_server_approval_result_payload(method, decision, pending)
+        if error:
+            return {
+                "ok": False,
+                "via": "codex-approval",
+                "code": "codex_approval_not_actionable",
+                "error": error,
+            }
+
+    transport = _ensure_codex_app_server()
+    if transport is None:
+        return {
+            "ok": False,
+            "via": "codex-approval",
+            "code": "codex_app_server_unavailable",
+            "error": "Codex app-server transport unavailable",
+        }
+
+    response = {"jsonrpc": "2.0", "id": request_id, "result": result}
+    try:
+        transport.send_json(response)
+    except (BrokenPipeError, OSError) as e:
+        return {
+            "ok": False,
+            "via": "codex-approval",
+            "code": "codex_approval_send_failed",
+            "error": str(e),
+        }
+
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) if sid else None
+        if isinstance(state, dict):
+            current = state.get("pending_approval_request")
+            if isinstance(current, dict) and (
+                current.get("request_id_raw") == request_id
+                or current.get("request_id") == request_id
+                or str(current.get("request_id") or "") == str(request_id)
+            ):
+                state.pop("pending_approval_request", None)
+            flags = [
+                flag for flag in (state.get("active_flags") or [])
+                if not _codex_app_server_flags_need_approval([flag])
+            ]
+            state["active_flags"] = flags
+            state["thread_needs_approval"] = False
+            now = time.time()
+            for key in ("active_item", "last_item"):
+                item = state.get(key)
+                if isinstance(item, dict) and (
+                    item.get("request_id_raw") == request_id
+                    or item.get("request_id") == request_id
+                    or str(item.get("request_id") or "") == str(request_id)
+                ):
+                    item["needs_approval"] = False
+                    item["can_approve"] = False
+                    item["status"] = "approval_response_sent"
+                    item["in_flight"] = True
+                    item["updated_at"] = now
+            active = state.get("active_items")
+            if isinstance(active, dict):
+                for item in active.values():
+                    if isinstance(item, dict) and (
+                        item.get("request_id_raw") == request_id
+                        or item.get("request_id") == request_id
+                        or str(item.get("request_id") or "") == str(request_id)
+                    ):
+                        item["needs_approval"] = False
+                        item["can_approve"] = False
+                        item["status"] = "approval_response_sent"
+                        item["in_flight"] = True
+                        item["updated_at"] = now
+            state["last_activity_at"] = now
+            _save_codex_app_server_state_unlocked()
+        _CODEX_APP_SERVER_LOCK.notify_all()
+    return {
+        "ok": True,
+        "via": "codex-approval",
+        "session_id": sid,
+        "request_id": request_id,
+        "approval_method": method,
+        "decision": _codex_app_server_normalize_approval_decision(decision),
+    }
 
 
 def _codex_spawn_id_for_thread(thread_id):
@@ -20973,7 +22020,7 @@ def _codex_compact_via_app_server(session_id, cwd=None, model=None):
 
 
 def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None):
-    """Set or clear a Codex thread goal via the app-server RPC.
+    """Set, clear, pause, or resume a Codex thread goal.
 
     `action` is "clear" (-> `thread/goal/clear`, params `{threadId}`) or "set"
     (-> `thread/goal/set`, params `{threadId, objective}`). This is the non-live
@@ -20982,15 +22029,16 @@ def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None):
     drive the same native goal store for a dormant thread — mirrors
     `_codex_compact_via_app_server` (`thread/compact/start`).
 
-    Only reaches threads THIS app-server owns; a goal set in Codex.app's own UI
-    lives in a different app-server and is out of reach. Returns the usual
-    `{ok, via, ...}` shape.
+    The app-server RPC currently reports success without always updating the
+    local goals sqlite used by Codex/CCC, so CCC verifies the same native store
+    directly under a file lock. Pause/resume have no app-server RPC; they are
+    direct status updates.
     """
     sid = (session_id or "").strip()
     if not sid:
         return {"ok": False, "via": "codex-goal", "error": "missing session_id"}
     action = (action or "").strip().lower()
-    if action not in ("clear", "set"):
+    if action not in ("clear", "set", "pause", "resume"):
         return {
             "ok": False,
             "via": "codex-goal",
@@ -21004,47 +22052,118 @@ def _codex_goal_via_app_server(session_id, action, objective=None, cwd=None):
             "code": "codex_goal_empty_objective",
             "error": "Goal objective must not be empty.",
         }
-    if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
-        return {
-            "ok": False,
-            "via": "codex-goal",
-            "code": "codex_goal_unavailable",
-            "error": "Codex app-server disabled",
-        }
-    # The thread must be loaded into this app-server before its goal can change.
-    resume_params = {"threadId": sid, "excludeTurns": False}
-    if cwd:
-        resume_params["cwd"] = cwd
-    resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
-    if resumed.get("error") or (resumed.get("ok") is False and "result" not in resumed):
-        return {
-            "ok": False,
-            "via": "codex-goal",
-            "code": "codex_goal_unavailable",
-            "error": _codex_error_text(resumed) or "Codex app-server unavailable",
-        }
-    if action == "clear":
-        rpc_method = "thread/goal/clear"
-        rpc_params = {"threadId": sid}
-    else:
-        rpc_method = "thread/goal/set"
-        rpc_params = {"threadId": sid, "objective": objective.strip()}
-    result = _codex_app_server_request(rpc_method, rpc_params, timeout=30)
-    if _codex_response_succeeded(result):
-        return {"ok": True, "via": "codex-goal", "action": action, "session_id": sid}
-    if result.get("ok") is False and "result" not in result:
-        return {
-            "ok": False,
-            "via": "codex-goal",
-            "code": "codex_goal_unavailable",
-            "error": result.get("error") or "Codex app-server unavailable",
-        }
+    app_server_ok = False
+    if action in ("clear", "set") and os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() not in ("0", "false", "no"):
+        # Best-effort: let Codex handle any side effects it knows about, then
+        # enforce the durable store CCC actually reads below.
+        resume_params = {"threadId": sid, "excludeTurns": False}
+        if cwd:
+            resume_params["cwd"] = cwd
+        resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
+        if not (resumed.get("error") or (resumed.get("ok") is False and "result" not in resumed)):
+            if action == "clear":
+                rpc_method = "thread/goal/clear"
+                rpc_params = {"threadId": sid}
+            else:
+                rpc_method = "thread/goal/set"
+                rpc_params = {"threadId": sid, "objective": objective.strip()}
+            result = _codex_app_server_request(rpc_method, rpc_params, timeout=30)
+            app_server_ok = _codex_response_succeeded(result)
+
+    store = _codex_goal_store_update(sid, action, objective=objective)
+    if store.get("ok"):
+        store.setdefault("engine", "codex")
+        store["app_server_ok"] = app_server_ok
+        return store
     return {
         "ok": False,
         "via": "codex-goal",
-        "code": "codex_goal_failed",
-        "error": _codex_error_text(result) or f"Codex goal {action} failed",
+        "code": store.get("code") or "codex_goal_failed",
+        "engine": "codex",
+        "error": store.get("error") or f"Codex goal {action} failed",
+        "app_server_ok": app_server_ok,
     }
+
+
+def _codex_grab_back_settings_params(session_id, cwd=None, model=None, reasoning_effort=None):
+    params = {
+        "threadId": session_id,
+        "approvalPolicy": "never",
+        "approvalsReviewer": "user",
+        "sandboxPolicy": {"type": "dangerFullAccess"},
+    }
+    if cwd:
+        params["cwd"] = cwd
+    if model:
+        params["model"] = model
+    if reasoning_effort:
+        params["effort"] = reasoning_effort
+    return params
+
+
+def _codex_grab_back_via_app_server(session_id, cwd=None, model=None, reasoning_effort=None):
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "via": "codex-grab-back", "error": "missing session_id"}
+    if os.environ.get("CCC_CODEX_APP_SERVER", "1").lower() in ("0", "false", "no"):
+        return {
+            "ok": False,
+            "via": "codex-grab-back",
+            "code": "codex_grab_back_unavailable",
+            "error": "Codex app-server disabled",
+        }
+    if not cwd:
+        cwd = find_session_cwd(sid)
+    settings_params = _codex_grab_back_settings_params(
+        sid,
+        cwd=cwd,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
+    _codex_app_server_refresh_thread_status(sid, max_age=0)
+    settings_response = _codex_app_server_request(
+        "thread/settings/update",
+        settings_params,
+        timeout=10,
+    )
+    settings_ok = _codex_response_succeeded(settings_response)
+    interrupt = _codex_interrupt_via_app_server(sid, cwd=cwd)
+    no_active_turn = (interrupt.get("code") == "codex_no_active_turn")
+    _codex_app_server_refresh_thread_status(sid, max_age=0)
+    public = _codex_app_server_thread_public_status(sid)
+    ok = bool(settings_ok or interrupt.get("ok") or no_active_turn)
+    result = {
+        "ok": ok,
+        "via": "codex-grab-back",
+        "session_id": sid,
+        "settings_applied": bool(settings_ok),
+        "interrupted": bool(interrupt.get("ok")),
+        "no_active_turn": bool(no_active_turn),
+        "codex_app_server": _codex_app_server_is_live(),
+        "codex_app_server_transport": _codex_app_server_transport_kind(),
+        "codex_managed_app_server": _codex_app_server_transport_kind() == "managed",
+        "codex_app_server_active_item": public.get("active_item"),
+        "codex_app_server_token_usage": public.get("token_usage"),
+    }
+    if cwd:
+        result["cwd"] = cwd
+    if not settings_ok:
+        result["settings_error"] = _codex_app_server_response_error(
+            settings_response,
+            "Codex app-server did not apply thread settings",
+        )
+    if interrupt:
+        result["interrupt"] = interrupt
+        if interrupt.get("error") and not interrupt.get("ok") and not no_active_turn:
+            result["interrupt_error"] = interrupt.get("error")
+    if not ok:
+        result["error"] = (
+            result.get("interrupt_error")
+            or result.get("settings_error")
+            or "Codex grab-back failed"
+        )
+        result.setdefault("code", "codex_grab_back_failed")
+    return result
 
 
 def _codex_interrupt_via_app_server(session_id, cwd=None):
@@ -21493,6 +22612,145 @@ def _codex_goals_db_path():
     return best
 
 
+def _invalidate_codex_goals_cache():
+    with _codex_goals_lock:
+        _codex_goals_cache["key"] = None
+        _codex_goals_cache["data"] = {}
+        _codex_goals_cache["ts"] = 0.0
+
+
+def _codex_goal_store_update(session_id, action, objective=None):
+    """Mutate Codex's native goals sqlite under a file lock.
+
+    The Codex app-server goal RPC is not a reliable postcondition on every
+    transport/version: it can return a JSON-RPC result while the `thread_goals`
+    row CCC and Codex read remains unchanged. This helper writes the same store
+    directly for dormant-thread `/goal` actions.
+    """
+    sid = str(session_id or "").strip()
+    action = str(action or "").strip().lower()
+    if not sid:
+        return {"ok": False, "via": "codex-goal-store", "error": "missing session_id"}
+    if action not in ("clear", "set", "pause", "resume"):
+        return {
+            "ok": False,
+            "via": "codex-goal-store",
+            "code": "codex_goal_unsupported_action",
+            "error": f"unsupported goal action: {action!r}",
+        }
+    obj = str(objective or "").strip()
+    if action == "set" and not obj:
+        return {
+            "ok": False,
+            "via": "codex-goal-store",
+            "code": "codex_goal_empty_objective",
+            "error": "Goal objective must not be empty.",
+        }
+    db = _codex_goals_db_path() or CODEX_GOALS_DB_CANDIDATES[0]
+    lock_path = db.with_suffix(db.suffix + ".lock")
+    con = None
+    lock_fh = None
+    try:
+        db.parent.mkdir(parents=True, exist_ok=True)
+        lock_fh = lock_path.open("a+")
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        con = sqlite3.connect(f"file:{db}?mode=rwc", uri=True, timeout=5.0)
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thread_goals (
+              thread_id TEXT PRIMARY KEY NOT NULL,
+              goal_id TEXT NOT NULL,
+              objective TEXT NOT NULL,
+              status TEXT NOT NULL,
+              token_budget INTEGER,
+              tokens_used INTEGER NOT NULL DEFAULT 0,
+              time_used_seconds INTEGER NOT NULL DEFAULT 0,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        cols = {r[1] for r in con.execute("PRAGMA table_info(thread_goals)").fetchall()}
+        required = {"thread_id", "goal_id", "objective", "status", "created_at_ms", "updated_at_ms"}
+        if not required.issubset(cols):
+            return {
+                "ok": False,
+                "via": "codex-goal-store",
+                "code": "codex_goal_schema_unsupported",
+                "error": "Codex goals DB schema is not supported.",
+            }
+        now_ms = int(time.time() * 1000)
+        if action == "clear":
+            con.execute("DELETE FROM thread_goals WHERE thread_id = ?", (sid,))
+            con.commit()
+            _invalidate_codex_goals_cache()
+            return {"ok": True, "via": "codex-goal-store", "action": "clear", "session_id": sid}
+
+        if action == "set":
+            existing = con.execute(
+                "SELECT goal_id, created_at_ms FROM thread_goals WHERE thread_id = ?",
+                (sid,),
+            ).fetchone()
+            goal_id = existing[0] if existing and existing[0] else str(uuid.uuid4())
+            created_at_ms = int(existing[1]) if existing and existing[1] else now_ms
+            con.execute(
+                """
+                INSERT INTO thread_goals (
+                  thread_id, goal_id, objective, status, token_budget,
+                  tokens_used, time_used_seconds, created_at_ms, updated_at_ms
+                )
+                VALUES (?, ?, ?, 'active', NULL, 0, 0, ?, ?)
+                ON CONFLICT(thread_id) DO UPDATE SET
+                  goal_id = excluded.goal_id,
+                  objective = excluded.objective,
+                  status = 'active',
+                  token_budget = excluded.token_budget,
+                  tokens_used = 0,
+                  time_used_seconds = 0,
+                  updated_at_ms = excluded.updated_at_ms
+                """,
+                (sid, goal_id, obj, created_at_ms, now_ms),
+            )
+            con.commit()
+            _invalidate_codex_goals_cache()
+            return {"ok": True, "via": "codex-goal-store", "action": "set", "session_id": sid}
+
+        status = "active" if action == "resume" else "paused"
+        cur = con.execute(
+            "UPDATE thread_goals SET status = ?, updated_at_ms = ? WHERE thread_id = ?",
+            (status, now_ms, sid),
+        )
+        con.commit()
+        if cur.rowcount <= 0:
+            return {
+                "ok": False,
+                "via": "codex-goal-store",
+                "code": "codex_goal_missing",
+                "error": "No Codex goal exists for this thread.",
+            }
+        _invalidate_codex_goals_cache()
+        return {"ok": True, "via": "codex-goal-store", "action": action, "session_id": sid}
+    except (OSError, sqlite3.Error, ValueError) as e:
+        return {
+            "ok": False,
+            "via": "codex-goal-store",
+            "code": "codex_goal_store_failed",
+            "error": str(e) or "Codex goal store update failed.",
+        }
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except sqlite3.Error:
+                pass
+        if lock_fh is not None:
+            try:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                lock_fh.close()
+            except OSError:
+                pass
+
+
 def _codex_goals_snapshot():
     """Map thread_id -> {objective, status, token_budget, tokens_used} for every
     codex thread that currently has a goal.
@@ -21612,6 +22870,88 @@ def _is_codex_session(session_id):
 
 def _codex_tool_name(name):
     return (name or "").rsplit(".", 1)[-1]
+
+
+def _codex_js_string_literal_value(literal):
+    if not isinstance(literal, str) or not literal:
+        return ""
+    try:
+        value = json.loads(literal)
+        return value if isinstance(value, str) else ""
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        value = ast.literal_eval(literal)
+        return value if isinstance(value, str) else ""
+    except (SyntaxError, ValueError, TypeError):
+        return literal.strip("\"'")
+
+
+def _codex_custom_tool_arg(source, key):
+    if not isinstance(source, str) or not source or not key:
+        return ""
+    # Handles the current Codex custom-tool JS body:
+    #   tools.exec_command({ cmd: "...", sandbox_permissions: "..." })
+    # It is intentionally small and best-effort; rollout remains authoritative.
+    pattern = (
+        r"(?<![A-Za-z0-9_$])" + re.escape(key)
+        + r"\s*:\s*(?P<quote>[\"'])(?P<body>(?:\\.|(?!(?P=quote)).)*)(?P=quote)"
+    )
+    match = re.search(pattern, source, re.DOTALL)
+    if not match:
+        return ""
+    return _codex_js_string_literal_value(match.group("quote") + match.group("body") + match.group("quote"))
+
+
+def _codex_custom_tool_kind(source, fallback_name=""):
+    text = source if isinstance(source, str) else ""
+    if "tools.exec_command" in text:
+        return "Bash"
+    if "tools.apply_patch" in text:
+        return "apply_patch"
+    if "tools.update_plan" in text:
+        return "update_plan"
+    if "tools.write_stdin" in text:
+        return "write_stdin"
+    return _codex_tool_name(fallback_name) or "tool"
+
+
+def _codex_custom_tool_detail(source, fallback_name=""):
+    text = source if isinstance(source, str) else ""
+    cmd = _codex_custom_tool_arg(text, "cmd") or _codex_custom_tool_arg(text, "command")
+    if cmd:
+        return _shell_command_activity_label(cmd)
+    for key in ("path", "file_path", "filename", "query", "pattern", "prompt", "message"):
+        value = _codex_custom_tool_arg(text, key)
+        if value:
+            return value
+    return _codex_custom_tool_kind(text, fallback_name)
+
+
+def _codex_custom_tool_command(source):
+    text = source if isinstance(source, str) else ""
+    return _codex_custom_tool_arg(text, "cmd") or _codex_custom_tool_arg(text, "command")
+
+
+def _codex_custom_tool_workdir(source):
+    return _codex_custom_tool_arg(source if isinstance(source, str) else "", "workdir")
+
+
+def _codex_tool_requires_approval(name, args=None, raw_text=""):
+    args = args if isinstance(args, dict) else {}
+    sandbox = args.get("sandbox_permissions") or args.get("sandboxPermissions") or ""
+    if str(sandbox) == "require_escalated":
+        return True
+    return _codex_custom_tool_arg(raw_text, "sandbox_permissions") == "require_escalated"
+
+
+def _codex_tool_approval_message(args=None, raw_text=""):
+    args = args if isinstance(args, dict) else {}
+    for key in ("justification", "approval_prompt", "approvalPrompt"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return _codex_custom_tool_arg(raw_text, "justification").strip()
 
 
 def _codex_args(raw):
@@ -22907,6 +24247,9 @@ def _extract_codex_tail_meta(path):
             "pending_tool": None,
             "pending_file": None,
             "pending_tool_ts": 0,
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "pending_approval_call_id": "",
             "has_edit": False,
             "has_commit": False,
             "has_push": False,
@@ -22982,6 +24325,10 @@ def _extract_codex_tail_meta(path):
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
+                        meta["needs_approval"] = False
+                        meta["needs_approval_message"] = ""
+                        meta["pending_approval_call_id"] = ""
+                        pending_calls.clear()
                         if ts_epoch:
                             meta["last_meaningful_ts"] = ts_epoch
                     elif ptype == "agent_message":
@@ -23000,27 +24347,52 @@ def _extract_codex_tail_meta(path):
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
+                        meta["needs_approval"] = False
+                        meta["needs_approval_message"] = ""
+                        meta["pending_approval_call_id"] = ""
+                        pending_calls.clear()
                         if ts_epoch:
                             meta["last_meaningful_ts"] = ts_epoch
                     continue
                 if ev_type != "response_item":
                     continue
-                if ptype == "function_call":
+                if ptype in ("function_call", "custom_tool_call"):
                     name = payload.get("name") or ""
-                    args = _codex_args(payload.get("arguments"))
-                    detail = _codex_tool_detail(name, args)
+                    is_custom_tool = ptype == "custom_tool_call"
+                    raw_input = payload.get("input") if isinstance(payload.get("input"), str) else ""
+                    args = {} if is_custom_tool else _codex_args(payload.get("arguments"))
+                    detail = (
+                        _codex_custom_tool_detail(raw_input, name)
+                        if is_custom_tool else _codex_tool_detail(name, args)
+                    )
                     call_id = payload.get("call_id") or ""
                     meta["last_event_type"] = "assistant"
                     if ts_epoch:
                         meta["last_meaningful_ts"] = ts_epoch
-                    meta["pending_tool"] = _codex_tool_name(name) or name
+                    tool_name = (
+                        _codex_custom_tool_kind(raw_input, name)
+                        if is_custom_tool else (_codex_tool_name(name) or name)
+                    )
+                    meta["pending_tool"] = tool_name
                     meta["pending_file"] = (detail[:80] if isinstance(detail, str) else None)
                     meta["pending_tool_ts"] = ts_epoch or meta.get("last_meaningful_ts") or mtime
-                    if _codex_tool_name(name) == "apply_patch":
+                    approval_required = _codex_tool_requires_approval(name, args, raw_input)
+                    approval_message = _codex_tool_approval_message(args, raw_input)
+                    if approval_required:
+                        meta["needs_approval"] = True
+                        meta["needs_approval_message"] = approval_message
+                        meta["pending_approval_call_id"] = call_id
+                    if tool_name == "apply_patch":
                         meta["has_edit"] = True
                         meta["last_edit_pos"] = pos
-                    cmd = _codex_tool_command(name, args)
-                    tool_workdir = _codex_tool_workdir(name, args) or meta.get("cwd")
+                    cmd = (
+                        _codex_custom_tool_command(raw_input)
+                        if is_custom_tool else _codex_tool_command(name, args)
+                    )
+                    tool_workdir = (
+                        _codex_custom_tool_workdir(raw_input)
+                        if is_custom_tool else _codex_tool_workdir(name, args)
+                    ) or meta.get("cwd")
                     if cmd:
                         signals = _codex_command_signals(cmd, base_cwd=tool_workdir)
                         if signals["edit"]:
@@ -23039,16 +24411,28 @@ def _extract_codex_tail_meta(path):
                         if signals.get("worktree_branch"):
                             meta["tail_branch"] = signals["worktree_branch"]
                         if call_id:
-                            pending_calls[call_id] = {"cmd": cmd, "pr": signals["pr"]}
+                            pending_calls[call_id] = {
+                                "cmd": cmd,
+                                "pr": signals["pr"],
+                                "approval": approval_required,
+                            }
                     elif call_id:
-                        pending_calls[call_id] = {"cmd": "", "pr": False}
-                elif ptype == "function_call_output":
+                        pending_calls[call_id] = {
+                            "cmd": "",
+                            "pr": False,
+                            "approval": approval_required,
+                        }
+                elif ptype in ("function_call_output", "custom_tool_call_output"):
                     call_id = payload.get("call_id") or ""
                     call = pending_calls.pop(call_id, {})
                     if call:
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
                         meta["pending_tool_ts"] = 0
+                        if call.get("approval") and meta.get("pending_approval_call_id") == call_id:
+                            meta["needs_approval"] = False
+                            meta["needs_approval_message"] = ""
+                            meta["pending_approval_call_id"] = ""
                     meta["last_event_type"] = "assistant"
                     if ts_epoch:
                         meta["last_meaningful_ts"] = ts_epoch
@@ -23177,6 +24561,8 @@ def _codex_activity_fields_from_tail(tail, live):
         "question_preamble": "",
         "question_options": [],
         "question_option_details": [],
+        "needs_approval": bool((tail or {}).get("needs_approval")),
+        "needs_approval_message": (tail or {}).get("needs_approval_message") or "",
     }
     if not live or not tail:
         return fields
@@ -23206,6 +24592,26 @@ def _codex_activity_fields_from_tail(tail, live):
     return fields
 
 
+def _codex_app_activity_superseded_by_tail(app_activity, tail):
+    if not app_activity or not app_activity.get("sidecar_status") or not tail:
+        return False
+    try:
+        app_ts = float(app_activity.get("sidecar_ts") or 0)
+        tail_ts = float(tail.get("last_meaningful_ts") or 0)
+        pending_ts = float(tail.get("pending_tool_ts") or 0)
+    except (TypeError, ValueError):
+        return False
+    newest_tail_ts = max(tail_ts, pending_ts)
+    if not app_ts or newest_tail_ts <= app_ts + 2:
+        return False
+    if tail.get("needs_approval"):
+        return True
+    pending_tool = tail.get("pending_tool")
+    if not pending_tool:
+        return True
+    return pending_tool != app_activity.get("sidecar_tool")
+
+
 def _codex_fresh_threshold_s():
     try:
         v = float(os.environ.get("CCC_CODEX_FRESH_SEC", "40"))
@@ -23233,6 +24639,8 @@ def _codex_row_state(tail, mtime, now, pool_alive, has_live_proc):
     """
     if not tail:
         return None
+    if tail.get("needs_approval"):
+        return "waiting"
     mid_turn = bool(tail.get("pending_tool")) or (
         tail.get("last_event_type") in ("user", "assistant")
     )
@@ -23303,6 +24711,32 @@ def _codex_state_fields(sid, now=None):
         app_state = _codex_app_server_thread_state(sid)
     except Exception:
         app_state = {}
+    tail = {}
+    if path and mtime is not None and (now - mtime) <= _codex_recent_window_s():
+        try:
+            tail = _extract_codex_tail_meta(path) or {}
+        except Exception:
+            tail = {}
+        if tail.get("needs_approval"):
+            fields["codex_state"] = "waiting"
+            fields["codex_fresh"] = True
+            fields["codex_state_reason"] = tail.get("needs_approval_message") or "Codex is waiting for approval"
+            return fields
+    approval_item = _codex_app_server_pending_approval_item(app_state)
+    if approval_item:
+        fields["codex_state"] = "waiting"
+        fields["codex_fresh"] = True
+        fields["codex_state_reason"] = (
+            approval_item.get("approval_message")
+            or approval_item.get("detail")
+            or "Codex is waiting for approval"
+        )
+        return fields
+    if _codex_app_server_thread_needs_approval(app_state):
+        fields["codex_state"] = "waiting"
+        fields["codex_fresh"] = True
+        fields["codex_state_reason"] = _codex_app_server_thread_approval_message(app_state)
+        return fields
     try:
         # Writer attribution (desktop ↔ CCC coordination): reuses the rollout
         # stat above + the TTL-cached desktop-attachment map. Also feeds the
@@ -23317,9 +24751,16 @@ def _codex_state_fields(sid, now=None):
         snap = {}
     try:
         if app_state and (app_state.get("active_turn_id") or str(app_state.get("status") or "").lower() == "active"):
-            fields["codex_state"] = "working"
-            fields["codex_fresh"] = True
-            return fields
+            try:
+                app_ts = float(app_state.get("last_activity_at") or app_state.get("last_event_at") or 0)
+                tail_ts = float((tail or {}).get("last_meaningful_ts") or 0)
+            except (TypeError, ValueError):
+                app_ts = 0.0
+                tail_ts = 0.0
+            if not (tail_ts > app_ts + 2 and (tail or {}).get("last_event_type") == "result"):
+                fields["codex_state"] = "working"
+                fields["codex_fresh"] = True
+                return fields
     except Exception:
         pass
     if snap.get("external_active"):
@@ -23338,7 +24779,8 @@ def _codex_state_fields(sid, now=None):
     if (now - mtime) > _codex_recent_window_s():
         return fields
     try:
-        tail = _extract_codex_tail_meta(path) or {}
+        if not tail:
+            tail = _extract_codex_tail_meta(path) or {}
         pool_alive = _codex_pool_alive(now)
         has_live_proc = sid in _live_engine_session_ids()
         state = _codex_row_state(tail, mtime, now, pool_alive, has_live_proc)
@@ -23525,9 +24967,15 @@ def find_codex_conversations(
         spawn_alive = bool(spawn_info.get("alive"))
         codex_activity = _codex_activity_fields_from_tail(tail, spawn_alive)
         app_activity = _codex_app_server_activity_fields(sid)
-        if app_activity.get("sidecar_status"):
+        if app_activity.get("sidecar_status") and not _codex_app_activity_superseded_by_tail(app_activity, tail):
             codex_activity.update(app_activity)
         codex_stale_tool = _codex_stale_tool_fields(tail)
+        needs_approval = bool(tail.get("needs_approval") or codex_activity.get("needs_approval"))
+        needs_approval_message = (
+            tail.get("needs_approval_message")
+            or codex_activity.get("needs_approval_message")
+            or ""
+        )
         _goal = goals_by_sid.get(sid) or {}
         out.append({
             "id": sid,
@@ -23595,8 +25043,8 @@ def find_codex_conversations(
             ),
             **codex_activity,
             **codex_stale_tool,
-            "needs_approval": False,
-            "needs_approval_message": "",
+            "needs_approval": needs_approval,
+            "needs_approval_message": needs_approval_message,
             "model": row.get("model") or tail.get("model") or "",
             "reasoning_effort": row.get("reasoning_effort") or "",
             "latest_input_tokens": tail.get("latest_input_tokens") or 0,
@@ -23737,19 +25185,32 @@ def _parse_codex_event(ev, line_num, token_usage=None):
         return None
     if ev_type != "response_item":
         return None
-    if ptype == "function_call":
+    if ptype in ("function_call", "custom_tool_call"):
         name = payload.get("name") or "tool"
-        args = _codex_args(payload.get("arguments"))
-        detail = _codex_tool_detail(name, args)
+        is_custom_tool = ptype == "custom_tool_call"
+        raw_input = payload.get("input") if isinstance(payload.get("input"), str) else ""
+        args = {} if is_custom_tool else _codex_args(payload.get("arguments"))
+        detail = (
+            _codex_custom_tool_detail(raw_input, name)
+            if is_custom_tool else _codex_tool_detail(name, args)
+        )
         if isinstance(detail, str) and len(detail) > 200:
             detail = detail[:200] + "..."
         block = {
             "kind": "tool_use",
-            "name": _codex_tool_name(name),
+            "name": _codex_custom_tool_kind(raw_input, name) if is_custom_tool else _codex_tool_name(name),
             "detail": detail or "",
             "id": payload.get("call_id") or payload.get("id") or "",
         }
-        command_text = _codex_tool_command(name, args)
+        approval_required = _codex_tool_requires_approval(name, args, raw_input)
+        approval_message = _codex_tool_approval_message(args, raw_input)
+        if approval_required:
+            block["approval_required"] = True
+            block["approval_message"] = approval_message
+        command_text = (
+            _codex_custom_tool_command(raw_input)
+            if is_custom_tool else _codex_tool_command(name, args)
+        )
         if command_text:
             redacted_command = _redacted_shell_command_text(command_text, max_len=12000)
             if redacted_command and (
@@ -23767,7 +25228,7 @@ def _parse_codex_event(ev, line_num, token_usage=None):
             "message_id": f"codex-tool-{line_num}",
             "blocks": [block],
         }
-    if ptype == "function_call_output":
+    if ptype in ("function_call_output", "custom_tool_call_output"):
         output = payload.get("output") or ""
         images = []
         if isinstance(output, list):
@@ -23920,6 +25381,7 @@ def _get_queued_events_for_session(session_id):
     try:
         if _detect_session_engine(session_id) == "codex":
             events.extend(_get_codex_coordination_events_for_session(session_id))
+            events.extend(_get_codex_app_server_item_events_for_session(session_id))
     except Exception:
         pass
     return events
@@ -39440,15 +40902,18 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
             )
         # Non-live fallback: `/goal` is codex's native goal command, but its
         # slash only runs in a live TUI. For a dormant thread, drive the same
-        # native goal store directly through the app-server RPC — `/goal clear`
-        # -> thread/goal/clear, `/goal <objective>` -> thread/goal/set. The
-        # pause/resume/edit subcommands have no RPC, so they still need a live
-        # TUI and fall through to the bounce below. (Mirrors codex /compact.)
+        # native goal store directly — `/goal clear` clears, `/goal <objective>`
+        # sets, and pause/resume update the goal status. `edit` still needs a
+        # live TUI because the button form carries no replacement objective.
         if _first_tok == "/goal":
             _goal_rest = text.strip()[len("/goal"):].strip()
             _goal_sub = _goal_rest.split(None, 1)[0].lower() if _goal_rest else ""
             if _goal_sub == "clear":
                 res = _codex_goal_via_app_server(session_id, "clear", cwd=cwd)
+                res.setdefault("engine", "codex")
+                return res
+            if _goal_sub in ("pause", "resume"):
+                res = _codex_goal_via_app_server(session_id, _goal_sub, cwd=cwd)
                 res.setdefault("engine", "codex")
                 return res
             if _goal_rest and _goal_sub not in ("edit", "pause", "resume"):
@@ -50742,28 +52207,61 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             is_hermes_status = _is_hermes_session(sid) if sid else False
             notif = None if (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status) else (_read_notification_state(sid) if sid else None)
             if is_codex_status:
+                _schedule_codex_managed_app_server_warmup()
+                _codex_app_server_refresh_thread_status(sid)
                 path = _resolve_codex_rollout_path(sid)
                 tail = _extract_codex_tail_meta(path) if path else {}
                 status["pending_tool"] = tail.get("pending_tool") if tail else None
                 status["pending_file"] = tail.get("pending_file") if tail else None
                 status["pending_tool_ts"] = tail.get("pending_tool_ts") if tail else 0
+                status["needs_approval"] = bool(tail.get("needs_approval")) if tail else False
+                status["needs_approval_message"] = tail.get("needs_approval_message") if tail else ""
                 status.update(_codex_activity_fields_from_tail(tail, status.get("live")))
                 status.update(_codex_stale_tool_fields(tail))
                 status.update(_codex_state_fields(sid))
                 app_activity = _codex_app_server_activity_fields(sid)
-                if app_activity.get("sidecar_status"):
+                if app_activity.get("sidecar_status") and not _codex_app_activity_superseded_by_tail(app_activity, tail):
+                    tail_needs_approval = bool(status.get("needs_approval"))
+                    tail_needs_approval_message = status.get("needs_approval_message") or ""
                     status.update(app_activity)
-                    status["codex_state"] = "working"
+                    status["needs_approval"] = bool(tail_needs_approval or app_activity.get("needs_approval"))
+                    status["needs_approval_message"] = (
+                        tail_needs_approval_message
+                        or app_activity.get("needs_approval_message")
+                        or ""
+                    )
+                    status["codex_state"] = "waiting" if status["needs_approval"] else "working"
                     status["codex_fresh"] = True
+                    if status["needs_approval"]:
+                        status["codex_state_reason"] = (
+                            status["needs_approval_message"]
+                            or "Codex is waiting for approval"
+                        )
                 # App-server liveness: is CCC currently driving Codex via its
                 # own JSON-RPC stdio app-server (the path that can append input
                 # to a loaded thread and run thread/compact), or is there no
                 # live app-server (a Codex action would then lazily spawn one /
                 # fall back to one-shot `codex exec`). Read-only, cheap.
+                _schedule_codex_managed_app_server_warmup()
                 status["codex_app_server"] = _codex_app_server_is_live()
                 transport = _codex_app_server_transport_kind()
                 status["codex_app_server_transport"] = transport
                 status["codex_managed_app_server"] = transport == "managed"
+                app_public = _codex_app_server_thread_public_status(sid)
+                status["codex_app_server_event_seq"] = app_public["event_seq"]
+                status["codex_app_server_last_activity_at"] = app_public["last_activity_at"]
+                status["codex_app_server_last_event_at"] = app_public["last_event_at"]
+                status["codex_app_server_last_item_id"] = app_public["last_item_id"]
+                status["codex_app_server_active_item"] = app_public["active_item"]
+                status["codex_app_server_token_usage"] = app_public["token_usage"]
+                if status.get("codex_state") == "waiting" and status.get("sidecar_tool") == "Approval":
+                    status["needs_approval"] = True
+                    status["needs_approval_message"] = (
+                        status.get("needs_approval_message")
+                        or status.get("sidecar_file")
+                        or status.get("codex_state_reason")
+                        or "Codex is waiting for approval"
+                    )
             elif is_gemini_status:
                 path = _resolve_gemini_chat_path(sid)
                 tail = _extract_gemini_tail_meta(path) if path else {}
@@ -50914,8 +52412,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["question_preamble"] = ""
                     status["question_options"] = []
                     status["question_option_details"] = []
-            status["needs_approval"] = _notification_is_blocking(notif)
-            status["needs_approval_message"] = notif.get("message", "") if notif else ""
+            if not (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status):
+                status["needs_approval"] = _notification_is_blocking(notif)
+                status["needs_approval_message"] = notif.get("message", "") if notif else ""
             # Surface a count of CCC-initiated spawns so the client can
             # detect "a new session was just spawned (by an agent via
             # /api/sessions/spawn) — refresh the conv list NOW instead
@@ -50987,9 +52486,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # refreshes working/idle/waiting/ended in step with the bulk list
             # and the detail endpoint. session_live_status uses `live`; map it
             # to the `is_live` key the classifier reads.
+            _state_live = status.get("live") or (
+                is_codex_status
+                and status.get("codex_state") in ("waiting", "working", "idle")
+            )
             _state_view = {
                 "session_id": sid,
-                "is_live": status.get("live"),
+                "is_live": _state_live,
                 "pending_tool": status.get("pending_tool"),
                 "sidecar_in_flight": status.get("sidecar_in_flight"),
                 "subagent_in_flight_count": status.get("subagent_in_flight_count"),
@@ -55908,6 +57411,62 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(result, 404)
             else:
                 self.send_json(result)
+        elif path == "/api/codex/approval":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            sid = (payload.get("session_id") or "").strip()
+            decision = (payload.get("decision") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            if not decision:
+                self.send_json({"ok": False, "error": "missing decision"}, 400)
+                return
+            _record_interaction(sid)
+            result = _codex_app_server_resolve_approval(sid, decision)
+            status_code = 200 if result.get("ok") else 409
+            if result.get("error") == "missing session_id":
+                status_code = 400
+            elif result.get("code") == "codex_app_server_unavailable":
+                status_code = 503
+            self.send_json(result, status_code)
+        elif path == "/api/codex/grab-back":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            sid = (payload.get("session_id") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            cwd = (payload.get("cwd") or "").strip()
+            model = (payload.get("model") or "").strip()
+            reasoning_effort = (
+                (payload.get("reasoning_effort") or payload.get("effort") or "").strip()
+            )
+            _record_interaction(sid)
+            result = _codex_grab_back_via_app_server(
+                sid,
+                cwd=cwd or None,
+                model=model or None,
+                reasoning_effort=reasoning_effort or None,
+            )
+            status_code = 200 if result.get("ok") else 503
+            if result.get("error") == "missing session_id":
+                status_code = 400
+            self.send_json(result, status_code)
         elif path == "/api/inject-input":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

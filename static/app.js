@@ -2399,7 +2399,7 @@
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
-  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false };
+  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
   let liveStatusTimer = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
   // Separate 1s tick that just re-renders the live-tool strip + inline
@@ -3072,9 +3072,36 @@
   // "checked Xs ago" label on the conversation top-bar process indicator.
   let _lastStatusCheckedAt = 0;
   let _liveStatusFetchingKey = '';
+  const _codexAppServerStatusKeys = new Map();
+
+  function maybeCatchUpCodexConversationFromAppServer(sessionId, data) {
+    if (!sessionId || !data || !data.codex_app_server) return;
+    const seq = Number(data.codex_app_server_event_seq || 0);
+    const lastActivity = Number(data.codex_app_server_last_activity_at || 0);
+    const lastItem = String(data.codex_app_server_last_item_id || '');
+    if (!seq && !lastActivity && !lastItem) return;
+    const key = seq + '|' + lastActivity + '|' + lastItem;
+    const previous = _codexAppServerStatusKeys.get(sessionId);
+    _codexAppServerStatusKeys.set(sessionId, key);
+    if (previous === key) return;
+    const paneId = activePaneId();
+    const pane = paneByPaneId(paneId);
+    if (!pane || !pane.conversationId) return;
+    const paneSid = sessionIdByConv[pane.conversationId] || pane.conversationId;
+    if (paneSid !== sessionId || currentSession.id !== sessionId) return;
+    setTimeout(() => {
+      const latestPane = paneByPaneId(paneId);
+      const latestSid = latestPane && latestPane.conversationId
+        ? (sessionIdByConv[latestPane.conversationId] || latestPane.conversationId)
+        : '';
+      if (!latestPane || latestSid !== sessionId || currentSession.id !== sessionId) return;
+      try { fetchConversationEvents(paneId); } catch (_) {}
+    }, previous ? 0 : 250);
+  }
+
   async function refreshLiveStatus() {
     if (!currentSession.id) {
-      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false };
+      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
       updateJumpButton();
       updateInputBar();
       return;
@@ -3112,13 +3139,27 @@
         codexAppServer: !!data.codex_app_server,
         codexAppServerTransport: data.codex_app_server_transport || null,
         codexManagedAppServer: !!data.codex_managed_app_server,
+        codexAppServerEventSeq: Number(data.codex_app_server_event_seq || 0),
+        codexAppServerLastActivityAt: Number(data.codex_app_server_last_activity_at || 0),
+        codexAppServerLastItemId: data.codex_app_server_last_item_id || '',
         // Who last wrote this Codex thread ("ccc"|"desktop"|"external"|null) and
         // whether the Codex desktop app has it loaded — drives the writer badge
         // and the "queued because desktop is writing" send UX.
         codexWriter: data.codex_writer || null,
         codexDesktopAttached: !!data.codex_desktop_attached,
+        // App-server live overlay (contract with the server-side owner): the
+        // current in-flight item and running token usage while a turn is
+        // active — including turns owned by an external writer (mobile /
+        // desktop Codex). Both are optional; the UI degrades to the coarse
+        // sidecar_* fallback + a bare "Generating…" when they're absent.
+        codexAppServerActiveItem: (data.codex_app_server_active_item && typeof data.codex_app_server_active_item === 'object')
+          ? data.codex_app_server_active_item : null,
+        codexAppServerTokenUsage: (data.codex_app_server_token_usage && typeof data.codex_app_server_token_usage === 'object')
+          ? data.codex_app_server_token_usage : null,
         staleToolCall: !!data.stale_tool_call,
         staleToolAgeS: data.stale_tool_age_s || 0,
+        needsApproval: !!data.needs_approval,
+        needsApprovalMessage: data.needs_approval_message || '',
         questionWaiting: !!data.question_waiting,
         questionText: data.question_text || '',
         questionHeader: data.question_header || '',
@@ -3135,6 +3176,7 @@
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
       _lastStatusCheckedAt = Date.now();
+      maybeCatchUpCodexConversationFromAppServer(_fetchedFor, data);
       // Detect server-side spawns we didn't initiate from this client
       // (e.g. agent calls /api/sessions/spawn for a sibling Codex /
       // Gemini session). Server returns a running count of CCC-spawned
@@ -3184,6 +3226,8 @@
           row.codex_state_reason = data.codex_state_reason || '';
           row.codex_writer = data.codex_writer || null;
           row.codex_desktop_attached = !!data.codex_desktop_attached;
+          row.needs_approval = !!data.needs_approval;
+          row.needs_approval_message = data.needs_approval_message || '';
           row.question_waiting = !!data.question_waiting;
           row.question_text = data.question_text || '';
           row.question_header = data.question_header || '';
@@ -3204,6 +3248,8 @@
         sidecar_status: data.sidecar_status || null,
         sidecar_ts: data.sidecar_ts || 0,
         sidecar_in_flight: !!data.sidecar_in_flight,
+        needs_approval: !!data.needs_approval,
+        needs_approval_message: data.needs_approval_message || '',
         question_waiting: !!data.question_waiting,
         question_text: data.question_text || '',
         question_header: data.question_header || '',
@@ -3217,7 +3263,7 @@
         codex_desktop_attached: !!data.codex_desktop_attached,
       });
     } catch (err) {
-      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false, codexWriter: null, codexDesktopAttached: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -4538,8 +4584,13 @@
     // on a deep conversation that's pure waste when no session is running.
     // Tear the indicator down once on the live->idle transition, then do
     // zero DOM work each tick until a session goes live again.
+    const needsApproval = liveStatusMatchesOpenConv() && !!liveStatus.needsApproval;
     const codexStateWorking = liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
     if (!liveStatus.live && !codexStateWorking) {
+      if (needsApproval) {
+        // Continue below so an approval prompt can render even if liveness
+        // briefly drops during app-server/rollout reconciliation.
+      } else {
       const staleOptimisticSettled = settleStaleOptimisticAgentIndicator($view);
       if (staleOptimisticSettled) return;
       // Brief "✓ Done" flash for ~4s after session goes idle
@@ -4563,6 +4614,7 @@
         _liveStripShown = false;
       }
       return;
+      }
     }
     // Track last-seen-live timestamp for the Done flash
     _liveStripLastLiveTime = Date.now();
@@ -4595,13 +4647,51 @@
     const isGenerating = (liveStatus.live || codexStateWorking) && !tool
       && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking);
     const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');
-    const shouldShow = (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
+    const shouldShow = needsApproval
+      || (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
       && (ageSec < 300 || isQuestion) && !_headlessQuestion)
       || isGenerating;
     if (!shouldShow) {
       if (inline) inline.remove();
       updateLiveStripOffset($view, null);
       _liveStripShown = false;
+      return;
+    }
+    if (needsApproval) {
+      if (!inline) {
+        inline = document.createElement('div');
+        inline.className = 'conv-live-tool-inline';
+        $view.appendChild(inline);
+      }
+      const msg = liveStatus.needsApprovalMessage || liveStatus.sidecarFile || 'Codex is waiting for approval';
+      const approvalItem = liveStatusMatchesOpenConv() ? liveStatus.codexAppServerActiveItem : null;
+      const canApprove = !!(approvalItem && approvalItem.needs_approval && approvalItem.request_id && approvalItem.can_approve);
+      inline.className = 'conv-live-tool-inline is-question';
+      inline.innerHTML = '<span class="cl-pulse"></span><span class="cl-tool">Needs approval</span>'
+        + (msg ? '<span class="cl-file">' + escapeHtml(truncate(msg, canApprove ? 86 : 120)) + '</span>' : '')
+        + (canApprove
+          ? '<span class="cl-approval-actions">'
+            + '<button type="button" class="cl-approval-btn" data-decision="accept">Approve</button>'
+            + '<button type="button" class="cl-approval-btn" data-decision="acceptForSession">Approve session</button>'
+            + '<button type="button" class="cl-approval-btn is-negative" data-decision="decline">Deny</button>'
+            + '<button type="button" class="cl-approval-btn is-negative" data-decision="cancel">Cancel</button>'
+            + '</span>'
+          : '');
+      inline.title = msg;
+      if (canApprove) {
+        inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
+          btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const sid = currentSession && currentSession.id;
+            if (sid) respondCodexApproval(sid, btn.dataset.decision || 'accept', btn);
+          });
+        });
+      }
+      if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
+        $view.appendChild(inline);
+      }
+      _liveStripShown = true;
       return;
     }
     // "Generating…" — session is live but no tool is executing yet/anymore
@@ -4617,9 +4707,24 @@
         inline.className = 'conv-live-tool-inline';
         $view.appendChild(inline);
       }
-      inline.className = 'conv-live-tool-inline is-generating';
-      inline.innerHTML = '<span class="cl-pulse"></span><span class="cl-tool">Generating…</span>';
-      inline.title = 'Session is live — model is generating';
+      // Prefer the app-server live overlay over a bare "Generating…": show the
+      // current in-flight item (what Codex is actually doing right now) and the
+      // running token count — including turns owned by an external writer
+      // (mobile / desktop Codex). Both degrade cleanly to "Generating…" when the
+      // server hasn't supplied them.
+      const _liveMatches = liveStatusMatchesOpenConv();
+      const _activeItem = _liveMatches ? codexActiveItemLabel(liveStatus.codexAppServerActiveItem) : { label: '', detail: '' };
+      const _tokTxt = _liveMatches ? codexTokenUsageText(liveStatus.codexAppServerTokenUsage) : '';
+      const _toolTxt = _activeItem.label || 'Generating…';
+      const _detailTxt = _activeItem.label ? _activeItem.detail : '';
+      inline.className = 'conv-live-tool-inline is-generating' + (_activeItem.label ? ' in-flight' : '');
+      inline.innerHTML = '<span class="cl-pulse"></span>'
+        + '<span class="cl-tool">' + (_activeItem.label ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
+        + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
+        + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '');
+      inline.title = _activeItem.label
+        ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' — ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
+        : ('Session is live — model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : ''));
       if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
         $view.appendChild(inline);
       }
@@ -4718,6 +4823,17 @@
       badge.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _doWake(); }
       });
+      // Grab-back is a distinct affordance rendered inside the (non-wakeable)
+      // external-writer pill. Delegate its click here — the button markup is
+      // rebuilt on every poll, so a per-render listener would leak.
+      badge.addEventListener('click', (e) => {
+        const gb = e.target.closest('.ccs-grab-back');
+        if (!gb) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const sid = (currentSession && currentSession.id) || '';
+        if (sid) grabBackCodexSession(sid, gb);
+      });
       $view.appendChild(badge);
     }
     // For a stuck session, answer "why?" right on the pill: show the concrete
@@ -4744,6 +4860,13 @@
     const attachedSuffix = (st !== 'working' && liveStatus.codexDesktopAttached)
       ? '<span class="ccs-desktop-attached" title="This thread is also open in Codex desktop">⧉ desktop</span>'
       : '';
+    // "Grab back" — reclaim a thread that drifted to an external writer (mobile /
+    // desktop Codex holding the turn). Reapplies the noninteractive CCC-worker
+    // profile and interrupts the external turn so CCC becomes the single writer
+    // again. Only offered while an external/desktop writer is mid-turn.
+    const grabBackHtml = (writer === 'external' || writer === 'desktop')
+      ? '<button type="button" class="ccs-grab-back" title="Reclaim this thread into CCC control — reapply approvalPolicy:never and interrupt the external turn">Grab back</button>'
+      : '';
     badge.className = 'conv-codex-state state-' + st + steady + writerCls + (wakeable ? ' is-wakeable' : '');
     if (wakeable) {
       badge.setAttribute('role', 'button');
@@ -4760,6 +4883,7 @@
     badge.innerHTML = '<span class="ccs-dot"></span><span class="ccs-label">' + escapeHtml(label) + '</span>'
       + (reason ? '<span class="ccs-reason">' + escapeHtml(reason) + '</span>' : '')
       + attachedSuffix
+      + grabBackHtml
       + (wakeable ? '<span class="ccs-wake" aria-hidden="true" title="Wake GPT">↻</span>' : '');
   }
 
@@ -5098,7 +5222,7 @@
       // Pkood sessions don't need live status polling or resume button
       if (liveStatusTimer) { clearInterval(liveStatusTimer); liveStatusTimer = null; }
       if (liveStatusRenderTicker) { clearInterval(liveStatusRenderTicker); liveStatusRenderTicker = null; }
-      liveStatus = { forSessionId: sid, live: false, pid: null, tty: null, terminalApp: null, staleToolCall: false, staleToolAgeS: 0, questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
+      liveStatus = { forSessionId: sid, live: false, pid: null, tty: null, terminalApp: null, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [] };
       updateResumeButton();
       updateAnnounceButton();
       updateJumpButton();
@@ -5583,13 +5707,12 @@
       actions.push({ action: 'clear', label: 'Clear', iconHtml: '&times;' });
     }
     if (!actions.length) return '';
-    // pause/resume/edit have no dormant-thread RPC path (server.py
-    // resume_session_codex: only /goal clear and /goal <objective> work
-    // without a live TUI) — disable them instead of letting the click
-    // round-trip into a guaranteed "requires live interactive terminal" toast.
+    // Edit has no dormant-thread button path because the action carries no
+    // replacement objective. Clear/pause/resume are server-side goal-store
+    // mutations and can run without a live Codex TUI.
     return '<span class="conv-goal-strip-actions" aria-label="Goal actions">'
       + actions.map(a => {
-        const needsLiveTui = kind === 'codex' && a.action !== 'clear' && !isLive;
+        const needsLiveTui = kind === 'codex' && a.action === 'edit' && !isLive;
         const title = needsLiveTui
           ? 'Launch or focus the session to ' + a.label.toLowerCase() + ' its goal'
           : (a.label + ' goal');
@@ -6417,7 +6540,10 @@
       : engine === 'antigravity' ? 'Antigravity'
       : engine === 'hermes' ? 'Hermes'
       : 'Claude';
-    note.textContent = waking
+    const steered = !!(data && data.via === 'codex-steer');
+    note.textContent = steered
+      ? '✓ Steered into the running Codex turn.'
+      : waking
       ? '⏻ Waking the headless agent — it reloads the conversation first, so the reply can take a minute.'
       : '✓ Delivered — waiting for ' + engineLabel + ' to pick it up.';
     // Tier 2: the agent now has the message — advance the live turn status from
@@ -7037,7 +7163,9 @@
           markPendingSendQueued(pendingSend, queuedMsg);
           showOpToast(queuedMsg);
         } else if (data.via === 'codex-steer') {
+          markPendingSendDelivered(pendingSend, data);
           showOpToast('Steered running Codex turn.');
+          try { refreshLiveStatus(); } catch (_) {}
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
         } else if (data.via === 'codex-app-turn') {
@@ -8307,6 +8435,49 @@
       .replace(/&quot;/g, '"')
       .replace(/&#39;|&#x27;/g, "'")
       .replace(/&amp;/g, '&');
+  }
+
+  // Collapse whitespace and clip to `max` chars with a trailing ellipsis.
+  // The throughput widget IIFE has its own copy; this is the main-app scope's.
+  function truncate(text, max) {
+    text = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    return text.length > max ? text.slice(0, Math.max(0, max - 1)) + '...' : text;
+  }
+
+  // 12300 -> "12.3K", 4200000 -> "4.2M". Compact token counts for the live
+  // progress strip (main-app scope; the throughput IIFE has its own formatTokens).
+  function formatCompactCount(n) {
+    n = Math.max(0, Number(n) || 0);
+    if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'K';
+    return String(Math.round(n));
+  }
+
+  // Compact "12.3K tok · 45%" summary from the app-server codex_app_server_token_usage
+  // object. Returns "" when there's nothing meaningful to show. `total_tokens`
+  // is preferred; falls back to input+output. `used_percent` is optional.
+  function codexTokenUsageText(usage) {
+    if (!usage || typeof usage !== 'object') return '';
+    let total = Number(usage.total_tokens) || 0;
+    if (!total) {
+      total = (Number(usage.input_tokens) || 0) + (Number(usage.output_tokens) || 0);
+    }
+    if (!total) return '';
+    let out = formatCompactCount(total) + ' tok';
+    const pct = Number(usage.used_percent);
+    if (Number.isFinite(pct) && pct > 0) out += ' · ' + Math.round(pct) + '%';
+    return out;
+  }
+
+  // Human label + short detail for the app-server codex_app_server_active_item.
+  // Returns { label, detail } (either may be ''). Prefers an explicit tool name,
+  // then the item type; detail is the compact item detail/output.
+  function codexActiveItemLabel(item) {
+    if (!item || typeof item !== 'object') return { label: '', detail: '' };
+    const label = String(item.tool || item.type || '').trim();
+    const detail = String(item.detail || item.output || '').trim();
+    return { label: label, detail: detail };
   }
 
   function normalizeMarkdownLinkTarget(raw) {
@@ -22439,6 +22610,101 @@
     }
   }
 
+  async function respondCodexApproval(sessionId, decision, feedbackEl) {
+    if (!sessionId) return;
+    const originalText = feedbackEl ? feedbackEl.textContent : '';
+    if (feedbackEl) {
+      feedbackEl.disabled = true;
+      feedbackEl.textContent = '…';
+    }
+    try {
+      const res = await fetch('/api/codex/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, decision }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) { data = {}; }
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      const label = decision === 'acceptForSession' ? 'Approved for session'
+        : decision === 'decline' ? 'Denied'
+        : decision === 'cancel' ? 'Cancelled'
+        : 'Approved';
+      showOpToast(label + '.');
+      touchSessionOptimistically(sessionId);
+      try { refreshLiveStatus(); } catch (_) {}
+      setTimeout(refreshConversationList, 700);
+      if (feedbackEl) {
+        feedbackEl.textContent = '✓';
+        setTimeout(() => {
+          feedbackEl.disabled = false;
+          feedbackEl.textContent = originalText;
+        }, 1000);
+      }
+    } catch (err) {
+      showOpToast('Approval failed: ' + (err.message || 'unknown'), 'error');
+      if (feedbackEl) {
+        feedbackEl.disabled = false;
+        feedbackEl.textContent = originalText;
+      }
+    }
+  }
+
+  // "Grab back" a Codex thread that drifted to an external writer (mobile /
+  // desktop Codex opening the session flips it to interactive and stalls CCC
+  // sends). POSTs the server-side recovery endpoint, which reapplies the
+  // noninteractive CCC-worker profile (approvalPolicy:never) and interrupts the
+  // external turn if needed — without auto-approving anything.
+  async function grabBackCodexSession(sessionId, feedbackEl) {
+    if (!sessionId) return;
+    const originalHtml = feedbackEl ? feedbackEl.innerHTML : '';
+    const originalTitle = feedbackEl ? feedbackEl.title : '';
+    if (feedbackEl) {
+      feedbackEl.disabled = true;
+      feedbackEl.classList.add('is-busy');
+      feedbackEl.textContent = '…';
+    }
+    try {
+      const res = await fetch('/api/codex/grab-back', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, mode: 'restore_ccc_worker_mode' }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) { data = {}; }
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      const bits = [];
+      if (data.settings_applied) bits.push('CCC worker mode restored');
+      if (data.interrupted) bits.push('external turn interrupted');
+      if (data.queued) bits.push('your message queued');
+      showOpToast(data.message || ('Grabbed back into CCC' + (bits.length ? ' — ' + bits.join(', ') : '')) + '.');
+      touchSessionOptimistically(sessionId);
+      setTimeout(refreshConversationList, 1200);
+      setTimeout(refreshConversationList, 3000);
+      if (feedbackEl) {
+        feedbackEl.classList.remove('is-busy');
+        feedbackEl.textContent = '✓';
+        setTimeout(() => {
+          feedbackEl.innerHTML = originalHtml;
+          feedbackEl.disabled = false;
+          feedbackEl.title = originalTitle;
+        }, 1400);
+      }
+    } catch (err) {
+      showOpToast('Grab back failed: ' + (err.message || 'unknown'), 'error');
+      if (feedbackEl) {
+        feedbackEl.classList.remove('is-busy');
+        feedbackEl.innerHTML = originalHtml;
+        feedbackEl.disabled = false;
+        feedbackEl.title = originalTitle;
+      }
+    }
+  }
+
   function showInjectError(inp, btn, msg) {
     if (inp) {
       const orig = inp.placeholder;
@@ -22988,6 +23254,11 @@
         liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
           + '<span class="conv-live-name">Stuck</span>'
           + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(staleTool)) + '</span>'
+          + '</span>';
+      } else if (c.is_live && c.needs_approval) {
+        const msg = c.needs_approval_message || c.sidecar_file || 'Agent is asking for approval';
+        liveToolHtml = '<span class="conv-live-tool is-question" title="' + escapeHtml(msg) + '">'
+          + '<span class="conv-live-name">Needs approval</span>'
           + '</span>';
       } else if (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'))) {
         const q = c.sidecar_file || c.question_text || 'Claude is asking a question';
@@ -37949,6 +38220,26 @@
           if (_coordKind) div.classList.add('coord-' + _coordKind);
           div.innerHTML = '<span class="ccoord-icon" aria-hidden="true">' + _coordIcon + '</span>'
             + '<span class="ccoord-text">' + escapeHtml(ev.text || '') + '</span>'
+            + tsSpan(ev.ts);
+        } else if (ev.subtype === 'codex_app_server_item') {
+          const _tool = String(ev.tool || ev.item_type || 'Codex');
+          const _status = String(ev.status || '').toLowerCase();
+          const _needsApproval = !!ev.needs_approval;
+          const _isRunning = !!ev.in_flight || _status === 'inprogress' || _status === 'running';
+          const _isError = !!ev.is_error || _status === 'failed' || _status === 'errored';
+          const _icon = _needsApproval ? '!' : (_isError ? '!' : (_isRunning ? '>' : '+'));
+          const _detail = String(ev.approval_message || ev.detail || ev.output || ev.text || '').trim();
+          const _label = _needsApproval
+            ? ('Codex app-server · ' + _tool + ' needs approval')
+            : (ev.item_type === 'agentMessage' ? 'Codex message' : ('Codex app-server · ' + _tool));
+          div.classList.add('system-compact', 'codex-app-item');
+          if (_isRunning) div.classList.add('is-running');
+          if (_isError) div.classList.add('is-error');
+          if (_needsApproval) div.classList.add('needs-approval');
+          div.innerHTML = '<span class="ccoord-icon" aria-hidden="true">' + _icon + '</span>'
+            + '<span class="ccoord-text"><span class="codex-app-item-label">' + escapeHtml(_label) + '</span>'
+            + (_detail ? ' <span class="codex-app-item-detail">' + escapeHtml(truncate(_detail, 260)) + '</span>' : '')
+            + '</span>'
             + tsSpan(ev.ts);
         } else {
           div.innerHTML = '<span class="label">System</span>'

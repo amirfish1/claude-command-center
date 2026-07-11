@@ -4120,7 +4120,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("is-paused", goal_js)
         self.assertIn("is-blocked", goal_js)
         self.assertIn("function conversationGoalActionButtonsHtml(statusKey, source, isLive)", goal_js)
-        self.assertIn("const needsLiveTui = kind === 'codex' && a.action !== 'clear' && !isLive;", goal_js)
+        self.assertIn("const needsLiveTui = kind === 'codex' && a.action === 'edit' && !isLive;", goal_js)
+        self.assertIn("Clear/pause/resume are server-side goal-store", goal_js)
         self.assertIn('data-role="conv-goal-action"', goal_js)
         self.assertIn("function conversationGoalActionCommand(action)", goal_js)
         self.assertIn("return '/goal clear';", goal_js)
@@ -4141,6 +4142,39 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-goal-strip.is-blocked", app_css)
         self.assertIn(".conv-item .conv-goal.is-paused", app_css)
         self.assertIn(".conv-item .conv-goal.is-blocked", app_css)
+
+    def test_codex_goal_store_update_mutates_sqlite(self):
+        """Dormant Codex /goal actions should update the native goal DB without
+        needing a live TUI or trusting a best-effort app-server RPC."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        old_candidates = server.CODEX_GOALS_DB_CANDIDATES
+        sid = "019f0000-test-goal"
+        with tempfile.TemporaryDirectory() as td:
+            db = pathlib.Path(td) / "goals_1.sqlite"
+            server.CODEX_GOALS_DB_CANDIDATES = (db,)
+            try:
+                set_res = server._codex_goal_store_update(sid, "set", objective="ship the thing")
+                self.assertTrue(set_res["ok"], set_res)
+                snap = server._codex_goals_snapshot()
+                self.assertEqual(snap[sid]["objective"], "ship the thing")
+                self.assertEqual(snap[sid]["status"], "active")
+
+                pause_res = server._codex_goal_store_update(sid, "pause")
+                self.assertTrue(pause_res["ok"], pause_res)
+                self.assertEqual(server._codex_goals_snapshot()[sid]["status"], "paused")
+
+                resume_res = server._codex_goal_store_update(sid, "resume")
+                self.assertTrue(resume_res["ok"], resume_res)
+                self.assertEqual(server._codex_goals_snapshot()[sid]["status"], "active")
+
+                clear_res = server._codex_goal_store_update(sid, "clear")
+                self.assertTrue(clear_res["ok"], clear_res)
+                self.assertNotIn(sid, server._codex_goals_snapshot())
+            finally:
+                server.CODEX_GOALS_DB_CANDIDATES = old_candidates
+                server._invalidate_codex_goals_cache()
 
     def test_claude_goal_command_stamps_goal_fields(self):
         """Claude slash-command goal state should be promoted to row fields,
@@ -4270,6 +4304,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('hidden disabled aria-hidden="true"', app_js)
         self.assertIn("btn.hidden = !steerable;", app_js)
         self.assertIn("Steered running Codex turn.", app_js)
+        self.assertIn("markPendingSendDelivered(pendingSend, data);", app_js)
+        self.assertIn("Steered into the running Codex turn.", app_js)
         self.assertIn("div.classList.add('has-user-steer')", app_js)
         self.assertIn(".conversations-view .event.user_text.has-user-steer .user-msg", app_css)
         self.assertIn(".user-message-steer", app_css)
@@ -7926,6 +7962,112 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertFalse(meta["has_commit"])
         self.assertFalse(meta["has_push"])
 
+    def test_codex_tail_meta_detects_custom_tool_approval(self):
+        server = self.server
+        event = {
+            "timestamp": "2026-07-11T03:12:48.336Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call_approval",
+                "status": "completed",
+                "input": (
+                    "const r = await tools.exec_command({\n"
+                    "  cmd: \"wt status -q CHUCK --json\",\n"
+                    "  workdir: \"/home/hermes/projects/chuck-realtor-web\",\n"
+                    "  sandbox_permissions: \"require_escalated\",\n"
+                    "  justification: \"Allow this read-only WatchTower status check?\"\n"
+                    "});\n"
+                ),
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "rollout.jsonl"
+            path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+            server._conv_meta_cache.clear()
+            server._codex_tail_resume.clear()
+            meta = server._extract_codex_tail_meta(path)
+
+            self.assertEqual(meta["pending_tool"], "Bash")
+            self.assertTrue(meta["needs_approval"])
+            self.assertEqual(
+                meta["needs_approval_message"],
+                "Allow this read-only WatchTower status check?",
+            )
+
+            output = {
+                "timestamp": "2026-07-11T03:12:50.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_approval",
+                    "output": "Script completed\nWall time 0.1 seconds\nOutput:\n{}",
+                },
+            }
+            path.write_text(
+                json.dumps(event) + "\n" + json.dumps(output) + "\n",
+                encoding="utf-8",
+            )
+            server._conv_meta_cache.clear()
+            server._codex_tail_resume.clear()
+            meta = server._extract_codex_tail_meta(path)
+
+        self.assertIsNone(meta["pending_tool"])
+        self.assertFalse(meta["needs_approval"])
+        self.assertEqual(meta["needs_approval_message"], "")
+
+    def test_parse_codex_event_renders_custom_tool_call(self):
+        event = {
+            "timestamp": "2026-07-11T03:12:48.336Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call_custom",
+                "input": (
+                    "const r = await tools.exec_command({\n"
+                    "  cmd: \"wt status -q CHUCK --json\",\n"
+                    "  sandbox_permissions: \"require_escalated\",\n"
+                    "  justification: \"Allow status?\"\n"
+                    "});\n"
+                ),
+            },
+        }
+
+        parsed = self.server._parse_codex_event(event, 12)
+
+        self.assertEqual(parsed["type"], "assistant")
+        block = parsed["blocks"][0]
+        self.assertEqual(block["name"], "Bash")
+        self.assertIn("wt status", block["detail"])
+        self.assertTrue(block["approval_required"])
+        self.assertEqual(block["approval_message"], "Allow status?")
+
+    def test_codex_app_activity_superseded_by_newer_tail(self):
+        app_activity = {
+            "sidecar_status": "active",
+            "sidecar_tool": "Bash",
+            "sidecar_ts": 100.0,
+        }
+        newer_tail = {
+            "last_meaningful_ts": 130.0,
+            "pending_tool": None,
+            "needs_approval": False,
+        }
+        current_tail = {
+            "last_meaningful_ts": 99.0,
+            "pending_tool": None,
+            "needs_approval": False,
+        }
+
+        self.assertTrue(
+            self.server._codex_app_activity_superseded_by_tail(app_activity, newer_tail)
+        )
+        self.assertFalse(
+            self.server._codex_app_activity_superseded_by_tail(app_activity, current_tail)
+        )
+
     def test_reattach_spawned_orphans_defaults_legacy_rows_to_claude(self):
         """A registry row written before the `engine` field existed
         must reattach as engine='claude' — not raise KeyError, not
@@ -9085,6 +9227,333 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertNotIn("active_item", state)
         self.assertIsNone(server._codex_app_server_activity_fields(sid)["sidecar_tool"])
 
+    def test_codex_app_server_approval_item_feeds_waiting_ui_fields(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-active"}},
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/started",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "startedAtMs": 1783600000000,
+                "item": {
+                    "id": "item-approval",
+                    "type": "commandExecution",
+                    "status": "waiting_for_approval",
+                    "command": "rm -rf /tmp/nope",
+                    "commandActions": [
+                        {"id": "approve", "label": "Approve"},
+                        {"id": "deny", "label": "Deny"},
+                    ],
+                    "approvalMessage": "Allow destructive command?",
+                },
+            },
+        })
+
+        state = server._codex_app_server_thread_state(sid)
+        self.assertTrue(state["active_item"]["needs_approval"])
+        self.assertEqual(state["active_item"]["approval_message"], "Allow destructive command?")
+        fields = server._codex_app_server_activity_fields(sid)
+        self.assertTrue(fields["needs_approval"])
+        self.assertEqual(fields["needs_approval_message"], "Allow destructive command?")
+        self.assertEqual(fields["sidecar_tool"], "Bash")
+        self.assertTrue(fields["sidecar_in_flight"])
+        state_fields = server._codex_state_fields(sid)
+        self.assertEqual(state_fields["codex_state"], "waiting")
+        self.assertEqual(state_fields["codex_state_reason"], "Allow destructive command?")
+        events = server._get_codex_app_server_item_events_for_session(sid)
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0]["needs_approval"])
+        self.assertIn("needs approval", events[0]["text"])
+
+    def test_codex_app_server_request_approval_is_actionable(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_RESPONSES.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "id": "approval-req-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "itemId": "item-shell",
+                "startedAtMs": 1783600000000,
+                "command": "rm -rf /tmp/nope",
+                "reason": "Allow destructive command?",
+                "availableDecisions": ["accept", "decline", "cancel"],
+            },
+        })
+
+        with server._CODEX_APP_SERVER_LOCK:
+            self.assertNotIn("approval-req-1", server._CODEX_APP_SERVER_RESPONSES)
+        state = server._codex_app_server_thread_state(sid)
+        pending = state["pending_approval_request"]
+        self.assertEqual(pending["request_id"], "approval-req-1")
+        self.assertEqual(pending["approval_method"], "item/commandExecution/requestApproval")
+        self.assertEqual(pending["tool"], "Bash")
+        self.assertTrue(pending["can_approve"])
+        self.assertTrue(state["thread_needs_approval"])
+        public = server._codex_app_server_thread_public_status(sid)
+        self.assertEqual(public["active_item"]["request_id"], "approval-req-1")
+        self.assertTrue(public["active_item"]["can_approve"])
+        self.assertTrue(public["active_item"]["needs_approval"])
+        fields = server._codex_app_server_activity_fields(sid)
+        self.assertTrue(fields["needs_approval"])
+        self.assertEqual(fields["needs_approval_message"], "Allow destructive command?")
+
+    def test_codex_app_server_resolve_approval_sends_json_rpc_response(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        class FakeTransport:
+            kind = "managed-unix"
+
+            def __init__(self):
+                self.sent = []
+
+            def alive(self):
+                return True
+
+            def send_json(self, payload):
+                self.sent.append(payload)
+
+        fake = FakeTransport()
+        with server._CODEX_APP_SERVER_LOCK:
+            old_transport = server._CODEX_APP_SERVER_TRANSPORT
+            old_initialized = server._CODEX_APP_SERVER_INITIALIZED
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_RESPONSES.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+            server._CODEX_APP_SERVER_TRANSPORT = fake
+            server._CODEX_APP_SERVER_INITIALIZED = True
+        try:
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "id": "approval-req-2",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-active",
+                    "itemId": "item-shell",
+                    "startedAtMs": 1783600000000,
+                    "command": "pytest -q",
+                    "reason": "Allow test command?",
+                },
+            })
+            result = server._codex_app_server_resolve_approval(sid, "acceptForSession")
+        finally:
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_TRANSPORT = old_transport
+                server._CODEX_APP_SERVER_INITIALIZED = old_initialized
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(fake.sent, [{
+            "jsonrpc": "2.0",
+            "id": "approval-req-2",
+            "result": {"decision": "acceptForSession"},
+        }])
+        state = server._codex_app_server_thread_state(sid)
+        self.assertNotIn("pending_approval_request", state)
+        self.assertFalse(state["thread_needs_approval"])
+        self.assertFalse(state["active_item"]["needs_approval"])
+
+    def test_codex_app_server_thread_waiting_on_approval_flag_feeds_ui_fields(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "thread/status/changed",
+            "params": {
+                "threadId": sid,
+                "status": {"type": "active", "activeFlags": ["waitingOnApproval"]},
+            },
+        })
+
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "active")
+        self.assertEqual(state["active_flags"], ["waitingOnApproval"])
+        self.assertTrue(state["thread_needs_approval"])
+        fields = server._codex_app_server_activity_fields(sid)
+        self.assertTrue(fields["needs_approval"])
+        self.assertEqual(fields["sidecar_status"], "active")
+        self.assertEqual(fields["sidecar_tool"], "Approval")
+        state_fields = server._codex_state_fields(sid)
+        self.assertEqual(state_fields["codex_state"], "waiting")
+        self.assertIn("approval", state_fields["codex_state_reason"].lower())
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "thread/status/changed",
+            "params": {"threadId": sid, "status": {"type": "idle", "activeFlags": []}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertFalse(state["thread_needs_approval"])
+        self.assertEqual(state["active_flags"], [])
+        self.assertFalse(server._codex_app_server_activity_fields(sid)["needs_approval"])
+
+    def test_codex_app_server_public_status_exposes_active_item_and_token_usage(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-active"}},
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/started",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "item": {
+                    "id": "item-shell",
+                    "type": "commandExecution",
+                    "status": "inProgress",
+                    "command": "python3 -m pytest tests/test_smoke.py -q",
+                },
+            },
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 144000,
+                        "cachedInputTokens": 5000,
+                        "outputTokens": 25,
+                        "reasoningOutputTokens": 0,
+                        "totalTokens": 144025,
+                    },
+                    "total": {
+                        "inputTokens": 152712,
+                        "cachedInputTokens": 5000,
+                        "outputTokens": 171,
+                        "reasoningOutputTokens": 106,
+                        "totalTokens": 152883,
+                    },
+                    "modelContextWindow": 258400,
+                },
+            },
+        })
+
+        public = server._codex_app_server_thread_public_status(sid)
+        self.assertEqual(public["active_item"]["tool"], "Bash")
+        self.assertIn("pytest", public["active_item"]["detail"])
+        self.assertEqual(public["last_item_id"], "item-shell")
+        usage = public["token_usage"]
+        self.assertEqual(usage["input_tokens"], 152712)
+        self.assertEqual(usage["cached_input_tokens"], 5000)
+        self.assertEqual(usage["output_tokens"], 171)
+        self.assertEqual(usage["reasoning_output_tokens"], 106)
+        self.assertEqual(usage["total_tokens"], 152883)
+        self.assertEqual(usage["context_limit"], 258400)
+        self.assertEqual(usage["used_percent"], 59.2)
+        self.assertEqual(usage["last"]["input_tokens"], 144000)
+
+    def test_codex_app_server_text_items_do_not_render_as_overlays(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        for item in (
+            {"id": "user-1", "type": "userMessage", "text": "hello"},
+            {"id": "agent-1", "type": "agentMessage", "text": "hi"},
+            {"id": "reason-1", "type": "reasoning", "summary": ["thinking"]},
+        ):
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-active",
+                    "completedAtMs": 1783600005000,
+                    "item": item,
+                },
+            })
+
+        self.assertEqual(server._get_codex_app_server_item_events_for_session(sid), [])
+
+    def test_codex_app_server_items_render_as_conversation_overlays(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/completed",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "completedAtMs": 1783600005000,
+                "item": {
+                    "id": "item-shell",
+                    "type": "commandExecution",
+                    "status": "completed",
+                    "command": "wt find CHUCK-51 --json",
+                    "exitCode": 0,
+                    "aggregatedOutput": "{\"ref\":\"CHUCK-51\"}",
+                },
+            },
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/completed",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "completedAtMs": 1783600006000,
+                "item": {"id": "empty-thinking", "type": "reasoning", "status": "completed"},
+            },
+        })
+
+        events = server._get_codex_app_server_item_events_for_session(sid)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["subtype"], "codex_app_server_item")
+        self.assertEqual(events[0]["tool"], "Bash")
+        self.assertIn("wt find", events[0]["detail"])
+        self.assertIn("CHUCK-51", events[0]["output"])
+
+        with mock.patch.object(server, "_detect_session_engine", return_value="codex"):
+            queued = server._get_queued_events_for_session(sid)
+        self.assertTrue(any(ev.get("subtype") == "codex_app_server_item" for ev in queued))
+
     def test_codex_app_server_wake_confirms_from_notification(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -9426,7 +9895,14 @@ class TestRepoContextHelpers(unittest.TestCase):
     def test_codex_managed_app_server_ui_label_is_present(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("managed app-server", app_js)
-        self.assertIn("codex_app_server_transport", pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8"))
+        self.assertIn("codex_app_server_event_seq", app_js)
+        self.assertIn("codex_app_server_item", app_js)
+        self.assertIn("/api/codex/approval", app_js)
+        self.assertIn("data-decision=\"acceptForSession\"", app_js)
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("codex_app_server_transport", server_py)
+        self.assertIn("_schedule_codex_managed_app_server_warmup()", server_py)
+        self.assertIn("name=\"codex-managed-app-server-warmup\"", server_py)
 
     def test_resume_codex_prefers_app_server_before_queued_cli_resume(self):
         server = self.server
@@ -11936,7 +12412,7 @@ class TestPendingInputs(unittest.TestCase):
         self.assertTrue(events[2]["pending"])
 
     def test_conv_bytes_cache_misses_when_pending_input_queued(self):
-        """Pre-serialized /api/conversations bodies must not hide queued injects."""
+        """Pre-serialized /api/conversations bodies must not hide dynamic overlays."""
         sid = "cache-pending-test-session"
         # Mock PROJECTS_ROOT to a tmp dir so the test fixture doesn't leak
         # into the user's real `~/.claude/projects` and surface as a ghost
@@ -11965,6 +12441,23 @@ class TestPendingInputs(unittest.TestCase):
             self.assertIsNone(self.server._conv_response_bytes_get(sid, 0))
             with self.server._pending_terminal_input_lock:
                 self.server._pending_terminal_input_queue.clear()
+            self.server._conv_response_bytes_put(sid, 0, raw, None)
+            self.assertIsNotNone(self.server._conv_response_bytes_get(sid, 0))
+            with self.server._CODEX_APP_SERVER_LOCK:
+                self.server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                    "recent_items": [{
+                        "id": "item-shell",
+                        "type": "commandExecution",
+                        "tool": "Bash",
+                        "detail": "wt find CHUCK-51 --json",
+                        "status": "completed",
+                        "ts": 1783600005.0,
+                        "updated_at": 1783600005.0,
+                    }]
+                }
+            self.assertIsNone(self.server._conv_response_bytes_get(sid, 0))
+            with self.server._CODEX_APP_SERVER_LOCK:
+                self.server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
         finally:
             self.server.PROJECTS_ROOT = prev_projects_root
             shutil.rmtree(tmp_projects, ignore_errors=True)
