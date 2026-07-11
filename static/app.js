@@ -3221,6 +3221,7 @@
     }
     updateJumpButton();
     updateInputBar();
+    syncUserMessageSteerButtons(getConvViewForPane(activePaneId()) || $conversationsView);
     updateLiveToolStrip();
     updateCodexStateBadge();
     updateConvProcessIndicator();
@@ -5034,7 +5035,10 @@
     btn.disabled = true;
     btn.textContent = '...';
     try {
-      const data = await postInjectInput(sid, text, 'steer');
+      let data = await postInjectInput(sid, text, 'steer');
+      if ((!data || !data.ok) && codexSteerUnavailable(data)) {
+        data = await postInjectInput(sid, text, 'send');
+      }
       if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
       btn.textContent = '✓';
       showOpToast(data.via === 'codex-steer' ? 'Steered running Codex turn.' : 'Sent to Codex.');
@@ -5812,10 +5816,15 @@
         }
       }
       if (activeSteerBtn) {
-        const canSteer = canSend && isCodex && hasSession && !isNewSession && !isBacklogIssue;
+        const canSteer = canSend && isCodex && hasSession && !isNewSession && !isBacklogIssue
+          && codexTurnSteerable();
         activeSteerBtn.classList.toggle('visible', canSteer);
         activeSteerBtn.disabled = !canSteer;
-        activeSteerBtn.title = canSteer ? 'Steer running Codex turn now' : 'Steer is only available for Codex sessions';
+        activeSteerBtn.title = canSteer
+          ? 'Steer running Codex turn now'
+          : (isCodex
+              ? 'No running Codex turn can be steered from CCC; use Send to resume or follow up'
+              : 'Steer is only available for Codex sessions');
       }
       // Compact button — only for compaction-capable open sessions (Claude
       // AND Codex). cursor/gemini/antigravity return compact_unsupported_engine
@@ -6972,6 +6981,14 @@
       }
       let data = {};
       try { data = await res.json(); } catch (_) {}
+      if (injectMode === 'steer'
+          && currentSession.source === 'codex'
+          && (!data || !data.ok)
+          && codexSteerUnavailable(data)) {
+        data = await postInjectInput(sid, text, 'send', { announcedFrom });
+        res = { ok: !!(data && data.ok), status: (data && data.ok) ? 200 : 0 };
+        injectMode = 'send';
+      }
       if (res.ok && data.ok && data.submitted === false) {
         removePendingSendEcho(pendingSend);
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
@@ -8653,8 +8670,14 @@
   function userMessageSteerHtml(text, notification, compactCardHtml) {
     if (!currentSession || currentSession.source !== 'codex') return '';
     if (notification || compactCardHtml || !String(text || '').trim()) return '';
+    const steerable = codexTurnSteerable();
+    const title = steerable
+      ? 'Steer Codex with this message'
+      : 'No running Codex turn can be steered from CCC; use Send to resume or follow up';
+    const inactiveAttrs = steerable ? '' : ' hidden disabled aria-hidden="true"';
     return '<button type="button" class="user-message-steer" data-steer-user-message'
-      + ' title="Steer Codex with this message" aria-label="Steer Codex with this message">Steer</button>';
+      + inactiveAttrs + ' title="' + escapeAttr(title)
+      + '" aria-label="Steer Codex with this message">Steer</button>';
   }
 
   document.addEventListener('click', (ev) => {
@@ -21845,6 +21868,33 @@
     try { data = await res.json(); } catch (_) {}
     if (!res.ok && !data.error) data.error = 'HTTP ' + res.status;
     return data;
+  }
+
+  function codexSteerUnavailable(data) {
+    const code = data && data.code;
+    return code === 'codex_no_active_turn'
+      || code === 'codex_steer_unavailable'
+      || code === 'codex_steer_failed';
+  }
+
+  function codexTurnSteerable() {
+    if (!currentSession || currentSession.source !== 'codex') return false;
+    if (!liveStatusMatchesOpenConv() || !liveStatus || liveStatus.codexState !== 'working') return false;
+    const writer = liveStatus.codexWriter || null;
+    return writer !== 'desktop' && writer !== 'external';
+  }
+
+  function syncUserMessageSteerButtons(root) {
+    const steerable = codexTurnSteerable();
+    const title = steerable
+      ? 'Steer Codex with this message'
+      : 'No running Codex turn can be steered from CCC; use Send to resume or follow up';
+    (root || document).querySelectorAll('[data-steer-user-message]').forEach((btn) => {
+      btn.hidden = !steerable;
+      btn.disabled = !steerable;
+      btn.setAttribute('aria-hidden', steerable ? 'false' : 'true');
+      btn.title = title;
+    });
   }
 
   async function postCompactSession(sessionId, terminalApp) {
@@ -38373,6 +38423,7 @@
     // Re-hide the inline duplicate of a pending question after the transcript
     // rebuilds (it re-creates the .ask-user-block without the hide class).
     try { _syncLiveQuestionDuplicateHide(); } catch (_) {}
+    try { syncUserMessageSteerButtons($view); } catch (_) {}
     // Conversation/control-plane tools otherwise collapse into the fused
     // "Ran N commands ▶" group. Their details are important context, so keep
     // those groups expanded after any transcript rebuild.

@@ -4201,6 +4201,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-input-bar .steer-btn", app_css)
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
+        self.assertIn("function codexTurnSteerable()", app_js)
+        self.assertIn("&& codexTurnSteerable();", app_js)
+        self.assertIn("function codexSteerUnavailable(data)", app_js)
+        self.assertIn("data = await postInjectInput(sid, text, 'send', { announcedFrom });", app_js)
 
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers
@@ -4224,6 +4228,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
         self.assertIn('data-steer-user-message', app_js)
         self.assertIn("postInjectInput(sid, text, 'steer')", app_js)
+        self.assertIn("data = await postInjectInput(sid, text, 'send');", app_js)
+        self.assertIn("syncUserMessageSteerButtons", app_js)
+        self.assertIn('hidden disabled aria-hidden="true"', app_js)
+        self.assertIn("btn.hidden = !steerable;", app_js)
         self.assertIn("Steered running Codex turn.", app_js)
         self.assertIn("div.classList.add('has-user-steer')", app_js)
         self.assertIn(".conversations-view .event.user_text.has-user-steer .user-msg", app_css)
