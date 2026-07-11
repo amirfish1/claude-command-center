@@ -36048,9 +36048,13 @@
         + (currentReasoningEffort ? '\nReasoning effort: ' + currentReasoningEffort : '')
         + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued — applies on the session\'s next CCC-resumed ask)' : '')
         + (engine === 'antigravity' ? '' : '\n\nClick to change model');
+      const effortInner = currentReasoningEffort
+        ? ' <span class="wp-model-effort">' + escapeHtml(currentReasoningEffort) + '</span>'
+        : '';
       const modelInner = escapeHtml(shortModel)
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
         + (queued ? ' <span class="wp-model-pending">→ ' + (liveModel && shortOvrModel ? escapeHtml(shortOvrModel) : 'next') + '</span>' : '')
+        + effortInner
         + ' <span class="wp-model-chevron">&#x25be;</span>';
       if (engine === 'antigravity' || engine === 'hermes') {
         modelPill = ' <span class="wp-model-pill is-static" title="' + escapeHtml(modelTip) + '">'

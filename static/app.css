@@ -2855,6 +2855,13 @@
     font-size: 9px;
     font-weight: 700;
   }
+  .conv-input-context .wp-model-effort {
+    margin-left: 4px;
+    color: var(--text-muted);
+    opacity: 0.72;
+    font-size: 9px;
+    font-weight: 700;
+  }
   .conv-input-context .wp-model-chevron { opacity: 0.45; font-size: 8px; vertical-align: middle; }
   /* Model picker popover — anchored under the wp-model-pill button. */
   .model-picker-pop {

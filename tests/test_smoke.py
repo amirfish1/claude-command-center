@@ -11684,6 +11684,8 @@ class TestModelPicker(unittest.TestCase):
     def test_codex_model_picker_marks_current_reasoning_effort(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         self.assertIn("const currentReasoningEffort = (ovr && ovr.reasoning_effort) || u.reasoning_effort || '';", js)
+        self.assertIn("const effortInner = currentReasoningEffort", js)
+        self.assertIn("wp-model-effort", js)
         self.assertIn('data-reasoning="\' + escapeHtml(currentReasoningEffort) + \'"', js)
         self.assertIn("const currentReasoning = btn.dataset.reasoning || '';", js)
         self.assertIn("const isActive = lvl.id === currentReasoning;", js)
