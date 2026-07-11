@@ -20657,6 +20657,20 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
     if ccc_turn_active or exec_child:
         snap["writer"] = "ccc"
         return snap
+    # Trust an authoritative "idle" thread status (delivered via
+    # thread/status/changed and captured into state["status"]) over the
+    # rollout-mtime heuristic. CCC shares the managed app-server daemon with the
+    # Codex mobile/desktop apps, so it receives their real active→idle
+    # transitions; a thread the daemon reports idle is NOT being written, even
+    # when the rollout mtime is fresh because an external surface merely OPENED
+    # the thread (touching the file without starting a turn). Without this, an
+    # opened-but-idle thread was mis-attributed to an active external writer and
+    # every CCC send queued forever ("session is busy" that never clears). The
+    # status is volatile (never restored across restarts), so its presence means
+    # we heard it this process — trustworthy. When we have no status (a thread we
+    # aren't attached to / haven't heard from), fall back to the mtime heuristic.
+    if str(state.get("status") or "").strip().lower() == "idle":
+        return snap
     if mtime_recent and not ccc_recent:
         snap["external_active"] = True
         snap["writer"] = "desktop" if snap["desktop_attached"] else "external"

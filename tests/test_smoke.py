@@ -6005,6 +6005,31 @@ class TestRepoContextHelpers(unittest.TestCase):
         inject.assert_called_once()
         resume.assert_called_once_with(sid, "hello")
 
+    def test_codex_writer_snapshot_trusts_idle_status_over_mtime(self):
+        # Regression for the false-busy/stuck saga: an idle thread whose rollout
+        # mtime is fresh (a mobile/desktop app merely OPENED it) must NOT be
+        # attributed to an active external writer once the daemon has reported
+        # status "idle" via thread/status/changed. Without this, CCC queued every
+        # send forever ("session is busy" that never clears).
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        now = 1_000_000.0
+        fresh_rollout = {"path": "/tmp/rollout.jsonl", "mtime_ns": int((now - 1) * 1e9)}
+        # Idle status present -> external_active must be False even with fresh mtime.
+        snap_idle = self.server._codex_thread_writer_snapshot(
+            sid, now=now, rollout=fresh_rollout,
+            app_state={"status": "idle"}, attached={}, exec_child=False,
+        )
+        self.assertFalse(snap_idle["external_active"])
+        self.assertIsNone(snap_idle["writer"])
+        # No status (thread we haven't heard from) -> mtime fallback still flags
+        # an external writer, so unrelated behavior isn't regressed.
+        snap_unknown = self.server._codex_thread_writer_snapshot(
+            sid, now=now, rollout=fresh_rollout,
+            app_state={}, attached={}, exec_child=False,
+        )
+        self.assertTrue(snap_unknown["external_active"])
+        self.assertEqual(snap_unknown["writer"], "external")
+
     def test_codex_slash_idle_terminal_submits_with_return(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
