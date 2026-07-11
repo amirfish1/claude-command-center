@@ -13142,8 +13142,9 @@ class TestQuestionRelay(unittest.TestCase):
                 if "command-center/hooks/" in h.get("command", "")
             ]
             self.assertEqual(len(commands), 4)
+            expected_python = "/usr/bin/python3" if self.server.sys.platform == "darwin" else "/opt/ccc-test/python3"
             for command in commands:
-                self.assertTrue(command.startswith("/opt/ccc-test/python3 "), command)
+                self.assertTrue(command.startswith(expected_python + " "), command)
                 self.assertNotIn("python3 ", command[:8])
 
 

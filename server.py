@@ -9275,6 +9275,9 @@ HOOK_MARKER_LEGACY = "log-viewer/hooks/"
 
 def _hook_python_executable():
     """Absolute Python executable for Claude Code hook commands."""
+    system_python = "/usr/bin/python3"
+    if sys.platform == "darwin" and os.access(system_python, os.X_OK):
+        return system_python
     exe = sys.executable or ""
     if exe and not os.path.isabs(exe):
         exe = shutil.which(exe) or exe
