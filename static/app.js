@@ -37932,6 +37932,14 @@
       const title = ev.chat_id ? ('WhatsApp sender in ' + ev.chat_id) : 'WhatsApp sender';
       return '<div class="whatsapp-bridge-sender" title="' + escapeAttr(title) + '">' + escapeHtml(sender) + '</div>';
     }
+    function eventModelMetaHtml(ev, role) {
+      if (!ev || !ev.model) return '';
+      const bits = [];
+      const prefix = role === 'assistant' ? 'Used' : 'Sent to';
+      bits.push(prefix + ' ' + String(ev.model));
+      if (ev.reasoning_effort) bits.push('effort ' + String(ev.reasoning_effort));
+      return '<div class="event-model-meta" title="' + escapeAttr(bits.join(' · ')) + '">' + escapeHtml(bits.join(' · ')) + '</div>';
+    }
     for (const ev of events) {
       if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
@@ -38427,6 +38435,7 @@
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
           + tsSpan(ev.ts)
           + textHtml
+          + eventModelMetaHtml(ev, 'user')
           + (_isPinned ? '' : imagesHtml)
           + userSteerHtml;
 
@@ -38604,6 +38613,7 @@
           }
         }
         html += blockParts.join('');
+        if (renderedSomething) html += eventModelMetaHtml(ev, 'assistant');
         if (!hasNonTool) div.classList.add('tool-only');
         if (!renderedSomething) div.classList.add('is-silent-thinking-only');
         // Hide bare no-op acknowledgments ("No response requested." etc.):

@@ -1471,6 +1471,17 @@
     font-variant-numeric: tabular-nums;
     cursor: help;
   }
+  .event-model-meta {
+    margin: 3px 0 0;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.68;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   /* Merged into the trailing tool-call line (CCC-30): sits at the right edge
      of the flex row instead of floating as its own line below the turn. */
   .tool-call .event-token-chips.is-merged {

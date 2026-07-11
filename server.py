@@ -16675,6 +16675,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
 
     events = []
     codex_token_usage = None
+    codex_turn_meta = None
     for ln, line in buf:
         line = line.strip()
         if not line:
@@ -16684,11 +16685,15 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         except json.JSONDecodeError:
             continue
         if is_codex:
+            turn_meta = _codex_turn_meta_from_event(ev)
+            if turn_meta:
+                codex_turn_meta = turn_meta
+                continue
             usage = _codex_token_usage_from_event(ev)
             if usage:
                 codex_token_usage = usage
                 continue
-            parsed = parser(ev, ln, codex_token_usage)
+            parsed = parser(ev, ln, codex_token_usage, codex_turn_meta=codex_turn_meta)
         else:
             parsed = parser(ev, ln)
         if parsed:
@@ -16778,6 +16783,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     line_num = 0
     is_codex = parser is _parse_codex_event
     codex_token_usage = None
+    codex_turn_meta = None
     is_cursor = parser is _parse_cursor_event
     # Cursor JSONLs record no per-event timestamp (only `role` + `message`)
     # so every event ended up with ts="", and the browser fell back to
@@ -16818,6 +16824,10 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                         except json.JSONDecodeError:
                             ev = None
                         if ev:
+                            turn_meta = _codex_turn_meta_from_event(ev)
+                            if turn_meta:
+                                codex_turn_meta = turn_meta
+                                continue
                             usage = _codex_token_usage_from_event(ev)
                             if usage:
                                 codex_token_usage = usage
@@ -16831,11 +16841,15 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                     continue
 
                 if is_codex:
+                    turn_meta = _codex_turn_meta_from_event(ev)
+                    if turn_meta:
+                        codex_turn_meta = turn_meta
+                        continue
                     usage = _codex_token_usage_from_event(ev)
                     if usage:
                         codex_token_usage = usage
                         continue
-                    parsed = parser(ev, line_num, codex_token_usage)
+                    parsed = parser(ev, line_num, codex_token_usage, codex_turn_meta=codex_turn_meta)
                 else:
                     parsed = parser(ev, line_num)
                 if parsed:
@@ -18033,7 +18047,10 @@ def _parse_conversation_event(ev, line_num):
         if text or images:
             # Preview placeholder "[image]" shouldn't leak into the rendered message.
             display_text = "" if (text == "[image]" and images) else text
-            return {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
+            out_ev = {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
+            if msg.get("model"):
+                out_ev["model"] = msg.get("model")
+            return out_ev
         # Check for tool results in content list. Capture the result text so
         # the UI can render it inline under the matching tool_call (Claude
         # Desktop-style "Bash $ npm test \n <stdout>" preview).
@@ -25115,6 +25132,41 @@ def _codex_token_usage_from_event(ev):
     }
 
 
+def _codex_turn_meta_from_event(ev):
+    payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+    if ev.get("type") != "turn_context" or not isinstance(payload, dict):
+        return None
+    collaboration = payload.get("collaboration_mode")
+    if not isinstance(collaboration, dict):
+        collaboration = {}
+    settings = collaboration.get("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+    model = payload.get("model") or settings.get("model") or ""
+    effort = (
+        payload.get("effort")
+        or payload.get("reasoning_effort")
+        or settings.get("reasoning_effort")
+        or ""
+    )
+    out = {}
+    if model:
+        out["model"] = str(model)
+    if effort:
+        out["reasoning_effort"] = str(effort)
+    return out or None
+
+
+def _apply_codex_turn_meta(parsed, codex_turn_meta):
+    if not parsed or not isinstance(codex_turn_meta, dict):
+        return parsed
+    if codex_turn_meta.get("model") and not parsed.get("model"):
+        parsed["model"] = codex_turn_meta.get("model")
+    if codex_turn_meta.get("reasoning_effort") and not parsed.get("reasoning_effort"):
+        parsed["reasoning_effort"] = codex_turn_meta.get("reasoning_effort")
+    return parsed
+
+
 def _codex_usage_delta_from_event(ev, previous_totals=None):
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     if payload.get("type") != "token_count":
@@ -25167,7 +25219,7 @@ def _codex_usage_delta_from_event(ev, previous_totals=None):
     }, next_totals
 
 
-def _parse_codex_event(ev, line_num, token_usage=None):
+def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
     ev_type = ev.get("type", "")
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     ptype = payload.get("type", "")
@@ -25177,17 +25229,19 @@ def _parse_codex_event(ev, line_num, token_usage=None):
             text = _strip_ccc_session_state_instruction(payload.get("message") or "")
             images = []
             if text or images:
-                return {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": images}
+                result = {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": images}
+                return _apply_codex_turn_meta(result, codex_turn_meta)
         if ptype == "agent_message":
             text = (payload.get("message") or "").strip()
             if text:
-                return {
+                result = {
                     "line": line_num,
                     "ts": ts,
                     "type": "assistant",
                     "message_id": f"codex-{line_num}",
                     "blocks": [{"kind": "text", "text": text}],
                 }
+                return _apply_codex_turn_meta(result, codex_turn_meta)
         if ptype == "task_complete":
             text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
             result = {
@@ -25292,6 +25346,7 @@ def _parse_codex_conversation(thread_id, after_line=0):
     events = []
     line_num = 0
     codex_token_usage = None
+    codex_turn_meta = None
     if not filepath:
         return {"events": [], "last_line": 0}
     try:
@@ -25299,6 +25354,14 @@ def _parse_codex_conversation(thread_id, after_line=0):
             for line in f:
                 line_num += 1
                 if line_num <= after_line:
+                    try:
+                        skipped_ev = json.loads(line.strip())
+                    except json.JSONDecodeError:
+                        skipped_ev = None
+                    if skipped_ev:
+                        turn_meta = _codex_turn_meta_from_event(skipped_ev)
+                        if turn_meta:
+                            codex_turn_meta = turn_meta
                     continue
                 line = line.strip()
                 if not line:
@@ -25307,11 +25370,15 @@ def _parse_codex_conversation(thread_id, after_line=0):
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                turn_meta = _codex_turn_meta_from_event(ev)
+                if turn_meta:
+                    codex_turn_meta = turn_meta
+                    continue
                 usage = _codex_token_usage_from_event(ev)
                 if usage:
                     codex_token_usage = usage
                     continue
-                parsed = _parse_codex_event(ev, line_num, codex_token_usage)
+                parsed = _parse_codex_event(ev, line_num, codex_token_usage, codex_turn_meta=codex_turn_meta)
                 if parsed:
                     events.append(parsed)
     except FileNotFoundError:
