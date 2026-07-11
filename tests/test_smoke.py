@@ -6030,6 +6030,39 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(snap_unknown["external_active"])
         self.assertEqual(snap_unknown["writer"], "external")
 
+    def test_codex_writer_snapshot_attributes_active_status_by_owner(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        old_rollout = {"path": "/tmp/rollout.jsonl", "mtime_ns": 1}
+        external = self.server._codex_thread_writer_snapshot(
+            sid,
+            now=1_000_000.0,
+            rollout=old_rollout,
+            app_state={
+                "status": "active",
+                "active_turn_id": "external-turn",
+                "active_writer": "external",
+            },
+            attached={},
+            exec_child=False,
+        )
+        self.assertTrue(external["external_active"])
+        self.assertEqual(external["writer"], "external")
+
+        ccc = self.server._codex_thread_writer_snapshot(
+            sid,
+            now=1_000_000.0,
+            rollout=old_rollout,
+            app_state={
+                "status": "active",
+                "active_turn_id": "ccc-turn",
+                "active_writer": "ccc",
+            },
+            attached={},
+            exec_child=False,
+        )
+        self.assertFalse(ccc["external_active"])
+        self.assertEqual(ccc["writer"], "ccc")
+
     def test_codex_slash_idle_terminal_submits_with_return(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
@@ -9218,6 +9251,56 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(state["last_completed_turn_id"], "turn-active")
         self.assertNotIn("active_turn_id", state)
 
+    def test_codex_app_server_turn_started_tracks_writer_ownership(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "ccc_turn_start_pending": True,
+            }
+
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "ccc-turn"}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_writer"], "ccc")
+
+        server._codex_app_server_handle_message({
+            "method": "turn/completed",
+            "params": {"threadId": sid, "turn": {"id": "ccc-turn"}},
+        })
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid].pop("ccc_turn_start_pending", None)
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "external-turn"}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_writer"], "external")
+
+    def test_codex_app_server_turn_start_response_marks_ccc_owner(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+
+        response = {"result": {"turn": {"id": "ccc-turn"}}}
+        with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+             mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=response):
+            result = server._codex_app_server_request(
+                "turn/start", {"threadId": sid, "input": []}, timeout=1,
+            )
+
+        self.assertIs(result, response)
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_turn_id"], "ccc-turn")
+        self.assertEqual(state["active_writer"], "ccc")
+        self.assertNotIn("ccc_turn_start_pending", state)
+
     def test_codex_app_server_item_activity_feeds_live_ui_fields(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -11188,7 +11271,8 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         # CCC owns an active turn → ccc writer, never external (even recent mtime)
         snap = server._codex_thread_writer_snapshot(
-            "sid", now, rollout=recent, app_state={"active_turn_id": "t1"},
+            "sid", now, rollout=recent,
+            app_state={"active_turn_id": "t1", "active_writer": "ccc"},
             attached={path: 4242}, exec_child=False,
         )
         self.assertEqual(snap["writer"], "ccc")
