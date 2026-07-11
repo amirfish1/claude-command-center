@@ -10892,12 +10892,13 @@
     scrollConversationToEnd($view);
   }
 
-  function adoptPendingSpawnPid(tempPid, realPid, logPath) {
+  function adoptPendingSpawnPid(tempPid, realPid, logPath, sessionId) {
     if (!tempPid || !realPid) return null;
     const placeholder = pendingSpawns.get(tempPid)
       || conversationsData.find(x => x && x.id === 'spawning-' + tempPid);
     if (!placeholder) return null;
     placeholder.spawn_pid = realPid;
+    placeholder.expected_session_id = sessionId || '';
     if ((placeholder.source === 'codex' || placeholder.source === 'gemini' || placeholder.source === 'cursor' || placeholder.source === 'antigravity' || placeholder.source === 'kilo') && logPath) {
       placeholder.agent_log_path = logPath;
       if (placeholder.source === 'codex') placeholder.codex_log_path = logPath;
@@ -10924,6 +10925,8 @@
 
   function pendingSpawnMatchesRow(pid, placeholder, row) {
     if (!placeholder || !row) return false;
+    if (row.session_id && placeholder.expected_session_id
+        && String(row.session_id) === String(placeholder.expected_session_id)) return true;
     if (row.spawn_pid && String(row.spawn_pid) === String(pid)) return true;
 
     const prompt = normalizePendingPrompt(placeholder.first_message || placeholder.display_name);
@@ -14896,7 +14899,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);
+        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);
         if (placeholder && spawnUsesLogPlaceholder(engine) && typeof selectConversation === 'function') {
           selectConversation(placeholder.id);
         }
@@ -49739,7 +49742,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
-        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);
+        const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);
         assignSpawnedSessionToDefaultObject(data);
         // Fire-and-watch engines can stream their spawn log once the real pid
         // is known. Re-select the same placeholder id so fetchConversationEvents

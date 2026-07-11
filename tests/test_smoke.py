@@ -840,7 +840,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function ensureNewSessionDefaultObject()", app_js)
         self.assertIn("function assignSpawnedSessionToDefaultObject(data)", app_js)
         self.assertIn("function reconcilePendingNewSessionObjectAssignments()", app_js)
-        self.assertIn("const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);", spawn_block)
+        self.assertIn("const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);", spawn_block)
         self.assertIn("assignSpawnedSessionToDefaultObject(data);", spawn_block)
         self.assertNotIn("assignSpawnedSessionToDefaultObject(data);", draft_block)
         self.assertIn("_objectsApiPost('assign', { session_node_id: flowNodeKey('session', sid), object_id: objectId })", app_js)
@@ -4671,9 +4671,17 @@ class TestServerImports(unittest.TestCase):
     def test_spawn_adoption_accepts_spawn_id_without_pid(self):
         """App-server Codex spawns use synthetic spawn ids rather than OS pids."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log)", app_js)
+        self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id)", app_js)
         self.assertIn("const realSpawnId = data.spawn_id || data.pid;", app_js)
         self.assertIn("insertPendingSpawnCard(data.spawn_id || data.pid, subject", app_js)
+
+    def test_codex_spawn_placeholder_matches_returned_session_id(self):
+        """A real app-server row must replace its optimistic card without a duplicate flash."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("placeholder.expected_session_id = sessionId || ''", app_js)
+        self.assertIn("row.session_id && placeholder.expected_session_id", app_js)
+        self.assertIn("String(row.session_id) === String(placeholder.expected_session_id)", app_js)
+        self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id)", app_js)
 
     def test_slash_command_args_surface_in_user_text(self):
         """A /command user turn must render "/cmd <args>", not a bare "/cmd".
