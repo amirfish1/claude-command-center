@@ -940,6 +940,22 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('<div class="conv-archived-list">', archived_markup)
         self.assertIn("_sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))", app_js)
 
+    def test_archived_sessions_have_visible_restore_action(self):
+        """Archived session rows should have an explicit restore path back to Active."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('conv-archive-btn is-restore', app_js)
+        self.assertIn('Restore to Active', app_js)
+        self.assertIn("const archivedRestoreRestHtml = (c.archived && !isBacklogRow && !isGithubPrRow) ? archiveBtn : '';", app_js)
+        self.assertIn("(c.archived ? ' is-archived-row' : '')", app_js)
+        self.assertIn("payload.archived = archived;", app_js)
+        self.assertIn("const nextArchived = !currentlyArchived;", app_js)
+        self.assertIn("archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived)", app_js)
+        self.assertIn("Restored to Active", app_js)
+        self.assertIn(".conv-item .conv-archive-btn.is-restore", app_css)
+        self.assertIn(".conv-item.is-archived-row .conv-row-end { min-width: 76px; }", app_css)
+
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
         """When Hermes rows exist, All should expose Coding, Workers, and
         Messages lanes so plain WhatsApp/router conversations do not bury

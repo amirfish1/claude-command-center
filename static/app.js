@@ -20270,8 +20270,10 @@
     try { return await res.json(); } catch (_) { return {}; }
   }
 
-  function archivePayloadForRow(row, sessionId) {
-    return withRepoPath({ session_id: sessionId }, rowRepoPath(row));
+  function archivePayloadForRow(row, sessionId, archived) {
+    const payload = { session_id: sessionId };
+    if (typeof archived === 'boolean') payload.archived = archived;
+    return withRepoPath(payload, rowRepoPath(row));
   }
 
   function showOpToast(msg, kind) {
@@ -23309,7 +23311,9 @@
         // CCC-507: archiving a session moves it into the "Trash" section
         // (see conv-trash-section below) — use the trash-can glyph already
         // established for archive actions elsewhere (data-role="archive-object").
-        archiveBtn = '<button class="conv-archive-btn" data-role="archive" title="' + (c.archived ? 'Unarchive' : 'Archive') + '">' + (c.archived ? '&#8617;' : '&#128465;') + '</button>';
+        archiveBtn = c.archived
+          ? '<button class="conv-archive-btn is-restore" data-role="archive" title="Restore to Active" aria-label="Restore to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Restore</span></button>'
+          : '<button class="conv-archive-btn" data-role="archive" title="Archive session" aria-label="Archive session">&#128465;</button>';
       }
       // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
       // the meta row — it wrapped onto a second line and is redundant with the
@@ -23585,7 +23589,8 @@
         + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      const archivedRestoreRestHtml = (c.archived && !isBacklogRow && !isGithubPrRow) ? archiveBtn : '';
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
@@ -23616,7 +23621,7 @@
             // narrow and there's no per-row layout shift between hover
             // states (CSS uses `position: absolute` for one of them).
             + '<span class="conv-row-end">'
-            +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
+            +   (archivedRestoreRestHtml || '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>')
             +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
             + '</span>'
           + '</div>'
@@ -27535,8 +27540,10 @@
         try {
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId);
           const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
+          const currentlyArchived = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section') || !!(c && c.archived);
+          const nextArchived = !currentlyArchived;
           const data = await ccPostJson('/api/conversations/' + convId + '/archive',
-            archivePayloadForRow(c || { repo_path: repoPath }, sessionId));
+            archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived));
           if (!data.ok) {
             const ghError = data.github && data.github.stderr;
             throw new Error(data.error || ghError || 'archive failed');
@@ -27565,8 +27572,10 @@
           if (data.archived && nextSelectId) {
             selectConversation(nextSelectId);
           }
+          if (!data.archived) showOpToast('Restored to Active');
         } catch (err) {
-          showOpToast('Archive failed (' + err.message + ')', 'error');
+          const restoring = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section');
+          showOpToast((restoring ? 'Restore' : 'Archive') + ' failed (' + err.message + ')', 'error');
         }
       });
     });
