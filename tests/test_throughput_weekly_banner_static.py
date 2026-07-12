@@ -45,3 +45,23 @@ def test_codex_aggregate_uses_weekly_period_overlay():
     assert "const resetAt = new Date(weeklyChart.resetAt)" in throughput_html
     assert "let ppt = weeklyChart.pctPerToken" in throughput_html
     assert "weeklyData.codex.weekly_pct / currentTokens" in throughput_html
+
+
+def test_aggregate_chart_has_no_legacy_all_hours_fallback():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "Fallback: all available 3h data" not in throughput_html
+    assert "const firstH = hourly.length" not in throughput_html
+
+
+def test_weekly_axis_is_fixed_at_100_with_overflow_and_midnight_labels():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "const WEEKLY_AXIS_MAX = 100" in throughput_html
+    assert "Math.min(Math.max(p, 0), WEEKLY_AXIS_MAX)" in throughput_html
+    assert "projectedEnd > WEEKLY_AXIS_MAX ? ' ↑' : ''" in throughput_html
+    assert "midnightLabel.textContent = '00:00'" in throughput_html
+    assert "!isCalendarDayStart(i)" in throughput_html
+    assert "!isCalendarDayStart(i - 1)" in throughput_html
+    assert "!isCalendarDayStart(i + 1)" in throughput_html
+    assert "if (j > 0)" in throughput_html

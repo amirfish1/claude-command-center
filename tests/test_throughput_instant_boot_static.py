@@ -203,3 +203,28 @@ def test_weekly_usage_banner_has_compact_two_line_summary():
     assert "banner.style.display = 'grid'" in render
     assert "fableMeter.style.display = 'grid'" in render
     assert "codexMeter.style.display = 'grid'" in render
+
+
+def test_common_quota_row_precedes_engine_switch_and_aggregate_content():
+    html = _html()
+
+    banner = html.index('id="weekly-banner"')
+    engine_switch = html.index('id="throughput-engine-tabs"')
+    dashboard = html.index('id="dashboard-content"')
+    assert banner < engine_switch < dashboard
+    assert 'class="engine-switch-row"' in html
+
+
+def test_aggregate_metrics_are_shared_sparse_and_non_monetary():
+    html = _html()
+    render = _function(html, "renderAggregateMetrics", "renderDashboard")
+
+    assert "CALLS" in render
+    assert "CACHE-ADJUSTED TOKENS / DAY" in render
+    assert "CACHE HIT RATE" in render
+    assert "metrics-grid aggregate" in render
+    assert "metric-card-4" in render and "style.display = 'none'" in render
+    assert "fmtCost" not in render
+    assert "saved" not in render
+    assert "actual vs" not in render
+    assert "Math.round(calls).toLocaleString()" in render

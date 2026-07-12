@@ -29,12 +29,12 @@ def test_aggregate_chart_never_draws_legacy_fallback_and_labels_previous_week():
     assert "projectedLabelAnchor" in throughput_html
 
 
-def test_weekly_quota_overlay_uses_dynamic_axis_scale():
+def test_weekly_quota_overlay_uses_fixed_100_percent_axis():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
-    assert "function quotaScaleMax" in throughput_html
-    assert "quotaScaleMax(projectedEnd, cumPrv, lastOpusV" in throughput_html
-    assert "Math.max(100, Math.ceil(Math.max(projectedEnd, cumPrv, 10)" not in throughput_html
+    assert "function quotaScaleMax" not in throughput_html
+    assert "const WEEKLY_AXIS_MAX = 100" in throughput_html
+    assert "projectedEnd > WEEKLY_AXIS_MAX ? ' ↑' : ''" in throughput_html
 
 
 def test_token_axis_labels_show_weekly_percent_when_available():
