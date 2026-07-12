@@ -5351,10 +5351,7 @@
     btn.disabled = true;
     btn.textContent = '...';
     try {
-      let data = await postInjectInput(sid, text, 'steer');
-      if ((!data || !data.ok) && codexSteerUnavailable(data)) {
-        data = await postInjectInput(sid, text, 'send');
-      }
+      const data = await postInjectInput(sid, text, 'steer');
       if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
       btn.textContent = '✓';
       showOpToast(data.via === 'codex-steer' ? 'Steered running Codex turn.' : 'Sent to Codex.');
@@ -7217,6 +7214,14 @@
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);
     const clearCommand = /^\/clear(?:\s|$)/i.test(text);
+    // A normal composer submit during a CCC-owned running Codex turn is a
+    // steer, not a follow-up to park until the turn ends. Goal-driven turns
+    // can intentionally run for a long time, so send-mode queueing here makes
+    // the next message effectively unreadable. Slash commands keep their
+    // dedicated routing and are never promoted to steer.
+    if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable()) {
+      if (!/^\//.test(text)) injectMode = 'steer';
+    }
     if (/^\//.test(text)) announcedFrom = '';
     if (compactCommand && hasPendingSendEchoBeforeCompact(getConvViewForPane(paneId || activePaneId()))) {
       showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
@@ -7306,14 +7311,6 @@
       }
       let data = {};
       try { data = await res.json(); } catch (_) {}
-      if (injectMode === 'steer'
-          && currentSession.source === 'codex'
-          && (!data || !data.ok)
-          && codexSteerUnavailable(data)) {
-        data = await postInjectInput(sid, text, 'send', { announcedFrom });
-        res = { ok: !!(data && data.ok), status: (data && data.ok) ? 200 : 0 };
-        injectMode = 'send';
-      }
       if (res.ok && data.ok && data.submitted === false) {
         removePendingSendEcho(pendingSend);
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');

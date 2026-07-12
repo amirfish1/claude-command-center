@@ -4370,7 +4370,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function codexTurnSteerable()", app_js)
         self.assertIn("&& codexTurnSteerable();", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
-        self.assertIn("data = await postInjectInput(sid, text, 'send', { announcedFrom });", app_js)
+        self.assertIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
+        send_handler = app_js[
+            app_js.index("async function sendToTerminal"):
+            app_js.index("function insertPendingSpawnCard")
+        ]
+        self.assertNotIn("postInjectInput(sid, text, 'send', { announcedFrom })", send_handler)
 
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers
@@ -4394,7 +4399,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
         self.assertIn('data-steer-user-message', app_js)
         self.assertIn("postInjectInput(sid, text, 'steer')", app_js)
-        self.assertIn("data = await postInjectInput(sid, text, 'send');", app_js)
+        inline_handler = app_js[
+            app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"):
+            app_js.index("function setCurrentSession", app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"))
+        ]
+        self.assertNotIn("postInjectInput(sid, text, 'send')", inline_handler)
         self.assertIn("syncUserMessageSteerButtons", app_js)
         self.assertIn('hidden disabled aria-hidden="true"', app_js)
         self.assertIn("btn.hidden = !steerable;", app_js)
