@@ -23821,12 +23821,11 @@
       } else if (isGithubPrRow) {
         archiveBtn = '';
       } else {
-        // CCC-507: archiving a session moves it into the "Trash" section
-        // (see conv-trash-section below) — use the trash-can glyph already
-        // established for archive actions elsewhere (data-role="archive-object").
+        // Archiving moves the session into the Trash section, but this control
+        // performs the reversible archive action rather than permanent deletion.
         archiveBtn = c.archived
           ? '<button class="conv-archive-btn is-restore" data-role="archive" title="Restore to Active" aria-label="Restore to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Restore</span></button>'
-          : '<button class="conv-archive-btn" data-role="archive" title="Archive session" aria-label="Archive session">&#128465;</button>';
+          : '<button class="conv-archive-btn" data-role="archive" title="Archive session" aria-label="Archive session">&#128229;</button>';
       }
       // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
       // the meta row — it wrapped onto a second line and is redundant with the
