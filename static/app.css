@@ -3990,8 +3990,10 @@
     font-weight: 650;
     color: var(--text);
   }
-  .tool-result-output.is-error { border-left-color: var(--red); color: var(--red); }
-  .tool-result-output.is-error::before { color: var(--red); }
+  /* A tool can fail while the agent recovers (for example, grep no-match).
+     Keep that visible, but reserve red for unrecovered session/CCC failures. */
+  .tool-result-output.is-error { border-left-color: var(--orange); color: var(--orange); }
+  .tool-result-output.is-error::before { color: var(--orange); }
   /* CCC-46: relayed answer confirmation — a success, shown green not red. */
   .tool-result-output.is-answer-confirm { border-left-color: var(--green); color: var(--green); }
   .tool-result-output.is-answer-confirm::before { color: var(--green); }

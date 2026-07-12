@@ -1,0 +1,1 @@
+- Show recoverable tool-call failures as amber warnings instead of alarming red errors.

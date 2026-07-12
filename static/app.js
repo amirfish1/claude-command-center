@@ -37444,9 +37444,9 @@
 
   function toolResultOutputLabel(toolCall, isError) {
     if (isCommandActivityTool(toolCallName(toolCall))) {
-      return isError ? 'Command error' : 'Command result';
+      return isError ? '⚠ Command failed' : 'Command result';
     }
-    return isError ? 'Tool error' : 'Tool result';
+    return isError ? '⚠ Tool failed' : 'Tool result';
   }
 
   function isEditToolName(name) {

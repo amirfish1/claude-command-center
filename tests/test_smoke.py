@@ -3238,9 +3238,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("out.dataset.resultLabel = ", app_js)
         self.assertIn("toolResultOutputLabel(last, ", app_js)
         self.assertIn("Command result", app_js)
-        self.assertIn("Command error", app_js)
+        self.assertIn("⚠ Command failed", app_js)
         self.assertIn(".tool-result-output::before", app_css)
         self.assertIn("content: attr(data-result-label);", app_css)
+
+    def test_recoverable_tool_failures_use_a_subdued_warning_treatment(self):
+        """A failed tool call should not look like a CCC or session failure."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("⚠ Command failed", app_js)
+        self.assertIn(".tool-result-output.is-error { border-left-color: var(--orange); color: var(--orange); }", app_css)
+        self.assertIn(".tool-result-output.is-error::before { color: var(--orange); }", app_css)
 
     def test_organize_is_incremental_with_overlap_resolve(self):
         """Per user request: Organize must keep repos/objects where they
