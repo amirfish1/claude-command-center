@@ -33398,7 +33398,8 @@
     const queues = Array.isArray(options.queues) ? options.queues : [];
     const findQueue = (name) => queues.find(q => String(q.queue).toUpperCase() === String(name || '').toUpperCase());
     const pathChoices = (options.repo_paths || []).map(p => '<option value="' + escapeAttr(p) + '"></option>').join('');
-    const modelChoices = (options.models || []).map(m => '<option value="' + escapeAttr(m) + '"></option>').join('');
+    const githubRepoChoices = (options.github_repos || []).map(repo => '<option value="' + escapeAttr(repo) + '"></option>').join('');
+    const modelsByEngine = options.models_by_engine || {};
     const queueChoices = queues.map(q => '<option value="' + escapeAttr(q.queue) + '"></option>').join('');
     const modal = document.createElement('div');
     modal.className = 'upd-overlay fq-config-composer open';
@@ -33414,10 +33415,10 @@
       +       '<div class="fq-config-field"><label for="fqConfigBackend">Ticket backend</label><select id="fqConfigBackend" name="fq-config-backend"><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigEngine">Worker engine</label><select id="fqConfigEngine"><option value="claude">Claude</option><option value="codex">Codex</option></select><span class="fq-config-help">The agent runtime spawned for this queue.</span></div>'
       +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><input id="fqConfigModel" list="fqConfigModels" placeholder="Use engine default"><datalist id="fqConfigModels">' + modelChoices + '</datalist><span class="fq-config-help">Leave blank to use the engine default.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Choose a model for this engine, or use a custom model id. Leave blank for the engine default.</span></div>'
       +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checks"><label><input id="fqConfigDrain" type="checkbox"> Auto-drain new work</label></div><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
       +       '<div class="fq-config-field wide"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
-      +       '<div class="fq-config-field wide fq-config-github" hidden><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" placeholder="owner/repository"><span class="fq-config-help">The repository whose issues this queue tracks.</span></div>'
+      +       '<div class="fq-config-field wide fq-config-github" hidden><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
       +       '<div class="fq-config-field fq-config-github" hidden><label for="fqConfigGithubAssignee">GitHub assignee (optional)</label><input id="fqConfigGithubAssignee" placeholder="@me"><span class="fq-config-help">Used by GitHub-backed claims.</span></div>'
       +     '</div>'
       +   '</div>'
@@ -33425,13 +33426,24 @@
       + '</div>';
     document.body.appendChild(modal);
     const $ = (sel) => modal.querySelector(sel);
-    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), drain: $('#fqConfigDrain'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
+    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), drain: $('#fqConfigDrain'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
+    const setModel = (model) => {
+      const choices = Array.isArray(modelsByEngine[fields.engine.value]) ? modelsByEngine[fields.engine.value] : [];
+      const selected = String(model || '');
+      const known = !selected || choices.includes(selected);
+      fields.model.innerHTML = '<option value="">Use engine default</option>'
+        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(choice) + '</option>').join('')
+        + '<option value="__custom__">Custom model…</option>';
+      fields.model.value = known ? selected : '__custom__';
+      fields.customModel.hidden = known;
+      fields.customModel.value = known ? '' : selected;
+    };
     const apply = (entry) => {
       const c = (entry && entry.config) || defaults;
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
       fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || 'claude';
-      fields.path.value = c.repo_path || ''; fields.model.value = c.model || ''; fields.drain.checked = !!c.auto_drain;
+      fields.path.value = c.repo_path || ''; setModel(c.model); fields.drain.checked = !!c.auto_drain;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
       modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; });
@@ -33440,11 +33452,18 @@
     apply(findQueue(initialQueue));
     fields.queue.addEventListener('change', () => { const found = findQueue(fields.queue.value); if (found) apply(found); });
     fields.backend.addEventListener('change', () => modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; }));
+    fields.engine.addEventListener('change', () => setModel(''));
+    fields.model.addEventListener('change', () => {
+      const custom = fields.model.value === '__custom__';
+      fields.customModel.hidden = !custom;
+      if (custom) fields.customModel.focus();
+    });
     modal.querySelectorAll('[data-fq-config-cancel]').forEach(el => el.addEventListener('click', close));
     modal.querySelector('[data-fq-config-save]').addEventListener('click', async () => {
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model: fields.model.value, auto_drain: fields.drain.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
+      const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, auto_drain: fields.drain.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
       save.disabled = true;
       try {
         const res = await fetch('/api/queue/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });

@@ -5106,6 +5106,25 @@ class TestRepoContextHelpers(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_queue_config_options_offer_model_and_github_repo_choices(self):
+        """The queue manager has useful selectors before another queue saves them."""
+        config_path = self.server._wt_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({
+            "GITHUB": {
+                "backend": "github",
+                "github_repo": "example-org/example-repo",
+                "engine": "codex",
+                "model": "custom-codex-model",
+            },
+        }), encoding="utf-8")
+
+        options = self.server._queue_config_options()
+
+        self.assertIn("example-org/example-repo", options["github_repos"])
+        self.assertIn("custom-codex-model", options["models_by_engine"]["codex"])
+        self.assertIn("gpt-5.5", options["models_by_engine"]["codex"])
+
     def test_ux_fixes_queue_file_is_isolated_to_test_home(self):
         self.assertEqual(
             self.server.ux_fixes_queue.QUEUE_FILE,

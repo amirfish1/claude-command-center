@@ -317,22 +317,36 @@ def _queue_config_from_payload(payload):
 def _queue_config_options():
     """Small, local suggestions for the queue-management dialog."""
     cfg = _wt_read_config() or {}
-    repo_paths, models = set(), set()
+    repo_paths, github_repos = set(), set()
+    models_by_engine = {
+        engine: {str(option["id"]): str(option["label"])
+                 for option in options}
+        for engine, options in _ENGINE_CURATED_MODELS.items()
+        if engine in ("claude", "codex")
+    }
     queues = []
     for name, conf in cfg.items():
         conf = conf if isinstance(conf, dict) else {}
         queues.append({"queue": str(name).upper(), "config": conf})
         if conf.get("repo_path"):
             repo_paths.add(str(conf["repo_path"]))
-        if conf.get("model"):
-            models.add(str(conf["model"]))
+        if conf.get("github_repo"):
+            github_repos.add(str(conf["github_repo"]))
+        engine = str(conf.get("engine") or "claude").lower()
+        model = str(conf.get("model") or "").strip()
+        if model and engine in models_by_engine:
+            models_by_engine[engine].setdefault(model, model)
     repo_paths.add(str(Path.cwd()))
     return {
         "ok": True,
         "defaults": dict(_QUEUE_CONFIG_DEFAULTS),
         "queues": sorted(queues, key=lambda row: row["queue"]),
         "repo_paths": sorted(repo_paths),
-        "models": sorted(models),
+        "github_repos": sorted(github_repos),
+        "models_by_engine": {
+            engine: [model for model in choices]
+            for engine, choices in models_by_engine.items()
+        },
     }
 
 
