@@ -38075,9 +38075,13 @@
     if (replaceServerCandidates && tray) {
       tray.querySelectorAll('[data-queued-steer-server="true"]').forEach(el => el.remove());
     }
+    // Only durable server queue entries belong here. A local `.pending` row
+    // merely means the browser is awaiting an acknowledgement; showing it as
+    // a queued candidate made an idle session look as though it still had work.
     const candidates = Array.from($view.querySelectorAll(
-      '.event.user_text.pending, .event.user_text.send-queued, .event.user_text.not-acknowledged'
-    ));
+      '.event.user_text.pending, .event.user_text.send-queued'
+    )).filter(el => el.dataset.queuedSteerServer === 'true'
+      || el.classList.contains('send-queued'));
     if (!candidates.length && (!tray || !tray.children.length)) {
       if (tray) tray.remove();
       return;

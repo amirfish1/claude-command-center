@@ -4711,6 +4711,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function syncQueuedSteerTray", app_js)
         self.assertIn("queued-steer-tray", app_js)
         self.assertIn("inputBar.insertBefore(tray, inputBar.firstChild)", app_js)
+        self.assertIn("el.dataset.queuedSteerServer === 'true'", app_js)
+        self.assertIn("el.classList.contains('send-queued')", app_js)
         self.assertIn("is-queued-steer-duplicate", app_js)
         self.assertIn(".event.user_text.is-queued-steer-duplicate", app_css)
         self.assertIn(".queued-steer-tray .msg-image", app_css)
