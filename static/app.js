@@ -32990,7 +32990,8 @@
       // queue header. This stays after the empty state too, so an empty queue
       // still offers its primary action.
       $queue.innerHTML = queueRowsHtml
-        + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>';
+        + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>'
+        + '<button class="fq-add-row fq-configure-row" id="filesQueueConfigure" type="button" title="Create or edit a WatchTower queue" aria-label="Add or manage queues">⚙ Add queue</button>';
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
     });
@@ -33031,6 +33032,12 @@
         if (addBtn) {
           ev.stopPropagation();
           await _addQueueTicket();
+          return;
+        }
+        const configureBtn = ev.target && ev.target.closest && ev.target.closest('#filesQueueConfigure');
+        if (configureBtn) {
+          ev.stopPropagation();
+          await openQueueManager(_uxqLastResolvedProject || _uxqWorkerProject());
           return;
         }
         const runBtn = ev.target && ev.target.closest && ev.target.closest('.fq-run[data-ref]');
@@ -33267,11 +33274,11 @@
         _renderQueuePanel();
       });
     }
-    const $queueConfigure = document.getElementById('filesQueueConfigure');
-    if ($queueConfigure) {
-      $queueConfigure.addEventListener('click', (ev) => {
+    const $queueAdd = document.getElementById('filesQueueAdd');
+    if ($queueAdd) {
+      $queueAdd.addEventListener('click', async (ev) => {
         ev.stopPropagation();
-        openQueueManager(_uxqLastResolvedProject || _uxqWorkerProject());
+        await _addQueueTicket();
       });
     }
     // Status filter toggle (All | Open). 'open' hides closed tickets.

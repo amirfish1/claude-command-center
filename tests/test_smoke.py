@@ -3849,11 +3849,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function openQueueTicketComposer()", app_js)
         self.assertIn("const note = await openQueueTicketComposer();", app_js)
         self.assertNotIn("window.prompt('New queue ticket", app_js)
-        self.assertNotIn('id="filesQueueAdd"', index_html)
+        self.assertIn('id="filesQueueAdd"', index_html)
         self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
         self.assertGreater(
             app_js.index('class="fq-add-row" id="filesQueueAdd"'),
             app_js.index("$queue.innerHTML = queueRowsHtml"),
+        )
+        self.assertIn('class="fq-add-row fq-configure-row" id="filesQueueConfigure"', app_js)
+        self.assertGreater(
+            app_js.index('class="fq-add-row fq-configure-row" id="filesQueueConfigure"'),
+            app_js.index('class="fq-add-row" id="filesQueueAdd"'),
         )
         self.assertIn('class="fq-ticket-textarea"', app_js)
         self.assertIn('rows="7"', app_js)
@@ -3867,11 +3872,12 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn('id="filesQueueConfigure"', index_html)
+        self.assertNotIn('id="filesQueueConfigure"', index_html)
         self.assertIn("function openQueueManager", app_js)
         self.assertIn("/api/queue/config-options", app_js)
         self.assertIn("/api/queue/config", app_js)
         self.assertIn('data-fq-config-queue', app_js)
+        self.assertIn('id="filesQueueConfigure"', app_js)
         self.assertIn('name="fq-config-backend"', app_js)
         self.assertIn('name="fq-config-claim-type"', app_js)
         self.assertIn("queue configuration", app_js)
