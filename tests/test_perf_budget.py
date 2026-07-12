@@ -887,6 +887,104 @@ def test_throughput_initial_payload_includes_only_cached_complete_bootstrap(
     assert payload["bootstrap"] is None
 
 
+def test_throughput_refresh_is_single_flight(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def fake_payload(*_args, progress=None, **_kwargs):
+        calls.append(1)
+        entered.set()
+        release.wait(2)
+        return {
+            "ok": True,
+            "session_id": "all_7_days",
+            "scope": {"aggregate": True, "engine": "claude"},
+            "summary": {},
+            "turns": [],
+        }, 200
+
+    monkeypatch.setattr(server, "_throughput_payload", fake_payload)
+    monkeypatch.setattr(server, "_throughput_build_bootstrap", lambda *a, **k: {})
+    monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *a, **k: True)
+    with server._THROUGHPUT_REFRESH_LOCK:
+        server._THROUGHPUT_REFRESH_JOBS.clear()
+
+    first = server._throughput_refresh_start("all_7_days", "claude")
+    assert entered.wait(1)
+    second = server._throughput_refresh_start("all_7_days", "claude")
+
+    assert first["job_id"] == second["job_id"]
+    assert len(calls) == 1
+    release.set()
+
+
+def test_throughput_refresh_reports_live_session_progress(monkeypatch):
+    finished = threading.Event()
+
+    def fake_payload(*_args, progress=None, **_kwargs):
+        progress("sessions_discovered", 12)
+        progress("cache_hit")
+        progress("parsed")
+        progress("session_read")
+        finished.set()
+        return {
+            "ok": True,
+            "session_id": "all_7_days",
+            "scope": {"aggregate": True, "engine": "claude"},
+            "summary": {},
+            "turns": [],
+        }, 200
+
+    monkeypatch.setattr(server, "_throughput_payload", fake_payload)
+    monkeypatch.setattr(server, "_throughput_build_bootstrap", lambda *a, **k: {})
+    monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *a, **k: True)
+    with server._THROUGHPUT_REFRESH_LOCK:
+        server._THROUGHPUT_REFRESH_JOBS.clear()
+
+    started = server._throughput_refresh_start("all_7_days", "claude")
+    assert finished.wait(1)
+    for _ in range(100):
+        status = server._throughput_refresh_status("all_7_days", "claude")
+        if status["state"] == "complete":
+            break
+        time.sleep(0.01)
+
+    assert status["job_id"] == started["job_id"]
+    assert status["sessions_discovered"] == 12
+    assert status["sessions_read"] == 1
+    assert status["cache_hits"] == 1
+    assert status["parsed"] == 1
+    assert status["last_refreshed_at"] is not None
+    assert status["expected_ms"] > 0
+    assert status["elapsed_ms"] >= 0
+
+
+def test_throughput_refresh_failure_preserves_previous_completion(monkeypatch):
+    def fail_payload(*_args, **_kwargs):
+        return {"error": "boom"}, 500
+
+    monkeypatch.setattr(server, "_throughput_payload", fail_payload)
+    with server._THROUGHPUT_REFRESH_LOCK:
+        server._THROUGHPUT_REFRESH_JOBS.clear()
+        server._THROUGHPUT_REFRESH_LAST_SUCCESS["all_7_days:claude"] = {
+            "completed_at": 456.0,
+            "duration_ms": 1200,
+        }
+
+    server._throughput_refresh_start("all_7_days", "claude")
+    for _ in range(100):
+        status = server._throughput_refresh_status("all_7_days", "claude")
+        if status["state"] == "failed":
+            break
+        time.sleep(0.01)
+
+    assert status["state"] == "failed"
+    assert status["error"] == "boom"
+    assert status["last_refreshed_at"] == 456.0
+    assert status["expected_ms"] == 1200
+
+
 def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):
     """The queue-health poll scans past WT worker logs; timestamp formatting
     must not emit Python 3.14 deprecation warnings on every row."""

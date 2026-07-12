@@ -49842,6 +49842,9 @@ _THROUGHPUT_AGG_CACHE_TTL = 300    # seconds
 _THROUGHPUT_RANKINGS_CACHE = {}    # "week" -> {"ts": float, "rankings": list}
 _THROUGHPUT_RANKINGS_CACHE_TTL = 60
 _THROUGHPUT_BOOTSTRAP_SCHEMA = 1
+_THROUGHPUT_REFRESH_JOBS = {}
+_THROUGHPUT_REFRESH_LAST_SUCCESS = {}
+_THROUGHPUT_REFRESH_LOCK = threading.Lock()
 
 _THROUGHPUT_DISK_CACHE_DIR = Path.home() / ".cache" / "ccc-throughput-cache"
 _THROUGHPUT_DISK_CACHE_DB = _THROUGHPUT_DISK_CACHE_DIR / "turns.db"
@@ -49948,6 +49951,144 @@ def _throughput_write_bootstrap(session_id, engine_filter, model):
         return True
     except OSError:
         return False
+
+
+def _throughput_refresh_public(job, now=None):
+    now = time.time() if now is None else now
+    public = dict(job)
+    started_at = public.get("started_at") or now
+    completed_at = public.get("completed_at")
+    end = completed_at if completed_at is not None else now
+    public["elapsed_ms"] = max(0, int((end - started_at) * 1000))
+    public.pop("thread", None)
+    return public
+
+
+def _throughput_refresh_status(session_id, engine_filter=None):
+    key = _throughput_aggregate_cache_key(
+        session_id, _throughput_engine_filter(engine_filter)
+    )
+    with _THROUGHPUT_REFRESH_LOCK:
+        job = _THROUGHPUT_REFRESH_JOBS.get(key)
+        last = _THROUGHPUT_REFRESH_LAST_SUCCESS.get(key) or {}
+        if job is not None:
+            return _throughput_refresh_public(job)
+        return {
+            "job_id": None,
+            "state": "idle",
+            "session_id": session_id,
+            "engine": _throughput_engine_filter(engine_filter),
+            "started_at": None,
+            "completed_at": None,
+            "elapsed_ms": 0,
+            "expected_ms": int(last.get("duration_ms") or 35000),
+            "sessions_discovered": 0,
+            "sessions_read": 0,
+            "cache_hits": 0,
+            "parsed": 0,
+            "last_refreshed_at": last.get("completed_at"),
+            "error": None,
+        }
+
+
+def _throughput_refresh_start(session_id, engine_filter=None):
+    engine = _throughput_engine_filter(engine_filter)
+    key = _throughput_aggregate_cache_key(session_id, engine)
+    now = time.time()
+    with _THROUGHPUT_REFRESH_LOCK:
+        existing = _THROUGHPUT_REFRESH_JOBS.get(key)
+        if existing and existing.get("state") == "refreshing":
+            return _throughput_refresh_public(existing, now)
+        last = _THROUGHPUT_REFRESH_LAST_SUCCESS.get(key) or {}
+        job = {
+            "job_id": uuid.uuid4().hex,
+            "state": "refreshing",
+            "session_id": session_id,
+            "engine": engine,
+            "started_at": now,
+            "completed_at": None,
+            "expected_ms": int(last.get("duration_ms") or 35000),
+            "sessions_discovered": 0,
+            "sessions_read": 0,
+            "cache_hits": 0,
+            "parsed": 0,
+            "last_refreshed_at": last.get("completed_at"),
+            "error": None,
+        }
+        _THROUGHPUT_REFRESH_JOBS[key] = job
+
+    def progress(event, value=None):
+        with _THROUGHPUT_REFRESH_LOCK:
+            current = _THROUGHPUT_REFRESH_JOBS.get(key)
+            if current is not job or current.get("state") != "refreshing":
+                return
+            if event == "sessions_discovered":
+                current["sessions_discovered"] = max(0, int(value or 0))
+            elif event == "session_read":
+                current["sessions_read"] += 1
+            elif event == "cache_hit":
+                current["cache_hits"] += 1
+            elif event == "parsed":
+                current["parsed"] += 1
+
+    def run():
+        try:
+            payload, status = _throughput_payload(
+                session_id,
+                engine_filter=engine,
+                force_refresh=True,
+                progress=progress,
+            )
+            if status != 200 or not isinstance(payload, dict) or not payload.get("ok"):
+                raise RuntimeError((payload or {}).get("error") or "Throughput refresh failed")
+            completed = time.time()
+            with _THROUGHPUT_REFRESH_LOCK:
+                current = _THROUGHPUT_REFRESH_JOBS.get(key)
+                refresh_meta = _throughput_refresh_public(current or job, completed)
+            model = _throughput_build_bootstrap(
+                session_id,
+                engine,
+                payload,
+                generated_at=completed,
+                refresh=refresh_meta,
+            )
+            if not _throughput_write_bootstrap(session_id, engine, model):
+                raise RuntimeError("Could not persist throughput bootstrap")
+            duration_ms = max(1, int((completed - now) * 1000))
+            with _THROUGHPUT_REFRESH_LOCK:
+                current = _THROUGHPUT_REFRESH_JOBS.get(key)
+                if current is job:
+                    current.update({
+                        "state": "complete",
+                        "completed_at": completed,
+                        "elapsed_ms": duration_ms,
+                        "expected_ms": duration_ms,
+                        "last_refreshed_at": completed,
+                    })
+                    _THROUGHPUT_REFRESH_LAST_SUCCESS[key] = {
+                        "completed_at": completed,
+                        "duration_ms": duration_ms,
+                    }
+        except Exception as exc:
+            completed = time.time()
+            with _THROUGHPUT_REFRESH_LOCK:
+                current = _THROUGHPUT_REFRESH_JOBS.get(key)
+                if current is job:
+                    current.update({
+                        "state": "failed",
+                        "completed_at": completed,
+                        "error": str(exc),
+                    })
+
+    thread = threading.Thread(
+        target=run,
+        daemon=True,
+        name=f"ccc-throughput-refresh-{engine}",
+    )
+    with _THROUGHPUT_REFRESH_LOCK:
+        job["thread"] = thread
+    thread.start()
+    return _throughput_refresh_public(job, now)
 
 
 def _throughput_empty_initial_payload(session_id, range_key=None, engine_filter=None):
@@ -50103,7 +50244,7 @@ def _throughput_disk_put(key, mtime, size, turns):
         pass
 
 
-def _throughput_file_turns(path, extract_fn):
+def _throughput_file_turns(path, extract_fn, progress=None):
     """Return the FULL (unfiltered-by-cutoff) turn list for a transcript at
     `path`, recomputing only if mtime/size changed.  `extract_fn()` produces the
     fresh full turn list on a cache miss.  Returns None if the path can't be
@@ -50125,6 +50266,8 @@ def _throughput_file_turns(path, extract_fn):
     with _THROUGHPUT_CACHE_LOCK:
         cached = _THROUGHPUT_TURN_CACHE.get(key)
         if cached and cached["mtime"] == mtime and cached["size"] == size:
+            if progress:
+                progress("cache_hit")
             return cached["turns"]
 
     # 2. Disk cache hit (lazy — reads only this one entry)
@@ -50132,10 +50275,14 @@ def _throughput_file_turns(path, extract_fn):
     if disk_turns is not None:
         with _THROUGHPUT_CACHE_LOCK:
             _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": disk_turns}
+        if progress:
+            progress("cache_hit")
         return disk_turns
 
     # 3. Full parse — write through to both layers
     turns = extract_fn()
+    if progress:
+        progress("parsed")
     with _THROUGHPUT_CACHE_LOCK:
         _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": turns}
     _throughput_disk_put(key, mtime, size, turns)
@@ -50722,14 +50869,22 @@ def _throughput_week_rankings():
     return rankings
 
 
-def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filter=None):
+def _throughput_payload(
+    session_id,
+    repo_path=None,
+    range_key=None,
+    engine_filter=None,
+    *,
+    force_refresh=False,
+    progress=None,
+):
     engine_filter = _throughput_engine_filter(engine_filter)
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
     if is_aggregate:
         # cutoff_epoch shifts every call (float); key on stable scope + engine.
         _cache_key = _throughput_aggregate_cache_key(session_id, engine_filter)
         _cached = _THROUGHPUT_AGG_CACHE.get(_cache_key)
-        if _cached and (time.time() - _cached["ts"] < _THROUGHPUT_AGG_CACHE_TTL):
+        if not force_refresh and _cached and (time.time() - _cached["ts"] < _THROUGHPUT_AGG_CACHE_TTL):
             return _cached["payload"], _cached["status"]
     turns = []
     if is_aggregate:
@@ -50774,6 +50929,9 @@ def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filte
                     continue
             recent.append(conv_row)
 
+        if progress:
+            progress("sessions_discovered", len(recent))
+
         for conv_row in recent:
             sid = conv_row.get("session_id")
             name = conv_row.get("display_name") or conv_row.get("name") or "Untitled"
@@ -50788,6 +50946,8 @@ def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filte
                     continue
             elif is_codex:
                 continue
+            if progress:
+                progress("session_read")
 
             # Resolve the transcript path so we can (mtime,size)-cache its full
             # turn list. Extraction runs with cutoff_epoch=None — the window
@@ -50815,7 +50975,7 @@ def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filte
 
             full_turns = None
             if cache_path:
-                full_turns = _throughput_file_turns(cache_path, _extract)
+                full_turns = _throughput_file_turns(cache_path, _extract, progress=progress)
             if full_turns is None:
                 # No stat-able path (or cache disabled) — fall back to a direct,
                 # cutoff-scoped extraction so we never serve nothing.
@@ -50825,6 +50985,8 @@ def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filte
                     else cutoff_epoch
                 )
                 try:
+                    if progress:
+                        progress("parsed")
                     if is_codex:
                         turns.extend(_throughput_codex_turns_from_file(
                             sid, session_name=name, model_hint=model_hint,
@@ -50907,15 +51069,6 @@ def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filte
             "status": _status,
         }
         _throughput_persist_aggregate_snapshot(session_id, _payload, _status, engine_filter)
-        try:
-            _bootstrap = _throughput_build_bootstrap(
-                session_id,
-                engine_filter,
-                _payload,
-            )
-            _throughput_write_bootstrap(session_id, engine_filter, _bootstrap)
-        except Exception:
-            pass
     return _payload, _status
 
 
@@ -52382,6 +52535,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # doesn't re-walk every JSONL. Atomic; only writes when dirty.
             _save_conv_meta_cache()
             self.send_json(convs)
+        elif path == "/api/throughput/refresh/start":
+            qs = urllib.parse.parse_qs(parsed.query)
+            session_id = (qs.get("session_id", [""])[0] or "").strip()
+            if not session_id:
+                self.send_json({"error": "Missing session_id"}, 400)
+                return
+            engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
+            self.send_json(_throughput_refresh_start(session_id, engine_filter), 202)
+            return
+        elif path == "/api/throughput/refresh/status":
+            qs = urllib.parse.parse_qs(parsed.query)
+            session_id = (qs.get("session_id", [""])[0] or "").strip()
+            if not session_id:
+                self.send_json({"error": "Missing session_id"}, 400)
+                return
+            engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
+            self.send_json(_throughput_refresh_status(session_id, engine_filter))
+            return
         elif path == "/api/throughput/initial":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()

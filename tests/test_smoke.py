@@ -14056,5 +14056,13 @@ def test_throughput_initial_route_is_registered():
     assert "_throughput_initial_payload(" in server_py
 
 
+def test_throughput_refresh_routes_are_registered():
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/api/throughput/refresh/start":' in server_py
+    assert 'elif path == "/api/throughput/refresh/status":' in server_py
+    assert "_throughput_refresh_start(" in server_py
+    assert "_throughput_refresh_status(" in server_py
+
+
 if __name__ == "__main__":
     unittest.main()
