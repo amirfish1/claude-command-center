@@ -10406,6 +10406,7 @@
   // refresh.
   function restoreLastViewOrConversation() {
     if (CONV_POPOUT_MODE) { return; }
+    if (_suppressRestoreLastView) return;  // mid-transition, not a real boot/refresh (CCC-508)
     if (_gcReaderPath || _gcReaderId) return;  // a reader is open — leave it
     try {
       const raw = localStorage.getItem('ccc-last-view');
@@ -17773,6 +17774,17 @@
   let _gcLastMtime = null;
   let _gcPollFailCount = 0;
   let _gcLastNudgeTime = 0;
+  // CCC-508: stopGroupChatReader's cosmetic sidebar refresh (rerenderSidebar)
+  // chains into renderArchiveList -> restoreLastViewOrConversation, an
+  // unrelated boot/refresh restore that reads localStorage 'ccc-last-view' --
+  // still pointing at the chat just being left, since selectConversation only
+  // overwrites it for the new target AFTER stopGroupChatReader returns.
+  // Without this flag that reentrant call reopens the same group chat mid-
+  // transition. Its own "_gcReaderPath || _gcReaderId" guard doesn't catch
+  // this because stopGroupChatReader has already nulled those out by the
+  // time renderSidebar runs. This flag suppresses that one reentrant restore
+  // call without touching any other renderSidebar caller.
+  let _suppressRestoreLastView = false;
   // Latest participant name_map from the reader poll — used for @
   // autocomplete in the group-chat input box.
   let _gcReaderNameMap = {};
@@ -19504,7 +19516,13 @@
     if (opts && opts.rerenderSidebar && typeof renderSidebar === 'function'
         && typeof filterConversations === 'function'
         && typeof $convSearch !== 'undefined' && $convSearch) {
-      renderSidebar(filterConversations($convSearch.value));
+      // Suppress the reentrant "restore last view" this cosmetic re-render
+      // would otherwise trigger (CCC-508) — it would reopen this same chat
+      // from the stale localStorage entry before the caller gets a chance
+      // to select whatever it's actually switching to.
+      _suppressRestoreLastView = true;
+      try { renderSidebar(filterConversations($convSearch.value)); }
+      finally { _suppressRestoreLastView = false; }
     }
   }
 

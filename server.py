@@ -39781,7 +39781,19 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             continue
         if not isinstance(meta, dict) or group_chat_activity_state(meta, now) != "active":
             continue
+        md_path = sidecar_path[:-5] + ".md"
+        # CCC-508: id/uuid/path are cheap (already-loaded meta + a stable
+        # sidecar field), unlike the participant-probing/message-reading this
+        # summary deliberately skips. Omitting them left every sidebar
+        # "In Group Chat" row with an empty data-gc-path/data-gc-id, so its
+        # click handler's `if (path || chatId)` guard silently no-opened —
+        # the row looked clickable but never actually opened the reader.
+        chat_uuid = _ensure_group_chat_uuid(md_path, meta)
         summaries.append({
+            "id": chat_uuid,
+            "uuid": chat_uuid,
+            "path": md_path,
+            "path_tilde": "~/.claude/group-chats/" + os.path.basename(md_path),
             "topic": meta.get("topic", ""),
             "state": "active",
             "session_ids": meta.get("session_ids") or [],

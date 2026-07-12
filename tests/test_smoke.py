@@ -12169,6 +12169,45 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
             sidecar = json.loads((gcd / "demo.json").read_text(encoding="utf-8"))
             self.assertEqual(sidecar["uuid"], chats[0]["uuid"])
 
+    def test_list_active_group_chat_summaries_includes_path_and_id(self):
+        """CCC-508: the lightweight polling summary must still carry
+        id/uuid/path/path_tilde. The sidebar's "In Group Chat" row click
+        handler only opens the reader when one of those is present
+        (`if (path || chatId) openGroupChatReader(...)`); dropping them
+        silently turned every row unclickable."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmp:
+            gcd = pathlib.Path(tmp) / "group-chats"
+            gcd.mkdir()
+            (gcd / "demo.md").write_text("# Group Chat — Demo\n", encoding="utf-8")
+            (gcd / "demo.json").write_text(json.dumps({
+                "session_ids": [],
+                "topic": "Demo",
+                "mode": "topic",
+                "name_map": {},
+                "archived": False,
+                "last_message_at": time.time(),
+            }), encoding="utf-8")
+
+            orig_expanduser = server.os.path.expanduser
+
+            def fake_expanduser(path):
+                if path == "~/.claude/group-chats":
+                    return str(gcd)
+                return orig_expanduser(path)
+
+            with mock.patch.object(server.os.path, "expanduser", side_effect=fake_expanduser):
+                summaries = server._list_active_group_chat_summaries()
+
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(summaries[0]["state"], "active")
+            self.assertTrue(summaries[0]["id"])
+            self.assertEqual(summaries[0]["id"], summaries[0]["uuid"])
+            self.assertTrue(summaries[0]["path"].endswith("demo.md"))
+            self.assertEqual(summaries[0]["path_tilde"], "~/.claude/group-chats/demo.md")
+
     def test_group_chat_header_syncs_sidecar_topic_and_participants(self):
         """Reader refresh should repair stale markdown headers without
         touching the message history.
