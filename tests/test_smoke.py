@@ -4710,6 +4710,7 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function syncQueuedSteerTray", app_js)
         self.assertIn("queued-steer-tray", app_js)
+        self.assertIn("inputBar.insertBefore(tray, inputBar.firstChild)", app_js)
         self.assertIn(".queued-steer-tray .msg-image", app_css)
 
     def test_codex_app_queued_send_marks_pending_echo_queued(self):

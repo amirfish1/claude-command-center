@@ -38081,7 +38081,10 @@
       tray = document.createElement('div');
       tray.className = 'queued-steer-tray';
       tray.setAttribute('aria-label', 'Queued messages ready to steer');
-      inputBar.parentNode.insertBefore(tray, inputBar);
+      // `.conv-pane` is a CSS grid; a sibling with no grid area gets
+      // auto-placed at the top. Nesting it in the composer guarantees the
+      // tray sits immediately above the textarea in every pane layout.
+      inputBar.insertBefore(tray, inputBar.firstChild);
     }
     candidates.forEach(el => tray.appendChild(el));
     if (!tray.children.length) tray.remove();
