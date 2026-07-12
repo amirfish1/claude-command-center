@@ -2380,6 +2380,37 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
 
+    def test_observed_model_records_keep_each_cached_transcript_engine(self):
+        """Transcript-derived models must not leak into Claude's picker."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._conv_meta_cache)
+        try:
+            server._conv_meta_cache.clear()
+            server._conv_meta_cache.update({
+                "codex-session": {"engine": "codex", "model": "gpt-5.6-sol"},
+                "cursor-session": {"engine": "cursor", "model": "composer-2.5"},
+            })
+            with mock.patch.object(server, "_load_session_overrides", return_value={}), \
+                 mock.patch.object(server, "_load_spawn_registry", return_value=[]), \
+                 mock.patch.object(server, "_codex_thread_registry_entries", return_value={}), \
+                 mock.patch.object(server, "_spawned_sessions", []):
+                records = server._observed_model_records()
+        finally:
+            server._conv_meta_cache.clear()
+            server._conv_meta_cache.update(old_cache)
+
+        self.assertIn(
+            {"engine": "codex", "id": "gpt-5.6-sol", "label": "gpt-5.6-sol", "source": "transcript-cache"},
+            records,
+        )
+        self.assertIn(
+            {"engine": "cursor", "id": "composer-2.5", "label": "composer-2.5", "source": "transcript-cache"},
+            records,
+        )
+
     def test_codex_model_catalog_marks_missing_cli_models_unavailable(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)

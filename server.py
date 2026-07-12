@@ -3605,7 +3605,7 @@ def _observed_model_records():
     try:
         for meta in _conv_meta_cache.values():
             if isinstance(meta, dict):
-                add("claude", meta.get("model"), "transcript-cache")
+                add(meta.get("engine") or "claude", meta.get("model"), "transcript-cache")
     except Exception:
         pass
     return rows
