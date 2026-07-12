@@ -89,6 +89,37 @@ at 0–100%; values above 100% are clamped to the top edge and retain their true
 value in an upward overflow label. Each local calendar-day divider is labeled
 `00:00` in addition to its centered day/date label.
 
+### Combined view, authoritative rates, and compact forecast
+
+The selector has three modes: `Combined`, `Claude`, and `Codex`. Combined is
+composed in the browser from the complete Claude and Codex bootstraps, so it
+does not introduce a third transcript scan. Its activity bars sum both
+engines; its normalized weekly lines and reset labels remain separate because
+the engines have independent quota windows.
+
+The operational row contains Calls, Usage rate, and Cache hit rate. Usage rate
+is authoritative weekly percentage divided by elapsed days in the active
+quota window. Cache hit rate leads its card, followed by fresh/non-cached input
+and cache-adjusted total; it never derives an “avoided” count by subtracting
+incompatible token bases.
+
+Model `% weekly` values are contributions to the authoritative engine total:
+each model's share of the engine's weekly token basis multiplied by the live
+weekly percentage. Contributions for an engine therefore sum to that engine's
+displayed weekly percentage instead of each independently applying the full
+calibration.
+
+The quota row includes a dedicated next-reset line for Claude and Codex with
+absolute local time and countdown. Empty Week-over-Week and Top Sessions
+sections remain hidden rather than showing perpetual loaders or zero-row
+tables.
+
+The chart begins with two days from the previous cycle, continues through all
+actual current-cycle data, and uses a visibly compressed forecast tail. The
+tail ends at the earliest projected 100% crossing rather than reserving space
+for unused days. A break marker and caption distinguish compressed forecast
+time from actual time. Above-cap projections retain their true labeled value.
+
 There is no staleness cutoff for display. Age is disclosed in the refresh panel;
 stale data is preferable to a loader or the legacy graph.
 
