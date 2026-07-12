@@ -17331,7 +17331,7 @@ body:has(.gc-reader) .pwa-install-banner {
 .wl-queue { flex-shrink: 0; width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 /* Ticket ref column — pulled to the LEFT of the verb so the item ID reads
    before the action taken on it. Empty for reconciler rows (worker ids). */
-.wl-ref-col { flex-shrink: 0; width: 84px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-ref-col { flex-shrink: 0; width: 124px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wl-verb { flex-shrink: 0; width: 80px; white-space: nowrap; }
 .wl-worker-col { flex-shrink: 0; width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wl-worker-id { opacity: 0.6; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
