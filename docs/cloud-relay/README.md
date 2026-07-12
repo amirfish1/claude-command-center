@@ -88,11 +88,13 @@ notifications. There are six views:
   the thing that needs you most is on top.
 - **Sessions** — recent and live sessions across all paired machines, each with
   a safe title, which machine and engine it is on, its status, how recently it
-  ran, remaining context, and a freshness stamp.
+  ran, how much of its context window is used, and a freshness stamp.
 - **Workers** — queue depth, worker health, and stuck flags.
 - **Schedules** — recurring/cron jobs and their recent results.
-- **Questions** — agent questions waiting for an answer, with their options.
 - **Devices** — your paired machines, with the ability to revoke any of them.
+- **Account** — email, consent history, privacy summary, notification
+  preferences, export, and account deletion. (Waiting agent questions appear
+  in Attention, answerable in place.)
 
 **Freshness and "stale."** Every remote datum carries an explicit *as-of*
 timestamp. An item is marked **stale** when its snapshot is older than about 90
