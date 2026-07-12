@@ -146,26 +146,39 @@ class CloudPaths:
 # Redaction & truncation (PROTOCOL §4.1 / data-classification "class E")
 # ---------------------------------------------------------------------------
 
-_RE_URL_USERINFO = re.compile(r"\bhttps?://[^\s/@]+@[^\s]+", re.IGNORECASE)
-_RE_PATH_POSIX = re.compile(
-    r"(?:/Users/|/home/|/private/|/var/|/tmp/|/opt/|/etc/)[^\s\"'<>|]+"
-)
-_RE_PATH_WIN = re.compile(r"[A-Za-z]:\\[^\s\"'<>|]+")
+# Credentialed URL for ANY scheme (ssh://, ftp://, git://, http(s)://, …), not
+# just http, so `ssh://user:pass@host/path` cannot leak its userinfo.
+_RE_URL_USERINFO = re.compile(r"\b[a-z][a-z0-9+.\-]*://[^\s/@]+@[^\s]+", re.IGNORECASE)
+# Any absolute POSIX path of two or more segments, plus tilde paths — not just a
+# fixed prefix allowlist (the old 7-prefix list leaked /usr, /mnt, /srv, /root,
+# /Applications, /Volumes/<mount>, /Library, /media, ~/… etc.).
+_RE_PATH_POSIX = re.compile(r"(?:~|(?<![\w.]))/[\w.\-]+(?:/[\w.\-]+)+")
+# Windows drive paths AND UNC shares (\\server\share\…).
+_RE_PATH_WIN = re.compile(r"(?:[A-Za-z]:\\|\\\\[^\s\\]+\\)[^\s\"'<>|]+")
 _RE_EMAIL = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
-_RE_HEX = re.compile(r"\b[0-9a-fA-F]{20,}\b")
-# base64/urlsafe-ish token >=20 chars that carries at least one digit AND one
-# letter (so plain long words are not scrubbed).
+_RE_HEX = re.compile(r"\b[0-9a-fA-F]{16,}\b")
+# base64/urlsafe-ish token >=16 chars containing a digit OR at least one of the
+# non-word token chars (+ / = _ -). We deliberately do NOT treat a plain
+# mixed-case alphabetic run as a token: real secrets almost always carry a
+# digit or symbol, whereas CamelCase code identifiers (AuthenticationManager)
+# are common in legitimate session titles and must survive. An all-letter
+# secret is a rare residual gap; `share_titles=off` is the guarantee for it.
 _RE_TOKEN = re.compile(
-    r"\b(?=[A-Za-z0-9+/_=\-]*\d)(?=[A-Za-z0-9+/_=\-]*[A-Za-z])[A-Za-z0-9+/_=\-]{20,}\b"
+    r"\b(?=[A-Za-z0-9+/_=\-]*(?:\d|[+/=_\-]))[A-Za-z0-9+/_=\-]{16,}\b"
 )
 
 _REDACTED = "[redacted]"
 
 
 def redact(text) -> str:
-    """Strip things that look like absolute paths, URLs with credentials,
-    emails, and long hex/base64 tokens. Order matters: URLs-with-userinfo and
-    paths first (they can contain @ / hex), then emails, then bare tokens."""
+    """Strip things that look like absolute paths (POSIX/tilde/Windows/UNC),
+    credentialed URLs of any scheme, emails, and long hex/base64 tokens. Order
+    matters: URLs-with-userinfo and paths first (they can contain @ / hex),
+    then emails, then bare tokens.
+
+    This is a heuristic best-effort minimizer, NOT a guarantee. The guarantee
+    for sensitive labels is `share_titles=off` (opaque labels); see the privacy
+    docs. It errs toward over-redaction of long identifier-like tokens."""
     if text is None:
         return ""
     s = str(text)
@@ -316,6 +329,16 @@ class IdempotencyStore:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)"
             )
+            # Reservations mark a request_id as dispatch-attempted BEFORE the
+            # local action runs, so a crash between dispatch and record_result
+            # cannot cause a re-execution (double action) on redelivery. A
+            # reserved-but-never-finalized id resolves to an "interrupted"
+            # result — at-most-once, which is the safe default for an action
+            # that sends input to an agent.
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS inprogress ("
+                "request_id TEXT PRIMARY KEY, ts REAL)"
+            )
 
     def get_result(self, request_id: str) -> dict | None:
         if not request_id:
@@ -331,6 +354,29 @@ class IdempotencyStore:
         except ValueError:
             return None
 
+    def reserve(self, request_id: str) -> None:
+        """Mark request_id dispatch-attempted before the local action runs.
+        No-op if already reserved or finalized."""
+        if not request_id:
+            return
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO inprogress (request_id, ts) VALUES (?, ?)",
+                (request_id, now),
+            )
+            conn.execute(
+                "DELETE FROM inprogress WHERE ts < ?", (now - self.RETENTION_S,))
+
+    def is_reserved(self, request_id: str) -> bool:
+        if not request_id:
+            return False
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM inprogress WHERE request_id = ?", (request_id,)
+            ).fetchone()
+        return row is not None
+
     def record_result(self, request_id: str, result: dict) -> None:
         if not request_id:
             return
@@ -341,6 +387,9 @@ class IdempotencyStore:
                 "VALUES (?, ?, ?)",
                 (request_id, json.dumps(result), now),
             )
+            # The command is finalized — clear its in-progress reservation.
+            conn.execute(
+                "DELETE FROM inprogress WHERE request_id = ?", (request_id,))
             conn.execute("DELETE FROM idem WHERE ts < ?", (now - self.RETENTION_S,))
 
     def get_last_seq(self) -> int:
@@ -714,11 +763,17 @@ def validate_command(env: dict, last_seq: int, now: float | None = None) -> str 
         return "expired"
 
     try:
-        seq = int(env.get("seq"))
+        int(env.get("seq"))
     except (TypeError, ValueError):
         return "invalid_payload"
-    if seq <= int(last_seq):
-        return "replay"
+    # NOTE: seq is NOT a rejection gate. Replay defense is the idempotency
+    # store (a seen request_id returns its recorded result) plus the expiry
+    # window above. Rejecting a lower-than-last seq here would drop a command
+    # that the relay legitimately re-queued out of order after a delivery to a
+    # dead socket (an earlier, never-executed command redelivered after a later
+    # one advanced last_seq) — a lost action. `last_seq` is retained only as an
+    # advisory high-water mark, not a filter. See PROTOCOL §4.3.
+    _ = last_seq
 
     payload = env.get("payload")
     if not isinstance(payload, dict):
@@ -773,24 +828,41 @@ class CommandExecutor:
         if capability not in ALLOWED_CAPABILITIES:
             return self._reject(request_id, capability, session_ref, "unknown_capability")
 
-        # --- idempotency short-circuit (a retried request_id carries the SAME
-        # seq it did on first execution, so it must return the recorded result
-        # BEFORE the strictly-greater seq check would wrongly flag it replay). ---
+        # --- idempotency short-circuit: a finalized request_id returns its
+        # recorded result without re-executing. ---
         recorded = self.store.get_result(request_id)
         if recorded is not None:
             self._audit(request_id, capability, session_ref, "duplicate")
             return recorded
 
-        # --- ordered validation for a genuinely new command ---
+        # --- crash-recovery: a request_id reserved on a prior attempt but never
+        # finalized means we dispatched (or were about to) and then died. We do
+        # NOT re-dispatch — that would double-apply the action. Resolve it to an
+        # interrupted result (at-most-once). ---
+        if self.store.is_reserved(request_id):
+            result = self._result(
+                request_id, "error", error_code="interrupted",
+                detail_code="interrupted")
+            self.store.record_result(request_id, result)
+            self._audit(request_id, capability, session_ref, "interrupted")
+            return result
+
+        # --- ordered validation for a genuinely new command (no seq gate) ---
         err = validate_command(env, self.store.get_last_seq())
         if err is not None:
             return self._reject(request_id, capability, session_ref, err)
 
+        # --- reserve BEFORE dispatch so a crash mid-execution cannot cause a
+        # re-execution on redelivery. ---
+        self.store.reserve(request_id)
+
         # --- dispatch via loopback (§4.5) ---
         result = self._dispatch(env, capability, session_ref)
-        # Consume the sequence and persist the terminal result (idempotent).
+        # Advance the advisory high-water mark and persist the terminal result
+        # (record_result clears the reservation atomically).
         try:
-            self.store.set_last_seq(int(env.get("seq")))
+            cur = self.store.get_last_seq()
+            self.store.set_last_seq(max(cur, int(env.get("seq"))))
         except (TypeError, ValueError):
             pass
         self.store.record_result(request_id, result)
@@ -1516,10 +1588,12 @@ def _selftest() -> int:
     check("expired", validate_command(
         env("session.send_input", 10, "r-exp", expires_delta=-120), 0) == "expired")
 
-    # 4. seq replay (new request_id, stale seq)
+    # 4. seq is NOT a rejection gate (C1 fix): a below-high-water-mark seq on a
+    # new request_id must still validate — the relay legitimately re-queues an
+    # earlier, never-delivered command after a later one advanced the mark.
     store.set_last_seq(50)
-    check("seq_replay", validate_command(
-        env("session.send_input", 50, "r-replay"), store.get_last_seq()) == "replay")
+    check("seq_lower_not_replay", validate_command(
+        env("session.send_input", 50, "r-lower"), store.get_last_seq()) is None)
     check("seq_ok", validate_command(
         env("session.send_input", 51, "r-ok"), store.get_last_seq()) is None)
 

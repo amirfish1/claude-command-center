@@ -133,13 +133,26 @@ re-queue after 30 s without a result).
  "requested_by": {"kind": "user", "ua_class": "mobile|desktop"}}
 ```
 
-Device-side validation (fail-closed, in order): protocol version; capability
-in the device's own closed allow-list; `expires` in the future (max lifetime
-10 min, clock-skew grace 60 s); `seq` strictly greater than the last executed
-seq for this device (relay issues a per-device monotonic sequence; gaps are
-fine, regressions are rejected as `replay`); idempotency key unseen (else
-return recorded result, do not re-execute); payload size and schema. Only then
-execute by calling the local CCC loopback endpoint mapped below.
+Device-side validation (fail-closed, in order): a finalized `request_id`
+returns its recorded result immediately (idempotent, no re-execute); a
+`request_id` reserved-but-not-finalized on a prior attempt resolves to an
+`interrupted` error and is NOT re-dispatched (at-most-once across a crash);
+otherwise protocol version; capability in the device's own closed allow-list;
+`expires` in the future (max lifetime 10 min, clock-skew grace 60 s); payload
+size and schema. The device then **reserves** the `request_id` and executes by
+calling the local CCC loopback endpoint mapped below.
+
+**Replay defense is idempotency + expiry, not sequence ordering.** The relay
+issues a per-device monotonic `seq` for observability and in-batch ordering,
+but the device does NOT reject a command whose `seq` is below the high-water
+mark: the relay legitimately re-queues an earlier, never-delivered command
+after a later one advanced the mark (delivery to a dead socket), and rejecting
+it as `replay` would silently drop a real user action. A genuine replay of an
+already-executed command carries a seen `request_id` and is caught by the
+idempotency store (24 h ≫ the 10 min max lifetime); a never-seen command is
+either still-valid (executes once) or past `expires` (rejected). Reserve-
+before-dispatch guarantees at-most-once even if the device crashes between the
+local action and persisting the result.
 
 ### 4.4 Command result (device → cloud)
 

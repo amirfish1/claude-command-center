@@ -50677,25 +50677,34 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         return False
 
     def _require_localhost_origin(self, label):
-        """SECURITY: localhost-only gate for privilege-sensitive POSTs — even a
-        trusted tailnet peer (which passes the same-origin check above) must NOT
-        be able to pair/enable cloud relay or exfiltrate credentials. Mirrors
-        the /api/network-config gate verbatim. Returns True when allowed; sends
-        a 403 and returns False otherwise."""
+        """SECURITY: localhost-only gate for privilege-sensitive POSTs (pair,
+        enable, unpair, credential-adjacent). Even a trusted tailnet peer (which
+        passes the same-origin check above) must NOT reach these. Unlike the
+        broader same-origin check, a MISSING Origin is not enough here — an
+        Origin-less programmatic client from a network peer must not pass. We
+        require POSITIVE proof of local origin: either a present, localhost-
+        matching Origin, OR a loopback peer socket address. Returns True when
+        allowed; sends 403 and returns False otherwise."""
         origin = (self.headers.get("Origin") or "").strip()
         if origin:
-            ok = False
             for host in ("localhost", "127.0.0.1", "[::1]"):
                 for scheme in ("http", "https"):
-                    if origin == f"{scheme}://{host}:{PORT}" or origin == f"{scheme}://{host}":
-                        ok = True
-                        break
-                if ok:
-                    break
-            if not ok:
-                self.send_json({"error": f"{label} is localhost-only", "origin": origin}, 403)
-                return False
-        return True
+                    if origin in (f"{scheme}://{host}:{PORT}", f"{scheme}://{host}"):
+                        return True
+            self.send_json({"error": f"{label} is localhost-only", "origin": origin}, 403)
+            return False
+        # No Origin (curl / programmatic): only trust it if the peer socket is
+        # loopback. A tailnet/LAN peer reaches us on a non-loopback address and
+        # is rejected — closing the Origin-less bypass.
+        peer_ip = ""
+        try:
+            peer_ip = self.client_address[0]
+        except (AttributeError, IndexError, TypeError):
+            peer_ip = ""
+        if peer_ip in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return True
+        self.send_json({"error": f"{label} is localhost-only"}, 403)
+        return False
 
     def do_POST(self):
         if not self._check_same_origin():

@@ -108,10 +108,12 @@ def test_validate_expired():
     assert cr.validate_command(_env(expires_delta=-120), last_seq=0) == "expired"
 
 
-def test_validate_seq_replay():
-    # New request_id but a seq that is not strictly greater than last_seq.
-    assert cr.validate_command(_env(seq=50), last_seq=50) == "replay"
-    assert cr.validate_command(_env(seq=49), last_seq=50) == "replay"
+def test_validate_lower_seq_is_not_replay():
+    # C1 fix: a below-high-water-mark seq on a NEW request_id is NOT a replay —
+    # the relay legitimately re-queues an earlier undelivered command after a
+    # later one advanced the mark. Rejecting it would drop a real user action.
+    assert cr.validate_command(_env(seq=50), last_seq=50) is None
+    assert cr.validate_command(_env(seq=49), last_seq=50) is None
 
 
 def test_validate_ok_and_unknown_capability():
@@ -151,12 +153,15 @@ def test_executor_expired_status(tmp_path):
     assert res["error_code"] == "expired"
 
 
-def test_executor_seq_replay_status(tmp_path):
-    ex, store = _executor(tmp_path, CountingLocalAPI())
+def test_executor_lower_seq_still_executes(tmp_path):
+    # C1 fix: an earlier command redelivered after a later one advanced the mark
+    # must still execute exactly once, not be dropped as replay.
+    api = CountingLocalAPI()
+    ex, store = _executor(tmp_path, api)
     store.set_last_seq(100)
     res = ex.execute(_env(request_id="rp-1", seq=100))
-    assert res["status"] == "rejected"
-    assert res["error_code"] == "replay"
+    assert res["status"] == "ok"
+    assert api.calls == 1
 
 
 def test_executor_idempotency_dedup_runs_once(tmp_path):
@@ -170,14 +175,43 @@ def test_executor_idempotency_dedup_runs_once(tmp_path):
     assert a["status"] == "ok"
 
 
-def test_executor_advances_last_seq_only_on_execute(tmp_path):
+def test_executor_advances_last_seq_to_high_water_mark(tmp_path):
     api = CountingLocalAPI()
     ex, store = _executor(tmp_path, api)
     ex.execute(_env(request_id="s-1", seq=10))
     assert store.get_last_seq() == 10
-    # A stale-seq new command is rejected and must NOT roll back / advance seq.
+    # A lower-seq new command executes but must not roll the mark backward.
     ex.execute(_env(request_id="s-2", seq=5))
+    assert api.calls == 2
     assert store.get_last_seq() == 10
+
+
+def test_executor_reserved_request_not_reexecuted(tmp_path):
+    # H1 fix: a request_id reserved on a prior (crashed) attempt but never
+    # finalized must resolve to `interrupted` WITHOUT re-dispatching — the
+    # at-most-once guarantee for an action that sends input to an agent.
+    api = CountingLocalAPI()
+    ex, store = _executor(tmp_path, api)
+    env = _env(request_id="crash-1", seq=7)
+    store.reserve("crash-1")            # simulate: reserved, then crashed
+    res = ex.execute(env)
+    assert api.calls == 0               # NOT re-dispatched
+    assert res["status"] == "error"
+    assert res["error_code"] == "interrupted"
+    # And it is now finalized: a further redelivery returns the recorded result.
+    res2 = ex.execute(env)
+    assert api.calls == 0
+    assert res2 == res
+
+
+def test_executor_reserves_before_dispatch(tmp_path):
+    # The reservation is cleared once the command finalizes (normal path).
+    api = CountingLocalAPI()
+    ex, store = _executor(tmp_path, api)
+    ex.execute(_env(request_id="ok-1", seq=3))
+    assert api.calls == 1
+    assert store.is_reserved("ok-1") is False
+    assert store.get_result("ok-1")["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------
