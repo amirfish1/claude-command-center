@@ -5296,6 +5296,44 @@
   });
 
   document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-steer-queued-message]');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const row = btn.closest('.event.user_text');
+    const msg = row && row.querySelector('.user-msg');
+    const text = (msg && (msg.getAttribute('data-raw-text') || msg.textContent || '')).trim();
+    const sid = btn.dataset.sessionId || '';
+    if (!sid || !text) {
+      showOpToast('Queued message is missing its session or text.', 'error');
+      return;
+    }
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Steering…';
+    try {
+      let data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
+      if ((!data || !data.ok) && codexSteerUnavailable(data)) {
+        data = await postInjectInput(sid, text, 'send');
+      }
+      if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
+      if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
+      else if (row) row.remove();
+      showOpToast(data.via === 'codex-steer' ? 'Steered running Codex turn.' : 'Sent to Codex.');
+      setTimeout(refreshConversationList, 500);
+    } catch (err) {
+      btn.textContent = '!';
+      showOpToast('Steer failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      setTimeout(() => {
+        if (!btn.isConnected) return;
+        btn.disabled = false;
+        btn.textContent = original || 'Steer';
+      }, 900);
+    }
+  });
+
+  document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-steer-user-message]');
     if (!btn) return;
     ev.preventDefault();
@@ -22396,6 +22434,7 @@
   async function postInjectInput(sessionId, text, mode, opts) {
     const payload = { session_id: sessionId, text };
     if (mode) payload.mode = mode;
+    if (opts && opts.replaceQueued) payload.replace_queued = true;
     const announcedFrom = opts && opts.announcedFrom ? String(opts.announcedFrom).trim() : '';
     if (announcedFrom) payload.announced_from = announcedFrom;
     const res = await fetch('/api/inject-input', {
@@ -30994,6 +31033,10 @@
     paneId = paneId || activePaneId();
     const pane = paneByPaneId(paneId);
     if (!pane) return;
+    const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
+    if (staleQueuedTray && staleQueuedTray.dataset.conversationId !== String(id || '')) {
+      staleQueuedTray.remove();
+    }
     // The Watchtower log overlay behaves like any other reader: opening another
     // session dismisses it (no need to hit ×), landing you on that session.
     try { _closeWtLogPanel(); } catch (_) {}
@@ -38147,7 +38190,13 @@
     const pane = $view.closest('.conv-pane');
     const inputBar = getConvInputBarForPane(paneId);
     if (!pane || !inputBar) return;
+    const paneState = paneByPaneId(paneId);
+    const conversationId = String((paneState && paneState.conversationId) || '');
     let tray = pane.querySelector('.queued-steer-tray');
+    if (tray && tray.dataset.conversationId !== conversationId) {
+      tray.remove();
+      tray = null;
+    }
     const transcriptRows = Array.from($view.querySelectorAll('.event.user_text'));
     // A prior refresh may have hidden a durable row that duplicated a queue
     // candidate. Start clean so it returns as ordinary history once queued
@@ -38170,13 +38219,31 @@
     if (!tray) {
       tray = document.createElement('div');
       tray.className = 'queued-steer-tray';
+      tray.dataset.conversationId = conversationId;
       tray.setAttribute('aria-label', 'Queued messages ready to steer');
       // `.conv-pane` is a CSS grid; a sibling with no grid area gets
       // auto-placed at the top. Nesting it in the composer guarantees the
       // tray sits immediately above the textarea in every pane layout.
       inputBar.insertBefore(tray, inputBar.firstChild);
     }
-    candidates.forEach(el => tray.appendChild(el));
+    const selected = (conversationsData || []).find(item => item && (
+      item.id === conversationId || item.session_id === conversationId
+    ));
+    const sessionId = String((selected && selected.session_id) || conversationId);
+    candidates.forEach(el => {
+      let steer = el.querySelector('[data-steer-queued-message]');
+      if (!steer) {
+        steer = document.createElement('button');
+        steer.type = 'button';
+        steer.className = 'send-queued-steer';
+        steer.setAttribute('data-steer-queued-message', '');
+        steer.textContent = 'Steer';
+        const note = el.querySelector('.send-queued-note');
+        (note || el).appendChild(steer);
+      }
+      steer.dataset.sessionId = sessionId;
+      tray.appendChild(el);
+    });
     if (!tray.children.length) { tray.remove(); return; }
     // A durable transcript event can be present before its matching synthetic
     // queue overlay arrives. Show just the actionable tray version until the

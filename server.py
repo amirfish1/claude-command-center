@@ -25722,6 +25722,39 @@ def _drop_matching_terminal_queue_entries(session_id, text):
     return removed
 
 
+def _consume_matching_pending_input(session_id, text):
+    """Remove one queued copy before re-routing it through Steer.
+
+    Duplicate prompts are valid, so consume at most one item. Resume-queued
+    input is checked first because it is the queue used by dormant Codex turns;
+    the terminal queue is the fallback used by live terminal sessions.
+    """
+    clean = str(text or "").strip()
+    if not session_id or not clean:
+        return 0
+    for queue, lock in (
+        (_pending_resume_queue, _pending_resume_lock),
+        (_pending_terminal_input_queue, _pending_terminal_input_lock),
+    ):
+        removed = False
+        with lock:
+            items = queue.get(session_id)
+            if not items:
+                continue
+            for index, item in enumerate(items):
+                if str(item or "").strip() != clean:
+                    continue
+                items.pop(index)
+                if not items:
+                    queue.pop(session_id, None)
+                removed = True
+                break
+        if removed:
+            _save_pending_inputs()
+            return 1
+    return 0
+
+
 _CCC_HOOK_SCRIPTS = CCC_HOOK_SCRIPT_NAMES
 
 
@@ -58345,6 +58378,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # card, which is the whole signal we want — independent of
                 # whether the keystroke injection itself ends up succeeding.
                 _record_interaction(sid)
+                queued_consumed = 0
+                if bool(payload.get("replace_queued")):
+                    queued_consumed = _consume_matching_pending_input(sid, text)
                 text = _wrap_injected_text_with_announced_from(text, announced_from)
                 try:
                     result = _inject_text_into_session(
@@ -58361,6 +58397,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # "Failed to fetch" with no way to tell what went wrong.
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
+                if queued_consumed and isinstance(result, dict):
+                    result["queued_consumed"] = queued_consumed
                 self.send_json(result)
         elif path == "/api/session/compact":
             length = int(self.headers.get("Content-Length", "0"))

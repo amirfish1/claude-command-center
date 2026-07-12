@@ -4732,6 +4732,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("inputBar.insertBefore(tray, inputBar.firstChild)", app_js)
         self.assertIn("el.dataset.queuedSteerServer === 'true'", app_js)
         self.assertIn("el.classList.contains('send-queued')", app_js)
+        self.assertIn("data-steer-queued-message", app_js)
+        self.assertIn("tray.dataset.conversationId", app_js)
+        self.assertIn("replace_queued", app_js)
         self.assertIn("is-queued-steer-duplicate", app_js)
         self.assertIn(".event.user_text.is-queued-steer-duplicate", app_css)
         self.assertIn(".queued-steer-tray .msg-image", app_css)
@@ -12704,6 +12707,36 @@ class TestPendingInputs(unittest.TestCase):
         self.assertEqual(events[1]["text"], "r2")
         self.assertEqual(events[2]["text"], "t1")
         self.assertTrue(events[2]["pending"])
+
+    def test_consume_matching_pending_input_removes_only_one_copy(self):
+        sid = "test-session-id"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["repeat", "repeat", "keep"]
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[sid] = ["repeat"]
+
+        removed = self.server._consume_matching_pending_input(sid, " repeat ")
+
+        self.assertEqual(removed, 1)
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["repeat", "keep"])
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(self.server._pending_terminal_input_queue[sid], ["repeat"])
+
+    def test_consume_matching_pending_input_falls_back_to_terminal_queue(self):
+        sid = "test-session-id"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["keep"]
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[sid] = ["queued", "later"]
+
+        removed = self.server._consume_matching_pending_input(sid, "queued")
+
+        self.assertEqual(removed, 1)
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["keep"])
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(self.server._pending_terminal_input_queue[sid], ["later"])
 
     def test_conv_bytes_cache_misses_when_pending_input_queued(self):
         """Pre-serialized /api/conversations bodies must not hide dynamic overlays."""
