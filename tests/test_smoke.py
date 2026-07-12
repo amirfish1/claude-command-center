@@ -9510,6 +9510,37 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(state["last_completed_turn_id"], "turn-active")
         self.assertNotIn("active_turn_id", state)
 
+    def test_codex_late_tool_output_does_not_resurrect_completed_turn(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turnId": "turn-done"},
+        })
+        server._codex_app_server_handle_message({
+            "method": "turn/completed",
+            "params": {"threadId": sid, "turnId": "turn-done"},
+        })
+        server._codex_app_server_handle_message({
+            "method": "item/commandExecution/outputDelta",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-done",
+                "itemId": "late-shell",
+                "delta": "late process output",
+            },
+        })
+
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertNotIn("active_turn_id", state)
+        self.assertNotIn("active_item", state)
+        self.assertIsNone(server._codex_app_server_activity_fields(sid)["sidecar_tool"])
+
     def test_codex_app_server_turn_started_tracks_writer_ownership(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -10352,6 +10383,29 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["via"], "codex-app-queued")
         app_queue.assert_called_once()
         popen.assert_not_called()
+
+    def test_resume_codex_preserves_existing_queue_order(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._pending_resume_lock:
+            original_queue = dict(server._pending_resume_queue)
+            server._pending_resume_queue.clear()
+            server._pending_resume_queue[sid] = ["first"]
+        try:
+            with mock.patch.object(server, "_resolve_codex_bin") as resolve_bin, \
+                 mock.patch.object(server, "_codex_resume_or_steer_via_app_server") as app_send:
+                result = server.resume_session_codex(sid, "second")
+        finally:
+            with server._pending_resume_lock:
+                queued = list(server._pending_resume_queue.get(sid, []))
+                server._pending_resume_queue.clear()
+                server._pending_resume_queue.update(original_queue)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
+        self.assertEqual(queued, ["first", "second"])
+        resolve_bin.assert_not_called()
+        app_send.assert_not_called()
 
     def test_resume_antigravity_adds_pasted_image_dir(self):
         """AGY needs pasted-image folders in its repeatable --add-dir workspace."""

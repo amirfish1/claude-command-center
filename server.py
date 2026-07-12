@@ -6958,6 +6958,14 @@ def _build_archive_conversations(
     return convs
 
 
+def archive_window_since_epoch(window: str, now: float | None = None) -> float | None:
+    """Translate the public archive window into a server-side time bound."""
+    seconds = {"1d": 24 * 60 * 60, "7d": 7 * 24 * 60 * 60}.get(window)
+    if seconds is None:
+        return None
+    return (time.time() if now is None else now) - seconds
+
+
 def _archive_refresh_response_cache_async(key, options):
     if not _archive_response_refresh_begin(key):
         return False
@@ -19977,14 +19985,24 @@ def _codex_app_server_handle_notification(method, params):
         "item/plan/delta",
         "thread/tokenUsage/updated",
     ):
-        state["last_activity_at"] = now
-        if turn_id:
-            state["active_turn_id"] = turn_id
+        # A command can outlive its Codex turn and keep emitting output after
+        # turn/completed. Those late deltas are process output, not evidence of
+        # a new turn; accepting them resurrected idle threads as "Thinking".
+        # A genuine new turn always arrives through turn/started first.
+        late_completed_turn = bool(
+            turn_id
+            and str(state.get("last_completed_turn_id") or "") == str(turn_id)
+            and not state.get("active_turn_id")
+        )
+        if not late_completed_turn:
+            state["last_activity_at"] = now
+            if turn_id:
+                state["active_turn_id"] = turn_id
         if method == "thread/tokenUsage/updated":
             usage = params.get("tokenUsage") or params.get("token_usage") or params.get("usage")
             if isinstance(usage, dict):
                 state["token_usage"] = usage
-        elif method in (
+        elif not late_completed_turn and method in (
             "item/started",
             "item/completed",
             "item/commandExecution/outputDelta",
@@ -26953,8 +26971,10 @@ def build_ux_fixes_health_payload(force=False):
         return copy.deepcopy(data)
 
 
-def _queue_codex_resume(session_id, text, pid=None, reason=None):
+def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pending=False):
     with _pending_resume_lock:
+        if only_if_pending and not _pending_resume_queue.get(session_id):
+            return None
         _pending_resume_queue.setdefault(session_id, []).append(text)
     _save_pending_inputs()
     payload = {
@@ -27224,6 +27244,15 @@ def resume_session_codex(session_id, text, *, steer=False):
     text = _strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
+    if not steer:
+        queued_behind_earlier = _queue_codex_resume(
+            session_id,
+            text,
+            reason="Waiting behind an earlier queued Codex message",
+            only_if_pending=True,
+        )
+        if queued_behind_earlier is not None:
+            return queued_behind_earlier
     image_paths = _extract_pasted_image_paths(text)
     resolved = _resolve_codex_bin()
     if not resolved["available"]:
