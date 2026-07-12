@@ -19199,6 +19199,7 @@ def _codex_app_server_record_thread(thread_id, thread):
         _CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
     elif str(status or "").lower() == "idle":
         state.pop("active_turn_id", None)
+        state.pop("active_writer", None)
         state["thread_needs_approval"] = False
         state["active_flags"] = []
     for turn in turns:
@@ -19933,6 +19934,7 @@ def _codex_app_server_handle_notification(method, params):
             state["thread_needs_approval"] = bool(status_fields.get("thread_needs_approval"))
             if str(status).lower() == "idle":
                 state.pop("active_turn_id", None)
+                state.pop("active_writer", None)
                 state.pop("active_item", None)
                 state.pop("active_items", None)
                 state["thread_needs_approval"] = False
@@ -19942,13 +19944,25 @@ def _codex_app_server_handle_notification(method, params):
         if isinstance(settings, dict):
             state["thread_settings"] = settings
     elif method == "turn/started":
+        known_ccc_turn = bool(
+            state.get("active_writer") == "ccc"
+            and turn_id
+            and str(state.get("active_turn_id") or "") == str(turn_id)
+        )
         if turn_id:
             state["active_turn_id"] = turn_id
             state["last_activity_at"] = now
+        writer = "ccc" if state.get("ccc_turn_start_pending") or known_ccc_turn else "external"
+        state["active_writer"] = writer
         state["active_items"] = {}
         state.pop("active_item", None)
         state["status"] = "active"
-        _codex_coordination_event_unlocked(state, "ccc_turn_started", writer="ccc", now=now)
+        _codex_coordination_event_unlocked(
+            state,
+            "ccc_turn_started" if writer == "ccc" else "external_turn_started",
+            writer=writer,
+            now=now,
+        )
     elif method in (
         "item/started",
         "item/completed",
@@ -19979,14 +19993,21 @@ def _codex_app_server_handle_notification(method, params):
         ):
             _codex_app_server_record_item_notification(state, method, params, now)
     elif method == "turn/completed":
+        completed_writer = str(state.get("active_writer") or "external")
         state["last_activity_at"] = now
         state["last_completed_turn_id"] = turn_id
         if not turn_id or state.get("active_turn_id") == turn_id:
             state.pop("active_turn_id", None)
+            state.pop("active_writer", None)
         state.pop("active_item", None)
         state.pop("active_items", None)
         state["status"] = "idle"
-        _codex_coordination_event_unlocked(state, "ccc_turn_completed", writer="ccc", now=now)
+        _codex_coordination_event_unlocked(
+            state,
+            "ccc_turn_completed" if completed_writer == "ccc" else "external_turn_completed",
+            writer=completed_writer,
+            now=now,
+        )
     _save_codex_app_server_state_unlocked()
     try:
         _codex_telemetry_note_notification(method, params, thread_id, turn_id)
@@ -20303,14 +20324,41 @@ def _codex_app_server_request(method, params=None, timeout=20):
     The app-server is the only local Codex interface that can append input to
     a loaded thread; `codex exec resume` can only start a one-shot process.
     """
+    params = params or {}
+    thread_id = _codex_app_server_request_thread_id(method, params)
+    if method == "turn/start" and thread_id:
+        with _CODEX_APP_SERVER_LOCK:
+            state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
+            state["ccc_turn_start_pending"] = True
+            state["ccc_turn_start_pending_at"] = time.time()
     transport = _ensure_codex_app_server()
     if transport is None:
+        if method == "turn/start" and thread_id:
+            with _CODEX_APP_SERVER_LOCK:
+                state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
+                state.pop("ccc_turn_start_pending", None)
+                state.pop("ccc_turn_start_pending_at", None)
         return {
             "ok": False,
             "error": "Codex app-server is unavailable",
             "fallback": "exec",
         }
-    return _codex_app_server_request_to_transport(transport, method, params=params, timeout=timeout)
+    response = _codex_app_server_request_to_transport(
+        transport, method, params=params, timeout=timeout,
+    )
+    if method == "turn/start" and thread_id:
+        with _CODEX_APP_SERVER_LOCK:
+            state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
+            state.pop("ccc_turn_start_pending", None)
+            state.pop("ccc_turn_start_pending_at", None)
+            if _codex_response_succeeded(response):
+                turn = ((response.get("result") or {}).get("turn") or {})
+                turn_id = str(turn.get("id") or "").strip()
+                if turn_id:
+                    state["active_turn_id"] = turn_id
+                    state["active_writer"] = "ccc"
+                    _CODEX_APP_SERVER_TURN_THREAD[turn_id] = thread_id
+    return response
 
 
 def _codex_app_server_refresh_thread_status(session_id, *, max_age=2.0):
@@ -20812,7 +20860,13 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
         return snap
     state = app_state if app_state is not None else _codex_app_server_thread_state(session_id)
     state = state or {}
-    ccc_turn_active = bool(state.get("active_turn_id"))
+    active_turn_id = state.get("active_turn_id")
+    active_status = str(state.get("status") or "").strip().lower() == "active"
+    active_writer = str(state.get("active_writer") or "").strip().lower()
+    ccc_turn_active = bool(
+        state.get("ccc_turn_start_pending")
+        or (active_turn_id and active_writer == "ccc")
+    )
     ccc_recent = ccc_turn_active
     if not ccc_recent:
         try:
@@ -20839,6 +20893,27 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
         snap["desktop_attached"] = str(path) in (attached or {})
     if ccc_turn_active or exec_child:
         snap["writer"] = "ccc"
+        return snap
+    # Trust an authoritative "idle" thread status (delivered via
+    # thread/status/changed and captured into state["status"]) over the
+    # rollout-mtime heuristic. CCC shares the managed app-server daemon with the
+    # Codex mobile/desktop apps, so it receives their real active→idle
+    # transitions; a thread the daemon reports idle is NOT being written, even
+    # when the rollout mtime is fresh because an external surface merely OPENED
+    # the thread (touching the file without starting a turn). Without this, an
+    # opened-but-idle thread was mis-attributed to an active external writer and
+    # every CCC send queued forever ("session is busy" that never clears). The
+    # status is volatile (never restored across restarts), so its presence means
+    # we heard it this process — trustworthy. When we have no status (a thread we
+    # aren't attached to / haven't heard from), fall back to the mtime heuristic.
+    if str(state.get("status") or "").strip().lower() == "idle":
+        return snap
+    # An authoritative active status without CCC ownership belongs to another
+    # app-server client (mobile, desktop, or another integration). This is more
+    # precise than rollout mtime and prevents CCC from becoming a second writer.
+    if active_status and active_writer != "ccc":
+        snap["external_active"] = True
+        snap["writer"] = "desktop" if snap["desktop_attached"] else "external"
         return snap
     if mtime_recent and not ccc_recent:
         snap["external_active"] = True
@@ -41361,6 +41436,22 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         if answering_tty_question:
             _drop_matching_terminal_queue_entries(session_id, text)
         keystroke_result = inject_input_via_keystroke(tty, term_app or "Terminal", text)
+        # Codex/Cursor fallback: their TUIs accept input through their own
+        # resume/steer delivery, so when keystroke injection ISN'T viable —
+        # inject_input_via_keystroke is osascript-only, so it always fails on
+        # Linux (no AppleScript driver, terminal_app is None), and can also fail
+        # on macOS (permission denied / tab unreachable) — deliver via resume
+        # instead of returning the failure. Without this, a terminal-queue drain
+        # (`_from_terminal_queue=True`, which skips the tty-unreachable re-queue
+        # below) re-parks the message every 60s forever ("Queued: the session is
+        # busy" that never clears). Answering a native tty PICKER still needs the
+        # keystroke, so that path is left alone.
+        if (isinstance(keystroke_result, dict) and not keystroke_result.get("ok")
+                and not answering_tty_question):
+            if is_codex:
+                return resume_session_codex(session_id, text)
+            if is_cursor:
+                return resume_session_cursor(session_id, text)
         # If the AppleScript can't find the terminal tab (user switched
         # apps, tab hidden, fullscreen-elsewhere, permission denied),
         # queue the text instead of bouncing the message. The queue

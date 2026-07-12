@@ -6149,6 +6149,97 @@ class TestRepoContextHelpers(unittest.TestCase):
         inject.assert_called_once_with("ttys009", "Terminal", "hello")
         resume.assert_not_called()
 
+    def test_codex_live_terminal_falls_back_to_resume_when_keystroke_fails(self):
+        # Regression: inject_input_via_keystroke is osascript-only, so it always
+        # fails on Linux (no AppleScript driver, terminal_app is None). A live
+        # Codex tty send must then fall back to resume delivery instead of
+        # returning the failure — otherwise the terminal-queue drain re-parks the
+        # message every 60s forever ("Queued: the session is busy").
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": True, "tty": "pts/2", "terminal_app": None},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "inject_input_via_keystroke",
+                 return_value={"ok": False, "via": "terminal-control", "error": "osascript not found"},
+             ) as inject, \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "via": "codex-resume"},
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid, "hello", _from_terminal_queue=True
+            )
+
+        self.assertTrue(result["ok"])
+        inject.assert_called_once()
+        resume.assert_called_once_with(sid, "hello")
+
+    def test_codex_writer_snapshot_trusts_idle_status_over_mtime(self):
+        # Regression for the false-busy/stuck saga: an idle thread whose rollout
+        # mtime is fresh (a mobile/desktop app merely OPENED it) must NOT be
+        # attributed to an active external writer once the daemon has reported
+        # status "idle" via thread/status/changed. Without this, CCC queued every
+        # send forever ("session is busy" that never clears).
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        now = 1_000_000.0
+        fresh_rollout = {"path": "/tmp/rollout.jsonl", "mtime_ns": int((now - 1) * 1e9)}
+        # Idle status present -> external_active must be False even with fresh mtime.
+        snap_idle = self.server._codex_thread_writer_snapshot(
+            sid, now=now, rollout=fresh_rollout,
+            app_state={"status": "idle"}, attached={}, exec_child=False,
+        )
+        self.assertFalse(snap_idle["external_active"])
+        self.assertIsNone(snap_idle["writer"])
+        # No status (thread we haven't heard from) -> mtime fallback still flags
+        # an external writer, so unrelated behavior isn't regressed.
+        snap_unknown = self.server._codex_thread_writer_snapshot(
+            sid, now=now, rollout=fresh_rollout,
+            app_state={}, attached={}, exec_child=False,
+        )
+        self.assertTrue(snap_unknown["external_active"])
+        self.assertEqual(snap_unknown["writer"], "external")
+
+    def test_codex_writer_snapshot_attributes_active_status_by_owner(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        old_rollout = {"path": "/tmp/rollout.jsonl", "mtime_ns": 1}
+        external = self.server._codex_thread_writer_snapshot(
+            sid,
+            now=1_000_000.0,
+            rollout=old_rollout,
+            app_state={
+                "status": "active",
+                "active_turn_id": "external-turn",
+                "active_writer": "external",
+            },
+            attached={},
+            exec_child=False,
+        )
+        self.assertTrue(external["external_active"])
+        self.assertEqual(external["writer"], "external")
+
+        ccc = self.server._codex_thread_writer_snapshot(
+            sid,
+            now=1_000_000.0,
+            rollout=old_rollout,
+            app_state={
+                "status": "active",
+                "active_turn_id": "ccc-turn",
+                "active_writer": "ccc",
+            },
+            attached={},
+            exec_child=False,
+        )
+        self.assertFalse(ccc["external_active"])
+        self.assertEqual(ccc["writer"], "ccc")
+
     def test_codex_slash_idle_terminal_submits_with_return(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
@@ -9395,6 +9486,56 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(state["last_completed_turn_id"], "turn-active")
         self.assertNotIn("active_turn_id", state)
 
+    def test_codex_app_server_turn_started_tracks_writer_ownership(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "ccc_turn_start_pending": True,
+            }
+
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "ccc-turn"}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_writer"], "ccc")
+
+        server._codex_app_server_handle_message({
+            "method": "turn/completed",
+            "params": {"threadId": sid, "turn": {"id": "ccc-turn"}},
+        })
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid].pop("ccc_turn_start_pending", None)
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "external-turn"}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_writer"], "external")
+
+    def test_codex_app_server_turn_start_response_marks_ccc_owner(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+
+        response = {"result": {"turn": {"id": "ccc-turn"}}}
+        with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+             mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=response):
+            result = server._codex_app_server_request(
+                "turn/start", {"threadId": sid, "input": []}, timeout=1,
+            )
+
+        self.assertIs(result, response)
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_turn_id"], "ccc-turn")
+        self.assertEqual(state["active_writer"], "ccc")
+        self.assertNotIn("ccc_turn_start_pending", state)
+
     def test_codex_app_server_item_activity_feeds_live_ui_fields(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -11365,7 +11506,8 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         # CCC owns an active turn → ccc writer, never external (even recent mtime)
         snap = server._codex_thread_writer_snapshot(
-            "sid", now, rollout=recent, app_state={"active_turn_id": "t1"},
+            "sid", now, rollout=recent,
+            app_state={"active_turn_id": "t1", "active_writer": "ccc"},
             attached={path: 4242}, exec_child=False,
         )
         self.assertEqual(snap["writer"], "ccc")
