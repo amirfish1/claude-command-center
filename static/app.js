@@ -32889,7 +32889,7 @@
       (((_uxqHealthCache || {}).queues) || []).forEach(q => {
         if (q && q.queue != null) _drainByQueueRow.set(String(q.queue).toUpperCase(), !!q.auto_drain);
       });
-      $queue.innerHTML = rows.map(it => {
+      const queueRowsHtml = rows.map(it => {
         const noteFull = String(it.note || '');
         const rawStatus = it.status || 'open';
         const status = _effectiveStatus(it);
@@ -32932,6 +32932,11 @@
           + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed — unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
+      // Keep creation with the tickets it affects, instead of crowding the
+      // queue header. This stays after the empty state too, so an empty queue
+      // still offers its primary action.
+      $queue.innerHTML = queueRowsHtml
+        + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>';
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
     });
@@ -32968,6 +32973,12 @@
     const $queueList = document.getElementById('sidebarQueueList');
     if ($queueList) {
       $queueList.addEventListener('click', async (ev) => {
+        const addBtn = ev.target && ev.target.closest && ev.target.closest('#filesQueueAdd');
+        if (addBtn) {
+          ev.stopPropagation();
+          await _addQueueTicket();
+          return;
+        }
         const runBtn = ev.target && ev.target.closest && ev.target.closest('.fq-run[data-ref]');
         if (runBtn) {
           ev.stopPropagation();
@@ -33372,40 +33383,33 @@
     requestAnimationFrame(() => fields.queue.focus());
   }
 
-  // Add a ticket to the queue straight from the panel header (CCC-145). Routes
-  // into the same project scope the panel is showing (_uxqWorkerProject), so a
-  // project worker's add lands in that project. Refreshes the list on success.
-  {
-    const $qadd = document.getElementById('filesQueueAdd');
-    if ($qadd) {
-      $qadd.addEventListener('click', async (ev) => {
-        ev.stopPropagation();
-        const note = await openQueueTicketComposer();
-        if (!note) return;
-        const proj = _uxqLastResolvedProject || _uxqWorkerProject();
-        // A family root ("WT") isn't a real sub-queue — route the add to its
-        // fix-now child ("WT-BUGS") so it lands somewhere drainable.
-        const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(proj)] || proj;
-        try {
-          const res = await fetch('/api/ux-fixes/enqueue', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (data && data.ok) {
-            const ref = (data.item && data.item.ref) || 'ticket';
-            showOpToast('Added ' + ref + ' to queue');
-            _uxqItemsCache.ts = 0;  // bust cache so the new row shows
-            _uxqHealthCache.ts = 0;
-            _renderQueuePanel();
-          } else {
-            showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
-          }
-        } catch (e) {
-          showOpToast('Add failed: ' + e);
-        }
+  // Routes a ticket into the panel's current scope. The trigger is rendered
+  // as the queue's last row, so it is delegated from #sidebarQueueList.
+  async function _addQueueTicket() {
+    const note = await openQueueTicketComposer();
+    if (!note) return;
+    const proj = _uxqLastResolvedProject || _uxqWorkerProject();
+    // A family root ("WT") isn't a real sub-queue — route the add to its
+    // fix-now child ("WT-BUGS") so it lands somewhere drainable.
+    const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(proj)] || proj;
+    try {
+      const res = await fetch('/api/ux-fixes/enqueue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok) {
+        const ref = (data.item && data.item.ref) || 'ticket';
+        showOpToast('Added ' + ref + ' to queue');
+        _uxqItemsCache.ts = 0;  // bust cache so the new row shows
+        _uxqHealthCache.ts = 0;
+        _renderQueuePanel();
+      } else {
+        showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
+      }
+    } catch (e) {
+      showOpToast('Add failed: ' + e);
     }
   }
 
@@ -38054,6 +38058,35 @@
     }
   }
 
+  // Queued sends are actionable steer candidates, not past conversation.
+  // Keep their real event nodes in a small tray immediately above the composer
+  // so ongoing output cannot scroll them out of reach.
+  function syncQueuedSteerTray($view, paneId, replaceServerCandidates) {
+    if (!$view) return;
+    const pane = $view.closest('.conv-pane');
+    const inputBar = getConvInputBarForPane(paneId);
+    if (!pane || !inputBar) return;
+    let tray = pane.querySelector('.queued-steer-tray');
+    if (replaceServerCandidates && tray) {
+      tray.querySelectorAll('[data-queued-steer-server="true"]').forEach(el => el.remove());
+    }
+    const candidates = Array.from($view.querySelectorAll(
+      '.event.user_text.pending, .event.user_text.send-queued, .event.user_text.not-acknowledged'
+    ));
+    if (!candidates.length && (!tray || !tray.children.length)) {
+      if (tray) tray.remove();
+      return;
+    }
+    if (!tray) {
+      tray = document.createElement('div');
+      tray.className = 'queued-steer-tray';
+      tray.setAttribute('aria-label', 'Queued messages ready to steer');
+      inputBar.parentNode.insertBefore(tray, inputBar);
+    }
+    candidates.forEach(el => tray.appendChild(el));
+    if (!tray.children.length) tray.remove();
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -38134,6 +38167,7 @@
       }
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
+      if (ev.pending) div.dataset.queuedSteerServer = 'true';
       if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
       if (_videoClearLine && ev.line != null && Number(ev.line) <= _videoClearLine) {
         div.classList.add('ccc-video-cleared');
@@ -38526,7 +38560,8 @@
         // send-delivered / not-acknowledged too so the durable event always
         // wins. Real events never carry these classes, so this can't remove a
         // genuine transcript row.
-        const echoDivs = $view.querySelectorAll(
+        const echoScope = $view.closest('.conv-pane') || $view;
+        const echoDivs = echoScope.querySelectorAll(
           '.event.user_text.pending, .event.user_text.send-queued,'
           + ' .event.user_text.send-delivered, .event.user_text.not-acknowledged');
         for (const pDiv of echoDivs) {
@@ -39054,16 +39089,9 @@
         && _streamingBubble !== $view.lastElementChild) {
       $view.appendChild(_streamingBubble);
     }
-    // Same story for not-yet-delivered send echoes (`.pending` /
-    // `.send-queued` / `.not-acknowledged`) — a turn that streams in while
-    // the agent hasn't drained the queued input yet would otherwise bury the
-    // message the user is still waiting to have acknowledged, stranding it
-    // mid-transcript instead of right above the input box (CCC-515).
-    for (const p of _pendingSends) {
-      if (p.element && p.element.parentNode === $view && p.element !== $view.lastElementChild) {
-        $view.appendChild(p.element);
-      }
-    }
+    // Keep queued steer candidates at the composer, including durable server
+    // queue events (which are not represented in `_pendingSends`).
+    syncQueuedSteerTray($view, paneId, !!(opts.initialLoad || events.some(ev => ev && ev.pending)));
     // The optimistic "Sending…" pill needs two things:
     //   1) If the agent has already produced a real reply (assistant /
     //      tool_use / result event in this batch), kill it — "starting up"

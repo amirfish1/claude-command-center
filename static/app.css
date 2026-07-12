@@ -937,6 +937,29 @@
   }
   .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
+  /* Queue candidates belong at the composer, not in scrollback. Keep pasted
+     image previews recognizable without letting attachments dominate the
+     narrow handoff strip. */
+  .queued-steer-tray {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 124px;
+    overflow-y: auto;
+    padding: 6px 14px 0;
+    border-top: 1px solid color-mix(in srgb, var(--orange, #d29922) 28%, transparent);
+    background: color-mix(in srgb, var(--surface) 88%, var(--bg));
+  }
+  .queued-steer-tray .event { margin: 0; padding: 5px 10px; font-size: 12px; }
+  .queued-steer-tray .event .user-msg { margin-top: 2px; font-size: 13px; }
+  .queued-steer-tray .msg-image {
+    width: 44px;
+    height: 32px;
+    margin: 3px 4px 0 0;
+    object-fit: cover;
+    vertical-align: middle;
+    border-radius: 3px;
+  }
   .task-notification-card {
     display: grid;
     gap: 6px;
@@ -16750,6 +16773,14 @@ body:has(.gc-reader) .pwa-install-banner {
 .uxq-reopen-row { display: flex; justify-content: flex-end; margin-top: 8px; }
 
 .fq-empty { padding: 12px 10px; font-size: 13px; color: var(--text-muted); }
+.fq-add-row {
+  width: 100%; border: 0; border-bottom: 1px solid rgba(139,148,158,0.08);
+  padding: 8px 10px; background: transparent; color: var(--text-muted);
+  font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.fq-add-row:hover, .fq-add-row:focus-visible {
+  color: var(--accent); background: var(--surface-hover); outline: none;
+}
 .fq-empty-sub {
   margin-top: 4px;
   font-size: 12px;

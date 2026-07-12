@@ -3843,11 +3843,18 @@ class TestServerImports(unittest.TestCase):
     def test_queue_add_uses_large_composer(self):
         """Adding a queue item should use a multiline composer, not prompt()."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function openQueueTicketComposer()", app_js)
         self.assertIn("const note = await openQueueTicketComposer();", app_js)
         self.assertNotIn("window.prompt('New queue ticket", app_js)
+        self.assertNotIn('id="filesQueueAdd"', index_html)
+        self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
+        self.assertGreater(
+            app_js.index('class="fq-add-row" id="filesQueueAdd"'),
+            app_js.index("$queue.innerHTML = queueRowsHtml"),
+        )
         self.assertIn('class="fq-ticket-textarea"', app_js)
         self.assertIn('rows="7"', app_js)
         self.assertIn('data-fq-ticket-submit', app_js)
@@ -4696,6 +4703,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.user_text.send-queued", app_js)
         self.assertIn(".event.user_text.send-delivered", app_js)
         self.assertIn(".event.user_text.not-acknowledged", app_js)
+
+    def test_queued_steer_candidates_stay_above_the_composer(self):
+        """Queued input is a steer candidate, not history that later events bury."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("function syncQueuedSteerTray", app_js)
+        self.assertIn("queued-steer-tray", app_js)
+        self.assertIn(".queued-steer-tray .msg-image", app_css)
 
     def test_codex_app_queued_send_marks_pending_echo_queued(self):
         """Codex app-server queue ACKs must not leave the optimistic echo pending."""
