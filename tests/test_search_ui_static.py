@@ -71,7 +71,7 @@ class TestSearchUiStatic(unittest.TestCase):
         self.assertNotIn("refreshAggregateInBackground", html)
 
         boot_start = html.index("function bootThroughputPage")
-        read_idx = html.index("readThroughputBootstrap", boot_start)
+        read_idx = html.index("readActiveThroughputBootstrap", boot_start)
         apply_idx = html.index("applyThroughputBootstrap", boot_start)
         network_idx = html.index("loadServerBootstrapThenRefresh", boot_start)
         self.assertLess(read_idx, apply_idx)
