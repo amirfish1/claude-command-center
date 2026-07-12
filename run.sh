@@ -421,13 +421,13 @@ echo "  url      : http://localhost:$PORT"
 PYTHON="$HERE/.venv/bin/python3"
 for candidate in "$PYTHON" "${CCC_PYTHON:-}" /opt/homebrew/bin/python3 /usr/local/bin/python3 "$(command -v python3 || true)"; do
   if [ -n "$candidate" ] && [ -x "$candidate" ] \
-    && "$candidate" -c 'import sys; raise SystemExit(sys.version_info >= (3, 10))' >/dev/null 2>&1; then
+    && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
     PYTHON="$candidate"
     break
   fi
 done
 
-if ! "$PYTHON" -c 'import sys; raise SystemExit(sys.version_info >= (3, 10))' >/dev/null 2>&1; then
+if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
   echo "Error: CCC requires Python 3.10+. Set CCC_PYTHON to a compatible interpreter." >&2
   exit 1
 fi
