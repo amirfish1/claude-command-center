@@ -1287,6 +1287,7 @@
 
       <div class="engine-switch-row">
         <div class="engine-tabs" id="throughput-engine-tabs" role="tablist" aria-label="Throughput engine">
+          <button type="button" class="engine-tab" id="engine-tab-combined" role="tab" aria-selected="false" onclick="setThroughputEngine('combined')">Combined</button>
           <button type="button" class="engine-tab active" id="engine-tab-claude" role="tab" aria-selected="true" onclick="setThroughputEngine('claude')">Claude</button>
           <button type="button" class="engine-tab" id="engine-tab-codex" role="tab" aria-selected="false" onclick="setThroughputEngine('codex')">Codex</button>
         </div>
@@ -1439,6 +1440,7 @@
     ];
 
     function throughputEngineLabel() {
+      if (activeThroughputEngine === 'combined') return 'Combined';
       return activeThroughputEngine === 'codex' ? 'Codex' : 'Claude';
     }
 
@@ -1486,6 +1488,117 @@
         localStorage.removeItem(key);
       }
       return null;
+    }
+
+    const COMBINED_SUM_FIELDS = [
+      'total_turns', 'turns_with_tokens', 'total_active_duration_sec',
+      'total_input_tokens', 'total_output_tokens', 'total_tokens',
+      'total_raw_context_tokens', 'total_fresh_input_tokens',
+      'total_cache_read_tokens', 'total_cache_write_tokens',
+      'total_effective_input_tokens', 'cost_usd', 'unpriced_turns'
+    ];
+
+    const COMBINED_BUCKET_FIELDS = [
+      'turns', 'active_duration_sec', 'raw_context_tokens', 'fresh_input_tokens',
+      'cache_read_tokens', 'cache_write_tokens', 'effective_input_tokens',
+      'output_tokens', 'total_tokens', 'cost_usd', 'unpriced_turns'
+    ];
+
+    function mergeSummaryRows(leftRows, rightRows, keyField) {
+      const rows = new Map();
+      [leftRows || [], rightRows || []].forEach(group => group.forEach(row => {
+        const key = row && (row[keyField] || row.hour || row.day);
+        if (!key) return;
+        const merged = rows.get(key) || { [keyField]: key };
+        if (row.hour) merged.hour = row.hour;
+        if (row.day) merged.day = row.day;
+        COMBINED_BUCKET_FIELDS.forEach(field => {
+          merged[field] = Number(merged[field] || 0) + Number(row[field] || 0);
+        });
+        rows.set(key, merged);
+      }));
+      return Array.from(rows.values()).sort((a, b) =>
+        String(a[keyField] || a.hour || '').localeCompare(String(b[keyField] || b.hour || ''))
+      );
+    }
+
+    function mergeThroughputSummaries(claudeSummary, codexSummary) {
+      const claude = claudeSummary || {};
+      const codex = codexSummary || {};
+      const merged = {};
+      COMBINED_SUM_FIELDS.forEach(field => {
+        merged[field] = Number(claude[field] || 0) + Number(codex[field] || 0);
+      });
+      merged.cache_hit_ratio = merged.total_raw_context_tokens > 0
+        ? merged.total_cache_read_tokens / merged.total_raw_context_tokens
+        : 0;
+      merged.hourly = mergeSummaryRows(claude.hourly, codex.hourly, 'hour');
+      merged.daily = mergeSummaryRows(claude.daily, codex.daily, 'day');
+      merged.per_model = [
+        ...(claude.per_model || []).map(row => ({ ...row, engine: row.engine || 'claude' })),
+        ...(codex.per_model || []).map(row => ({ ...row, engine: row.engine || 'codex' })),
+      ];
+      merged.components = { claude, codex };
+      return merged;
+    }
+
+    function combineRefreshStatuses(statuses) {
+      const list = (statuses || []).filter(Boolean);
+      const states = list.map(status => status.state);
+      return {
+        state: states.includes('failed') ? 'failed' : states.every(state => state === 'complete') ? 'complete' : 'refreshing',
+        phase: list.find(status => status.state === 'refreshing')?.phase || '',
+        started_at: Math.min(...list.map(status => Number(status.started_at || Date.now() / 1000))),
+        elapsed_ms: Math.max(0, ...list.map(status => Number(status.elapsed_ms || 0))),
+        expected_ms: Math.max(0, ...list.map(status => Number(status.expected_ms || 0))),
+        sessions_discovered: list.reduce((sum, status) => sum + Number(status.sessions_discovered || 0), 0),
+        sessions_read: list.reduce((sum, status) => sum + Number(status.sessions_read || 0), 0),
+        cache_hits: list.reduce((sum, status) => sum + Number(status.cache_hits || 0), 0),
+        parsed: list.reduce((sum, status) => sum + Number(status.parsed || 0), 0),
+        last_refreshed_at: Math.min(...list.map(status => Number(status.last_refreshed_at || Infinity))),
+      };
+    }
+
+    function composeCombinedBootstrap(claudeModel, codexModel) {
+      if (!validateThroughputBootstrap(claudeModel, 'all_7_days', 'claude') ||
+          !validateThroughputBootstrap(codexModel, 'all_7_days', 'codex')) return null;
+      const generatedAt = Math.min(Number(claudeModel.generated_at), Number(codexModel.generated_at));
+      return {
+        schema: THROUGHPUT_BOOTSTRAP_SCHEMA,
+        session_id: 'all_7_days',
+        engine: 'combined',
+        generated_at: generatedAt,
+        weekly: claudeModel.weekly,
+        reset_events: [...claudeModel.reset_events, ...codexModel.reset_events].filter((event, index, all) => {
+          const key = event.id || `${event.window}:${event.kind}:${event.detected_at}`;
+          return index === all.findIndex(candidate =>
+            (candidate.id || `${candidate.window}:${candidate.kind}:${candidate.detected_at}`) === key
+          );
+        }),
+        refresh: combineRefreshStatuses([claudeModel.refresh, codexModel.refresh]),
+        throughput: {
+          ok: true,
+          session_id: 'all_7_days',
+          scope: { aggregate: true, engine: 'combined', range: 'Last 7 Days' },
+          summary: mergeThroughputSummaries(
+            claudeModel.throughput.summary,
+            codexModel.throughput.summary
+          ),
+          turns: [],
+          components: {
+            claude: claudeModel.throughput,
+            codex: codexModel.throughput,
+          },
+        },
+      };
+    }
+
+    function readActiveThroughputBootstrap(sessionId, engine) {
+      if (engine !== 'combined') return readThroughputBootstrap(sessionId, engine);
+      return composeCombinedBootstrap(
+        readThroughputBootstrap(sessionId, 'claude'),
+        readThroughputBootstrap(sessionId, 'codex')
+      );
     }
 
     function compactThroughputHourlyRows(rows) {
@@ -1561,6 +1674,7 @@
           const modelRows = summary.per_model || [];
           renderModelBreakdown(modelRows, modelBreakdownContext(modelRows));
           renderTopSessions();
+          loadCachedAuxiliaryPanels();
         }
       });
       return true;
@@ -1622,7 +1736,46 @@
         <text x="${width/2}" y="${height/2 + 28}" fill="var(--accent)" text-anchor="middle" font-size="12">${workLine}</text>`;
     }
 
+    async function fetchInitialBootstrapForEngine(engine, session, generation) {
+      const suffix = generation ? `&generation=${encodeURIComponent(generation)}` : '';
+      const response = await fetch(
+        `/api/throughput/initial?session_id=${encodeURIComponent(session.session_id)}&engine=${encodeURIComponent(engine)}${suffix}`,
+        { cache: 'no-store' }
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      const model = data && data.bootstrap;
+      return validateThroughputBootstrap(model, session.session_id, engine) ? model : null;
+    }
+
+    async function loadCombinedServerBootstrapThenRefresh(session) {
+      const engineAtStart = activeThroughputEngine;
+      try {
+        const [claudeModel, codexModel] = await Promise.all([
+          fetchInitialBootstrapForEngine('claude', session),
+          fetchInitialBootstrapForEngine('codex', session),
+        ]);
+        if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return null;
+        if (claudeModel) writeThroughputBootstrap(claudeModel);
+        if (codexModel) writeThroughputBootstrap(codexModel);
+        const combined = composeCombinedBootstrap(claudeModel, codexModel);
+        if (combined && isNewerThroughputBootstrap(combined, visibleBootstrap)) {
+          applyThroughputBootstrap(combined, 'server');
+        }
+        return combined;
+      } catch (_error) {
+        return null;
+      } finally {
+        if (engineAtStart === 'combined' && activeThroughputEngine === 'combined') {
+          startCombinedRefreshStatusPolling(session);
+        }
+      }
+    }
+
     async function loadServerBootstrapThenRefresh(session) {
+      if (activeThroughputEngine === 'combined') {
+        return loadCombinedServerBootstrapThenRefresh(session);
+      }
       const engineAtStart = activeThroughputEngine;
       try {
         const response = await fetch(throughputFetchUrl('/api/throughput/initial', session.session_id), { cache: 'no-store' });
@@ -1651,15 +1804,20 @@
       const session = currentAggregateSession();
       activeSessionId = session.session_id;
       toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
-      const cached = readThroughputBootstrap(session.session_id, activeThroughputEngine);
+      const cached = readActiveThroughputBootstrap(session.session_id, activeThroughputEngine);
       if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(session);
       queueMicrotask(() => loadServerBootstrapThenRefresh(session));
     }
 
     function updateThroughputEngineUi() {
       currentAggregateSession();
+      const combined = document.getElementById('engine-tab-combined');
       const claude = document.getElementById('engine-tab-claude');
       const codex = document.getElementById('engine-tab-codex');
+      if (combined) {
+        combined.classList.toggle('active', activeThroughputEngine === 'combined');
+        combined.setAttribute('aria-selected', activeThroughputEngine === 'combined' ? 'true' : 'false');
+      }
       if (claude) {
         claude.classList.toggle('active', activeThroughputEngine === 'claude');
         claude.setAttribute('aria-selected', activeThroughputEngine === 'claude' ? 'true' : 'false');
@@ -1673,7 +1831,7 @@
     }
 
     async function setThroughputEngine(engine) {
-      const next = engine === 'codex' ? 'codex' : 'claude';
+      const next = ['combined', 'codex'].includes(engine) ? engine : 'claude';
       if (next === activeThroughputEngine) return;
       activeThroughputEngine = next;
       activeSessionId = null;
@@ -1686,7 +1844,7 @@
       renderSessionList();
       const agg = currentAggregateSession();
       activeSessionId = agg.session_id;
-      const cached = readThroughputBootstrap(agg.session_id, activeThroughputEngine);
+      const cached = readActiveThroughputBootstrap(agg.session_id, activeThroughputEngine);
       if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(agg);
       queueMicrotask(() => loadServerBootstrapThenRefresh(agg));
     }
@@ -1848,6 +2006,71 @@
       return true;
     }
 
+    async function loadCombinedCompletedBootstrap(session, statuses) {
+      const [claudeModel, codexModel] = await Promise.all([
+        fetchInitialBootstrapForEngine('claude', session, statuses.claude && statuses.claude.last_refreshed_at),
+        fetchInitialBootstrapForEngine('codex', session, statuses.codex && statuses.codex.last_refreshed_at),
+      ]);
+      if (activeThroughputEngine !== 'combined') return false;
+      if (claudeModel) writeThroughputBootstrap(claudeModel);
+      if (codexModel) writeThroughputBootstrap(codexModel);
+      const combined = composeCombinedBootstrap(claudeModel, codexModel);
+      if (!combined) return false;
+      applyThroughputBootstrap(combined, 'refresh');
+      renderRefreshPanel(combineRefreshStatuses(Object.values(statuses)));
+      return true;
+    }
+
+    async function startCombinedRefreshStatusPolling(session) {
+      stopRefreshStatusPolling();
+      const engines = ['claude', 'codex'];
+      const engineAtStart = activeThroughputEngine;
+      const statuses = {};
+      const starts = await Promise.all(engines.map(async engine => {
+        const response = await fetch(
+          `/api/throughput/refresh/start?session_id=${encodeURIComponent(session.session_id)}&engine=${engine}`,
+          { cache: 'no-store' }
+        );
+        statuses[engine] = response.ok ? await response.json() : { state: 'failed' };
+      }));
+      void starts;
+      if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return;
+      refreshStatus = combineRefreshStatuses(Object.values(statuses));
+      renderRefreshPanel(refreshStatus);
+
+      refreshElapsedTimer = setInterval(() => {
+        if (activeThroughputEngine !== 'combined') return;
+        Object.values(statuses).forEach(status => {
+          if (status.state === 'refreshing') {
+            status.elapsed_ms = Math.max(0, Date.now() - Number(status.started_at || 0) * 1000);
+          }
+        });
+        renderRefreshPanel(combineRefreshStatuses(Object.values(statuses)));
+      }, 100);
+
+      const poll = async () => {
+        if (activeThroughputEngine !== 'combined') return;
+        await Promise.all(engines.map(async engine => {
+          if (statuses[engine] && ['complete', 'failed'].includes(statuses[engine].state)) return;
+          const response = await fetch(
+            `/api/throughput/refresh/status?session_id=${encodeURIComponent(session.session_id)}&engine=${engine}`,
+            { cache: 'no-store' }
+          );
+          if (response.ok) statuses[engine] = await response.json();
+        }));
+        refreshStatus = combineRefreshStatuses(Object.values(statuses));
+        renderRefreshPanel(refreshStatus);
+        if (refreshStatus.state === 'complete') {
+          stopRefreshStatusPolling();
+          await loadCombinedCompletedBootstrap(session, statuses);
+        } else if (refreshStatus.state === 'failed') {
+          stopRefreshStatusPolling();
+        }
+      };
+      refreshPollTimer = setInterval(poll, 500);
+      poll();
+    }
+
     async function startRefreshStatusPolling(session) {
       if (!session) return;
       stopRefreshStatusPolling();
@@ -1902,7 +2125,8 @@
     function refreshThroughput() {
       const session = currentAggregateSession();
       activeSessionId = session.session_id;
-      startRefreshStatusPolling(session);
+      if (activeThroughputEngine === 'combined') startCombinedRefreshStatusPolling(session);
+      else startRefreshStatusPolling(session);
     }
 
     // Load session list from /api/conversations?all=true
@@ -1941,6 +2165,11 @@
     }
 
     async function loadSessions({ selectDefault = true } = {}) {
+      if (activeThroughputEngine === 'combined') {
+        allSessions = [];
+        renderSessionList();
+        return;
+      }
       if (selectDefault) setStatus('Loading sessions...', true);
       try {
         const convRes = await fetch(`/api/conversations?all=1&${throughputEngineParam()}`);
@@ -2167,17 +2396,21 @@
       const adjustedTokens = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
       const freshTokens = summary.total_fresh_input_tokens || 0;
       const cacheHitPct = Math.round((summary.cache_hit_ratio || 0) * 100);
-      const rate = weeklyRatePerDay(activeThroughputEngine);
+      const rate = activeThroughputEngine === 'combined' ? null : weeklyRatePerDay(activeThroughputEngine);
+      const claudeRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('claude') : null;
+      const codexRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('codex') : null;
 
       document.getElementById('lbl-card1').textContent = 'CALLS';
       document.getElementById('val-active-duration').textContent = Math.round(calls).toLocaleString();
       document.getElementById('val-total-duration').textContent = 'Last 7 days';
 
       document.getElementById('lbl-card2').textContent = 'USAGE RATE';
-      document.getElementById('val-total-tokens').textContent = rate ? `${rate.pctPerDay.toFixed(1)}% / day` : '—';
+      document.getElementById('val-total-tokens').textContent = rate
+        ? `${rate.pctPerDay.toFixed(1)}% / day`
+        : (claudeRate && codexRate ? `C ${claudeRate.pctPerDay.toFixed(1)}% · X ${codexRate.pctPerDay.toFixed(1)}% / day` : '—');
       document.getElementById('val-token-split').textContent = rate
         ? `${rate.pct.toFixed(0)}% so far · ${rate.elapsedDays.toFixed(1)} days elapsed`
-        : 'Weekly quota unavailable';
+        : (claudeRate && codexRate ? `Claude ${claudeRate.pct.toFixed(0)}% · Codex ${codexRate.pct.toFixed(0)}% so far` : 'Weekly quota unavailable');
 
       document.getElementById('lbl-card3').textContent = 'CACHE HIT RATE';
       document.getElementById('val-in-throughput').textContent = `${cacheHitPct}%`;
@@ -2295,6 +2528,10 @@
     function hideAuxiliarySection(id) {
       const section = document.getElementById(id);
       if (section) section.style.display = 'none';
+    }
+
+    function loadCachedAuxiliaryPanels() {
+      loadWeeklyHistory();
     }
 
     async function loadWeeklyHistory() {
@@ -2774,6 +3011,37 @@
       });
     }
 
+    const PREVIOUS_CYCLE_DAYS = 2;
+    const FORECAST_WIDTH_RATIO = 0.45;
+
+    function forecastCrossingAt100(pct, weekStart, resetAt) {
+      const now = Date.now();
+      const start = new Date(weekStart || '').getTime();
+      const reset = new Date(resetAt || '').getTime();
+      if (!Number.isFinite(start) || !Number.isFinite(reset) || !(pct > 0)) return reset;
+      const elapsed = Math.max(3600000, now - start);
+      const remainingMs = Math.max(0, (100 - pct) * elapsed / pct);
+      return Math.min(reset, now + remainingMs);
+    }
+
+    function compactForecastEnd() {
+      if (chartWeekOffset !== 0 || !weeklyData) return null;
+      const crossings = [];
+      if (weeklyData.display_pct != null && weeklyData.week_start && weeklyData.weekly_resets_at) {
+        crossings.push(forecastCrossingAt100(
+          Number(weeklyData.display_pct), weeklyData.week_start, weeklyData.weekly_resets_at
+        ));
+      }
+      const codex = weeklyData.codex;
+      if ((activeThroughputEngine === 'codex' || activeThroughputEngine === 'combined') &&
+          codex && codex.weekly_pct != null && codex.week_start && codex.weekly_resets_at) {
+        crossings.push(forecastCrossingAt100(
+          Number(codex.weekly_pct), codex.week_start, codex.weekly_resets_at
+        ));
+      }
+      return crossings.filter(Number.isFinite).length ? Math.min(...crossings.filter(Number.isFinite)) : null;
+    }
+
     function weeklyChartContext(summary) {
       if (activeThroughputEngine === 'claude') {
         if (!weeklyData || weeklyData.pct_per_token == null || !weeklyData.weekly_resets_at) return null;
@@ -2790,6 +3058,83 @@
       }, 0);
       if (periodTokens <= 0) return null;
       return { pctPerToken: codex.weekly_pct / periodTokens, resetAt: codex.weekly_resets_at };
+    }
+
+    function quotaTokenEvents(componentSummary, weekStart) {
+      const start = new Date(weekStart || '').getTime();
+      return ((componentSummary && componentSummary.hourly) || []).map(row => ({
+        at: chartRowTimeMs(row),
+        tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
+      })).filter(event => event.at != null && event.at >= start && event.at <= Date.now());
+    }
+
+    function buildQuotaSeries(componentSummary, weekStart, sourceRows, pctPerToken, authoritativePct) {
+      const start = new Date(weekStart || '').getTime();
+      const events = quotaTokenEvents(componentSummary, weekStart);
+      let running = 0;
+      let actualCount = 0;
+      const actual = sourceRows.map(row => {
+        const at = chartRowTimeMs(row);
+        if (row._prePeriod || row._projected || at == null || at < start) return null;
+        running = events.filter(event => event.at < at + 3 * 3600000)
+          .reduce((sum, event) => sum + event.tokens, 0);
+        actualCount += 1;
+        return running * pctPerToken;
+      });
+      const elapsedThreeHourSlots = Number.isFinite(start)
+        ? Math.max(1, (Date.now() - start) / (3 * 3600000))
+        : actualCount;
+      const burnPerSlot = elapsedThreeHourSlots > 0
+        ? Number(authoritativePct || 0) / elapsedThreeHourSlots
+        : 0;
+      const elapsedMs = Number.isFinite(start) ? Math.max(3600000, Date.now() - start) : 0;
+      const pctPerMs = elapsedMs > 0 ? Number(authoritativePct || 0) / elapsedMs : 0;
+      const values = actual.map((value, index) => {
+        if (value != null) return value;
+        if (!sourceRows[index] || !sourceRows[index]._projected || actualCount === 0) return null;
+        const projectedAt = chartRowTimeMs(sourceRows[index]);
+        const projectedElapsedMs = projectedAt == null ? 0 : Math.max(0, projectedAt + 3 * 3600000 - Date.now());
+        return Math.min(100, Number(authoritativePct || 0) + pctPerMs * projectedElapsedMs);
+      });
+      return {
+        actual,
+        values,
+        currentPct: Number(authoritativePct || 0),
+        burnPerSlot,
+        lastActualIndex: actual.reduce((last, value, index) => value != null ? index : last, -1),
+        projectedEnd: values.reduce((last, value) => value != null ? value : last, Number(authoritativePct || 0)),
+      };
+    }
+
+    function drawQuotaSeries(svg, series, xScale, yPct, color, label, labelOffset = 0) {
+      if (!series || series.lastActualIndex < 0) return;
+      let actualPath = '';
+      let projectedPath = '';
+      series.values.forEach((value, index) => {
+        if (value == null) return;
+        const point = `${xScale(index + 1)} ${yPct(value)}`;
+        if (index <= series.lastActualIndex) actualPath += actualPath ? `L ${point} ` : `M ${point} `;
+        if (index >= series.lastActualIndex) projectedPath += projectedPath ? `L ${point} ` : `M ${point} `;
+      });
+      [[actualPath, 'none', '2.5'], [projectedPath, '7,4', '1.8']].forEach(([path, dash, width]) => {
+        if (!path) return;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        line.setAttribute('d', path); line.setAttribute('fill', 'none');
+        line.setAttribute('stroke', color); line.setAttribute('stroke-width', width);
+        if (dash !== 'none') line.setAttribute('stroke-dasharray', dash);
+        svg.appendChild(line);
+      });
+      const x = xScale(series.lastActualIndex + 1);
+      const y = yPct(series.currentPct);
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '4'); dot.setAttribute('fill', color);
+      svg.appendChild(dot);
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', x + 7); text.setAttribute('y', y - 5 + labelOffset);
+      text.setAttribute('fill', color); text.setAttribute('font-size', '10px'); text.setAttribute('font-weight', 'bold');
+      text.setAttribute('font-family', 'var(--font-mono)');
+      text.textContent = `${label} ${series.currentPct.toFixed(1)}%`;
+      svg.appendChild(text);
     }
 
     function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
@@ -2867,17 +3212,22 @@
           selPeriodEnd = new Date(resetAt.getTime() + chartWeekOffset * 7 * 86400000);
           selPeriodStart = new Date(selPeriodEnd.getTime() - 7 * 86400000);
           const nowTs = Date.now();
-          const slotBase = new Date(selPeriodStart);
+          const forecastEnd = compactForecastEnd();
+          const displayEnd = chartWeekOffset === 0 && Number.isFinite(forecastEnd)
+            ? new Date(Math.max(nowTs + 3 * 3600000, forecastEnd))
+            : selPeriodEnd;
+          const slotBase = new Date(selPeriodStart.getTime() - (chartWeekOffset === 0 ? PREVIOUS_CYCLE_DAYS * 86400000 : 0));
           slotBase.setUTCHours(Math.floor(slotBase.getUTCHours() / 3) * 3, 0, 0, 0);
           const slots = [];
           // Night-slot carry: accumulate data from skipped UTC slots (local 00–06)
           // so no activity is silently dropped from the cumulative line.
           let carry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
                         cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-          for (let dt = new Date(slotBase); dt < selPeriodEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
+          for (let dt = new Date(slotBase); dt < displayEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
             const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
             const actual = allGroups.get(ks);
-            if (dt.getHours() < 6) {
+            const isProj = chartWeekOffset === 0 && dt.getTime() > nowTs;
+            if (dt.getHours() < 6 && !isProj) {
               // Night slot: roll its data into the carry bucket
               if (actual) {
                 carry.raw_context_tokens   += actual.raw_context_tokens   || 0;
@@ -2890,12 +3240,13 @@
               }
               continue;
             }
-            const isProj = chartWeekOffset === 0 && dt.getTime() > nowTs;
+            const isPrePeriod = dt < selPeriodStart;
             const base = actual
               ? {...actual, _projected: false}
               : { hour: ks, day: ks.substring(0,10), raw_context_tokens: 0, effective_input_tokens: 0,
                   output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
                   turns: 0, cost_usd: 0, active_duration_sec: 0, _projected: isProj };
+            base._prePeriod = isPrePeriod;
             // Absorb carry from preceding night slots
             base.raw_context_tokens    = (base.raw_context_tokens    || 0) + carry.raw_context_tokens;
             base.effective_input_tokens = (base.effective_input_tokens || 0) + carry.effective_input_tokens;
@@ -3007,21 +3358,45 @@
       }
       
       const chartW = width - padding.left - padding.right;
-      const slotW = chartW / Math.max(1, data.length);
+      const firstProjectedIndex = sourceRows.findIndex(row => row && row._projected);
+      const actualSlotCount = firstProjectedIndex >= 0 ? firstProjectedIndex : data.length;
+      const projectedSlotCount = Math.max(0, data.length - actualSlotCount);
+      const effectiveSlotCount = Math.max(1, actualSlotCount + projectedSlotCount * FORECAST_WIDTH_RATIO);
+      const slotW = chartW / effectiveSlotCount;
       const barW = Math.max(2, slotW * 0.72);
       const xScale = sixhourly
-        ? (index) => padding.left + (index - 0.5) * slotW
+        ? (index) => {
+            const zeroIndex = index - 1;
+            const units = zeroIndex < actualSlotCount
+              ? zeroIndex + 0.5
+              : actualSlotCount + (zeroIndex - actualSlotCount + 0.5) * FORECAST_WIDTH_RATIO;
+            return padding.left + units * slotW;
+          }
         : (index) => {
             if (data.length <= 1) return padding.left + chartW / 2;
             return padding.left + ((index - 1) / (data.length - 1)) * chartW;
           };
+
+      if (sixhourly && firstProjectedIndex >= 0) {
+        const forecastX = xScale(firstProjectedIndex + 1) - slotW * FORECAST_WIDTH_RATIO / 2;
+        const separator = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        separator.setAttribute('x1', forecastX); separator.setAttribute('x2', forecastX);
+        separator.setAttribute('y1', padding.top); separator.setAttribute('y2', height - padding.bottom);
+        separator.setAttribute('stroke', 'rgba(148,163,184,0.45)');
+        separator.setAttribute('stroke-dasharray', '2,4');
+        svg.appendChild(separator);
+        const caption = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        caption.setAttribute('x', forecastX + 6); caption.setAttribute('y', padding.top + 12);
+        caption.setAttribute('fill', 'var(--text-muted)'); caption.setAttribute('font-size', '9px');
+        caption.setAttribute('font-family', 'var(--font-mono)');
+        caption.textContent = 'forecast · compressed';
+        svg.appendChild(caption);
+      }
       
       const yScale = (tpm) => {
         const rawY = height - padding.bottom - (tpm / (maxTpm * 1.1)) * (height - padding.top - padding.bottom);
         return Math.max(padding.top - 8, Math.min(height - padding.bottom, rawY));
       };
-      const tokenAxisPctPerToken = showWeeklyOverlay ? weeklyChart.pctPerToken : null;
-      
       // Draw grid lines
       const gridSteps = 5;
       for (let i = 0; i <= gridSteps; i++) {
@@ -3046,7 +3421,7 @@
         text.setAttribute('font-size', '10px');
         text.setAttribute('text-anchor', 'end');
         text.setAttribute('font-family', 'var(--font-mono)');
-        text.textContent = formatTokenAxisLabel(val, tokenAxisPctPerToken);
+        text.textContent = formatTokenAxisLabel(val, null);
         svg.appendChild(text);
       }
       
@@ -3237,38 +3612,50 @@
       const resetMarkerWindow = activeThroughputEngine === 'codex'
         ? 'codex_weekly'
         : (activeThroughputEngine === 'claude' && (showWeeklyOverlay || showCumulative)) ? 'seven_day' : null;
-      renderResetMarkers(
-        svg,
-        sourceRows,
-        xScale,
-        padding,
-        height,
-        resetMarkerWindow,
-        selPeriodStart ? selPeriodStart.getTime() : null,
-      );
+      if (activeThroughputEngine === 'combined') {
+        renderResetMarkers(svg, sourceRows, xScale, padding, height, 'seven_day', selPeriodStart && selPeriodStart.getTime());
+        const codexStart = weeklyData && weeklyData.codex && weeklyData.codex.week_start;
+        renderResetMarkers(svg, sourceRows, xScale, padding, height, 'codex_weekly', new Date(codexStart || '').getTime());
+      } else {
+        renderResetMarkers(
+          svg,
+          sourceRows,
+          xScale,
+          padding,
+          height,
+          resetMarkerWindow,
+          selPeriodStart ? selPeriodStart.getTime() : null,
+        );
+      }
 
       // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
       if (showWeeklyOverlay && sixhourly) {
-        let ppt = weeklyChart.pctPerToken;
-        if (activeThroughputEngine === 'codex') {
-          const currentTokens = sourceRows.reduce((total, row) => row._projected
-            ? total
-            : total + (row.raw_context_tokens || 0) + (row.output_tokens || 0), 0);
-          if (currentTokens > 0) ppt = weeklyData.codex.weekly_pct / currentTokens;
-        }
+        const componentSummaries = summary.components || {};
+        const claudeComponent = componentSummaries.claude || (activeThroughputEngine === 'claude' ? summary : null);
+        const codexComponent = componentSummaries.codex || (activeThroughputEngine === 'codex' ? summary : null);
+        const claudeEvents = quotaTokenEvents(claudeComponent, weeklyData.week_start);
+        const codexEvents = quotaTokenEvents(codexComponent, weeklyData.codex && weeklyData.codex.week_start);
+        const claudeCurrentTokens = claudeEvents.reduce((sum, event) => sum + event.tokens, 0);
+        const codexCurrentTokens = codexEvents.reduce((sum, event) => sum + event.tokens, 0);
+        const claudePpt = claudeCurrentTokens > 0 ? weeklyData.display_pct / claudeCurrentTokens : 0;
+        const codexPpt = codexCurrentTokens > 0 ? weeklyData.codex.weekly_pct / codexCurrentTokens : 0;
+        const claudeSeries = claudePpt > 0 ? buildQuotaSeries(
+          claudeComponent, weeklyData.week_start, sourceRows, claudePpt, weeklyData.display_pct
+        ) : null;
+        const codexSeries = codexPpt > 0 ? buildQuotaSeries(
+          codexComponent, weeklyData.codex.week_start, sourceRows, codexPpt, weeklyData.codex.weekly_pct
+        ) : null;
+        const primarySeries = activeThroughputEngine === 'codex' ? codexSeries : claudeSeries;
+        if (!primarySeries) return;
+        const ppt = activeThroughputEngine === 'codex' ? codexPpt : claudePpt;
 
-        // 1. Cumulative actual %
-        let cumAct = 0;
-        const cumActVals = sourceRows.map(row => {
-          if (row._projected) return null;
-          cumAct += ((row.raw_context_tokens || 0) + (row.output_tokens || 0)) * ppt;
-          return cumAct;
-        });
-        const lastActIdx = cumActVals.reduce((last, v, i) => v != null ? i : last, -1);
-        const slotsElapsed = lastActIdx + 1;
-        const slotsRemaining = sourceRows.length - slotsElapsed;
-        const burnPerSlot = slotsElapsed > 0 ? cumAct / slotsElapsed : 0;
-        const projectedEnd = cumAct + burnPerSlot * slotsRemaining;
+        // 1. Cumulative actual % — normalized to the authoritative meter.
+        const cumActVals = primarySeries.actual;
+        const cumAct = primarySeries.currentPct;
+        const lastActIdx = primarySeries.lastActualIndex;
+        const slotsRemaining = sourceRows.filter(row => row && row._projected).length;
+        const burnPerSlot = primarySeries.burnPerSlot;
+        const projectedEnd = primarySeries.projectedEnd;
 
         // 2. Previous period cumulative % (position-aligned)
         let cumPrv = 0;
@@ -3284,7 +3671,9 @@
         const _opusCPT = (_opusTok > 0 && _opusCost > 0) ? _opusCost / _opusTok : null;
         const _effTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
         const _blendCPT = (_effTok > 0 && (summary.cost_usd || 0) > 0) ? (summary.cost_usd || 0) / _effTok : null;
-        const _opusRatio = (_opusCPT && _blendCPT) ? _opusCPT / _blendCPT : null;
+        const _opusRatio = activeThroughputEngine === 'claude' && _opusCPT && _blendCPT
+          ? _opusCPT / _blendCPT
+          : null;
         let lastOpusV = null, lastOpusI = -1;
         const cumOpusVals = _opusRatio ? cumActVals.map((v, i) => {
           if (v == null) return null;
@@ -3365,7 +3754,7 @@
           nowLbl.setAttribute('fill', '#f59e0b'); nowLbl.setAttribute('font-size', '11px');
           nowLbl.setAttribute('font-weight', 'bold'); nowLbl.setAttribute('text-anchor', 'start');
           nowLbl.setAttribute('font-family', 'var(--font-mono)');
-          nowLbl.textContent = `${cumAct.toFixed(1)}% · right now`;
+          nowLbl.textContent = `${activeThroughputEngine === 'combined' ? 'Claude ' : ''}${cumAct.toFixed(1)}% · right now`;
           svg.appendChild(nowLbl);
         }
 
@@ -3373,8 +3762,10 @@
         if (chartWeekOffset === 0 && slotsRemaining > 0 && burnPerSlot > 0 && lastActIdx >= 0) {
           const sx = xScale(lastActIdx + 1), sy = yPct(cumAct);
           let pp = `M ${sx} ${sy} `;
-          for (let i = slotsElapsed; i < sourceRows.length; i++) {
-            const proj = cumAct + burnPerSlot * (i - lastActIdx);
+          for (let i = lastActIdx + 1; i < sourceRows.length; i++) {
+            if (!sourceRows[i] || !sourceRows[i]._projected) continue;
+            const proj = primarySeries.values[i];
+            if (proj == null) continue;
             pp += `L ${xScale(i + 1)} ${yPct(proj)} `;
           }
           const projLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -3398,13 +3789,23 @@
           projWord.setAttribute('fill', '#f59e0b'); projWord.setAttribute('font-size', '11px');
           projWord.setAttribute('font-weight', 'bold'); projWord.setAttribute('text-anchor', 'end');
           projWord.setAttribute('font-family', 'var(--font-mono)'); projWord.setAttribute('opacity', '0.75');
-          projWord.textContent = 'projected'; svg.appendChild(projWord);
+          projWord.textContent = 'expected 100%'; svg.appendChild(projWord);
           const rateNote = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           rateNote.setAttribute('x', projectedLabelAnchor); rateNote.setAttribute('y', plyBase + 27);
           rateNote.setAttribute('fill', '#f59e0b'); rateNote.setAttribute('font-size', '9px');
           rateNote.setAttribute('text-anchor', 'end'); rateNote.setAttribute('opacity', '0.45');
           rateNote.setAttribute('font-family', 'var(--font-mono)');
-          rateNote.textContent = "at current week's rate"; svg.appendChild(rateNote);
+          const projectedRow = [...sourceRows].reverse().find(row => row && row._projected);
+          const projectedCrossingLabel = projectedRow && projectedRow.hour
+            ? new Date(`${projectedRow.hour}Z`).toLocaleString([], {
+                weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric'
+              })
+            : "at current week's rate";
+          rateNote.textContent = projectedCrossingLabel; svg.appendChild(rateNote);
+        }
+
+        if (activeThroughputEngine === 'combined' && codexSeries) {
+          drawQuotaSeries(svg, codexSeries, xScale, yPct, '#60a5fa', 'Codex', 13);
         }
 
         // 7. IF OPUS ONLY — red dashed line showing hypothetical all-Opus cumulative %

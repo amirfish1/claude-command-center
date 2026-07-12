@@ -20,7 +20,7 @@ def test_cached_boot_precedes_network_work():
     html = _html()
     boot = _function(html, "bootThroughputPage", "updateThroughputEngineUi")
 
-    read = boot.index("readThroughputBootstrap")
+    read = boot.index("readActiveThroughputBootstrap")
     apply = boot.index("applyThroughputBootstrap")
     layout = boot.index("toggleSidebar")
     defer = boot.index("queueMicrotask")
@@ -220,7 +220,7 @@ def test_aggregate_metrics_are_shared_sparse_and_non_monetary():
     render = _function(html, "renderAggregateMetrics", "renderDashboard")
 
     assert "CALLS" in render
-    assert "CACHE-ADJUSTED TOKENS / DAY" in render
+    assert "USAGE RATE" in render
     assert "CACHE HIT RATE" in render
     assert "metrics-grid aggregate" in render
     assert "metric-card-4" in render and "style.display = 'none'" in render
@@ -262,3 +262,49 @@ def test_empty_auxiliary_sections_hide_instead_of_stalling():
 
     assert "hideAuxiliarySection('weekly-history-section')" in history
     assert "hideAuxiliarySection('top-sessions-section')" in sessions
+
+
+def test_cached_auxiliary_panels_load_only_after_primary_paint():
+    html = _html()
+    apply = _function(html, "applyThroughputBootstrap", "showFirstSnapshotShell")
+
+    assert "requestAnimationFrame" in apply
+    assert "loadCachedAuxiliaryPanels()" in apply
+    assert apply.index("requestAnimationFrame") < apply.index("loadCachedAuxiliaryPanels()")
+    auxiliary = _function(html, "loadCachedAuxiliaryPanels", "loadWeeklyHistory")
+    assert "loadWeeklyHistory()" in auxiliary
+
+
+def test_combined_tab_composes_existing_engine_bootstraps():
+    html = _html()
+
+    assert 'id="engine-tab-combined"' in html
+    assert "setThroughputEngine('combined')" in html
+    assert "function mergeThroughputSummaries" in html
+    assert "function composeCombinedBootstrap" in html
+    compose = _function(html, "composeCombinedBootstrap", "readActiveThroughputBootstrap")
+    assert "claudeModel" in compose and "codexModel" in compose
+    assert "engine: 'combined'" in compose
+    assert "components" in compose
+
+
+def test_combined_boot_fetches_only_existing_engine_endpoints():
+    html = _html()
+    loader = _function(html, "loadCombinedServerBootstrapThenRefresh", "loadServerBootstrapThenRefresh")
+
+    assert "Promise.all" in loader
+    assert "fetchInitialBootstrapForEngine('claude'" in loader
+    assert "fetchInitialBootstrapForEngine('codex'" in loader
+    assert "engine=combined" not in loader
+    assert "startCombinedRefreshStatusPolling" in loader
+
+
+def test_combined_refresh_coordinates_two_single_flight_jobs():
+    html = _html()
+    refresh = _function(html, "startCombinedRefreshStatusPolling", "startRefreshStatusPolling")
+
+    assert "['claude', 'codex']" in refresh
+    assert "/api/throughput/refresh/start" in refresh
+    assert "/api/throughput/refresh/status" in refresh
+    assert "combineRefreshStatuses" in refresh
+    assert "loadCombinedCompletedBootstrap" in refresh

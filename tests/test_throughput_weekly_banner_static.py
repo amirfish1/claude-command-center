@@ -43,8 +43,8 @@ def test_codex_aggregate_uses_weekly_period_overlay():
     assert "codex.weekly_pct" in throughput_html
     assert "const showWeeklyOverlay = !!weeklyChart" in throughput_html
     assert "const resetAt = new Date(weeklyChart.resetAt)" in throughput_html
-    assert "let ppt = weeklyChart.pctPerToken" in throughput_html
-    assert "weeklyData.codex.weekly_pct / currentTokens" in throughput_html
+    assert "const codexPpt" in throughput_html
+    assert "weeklyData.codex.weekly_pct / codexCurrentTokens" in throughput_html
 
 
 def test_aggregate_chart_has_no_legacy_all_hours_fallback():
