@@ -4090,6 +4090,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("compact boundary proves the pending compact turn is over", app_js)
         self.assertIn("clearOptimisticAgentIndicator($view);", app_js)
 
+    def test_compact_request_has_a_hard_timeout(self):
+        """A stalled compact request must release the UI so the user can retry."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        compact_post = app_js[
+            app_js.index("async function postCompactSession(sessionId, terminalApp)"):
+            app_js.index("// Engines whose /compact", app_js.index("async function postCompactSession(sessionId, terminalApp)"))
+        ]
+        self.assertIn("const COMPACT_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;", compact_post)
+        self.assertIn("const controller = typeof AbortController === 'function' ? new AbortController() : null;", compact_post)
+        self.assertIn("setTimeout(() => controller.abort(), COMPACT_REQUEST_TIMEOUT_MS)", compact_post)
+        self.assertIn("signal: controller ? controller.signal : undefined", compact_post)
+        self.assertIn("finally { if (timer) clearTimeout(timer); }", compact_post)
+
     def test_compact_waits_for_pending_send_echoes(self):
         """Compaction must not run while a sent message is only an optimistic echo."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

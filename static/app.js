@@ -22278,15 +22278,26 @@
   async function postCompactSession(sessionId, terminalApp) {
     const payload = { session_id: sessionId };
     if (terminalApp) payload.terminal_app = terminalApp;
-    const res = await fetch('/api/session/compact', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload),
-    });
-    let data = {};
-    try { data = await res.json(); } catch (_) {}
-    if (!res.ok && !data.error) data.error = 'HTTP ' + res.status;
-    return data;
+    // The server usually completes Claude compaction within its own three
+    // minute deadline. Do not leave the UI disabled forever if that request
+    // gets wedged before it can send a response.
+    const COMPACT_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller
+      ? setTimeout(() => controller.abort(), COMPACT_REQUEST_TIMEOUT_MS)
+      : null;
+    try {
+      const res = await fetch('/api/session/compact', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+        signal: controller ? controller.signal : undefined,
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (!res.ok && !data.error) data.error = 'HTTP ' + res.status;
+      return data;
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   // Engines whose /compact runs through /api/session/compact (a real

@@ -1,0 +1,1 @@
+- Stop a stalled conversation compaction from leaving its progress banner and controls stuck indefinitely.
