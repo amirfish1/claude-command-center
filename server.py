@@ -8327,14 +8327,19 @@ def enqueue_annotation_ux_fixes_queue(
     _repo_path = str(meta.get("repo_path") or "")
     if not _repo_path and _src in ("", "ccc"):
         _repo_path = CCC_ROOT
+    _url = str(meta.get("url") or "")
+    # An annotation's page title is often a generic browser label (for example
+    # "problem"). When it points at a GitHub Issue, prefer the issue's actual
+    # title so the WatchTower ticket is identifiable in CCC and its queue.
+    _title = github_issue_title(_url) or str(meta.get("title") or "")
     try:
         item = _q.enqueue(
             note=meta.get("note") or text,
             text=text,
             source=str(meta.get("source") or "ccc"),
             annotation_id=str(meta.get("annotation_id") or meta.get("id") or ""),
-            url=str(meta.get("url") or ""),
-            title=str(meta.get("title") or ""),
+            url=_url,
+            title=_title,
             selector=str(meta.get("selector") or ""),
             screenshot_path=str(meta.get("screenshot_path") or ""),
             repo_path=_repo_path,
@@ -42663,6 +42668,26 @@ def _gh(repo_path, *args, timeout=10):
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
         pass
     return None
+
+
+def github_issue_title(url):
+    """Return the title for a canonical GitHub Issue URL, if it can be read."""
+    match = re.match(r"^https?://github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)(?:[/?#].*)?$", str(url or "").strip())
+    if not match:
+        return ""
+    owner, repo, number = match.groups()
+    try:
+        result = subprocess.run(
+            ["gh", "issue", "view", number, "--repo", f"{owner}/{repo}", "--json", "title"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return str((json.loads(result.stdout or "{}")).get("title") or "").strip()
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        pass
+    return ""
 
 
 def list_issues(repo_path):
