@@ -65,3 +65,12 @@ def test_weekly_axis_is_fixed_at_100_with_overflow_and_midnight_labels():
     assert "!isCalendarDayStart(i - 1)" in throughput_html
     assert "!isCalendarDayStart(i + 1)" in throughput_html
     assert "if (j > 0)" in throughput_html
+
+
+def test_model_weekly_contributions_normalize_to_authoritative_total():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "claudeWeeklyPct" in throughput_html
+    assert "claudeWeeklyTotalTokens" in throughput_html
+    assert "(tokens / total) * pct" in throughput_html
+    assert "tokens * ppt" not in throughput_html

@@ -228,3 +228,37 @@ def test_aggregate_metrics_are_shared_sparse_and_non_monetary():
     assert "saved" not in render
     assert "actual vs" not in render
     assert "Math.round(calls).toLocaleString()" in render
+
+
+def test_aggregate_metrics_use_authoritative_rate_and_explicit_cache_totals():
+    html = _html()
+    render = _function(html, "renderAggregateMetrics", "renderDashboard")
+
+    assert "USAGE RATE" in render
+    assert "weeklyRatePerDay" in render
+    assert "% / day" in render
+    assert "total_fresh_input_tokens" in render
+    assert "total_effective_input_tokens" in render
+    assert "non-cached" in render
+    assert "cache-adjusted total" in render
+    assert "tokens avoided" not in render
+
+
+def test_quota_banner_explicitly_lists_both_next_resets():
+    html = _html()
+
+    assert 'id="claude-next-reset"' in html
+    assert 'id="codex-next-reset"' in html
+    render = _function(html, "renderWeeklyUsage", "loadWeeklyUsage")
+    assert "formatNextReset" in render
+    assert "d.weekly_resets_at" in render
+    assert "d.codex.weekly_resets_at" in render
+
+
+def test_empty_auxiliary_sections_hide_instead_of_stalling():
+    html = _html()
+    history = _function(html, "loadWeeklyHistory", "drawWeeklyHistory")
+    sessions = _function(html, "renderTopSessions", "modelWeeklyBasisTokens")
+
+    assert "hideAuxiliarySection('weekly-history-section')" in history
+    assert "hideAuxiliarySection('top-sessions-section')" in sessions

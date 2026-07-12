@@ -537,6 +537,17 @@
   }
   .weekly-sub-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .weekly-sub-line + .weekly-sub-line { margin-top: 2px; color: var(--text); }
+  .weekly-reset-schedule {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 18px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .weekly-reset-schedule strong { color: var(--text); font-weight: 600; }
   .weekly-actions {
     display: flex;
     align-items: center;
@@ -1268,6 +1279,10 @@
           <input type="datetime-local" id="reset-event-input">
           <button type="button" id="record-reset-btn" onclick="recordLimitReset()" title="Record limit reset">Record reset</button>
         </div>
+        <div class="weekly-reset-schedule" aria-label="Next weekly resets">
+          <span id="claude-next-reset"><strong>Claude next reset:</strong> —</span>
+          <span id="codex-next-reset"><strong>Codex next reset:</strong> —</span>
+        </div>
       </div>
 
       <div class="engine-switch-row">
@@ -1544,18 +1559,7 @@
         if (activeSessionId === session.session_id) {
           const summary = model.throughput.summary || {};
           const modelRows = summary.per_model || [];
-          const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
-            ? weeklyData.codex.weekly_pct
-            : null;
-          const codexWeeklyTotalTokens = modelRows.reduce((sum, row) => {
-            return sum + (isCodexModelRow(row) ? modelWeeklyBasisTokens(row) : 0);
-          }, 0);
-          renderModelBreakdown(modelRows, {
-            claudePctPerToken: activeThroughputEngine === 'claude' && weeklyData && weeklyData.pct_per_token,
-            codexWeeklyPct,
-            codexWeeklyTotalTokens,
-            engine: activeThroughputEngine,
-          });
+          renderModelBreakdown(modelRows, modelBreakdownContext(modelRows));
           renderTopSessions();
         }
       });
@@ -2136,6 +2140,24 @@
       }
     }
 
+    function weeklyQuotaForEngine(engine) {
+      if (!weeklyData) return null;
+      if (engine === 'codex') {
+        const codex = weeklyData.codex;
+        if (!codex || !codex.ok || codex.weekly_pct == null) return null;
+        return { pct: Number(codex.weekly_pct), start: codex.week_start, resetAt: codex.weekly_resets_at };
+      }
+      if (weeklyData.display_pct == null) return null;
+      return { pct: Number(weeklyData.display_pct), start: weeklyData.week_start, resetAt: weeklyData.weekly_resets_at };
+    }
+
+    function weeklyRatePerDay(engine) {
+      const quota = weeklyQuotaForEngine(engine);
+      if (!quota || !quota.start) return null;
+      const elapsedDays = Math.max(1 / 24, (Date.now() - new Date(quota.start).getTime()) / 86400000);
+      return { pctPerDay: quota.pct / elapsedDays, pct: quota.pct, elapsedDays };
+    }
+
     function renderAggregateMetrics(summary, data) {
       const metrics = document.querySelector('.metrics-grid');
       metrics.className = 'metrics-grid aggregate';
@@ -2143,20 +2165,24 @@
 
       const calls = summary.total_turns || (data.scope && data.scope.total_turns) || 0;
       const adjustedTokens = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
-      const rawTokens = (summary.total_raw_context_tokens || 0) + (summary.total_output_tokens || 0);
+      const freshTokens = summary.total_fresh_input_tokens || 0;
       const cacheHitPct = Math.round((summary.cache_hit_ratio || 0) * 100);
+      const rate = weeklyRatePerDay(activeThroughputEngine);
 
       document.getElementById('lbl-card1').textContent = 'CALLS';
       document.getElementById('val-active-duration').textContent = Math.round(calls).toLocaleString();
       document.getElementById('val-total-duration').textContent = 'Last 7 days';
 
-      document.getElementById('lbl-card2').textContent = 'CACHE-ADJUSTED TOKENS / DAY';
-      document.getElementById('val-total-tokens').textContent = fmtNum(adjustedTokens / 7);
-      document.getElementById('val-token-split').textContent = `${fmtNum(adjustedTokens)} total`;
+      document.getElementById('lbl-card2').textContent = 'USAGE RATE';
+      document.getElementById('val-total-tokens').textContent = rate ? `${rate.pctPerDay.toFixed(1)}% / day` : '—';
+      document.getElementById('val-token-split').textContent = rate
+        ? `${rate.pct.toFixed(0)}% so far · ${rate.elapsedDays.toFixed(1)} days elapsed`
+        : 'Weekly quota unavailable';
 
       document.getElementById('lbl-card3').textContent = 'CACHE HIT RATE';
       document.getElementById('val-in-throughput').textContent = `${cacheHitPct}%`;
-      document.getElementById('val-in-tps').textContent = `${fmtNum(Math.max(0, rawTokens - adjustedTokens))} tokens avoided`;
+      document.getElementById('val-in-tps').textContent =
+        `${formatCompactTokens(freshTokens)} non-cached · ${formatCompactTokens(adjustedTokens)} cache-adjusted total`;
     }
 
     // Populate dashboard details
@@ -2241,19 +2267,8 @@
 
       // Model comparison table
       const modelRows = summary.per_model || [];
-      const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
-        ? weeklyData.codex.weekly_pct
-        : null;
-      const codexWeeklyTotalTokens = modelRows.reduce((sum, model) => {
-        return sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0);
-      }, 0);
       if (!deferSecondary) {
-        renderModelBreakdown(modelRows, {
-          claudePctPerToken: ppt,
-          codexWeeklyPct,
-          codexWeeklyTotalTokens,
-          engine: activeThroughputEngine
-        });
+        renderModelBreakdown(modelRows, modelBreakdownContext(modelRows));
       }
 
       // Weekly history chart (aggregate only, lazy-loaded)
@@ -2277,18 +2292,28 @@
     // ── Weekly history chart ───────────────────────────────────────────────
     let _weeklyHistoryData = null;   // cached so resize can redraw without re-fetch
 
+    function hideAuxiliarySection(id) {
+      const section = document.getElementById(id);
+      if (section) section.style.display = 'none';
+    }
+
     async function loadWeeklyHistory() {
       if (_weeklyHistoryData) { drawWeeklyHistory(_weeklyHistoryData); return; }
       try {
         const res = await fetch('/api/throughput/history?cache_only=1');
-        if (!res.ok) return;
+        if (!res.ok) {
+          hideAuxiliarySection('weekly-history-section');
+          return;
+        }
         const d = await res.json();
-        if (!d.ok || !d.daily || !d.daily.length) return;
+        if (!d.ok || !d.daily || !d.daily.length) {
+          hideAuxiliarySection('weekly-history-section');
+          return;
+        }
         _weeklyHistoryData = d.daily;
         drawWeeklyHistory(d.daily);
       } catch (e) {
-        const el = document.getElementById('weekly-history-loading');
-        if (el) el.textContent = 'History unavailable.';
+        hideAuxiliarySection('weekly-history-section');
       }
     }
 
@@ -2297,7 +2322,10 @@
       if (!container) return;
       const ppt = weeklyData && weeklyData.pct_per_token;
       const resetAt = weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
-      if (!ppt || !resetAt) { return; }
+      if (!ppt || !resetAt) {
+        hideAuxiliarySection('weekly-history-section');
+        return;
+      }
 
       // Group daily rows into 7-day billing-period buckets.
       // Use LOCAL calendar dates (midnight) so Jun 26 = first day of current
@@ -2331,7 +2359,10 @@
 
       // Filter out weeks with zero data (before history started)
       const filled = weeks.filter(w => w.days > 0 || w.wStart >= new Date(resetAt.getTime() - 7 * 86400000));
-      if (!filled.length) return;
+      if (!filled.length) {
+        hideAuxiliarySection('weekly-history-section');
+        return;
+      }
 
       const pcts = filled.map(w => w.raw * ppt);
       const maxPct = Math.max(130, Math.ceil(Math.max(...pcts) / 10) * 10 + 10);
@@ -2437,6 +2468,11 @@
       const withTokens = allSessions
         .filter(s => (s._week_tokens || 0) > 0)
         .sort((a, b) => (b._week_tokens || 0) - (a._week_tokens || 0));
+      if (!withTokens.length) {
+        hideAuxiliarySection('top-sessions-section');
+        return;
+      }
+      document.getElementById('top-sessions-section').style.display = '';
       const top = withTokens.slice(0, 20);
       const rest = withTokens.slice(20);
       const maxTok = top[0] ? top[0]._week_tokens : 1;
@@ -2499,6 +2535,23 @@
       return (model.raw_context_tokens || 0) + (model.output_tokens || 0);
     }
 
+    function modelBreakdownContext(models) {
+      const rows = models || [];
+      const claudeWeeklyPct = weeklyData && weeklyData.display_pct;
+      const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
+        ? weeklyData.codex.weekly_pct
+        : null;
+      return {
+        claudeWeeklyPct,
+        claudeWeeklyTotalTokens: rows.reduce((sum, model) =>
+          sum + (isCodexModelRow(model) ? 0 : modelWeeklyBasisTokens(model)), 0),
+        codexWeeklyPct,
+        codexWeeklyTotalTokens: rows.reduce((sum, model) =>
+          sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
+        engine: activeThroughputEngine,
+      };
+    }
+
     function isCodexModelRow(model, fallbackEngine) {
       const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
       const label = String((model && (model.model || model.engine)) || '').toLowerCase();
@@ -2515,9 +2568,10 @@
         if (!(total > 0) || !Number.isFinite(pct)) return '—';
         return `${((tokens / total) * pct).toFixed(2)}%`;
       }
-      const ppt = Number(ctx.claudePctPerToken);
-      if (!Number.isFinite(ppt) || !(ppt > 0)) return '—';
-      return `${(tokens * ppt).toFixed(2)}%`;
+      const total = Number(ctx.claudeWeeklyTotalTokens || 0);
+      const pct = Number(ctx.claudeWeeklyPct);
+      if (!(total > 0) || !Number.isFinite(pct)) return '—';
+      return `${((tokens / total) * pct).toFixed(2)}%`;
     }
 
     function renderModelBreakdown(models, context) {
@@ -3745,6 +3799,16 @@
       return days >= 1 ? `resets in ${days}d ${hrs}h` : `resets in ${hrs}h`;
     }
 
+    function formatNextReset(label, iso) {
+      if (!iso) return `<strong>${label} next reset:</strong> unavailable`;
+      const reset = new Date(iso);
+      if (Number.isNaN(reset.getTime())) return `<strong>${label} next reset:</strong> unavailable`;
+      const absolute = reset.toLocaleString([], {
+        weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+      });
+      return `<strong>${label} next reset:</strong> ${absolute} · ${fmtResetCountdown(iso)}`;
+    }
+
     function fmtResetStarted(iso) {
       if (!iso) return '';
       const d = new Date(iso);
@@ -3985,6 +4049,10 @@
         document.getElementById('weekly-sync-line').textContent = syncBits.join(' · ');
         document.getElementById('weekly-reset-line').textContent = resetBits.join(' · ');
         document.getElementById('weekly-sub').title = bits.join(' · ');
+        document.getElementById('claude-next-reset').innerHTML = formatNextReset('Claude', d.weekly_resets_at);
+        document.getElementById('codex-next-reset').innerHTML = formatNextReset(
+          'Codex', d.codex && d.codex.weekly_resets_at
+        );
         banner.style.display = 'grid';
     }
 
