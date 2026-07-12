@@ -4166,6 +4166,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-item .conv-goal.is-paused", app_css)
         self.assertIn(".conv-item .conv-goal.is-blocked", app_css)
 
+    def test_dormant_codex_goal_send_does_not_wait_for_transcript_echo(self):
+        """The direct goal-store path does not create a user_message event."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        branch = app_js[
+            app_js.index("renderConvWakeOutcome(getConvViewForPane"):
+            app_js.index("} else if (data.queued && data.cwd_missing)", app_js.index("renderConvWakeOutcome(getConvViewForPane"))
+        ]
+        self.assertIn("data.via === 'codex-goal-store'", branch)
+        self.assertIn("removePendingSendEcho(pendingSend);", branch)
+        self.assertIn("Goal updated.", branch)
+        self.assertIn("refreshConversationList", branch)
+
     def test_codex_goal_store_update_mutates_sqlite(self):
         """Dormant Codex /goal actions should update the native goal DB without
         needing a live TUI or trusting a best-effort app-server RPC."""

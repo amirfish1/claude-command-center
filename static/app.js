@@ -7162,7 +7162,26 @@
         // Render the wake OUTCOME inline first (codex resuming / queued reason),
         // then let the existing per-transport branches add their toast/echo.
         renderConvWakeOutcome(getConvViewForPane(paneId || activePaneId()) || getConvView(), data);
-        if (data.via === 'codex-app-queued') {
+        if (data.via === 'codex-goal-store') {
+          // Dormant Codex /goal commands update the native goal store directly;
+          // they deliberately do not write a user_message to the transcript.
+          // Treat that durable store update as the echo's terminal state rather
+          // than leaving a blue "Delivered — waiting" bubble forever.
+          removePendingSendEcho(pendingSend);
+          clearOptimisticAgentIndicator(getConvViewForPane(paneId || activePaneId()) || getConvView());
+          const row = currentConversationRow();
+          if (row) {
+            if (data.action === 'set') {
+              row.goal = text.replace(/^\/goal\s+/i, '').trim();
+              row.goal_status = 'active';
+            } else {
+              applyOptimisticConversationGoalAction(row, data.action);
+            }
+            renderConversationGoalStrip(paneId || activePaneId(), row);
+          }
+          refreshConversationList();
+          showOpToast('Goal updated.', 'success');
+        } else if (data.via === 'codex-app-queued') {
           markPendingSendQueued(pendingSend, 'Queued for Codex — will send when the running turn is ready.');
           showOpToast('Queued for Codex.');
           setTimeout(refreshConversationList, 1500);
