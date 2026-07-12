@@ -39109,7 +39109,10 @@
         // current group. If we can't find one, drop the marker silently —
         // empty .event.tool_result rows are hidden by CSS anyway.
         const text = eventTextString(ev.text).trim();
-        if (text && _currentToolGroup) {
+        const _answerConfirm = /^User answered the question/.test(text);
+        const _isErr = !!ev.is_error && !_answerConfirm;
+        const shouldRenderResult = !!text || _isErr;
+        if (shouldRenderResult && _currentToolGroup) {
           const last = toolCallForResult(_currentToolGroup, ev.tool_use_id || '');
           if (last && !last.querySelector('.tool-result-output, .tool-result-code-preview')) {
             // Stamp this output with the tool_result event's own ts (when
@@ -39122,8 +39125,7 @@
             // PreToolUse `deny` reason ("User answered the question…"), which
             // Claude Code records as an is_error tool_result. It's a SUCCESS,
             // not an error — don't paint it red / "Tool error".
-            const _answerConfirm = /^User answered the question/.test(text);
-            const _isErr = !!ev.is_error && !_answerConfirm;
+            const resultText = text || 'No error details returned.';
             const commandSucceeded = !_isErr && isSuccessfulCommandToolResult(last, text);
             if (commandSucceeded) last.classList.add('tool-call-ok');
             if (!_isErr && isRoutineSuccessfulToolResult(last, text)) {
@@ -39132,7 +39134,7 @@
               updateToolGroupLabel(_currentToolGroup);
               continue;
             }
-            const codePreview = (_isErr || _answerConfirm) ? null : renderToolCodePreview(last, text);
+            const codePreview = (_isErr || _answerConfirm) ? null : renderToolCodePreview(last, resultText);
             const out = codePreview || document.createElement('pre');
             if (codePreview) {
               out.dataset.renderTs = _toolTs;
@@ -39145,10 +39147,10 @@
               // an escaped+linkified innerHTML so they're one-click. The
               // `[J <ts>]` prefix is also preserved in escaped form.
               const _prefix = '[J ' + _toolTs + ']  ';
-              if (text.indexOf('http') !== -1) {
-                out.innerHTML = _linkifyEscapedUrls(escapeHtml(_prefix + text));
+              if (resultText.indexOf('http') !== -1) {
+                out.innerHTML = _linkifyEscapedUrls(escapeHtml(_prefix + resultText));
               } else {
-                out.textContent = _prefix + text;
+                out.textContent = _prefix + resultText;
               }
             }
             // Bump the group's header stamp too so it reflects the most

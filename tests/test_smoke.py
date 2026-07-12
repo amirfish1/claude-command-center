@@ -3250,6 +3250,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("⚠ Command failed", app_js)
         self.assertIn(".tool-result-output.is-error { border-left-color: var(--orange); color: var(--orange); }", app_css)
         self.assertIn(".tool-result-output.is-error::before { color: var(--orange); }", app_css)
+        self.assertIn("const shouldRenderResult = !!text || _isErr;", app_js)
+        self.assertIn("No error details returned.", app_js)
 
     def test_organize_is_incremental_with_overlap_resolve(self):
         """Per user request: Organize must keep repos/objects where they
