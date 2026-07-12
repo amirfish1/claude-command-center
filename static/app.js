@@ -4170,6 +4170,15 @@
   }
   function startCodexWakeBreakdown($view, sid) {
     if (!$view || !sid) return;
+    // Codex has its own progress row; remove the generic yellow Thinking banner
+    // so the same turn does not report its state twice.
+    const optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');
+    if (optimistic) optimistic.remove();
+    if (_optimisticAgentTimer) {
+      clearTimeout(_optimisticAgentTimer);
+      _optimisticAgentTimer = null;
+    }
+    _stopOptimisticAgeTicker();
     stopCodexWakeBreakdown(false);
     _codexWakePollSid = sid;
     _codexWakeStageKey = '';

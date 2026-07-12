@@ -4089,6 +4089,8 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("Waking up&hellip;", app_js)
         self.assertNotIn("Waking up headless&hellip;", app_js)
         self.assertNotIn("Waking the headless agent", app_js)
+        self.assertIn("const optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');", app_js)
+        self.assertIn("if (optimistic) optimistic.remove();", app_js)
 
     def test_mobile_live_command_indicator_collapses_command_detail(self):
         """Mobile should show a compact Bash/tool pill instead of a multi-line
