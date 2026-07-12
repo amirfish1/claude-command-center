@@ -105,6 +105,16 @@ def test_presentation_tooltip_keeps_engine_cost_and_activity_independent():
     assert unknown["title"] == "Codex · gpt-5.5 · Cost tier unknown · Not working"
 
 
+def test_canonical_engine_field_wins_over_generic_source():
+    presentation = _run_helpers(
+        "sessionIconPresentation({source:'session', engine:'codex', model:'gpt-5.6-sol', codex_state:'working'}, false)"
+    )
+
+    assert presentation["engine"] == "codex"
+    assert presentation["tier"] == "premium"
+    assert presentation["working"] is True
+
+
 def test_sidebar_and_pane_header_use_shared_session_icon_renderer():
     source = APP_JS.read_text(encoding="utf-8")
 

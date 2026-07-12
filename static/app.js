@@ -3810,13 +3810,14 @@
   // model/cost/activity contract can be executed directly in focused tests.
   function sessionIconEngine(row) {
     if (!row) return 'claude';
-    const raw = String(row.source || row.engine || 'claude').trim().toLowerCase();
-    if (raw === 'openai') return 'codex';
-    if (raw === 'gemini') return 'gemini';
-    if (raw === 'cursor') return 'cursor';
-    if (raw === 'antigravity') return 'antigravity';
-    if (raw === 'hermes') return 'hermes';
-    if (raw === 'codex') return 'codex';
+    const values = [row.source, row.engine]
+      .map(value => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    if (values.includes('codex') || values.includes('openai')) return 'codex';
+    if (values.includes('gemini')) return 'gemini';
+    if (values.includes('cursor')) return 'cursor';
+    if (values.includes('antigravity')) return 'antigravity';
+    if (values.includes('hermes')) return 'hermes';
     return 'claude';
   }
 
