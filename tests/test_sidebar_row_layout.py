@@ -63,6 +63,17 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn(".conv-repeat-group.is-collapsed .conv-repeat-group-body", app_css)
         self.assertIn("display: none;", app_css)
 
+    def test_repeated_sidebar_rows_offer_confirmed_bulk_archive(self):
+        """A cluster header archives its exact session set only after confirmation."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-role="repeat-row-group-archive"', app_js)
+        self.assertIn('Archive ' + "' + cards.length + ' sessions", app_js)
+        self.assertIn("confirm('Archive ' + sessionIds.length +", app_js)
+        self.assertIn("ccPostJson('/api/conversations/archive-bulk', {", app_js)
+        self.assertIn("session_ids: sessionIds, archived: true", app_js)
+        self.assertIn("refreshArchiveData({ force: true })", app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

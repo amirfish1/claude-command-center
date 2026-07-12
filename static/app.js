@@ -24331,9 +24331,11 @@
       const meta = [engine, model].filter(Boolean).join(' · ');
       const rel = latest ? relativeTime(latest) : '';
       const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
+      const sessionIdsAttr = escapeAttr(JSON.stringify(cards.map(c => c.session_id || c.id).filter(Boolean)));
       return '<div class="conv-repeat-group' + (expanded ? '' : ' is-collapsed') + '"'
         + ' data-role="repeat-row-group" data-repeat-key="' + keyAttr + '">'
-        + '<button type="button" class="conv-repeat-group-header" data-role="repeat-row-group-toggle"'
+        + '<div class="conv-repeat-group-header">'
+        + '<button type="button" class="conv-repeat-group-toggle" data-role="repeat-row-group-toggle"'
         + ' aria-expanded="' + (expanded ? 'true' : 'false') + '"'
         + ' title="Expand repeated rows">'
         + '<span class="conv-repeat-group-arrow">' + (expanded ? '&#9662;' : '&#9656;') + '</span>'
@@ -24342,6 +24344,9 @@
         + '<span class="conv-repeat-group-count">' + cards.length + '</span>'
         + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
         + '</button>'
+        + '<button type="button" class="conv-repeat-group-archive" data-role="repeat-row-group-archive"'
+        + ' data-session-ids="' + sessionIdsAttr + '" title="Archive ' + cards.length + ' sessions">Archive</button>'
+        + '</div>'
         + '<div class="conv-repeat-group-body">'
         + cards.map(c => _renderRow(c, opts)).join('')
         + '</div>'
@@ -26651,6 +26656,29 @@
         if (arrow) arrow.innerHTML = nowExpanded ? '&#9662;' : '&#9656;';
       };
       btn.addEventListener('click', toggle);
+    });
+    $convList.querySelectorAll('[data-role="repeat-row-group-archive"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        let sessionIds = [];
+        try { sessionIds = JSON.parse(btn.dataset.sessionIds || '[]'); } catch (_) {}
+        if (!Array.isArray(sessionIds) || !sessionIds.length) return;
+        if (!confirm('Archive ' + sessionIds.length + ' sessions? You can restore them from Trash.')) return;
+        btn.disabled = true;
+        try {
+          const data = await ccPostJson('/api/conversations/archive-bulk', {
+            session_ids: sessionIds, archived: true,
+          });
+          if (!data.ok) throw new Error(data.error || 'archive failed');
+          await refreshArchiveData({ force: true });
+          renderSidebar(filterConversations($convSearch.value));
+          showOpToast('Archived ' + sessionIds.length + ' sessions');
+        } catch (err) {
+          showOpToast('Archive failed (' + err.message + ')', 'error');
+          btn.disabled = false;
+        }
+      });
     });
     // Toggle handler for the Archived section header.
     const $archivedToggle = $convList.querySelector('[data-role="archived-toggle"]');
