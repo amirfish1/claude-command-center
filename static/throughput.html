@@ -97,6 +97,56 @@
     gap: 12px;
   }
 
+  .throughput-refresh-panel {
+    display: grid;
+    grid-template-columns: 10px minmax(210px, 1fr);
+    column-gap: 8px;
+    align-items: center;
+    max-width: 390px;
+    min-width: 250px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.025);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .refresh-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.12);
+    grid-row: 1 / span 2;
+  }
+
+  .refresh-dot.fetching {
+    background: var(--orange);
+    box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.13);
+    animation: refresh-pulse 1.2s ease-in-out infinite;
+  }
+
+  .refresh-dot.failed {
+    background: var(--red);
+    box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.12);
+  }
+
+  @keyframes refresh-pulse { 50% { opacity: 0.45; transform: scale(0.82); } }
+
+  .refresh-primary {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .refresh-secondary {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.35;
+    white-space: normal;
+  }
+
   .engine-tabs {
     display: inline-flex;
     align-items: center;
@@ -332,6 +382,9 @@
     .weekly-meters { flex-direction: column; width: 100%; }
     .weekly-meter { width: 100%; }
     .weekly-sub { margin-left: 0; text-align: left; width: 100%; }
+    .topbar { align-items: flex-start; gap: 10px; padding: 12px; }
+    .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }
+    .throughput-refresh-panel { order: 3; width: 100%; max-width: none; min-width: 0; }
 
     /* Pull the chart to the top so the graph is the first thing visible after
        the header — otherwise it's buried under the metric cards and an
@@ -1068,12 +1121,13 @@
         <button type="button" class="engine-tab active" id="engine-tab-claude" role="tab" aria-selected="true" onclick="setThroughputEngine('claude')">Claude</button>
         <button type="button" class="engine-tab" id="engine-tab-codex" role="tab" aria-selected="false" onclick="setThroughputEngine('codex')">Codex</button>
       </div>
-      <div class="refresh-indicator" id="refresh-indicator">
+      <div class="throughput-refresh-panel" id="throughput-refresh-panel" role="status" aria-live="polite" aria-atomic="true">
         <span class="refresh-dot" id="refresh-dot"></span>
-        <span id="refresh-status-text">Status: Idle</span>
+        <span class="refresh-primary" id="refresh-primary">Preparing cached view…</span>
+        <span class="refresh-secondary" id="refresh-secondary">No refresh started</span>
       </div>
-      <button class="btn btn-primary" onclick="loadSessions()">
-        <span>🔄</span> Refresh Sessions
+      <button class="btn btn-primary" onclick="refreshThroughput()">
+        <span>↻</span> Refresh Data
       </button>
       <button class="btn" id="annotate-btn" onclick="openAnnotate()" title="File a bug or note to the THROUGHPUT queue">
         <span>📝</span> Annotate
@@ -1336,6 +1390,9 @@
     let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
     const THROUGHPUT_BOOTSTRAP_SCHEMA = 1;
     let visibleBootstrap = null;
+    let refreshStatus = null;
+    let refreshPollTimer = null;
+    let refreshElapsedTimer = null;
     const aggregateSessions = [
       { session_id: 'all_7_days', display_name: 'Claude Total (Last 7 Days)', engine: 'claude', meta: '7d window' },
     ];
@@ -1422,6 +1479,11 @@
       resetEvents = model.reset_events;
       renderWeeklyUsage(model.weekly);
       renderDashboard(session, model.throughput, { deferSecondary: true });
+      const cachedRefresh = Object.assign({}, model.refresh, {
+        state: model.refresh.state === 'refreshing' ? 'stale' : (model.refresh.state || 'stale'),
+        last_refreshed_at: model.refresh.last_refreshed_at || model.generated_at,
+      });
+      renderRefreshPanel(cachedRefresh);
       performance.mark('throughput-bootstrap-rendered');
       window.__throughputBootstrapRenderMs = performance.now();
       window.__throughputBootstrapSource = source;
@@ -1452,6 +1514,7 @@
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
       svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">Preparing first snapshot…</text>`;
+      renderRefreshPanel({ state: 'preparing', expected_ms: 35000 });
     }
 
     async function loadServerBootstrapThenRefresh(session) {
@@ -1467,8 +1530,10 @@
           writeThroughputBootstrap(model);
           applyThroughputBootstrap(model, 'server');
         }
+        startRefreshStatusPolling(session);
         return model;
       } catch (_error) {
+        startRefreshStatusPolling(session);
         return null;
       }
     }
@@ -1575,15 +1640,147 @@
     // Refresh status indicator helper
     function setStatus(text, fetching = false) {
       const dot = document.getElementById('refresh-dot');
-      const label = document.getElementById('refresh-status-text');
-      label.textContent = `Status: ${text}`;
+      const label = document.getElementById('refresh-primary');
+      const detail = document.getElementById('refresh-secondary');
+      if (label) label.textContent = text;
+      if (detail) detail.textContent = '';
       if (fetching) {
         dot.classList.add('fetching');
+        dot.classList.remove('failed');
         dot.style.background = 'var(--orange)';
       } else {
         dot.classList.remove('fetching');
+        dot.classList.remove('failed');
         dot.style.background = 'var(--green)';
       }
+    }
+
+    function formatRefreshDuration(ms) {
+      const value = Math.max(0, Number(ms || 0));
+      return value < 1000 ? `${Math.round(value)}ms` : `${(value / 1000).toFixed(1)}s`;
+    }
+
+    function formatRefreshAge(epochSeconds) {
+      if (!epochSeconds) return 'Never refreshed';
+      const ageSeconds = Math.max(0, Math.floor(Date.now() / 1000 - Number(epochSeconds)));
+      if (ageSeconds < 5) return 'Updated just now';
+      if (ageSeconds < 60) return `Updated ${ageSeconds}s ago`;
+      if (ageSeconds < 3600) return `Updated ${Math.floor(ageSeconds / 60)}m ago`;
+      if (ageSeconds < 86400) return `Updated ${Math.floor(ageSeconds / 3600)}h ago`;
+      return `Updated ${Math.floor(ageSeconds / 86400)}d ago`;
+    }
+
+    function renderRefreshPanel(status) {
+      refreshStatus = Object.assign({}, status || {});
+      const panel = document.getElementById('throughput-refresh-panel');
+      const dot = document.getElementById('refresh-dot');
+      const primary = document.getElementById('refresh-primary');
+      const secondary = document.getElementById('refresh-secondary');
+      if (!panel || !dot || !primary || !secondary) return;
+      dot.classList.toggle('fetching', refreshStatus.state === 'refreshing');
+      dot.classList.toggle('failed', refreshStatus.state === 'failed');
+
+      const elapsed = formatRefreshDuration(refreshStatus.elapsed_ms);
+      const expected = formatRefreshDuration(refreshStatus.expected_ms || 35000);
+      const read = Number(refreshStatus.sessions_read || 0);
+      const discovered = Number(refreshStatus.sessions_discovered || 0);
+      const cacheHits = Number(refreshStatus.cache_hits || 0);
+      const parsed = Number(refreshStatus.parsed || 0);
+      const last = refreshStatus.last_refreshed_at;
+
+      if (refreshStatus.state === 'refreshing') {
+        primary.textContent = `Refreshing · ${elapsed} / ~${expected}`;
+        secondary.textContent = `Reading ${read} / ${discovered || '…'} sessions · ${cacheHits} cached · ${parsed} parsed`;
+      } else if (refreshStatus.state === 'failed') {
+        primary.textContent = 'Refresh failed · showing cached data';
+        secondary.textContent = `${formatRefreshAge(last)} · attempted ${elapsed}`;
+      } else if (refreshStatus.state === 'preparing') {
+        primary.textContent = 'Preparing first snapshot…';
+        secondary.textContent = `Expected about ${expected}`;
+      } else {
+        primary.textContent = formatRefreshAge(last);
+        secondary.textContent = `Last refresh ${elapsed || '—'} · ${read || discovered} sessions · ${cacheHits} cached · ${parsed} parsed`;
+      }
+      panel.title = last
+        ? `Last refreshed ${new Date(Number(last) * 1000).toLocaleString()}`
+        : 'No successful refresh yet';
+    }
+
+    function stopRefreshStatusPolling() {
+      clearInterval(refreshPollTimer);
+      clearInterval(refreshElapsedTimer);
+      refreshPollTimer = null;
+      refreshElapsedTimer = null;
+    }
+
+    async function loadCompletedThroughputBootstrap(session, status) {
+      const engineAtStart = activeThroughputEngine;
+      const url = `${throughputFetchUrl('/api/throughput/initial', session.session_id)}&generation=${encodeURIComponent(status.last_refreshed_at || Date.now())}`;
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) return false;
+      const data = await response.json();
+      const model = data && data.bootstrap;
+      if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return false;
+      if (!validateThroughputBootstrap(model, session.session_id, engineAtStart)) return false;
+      writeThroughputBootstrap(model);
+      applyThroughputBootstrap(model, 'refresh');
+      renderRefreshPanel(status);
+      return true;
+    }
+
+    async function startRefreshStatusPolling(session) {
+      if (!session) return;
+      stopRefreshStatusPolling();
+      const engineAtStart = activeThroughputEngine;
+      const startResponse = await fetch(
+        throughputFetchUrl('/api/throughput/refresh/start', session.session_id),
+        { cache: 'no-store' }
+      );
+      if (!startResponse.ok) {
+        renderRefreshPanel({
+          state: 'failed',
+          last_refreshed_at: visibleBootstrap && visibleBootstrap.generated_at,
+          expected_ms: 35000,
+        });
+        return;
+      }
+      refreshStatus = await startResponse.json();
+      renderRefreshPanel(refreshStatus);
+
+      const renderElapsed = () => {
+        if (!refreshStatus || refreshStatus.state !== 'refreshing') return;
+        refreshStatus.elapsed_ms = Math.max(0, Date.now() - Number(refreshStatus.started_at || 0) * 1000);
+        renderRefreshPanel(refreshStatus);
+      };
+      refreshElapsedTimer = setInterval(renderElapsed, 100);
+
+      const poll = async () => {
+        try {
+          const response = await fetch(
+            throughputFetchUrl('/api/throughput/refresh/status', session.session_id),
+            { cache: 'no-store' }
+          );
+          if (!response.ok || engineAtStart !== activeThroughputEngine) return;
+          refreshStatus = await response.json();
+          renderRefreshPanel(refreshStatus);
+          if (refreshStatus.state === 'complete') {
+            stopRefreshStatusPolling();
+            await loadCompletedThroughputBootstrap(session, refreshStatus);
+          } else if (refreshStatus.state === 'failed') {
+            stopRefreshStatusPolling();
+          }
+        } catch (_error) {
+          // A transient status poll must not disturb the stale dashboard.
+        }
+      };
+      refreshPollTimer = setInterval(poll, 500);
+      poll();
+    }
+
+    function refreshThroughput() {
+      const session = currentAggregateSession();
+      activeSessionId = session.session_id;
+      startRefreshStatusPolling(session);
     }
 
     // Load session list from /api/conversations?all=true
@@ -1622,7 +1819,7 @@
     }
 
     async function loadSessions({ selectDefault = true } = {}) {
-      setStatus('Loading sessions...', true);
+      if (selectDefault) setStatus('Loading sessions...', true);
       try {
         const convRes = await fetch(`/api/conversations?all=1&${throughputEngineParam()}`);
         if (!convRes.ok) throw new Error('API failed');
@@ -1638,7 +1835,7 @@
         }
       } catch (err) {
         console.error(err);
-        setStatus('Error loading sessions');
+        if (selectDefault) setStatus('Error loading sessions');
       }
     }
 

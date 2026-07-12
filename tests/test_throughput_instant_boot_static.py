@@ -90,3 +90,57 @@ def test_aggregate_boot_does_not_reselect_default_after_sessions_load():
     assert "selectDefault = true" in load_sessions
     assert "selectDefault && !activeSessionId" in load_sessions
     assert "loadSessions({ selectDefault: false })" in boot
+
+
+def test_refresh_panel_is_accessible_and_surfaces_all_progress_fields():
+    html = _html()
+
+    assert 'id="throughput-refresh-panel"' in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
+    assert 'id="refresh-primary"' in html
+    assert 'id="refresh-secondary"' in html
+
+    render = _function(html, "renderRefreshPanel", "stopRefreshStatusPolling")
+    assert "last_refreshed_at" in render
+    assert "expected_ms" in render
+    assert "sessions_read" in render
+    assert "sessions_discovered" in render
+    assert "cache_hits" in render
+    assert "parsed" in render
+
+
+def test_refresh_progress_uses_live_timer_and_lightweight_polling():
+    html = _html()
+    polling = _function(html, "startRefreshStatusPolling", "refreshThroughput")
+
+    assert "/api/throughput/refresh/start" in polling
+    assert "/api/throughput/refresh/status" in polling
+    assert "setInterval(renderElapsed, 100)" in polling
+    assert "setInterval(poll, 500)" in polling
+    assert "loadCompletedThroughputBootstrap" in polling
+
+
+def test_refresh_completion_publishes_complete_model_atomically():
+    html = _html()
+    complete = _function(
+        html,
+        "loadCompletedThroughputBootstrap",
+        "startRefreshStatusPolling",
+    )
+
+    assert "/api/throughput/initial" in complete
+    assert "validateThroughputBootstrap" in complete
+    assert "writeThroughputBootstrap(model)" in complete
+    assert "applyThroughputBootstrap(model, 'refresh')" in complete
+    assert "renderDashboard(" not in complete
+
+
+def test_manual_refresh_is_nonblocking_and_uses_same_single_flight_job():
+    html = _html()
+
+    assert 'onclick="refreshThroughput()"' in html
+    refresh = _function(html, "refreshThroughput", "fetchWeekRankings")
+    assert "startRefreshStatusPolling" in refresh
+    assert "showLoader" not in refresh
+    assert "loadSessions" not in refresh
