@@ -4431,13 +4431,13 @@
     justify-content: center;
     flex: 0 0 var(--conv-dot-col);
     vertical-align: middle;
-    opacity: 0.5;
+    opacity: 0.88;
     pointer-events: none;
     z-index: 1;
   }
   .conv-item:hover .conv-session-icon,
   .conv-item:focus-within .conv-session-icon {
-    opacity: 0.95;
+    opacity: 1;
   }
   .conv-item .conv-title {
     /* Omnara-style: slightly larger and looser line-height than the old
@@ -5989,47 +5989,134 @@
     display: inline-block; flex-shrink: 0;
   }
   .conv-session-icon {
-    transition: opacity 0.25s, transform 0.25s, filter 0.25s;
+    transition: opacity 0.15s;
   }
-  .conv-session-icon.is-live {
-    filter: drop-shadow(0 0 3px var(--icon-shadow-color));
-    animation: ccc-icon-pulse 2.8s ease-in-out infinite;
+  .conv-session-icon,
+  .conv-pane-cat-icon {
+    overflow: visible;
+    isolation: isolate;
   }
-  .conv-session-icon.is-dead {
-    opacity: 0.45;
-    filter: grayscale(0.75);
+  .conv-session-icon .conv-session-svg,
+  .conv-pane-cat-icon .conv-session-svg {
+    position: relative;
+    z-index: 2;
+    transition: opacity 0.15s;
   }
-  /* Pulse ONLY transform (GPU-compositable). Animating filter:drop-shadow here
-     forced WebKit to recompute a blur for every live icon every frame — the
-     dominant continuous-paint cost in the app (cheap in Safari, ~tens of ms in
-     WKWebView). The static drop-shadow on .conv-session-icon.is-live stays, so
-     the glow is constant while the icon breathes. */
-  @keyframes ccc-icon-pulse {
-    0% { transform: translateY(-50%) scale(1); }
-    50% { transform: translateY(-50%) scale(1.08); }
-    100% { transform: translateY(-50%) scale(1); }
+  .conv-session-icon.is-not-working .conv-session-svg,
+  .conv-pane-cat-icon.is-not-working .conv-session-svg {
+    opacity: 0.58;
+  }
+  .conv-item:hover .conv-session-icon .conv-session-svg,
+  .conv-item:focus-within .conv-session-icon .conv-session-svg,
+  .conv-pane-cat-icon:hover .conv-session-svg {
+    opacity: 1;
+  }
+
+  /* Cost Orbit: engine shape/hue stays inside; cost gets its own stationary
+     geometry around it. The four silhouettes remain distinct in monochrome. */
+  .session-cost-orbit {
+    display: none;
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .cost-low .session-cost-orbit {
+    display: block;
+    inset: 3px;
+    border: 1px solid rgba(129, 144, 163, 0.72);
+    border-style: dotted;
+  }
+  .cost-medium .session-cost-orbit {
+    display: block;
+    inset: 0;
+    border: 1px solid rgba(104, 169, 216, 0.82);
+    border-right-color: transparent;
+    transform: rotate(-24deg);
+  }
+  .cost-high .session-cost-orbit {
+    display: block;
+    inset: -1px;
+    border: 1.25px solid rgba(233, 168, 74, 0.9);
+  }
+  .cost-high::after {
+    content: '';
+    position: absolute;
+    right: -3px;
+    bottom: 0;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: #e9a84a;
+    box-shadow: 0 0 4px rgba(233, 168, 74, 0.7);
+    z-index: 4;
+  }
+  .cost-premium .session-cost-orbit {
+    display: block;
+    inset: -2px;
+    border: 1.25px solid #ffd84f;
+    box-shadow: 0 0 5px rgba(255, 216, 79, 0.34);
+  }
+  .cost-premium .session-cost-orbit::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border: 1px solid rgba(255, 216, 79, 0.5);
+    border-radius: 50%;
+  }
+  .session-cost-symbol {
+    display: none;
+  }
+  .cost-premium .session-cost-symbol {
+    display: block;
+    position: absolute;
+    right: -5px;
+    bottom: -4px;
+    color: #ffd84f;
+    font: 800 7px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    text-shadow: 0 0 3px var(--bg);
+    z-index: 5;
+  }
+  .cost-premium .session-cost-symbol::before {
+    content: '$';
+  }
+
+  /* Activity is deliberately independent of process liveness. Only active
+     turn execution fills and pulses this dot; idle/ended/waiting stays hollow. */
+  .session-activity-dot {
+    position: absolute;
+    left: -4px;
+    top: 50%;
+    width: 4px;
+    height: 4px;
+    margin-top: -2px;
+    border: 1px solid #657180;
+    border-radius: 50%;
+    background: transparent;
+    z-index: 5;
+  }
+  .is-working .session-activity-dot {
+    border-color: #49dc88;
+    background: #49dc88;
+    box-shadow: 0 0 4px rgba(73, 220, 136, 0.72);
+    animation: ccc-activity-dot-pulse 1.6s ease-in-out infinite;
+  }
+  .is-not-working .session-activity-dot {
+    border-color: #657180;
+    background: transparent;
+    box-shadow: none;
+  }
+  @keyframes ccc-activity-dot-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.42; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .is-working .session-activity-dot { animation: none; }
   }
   .conv-session-icon.claude,
   .conv-pane-cat-icon.claude {
     color: #e28767;
     --icon-shadow-color: rgba(226, 135, 103, 0.45);
-  }
-  .conv-session-icon.claude.is-fable5,
-  .conv-pane-cat-icon.claude.is-fable5 {
-    color: #f5c842;
-    --icon-shadow-color: rgba(245, 200, 66, 0.55);
-  }
-  .conv-session-icon.claude.is-fable5::after,
-  .conv-pane-cat-icon.claude.is-fable5::after {
-    content: '$';
-    position: absolute;
-    bottom: -3px;
-    right: -4px;
-    font-size: 7px;
-    font-weight: 800;
-    color: #f5c842;
-    line-height: 1;
-    font-family: monospace;
   }
   .conv-session-icon.codex,
   .conv-pane-cat-icon.codex {

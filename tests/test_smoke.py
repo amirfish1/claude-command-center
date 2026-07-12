@@ -1855,9 +1855,9 @@ class TestServerImports(unittest.TestCase):
         hover_meta_css = app_css[app_css.index(".conv-item .conv-hover-meta-row {"):app_css.index(".conv-item .conv-hover-meta-row > *", app_css.index(".conv-item .conv-hover-meta-row {"))]
         self.assertIn("margin: 4px 48px 0 var(--conv-content-left);", hover_meta_css)
         self.assertIn("max-width: calc(100% - var(--conv-content-left) - 70px);", hover_meta_css)
-        icon_pulse = app_css[app_css.index("@keyframes ccc-icon-pulse {"):app_css.index(".conv-session-icon.claude", app_css.index("@keyframes ccc-icon-pulse {"))]
-        self.assertIn("transform: translateY(-50%) scale(1);", icon_pulse)
-        self.assertIn("transform: translateY(-50%) scale(1.08);", icon_pulse)
+        self.assertNotIn("@keyframes ccc-icon-pulse", app_css)
+        self.assertNotIn(".conv-session-icon.is-live", app_css)
+        self.assertIn("@keyframes ccc-activity-dot-pulse", app_css)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always

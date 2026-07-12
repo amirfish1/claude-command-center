@@ -103,3 +103,45 @@ def test_presentation_tooltip_keeps_engine_cost_and_activity_independent():
 
     assert unknown["tier"] == ""
     assert unknown["title"] == "Codex · gpt-5.5 · Cost tier unknown · Not working"
+
+
+def test_sidebar_and_pane_header_use_shared_session_icon_renderer():
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert "function sessionEngineIconHtml(row, options)" in source
+    assert "sessionEngineIconHtml(c, { context: 'sidebar' })" in source
+    assert "sessionEngineIconHtml(row, { context: 'pane' })" in source
+    assert "sessionIconPresentation(row, optimistic)" in source
+    assert "session-activity-dot" in source
+    assert "session-cost-symbol" in source
+    assert "is-fable5" not in source
+
+
+def test_cost_orbit_css_replaces_process_liveness_animation():
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for tier in ("premium", "high", "medium", "low"):
+        assert f".cost-{tier}" in css
+    assert ".session-activity-dot" in css
+    assert ".is-working .session-activity-dot" in css
+    assert ".is-not-working .session-activity-dot" in css
+    assert "@keyframes ccc-activity-dot-pulse" in css
+    assert "prefers-reduced-motion: reduce" in css
+    assert ".cost-premium .session-cost-symbol" in css
+    assert "content: '$';" in css
+
+    assert ".conv-session-icon.is-live" not in css
+    assert ".conv-session-icon.is-dead" not in css
+    assert "@keyframes ccc-icon-pulse" not in css
+    assert ".is-fable5" not in css
+
+
+def test_orbit_geometry_has_non_color_tier_distinctions():
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert "border-style: dotted" in css
+    assert ".cost-medium .session-cost-orbit" in css
+    assert "border-right-color: transparent" in css
+    assert ".cost-high::after" in css
+    assert ".cost-premium .session-cost-orbit" in css
+    assert "box-shadow:" in css
