@@ -1362,10 +1362,6 @@
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px solid #f59e0b;background:transparent;"></span>
                   <span style="color:#f59e0b;">Cumulative weekly %</span>
                 </div>
-                <div class="legend-item" id="previous-week-legend" style="display:none;">
-                  <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #94a3b8;background:transparent;"></span>
-                  <span style="color:#94a3b8;">Last week</span>
-                </div>
                 <div class="legend-item" id="fable-contribution-legend" style="display:none;">
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #f5c842;background:transparent;"></span>
                   <span style="color:#f5c842;">Fable % of weekly</span>
@@ -2970,16 +2966,15 @@
       btn.title = label;
     }
 
-    function applyChartZoomRows(sourceRows, alignedRows) {
+    function applyChartZoomRows(sourceRows) {
       const rows = Array.isArray(sourceRows) ? sourceRows : [];
-      const aligned = Array.isArray(alignedRows) ? alignedRows : null;
       const displayTimedRows = rows
         .map((row, index) => ({ row, index, ms: chartRowTimeMs(row) }))
         .filter(item => item.ms != null);
       const focusTimedRows = displayTimedRows.filter(item => !(item.row && item.row._projected));
       if (displayTimedRows.length < 2 || focusTimedRows.length < 2) {
         if (chartZoomLastHours) chartZoomLastHours = false;
-        return { rows, alignedRows: aligned, zoomable: false };
+        return { rows, zoomable: false };
       }
       const minMs = Math.min(...displayTimedRows.map(item => item.ms));
       const maxMs = Math.max(...displayTimedRows.map(item => item.ms));
@@ -2991,12 +2986,11 @@
       const zoomable = maxMs - minMs > CHART_ZOOM_HOURS * 3600000 && zoomIndexes.length >= 2 && zoomIndexes.length < rows.length;
       if (!zoomable) {
         if (chartZoomLastHours) chartZoomLastHours = false;
-        return { rows, alignedRows: aligned, zoomable: false };
+        return { rows, zoomable: false };
       }
-      if (!chartZoomLastHours) return { rows, alignedRows: aligned, zoomable: true };
+      if (!chartZoomLastHours) return { rows, zoomable: true };
       return {
         rows: zoomIndexes.map(index => rows[index]).filter(Boolean),
-        alignedRows: aligned ? zoomIndexes.map(index => aligned[index] || null) : aligned,
         zoomable: true,
       };
     }
@@ -3155,8 +3149,6 @@
       const showWeeklyOverlay = !!weeklyChart;
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
-      const previousWeekLegend = document.getElementById('previous-week-legend');
-      if (previousWeekLegend) previousWeekLegend.style.display = 'none';
       // Hide week nav when not in sixhourly aggregate mode
       if (!sixhourly) {
         const _nav = document.getElementById('chart-week-nav');
@@ -3179,7 +3171,7 @@
 
       // Build sourceRows — aggregate hourly data into 3h buckets scoped to billing period.
       let buckets;
-      let selPeriodStart = null, selPeriodEnd = null, prevPeriodRows = [];
+      let selPeriodStart = null, selPeriodEnd = null, hasPreviousPeriodData = false;
       if (sixhourly) {
         const hourly = (summary && summary.hourly) || [];
         // Aggregate all hourly → 3h slot map (keys in UTC to match slot generator)
@@ -3260,43 +3252,14 @@
             slots.push(base);
           }
           buckets = slots;
-          // Previous period rows (position-aligned) for the faded overlay — same carry logic
+          // Keep historical navigation available when the preceding period has data.
           const prevEnd = selPeriodStart;
           const prevStart = new Date(prevEnd.getTime() - 7 * 86400000);
-          const prevBase = new Date(prevStart);
-          prevBase.setUTCHours(Math.floor(prevBase.getUTCHours() / 3) * 3, 0, 0, 0);
-          let prevCarry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
-                            cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-          for (let dt = new Date(prevBase); dt < prevEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
-            const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
-            const actual = allGroups.get(ks);
-            if (dt.getHours() < 6) {
-              if (actual) {
-                prevCarry.raw_context_tokens    += actual.raw_context_tokens    || 0;
-                prevCarry.effective_input_tokens += actual.effective_input_tokens || 0;
-                prevCarry.output_tokens         += actual.output_tokens         || 0;
-                prevCarry.cache_read_tokens     += actual.cache_read_tokens     || 0;
-                prevCarry.cache_write_tokens    += actual.cache_write_tokens    || 0;
-                prevCarry.turns                 += actual.turns                 || 0;
-                prevCarry.cost_usd              += actual.cost_usd              || 0;
-              }
-              continue;
-            }
-            const base = actual
-              ? {...actual}
-              : { hour: ks, raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
-                  cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-            base.raw_context_tokens    = (base.raw_context_tokens    || 0) + prevCarry.raw_context_tokens;
-            base.effective_input_tokens = (base.effective_input_tokens || 0) + prevCarry.effective_input_tokens;
-            base.output_tokens         = (base.output_tokens         || 0) + prevCarry.output_tokens;
-            base.cache_read_tokens     = (base.cache_read_tokens     || 0) + prevCarry.cache_read_tokens;
-            base.cache_write_tokens    = (base.cache_write_tokens    || 0) + prevCarry.cache_write_tokens;
-            base.turns                 = (base.turns                 || 0) + prevCarry.turns;
-            base.cost_usd              = (base.cost_usd              || 0) + prevCarry.cost_usd;
-            prevCarry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
-                          cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-            prevPeriodRows.push(base);
-          }
+          hasPreviousPeriodData = [...allGroups.values()].some(row => {
+            const rowMs = new Date(row.hour).getTime();
+            return rowMs >= prevStart.getTime() && rowMs < prevEnd.getTime() &&
+              ((row.turns || 0) > 0 || (row.raw_context_tokens || 0) > 0 || (row.output_tokens || 0) > 0);
+          });
         }
       } else if (isAggregate) {
         buckets = daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [];
@@ -3304,12 +3267,8 @@
         buckets = turns;
       }
       let sourceRows = buckets;
-      const zoomState = applyChartZoomRows(sourceRows, prevPeriodRows);
+      const zoomState = applyChartZoomRows(sourceRows);
       sourceRows = zoomState.rows;
-      if (Array.isArray(zoomState.alignedRows)) prevPeriodRows = zoomState.alignedRows;
-      if (previousWeekLegend) {
-        previousWeekLegend.style.display = showWeeklyOverlay && sixhourly && prevPeriodRows.some(r => r != null) ? 'flex' : 'none';
-      }
       updateChartZoomButton(zoomState.zoomable);
 
       // Label helper for 6h slots: show day name at midnight, "HH:00" otherwise.
@@ -3657,14 +3616,6 @@
         const burnPerSlot = primarySeries.burnPerSlot;
         const projectedEnd = primarySeries.projectedEnd;
 
-        // 2. Previous period cumulative % (position-aligned)
-        let cumPrv = 0;
-        const cumPrvVals = prevPeriodRows.map(row => {
-          if (!row) return null;
-          cumPrv += ((row.raw_context_tokens || 0) + (row.output_tokens || 0)) * ppt;
-          return cumPrv;
-        });
-
         const _opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
         const _opusTok = _opusRow ? (_opusRow.effective_input_tokens || 0) + (_opusRow.output_tokens || 0) : 0;
         const _opusCost = _opusRow ? (_opusRow.cost_usd || 0) : 0;
@@ -3702,32 +3653,6 @@
           t.setAttribute('text-anchor', 'start'); t.setAttribute('font-family', 'var(--font-mono)');
           t.textContent = `${p}%`; svg.appendChild(t);
         });
-
-        // 4. Previous period overlay — visible dashed slate line (reference)
-        if (cumPrvVals.some(v => v != null)) {
-          let pp = '', ppS = false;
-          let lastPrvX = 0, lastPrvY = 0, lastPrvV = 0;
-          cumPrvVals.forEach((v, i) => {
-            if (v == null) return;
-            const x = xScale(i + 1), y = yPct(v);
-            pp += ppS ? `L ${x} ${y} ` : `M ${x} ${y} `;
-            ppS = true; lastPrvX = x; lastPrvY = y; lastPrvV = v;
-          });
-          const ppLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          ppLine.setAttribute('d', pp); ppLine.setAttribute('fill', 'none');
-          ppLine.setAttribute('stroke', '#94a3b8'); ppLine.setAttribute('stroke-width', '2.0');
-          ppLine.setAttribute('stroke-dasharray', '5,3'); ppLine.setAttribute('opacity', '0.55');
-          svg.appendChild(ppLine);
-          // Label at end of prev period line
-          if (lastPrvV > 0) {
-            const pl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            pl.setAttribute('x', lastPrvX + 4); pl.setAttribute('y', lastPrvY + 4);
-            pl.setAttribute('fill', '#94a3b8'); pl.setAttribute('font-size', '10');
-            pl.setAttribute('font-family', 'monospace'); pl.setAttribute('opacity', '0.7');
-            pl.textContent = `prev ${lastPrvV.toFixed(0)}%`;
-            svg.appendChild(pl);
-          }
-        }
 
         // 5. Current period actual — thick solid orange (dominant)
         if (lastActIdx >= 0) {
@@ -3898,8 +3823,7 @@
             `${fmtD(selPeriodStart)} – ${fmtD(new Date(selPeriodEnd.getTime() - 1))}`;
           const prevBtn = document.getElementById('chart-week-prev');
           const nextBtn = document.getElementById('chart-week-next');
-          const hasPrevData = prevPeriodRows.some(r => r != null);
-          prevBtn.disabled = chartWeekOffset <= -1 || !hasPrevData;
+          prevBtn.disabled = chartWeekOffset <= -1 || !hasPreviousPeriodData;
           nextBtn.disabled = chartWeekOffset >= 0;
           prevBtn.onclick = () => {
             chartWeekOffset--;
