@@ -93,6 +93,16 @@ require_python3() {
     err "python3 not found on PATH. Install Python 3, then re-run this installer."
     exit 1
   fi
+  # server.py uses 3.10+ union-type syntax (e.g. `float | None`) without a
+  # `from __future__ import annotations` guard, so it fails to import on
+  # 3.9. Presence alone isn't enough — check the version so a stale
+  # system python3 (still common on e.g. Debian bullseye) fails here with
+  # a clear message instead of a cryptic TypeError from server.py.
+  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+    got="$(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
+    err "python3 ${got} found, but CCC requires Python 3.10+. Install a newer python3, then re-run this installer."
+    exit 1
+  fi
 }
 
 warn_if_no_claude_cli() {
