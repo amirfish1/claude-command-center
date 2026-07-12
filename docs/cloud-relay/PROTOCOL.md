@@ -85,7 +85,7 @@ min-interval 3 s, coalesced). Body (all lists capped; relay enforces 256 KiB):
                 "title_source": "redacted|opaque",
                 "engine": "claude|codex|gemini|cursor|hermes|other",
                 "state": "working|waiting|idle|ended",
-                "is_live": true, "recency": "…ISO…", "context_pct": 42,
+                "is_live": true, "recency": "…ISO…", "context_pct": 42,  // percent of context window USED
                 "machine_label": "…", "repo_label": "…opaque-or-redacted…",
                 "question_waiting": false}],
   "attention": [{"kind": "question|stuck|failed|completed|approval|offline",
