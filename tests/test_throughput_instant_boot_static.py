@@ -18,7 +18,7 @@ def _function(text, name, next_name=None):
 
 def test_cached_boot_precedes_network_work():
     html = _html()
-    boot = _function(html, "bootThroughputPage")
+    boot = _function(html, "bootThroughputPage", "updateThroughputEngineUi")
 
     read = boot.index("readThroughputBootstrap")
     apply = boot.index("applyThroughputBootstrap")
@@ -81,6 +81,21 @@ def test_first_visit_uses_final_view_shell_not_legacy_graph():
     assert "shouldDeferAggregateChart" not in html
 
 
+def test_first_snapshot_shell_shows_live_bounded_work_counts():
+    html = _html()
+    progress = _function(html, "renderFirstSnapshotProgress", "loadServerBootstrapThenRefresh")
+
+    assert "last 14 days" in progress
+    assert "sessions_discovered" in progress
+    assert "sessions_read" in progress
+    assert "cache_hits" in progress
+    assert "parsed" in progress
+    assert "Finding recent conversations" in progress
+    assert "Reading conversations" in progress
+    assert "Calculating weekly context" in progress
+    assert "renderFirstSnapshotProgress(refreshStatus)" in html
+
+
 def test_server_bootstrap_only_applies_complete_newer_models():
     html = _html()
     loader = _function(html, "loadServerBootstrapThenRefresh", "bootThroughputPage")
@@ -94,14 +109,16 @@ def test_server_bootstrap_only_applies_complete_newer_models():
     assert "renderDashboard(_aggDefault, data)" not in loader
 
 
-def test_aggregate_boot_does_not_reselect_default_after_sessions_load():
+def test_aggregate_boot_defers_sidebar_archive_until_refresh_finishes():
     html = _html()
     load_sessions = html[html.index("async function loadSessions"):html.index("function findSessionById")]
-    boot = _function(html, "bootThroughputPage")
+    boot = _function(html, "bootThroughputPage", "updateThroughputEngineUi")
+    complete = _function(html, "loadCompletedThroughputBootstrap", "startRefreshStatusPolling")
 
     assert "selectDefault = true" in load_sessions
     assert "selectDefault && !activeSessionId" in load_sessions
-    assert "loadSessions({ selectDefault: false })" in boot
+    assert "loadSessions({ selectDefault: false })" not in boot
+    assert "loadSessions({ selectDefault: false })" in complete
 
 
 def test_refresh_panel_is_accessible_and_surfaces_all_progress_fields():
@@ -168,3 +185,21 @@ def test_manual_refresh_is_nonblocking_and_uses_same_single_flight_job():
     assert "startRefreshStatusPolling" in refresh
     assert "showLoader" not in refresh
     assert "loadSessions" not in refresh
+
+
+def test_weekly_usage_banner_has_compact_two_line_summary():
+    html = _html()
+    render = _function(html, "renderWeeklyUsage", "loadWeeklyUsage")
+
+    assert 'id="weekly-sync-line"' in html
+    assert 'id="weekly-reset-line"' in html
+    assert '>Claude</div>' in html
+    assert '>Fable</div>' in html
+    assert '>Codex</div>' in html
+    assert "weekly-sub').title" in render
+    assert "weekly-sync-line').textContent" in render
+    assert "weekly-reset-line').textContent" in render
+    assert "innerHTML = bits.join('<br>')" not in render
+    assert "banner.style.display = 'grid'" in render
+    assert "fableMeter.style.display = 'grid'" in render
+    assert "codexMeter.style.display = 'grid'" in render

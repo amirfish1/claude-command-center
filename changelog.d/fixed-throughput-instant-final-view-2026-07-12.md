@@ -1,1 +1,1 @@
-The throughput dashboard now restores its complete billing-period graph instantly from stale cache, refreshes atomically in the background with live timing and session progress, and never flashes the legacy graph.
+The throughput dashboard now restores its complete billing-period graph instantly from stale cache, refreshes atomically in the background with live timing and session progress, limits discovery to the latest 14 days, and shows counted discovery/read/cache/parse phases instead of an opaque first-run wait.

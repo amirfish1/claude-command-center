@@ -375,10 +375,11 @@
     .weekly-banner { margin-bottom: 12px; }
     .session-title { max-width: none; }
     .workspace { padding: 16px; }
-    .weekly-banner { flex-wrap: wrap; gap: 10px; }
+    .weekly-banner { grid-template-columns: minmax(0, 1fr); gap: 10px; }
     .weekly-meters { flex-direction: column; width: 100%; }
     .weekly-meter { width: 100%; }
     .weekly-sub { margin-left: 0; text-align: left; width: 100%; }
+    .weekly-actions { justify-content: flex-start; }
     .topbar { align-items: flex-start; gap: 10px; padding: 12px; }
     .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }
     .throughput-refresh-panel { order: 3; width: 100%; max-width: none; min-width: 0; }
@@ -472,32 +473,34 @@
   /* Weekly usage banner — apples-to-apples with the macOS menu bar. */
   .weekly-banner {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(460px, 1fr) minmax(240px, 340px) auto;
     align-items: center;
-    gap: 16px;
-    padding: 14px 18px;
-    margin-bottom: 18px;
+    gap: 20px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
     background: linear-gradient(135deg, rgba(57,210,192,0.10), rgba(123,151,255,0.06));
     border: 1px solid rgba(57,210,192,0.25);
     border-radius: 12px;
   }
   .weekly-meters {
-    grid-column: 1 / -1;
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 18px;
     min-width: 0;
   }
   .weekly-meter {
     flex: 1 1 0;
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas: "main main" "gauge gauge";
     align-items: center;
-    gap: 12px;
+    gap: 4px 8px;
     min-width: 0;
   }
   .weekly-gauge {
-    flex: 0 0 112px;
-    height: 8px;
+    grid-area: gauge;
+    width: 100%;
+    height: 6px;
     border-radius: 6px;
     background: rgba(255,255,255,0.10);
     overflow: hidden;
@@ -509,23 +512,25 @@
     background: linear-gradient(90deg, var(--accent), var(--blue));
     transition: width 0.4s ease, background 0.4s ease;
   }
-  .weekly-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .weekly-main { grid-area: main; display: flex; align-items: baseline; gap: 6px; min-width: 0; }
   .weekly-pct {
     font-family: var(--font-display);
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 700;
     color: var(--text);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  .weekly-label { font-size: 13px; color: var(--text-muted); min-width: 0; }
+  .weekly-label { font-size: 12px; color: var(--text-muted); min-width: 0; }
   .weekly-sub {
     font-size: 12px;
     color: var(--text-muted);
     text-align: left;
-    line-height: 1.5;
+    line-height: 1.45;
     min-width: 0;
   }
+  .weekly-sub-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .weekly-sub-line + .weekly-sub-line { margin-top: 2px; color: var(--text); }
   .weekly-actions {
     display: flex;
     align-items: center;
@@ -553,6 +558,10 @@
     cursor: pointer;
   }
   .weekly-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  @media (max-width: 1200px) {
+    .weekly-banner { grid-template-columns: minmax(0, 1fr) auto; }
+    .weekly-meters { grid-column: 1 / -1; }
+  }
 
   /* Dashboard Grid */
   .dashboard-header {
@@ -1220,7 +1229,7 @@
             </div>
             <div class="weekly-main">
               <div class="weekly-pct" id="weekly-pct">–%</div>
-              <div class="weekly-label" id="weekly-label">Claude weekly limit</div>
+              <div class="weekly-label" id="weekly-label" aria-label="Claude weekly limit">Claude</div>
             </div>
           </div>
           <div class="weekly-meter weekly-meter-fable" id="weekly-fable-meter" style="display: none;">
@@ -1229,7 +1238,7 @@
             </div>
             <div class="weekly-main">
               <div class="weekly-pct" id="weekly-fable-pct">–%</div>
-              <div class="weekly-label">Fable weekly limit</div>
+              <div class="weekly-label" aria-label="Fable weekly limit">Fable</div>
             </div>
           </div>
           <div class="weekly-meter weekly-meter-codex" id="weekly-codex-meter" style="display: none;">
@@ -1238,14 +1247,17 @@
             </div>
             <div class="weekly-main">
               <div class="weekly-pct" id="weekly-codex-pct">–%</div>
-              <div class="weekly-label">Codex weekly</div>
+              <div class="weekly-label">Codex</div>
             </div>
           </div>
         </div>
-        <div class="weekly-sub" id="weekly-sub"></div>
+        <div class="weekly-sub" id="weekly-sub">
+          <div class="weekly-sub-line" id="weekly-sync-line"></div>
+          <div class="weekly-sub-line" id="weekly-reset-line"></div>
+        </div>
         <div class="weekly-actions">
           <input type="datetime-local" id="reset-event-input">
-          <button type="button" id="record-reset-btn" onclick="recordLimitReset()">Record limit reset…</button>
+          <button type="button" id="record-reset-btn" onclick="recordLimitReset()" title="Record limit reset">Record reset</button>
         </div>
       </div>
 
@@ -1551,8 +1563,43 @@
       const svg = document.getElementById('throughput-chart');
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
-      svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">Preparing first snapshot…</text>`;
-      renderRefreshPanel({ state: 'preparing', expected_ms: 35000 });
+      svg.innerHTML = '';
+      renderRefreshPanel({ state: 'preparing', phase: 'discovering', window_days: 14, expected_ms: 35000 });
+    }
+
+    function renderFirstSnapshotProgress(status) {
+      if (visibleBootstrap) return;
+      const svg = document.getElementById('throughput-chart');
+      if (!svg) return;
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 300;
+      const phase = status && status.phase || 'discovering';
+      const discovered = Number(status && status.sessions_discovered || 0);
+      const read = Number(status && status.sessions_read || 0);
+      const cacheHits = Number(status && status.cache_hits || 0);
+      const parsed = Number(status && status.parsed || 0);
+      const folders = Number(status && status.folders_scanned || 0);
+      const elapsed = formatRefreshDuration(status && status.elapsed_ms);
+      const expected = formatRefreshDuration(status && status.expected_ms || 35000);
+      const titleByPhase = {
+        discovering: 'Finding recent conversations…',
+        reading: 'Reading conversations…',
+        finalizing: 'Summarizing throughput…',
+        weekly_context: 'Calculating weekly context…',
+        publishing: 'Publishing fresh snapshot…',
+      };
+      const title = titleByPhase[phase] || 'Preparing first snapshot…';
+      let countLine = `Scanning the last 14 days · ${discovered} sessions found`;
+      if (phase !== 'discovering') {
+        countLine = `Reading ${read} of ${discovered || '…'} conversations`;
+      }
+      const workLine = phase === 'discovering'
+        ? `${folders} folders checked · ${elapsed} / ~${expected}`
+        : `${cacheHits} cached · ${parsed} parsed · ${elapsed} / ~${expected}`;
+      svg.innerHTML = `
+        <text x="${width/2}" y="${height/2 - 28}" fill="var(--text)" text-anchor="middle" font-size="16" font-weight="600">${title}</text>
+        <text x="${width/2}" y="${height/2 + 2}" fill="var(--text-muted)" text-anchor="middle" font-size="13">${countLine}</text>
+        <text x="${width/2}" y="${height/2 + 28}" fill="var(--accent)" text-anchor="middle" font-size="12">${workLine}</text>`;
     }
 
     async function loadServerBootstrapThenRefresh(session) {
@@ -1587,7 +1634,6 @@
       const cached = readThroughputBootstrap(session.session_id, activeThroughputEngine);
       if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(session);
       queueMicrotask(() => loadServerBootstrapThenRefresh(session));
-      loadSessions({ selectDefault: false });
     }
 
     function updateThroughputEngineUi() {
@@ -1623,7 +1669,6 @@
       const cached = readThroughputBootstrap(agg.session_id, activeThroughputEngine);
       if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(agg);
       queueMicrotask(() => loadServerBootstrapThenRefresh(agg));
-      await loadSessions({ selectDefault: false });
     }
 
     // Format relative time (mtime age)
@@ -1728,10 +1773,20 @@
       const cacheHits = Number(refreshStatus.cache_hits || 0);
       const parsed = Number(refreshStatus.parsed || 0);
       const last = refreshStatus.last_refreshed_at;
+      const phase = refreshStatus.phase || '';
+      const phaseLabels = {
+        discovering: 'Finding conversations',
+        reading: 'Reading conversations',
+        finalizing: 'Summarizing throughput',
+        weekly_context: 'Calculating weekly context',
+        publishing: 'Publishing snapshot',
+      };
 
       if (refreshStatus.state === 'refreshing') {
-        primary.textContent = `Refreshing · ${elapsed} / ~${expected}`;
-        secondary.textContent = `Reading ${read} / ${discovered || '…'} sessions · ${cacheHits} cached · ${parsed} parsed`;
+        primary.textContent = `${phaseLabels[phase] || 'Refreshing'} · ${elapsed} / ~${expected}`;
+        secondary.textContent = phase === 'discovering'
+          ? `${discovered} recent sessions · last 14 days · ${Number(refreshStatus.folders_scanned || 0)} folders`
+          : `Reading ${read} / ${discovered || '…'} sessions · ${cacheHits} cached · ${parsed} parsed`;
       } else if (refreshStatus.state === 'failed') {
         primary.textContent = 'Refresh failed · showing cached data';
         secondary.textContent = `${formatRefreshAge(last)} · attempted ${elapsed}`;
@@ -1745,6 +1800,7 @@
       panel.title = last
         ? `Last refreshed ${new Date(Number(last) * 1000).toLocaleString()}`
         : 'No successful refresh yet';
+      renderFirstSnapshotProgress(refreshStatus);
     }
 
     function stopRefreshStatusPolling() {
@@ -1768,6 +1824,7 @@
       renderRefreshPanel(status);
       fetchWeekRankings();
       loadWeeklyHistory();
+      loadSessions({ selectDefault: false });
       return true;
     }
 
@@ -1785,6 +1842,7 @@
           last_refreshed_at: visibleBootstrap && visibleBootstrap.generated_at,
           expected_ms: 35000,
         });
+        loadSessions({ selectDefault: false });
         return;
       }
       refreshStatus = await startResponse.json();
@@ -1811,6 +1869,7 @@
             await loadCompletedThroughputBootstrap(session, refreshStatus);
           } else if (refreshStatus.state === 'failed') {
             stopRefreshStatusPolling();
+            loadSessions({ selectDefault: false });
           }
         } catch (_error) {
           // A transient status poll must not disturb the stale dashboard.
@@ -3846,15 +3905,29 @@
         setWeeklyPctText(document.getElementById('weekly-pct'), pct);
         setWeeklyFill(document.getElementById('weekly-gauge-fill'), pct);
         const bits = [];
-        if (d.real_pct != null) bits.push(`Claude ${Math.round(d.real_pct)}% last synced from claude.ai`);
-        if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% Claude live estimate`);
-        if (d.projected_pct != null) bits.push(`Claude projected ${Math.round(d.projected_pct)}% at reset`);
+        const syncBits = [];
+        const resetBits = [];
+        if (d.real_pct != null) {
+          const value = `Claude ${Math.round(d.real_pct)}% synced`;
+          syncBits.push(value);
+          bits.push(`${value} from claude.ai`);
+        }
+        if (d.est_pct != null) {
+          const value = `~${d.est_pct.toFixed(0)}% live`;
+          syncBits.push(value);
+          bits.push(`Claude ${value} estimate`);
+        }
+        if (d.projected_pct != null) {
+          const value = `Claude ${Math.round(d.projected_pct)}% projected`;
+          resetBits.push(value);
+          bits.push(`${value} at reset`);
+        }
         if (d.week_start && (d.week_start_source === 'event' || d.week_start_source === 'override')) {
           bits.push(`week started ${fmtResetStarted(d.week_start)} (reset detected)`);
         }
         const fableMeter = document.getElementById('weekly-fable-meter');
         if (fableMeter && d.fable_pct != null) {
-          fableMeter.style.display = 'flex';
+          fableMeter.style.display = 'grid';
           setWeeklyPctText(document.getElementById('weekly-fable-pct'), d.fable_pct);
           setWeeklyFill(document.getElementById('weekly-fable-fill'), d.fable_pct);
           bits.push(`Fable scoped ${Math.round(d.fable_pct)}%`);
@@ -3863,23 +3936,32 @@
         }
         const codexMeter = document.getElementById('weekly-codex-meter');
         if (d.codex && d.codex.ok && d.codex.weekly_pct != null) {
-          codexMeter.style.display = 'flex';
+          codexMeter.style.display = 'grid';
           setWeeklyPctText(document.getElementById('weekly-codex-pct'), d.codex.weekly_pct);
           setWeeklyFill(document.getElementById('weekly-codex-fill'), d.codex.weekly_pct);
           if (d.codex.plan_type) bits.push(`Codex plan ${d.codex.plan_type}`);
           const cProj = d.codex.projected_pct != null ? ` · projected ${Math.round(d.codex.projected_pct)}%` : '';
           bits.push(`Codex weekly ${Math.round(d.codex.weekly_pct)}%${cProj}`);
+          if (d.codex.projected_pct != null) resetBits.push(`Codex ${Math.round(d.codex.projected_pct)}% projected`);
           const cSession = d.codex.session;
           if (cSession && cSession.pct != null) bits.push(`Codex session ${Math.round(cSession.pct)}%`);
         } else if (codexMeter) {
           codexMeter.style.display = 'none';
         }
         const reset = fmtResetCountdown(d.weekly_resets_at);
-        if (reset) bits.push(reset);
+        if (reset) {
+          resetBits.unshift(reset);
+          bits.push(reset);
+        }
         const updated = fmtLastUpdated(d.fetched_at || d.calibrated_at);
-        if (updated) bits.push(`last updated ${updated}`);
-        document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
-        banner.style.display = 'flex';
+        if (updated) {
+          syncBits.push(updated);
+          bits.push(`last updated ${updated}`);
+        }
+        document.getElementById('weekly-sync-line').textContent = syncBits.join(' · ');
+        document.getElementById('weekly-reset-line').textContent = resetBits.join(' · ');
+        document.getElementById('weekly-sub').title = bits.join(' · ');
+        banner.style.display = 'grid';
     }
 
     async function loadWeeklyUsage() {

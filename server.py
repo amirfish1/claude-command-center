@@ -49851,10 +49851,120 @@ _THROUGHPUT_DISK_CACHE_DB = _THROUGHPUT_DISK_CACHE_DIR / "turns.db"
 _throughput_disk_conn = None       # sqlite3.Connection, None until first use
 _throughput_disk_conn_lock = threading.Lock()
 _throughput_disk_available = None  # True/False/None (None = not yet tried)
+_THROUGHPUT_DISCOVERY_DAYS = 14
 
 
 def _throughput_aggregate_cache_key(session_id, engine_filter=None):
     return f"{session_id}:{engine_filter or 'claude'}"
+
+
+def _throughput_recent_conversations(
+    engine_filter,
+    cutoff_epoch,
+    *,
+    progress=None,
+    projects_root=None,
+):
+    """Return only transcript candidates needed by throughput.
+
+    Unlike the archive scanner, this applies the mtime cutoff before opening a
+    transcript and never discovers unrelated engines or archive metadata.
+    """
+    engine = _throughput_engine_filter(engine_filter)
+    if progress:
+        progress("phase", "discovering")
+        progress("sessions_discovered", 0)
+    rows = []
+
+    if engine == "claude":
+        root = Path(projects_root) if projects_root is not None else Path.home() / ".claude" / "projects"
+        try:
+            project_dirs = [path for path in root.iterdir() if path.is_dir()]
+        except OSError:
+            project_dirs = []
+        try:
+            names = _load_session_name_overrides()
+        except Exception:
+            names = {}
+        for folder_index, project_dir in enumerate(project_dirs, 1):
+            try:
+                candidates = []
+                for path in project_dir.iterdir():
+                    if not path.is_file() or not path.name.endswith(".jsonl"):
+                        continue
+                    try:
+                        stat = path.stat()
+                    except OSError:
+                        continue
+                    if cutoff_epoch is not None and stat.st_mtime < cutoff_epoch:
+                        continue
+                    candidates.append((path, stat))
+            except OSError:
+                candidates = []
+            for path, stat in candidates:
+                sid = path.stem
+                rows.append({
+                    "session_id": sid,
+                    "jsonl_path": str(path),
+                    "modified": stat.st_mtime,
+                    "mtime": stat.st_mtime,
+                    "engine": "claude",
+                    "source": "interactive",
+                    "display_name": names.get(sid) or sid[:8],
+                    "model": "",
+                    "folder_path": str(_decode_project_slug(project_dir.name) or project_dir.name),
+                })
+            if progress:
+                progress("folders_scanned", folder_index)
+                progress("sessions_discovered", len(rows))
+    else:
+        try:
+            threads = _codex_fetch_threads(limit=None) or []
+        except Exception:
+            threads = []
+        for row in threads:
+            sid = str(row.get("id") or "").strip()
+            if not sid:
+                continue
+            # The thread index timestamp is cheap and authoritative. Apply the
+            # bound before resolving a rollout path because that fallback may
+            # recursively search the full Codex sessions tree.
+            indexed_modified = _codex_ts_seconds(row, "updated")
+            if (
+                cutoff_epoch is not None
+                and indexed_modified
+                and indexed_modified < cutoff_epoch
+            ):
+                continue
+            path = _codex_rollout_path_from_row(row)
+            if not path or not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            modified = indexed_modified or stat.st_mtime
+            if cutoff_epoch is not None and modified < cutoff_epoch:
+                continue
+            rows.append({
+                "session_id": sid,
+                "jsonl_path": str(path),
+                "modified": modified,
+                "mtime": modified,
+                "engine": "codex",
+                "source": "codex",
+                "display_name": row.get("title") or sid[:8],
+                "model": row.get("model") or "",
+                "folder_path": row.get("cwd") or "",
+            })
+            if progress and (len(rows) == 1 or len(rows) % 25 == 0):
+                progress("sessions_discovered", len(rows))
+        if progress:
+            progress("folders_scanned", 1)
+            progress("sessions_discovered", len(rows))
+
+    rows.sort(key=lambda row: row.get("modified") or 0, reverse=True)
+    return rows
 
 
 def _throughput_snapshot_path(session_id, engine_filter=None):
@@ -49884,6 +49994,7 @@ def _throughput_build_bootstrap(
     *,
     generated_at=None,
     refresh=None,
+    weekly=None,
 ):
     engine = _throughput_engine_filter(engine_filter)
     return {
@@ -49892,7 +50003,7 @@ def _throughput_build_bootstrap(
         "engine": engine,
         "generated_at": float(time.time() if generated_at is None else generated_at),
         "throughput": throughput,
-        "weekly": _weekly_usage_block(),
+        "weekly": _weekly_usage_block() if weekly is None else weekly,
         "reset_events": usage_reset_events_payload(days=30).get("events", []),
         "refresh": dict(refresh or {}),
     }
@@ -49960,6 +50071,14 @@ def _throughput_refresh_public(job, now=None):
     completed_at = public.get("completed_at")
     end = completed_at if completed_at is not None else now
     public["elapsed_ms"] = max(0, int((end - started_at) * 1000))
+    discovered = int(public.get("sessions_discovered") or 0)
+    read = int(public.get("sessions_read") or 0)
+    if public.get("state") == "refreshing" and read >= 10 and discovered >= read:
+        # Reserve time for dedupe/summary plus weekly-context publication after
+        # the transcript loop finishes; otherwise the estimate reaches zero
+        # while the final (visible) phase is still running.
+        projected_ms = int((public["elapsed_ms"] / read) * discovered + 1500)
+        public["expected_ms"] = max(public["elapsed_ms"] + 250, projected_ms)
     public.pop("thread", None)
     return public
 
@@ -49982,6 +50101,9 @@ def _throughput_refresh_status(session_id, engine_filter=None):
             "completed_at": None,
             "elapsed_ms": 0,
             "expected_ms": int(last.get("duration_ms") or 35000),
+            "phase": "idle",
+            "window_days": _THROUGHPUT_DISCOVERY_DAYS,
+            "folders_scanned": 0,
             "sessions_discovered": 0,
             "sessions_read": 0,
             "cache_hits": 0,
@@ -50025,6 +50147,9 @@ def _throughput_refresh_start(session_id, engine_filter=None):
             "started_at": now,
             "completed_at": None,
             "expected_ms": int(last.get("duration_ms") or 35000),
+            "phase": "discovering",
+            "window_days": _THROUGHPUT_DISCOVERY_DAYS,
+            "folders_scanned": 0,
             "sessions_discovered": 0,
             "sessions_read": 0,
             "cache_hits": 0,
@@ -50041,6 +50166,10 @@ def _throughput_refresh_start(session_id, engine_filter=None):
                 return
             if event == "sessions_discovered":
                 current["sessions_discovered"] = max(0, int(value or 0))
+            elif event == "phase":
+                current["phase"] = str(value or "")
+            elif event == "folders_scanned":
+                current["folders_scanned"] = max(0, int(value or 0))
             elif event == "session_read":
                 current["sessions_read"] += 1
             elif event == "cache_hit":
@@ -50058,6 +50187,8 @@ def _throughput_refresh_start(session_id, engine_filter=None):
             )
             if status != 200 or not isinstance(payload, dict) or not payload.get("ok"):
                 raise RuntimeError((payload or {}).get("error") or "Throughput refresh failed")
+            progress("phase", "weekly_context")
+            weekly = _weekly_usage_block()
             completed = time.time()
             duration_ms = max(1, int((completed - now) * 1000))
             with _THROUGHPUT_REFRESH_LOCK:
@@ -50076,7 +50207,9 @@ def _throughput_refresh_start(session_id, engine_filter=None):
                 payload,
                 generated_at=completed,
                 refresh=refresh_meta,
+                weekly=weekly,
             )
+            progress("phase", "publishing")
             if not _throughput_write_bootstrap(session_id, engine, model):
                 raise RuntimeError("Could not persist throughput bootstrap")
             with _THROUGHPUT_REFRESH_LOCK:
@@ -50670,11 +50803,7 @@ def _weekly_usage_block():
     # same API response under fresh event uuids, so a raw sum double-counts
     # (~2x) — exactly what threw the estimate to 74% instead of ~34%.
     try:
-        convs = find_all_conversations(
-            resolve_pr_states=False,
-            resolve_effective=False,
-            resolve_worktree_dirty=False,
-        )
+        convs = _throughput_recent_conversations("claude", week_start_epoch)
     except Exception:
         convs = []
     collected = []
@@ -50691,10 +50820,7 @@ def _weekly_usage_block():
         if modified < week_start_epoch:
             continue
         engine = (conv_row.get("engine") or conv_row.get("source") or "").lower()
-        try:
-            if engine == "codex" or _is_codex_session(sid):
-                continue
-        except Exception:
+        if engine == "codex":
             continue
         path = conv_row.get("jsonl_path")
         if not path:
@@ -50808,11 +50934,7 @@ def _throughput_week_rankings():
         week_start_epoch = time.time() - 7 * 86400
 
     try:
-        convs = find_all_conversations(
-            resolve_pr_states=False,
-            resolve_effective=False,
-            resolve_worktree_dirty=False,
-        )
+        convs = _throughput_recent_conversations("claude", week_start_epoch)
     except Exception:
         convs = []
 
@@ -50830,10 +50952,7 @@ def _throughput_week_rankings():
         if modified < week_start_epoch:
             continue
         engine = (conv_row.get("engine") or conv_row.get("source") or "").lower()
-        try:
-            if engine == "codex" or _is_codex_session(sid):
-                continue
-        except Exception:
+        if engine == "codex":
             continue
         path = conv_row.get("jsonl_path")
         if not path:
@@ -50912,48 +51031,47 @@ def _throughput_payload(
             return _cached["payload"], _cached["status"]
     turns = []
     if is_aggregate:
+        bounded_recent = session_id == "all_7_days"
         try:
-            all_conversations = find_all_conversations(
-                resolve_pr_states=False,
-                resolve_effective=False,
-                resolve_worktree_dirty=False,
-            )
+            if bounded_recent:
+                # The interactive dashboard needs at most the current billing
+                # week plus its prior-week overlay, both covered by 14 days.
+                recent = _throughput_recent_conversations(
+                    engine_filter,
+                    time.time() - _THROUGHPUT_DISCOVERY_DAYS * 86400,
+                    progress=progress,
+                )
+            else:
+                # Preserve the public semantics of 56-day and all-time scopes.
+                all_conversations = find_all_conversations(
+                    resolve_pr_states=False,
+                    resolve_effective=False,
+                    resolve_worktree_dirty=False,
+                )
+                recent = []
+                for row in all_conversations:
+                    modified = (
+                        row.get("last_interacted")
+                        or row.get("modified")
+                        or row.get("mtime")
+                        or 0
+                    )
+                    if cutoff_epoch is not None and modified < cutoff_epoch:
+                        continue
+                    recent.append(row)
         except Exception as e:
             return {"error": f"Failed to list conversations: {str(e)}"}, 500
-        recent = []
-        for conv_row in all_conversations:
-            sid = conv_row.get("session_id")
-            if not sid:
-                continue
-            modified = (
-                conv_row.get("last_interacted")
-                or conv_row.get("modified")
-                or conv_row.get("mtime")
-                or 0
-            )
-            # For all_7_days, discover sessions from the last 14 days so the
-            # previous billing period (up to ~14d ago) has full hourly coverage
-            # for the chart overlay.  Aggregate card stats stay 7-day scoped via
-            # stat_cutoff_epoch passed to _throughput_summary below.
-            _discover_cutoff = (
-                time.time() - 14 * 86400
-                if session_id == "all_7_days" and cutoff_epoch is not None
-                else cutoff_epoch
-            )
-            if _discover_cutoff is not None and modified < _discover_cutoff:
-                continue
-            if repo_path:
-                try:
-                    if (
-                        Path(conv_row.get("folder_path") or "").resolve(strict=False)
-                        != Path(repo_path).resolve(strict=False)
-                    ):
-                        continue
-                except Exception:
-                    continue
-            recent.append(conv_row)
-
+        if repo_path:
+            try:
+                requested_repo = Path(repo_path).resolve(strict=False)
+                recent = [
+                    row for row in recent
+                    if Path(row.get("folder_path") or "").resolve(strict=False) == requested_repo
+                ]
+            except Exception:
+                recent = []
         if progress:
+            progress("phase", "reading")
             progress("sessions_discovered", len(recent))
 
         for conv_row in recent:
@@ -50961,10 +51079,12 @@ def _throughput_payload(
             name = conv_row.get("display_name") or conv_row.get("name") or "Untitled"
             engine = conv_row.get("engine") or conv_row.get("source") or ""
             model_hint = conv_row.get("model") or ""
-            try:
-                is_codex = engine == "codex" or _is_codex_session(sid)
-            except Exception:
-                continue
+            is_codex = engine == "codex"
+            if not bounded_recent and not is_codex:
+                try:
+                    is_codex = _is_codex_session(sid)
+                except Exception:
+                    continue
             if engine_filter == "codex":
                 if not is_codex:
                     continue
@@ -51037,6 +51157,8 @@ def _throughput_payload(
             for t in full_turns:
                 if _throughput_turn_after_cutoff(t, _turn_cutoff):
                     turns.append(dict(t))
+        if progress:
+            progress("phase", "finalizing")
         turns.sort(key=lambda t: t.get("t_start") or "")
         for idx, turn in enumerate(turns, 1):
             turn["turn_index"] = idx

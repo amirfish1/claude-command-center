@@ -23,11 +23,13 @@ def test_weekly_banner_surfaces_codex_fable_and_timestamp():
     assert "last updated" in throughput_html
 
 
-def test_weekly_banner_uses_non_overlapping_two_row_layout():
+def test_weekly_banner_uses_non_overlapping_compact_layout():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
     assert ".weekly-banner {\n    display: grid;" in throughput_html
-    assert "grid-template-columns: minmax(0, 1fr) auto;" in throughput_html
-    assert ".weekly-meters {\n    grid-column: 1 / -1;" in throughput_html
+    assert "grid-template-columns: minmax(460px, 1fr) minmax(240px, 340px) auto;" in throughput_html
+    assert 'id="weekly-sync-line"' in throughput_html
+    assert 'id="weekly-reset-line"' in throughput_html
+    assert ".weekly-sub-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }" in throughput_html
     assert ".weekly-meter {\n    flex: 1 1 0;" in throughput_html
     assert "min-width: 0;" in throughput_html

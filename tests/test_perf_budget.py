@@ -21,6 +21,7 @@ import threading
 import time
 import uuid
 import warnings
+from pathlib import Path
 
 import pytest
 
@@ -719,11 +720,11 @@ def test_throughput_aggregate_cache_covers_footer_poll_interval(monkeypatch):
 
     monkeypatch.setattr(server.time, "time", lambda: now[0])
 
-    def fake_find_all_conversations(*args, **kwargs):
+    def fake_archive_conversations(*args, **kwargs):
         calls.append(now[0])
         return []
 
-    monkeypatch.setattr(server, "find_all_conversations", fake_find_all_conversations)
+    monkeypatch.setattr(server, "find_all_conversations", fake_archive_conversations)
 
     first, first_status = server._throughput_payload("all_56_days")
     now[0] += 90.0
@@ -1100,6 +1101,153 @@ def test_throughput_refresh_rejects_unsupported_scopes(session_id):
 
 def test_throughput_refresh_accepts_default_aggregate_scope():
     assert server._throughput_refresh_scope_supported("all_7_days") is True
+
+
+def test_throughput_refresh_projects_remaining_time_from_live_progress():
+    job = {
+        "state": "refreshing",
+        "started_at": 100.0,
+        "completed_at": None,
+        "expected_ms": 35000,
+        "sessions_discovered": 100,
+        "sessions_read": 50,
+    }
+
+    status = server._throughput_refresh_public(job, now=101.0)
+
+    assert 3000 <= status["expected_ms"] <= 4000
+
+
+def test_throughput_recent_conversations_filters_before_opening(monkeypatch, tmp_path):
+    projects = tmp_path / "projects"
+    folder = projects / "-tmp-repo"
+    folder.mkdir(parents=True)
+    old = folder / "old-session.jsonl"
+    recent = folder / "recent-session.jsonl"
+    old.write_text("not-json\n", encoding="utf-8")
+    recent.write_text("not-json\n", encoding="utf-8")
+    now = 1_800_000_000.0
+    os.utime(old, (now - 15 * 86400, now - 15 * 86400))
+    os.utime(recent, (now - 2 * 86400, now - 2 * 86400))
+    events = []
+
+    rows = server._throughput_recent_conversations(
+        "claude",
+        now - 14 * 86400,
+        projects_root=projects,
+        progress=lambda event, value=None: events.append((event, value)),
+    )
+
+    assert [row["session_id"] for row in rows] == ["recent-session"]
+    assert rows[0]["jsonl_path"] == str(recent)
+    assert ("phase", "discovering") in events
+    assert ("folders_scanned", 1) in events
+    assert ("sessions_discovered", 1) in events
+
+
+def test_throughput_recent_conversations_isolates_codex_and_applies_cutoff(
+    monkeypatch, tmp_path
+):
+    old = tmp_path / "old.jsonl"
+    recent = tmp_path / "recent.jsonl"
+    old.write_text("{}\n", encoding="utf-8")
+    recent.write_text("{}\n", encoding="utf-8")
+    now = 1_800_000_000.0
+    os.utime(old, (now - 20 * 86400, now - 20 * 86400))
+    os.utime(recent, (now - 2 * 86400, now - 2 * 86400))
+    monkeypatch.setattr(
+        server,
+        "_codex_fetch_threads",
+        lambda limit=None: [
+            {"id": "old", "path": str(old), "title": "Old"},
+            {"id": "recent", "path": str(recent), "title": "Recent"},
+        ],
+    )
+    resolved = []
+
+    def rollout_path(row):
+        resolved.append(row["id"])
+        return Path(row["path"])
+
+    monkeypatch.setattr(server, "_codex_rollout_path_from_row", rollout_path)
+    monkeypatch.setattr(
+        server,
+        "_codex_ts_seconds",
+        lambda row, *_args: now - (20 if row["id"] == "old" else 2) * 86400,
+    )
+
+    rows = server._throughput_recent_conversations("codex", now - 14 * 86400)
+
+    assert [row["session_id"] for row in rows] == ["recent"]
+    assert rows[0]["engine"] == "codex"
+    assert resolved == ["recent"]
+
+
+def test_throughput_long_scopes_keep_archive_semantics(monkeypatch):
+    server._THROUGHPUT_AGG_CACHE.clear()
+    monkeypatch.setattr(
+        server,
+        "_throughput_recent_conversations",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bounded indexer is only for the live seven-day view")
+        ),
+    )
+    monkeypatch.setattr(server, "find_all_conversations", lambda **_kwargs: [])
+
+    payload, status = server._throughput_payload("all_56_days", force_refresh=True)
+
+    assert status == 200
+    assert payload["scope"]["range"] == "Last 56 days"
+
+
+def test_throughput_aggregate_uses_bounded_indexer_not_archive(monkeypatch, tmp_path):
+    server._THROUGHPUT_AGG_CACHE.clear()
+    monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
+    seen = {}
+
+    def recent(engine, cutoff, **_kwargs):
+        seen.update(engine=engine, cutoff=cutoff)
+        return []
+
+    def fail_archive(*_args, **_kwargs):
+        raise AssertionError("throughput must not scan the global archive")
+
+    monkeypatch.setattr(server, "_throughput_recent_conversations", recent)
+    monkeypatch.setattr(server, "find_all_conversations", fail_archive)
+    now = time.time()
+
+    payload, status = server._throughput_payload(
+        "all_7_days", engine_filter="claude", force_refresh=True
+    )
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert seen["engine"] == "claude"
+    assert 13.9 * 86400 <= now - seen["cutoff"] <= 14.1 * 86400
+
+
+def test_weekly_usage_uses_recent_throughput_indexer(monkeypatch):
+    calls = []
+    monkeypatch.setattr(server, "_live_weekly_usage", lambda **_: None)
+    monkeypatch.setattr(server, "_weekly_pct_calibration", lambda: None)
+    monkeypatch.setattr(
+        server,
+        "_throughput_recent_conversations",
+        lambda engine, cutoff, **kwargs: calls.append((engine, cutoff)) or [],
+    )
+    monkeypatch.setattr(
+        server,
+        "find_all_conversations",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("weekly context must not scan the global archive")
+        ),
+    )
+
+    result = server._weekly_usage_block()
+
+    assert result["available"] is False
+    assert calls and calls[0][0] == "claude"
+    assert time.time() - 8 * 86400 < calls[0][1] < time.time() - 6 * 86400
 
 
 def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):
