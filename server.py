@@ -184,6 +184,8 @@ ANNOTATIONS_FILE = COMMAND_CENTER_STATE_DIR / "annotations.json"
 ANNOTATION_SCREENSHOT_DIR = COMMAND_CENTER_STATE_DIR / "annotation-screenshots"
 ANNOTATION_UX_FIXES_QUEUE_NAME = "UX-fixes-queue"
 _ANNOTATIONS_LOCK = threading.Lock()
+_ANNOTATION_QUEUE_SUBMISSIONS_LOCK = threading.Lock()
+_ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT = set()
 import ux_fixes_queue  # kept as fallback when watchtower is not installed
 # WT-32 Phase 2: watchtower.queue is now the primary engine. ux_fixes_queue is
 # the fallback so CCC works without WT installed. Both read/write the same store.
@@ -8262,6 +8264,25 @@ def _normalize_annotation_queue_name(value):
     return text
 
 
+def _annotation_queue_submission_key(text, meta, project):
+    """Return a stable key for one in-flight annotation queue submission."""
+    meta = meta if isinstance(meta, dict) else {}
+    fields = {
+        "annotation_id": str(meta.get("annotation_id") or meta.get("id") or ""),
+        "note": str(meta.get("note") or ""),
+        "url": str(meta.get("url") or ""),
+        "title": str(meta.get("title") or ""),
+        "selector": str(meta.get("selector") or ""),
+        "screenshot_path": str(meta.get("screenshot_path") or ""),
+        "repo_path": str(meta.get("repo_path") or ""),
+        "source": str(meta.get("source") or ""),
+        "lane": str(meta.get("lane") or ""),
+        "project": str(project or meta.get("project") or ""),
+        "text": text,
+    }
+    return hashlib.sha256(json.dumps(fields, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def _find_annotation_ux_queue_session(queue_name=ANNOTATION_UX_FIXES_QUEUE_NAME):
     """Find the newest Claude session in the CCC repo with the queue name."""
     repo_path = resolve_repo_path(str(CCC_ROOT))
@@ -8346,6 +8367,15 @@ def enqueue_annotation_ux_fixes_queue(
     # "problem"). When it points at a GitHub Issue, prefer the issue's actual
     # title so the WatchTower ticket is identifiable in CCC and its queue.
     _title = github_issue_title(_url) or str(meta.get("title") or "")
+    _submission_key = _annotation_queue_submission_key(text, meta, project)
+    with _ANNOTATION_QUEUE_SUBMISSIONS_LOCK:
+        if _submission_key in _ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT:
+            return {
+                "ok": False,
+                "error": "This annotation is already being submitted",
+                "status": 409,
+            }
+        _ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT.add(_submission_key)
     try:
         item = _q.enqueue(
             note=meta.get("note") or text,
@@ -8365,6 +8395,9 @@ def enqueue_annotation_ux_fixes_queue(
         queue_error = str(e)
     else:
         queue_error = None
+    finally:
+        with _ANNOTATION_QUEUE_SUBMISSIONS_LOCK:
+            _ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT.discard(_submission_key)
 
     # Dispatch NOW (nudge a live worker, else spawn) + log the decision so a
     # captured ticket is handled immediately and the activity log explains the

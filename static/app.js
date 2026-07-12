@@ -46107,12 +46107,24 @@
       catch (_) { try { textArea.select(); document.execCommand('copy'); } catch (e) {} }
     });
     modal.querySelector('[data-ux-cancel]').addEventListener('click', close);
-    modal.querySelector('[data-ux-submit]').addEventListener('click', () => {
+    const submitBtn = modal.querySelector('[data-ux-submit]');
+    let submitting = false;
+    submitBtn.addEventListener('click', async () => {
+      if (submitting) return;
+      submitting = true;
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Submitting…';
       const edited = textArea.value;
-      close();
       // Hand the (possibly edited) prompt to the submitter so what the
       // user reviewed is exactly what the worker receives.
-      if (typeof onSubmit === 'function') onSubmit(edited);
+      const queued = typeof onSubmit === 'function' && await onSubmit(edited);
+      if (queued) {
+        close();
+        return;
+      }
+      submitting = false;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit to queue';
     });
   }
 
@@ -46203,10 +46215,12 @@
           if (typeof renderArchiveList === 'function') renderArchiveList($search ? $search.value : '');
         }
       } catch (_) {}
+      return true;
     } catch (err) {
       // Modal is already closed; the toast is the only feedback channel
       // left. Use it for both transports (in-page editor + screen-cap).
       showOpToast('UX fixes queue failed: ' + ((err && err.message) || 'unknown'), 'error');
+      return false;
     }
   }
 
