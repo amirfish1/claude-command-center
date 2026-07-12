@@ -750,6 +750,29 @@ def test_throughput_history_cache_only_does_not_compute(monkeypatch):
     assert payload == {"ok": True, "daily": [], "cached": False}
 
 
+def test_throughput_history_cache_only_reads_engine_scoped_cache(monkeypatch):
+    server._THROUGHPUT_AGG_CACHE.clear()
+    key = server._throughput_aggregate_cache_key("all_56_days", "claude")
+    server._THROUGHPUT_AGG_CACHE[key] = {
+        "ts": time.time(),
+        "status": 200,
+        "payload": {"summary": {"daily": [{"date": "2026-07-12"}]}},
+    }
+
+    def fail_compute(*_args, **_kwargs):
+        raise AssertionError("cache-only history must not compute")
+
+    monkeypatch.setattr(server, "_throughput_payload", fail_compute)
+    payload, status = server._throughput_history_payload(cache_only=True)
+
+    assert status == 200
+    assert payload == {
+        "ok": True,
+        "daily": [{"date": "2026-07-12"}],
+        "cached": True,
+    }
+
+
 def test_throughput_initial_payload_never_computes(monkeypatch, tmp_path):
     """The throughput page's first paint must use only cheap snapshot data."""
     server._THROUGHPUT_AGG_CACHE.clear()
@@ -829,6 +852,24 @@ def test_throughput_bootstrap_round_trips_complete_context(monkeypatch, tmp_path
     assert loaded["reset_events"] == [{"id": "reset-1"}]
     assert loaded["generated_at"] == 123.0
     assert loaded["refresh"]["sessions_read"] == 9
+
+
+def test_throughput_bootstrap_preserves_zero_generation_time(monkeypatch):
+    monkeypatch.setattr(server, "_weekly_usage_block", lambda: {})
+    monkeypatch.setattr(server, "usage_reset_events_payload", lambda **_: {"events": []})
+    payload = {
+        "ok": True,
+        "session_id": "all_7_days",
+        "scope": {"aggregate": True, "engine": "claude"},
+        "summary": {},
+        "turns": [],
+    }
+
+    model = server._throughput_build_bootstrap(
+        "all_7_days", "claude", payload, generated_at=0
+    )
+
+    assert model["generated_at"] == 0
 
 
 @pytest.mark.parametrize(
@@ -983,6 +1024,82 @@ def test_throughput_refresh_failure_preserves_previous_completion(monkeypatch):
     assert status["error"] == "boom"
     assert status["last_refreshed_at"] == 456.0
     assert status["expected_ms"] == 1200
+
+
+def test_throughput_refresh_uses_persisted_duration_after_restart(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_payload(*_args, **_kwargs):
+        entered.set()
+        release.wait(2)
+        return {"error": "stopped"}, 500
+
+    monkeypatch.setattr(server, "_throughput_payload", fake_payload)
+    monkeypatch.setattr(
+        server,
+        "_throughput_read_bootstrap",
+        lambda *_args, **_kwargs: {
+            "generated_at": 789.0,
+            "refresh": {"elapsed_ms": 4200},
+        },
+    )
+    with server._THROUGHPUT_REFRESH_LOCK:
+        server._THROUGHPUT_REFRESH_JOBS.clear()
+        server._THROUGHPUT_REFRESH_LAST_SUCCESS.clear()
+
+    status = server._throughput_refresh_start("all_7_days", "claude")
+    assert entered.wait(1)
+
+    assert status["expected_ms"] == 4200
+    assert status["last_refreshed_at"] == 789.0
+    release.set()
+
+
+def test_throughput_refresh_persists_completed_metadata(monkeypatch):
+    captured = {}
+
+    def fake_payload(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "session_id": "all_7_days",
+            "scope": {"aggregate": True, "engine": "claude"},
+            "summary": {},
+            "turns": [],
+        }, 200
+
+    def fake_build(*_args, **kwargs):
+        captured["refresh"] = kwargs["refresh"]
+        return {"valid": True}
+
+    monkeypatch.setattr(server, "_throughput_payload", fake_payload)
+    monkeypatch.setattr(server, "_throughput_build_bootstrap", fake_build)
+    monkeypatch.setattr(server, "_throughput_write_bootstrap", lambda *_: True)
+    with server._THROUGHPUT_REFRESH_LOCK:
+        server._THROUGHPUT_REFRESH_JOBS.clear()
+        server._THROUGHPUT_REFRESH_LAST_SUCCESS.clear()
+
+    server._throughput_refresh_start("all_7_days", "claude")
+    for _ in range(100):
+        status = server._throughput_refresh_status("all_7_days", "claude")
+        if status["state"] == "complete":
+            break
+        time.sleep(0.01)
+
+    persisted = captured["refresh"]
+    assert persisted["state"] == "complete"
+    assert persisted["completed_at"] == persisted["last_refreshed_at"]
+    assert persisted["elapsed_ms"] == persisted["expected_ms"]
+    assert persisted["elapsed_ms"] > 0
+
+
+@pytest.mark.parametrize("session_id", ["", "single-session", "all_today"])
+def test_throughput_refresh_rejects_unsupported_scopes(session_id):
+    assert server._throughput_refresh_scope_supported(session_id) is False
+
+
+def test_throughput_refresh_accepts_default_aggregate_scope():
+    assert server._throughput_refresh_scope_supported("all_7_days") is True
 
 
 def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):

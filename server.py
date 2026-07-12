@@ -49890,7 +49890,7 @@ def _throughput_build_bootstrap(
         "schema": _THROUGHPUT_BOOTSTRAP_SCHEMA,
         "session_id": session_id,
         "engine": engine,
-        "generated_at": float(generated_at or time.time()),
+        "generated_at": float(time.time() if generated_at is None else generated_at),
         "throughput": throughput,
         "weekly": _weekly_usage_block(),
         "reset_events": usage_reset_events_payload(days=30).get("events", []),
@@ -49991,6 +49991,10 @@ def _throughput_refresh_status(session_id, engine_filter=None):
         }
 
 
+def _throughput_refresh_scope_supported(session_id):
+    return session_id == "all_7_days"
+
+
 def _throughput_refresh_start(session_id, engine_filter=None):
     engine = _throughput_engine_filter(engine_filter)
     key = _throughput_aggregate_cache_key(session_id, engine)
@@ -50000,6 +50004,19 @@ def _throughput_refresh_start(session_id, engine_filter=None):
         if existing and existing.get("state") == "refreshing":
             return _throughput_refresh_public(existing, now)
         last = _THROUGHPUT_REFRESH_LAST_SUCCESS.get(key) or {}
+        if not last:
+            persisted = _throughput_read_bootstrap(session_id, engine) or {}
+            persisted_refresh = persisted.get("refresh") or {}
+            persisted_duration = (
+                persisted_refresh.get("elapsed_ms")
+                or persisted_refresh.get("expected_ms")
+            )
+            if isinstance(persisted_duration, (int, float)) and persisted_duration > 0:
+                last = {
+                    "completed_at": persisted.get("generated_at"),
+                    "duration_ms": int(persisted_duration),
+                }
+                _THROUGHPUT_REFRESH_LAST_SUCCESS[key] = last
         job = {
             "job_id": uuid.uuid4().hex,
             "state": "refreshing",
@@ -50042,9 +50059,17 @@ def _throughput_refresh_start(session_id, engine_filter=None):
             if status != 200 or not isinstance(payload, dict) or not payload.get("ok"):
                 raise RuntimeError((payload or {}).get("error") or "Throughput refresh failed")
             completed = time.time()
+            duration_ms = max(1, int((completed - now) * 1000))
             with _THROUGHPUT_REFRESH_LOCK:
                 current = _THROUGHPUT_REFRESH_JOBS.get(key)
                 refresh_meta = _throughput_refresh_public(current or job, completed)
+            refresh_meta.update({
+                "state": "complete",
+                "completed_at": completed,
+                "elapsed_ms": duration_ms,
+                "expected_ms": duration_ms,
+                "last_refreshed_at": completed,
+            })
             model = _throughput_build_bootstrap(
                 session_id,
                 engine,
@@ -50054,7 +50079,6 @@ def _throughput_refresh_start(session_id, engine_filter=None):
             )
             if not _throughput_write_bootstrap(session_id, engine, model):
                 raise RuntimeError("Could not persist throughput bootstrap")
-            duration_ms = max(1, int((completed - now) * 1000))
             with _THROUGHPUT_REFRESH_LOCK:
                 current = _THROUGHPUT_REFRESH_JOBS.get(key)
                 if current is job:
@@ -51079,7 +51103,9 @@ def _throughput_history_payload(cache_only=False):
     aggregate snapshot if one is fresh, but never compute the expensive 56-day
     aggregate just to paint a footer pill.
     """
-    cached = _THROUGHPUT_AGG_CACHE.get("all_56_days")
+    cached = _THROUGHPUT_AGG_CACHE.get(
+        _throughput_aggregate_cache_key("all_56_days", "claude")
+    )
     if cached and (time.time() - cached.get("ts", 0.0) < _THROUGHPUT_AGG_CACHE_TTL):
         payload = cached.get("payload") or {}
         if cached.get("status") == 200:
@@ -52538,8 +52564,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/throughput/refresh/start":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
-            if not session_id:
-                self.send_json({"error": "Missing session_id"}, 400)
+            if not _throughput_refresh_scope_supported(session_id):
+                self.send_json({"error": "Unsupported throughput refresh scope"}, 400)
                 return
             engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
             self.send_json(_throughput_refresh_start(session_id, engine_filter), 202)
@@ -52547,8 +52573,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/throughput/refresh/status":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
-            if not session_id:
-                self.send_json({"error": "Missing session_id"}, 400)
+            if not _throughput_refresh_scope_supported(session_id):
+                self.send_json({"error": "Unsupported throughput refresh scope"}, 400)
                 return
             engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
             self.send_json(_throughput_refresh_status(session_id, engine_filter))

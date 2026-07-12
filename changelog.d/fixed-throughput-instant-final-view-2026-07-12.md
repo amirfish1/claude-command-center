@@ -1,0 +1,1 @@
+The throughput dashboard now restores its complete billing-period graph instantly from stale cache, refreshes atomically in the background with live timing and session progress, and never flashes the legacy graph.

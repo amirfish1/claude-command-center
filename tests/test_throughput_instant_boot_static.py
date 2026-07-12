@@ -22,10 +22,11 @@ def test_cached_boot_precedes_network_work():
 
     read = boot.index("readThroughputBootstrap")
     apply = boot.index("applyThroughputBootstrap")
+    layout = boot.index("toggleSidebar")
     defer = boot.index("queueMicrotask")
     network = boot.index("loadServerBootstrapThenRefresh")
 
-    assert read < apply < defer < network
+    assert layout < read < apply < defer < network
     assert "bootThroughputPage();" in html
 
 
@@ -59,6 +60,15 @@ def test_browser_bootstrap_is_versioned_scoped_and_never_age_expires():
     )
 
 
+def test_browser_snapshot_compacts_hourly_rows_to_native_chart_resolution():
+    html = _html()
+    writer = _function(html, "writeThroughputBootstrap", "isNewerThroughputBootstrap")
+
+    assert "function compactThroughputHourlyRows(rows)" in html
+    assert "3 * 60 * 60 * 1000" in html
+    assert "stored.throughput.summary.hourly = compactThroughputHourlyRows" in writer
+
+
 def test_first_visit_uses_final_view_shell_not_legacy_graph():
     html = _html()
     shell = _function(html, "showFirstSnapshotShell", "loadServerBootstrapThenRefresh")
@@ -79,6 +89,8 @@ def test_server_bootstrap_only_applies_complete_newer_models():
     assert "validateThroughputBootstrap" in loader
     assert "isNewerThroughputBootstrap" in loader
     assert "applyThroughputBootstrap" in loader
+    assert "finally" in loader
+    assert "startRefreshStatusPolling(session)" in loader
     assert "renderDashboard(_aggDefault, data)" not in loader
 
 
@@ -133,7 +145,19 @@ def test_refresh_completion_publishes_complete_model_atomically():
     assert "validateThroughputBootstrap" in complete
     assert "writeThroughputBootstrap(model)" in complete
     assert "applyThroughputBootstrap(model, 'refresh')" in complete
+    assert "fetchWeekRankings()" in complete
+    assert "loadWeeklyHistory()" in complete
     assert "renderDashboard(" not in complete
+
+
+def test_cached_paint_does_not_start_competing_aggregate_scans():
+    html = _html()
+    apply = _function(html, "applyThroughputBootstrap", "showFirstSnapshotShell")
+    history = _function(html, "loadWeeklyHistory", "drawWeeklyHistory")
+
+    assert "fetchWeekRankings()" not in apply
+    assert "loadWeeklyHistory()" not in apply
+    assert "/api/throughput/history?cache_only=1" in history
 
 
 def test_manual_refresh_is_nonblocking_and_uses_same_single_flight_job():

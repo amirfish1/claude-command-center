@@ -6,9 +6,6 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
 <meta name="theme-color" content="#0d1117">
 <title>CCC — Token Throughput Analyzer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0b0d11;
@@ -29,9 +26,9 @@
     --orange: #e3b341;
     --red: #f85149;
     
-    --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   }
   
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -474,7 +471,8 @@
 
   /* Weekly usage banner — apples-to-apples with the macOS menu bar. */
   .weekly-banner {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 16px;
     padding: 14px 18px;
@@ -484,7 +482,7 @@
     border-radius: 12px;
   }
   .weekly-meters {
-    flex: 1 1 540px;
+    grid-column: 1 / -1;
     display: flex;
     align-items: center;
     gap: 14px;
@@ -495,7 +493,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    min-width: 220px;
+    min-width: 0;
   }
   .weekly-gauge {
     flex: 0 0 112px;
@@ -522,18 +520,18 @@
   }
   .weekly-label { font-size: 13px; color: var(--text-muted); min-width: 0; }
   .weekly-sub {
-    flex: 0 1 300px;
     font-size: 12px;
     color: var(--text-muted);
-    text-align: right;
+    text-align: left;
     line-height: 1.5;
-    min-width: 220px;
+    min-width: 0;
   }
   .weekly-actions {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .weekly-actions input {
     background: rgba(255,255,255,0.06);
@@ -1447,6 +1445,28 @@
       return null;
     }
 
+    function compactThroughputHourlyRows(rows) {
+      if (!Array.isArray(rows) || rows.length < 2) return Array.isArray(rows) ? rows : [];
+      const bucketMs = 3 * 60 * 60 * 1000;
+      const buckets = new Map();
+      rows.forEach(row => {
+        const time = Date.parse(row && row.hour);
+        if (!Number.isFinite(time)) return;
+        const bucketTime = Math.floor(time / bucketMs) * bucketMs;
+        let bucket = buckets.get(bucketTime);
+        if (!bucket) {
+          bucket = { hour: new Date(bucketTime).toISOString() };
+          buckets.set(bucketTime, bucket);
+        }
+        Object.entries(row).forEach(([key, value]) => {
+          if (key !== 'hour' && typeof value === 'number' && Number.isFinite(value)) {
+            bucket[key] = Number(bucket[key] || 0) + value;
+          }
+        });
+      });
+      return Array.from(buckets.values()).sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
+    }
+
     function writeThroughputBootstrap(model) {
       if (!validateThroughputBootstrap(model, model && model.session_id, model && model.engine)) return false;
       try {
@@ -1454,6 +1474,9 @@
         // and comfortably below browser quota on large histories.
         const stored = JSON.parse(JSON.stringify(model));
         stored.throughput.turns = [];
+        stored.throughput.summary.hourly = compactThroughputHourlyRows(
+          stored.throughput.summary.hourly
+        );
         localStorage.setItem(
           throughputBootstrapKey(stored.session_id, stored.engine),
           JSON.stringify(stored)
@@ -1470,6 +1493,7 @@
     }
 
     function applyThroughputBootstrap(model, source) {
+      const applyStarted = performance.now();
       const session = currentAggregateSession();
       if (!validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
       visibleBootstrap = model;
@@ -1486,11 +1510,25 @@
       renderRefreshPanel(cachedRefresh);
       performance.mark('throughput-bootstrap-rendered');
       window.__throughputBootstrapRenderMs = performance.now();
+      window.__throughputBootstrapApplyMs = performance.now() - applyStarted;
       window.__throughputBootstrapSource = source;
       requestAnimationFrame(() => {
         if (activeSessionId === session.session_id) {
-          loadWeeklyHistory();
-          fetchWeekRankings();
+          const summary = model.throughput.summary || {};
+          const modelRows = summary.per_model || [];
+          const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
+            ? weeklyData.codex.weekly_pct
+            : null;
+          const codexWeeklyTotalTokens = modelRows.reduce((sum, row) => {
+            return sum + (isCodexModelRow(row) ? modelWeeklyBasisTokens(row) : 0);
+          }, 0);
+          renderModelBreakdown(modelRows, {
+            claudePctPerToken: activeThroughputEngine === 'claude' && weeklyData && weeklyData.pct_per_token,
+            codexWeeklyPct,
+            codexWeeklyTotalTokens,
+            engine: activeThroughputEngine,
+          });
+          renderTopSessions();
         }
       });
       return true;
@@ -1530,22 +1568,25 @@
           writeThroughputBootstrap(model);
           applyThroughputBootstrap(model, 'server');
         }
-        startRefreshStatusPolling(session);
         return model;
       } catch (_error) {
-        startRefreshStatusPolling(session);
         return null;
+      } finally {
+        if (engineAtStart === activeThroughputEngine && activeSessionId === session.session_id) {
+          startRefreshStatusPolling(session);
+        }
       }
     }
 
     function bootThroughputPage() {
+      window.__throughputBootStartedMs = performance.now();
       updateThroughputEngineUi();
       const session = currentAggregateSession();
       activeSessionId = session.session_id;
+      toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
       const cached = readThroughputBootstrap(session.session_id, activeThroughputEngine);
       if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(session);
       queueMicrotask(() => loadServerBootstrapThenRefresh(session));
-      toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
       loadSessions({ selectDefault: false });
     }
 
@@ -1725,6 +1766,8 @@
       writeThroughputBootstrap(model);
       applyThroughputBootstrap(model, 'refresh');
       renderRefreshPanel(status);
+      fetchWeekRankings();
+      loadWeeklyHistory();
       return true;
     }
 
@@ -1826,7 +1869,7 @@
         const data = await convRes.json();
         allSessions = data.conversations || data.sessions || [];
         renderSessionList();
-        fetchWeekRankings(); // non-blocking: re-sorts when rankings arrive
+        if (selectDefault) fetchWeekRankings();
         const defaultSession = currentAggregateSession();
         if (selectDefault && !activeSessionId && defaultSession) {
           await selectSession(defaultSession);
@@ -2161,12 +2204,14 @@
       const codexWeeklyTotalTokens = modelRows.reduce((sum, model) => {
         return sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0);
       }, 0);
-      renderModelBreakdown(modelRows, {
-        claudePctPerToken: ppt,
-        codexWeeklyPct,
-        codexWeeklyTotalTokens,
-        engine: activeThroughputEngine
-      });
+      if (!deferSecondary) {
+        renderModelBreakdown(modelRows, {
+          claudePctPerToken: ppt,
+          codexWeeklyPct,
+          codexWeeklyTotalTokens,
+          engine: activeThroughputEngine
+        });
+      }
 
       // Weekly history chart (aggregate only, lazy-loaded)
       const histSection = document.getElementById('weekly-history-section');
@@ -2176,7 +2221,7 @@
       // Top sessions table (aggregate only)
       const topSessSection = document.getElementById('top-sessions-section');
       if (topSessSection) topSessSection.style.display = isAggregate ? '' : 'none';
-      if (isAggregate) renderTopSessions();
+      if (isAggregate && !deferSecondary) renderTopSessions();
 
       // Turns section: only useful for per-session drill-down
       const turnsSection = document.getElementById('turns-section');
@@ -2192,7 +2237,7 @@
     async function loadWeeklyHistory() {
       if (_weeklyHistoryData) { drawWeeklyHistory(_weeklyHistoryData); return; }
       try {
-        const res = await fetch('/api/throughput/history');
+        const res = await fetch('/api/throughput/history?cache_only=1');
         if (!res.ok) return;
         const d = await res.json();
         if (!d.ok || !d.daily || !d.daily.length) return;
