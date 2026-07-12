@@ -4735,11 +4735,24 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("el.dataset.queuedSteerServer === 'true'", app_js)
         self.assertIn("el.classList.contains('send-queued')", app_js)
         self.assertIn("data-steer-queued-message", app_js)
+        self.assertIn("el.appendChild(steer)", app_js)
+        queued_handler = app_js[
+            app_js.index("const btn = ev.target.closest('[data-steer-queued-message]')"):
+            app_js.index("const btn = ev.target.closest('[data-steer-user-message]')")
+        ]
+        self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true })", queued_handler)
+        self.assertNotIn("postInjectInput(sid, text, 'send')", queued_handler)
         self.assertIn("tray.dataset.conversationId", app_js)
         self.assertIn("replace_queued", app_js)
         self.assertIn("is-queued-steer-duplicate", app_js)
         self.assertIn(".event.user_text.is-queued-steer-duplicate", app_css)
         self.assertIn(".queued-steer-tray .msg-image", app_css)
+        self.assertIn(".queued-steer-tray .send-queued-steer {", app_css)
+        self.assertIn("position: absolute;", app_css)
+        self.assertIn("top: 6px;", app_css)
+        self.assertIn("right: 8px;", app_css)
+        self.assertIn(".queued-steer-tray .event.user_text {", app_css)
+        self.assertIn("background: rgba(63, 185, 80, 0.045);", app_css)
 
     def test_codex_app_queued_send_marks_pending_echo_queued(self):
         """Codex app-server queue ACKs must not leave the optimistic echo pending."""

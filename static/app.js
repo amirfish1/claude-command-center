@@ -5312,10 +5312,7 @@
     btn.disabled = true;
     btn.textContent = 'Steering…';
     try {
-      let data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
-      if ((!data || !data.ok) && codexSteerUnavailable(data)) {
-        data = await postInjectInput(sid, text, 'send');
-      }
+      const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
       if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
       if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
       else if (row) row.remove();
@@ -38248,8 +38245,7 @@
         steer.className = 'send-queued-steer';
         steer.setAttribute('data-steer-queued-message', '');
         steer.textContent = 'Steer';
-        const note = el.querySelector('.send-queued-note');
-        (note || el).appendChild(steer);
+        el.appendChild(steer);
       }
       steer.dataset.sessionId = sessionId;
       tray.appendChild(el);

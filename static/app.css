@@ -952,7 +952,21 @@
     border-top: 1px solid color-mix(in srgb, var(--orange, #d29922) 28%, transparent);
     background: color-mix(in srgb, var(--surface) 88%, var(--bg));
   }
-  .queued-steer-tray .event { margin: 0; padding: 5px 10px; font-size: 12px; }
+  .queued-steer-tray .event {
+    position: relative;
+    margin: 0;
+    padding: 5px 64px 5px 10px;
+    font-size: 12px;
+  }
+  .queued-steer-tray .event.user_text {
+    background: rgba(63, 185, 80, 0.045);
+    border-left-color: color-mix(in srgb, var(--green) 65%, transparent);
+  }
+  .queued-steer-tray .send-queued-steer {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+  }
   .queued-steer-tray .event .user-msg { margin-top: 2px; font-size: 13px; }
   .conversations-view .event.user_text.is-queued-steer-duplicate { display: none; }
   .queued-steer-tray .msg-image {

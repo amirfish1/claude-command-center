@@ -1,1 +1,1 @@
-- Keep queued-message trays scoped to their session and provide a Steer action that consumes the queued copy before redirecting it.
+- Keep queued-message trays scoped to their session and provide a top-right Steer action that consumes the queued copy and injects it strictly as a steer.
