@@ -16807,6 +16807,19 @@ body:has(.gc-reader) .pwa-install-banner {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(88,166,255,0.14);
 }
+.files-queue-configure { font-size: 14px; }
+.fq-config-dialog { width: min(700px, 94vw); max-height: min(780px, 88vh); overflow: auto; }
+.fq-config-body { gap: 13px; }
+.fq-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.fq-config-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fq-config-field.wide { grid-column: 1 / -1; }
+.fq-config-field label { font-size: 12px; font-weight: 650; color: var(--text-muted); }
+.fq-config-field input, .fq-config-field select { min-width: 0; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); padding: 7px 8px; font: inherit; }
+.fq-config-field input:focus, .fq-config-field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.14); }
+.fq-config-help { color: var(--faint, var(--text-muted)); font-size: 11px; line-height: 1.35; }
+.fq-config-checks { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; }
+.fq-config-checks label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text); }
+.fq-config-github[hidden] { display: none; }
 
 /* Queue-health strip: one glanceable line per project with open tickets,
    above the ticket list. Wraps gracefully at narrow widths. */
@@ -16863,6 +16876,9 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-health-del:hover { opacity: 1 !important; background: rgba(248,81,73,0.18); color: var(--red, #f85149); }
 .fq-health-del.is-disabled { cursor: not-allowed; }
 .fq-health-del.is-disabled:hover { background: transparent; color: var(--text-muted); opacity: 0.6 !important; }
+.fq-health-config { flex: 0 0 auto; border: 0; background: transparent; color: var(--text-muted); padding: 0 2px; cursor: pointer; opacity: 0; font-size: 12px; }
+.fq-health-row:hover .fq-health-config { opacity: 0.7; }
+.fq-health-config:hover { opacity: 1 !important; color: var(--accent); }
 .fq-health-proj {
   font-weight: 600; color: var(--text);
   flex: 0 1 auto; min-width: 0; max-width: 28%;

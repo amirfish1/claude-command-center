@@ -251,6 +251,91 @@ def _wt_read_config():
         return {}
 
 
+_QUEUE_CONFIG_NAME_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
+_QUEUE_CONFIG_DEFAULTS = {
+    "auto_drain": False,
+    "desired_workers": 1,
+    "backend": "file",
+    "engine": "claude",
+    "claim_types": [],
+}
+
+
+def _queue_config_from_payload(payload):
+    """Validate and normalize the complete WatchTower queue form payload.
+
+    CCC owns a small, dependency-free mirror of ``wt config`` so the dashboard
+    remains useful when the WatchTower Python package is not importable by the
+    server. Keeping defaults here makes a newly-created queue explicit and
+    editable instead of relying on undocumented CLI defaults.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("expected JSON object")
+    queue = str(payload.get("queue") or "").strip().upper()
+    if not _QUEUE_CONFIG_NAME_RE.fullmatch(queue):
+        raise ValueError("queue must use 1–64 letters, numbers, _ or -")
+    backend = str(payload.get("backend") or "file").strip().lower()
+    if backend not in ("file", "github"):
+        raise ValueError("backend must be file or github")
+    engine = str(payload.get("engine") or "claude").strip().lower()
+    if engine not in ("claude", "codex"):
+        raise ValueError("engine must be claude or codex")
+    try:
+        workers = int(payload.get("workers", 1))
+    except (TypeError, ValueError):
+        raise ValueError("workers must be a whole number")
+    if not 1 <= workers <= 16:
+        raise ValueError("workers must be between 1 and 16")
+    raw_types = payload.get("claim_types") or []
+    if not isinstance(raw_types, list):
+        raise ValueError("claim_types must be a list")
+    claim_types = [t for t in ("bug", "feature") if t in raw_types]
+    config = dict(_QUEUE_CONFIG_DEFAULTS)
+    config.update({
+        "auto_drain": bool(payload.get("auto_drain", False)),
+        "desired_workers": workers,
+        "backend": backend,
+        "engine": engine,
+        "claim_types": claim_types,
+    })
+    for source, target in (("repo_path", "repo_path"), ("model", "model"),
+                           ("github_repo", "github_repo"),
+                           ("github_assignee", "github_assignee")):
+        value = str(payload.get(source) or "").strip()
+        if value:
+            if "\n" in value or "\r" in value:
+                raise ValueError(f"{source} must be one line")
+            config[target] = value
+    if backend == "github" and not config.get("github_repo"):
+        raise ValueError("GitHub repository is required for the GitHub backend")
+    if backend != "github":
+        config.pop("github_repo", None)
+        config.pop("github_assignee", None)
+    return {"queue": queue, "config": config}
+
+
+def _queue_config_options():
+    """Small, local suggestions for the queue-management dialog."""
+    cfg = _wt_read_config() or {}
+    repo_paths, models = set(), set()
+    queues = []
+    for name, conf in cfg.items():
+        conf = conf if isinstance(conf, dict) else {}
+        queues.append({"queue": str(name).upper(), "config": conf})
+        if conf.get("repo_path"):
+            repo_paths.add(str(conf["repo_path"]))
+        if conf.get("model"):
+            models.add(str(conf["model"]))
+    repo_paths.add(str(Path.cwd()))
+    return {
+        "ok": True,
+        "defaults": dict(_QUEUE_CONFIG_DEFAULTS),
+        "queues": sorted(queues, key=lambda row: row["queue"]),
+        "repo_paths": sorted(repo_paths),
+        "models": sorted(models),
+    }
+
+
 def _wt_queue_deletions_path():
     return _WT_HOME / "queue-deletions.json"
 
@@ -54825,6 +54910,41 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(result)
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/queue/config-options":
+            # Suggestions and the current durable config for the Queue manager.
+            # No subprocess: CCC reads the same WatchTower JSON file used by the
+            # existing drain/claim-type controls.
+            self.send_json(_queue_config_options())
+            return
+        if path == "/api/queue/config":
+            # Create or replace a queue's complete WatchTower configuration.
+            # This is the UI equivalent of `wt config -q ...`; replacement is
+            # intentional so clearing an optional field actually clears it.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+                normalized = _queue_config_from_payload(payload)
+            except (json.JSONDecodeError, ValueError) as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            try:
+                cfg_path = _wt_config_path()
+                cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                cfg = _wt_read_config() or {}
+                queue_name = normalized["queue"]
+                matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
+                if matched and matched != queue_name:
+                    del cfg[matched]
+                cfg[queue_name] = normalized["config"]
+                tmp = cfg_path.with_suffix(".json.tmp")
+                with open(tmp, "w") as f:
+                    json.dump(cfg, f, indent=2)
+                tmp.replace(cfg_path)
+                self.send_json({"ok": True, **normalized})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return

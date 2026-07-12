@@ -3854,6 +3854,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("min-height: 150px;", app_css)
         self.assertIn("resize: vertical;", app_css)
 
+    def test_queue_manager_can_create_and_revise_full_watchtower_config(self):
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="filesQueueConfigure"', index_html)
+        self.assertIn("function openQueueManager", app_js)
+        self.assertIn("/api/queue/config-options", app_js)
+        self.assertIn("/api/queue/config", app_js)
+        self.assertIn('data-fq-config-queue', app_js)
+        self.assertIn('name="fq-config-backend"', app_js)
+        self.assertIn('name="fq-config-claim-type"', app_js)
+        self.assertIn("queue configuration", app_js)
+        self.assertIn(".fq-config-dialog", app_css)
+
     def test_toolbar_controls_move_to_settings_and_metadata_rail(self):
         """Right-rail mode should empty the crowded conversation topbar."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -5003,6 +5018,56 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_valid_repo_path_is_accepted(self):
         self.assertEqual(self.server.resolve_repo_path(str(self.repo)), str(self.repo))
+
+    def test_queue_config_payload_has_safe_defaults_and_normalizes_fields(self):
+        """The Queue UI may create a config without requiring every advanced field."""
+        config = self.server._queue_config_from_payload({
+            "queue": " demo_queue ",
+            "auto_drain": True,
+            "workers": "3",
+            "claim_types": ["bug", "invalid", "feature"],
+            "engine": "codex",
+        })
+
+        self.assertEqual(config["queue"], "DEMO_QUEUE")
+        self.assertTrue(config["config"]["auto_drain"])
+        self.assertEqual(config["config"]["desired_workers"], 3)
+        self.assertEqual(config["config"]["claim_types"], ["bug", "feature"])
+        self.assertEqual(config["config"]["backend"], "file")
+        self.assertEqual(config["config"]["engine"], "codex")
+        self.assertNotIn("repo_path", config["config"])
+
+    def test_queue_config_payload_rejects_bad_queue_name_and_github_without_repo(self):
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "not valid!"})
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "DEMO", "backend": "github"})
+
+    def test_queue_config_api_creates_a_queue_and_returns_suggestions(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            request = urllib.request.Request(
+                base + "/api/queue/config",
+                data=json.dumps({"queue": "DEMO", "workers": 2}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                saved = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(saved["ok"])
+            self.assertEqual(saved["config"]["desired_workers"], 2)
+            request = urllib.request.Request(base + "/api/queue/config-options", data=b"{}", method="POST")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                options = json.loads(response.read().decode("utf-8"))
+            self.assertIn("DEMO", [row["queue"] for row in options["queues"]])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
 
     def test_ux_fixes_queue_file_is_isolated_to_test_home(self):
         self.assertEqual(

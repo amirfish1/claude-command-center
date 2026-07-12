@@ -31967,10 +31967,13 @@
         const delBtn = '<button class="fq-health-del' + (depth > 0 ? ' is-disabled' : '') + '"'
           + ' data-del-queue="' + escapeAttr(project) + '" data-depth="' + depth + '"'
           + ' title="' + escapeAttr(delTitle) + '" aria-label="' + escapeAttr(delTitle) + '">×</button>';
+        const configBtn = '<button class="fq-health-config" data-fq-config-queue="' + escapeAttr(project) + '"'
+          + ' title="Edit ' + escapeAttr(project) + ' queue configuration" aria-label="Edit ' + escapeAttr(project) + ' queue configuration">⚙</button>';
         return '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
           + ' role="button" tabindex="0"'
           + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' — click to scope queue') + '">'
           + delBtn
+          + configBtn
           + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
           + '<span class="fq-health-sep">·</span>'
           + '<span class="fq-health-depth">' + depth + ' open</span>'
@@ -33097,7 +33100,7 @@
         }
       };
       const scopeFromRow = (ev) => {
-        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle, .fq-health-del');
+        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle, .fq-health-del, .fq-health-config');
         if (badge) return;
         const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project]');
         if (!row) return;
@@ -33116,6 +33119,12 @@
       $health.addEventListener('click', toggleDrain);
       $health.addEventListener('click', cycleClaimTypes);
       $health.addEventListener('click', deleteQueue);
+      $health.addEventListener('click', async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue]');
+        if (!btn) return;
+        ev.preventDefault(); ev.stopPropagation();
+        await openQueueManager(btn.getAttribute('data-fq-config-queue'));
+      });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); scopeFromRow(ev); }
@@ -33147,6 +33156,13 @@
         _uxqItemsCache.ts = 0;
         _uxqHealthCache.ts = 0;
         _renderQueuePanel();
+      });
+    }
+    const $queueConfigure = document.getElementById('filesQueueConfigure');
+    if ($queueConfigure) {
+      $queueConfigure.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openQueueManager(_uxqLastResolvedProject || _uxqWorkerProject());
       });
     }
     // Status filter toggle (All | Open). 'open' hides closed tickets.
@@ -33233,6 +33249,83 @@
       document.addEventListener('keydown', onKey);
       refresh();
     });
+  }
+
+  // Create and revise the complete durable WatchTower queue configuration.
+  // The compact health-row controls remain useful shortcuts; this manager is
+  // the discoverable place for every field `wt config` supports.
+  async function openQueueManager(initialQueue) {
+    document.querySelectorAll('.fq-config-composer').forEach(n => n.remove());
+    let options;
+    try {
+      const res = await fetch('/api/queue/config-options', { method: 'POST' });
+      options = await res.json();
+      if (!res.ok || !options.ok) throw new Error(options.error || res.status);
+    } catch (e) {
+      showOpToast('Could not load queue configuration: ' + e, 'error');
+      return;
+    }
+    const defaults = options.defaults || {};
+    const queues = Array.isArray(options.queues) ? options.queues : [];
+    const findQueue = (name) => queues.find(q => String(q.queue).toUpperCase() === String(name || '').toUpperCase());
+    const pathChoices = (options.repo_paths || []).map(p => '<option value="' + escapeAttr(p) + '"></option>').join('');
+    const modelChoices = (options.models || []).map(m => '<option value="' + escapeAttr(m) + '"></option>').join('');
+    const queueChoices = queues.map(q => '<option value="' + escapeAttr(q.queue) + '"></option>').join('');
+    const modal = document.createElement('div');
+    modal.className = 'upd-overlay fq-config-composer open';
+    modal.innerHTML =
+        '<div class="upd-backdrop" data-fq-config-cancel></div>'
+      + '<div class="upd-dialog fq-config-dialog" role="dialog" aria-modal="true" aria-labelledby="fqConfigTitle">'
+      +   '<div class="fq-ticket-header"><h2 class="upd-title" id="fqConfigTitle">Queue configuration</h2><button type="button" class="fq-ticket-close" data-fq-config-cancel aria-label="Close">&times;</button></div>'
+      +   '<div class="fq-ticket-body fq-config-body">'
+      +     '<div class="fq-config-help">Create a queue with safe local defaults, or select an existing queue to revise it. Changes are written to WatchTower’s queue config immediately.</div>'
+      +     '<div class="fq-config-grid">'
+      +       '<div class="fq-config-field"><label for="fqConfigQueue">Queue name</label><input id="fqConfigQueue" list="fqConfigQueues" maxlength="64" placeholder="e.g. PRODUCT" autocomplete="off"><datalist id="fqConfigQueues">' + queueChoices + '</datalist><span class="fq-config-help">Letters, numbers, _ and - only.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigWorkers">Workers</label><input id="fqConfigWorkers" type="number" min="1" max="16"><span class="fq-config-help">Concurrent workers when auto-drain is on.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigBackend">Ticket backend</label><select id="fqConfigBackend" name="fq-config-backend"><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigEngine">Worker engine</label><select id="fqConfigEngine"><option value="claude">Claude</option><option value="codex">Codex</option></select><span class="fq-config-help">The agent runtime spawned for this queue.</span></div>'
+      +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><input id="fqConfigModel" list="fqConfigModels" placeholder="Use engine default"><datalist id="fqConfigModels">' + modelChoices + '</datalist><span class="fq-config-help">Leave blank to use the engine default.</span></div>'
+      +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checks"><label><input id="fqConfigDrain" type="checkbox"> Auto-drain new work</label></div><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
+      +       '<div class="fq-config-field wide"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
+      +       '<div class="fq-config-field wide fq-config-github" hidden><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" placeholder="owner/repository"><span class="fq-config-help">The repository whose issues this queue tracks.</span></div>'
+      +       '<div class="fq-config-field fq-config-github" hidden><label for="fqConfigGithubAssignee">GitHub assignee (optional)</label><input id="fqConfigGithubAssignee" placeholder="@me"><span class="fq-config-help">Used by GitHub-backed claims.</span></div>'
+      +     '</div>'
+      +   '</div>'
+      +   '<div class="upd-actions"><button type="button" class="upd-btn" data-fq-config-cancel>Cancel</button><button type="button" class="upd-btn upd-primary" data-fq-config-save>Save queue</button></div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    const $ = (sel) => modal.querySelector(sel);
+    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), drain: $('#fqConfigDrain'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
+    const apply = (entry) => {
+      const c = (entry && entry.config) || defaults;
+      fields.queue.value = (entry && entry.queue) || initialQueue || '';
+      fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
+      fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || 'claude';
+      fields.path.value = c.repo_path || ''; fields.model.value = c.model || ''; fields.drain.checked = !!c.auto_drain;
+      fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
+      modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
+      modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; });
+    };
+    const close = () => modal.remove();
+    apply(findQueue(initialQueue));
+    fields.queue.addEventListener('change', () => { const found = findQueue(fields.queue.value); if (found) apply(found); });
+    fields.backend.addEventListener('change', () => modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; }));
+    modal.querySelectorAll('[data-fq-config-cancel]').forEach(el => el.addEventListener('click', close));
+    modal.querySelector('[data-fq-config-save]').addEventListener('click', async () => {
+      const save = modal.querySelector('[data-fq-config-save]');
+      const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model: fields.model.value, auto_drain: fields.drain.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
+      save.disabled = true;
+      try {
+        const res = await fetch('/api/queue/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || res.status);
+        showOpToast('Saved ' + data.queue + ' queue configuration', 'success');
+        _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close(); _renderQueuePanel();
+      } catch (e) { showOpToast('Could not save queue: ' + e.message, 'error'); save.disabled = false; }
+    });
+    requestAnimationFrame(() => fields.queue.focus());
   }
 
   // Add a ticket to the queue straight from the panel header (CCC-145). Routes
