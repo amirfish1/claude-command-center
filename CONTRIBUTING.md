@@ -102,10 +102,18 @@ IIFE — state is private. Key functions:
 
 ## Testing
 
-There's no test suite today. If you add one, pytest + stdlib is fine; don't
-introduce a test framework with its own toolchain. Focus on the session
-classification logic (`classifyKanbanColumn`, `session_live_status`) — that's
-where subtle bugs hurt.
+`tests/` has the suite (pytest + stdlib only — don't introduce a test
+framework with its own toolchain). Run it with a python3 that actually has
+pytest installed; bare `python3` on macOS often resolves to a system stub
+(Xcode CLT) without it:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install pytest  # one-time setup
+.venv/bin/python3 -m pytest tests/
+```
+
+Focus on the session classification logic (`classifyKanbanColumn`,
+`session_live_status`) — that's where subtle bugs hurt.
 
 ## Scope I'll push back on
 

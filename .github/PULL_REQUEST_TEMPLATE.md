@@ -10,7 +10,7 @@
 <!-- What did you run, click, break? If there are no tests yet, manual repro
      is totally fine — just say what you did. -->
 
-- [ ] `python3 -m unittest discover tests` passes
+- [ ] `.venv/bin/python3 -m pytest tests/` passes (see CONTRIBUTING.md § Testing)
 - [ ] Ran the server and exercised the touched surface by hand
 
 ## Checklist
