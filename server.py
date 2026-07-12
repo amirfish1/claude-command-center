@@ -39734,6 +39734,55 @@ def _group_chat_compute_waiting(real_path: str, session_ids: list, name_map: dic
     return out
 
 
+GROUP_CHAT_ACTIVE_WINDOW_S = 15 * 60
+
+
+def group_chat_activity_state(meta: dict, now: float | None = None) -> str:
+    """Return the durable, user-facing activity state for one group chat."""
+    now = time.time() if now is None else now
+    if meta.get("archived"):
+        return "archived"
+    if meta.get("paused"):
+        return "paused"
+    if meta.get("closed_at"):
+        return "closed"
+    last_activity = max(
+        float(meta.get("created_at") or meta.get("started_at") or 0),
+        float(meta.get("last_message_at") or 0),
+        float(meta.get("participant_changed_at") or 0),
+    )
+    if last_activity and now - last_activity < GROUP_CHAT_ACTIVE_WINDOW_S:
+        return "active"
+    return "inactive"
+
+
+def _list_active_group_chat_summaries(now: float | None = None) -> list:
+    """Return active-chat rows without reading messages or probing participants."""
+    group_chats_dir = os.path.expanduser("~/.claude/group-chats")
+    try:
+        filenames = os.listdir(group_chats_dir)
+    except OSError:
+        return []
+    summaries = []
+    for filename in filenames:
+        if not filename.endswith(".json"):
+            continue
+        sidecar_path = os.path.join(group_chats_dir, filename)
+        try:
+            with open(sidecar_path, encoding="utf-8") as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(meta, dict) or group_chat_activity_state(meta, now) != "active":
+            continue
+        summaries.append({
+            "topic": meta.get("topic", ""),
+            "state": "active",
+            "session_ids": meta.get("session_ids") or [],
+        })
+    return summaries
+
+
 def _list_group_chats(include_archived: bool = False, only_archived: bool = False) -> list:
     """Scan ~/.claude/group-chats/ and build a list of chat entries.
 
@@ -53487,14 +53536,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload = fetch_cross_repo_issues()
             self.send_json(payload)
         elif path == "/api/group-chats/active":
-            # Returns all unarchived chats (active + recently closed) so the
-            # sidebar can render a single section with ghosted closed rows.
-            # Active = currently in _active_coordinations; closed = sidecar
-            # exists, archived flag is falsy, and it's NOT in the watcher's
-            # in-memory dict.
+            # Background polling must not enumerate historical chats or probe
+            # their participants. Full history is loaded only from explicit
+            # history/reader paths.
             self.send_json({
                 "ok": True,
-                "chats": _list_group_chats(include_archived=False),
+                "chats": _list_active_group_chat_summaries(),
             })
         elif path == "/api/group-chats/archived":
             # Filtered to archived chats whose participants touch repo_path,

@@ -41927,7 +41927,11 @@
       .sort()
       .join('|');
   }
-  async function pollGcActive() {
+  let _gcActivePollTimer = null;
+  let _gcActivePollPromise = null;
+  function pollGcActive() {
+    if (_gcActivePollPromise) return _gcActivePollPromise;
+    _gcActivePollPromise = (async () => {
     try {
       const data = await fetch('/api/group-chats/active').then(r => r.json());
       // Compare a metadata key, not just length, so renames, participant
@@ -41939,6 +41943,15 @@
       try { localStorage.setItem(_GC_ACTIVE_CACHE_KEY, JSON.stringify(_gcActiveChats)); } catch (_) {}
       const nextKey = _gcChatsKey(_gcActiveChats);
       const activeCount = _gcActiveChats.filter(c => c.status === 'active').length;
+      if (activeCount && !_gcActivePollTimer) {
+        _gcActivePollTimer = setInterval(
+          _gated('gcActive', () => { pollGcActive(); }),
+          15000,
+        );
+      } else if (!activeCount && _gcActivePollTimer) {
+        clearInterval(_gcActivePollTimer);
+        _gcActivePollTimer = null;
+      }
       updateActiveGroupChatPill();
       if ($gcActiveBtn) {
         if (activeCount === 0) {
@@ -41958,7 +41971,9 @@
       }
     } catch (_) {
       updateActiveGroupChatPill();
-    }
+    } finally { _gcActivePollPromise = null; }
+    })();
+    return _gcActivePollPromise;
   }
   if ($gcActiveBtn) {
     $gcActiveBtn.addEventListener('click', () => {
@@ -43574,7 +43589,6 @@
   (function wireGroupChatPolling() {
     if (READER_ONLY_POPOUT) return;
     try { pollGcActive(); } catch (_) {}
-    setInterval(_gated('gcActive', () => { try { pollGcActive(); } catch (_) {} }), 15000);
   })();
 
   // ── Known-repos list ─────────────────────────────────────────────────────
