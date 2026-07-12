@@ -145,3 +145,13 @@ def test_orbit_geometry_has_non_color_tier_distinctions():
     assert ".cost-high::after" in css
     assert ".cost-premium .session-cost-orbit" in css
     assert "box-shadow:" in css
+
+
+def test_low_and_medium_orbits_clear_the_thirteen_pixel_engine_glyph():
+    css = APP_CSS.read_text(encoding="utf-8")
+    low = css[css.index(".cost-low .session-cost-orbit {"):css.index(".cost-medium .session-cost-orbit {")]
+    medium = css[css.index(".cost-medium .session-cost-orbit {"):css.index(".cost-high .session-cost-orbit {")]
+
+    assert "inset: -1px;" in low
+    assert "inset: -1px;" in medium
+    assert "border: 1.25px solid" in medium

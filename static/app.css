@@ -6023,14 +6023,14 @@
   }
   .cost-low .session-cost-orbit {
     display: block;
-    inset: 3px;
-    border: 1px solid rgba(129, 144, 163, 0.72);
+    inset: -1px;
+    border: 1px solid rgba(129, 144, 163, 0.82);
     border-style: dotted;
   }
   .cost-medium .session-cost-orbit {
     display: block;
-    inset: 0;
-    border: 1px solid rgba(104, 169, 216, 0.82);
+    inset: -1px;
+    border: 1.25px solid rgba(104, 169, 216, 0.9);
     border-right-color: transparent;
     transform: rotate(-24deg);
   }
