@@ -2584,11 +2584,10 @@
 
     function shouldRenderResetMarker(event, resetMarkerWindow) {
       if (!resetMarkerWindow) return true;
-      if (resetMarkerWindow === 'codex') return String(event.window || '').startsWith('codex_');
-      return (event && event.window) === resetMarkerWindow;
+      return !!event && event.window === resetMarkerWindow;
     }
 
-    function renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow = null) {
+    function renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow = null, resetPeriodStart = null) {
       if (!svg || !Array.isArray(resetEvents) || !resetEvents.length || !Array.isArray(sourceRows) || !sourceRows.length) return;
       const rows = sourceRows
         .map((row, i) => ({ i, d: _resetMarkerRowDate(row) }))
@@ -2596,9 +2595,19 @@
       if (!rows.length) return;
       const first = rows[0].d.getTime();
       const last = rows[rows.length - 1].d.getTime();
+      let visibleResetEvents = resetEvents.filter(event => shouldRenderResetMarker(event, resetMarkerWindow));
+      if (resetMarkerWindow === 'codex_weekly' && Number.isFinite(resetPeriodStart)) {
+        const automatic = visibleResetEvents.filter(event => event.kind !== 'manual');
+        const nearestResetEvent = automatic.reduce((nearest, event) => {
+          const distance = Math.abs(new Date(event.detected_at).getTime() - resetPeriodStart);
+          if (!Number.isFinite(distance)) return nearest;
+          return !nearest || distance < nearest.distance ? { event, distance } : nearest;
+        }, null);
+        visibleResetEvents = visibleResetEvents.filter(event => event.kind === 'manual');
+        if (nearestResetEvent) visibleResetEvents.unshift(nearestResetEvent.event);
+      }
       let markerLabelCount = 0;
-      resetEvents.forEach(event => {
-        if (!shouldRenderResetMarker(event, resetMarkerWindow)) return;
+      visibleResetEvents.forEach(event => {
         const d = new Date(event.detected_at || '');
         const ts = d.getTime();
         if (Number.isNaN(ts) || ts < first || ts > last + 86400000) return;
@@ -2734,6 +2743,24 @@
       return Math.ceil((visibleMax * 1.08) / step) * step;
     }
 
+    function weeklyChartContext(summary) {
+      if (activeThroughputEngine === 'claude') {
+        if (!weeklyData || weeklyData.pct_per_token == null || !weeklyData.weekly_resets_at) return null;
+        return { pctPerToken: weeklyData.pct_per_token, resetAt: weeklyData.weekly_resets_at };
+      }
+      const codex = weeklyData && weeklyData.codex;
+      if (!codex || !codex.ok || codex.weekly_pct == null || !codex.weekly_resets_at) return null;
+      const resetAt = new Date(codex.weekly_resets_at);
+      const periodStart = new Date(resetAt.getTime() - 7 * 86400000);
+      const periodTokens = ((summary && summary.hourly) || []).reduce((total, row) => {
+        const at = new Date(row.hour || '');
+        if (Number.isNaN(at.getTime()) || at < periodStart || at >= resetAt) return total;
+        return total + (row.raw_context_tokens || 0) + (row.output_tokens || 0);
+      }, 0);
+      if (periodTokens <= 0) return null;
+      return { pctPerToken: codex.weekly_pct / periodTokens, resetAt: codex.weekly_resets_at };
+    }
+
     function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
       const svg = document.getElementById('throughput-chart');
       if (!svg) return;
@@ -2748,7 +2775,8 @@
         : 'Cache-adj tokens';
 
       // Determine whether the weekly % overlay is available for this view.
-      const showWeeklyOverlay = activeThroughputEngine === 'claude' && (daily || sixhourly) && weeklyData && weeklyData.pct_per_token != null;
+      const weeklyChart = (daily || sixhourly) ? weeklyChartContext(summary) : null;
+      const showWeeklyOverlay = !!weeklyChart;
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
       const previousWeekLegend = document.getElementById('previous-week-legend');
@@ -2762,8 +2790,7 @@
       // Get container width
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
-      if (activeThroughputEngine === 'claude' && isAggregate && sixhourly &&
-          !(weeklyData && weeklyData.pct_per_token != null)) {
+      if (isAggregate && sixhourly && !weeklyChart) {
         const nav = document.getElementById('chart-week-nav');
         if (nav) nav.style.display = 'none';
         updateChartZoomButton(false);
@@ -2805,7 +2832,7 @@
 
         if (showWeeklyOverlay) {
           // Period-scoped 56-slot view (current or past billing period)
-          const resetAt = new Date(weeklyData.weekly_resets_at);
+          const resetAt = new Date(weeklyChart.resetAt);
           selPeriodEnd = new Date(resetAt.getTime() + chartWeekOffset * 7 * 86400000);
           selPeriodStart = new Date(selPeriodEnd.getTime() - 7 * 86400000);
           const nowTs = Date.now();
@@ -2982,7 +3009,7 @@
         const rawY = height - padding.bottom - (tpm / (maxTpm * 1.1)) * (height - padding.top - padding.bottom);
         return Math.max(padding.top - 8, Math.min(height - padding.bottom, rawY));
       };
-      const tokenAxisPctPerToken = showWeeklyOverlay ? weeklyData.pct_per_token : null;
+      const tokenAxisPctPerToken = showWeeklyOverlay ? weeklyChart.pctPerToken : null;
       
       // Draw grid lines
       const gridSteps = 5;
@@ -3174,13 +3201,27 @@
       }
 
       const resetMarkerWindow = activeThroughputEngine === 'codex'
-        ? 'codex'
+        ? 'codex_weekly'
         : (activeThroughputEngine === 'claude' && (showWeeklyOverlay || showCumulative)) ? 'seven_day' : null;
-      renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow);
+      renderResetMarkers(
+        svg,
+        sourceRows,
+        xScale,
+        padding,
+        height,
+        resetMarkerWindow,
+        selPeriodStart ? selPeriodStart.getTime() : null,
+      );
 
       // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
       if (showWeeklyOverlay && sixhourly) {
-        const ppt = weeklyData.pct_per_token;
+        let ppt = weeklyChart.pctPerToken;
+        if (activeThroughputEngine === 'codex') {
+          const currentTokens = sourceRows.reduce((total, row) => row._projected
+            ? total
+            : total + (row.raw_context_tokens || 0) + (row.output_tokens || 0), 0);
+          if (currentTokens > 0) ppt = weeklyData.codex.weekly_pct / currentTokens;
+        }
 
         // 1. Cumulative actual %
         let cumAct = 0;
@@ -3363,7 +3404,7 @@
         // Fable rows even when the current period has none. Gate on weeklyData.fable_pct,
         // which IS scoped to the current period, so the line only appears when Fable is
         // actually active in this billing period.
-        const _fableActiveThisPeriod = weeklyData && weeklyData.fable_pct != null && weeklyData.fable_pct > 0;
+        const _fableActiveThisPeriod = activeThroughputEngine === 'claude' && weeklyData && weeklyData.fable_pct != null && weeklyData.fable_pct > 0;
         const _fableRows = (summary.per_model || []).filter(m => (m.model || m.engine || '').toLowerCase().includes('fable'));
         const _fableTok = _fableRows.reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
         const _totalModelTok = (summary.per_model || []).reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
@@ -3435,8 +3476,8 @@
 
       // ── Weekly % overlay (daily view) ────────────────────────────────────────
       if (showWeeklyOverlay && daily) {
-        const pctPerToken = weeklyData.pct_per_token;
-        const resetAt = weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
+        const pctPerToken = weeklyChart.pctPerToken;
+        const resetAt = new Date(weeklyChart.resetAt);
         const periodStart = resetAt ? new Date(resetAt.getTime() - 7 * 86400000) : null;
         const rowDt = (row) => row.hour ? new Date(row.hour) : (row.day ? new Date(row.day + 'T00:00:00') : null);
         let cumPrev = 0, cumCurr = 0;

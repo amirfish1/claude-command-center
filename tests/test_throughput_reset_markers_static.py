@@ -20,8 +20,10 @@ def test_weekly_chart_filters_reset_markers_and_humanizes_codex_windows():
 
     assert "shouldRenderResetMarker(event, resetMarkerWindow)" in throughput_html
     assert "const resetMarkerWindow = activeThroughputEngine === 'codex'" in throughput_html
-    assert "? 'codex'" in throughput_html
-    assert "String(event.window || '').startsWith('codex_')" in throughput_html
+    assert "? 'codex_weekly'" in throughput_html
+    assert "event.window === resetMarkerWindow" in throughput_html
+    assert "const nearestResetEvent" in throughput_html
+    assert "Math.abs(new Date(event.detected_at).getTime() - resetPeriodStart)" in throughput_html
     assert "let markerLabelCount = 0" in throughput_html
     assert "markerLabelCount % 3" in throughput_html
     assert "Codex 5-hour session" in throughput_html

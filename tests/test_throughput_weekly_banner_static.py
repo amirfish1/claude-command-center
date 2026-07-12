@@ -33,3 +33,15 @@ def test_weekly_banner_uses_non_overlapping_compact_layout():
     assert ".weekly-sub-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }" in throughput_html
     assert ".weekly-meter {\n    flex: 1 1 0;" in throughput_html
     assert "min-width: 0;" in throughput_html
+
+
+def test_codex_aggregate_uses_weekly_period_overlay():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function weeklyChartContext(summary)" in throughput_html
+    assert "codex.weekly_resets_at" in throughput_html
+    assert "codex.weekly_pct" in throughput_html
+    assert "const showWeeklyOverlay = !!weeklyChart" in throughput_html
+    assert "const resetAt = new Date(weeklyChart.resetAt)" in throughput_html
+    assert "let ppt = weeklyChart.pctPerToken" in throughput_html
+    assert "weeklyData.codex.weekly_pct / currentTokens" in throughput_html
