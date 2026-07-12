@@ -1,0 +1,1 @@
+- Add drag-and-drop file attachments to session composers, with managed 100 MiB uploads.
