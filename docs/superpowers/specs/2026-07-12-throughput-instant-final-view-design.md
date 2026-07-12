@@ -55,7 +55,21 @@ Boot order is:
 4. Render it only if it is complete and newer than the visible model.
 5. Start one authoritative background refresh.
 6. Commit the fresh model to disk and browser storage, then replace the visible
-   model in one render transaction.
+model in one render transaction.
+
+### Compact weekly usage header
+
+The weekly usage banner is one compact row rather than a multi-line data dump.
+Claude, Fable, and Codex use identical meter anatomy: a short product label,
+the percentage, and a horizontal gauge. The center status area contains at
+most two visible lines: the last authoritative sync/live estimate and the
+reset projection/countdown. Secondary details such as plan type and Codex
+session usage remain accessible through the status area's native tooltip.
+
+The reset timestamp and `Record reset` action stay aligned on the right. At
+narrow widths the three sections wrap without collisions: meters first,
+status second, controls last. The banner must not rely on fixed text widths or
+allow status copy to overlap meters or controls.
 
 There is no staleness cutoff for display. Age is disclosed in the refresh panel;
 stale data is preferable to a loader or the legacy graph.
