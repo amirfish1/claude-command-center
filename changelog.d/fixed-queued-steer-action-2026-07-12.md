@@ -1,1 +1,1 @@
-- Keep queued-message trays scoped to their session, provide a top-right Steer action, and make normal composer submits steer CCC-owned active Codex turns instead of waiting indefinitely for them to end.
+- Keep queued-message trays scoped to their session and provide a top-right Steer action that redirects the active Codex turn without changing normal Send semantics.

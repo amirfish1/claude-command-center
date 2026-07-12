@@ -4370,7 +4370,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function codexTurnSteerable()", app_js)
         self.assertIn("&& codexTurnSteerable();", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
-        self.assertIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
+        self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
         send_handler = app_js[
             app_js.index("async function sendToTerminal"):
             app_js.index("function insertPendingSpawnCard")

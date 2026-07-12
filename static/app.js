@@ -7214,14 +7214,6 @@
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);
     const clearCommand = /^\/clear(?:\s|$)/i.test(text);
-    // A normal composer submit during a CCC-owned running Codex turn is a
-    // steer, not a follow-up to park until the turn ends. Goal-driven turns
-    // can intentionally run for a long time, so send-mode queueing here makes
-    // the next message effectively unreadable. Slash commands keep their
-    // dedicated routing and are never promoted to steer.
-    if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable()) {
-      if (!/^\//.test(text)) injectMode = 'steer';
-    }
     if (/^\//.test(text)) announcedFrom = '';
     if (compactCommand && hasPendingSendEchoBeforeCompact(getConvViewForPane(paneId || activePaneId()))) {
       showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
