@@ -9597,7 +9597,7 @@
   }
   .wake-breakdown .wb-stage.is-done { opacity: 1; color: #3fb950; }
   .wake-breakdown .wb-stage.is-current { opacity: 1; color: #58a6ff; }
-  .wake-breakdown:not(.is-detailed) .wb-stage.is-done .wb-label { display: none; }
+  .wake-breakdown .wb-stage.is-done .wb-label { display: none; }
   .wake-breakdown .wb-stage .wb-label { color: inherit; }
   .wake-breakdown .wb-icon {
     flex: 0 0 auto;

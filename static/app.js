@@ -3910,7 +3910,7 @@
     el.className = 'conv-live-tool-inline optimistic is-stale-no-process';
     el.innerHTML = '<span class="cl-pulse"></span>'
       + '<span class="cl-tool">No active agent process</span>'
-      + '<span class="cl-hint">Send a message to resume it headlessly (you\'ll see "Waking up…"), '
+      + '<span class="cl-hint">Send a message to resume it headlessly, '
       + 'or use Launch if typing is unavailable.</span>';
     return true;
   }
@@ -6590,11 +6590,11 @@
     note.textContent = steered
       ? '✓ Steered into the running Codex turn.'
       : waking
-      ? '⏻ Waking the headless agent — it reloads the conversation first, so the reply can take a minute.'
+      ? '✓ Delivered — reloading the conversation before the reply.'
       : '✓ Delivered — waiting for ' + engineLabel + ' to pick it up.';
-    // Tier 2: the agent now has the message — advance the live turn status from
-    // "Sending…" to "🧠 Thinking…" (or "Waking up…"). Clears when the response lands.
-    setOptimisticAgentThinking(div.parentNode, waking ? '⏻ Waking up headless&hellip;' : null);
+    // Tier 2: once a normal send is delivered, advance it from Sending to
+    // Thinking. Headless wakes use their compact checkmark progress instead.
+    if (!waking) setOptimisticAgentThinking(div.parentNode);
     // CCC-154: a DELIVERED send is confirmed in the pipeline — its echo must
     // survive across full re-renders until the agent emits it in the JSONL,
     // however long the turn runs. Mark + persist `delivered` so
@@ -7095,12 +7095,11 @@
     updateInputBar();
     $input.value = '';
     clearInputDraftForConversation(draftConversation);
-    // If the session has no live process, this send wakes it headlessly. Show
-    // "⏻ Waking up…" inline immediately (Claude AND Codex) rather than leaving a
-    // bare "Sending…" — the response then renders the outcome/error inline.
+    // A dormant send receives its outcome from the server. Codex additionally
+    // starts compact checkmark progress, while queued and error states remain
+    // explicit inline feedback.
     if (!compactCommand && !clearCommand && looksDormantNoProcess()) {
       const $wv = getConvViewForPane(paneId || activePaneId()) || getConvView();
-      setOptimisticAgentThinking($wv, '⏻ Waking up&hellip;');
       if (currentSession.source === 'codex') {
         startCodexWakeBreakdown($wv, sid);
       }

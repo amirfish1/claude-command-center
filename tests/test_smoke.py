@@ -4085,7 +4085,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("return 'Thinking… ' + model + effort;", app_js)
         self.assertIn("const WAKE_STAGE_DETAIL_DELAY_MS = 1000;", app_js)
         self.assertIn("el.classList.toggle('is-detailed', showDetails);", app_js)
-        self.assertIn(".wake-breakdown:not(.is-detailed) .wb-stage.is-done .wb-label", app_css)
+        self.assertIn(".wake-breakdown .wb-stage.is-done .wb-label { display: none; }", app_css)
+        self.assertNotIn("Waking up&hellip;", app_js)
+        self.assertNotIn("Waking up headless&hellip;", app_js)
+        self.assertNotIn("Waking the headless agent", app_js)
 
     def test_mobile_live_command_indicator_collapses_command_detail(self):
         """Mobile should show a compact Bash/tool pill instead of a multi-line
