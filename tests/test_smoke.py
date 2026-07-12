@@ -3501,6 +3501,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const protoDesc = Object.getOwnPropertyDescriptor(proto, 'value');", app_js)
         self.assertIn("const desc = ownDesc || protoDesc;", app_js)
 
+    def test_composer_file_drop_uses_managed_attachments(self):
+        """Finder/browser drops must persist files before inserting a path token."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+
+        self.assertIn("function attachFileDrop(el)", app_js)
+        self.assertIn("ev.dataTransfer.files", app_js)
+        self.assertIn("uploadManagedAttachment(file)", app_js)
+        self.assertIn("/api/upload-attachment", app_js)
+        self.assertIn('path == "/api/upload-attachment"', server_py)
+        self.assertIn("100 * 1024 * 1024", server_py)
+        self.assertIn("COMMAND_CENTER_ATTACHMENTS_DIR", server_py)
+
     def test_composer_textarea_hides_native_scrollbar_chrome(self):
         """The composer textarea should not show WebKit scrollbar thumbs.
 
@@ -8590,6 +8603,42 @@ class TestRepoContextHelpers(unittest.TestCase):
                 result = server.spawn_session_codex(
                     f"inspect this screenshot {image}",
                     name="image prompt",
+                    repo_path=str(self.repo),
+                )
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        cmd = popen.call_args.args[0]
+        self.assertIn("--image", cmd)
+        self.assertEqual(cmd[cmd.index("--image") + 1], str(image))
+
+    def test_spawn_codex_attaches_managed_drop_images(self):
+        """Image drops use the same Codex --image delivery as image paste."""
+        server = self.server
+        attachment_dir = server.COMMAND_CENTER_ATTACHMENTS_DIR
+        attachment_dir.mkdir(parents=True)
+        image = attachment_dir / "attachment-123.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n")
+        proc = mock.Mock(pid=4242)
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_codex_bin",
+                return_value={"available": True, "bin": "/usr/bin/codex-test"},
+            ), mock.patch.dict(os.environ, {"CCC_CODEX_SPAWN_APP_SERVER": "0"}), \
+                 mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+                 mock.patch.object(server, "_record_spawn_to_registry"):
+                result = server.spawn_session_codex(
+                    f"inspect this screenshot {image}",
+                    name="dropped image prompt",
                     repo_path=str(self.repo),
                 )
         finally:

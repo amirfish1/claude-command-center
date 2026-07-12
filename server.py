@@ -69,6 +69,7 @@ import federation
 CCC_ROOT = Path(__file__).resolve().parent
 COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
+COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 # AskUserQuestion relay: headless `claude -p` auto-declines AskUserQuestion
 # (no TUI picker), so for CCC-spawned sessions the PreToolUse hook blocks and
 # waits here for the dashboard to drop an answer file. Kept in sync with
@@ -753,6 +754,11 @@ _PASTED_IMAGE_PATH_RE = re.compile(
     r"pasted-images/paste-[\w.-]+\.(?:png|jpe?g|gif|webp))",
     re.IGNORECASE,
 )
+_MANAGED_ATTACHMENT_IMAGE_PATH_RE = re.compile(
+    r"(?:file://)?(/[^\s<>\"')]+/\.claude/command-center/"
+    r"attachments/attachment-[\w.-]+\.(?:png|jpe?g|gif|webp))",
+    re.IGNORECASE,
+)
 
 # Files-from-conversation: extension whitelist driving both the
 # /api/conversations/<id>/files extractor and the /api/reveal-file
@@ -887,6 +893,22 @@ def _resolve_pasted_image_path(target, *, require_file=False):
     return resolved
 
 
+def _resolve_managed_attachment_path(target, *, require_file=False):
+    """Return a resolved path when target is a CCC-managed dropped file."""
+    raw = urllib.parse.unquote(str(target or "").strip())
+    if raw.startswith("file://"):
+        raw = raw[len("file://"):]
+    try:
+        resolved = Path(raw).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+    if not _path_is_within(resolved, COMMAND_CENTER_ATTACHMENTS_DIR):
+        return None
+    if require_file and not resolved.is_file():
+        return None
+    return resolved
+
+
 def _session_referenced_open_path(session_id, resolved_target):
     """True when `resolved_target` is an exact file path referenced by a
     session tool call.
@@ -982,18 +1004,22 @@ def _safe_local_file_open_path(resolved_target, *, categories=None):
 
 
 def _extract_pasted_image_paths(text):
-    """Extract existing CCC-pasted images from prompt text for CLI attachment."""
+    """Extract CCC-managed images from prompt text for CLI attachment."""
     out = []
     seen = set()
-    for m in _PASTED_IMAGE_PATH_RE.finditer(str(text or "")):
-        resolved = _resolve_pasted_image_path(m.group(1), require_file=True)
-        if not resolved:
-            continue
-        path = str(resolved)
-        if path in seen:
-            continue
-        seen.add(path)
-        out.append(path)
+    for path_re, resolver in (
+        (_PASTED_IMAGE_PATH_RE, _resolve_pasted_image_path),
+        (_MANAGED_ATTACHMENT_IMAGE_PATH_RE, _resolve_managed_attachment_path),
+    ):
+        for m in path_re.finditer(str(text or "")):
+            resolved = resolver(m.group(1), require_file=True)
+            if not resolved:
+                continue
+            path = str(resolved)
+            if path in seen:
+                continue
+            seen.add(path)
+            out.append(path)
     return out
 
 
@@ -56106,6 +56132,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 fpath = os.path.join(img_dir, fname)
                 try:
                     with open(fpath, "wb") as f:
+                        f.write(raw)
+                    self.send_json({"ok": True, "path": fpath, "name": fname, "bytes": len(raw)})
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/upload-attachment":
+            # Browser File objects deliberately do not expose the Finder path.
+            # Persist their bytes in CCC state and return that managed path for
+            # the composer to insert into the session prompt.
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 100 * 1024 * 1024:
+                self.send_json({"ok": False, "error": "bad length"}, 400)
+            else:
+                raw = self.rfile.read(length)
+                original_name = urllib.parse.unquote(
+                    self.headers.get("X-CCC-Attachment-Name", "")
+                )
+                ext = os.path.splitext(os.path.basename(original_name))[1].lower()
+                ext = re.sub(r"[^a-z0-9.]", "", ext)[:20]
+                attachment_dir = str(COMMAND_CENTER_ATTACHMENTS_DIR)
+                os.makedirs(attachment_dir, exist_ok=True)
+                fname = f"attachment-{uuid.uuid4().hex}{ext}"
+                fpath = os.path.join(attachment_dir, fname)
+                try:
+                    with open(fpath, "xb") as f:
                         f.write(raw)
                     self.send_json({"ok": True, "path": fpath, "name": fname, "bytes": len(raw)})
                 except Exception as e:

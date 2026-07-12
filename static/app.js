@@ -44508,6 +44508,19 @@
     if (!data.ok) throw new Error(data.error || 'upload failed');
     return data.path;
   }
+  async function uploadManagedAttachment(file) {
+    const res = await fetch('/api/upload-attachment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'X-CCC-Attachment-Name': encodeURIComponent(file.name || 'attachment'),
+      },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) throw new Error(data.error || 'upload failed');
+    return data.path;
+  }
   function insertAtCursor(el, text) {
     if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text')) {
       const start = el.selectionStart || 0;
@@ -44590,7 +44603,34 @@
     const strip = host && host.querySelector(':scope > .paste-thumb-strip');
     if (strip) strip.remove();
   }
+  function attachFileDrop(el) {
+    if (!el || el._fileDropBound) return;
+    el._fileDropBound = true;
+    el.addEventListener('dragover', (ev) => {
+      if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'copy';
+      }
+    });
+    el.addEventListener('drop', async (ev) => {
+      const files = Array.from((ev.dataTransfer && ev.dataTransfer.files) || []).filter(Boolean);
+      if (!files.length) return;
+      ev.preventDefault();
+      for (const file of files) {
+        const placeholder = ' [uploading ' + (file.name || 'attachment') + '...] ';
+        insertAtCursor(el, placeholder);
+        try {
+          const path = await uploadManagedAttachment(file);
+          el.value = el.value.replace(placeholder, ' ' + path + ' ');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        } catch (e) {
+          el.value = el.value.replace(placeholder, ' [upload failed: ' + e.message + '] ');
+        }
+      }
+    });
+  }
   function attachImagePaste(el) {
+    attachFileDrop(el);
     if (!el || el._imgPasteBound) return;
     el._imgPasteBound = true;
     el.addEventListener('paste', async (ev) => {
