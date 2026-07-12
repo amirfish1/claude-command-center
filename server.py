@@ -23027,7 +23027,8 @@ def _codex_custom_tool_arg(source, key):
     #   tools.exec_command({ cmd: "...", sandbox_permissions: "..." })
     # It is intentionally small and best-effort; rollout remains authoritative.
     pattern = (
-        r"(?<![A-Za-z0-9_$])" + re.escape(key)
+        r"(?<![A-Za-z0-9_$])(?:" + re.escape(key)
+        + r'|"' + re.escape(key) + r'"|\'' + re.escape(key) + r"')"
         + r"\s*:\s*(?P<quote>[\"'])(?P<body>(?:\\.|(?!(?P=quote)).)*)(?P=quote)"
     )
     match = re.search(pattern, source, re.DOTALL)

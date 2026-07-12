@@ -8163,6 +8163,28 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(block["approval_required"])
         self.assertEqual(block["approval_message"], "Allow status?")
 
+    def test_parse_codex_event_reads_json_style_custom_tool_arguments(self):
+        event = {
+            "timestamp": "2026-07-12T04:01:54.740Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call_json_style",
+                "input": (
+                    'const r = await tools.exec_command({"cmd":"kill -TERM 66784\\n'
+                    'printf \\"replacement listener\\\\n\\""});\n'
+                ),
+            },
+        }
+
+        parsed = self.server._parse_codex_event(event, 12)
+
+        block = parsed["blocks"][0]
+        self.assertEqual(block["name"], "Bash")
+        self.assertIn("kill -TERM 66784", block["detail"])
+        self.assertIn("kill -TERM 66784", block["command"])
+
     def test_codex_app_activity_superseded_by_newer_tail(self):
         app_activity = {
             "sidecar_status": "active",
