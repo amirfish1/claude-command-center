@@ -23373,6 +23373,7 @@
       + '</div>';
     };
     const _renderRow = (c, opts = {}) => {
+      const goalIconOnly = !!opts.goalIconOnly;
       const quietTitleChrome = !!opts.quietTitleChrome;
       // Inline NYA lookup (In-progress rows only, when Details is on). Resolved
       // once here so both the row chevron and the appended block agree.
@@ -24039,17 +24040,25 @@
       // by CSS; full objective + status in the tooltip.
       let goalChipHtml = '';
       const _goalText = (c.goal || '').trim();
+      let _gui = null;
+      let _gcls = '';
+      let _gTip = '';
       if (_goalText) {
         const _gs = (c.goal_status || '').trim();
-        const _gui = goalStatusUi(_gs);
-        const _gcls = ' ' + _gui.className;
-        const _gTip = 'Goal' + (_gs ? ' (' + _gs + ')' : '') + ': ' + _goalText;
+        _gui = goalStatusUi(_gs);
+        _gcls = ' ' + _gui.className;
+        _gTip = 'Goal' + (_gs ? ' (' + _gs + ')' : '') + ': ' + _goalText;
         goalChipHtml = '<span class="conv-goal' + _gcls + '" data-role="goal" title="'
           + escapeAttr(_gTip) + '">'
           + '<span class="conv-goal-icon" aria-hidden="true">' + _gui.iconHtml + '</span>'
           + '<span class="conv-goal-text">' + escapeHtml(_goalText) + '</span>'
           + '</span>';
       }
+      const goalIconHtml = _goalText && goalIconOnly
+        ? '<span class="conv-goal-icon-only' + _gcls + '" title="' + escapeAttr(_gTip) + '"'
+          + ' aria-label="' + escapeAttr(_gTip) + '">' + _gui.iconHtml + '</span>'
+        : '';
+      const goalMetaHtml = goalIconOnly ? '' : goalChipHtml;
       const evergreenGoalHtml = opts.evergreenAgent ? goalChipHtml : '';
       let evergreenStateHtml = '';
       if (opts.evergreenAgent) {
@@ -24091,14 +24100,14 @@
           + (_briefOpen ? '&#9662;' : '&#9656;') + '</button>'
         : '';
       // Meta row: always shown when there are chips or a brief chevron.
-      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);
+      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);
       const hoverMetaRowHtml = _hasMetaContent
         ? '<div class="conv-hover-meta-row">'
           + _briefChevronHtml
           + _hmObjectChip
           + _hmFolderChip
           + sessionIdChipHtml
-          + goalChipHtml
+          + goalMetaHtml
           + pinnedHtml
           + (rowSizeHtml || '')
           + (branchSlotHtml ? '<span class="conv-branch-slot">' + branchSlotHtml + '</span>' : '')
@@ -24237,6 +24246,7 @@
             + cooTrackHtml
             + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            + (goalIconOnly ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
             + (opts.evergreenAgent ? '' : uxFixesQueueProgressHtml)
             + (opts.evergreenAgent ? '' : evergreenStateHtml)
@@ -26244,7 +26254,7 @@
         const archivedRepoPath = cards[0].folder_path || '';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)
-          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })
+          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true, goalIconOnly: true })
           + '</div>';
       }).join('');
       // Archived group chats live in the Trash section (CCC-468), so the
@@ -26309,7 +26319,7 @@
         const sep = _arcSeparatorBefore(mtime, pinRank);
         _arcChunks.push(sep + _renderRowsWithRepeatGroups(
           _arcCurCards,
-          { suppressFolderChip: _isSpecificFolderFilter }
+          { suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }
         ));
         _arcCurCards = [];
         _arcCurKey = null;
@@ -26325,7 +26335,7 @@
         if (!key) {
           _arcFlushCards();
           const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
-          _arcChunks.push(sep + _renderRow(it.card, { suppressFolderChip: _isSpecificFolderFilter }));
+          _arcChunks.push(sep + _renderRow(it.card, { suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }));
           continue;
         }
         if (_arcCurKey && _arcCurKey !== key) _arcFlushCards();
@@ -26362,7 +26372,7 @@
       for (const c of _trashConvs) {
         _trashItems.push({
           mtime: c.modified || c.last_interacted || 0,
-          html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter }),
+          html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }),
         });
       }
       for (const gc of _archivedGroupChatsForRender) {

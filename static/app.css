@@ -7598,6 +7598,16 @@
   .conv-item .conv-goal.is-paused { color: var(--orange, #d29922); }
   .conv-item .conv-goal.is-blocked { color: var(--red, #f85149); }
   .conv-item .conv-goal.is-complete { color: var(--text-muted); opacity: 0.75; }
+  .conv-item .conv-goal-icon-only {
+    flex: 0 0 auto;
+    margin-left: 6px;
+    color: var(--green, #3fb950);
+    font-size: 12px;
+    line-height: 1;
+  }
+  .conv-item .conv-goal-icon-only.is-paused,
+  .conv-item .conv-goal-icon-only.is-blocked { color: var(--orange, #d29922); }
+  .conv-item .conv-goal-icon-only.is-complete { color: var(--text-muted); opacity: 0.75; }
   .conv-item.active .conv-hover-meta-row .conv-goal { opacity: 1; }
 
   .conv-list-panel {
