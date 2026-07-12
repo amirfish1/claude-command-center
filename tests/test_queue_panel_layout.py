@@ -58,6 +58,20 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("const rawStatus = it.status || 'open';", queue_js)
         self.assertNotIn("const status = it.status || 'open';", queue_js)
 
+    def test_queue_panel_can_filter_tickets_by_type(self):
+        """Type controls keep bugs and features independently scannable."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="queueTypeFilterToggle"', index_html)
+        self.assertIn('data-uxq-type-filter="all"', index_html)
+        self.assertIn('data-uxq-type-filter="bug"', index_html)
+        self.assertIn('data-uxq-type-filter="feature"', index_html)
+        self.assertIn("const _UXQ_TYPE_FILTER_LS = 'ccc-uxq-type-filter';", app_js)
+        self.assertIn("function _uxqGetTypeFilter()", app_js)
+        self.assertIn("typeScoped = _uxqGetTypeFilter() === 'all'", app_js)
+        self.assertIn("[data-uxq-type-filter]", app_js)
+
     def test_right_rail_queue_items_use_larger_type(self):
         """Queue ticket rows in the right rail should be readable at a glance."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

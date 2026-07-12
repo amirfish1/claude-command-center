@@ -32280,6 +32280,28 @@
       b.classList.toggle('is-active', b.getAttribute('data-uxq-filter') === cur);
     });
   }
+  // Type filter is separate from the status filter above, so a user can see
+  // only open bugs, all features including closed work, or every ticket.
+  // Untyped tickets are bugs: that is the WatchTower claim-filter default.
+  const _UXQ_TYPE_FILTER_LS = 'ccc-uxq-type-filter';
+  function _uxqGetTypeFilter() {
+    try {
+      const val = localStorage.getItem(_UXQ_TYPE_FILTER_LS);
+      return val === 'bug' || val === 'feature' ? val : 'all';
+    } catch (_) { return 'all'; }
+  }
+  function _uxqSetTypeFilter(val) {
+    const next = val === 'bug' || val === 'feature' ? val : 'all';
+    try { localStorage.setItem(_UXQ_TYPE_FILTER_LS, next); } catch (_) {}
+  }
+  function _uxqRenderTypeFilterToggle() {
+    const $t = document.getElementById('queueTypeFilterToggle');
+    if (!$t) return;
+    const cur = _uxqGetTypeFilter();
+    $t.querySelectorAll('[data-uxq-type-filter]').forEach(b => {
+      b.classList.toggle('is-active', b.getAttribute('data-uxq-type-filter') === cur);
+    });
+  }
   const _UXQ_WRAP_TITLES_LS = 'ccc-uxq-wrap-titles';
   function _uxqGetWrapTitles() {
     try { return localStorage.getItem(_UXQ_WRAP_TITLES_LS) === '1'; } catch (_) { return false; }
@@ -32939,6 +32961,7 @@
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
       _uxqRenderFilterToggle();
+      _uxqRenderTypeFilterToggle();
       _renderQueueHealthStrip(false, null); // always show all queues regardless of scope/dropdown
       // Ensure _uxqHealthCache.queues (auto_drain per queue) is populated
       // before building rows below — _renderQueueHealthStrip above is
@@ -32950,15 +32973,18 @@
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       // Status filter: 'open' hides closed (shows open + in_progress).
       const statusScoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
+      const typeScoped = _uxqGetTypeFilter() === 'all'
+        ? statusScoped
+        : statusScoped.filter(it => ((it && it.type) === 'feature' ? 'feature' : 'bug') === _uxqGetTypeFilter());
       // Free-text search over ref/note/text (CCC-432).
       const $qSearch = document.getElementById('queueSearchInput');
       const qTerm = $qSearch ? $qSearch.value.trim().toLowerCase() : '';
       const scoped = qTerm
-        ? statusScoped.filter(it => {
+        ? typeScoped.filter(it => {
             const hay = (_uxqItemRef(it) + ' ' + (it && it.note || '') + ' ' + (it && it.text || '')).toLowerCase();
             return hay.includes(qTerm);
           })
-        : statusScoped;
+        : typeScoped;
       // Claim-order sort (mirrors claim_next): the TOP row is what a default
       // execution claim would grab next. open<in_progress<closed; within open,
       // claimable (shovel-ready/unset) before unready; then priority; then age.
@@ -33364,6 +33390,15 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-filter]');
         if (!btn) return;
         _uxqSetFilter(btn.getAttribute('data-uxq-filter'));
+        _renderQueuePanel();
+      });
+    }
+    const $typeFilter = document.getElementById('queueTypeFilterToggle');
+    if ($typeFilter) {
+      $typeFilter.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-type-filter]');
+        if (!btn) return;
+        _uxqSetTypeFilter(btn.getAttribute('data-uxq-type-filter'));
         _renderQueuePanel();
       });
     }

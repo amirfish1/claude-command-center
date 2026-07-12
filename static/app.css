@@ -11364,6 +11364,7 @@
     padding: 4px 0; position: sticky; top: 0;
     background: var(--surface);
   }
+  .files-queue-panel .files-header { flex-wrap: wrap; }
   .files-count {
     background: rgba(88,166,255,0.18); color: var(--accent, #58a6ff);
     font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 700;
@@ -11391,6 +11392,7 @@
   .fq-filter-btn + .fq-filter-btn { border-left: 1px solid var(--border); }
   .fq-filter-btn:hover { color: var(--text); }
   .fq-filter-btn.is-active { background: var(--accent); color: #fff; }
+  .fq-type-filter { margin-left: -4px; }
   .fq-wrap-toggle {
     background: transparent; color: var(--text-muted); border: 1px solid var(--border);
     border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 700;
