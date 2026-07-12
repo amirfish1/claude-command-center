@@ -49841,6 +49841,7 @@ _THROUGHPUT_AGG_CACHE = {}         # cache_key -> {"ts": float, "payload": dict,
 _THROUGHPUT_AGG_CACHE_TTL = 300    # seconds
 _THROUGHPUT_RANKINGS_CACHE = {}    # "week" -> {"ts": float, "rankings": list}
 _THROUGHPUT_RANKINGS_CACHE_TTL = 60
+_THROUGHPUT_BOOTSTRAP_SCHEMA = 1
 
 _THROUGHPUT_DISK_CACHE_DIR = Path.home() / ".cache" / "ccc-throughput-cache"
 _THROUGHPUT_DISK_CACHE_DB = _THROUGHPUT_DISK_CACHE_DIR / "turns.db"
@@ -49861,6 +49862,92 @@ def _throughput_snapshot_path(session_id, engine_filter=None):
     engine = _throughput_engine_filter(engine_filter)
     suffix = "" if engine == "claude" else f"-{engine}"
     return _THROUGHPUT_DISK_CACHE_DIR / f"aggregate-{safe or 'unknown'}{suffix}.json"
+
+
+def _throughput_bootstrap_path(session_id, engine_filter=None):
+    safe = "".join(
+        ch if ch.isalnum() or ch in ("-", "_") else "_"
+        for ch in str(session_id or "")
+    )
+    engine = _throughput_engine_filter(engine_filter)
+    suffix = "" if engine == "claude" else f"-{engine}"
+    return _THROUGHPUT_DISK_CACHE_DIR / f"bootstrap-{safe or 'unknown'}{suffix}.json"
+
+
+def _throughput_build_bootstrap(
+    session_id,
+    engine_filter,
+    throughput,
+    *,
+    generated_at=None,
+    refresh=None,
+):
+    engine = _throughput_engine_filter(engine_filter)
+    return {
+        "schema": _THROUGHPUT_BOOTSTRAP_SCHEMA,
+        "session_id": session_id,
+        "engine": engine,
+        "generated_at": float(generated_at or time.time()),
+        "throughput": throughput,
+        "weekly": _weekly_usage_block(),
+        "reset_events": usage_reset_events_payload(days=30).get("events", []),
+        "refresh": dict(refresh or {}),
+    }
+
+
+def _throughput_bootstrap_valid(model, session_id, engine_filter=None):
+    engine = _throughput_engine_filter(engine_filter)
+    if not isinstance(model, dict):
+        return False
+    if model.get("schema") != _THROUGHPUT_BOOTSTRAP_SCHEMA:
+        return False
+    if model.get("session_id") != session_id or model.get("engine") != engine:
+        return False
+    if not isinstance(model.get("generated_at"), (int, float)):
+        return False
+    throughput = model.get("throughput")
+    if not isinstance(throughput, dict) or throughput.get("ok") is not True:
+        return False
+    scope = throughput.get("scope")
+    if not isinstance(scope, dict) or scope.get("aggregate") is not True:
+        return False
+    if throughput.get("session_id") != session_id:
+        return False
+    if _throughput_engine_filter(scope.get("engine")) != engine:
+        return False
+    if not isinstance(model.get("weekly"), dict):
+        return False
+    if not isinstance(model.get("reset_events"), list):
+        return False
+    return isinstance(model.get("refresh"), dict)
+
+
+def _throughput_read_bootstrap(session_id, engine_filter=None):
+    try:
+        model = json.loads(
+            _throughput_bootstrap_path(session_id, engine_filter).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return None
+    if not _throughput_bootstrap_valid(model, session_id, engine_filter):
+        return None
+    return model
+
+
+def _throughput_write_bootstrap(session_id, engine_filter, model):
+    if not _throughput_bootstrap_valid(model, session_id, engine_filter):
+        return False
+    try:
+        _THROUGHPUT_DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = _throughput_bootstrap_path(session_id, engine_filter)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(model, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
 
 
 def _throughput_empty_initial_payload(session_id, range_key=None, engine_filter=None):
@@ -49912,7 +49999,10 @@ def _throughput_initial_payload(session_id, repo_path=None, range_key=None, engi
     engine_filter = _throughput_engine_filter(engine_filter)
     is_aggregate, _cutoff_epoch, _label = _throughput_scope(session_id, range_key)
     if not is_aggregate or repo_path:
-        return _throughput_empty_initial_payload(session_id, range_key, engine_filter), 200
+        payload = _throughput_empty_initial_payload(session_id, range_key, engine_filter)
+        payload["bootstrap"] = None
+        return payload, 200
+    bootstrap = _throughput_read_bootstrap(session_id, engine_filter)
     try:
         raw = _throughput_snapshot_path(session_id, engine_filter).read_text(encoding="utf-8")
         stored = json.loads(raw)
@@ -49926,10 +50016,13 @@ def _throughput_initial_payload(session_id, repo_path=None, range_key=None, engi
                 "stale": True,
                 "generated_at": stored.get("generated_at"),
             }
+            payload["bootstrap"] = bootstrap
             return payload, 200
     except Exception:
         pass
-    return _throughput_empty_initial_payload(session_id, range_key, engine_filter), 200
+    payload = _throughput_empty_initial_payload(session_id, range_key, engine_filter)
+    payload["bootstrap"] = bootstrap
+    return payload, 200
 
 
 def _throughput_disk_connection():
@@ -50814,6 +50907,15 @@ def _throughput_payload(session_id, repo_path=None, range_key=None, engine_filte
             "status": _status,
         }
         _throughput_persist_aggregate_snapshot(session_id, _payload, _status, engine_filter)
+        try:
+            _bootstrap = _throughput_build_bootstrap(
+                session_id,
+                engine_filter,
+                _payload,
+            )
+            _throughput_write_bootstrap(session_id, engine_filter, _bootstrap)
+        except Exception:
+            pass
     return _payload, _status
 
 

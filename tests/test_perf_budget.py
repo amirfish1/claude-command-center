@@ -791,6 +791,102 @@ def test_throughput_full_aggregate_persists_initial_snapshot(monkeypatch, tmp_pa
     assert initial_payload["summary"] == full_payload["summary"]
 
 
+def test_throughput_bootstrap_round_trips_complete_context(monkeypatch, tmp_path):
+    """The fast snapshot must contain every input needed by the final graph."""
+    monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(
+        server,
+        "_weekly_usage_block",
+        lambda: {"available": True, "pct_per_token": 0.01},
+    )
+    monkeypatch.setattr(
+        server,
+        "usage_reset_events_payload",
+        lambda **_kwargs: {"events": [{"id": "reset-1"}]},
+    )
+    payload = {
+        "ok": True,
+        "session_id": "all_7_days",
+        "scope": {"aggregate": True, "engine": "claude"},
+        "summary": {},
+        "turns": [],
+    }
+
+    model = server._throughput_build_bootstrap(
+        "all_7_days",
+        "claude",
+        payload,
+        generated_at=123.0,
+        refresh={"sessions_read": 9},
+    )
+    assert server._throughput_write_bootstrap("all_7_days", "claude", model)
+
+    loaded = server._throughput_read_bootstrap("all_7_days", "claude")
+
+    assert loaded["schema"] == server._THROUGHPUT_BOOTSTRAP_SCHEMA
+    assert loaded["throughput"] == payload
+    assert loaded["weekly"]["pct_per_token"] == 0.01
+    assert loaded["reset_events"] == [{"id": "reset-1"}]
+    assert loaded["generated_at"] == 123.0
+    assert loaded["refresh"]["sessions_read"] == 9
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema", 999),
+        ("session_id", "all_today"),
+        ("engine", "codex"),
+        ("weekly", None),
+        ("reset_events", {}),
+    ],
+)
+def test_throughput_bootstrap_rejects_incompatible_models(
+    monkeypatch, tmp_path, field, value
+):
+    monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
+    model = {
+        "schema": 1,
+        "session_id": "all_7_days",
+        "engine": "claude",
+        "generated_at": 123.0,
+        "throughput": {
+            "ok": True,
+            "session_id": "all_7_days",
+            "scope": {"aggregate": True, "engine": "claude"},
+            "summary": {},
+            "turns": [],
+        },
+        "weekly": {"available": True},
+        "reset_events": [],
+        "refresh": {},
+    }
+    model[field] = value
+    path = tmp_path / "bootstrap-all_7_days.json"
+    path.write_text(json.dumps(model), encoding="utf-8")
+
+    assert server._throughput_read_bootstrap("all_7_days", "claude") is None
+
+
+def test_throughput_initial_payload_includes_only_cached_complete_bootstrap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(server, "_THROUGHPUT_DISK_CACHE_DIR", tmp_path)
+
+    def fail_compute(*_args, **_kwargs):
+        raise AssertionError("cache-only bootstrap must not compute context")
+
+    monkeypatch.setattr(server, "_weekly_usage_block", fail_compute)
+    monkeypatch.setattr(server, "usage_reset_events_payload", fail_compute)
+    monkeypatch.setattr(server, "find_all_conversations", fail_compute)
+
+    payload, status = server._throughput_initial_payload("all_7_days")
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["bootstrap"] is None
+
+
 def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):
     """The queue-health poll scans past WT worker logs; timestamp formatting
     must not emit Python 3.14 deprecation warnings on every row."""
