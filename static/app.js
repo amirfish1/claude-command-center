@@ -32571,7 +32571,7 @@
       : '';
 
     if (!item.closed_at) {
-      const verb = status === 'in_progress' ? 'In progress' : status === 'blocked' ? 'Waiting for answer' : 'Open';
+      const verb = status === 'in_progress' ? 'In progress' : status === 'blocked' ? 'Agent needs your input' : 'Open';
       tlHtml += _tlEvt('uxq-tl-open',
         '<span class="uxq-tl-verb">' + verb + '</span>' + _tlWorker(item.claimed_by), '');
     }

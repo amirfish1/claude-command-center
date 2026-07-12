@@ -3854,6 +3854,17 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("item.answers", modal_js)
         self.assertNotIn("item.block_question) {", modal_js)
 
+    def test_blocked_queue_detail_says_the_agent_needs_input(self):
+        """A blocked ticket's live activity line must clearly ask the human
+        for input, rather than ambiguously saying it is waiting for an answer."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        modal_js = app_js[
+            app_js.index("function _uxqOpenItemModal(item)"):
+            app_js.index("function _renderQueuePanel", app_js.index("function _uxqOpenItemModal(item)"))
+        ]
+
+        self.assertIn("status === 'blocked' ? 'Agent needs your input' : 'Open'", modal_js)
+
     def test_queue_status_icons_are_large_and_in_progress_glows(self):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
