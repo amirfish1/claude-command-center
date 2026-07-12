@@ -16750,7 +16750,7 @@ def _registry_only_conversation_stub(conversation_id, after_line=0):
     except (TypeError, ValueError):
         after = 0
     events = [ev for ev in raw_events if ev.get("line", 0) > after]
-    events.extend(_get_queued_events_for_session(sid))
+    events = _merge_synthetic_conversation_events(events, _get_queued_events_for_session(sid))
     return {"events": events, "last_line": len(raw_events)}
 
 
@@ -16887,7 +16887,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         # The live tail also carries any optimistic queued events, same as the
         # full-parse path; an earlier-history window must not.
         out = list(events)
-        out.extend(_get_queued_events_for_session(conversation_id))
+        out = _merge_synthetic_conversation_events(out, _get_queued_events_for_session(conversation_id))
         result["events"] = out
     return result
 
@@ -16913,7 +16913,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                 hit = _CONV_PARSE_CACHE.get(key)
             if hit is not None:
                 events_copy = list(hit.get("events") or [])
-                events_copy.extend(_get_queued_events_for_session(conversation_id))
+                events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
                 return {"events": events_copy, "last_line": hit.get("last_line", 0)}
     # Route via the memoized engine detector instead of probing gemini then
     # antigravity unconditionally — _is_gemini_session scans the whole gemini
@@ -16924,19 +16924,19 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         result = _parse_gemini_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
-        events_copy.extend(_get_queued_events_for_session(conversation_id))
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "antigravity":
         result = _parse_antigravity_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
-        events_copy.extend(_get_queued_events_for_session(conversation_id))
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "kilo":
         result = _parse_kilo_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
-        events_copy.extend(_get_queued_events_for_session(conversation_id))
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "hermes":
         result = _parse_hermes_conversation(conversation_id, after_line=after_line)
@@ -17055,7 +17055,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
     result = {"events": events, "last_line": line_num}
     _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
     events_copy = list(events)
-    events_copy.extend(_get_queued_events_for_session(conversation_id))
+    events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
     return {"events": events_copy, "last_line": line_num}
 
 
@@ -25761,6 +25761,25 @@ def _get_queued_events_for_session(session_id):
     except Exception:
         pass
     return events
+
+
+def _merge_synthetic_conversation_events(events, synthetic_events):
+    """Chronologically merge transcript and CCC-generated overlay events."""
+    combined = list(events or []) + list(synthetic_events or [])
+
+    def _epoch(event):
+        value = event.get("ts") if isinstance(event, dict) else None
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            return float("inf")
+
+    # Python's sort is stable, so equal/missing timestamps retain their source
+    # order while old coordination rows move beside the turn that produced them.
+    combined.sort(key=_epoch)
+    return combined
 
 _BUSY_SESSION_STATUSES = {"busy", "running"}
 
@@ -45979,7 +45998,7 @@ def parse_conversation_by_sid(session_id, after_line=0):
             except OSError:
                 break
             events_copy = list(events)
-            events_copy.extend(_get_queued_events_for_session(session_id))
+            events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(session_id))
             return {"events": events_copy, "last_line": line_num}
     stub = _registry_only_conversation_stub(session_id, after_line=after_line)
     return stub or {"events": [], "last_line": 0}

@@ -12928,6 +12928,21 @@ class TestPendingInputs(unittest.TestCase):
         self.assertEqual(events[2]["text"], "t1")
         self.assertTrue(events[2]["pending"])
 
+    def test_synthetic_events_merge_by_timestamp_instead_of_appending(self):
+        transcript = [
+            {"line": 1, "ts": "2026-07-12T10:00:00Z", "type": "assistant"},
+            {"line": 3, "ts": "2026-07-12T10:02:00Z", "type": "assistant"},
+        ]
+        synthetic = [
+            {"line": "coord-1", "ts": "2026-07-12T10:01:00Z", "type": "system"},
+            {"line": None, "ts": 1783857000.0, "type": "user_text", "pending": True},
+        ]
+
+        merged = self.server._merge_synthetic_conversation_events(transcript, synthetic)
+
+        self.assertEqual([event.get("line") for event in merged[:3]], [1, "coord-1", 3])
+        self.assertTrue(merged[-1]["pending"])
+
     def test_consume_matching_pending_input_removes_only_one_copy(self):
         sid = "test-session-id"
         with self.server._pending_resume_lock:
