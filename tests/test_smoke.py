@@ -947,7 +947,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn('conv-archive-btn is-restore', app_js)
         self.assertIn('Restore to Active', app_js)
-        self.assertIn('<button class="conv-archive-btn" data-role="archive" title="Archive session" aria-label="Archive session">&#128229;</button>', app_js)
+        self.assertIn('<button class="conv-archive-btn" data-role="archive" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>', app_js)
         self.assertIn("const archivedRestoreRestHtml = (c.archived && !isBacklogRow && !isGithubPrRow) ? archiveBtn : '';", app_js)
         self.assertIn("(c.archived ? ' is-archived-row' : '')", app_js)
         self.assertIn("payload.archived = archived;", app_js)

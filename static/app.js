@@ -23934,11 +23934,11 @@
       } else if (isGithubPrRow) {
         archiveBtn = '';
       } else {
-        // Archiving moves the session into the Trash section, but this control
-        // performs the reversible archive action rather than permanent deletion.
+        // The All tab uses Trash as the session's discard action; restores
+        // remain explicit for rows that are already there.
         archiveBtn = c.archived
           ? '<button class="conv-archive-btn is-restore" data-role="archive" title="Restore to Active" aria-label="Restore to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Restore</span></button>'
-          : '<button class="conv-archive-btn" data-role="archive" title="Archive session" aria-label="Archive session">&#128229;</button>';
+          : '<button class="conv-archive-btn" data-role="archive" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>';
       }
       // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
       // the meta row — it wrapped onto a second line and is redundant with the
