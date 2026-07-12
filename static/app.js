@@ -32630,6 +32630,7 @@
       + (item.project  ? _propRow('Project', escapeHtml(item.project)) : '')
       + (item.source   ? _propRow('Source',  escapeHtml(item.source)) : '')
       + (item.lane     ? _propRow('Lane',    escapeHtml(item.lane)) : '')
+      + (item.repo_path ? _propRow('Repository', '<span class="uxq-td-mono">' + escapeHtml(item.repo_path) + '</span>') : '')
       + (item.url      ? _propRow('URL',     '<a href="' + escapeAttr(item.url) + '" target="_blank" rel="noopener" class="uxq-td-link">' + escapeHtml(item.url) + '</a>') : '')
       + (item.selector ? _propRow('Selector','<span class="uxq-td-mono">' + escapeHtml(item.selector) + '</span>') : '')
       + '</div>';

@@ -1,0 +1,1 @@
+- Show a WatchTower ticket's configured repository in its detail view.
