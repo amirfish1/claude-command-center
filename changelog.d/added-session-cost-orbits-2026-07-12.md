@@ -1,1 +1,1 @@
-- Session icons now preserve engine identity while showing a unified Claude/Codex cost orbit and a separate actively-working indicator.
+- Session icons now show unified Claude/Codex cost tiers through compact P/H/M/L colors, with a separate actively-working indicator.

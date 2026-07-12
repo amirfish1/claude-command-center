@@ -123,45 +123,41 @@ def test_sidebar_and_pane_header_use_shared_session_icon_renderer():
     assert "sessionEngineIconHtml(row, { context: 'pane' })" in source
     assert "sessionIconPresentation(row, optimistic)" in source
     assert "session-activity-dot" in source
-    assert "session-cost-symbol" in source
+    assert "session-tier-label" in source
+    assert "session-cost-orbit" not in source
+    assert "session-cost-symbol" not in source
     assert "is-fable5" not in source
 
 
-def test_cost_orbit_css_replaces_process_liveness_animation():
+def test_unified_tier_color_css_replaces_orbits_and_process_liveness_animation():
     css = APP_CSS.read_text(encoding="utf-8")
 
     for tier in ("premium", "high", "medium", "low"):
         assert f".cost-{tier}" in css
+    assert ".session-tier-label" in css
     assert ".session-activity-dot" in css
     assert ".is-working .session-activity-dot" in css
     assert ".is-not-working .session-activity-dot" in css
     assert "@keyframes ccc-activity-dot-pulse" in css
     assert "prefers-reduced-motion: reduce" in css
-    assert ".cost-premium .session-cost-symbol" in css
-    assert "content: '$';" in css
 
     assert ".conv-session-icon.is-live" not in css
     assert ".conv-session-icon.is-dead" not in css
     assert "@keyframes ccc-icon-pulse" not in css
     assert ".is-fable5" not in css
+    assert ".session-cost-orbit" not in css
+    assert ".session-cost-symbol" not in css
 
 
-def test_orbit_geometry_has_non_color_tier_distinctions():
+def test_unified_tier_palette_is_engine_independent():
     css = APP_CSS.read_text(encoding="utf-8")
+    start = css.index("/* Unified session cost palette */")
+    end = css.index("/* End unified session cost palette */", start)
+    palette = css[start:end]
 
-    assert "border-style: dotted" in css
-    assert ".cost-medium .session-cost-orbit" in css
-    assert "border-right-color: transparent" in css
-    assert ".cost-high::after" in css
-    assert ".cost-premium .session-cost-orbit" in css
-    assert "box-shadow:" in css
-
-
-def test_low_and_medium_orbits_clear_the_thirteen_pixel_engine_glyph():
-    css = APP_CSS.read_text(encoding="utf-8")
-    low = css[css.index(".cost-low .session-cost-orbit {"):css.index(".cost-medium .session-cost-orbit {")]
-    medium = css[css.index(".cost-medium .session-cost-orbit {"):css.index(".cost-high .session-cost-orbit {")]
-
-    assert "inset: -1px;" in low
-    assert "inset: -1px;" in medium
-    assert "border: 1.25px solid" in medium
+    assert ".cost-premium" in palette and "color: #ffd84f;" in palette
+    assert ".cost-high" in palette and "color: #e9a84a;" in palette
+    assert ".cost-medium" in palette and "color: #68a9d8;" in palette
+    assert ".cost-low" in palette and "color: #8190a3;" in palette
+    assert ".cost-premium.claude" not in palette
+    assert ".cost-premium.codex" not in palette

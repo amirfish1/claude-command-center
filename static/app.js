@@ -3889,16 +3889,16 @@
     const baseClass = opts.context === 'pane' ? 'conv-pane-cat-icon' : 'conv-session-icon';
     const tierClass = presentation.tier ? ' cost-' + presentation.tier : '';
     const activityClass = presentation.working ? ' is-working' : ' is-not-working';
-    const premiumSymbol = presentation.tier === 'premium'
-      ? '<span class="session-cost-symbol" aria-hidden="true"></span>'
+    const tierInitials = { premium: 'P', high: 'H', medium: 'M', low: 'L' };
+    const tierLabel = presentation.tier
+      ? '<span class="session-tier-label" aria-hidden="true">' + tierInitials[presentation.tier] + '</span>'
       : '';
     return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + '"'
       + ' title="' + escapeAttr(presentation.title) + '"'
       + ' role="img" aria-label="' + escapeAttr(presentation.title) + '">'
-      + '<span class="session-cost-orbit" aria-hidden="true"></span>'
       + getEngineSvg(presentation.engine)
       + '<span class="session-activity-dot" aria-hidden="true"></span>'
-      + premiumSymbol
+      + tierLabel
       + '</span>';
   }
 

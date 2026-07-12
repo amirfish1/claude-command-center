@@ -6004,83 +6004,20 @@
     z-index: 2;
     transition: opacity 0.15s;
   }
-  .conv-session-icon.is-not-working .conv-session-svg,
-  .conv-pane-cat-icon.is-not-working .conv-session-svg {
-    opacity: 0.58;
-  }
   .conv-item:hover .conv-session-icon .conv-session-svg,
   .conv-item:focus-within .conv-session-icon .conv-session-svg,
   .conv-pane-cat-icon:hover .conv-session-svg {
     opacity: 1;
   }
 
-  /* Cost Orbit: engine shape/hue stays inside; cost gets its own stationary
-     geometry around it. The four silhouettes remain distinct in monochrome. */
-  .session-cost-orbit {
-    display: none;
+  .session-tier-label {
     position: absolute;
-    border-radius: 50%;
-    pointer-events: none;
-    z-index: 1;
-  }
-  .cost-low .session-cost-orbit {
-    display: block;
-    inset: -1px;
-    border: 1px solid rgba(129, 144, 163, 0.82);
-    border-style: dotted;
-  }
-  .cost-medium .session-cost-orbit {
-    display: block;
-    inset: -1px;
-    border: 1.25px solid rgba(104, 169, 216, 0.9);
-    border-right-color: transparent;
-    transform: rotate(-24deg);
-  }
-  .cost-high .session-cost-orbit {
-    display: block;
-    inset: -1px;
-    border: 1.25px solid rgba(233, 168, 74, 0.9);
-  }
-  .cost-high::after {
-    content: '';
-    position: absolute;
-    right: -3px;
-    bottom: 0;
-    width: 3px;
-    height: 3px;
-    border-radius: 50%;
-    background: #e9a84a;
-    box-shadow: 0 0 4px rgba(233, 168, 74, 0.7);
-    z-index: 4;
-  }
-  .cost-premium .session-cost-orbit {
-    display: block;
-    inset: -2px;
-    border: 1.25px solid #ffd84f;
-    box-shadow: 0 0 5px rgba(255, 216, 79, 0.34);
-  }
-  .cost-premium .session-cost-orbit::after {
-    content: '';
-    position: absolute;
-    inset: 2px;
-    border: 1px solid rgba(255, 216, 79, 0.5);
-    border-radius: 50%;
-  }
-  .session-cost-symbol {
-    display: none;
-  }
-  .cost-premium .session-cost-symbol {
-    display: block;
-    position: absolute;
-    right: -5px;
-    bottom: -4px;
-    color: #ffd84f;
+    right: -6px;
+    bottom: -5px;
+    color: currentColor;
     font: 800 7px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
     text-shadow: 0 0 3px var(--bg);
     z-index: 5;
-  }
-  .cost-premium .session-cost-symbol::before {
-    content: '$';
   }
 
   /* Activity is deliberately independent of process liveness. Only active
@@ -6145,6 +6082,23 @@
     color: #2dd4bf;
     --icon-shadow-color: rgba(45, 212, 191, 0.42);
   }
+  /* Unified session cost palette */
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-premium {
+    color: #ffd84f;
+  }
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-premium .conv-session-svg {
+    filter: drop-shadow(0 0 3px rgba(255, 216, 79, 0.5));
+  }
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-high {
+    color: #e9a84a;
+  }
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-medium {
+    color: #68a9d8;
+  }
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-low {
+    color: #8190a3;
+  }
+  /* End unified session cost palette */
   .conv-session-icon.pkood {
     color: #58a6ff;
     --icon-shadow-color: rgba(88, 166, 255, 0.45);
