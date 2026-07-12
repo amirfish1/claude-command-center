@@ -62,17 +62,20 @@ class TestSearchUiStatic(unittest.TestCase):
         )
         self.assertIn("modified: _historyTsSeconds(hit.ts),", app_js)
 
-    def test_throughput_boot_renders_initial_snapshot_before_refresh(self):
+    def test_throughput_boot_renders_complete_browser_snapshot_before_network(self):
         html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
         self.assertIn("/api/throughput/initial", html)
-        self.assertIn("loadInitialAggregate(_aggDefault)", html)
-        self.assertIn("refreshAggregateInBackground(_aggDefault)", html)
+        self.assertIn("readThroughputBootstrap", html)
+        self.assertIn("applyThroughputBootstrap", html)
+        self.assertNotIn("refreshAggregateInBackground", html)
 
-        load_start = html.index("async function loadInitialAggregate")
-        render_idx = html.index("renderDashboard(_aggDefault, data)", load_start)
-        refresh_idx = html.index("refreshAggregateInBackground(_aggDefault)", load_start)
-        self.assertLess(render_idx, refresh_idx)
+        boot_start = html.index("function bootThroughputPage")
+        read_idx = html.index("readThroughputBootstrap", boot_start)
+        apply_idx = html.index("applyThroughputBootstrap", boot_start)
+        network_idx = html.index("loadServerBootstrapThenRefresh", boot_start)
+        self.assertLess(read_idx, apply_idx)
+        self.assertLess(apply_idx, network_idx)
 
 
 if __name__ == "__main__":

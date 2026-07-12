@@ -1334,6 +1334,8 @@
     let chartZoomLastHours = false;
     let activeResetEvent = null;
     let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
+    const THROUGHPUT_BOOTSTRAP_SCHEMA = 1;
+    let visibleBootstrap = null;
     const aggregateSessions = [
       { session_id: 'all_7_days', display_name: 'Claude Total (Last 7 Days)', engine: 'claude', meta: '7d window' },
     ];
@@ -1355,6 +1357,131 @@
       aggregateSessions[0].engine = activeThroughputEngine;
       aggregateSessions[0].meta = `${activeThroughputEngine} · 7d window`;
       return aggregateSessions[0];
+    }
+
+    function throughputBootstrapKey(sessionId, engine) {
+      return `ccc-throughput-bootstrap:v${THROUGHPUT_BOOTSTRAP_SCHEMA}:${engine}:${sessionId}`;
+    }
+
+    function validateThroughputBootstrap(model, sessionId, engine) {
+      if (!model || typeof model !== 'object') return false;
+      if (model.schema !== THROUGHPUT_BOOTSTRAP_SCHEMA) return false;
+      if (model.session_id !== sessionId || model.engine !== engine) return false;
+      if (!Number.isFinite(Number(model.generated_at))) return false;
+      if (!model.weekly || typeof model.weekly !== 'object') return false;
+      if (!Array.isArray(model.reset_events)) return false;
+      if (!model.refresh || typeof model.refresh !== 'object') return false;
+      const throughput = model.throughput;
+      if (!throughput || throughput.ok !== true || throughput.session_id !== sessionId) return false;
+      if (!throughput.scope || throughput.scope.aggregate !== true) return false;
+      if ((throughput.scope.engine || 'claude') !== engine) return false;
+      return !!(throughput.summary && typeof throughput.summary === 'object');
+    }
+
+    function readThroughputBootstrap(sessionId, engine) {
+      const key = throughputBootstrapKey(sessionId, engine);
+      try {
+        const model = JSON.parse(localStorage.getItem(key) || 'null');
+        if (validateThroughputBootstrap(model, sessionId, engine)) return model;
+        localStorage.removeItem(key);
+      } catch (_error) {
+        localStorage.removeItem(key);
+      }
+      return null;
+    }
+
+    function writeThroughputBootstrap(model) {
+      if (!validateThroughputBootstrap(model, model && model.session_id, model && model.engine)) return false;
+      try {
+        // Aggregate turns are not rendered; omit them to keep localStorage fast
+        // and comfortably below browser quota on large histories.
+        const stored = JSON.parse(JSON.stringify(model));
+        stored.throughput.turns = [];
+        localStorage.setItem(
+          throughputBootstrapKey(stored.session_id, stored.engine),
+          JSON.stringify(stored)
+        );
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function isNewerThroughputBootstrap(candidate, current) {
+      if (!current) return true;
+      return Number(candidate && candidate.generated_at || 0) > Number(current.generated_at || 0);
+    }
+
+    function applyThroughputBootstrap(model, source) {
+      const session = currentAggregateSession();
+      if (!validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
+      visibleBootstrap = model;
+      activeSessionId = session.session_id;
+      weeklyData = model.weekly;
+      weeklyDataLoaded = true;
+      resetEvents = model.reset_events;
+      renderWeeklyUsage(model.weekly);
+      renderDashboard(session, model.throughput, { deferSecondary: true });
+      performance.mark('throughput-bootstrap-rendered');
+      window.__throughputBootstrapRenderMs = performance.now();
+      window.__throughputBootstrapSource = source;
+      requestAnimationFrame(() => {
+        if (activeSessionId === session.session_id) {
+          loadWeeklyHistory();
+          fetchWeekRankings();
+        }
+      });
+      return true;
+    }
+
+    function showFirstSnapshotShell(session) {
+      activeSessionId = session.session_id;
+      hideLoader();
+      document.getElementById('empty-state').style.display = 'none';
+      document.getElementById('dashboard-content').style.display = 'block';
+      document.getElementById('weekly-banner').style.display = 'none';
+      document.getElementById('session-title-label').textContent = session.display_name;
+      document.getElementById('session-id-label').textContent = session.session_id;
+      ['val-active-duration', 'val-total-tokens', 'val-in-throughput', 'val-out-throughput']
+        .forEach(id => { document.getElementById(id).textContent = '—'; });
+      ['val-total-duration', 'val-token-split', 'val-in-tps', 'val-out-tps']
+        .forEach(id => { document.getElementById(id).textContent = ''; });
+      document.getElementById('chart-title-label').textContent = '3-Hour Cache-Adjusted Burn';
+      document.getElementById('chart-legend-label').textContent = 'Cache-adj tokens / 3h';
+      const svg = document.getElementById('throughput-chart');
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 300;
+      svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">Preparing first snapshot…</text>`;
+    }
+
+    async function loadServerBootstrapThenRefresh(session) {
+      const engineAtStart = activeThroughputEngine;
+      try {
+        const response = await fetch(throughputFetchUrl('/api/throughput/initial', session.session_id), { cache: 'no-store' });
+        if (!response.ok) return null;
+        const data = await response.json();
+        const model = data && data.bootstrap;
+        if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return null;
+        if (validateThroughputBootstrap(model, session.session_id, engineAtStart) &&
+            isNewerThroughputBootstrap(model, visibleBootstrap)) {
+          writeThroughputBootstrap(model);
+          applyThroughputBootstrap(model, 'server');
+        }
+        return model;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function bootThroughputPage() {
+      updateThroughputEngineUi();
+      const session = currentAggregateSession();
+      activeSessionId = session.session_id;
+      const cached = readThroughputBootstrap(session.session_id, activeThroughputEngine);
+      if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(session);
+      queueMicrotask(() => loadServerBootstrapThenRefresh(session));
+      toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
+      loadSessions({ selectDefault: false });
     }
 
     function updateThroughputEngineUi() {
@@ -1386,8 +1513,11 @@
       updateThroughputEngineUi();
       renderSessionList();
       const agg = currentAggregateSession();
-      await loadInitialAggregate(agg);
-      await loadSessions();
+      activeSessionId = agg.session_id;
+      const cached = readThroughputBootstrap(agg.session_id, activeThroughputEngine);
+      if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(agg);
+      queueMicrotask(() => loadServerBootstrapThenRefresh(agg));
+      await loadSessions({ selectDefault: false });
     }
 
     // Format relative time (mtime age)
@@ -1491,7 +1621,7 @@
       }
     }
 
-    async function loadSessions() {
+    async function loadSessions({ selectDefault = true } = {}) {
       setStatus('Loading sessions...', true);
       try {
         const convRes = await fetch(`/api/conversations?all=1&${throughputEngineParam()}`);
@@ -1501,7 +1631,7 @@
         renderSessionList();
         fetchWeekRankings(); // non-blocking: re-sorts when rankings arrive
         const defaultSession = currentAggregateSession();
-        if (!activeSessionId && defaultSession) {
+        if (selectDefault && !activeSessionId && defaultSession) {
           await selectSession(defaultSession);
         } else if (!defaultSession) {
           setStatus('Idle');
@@ -1692,7 +1822,7 @@
     }
 
     // Populate dashboard details
-    function renderDashboard(session, data) {
+    function renderDashboard(session, data, { deferSecondary = false } = {}) {
       chartWeekOffset = 0; // reset week navigation on session switch
       chartZoomLastHours = false;
       document.getElementById('empty-state').style.display = 'none';
@@ -1824,11 +1954,7 @@
       // Cache the rendered state so a window resize can redraw the chart from
       // memory instead of re-fetching + re-parsing the whole range.
       lastRender = { turns: data.turns, summary, isAggregate: chartIsAggregate, bucketMode, showCumulative: hasHourly, session, data };
-      if (shouldDeferAggregateChart(chartIsAggregate, bucketMode)) {
-        renderChartWaitingForWeeklyContext();
-      } else {
-        drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
-      }
+      drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
 
       // Model comparison table
       const modelRows = summary.per_model || [];
@@ -1848,7 +1974,7 @@
       // Weekly history chart (aggregate only, lazy-loaded)
       const histSection = document.getElementById('weekly-history-section');
       if (histSection) histSection.style.display = isAggregate ? '' : 'none';
-      if (isAggregate) loadWeeklyHistory();
+      if (isAggregate && !deferSecondary) loadWeeklyHistory();
 
       // Top sessions table (aggregate only)
       const topSessSection = document.getElementById('top-sessions-section');
@@ -2300,28 +2426,6 @@
       });
     }
 
-    function shouldDeferAggregateChart(isAggregate, bucketMode) {
-      return activeThroughputEngine === 'claude' && isAggregate && bucketMode === 'sixhourly' && !weeklyDataLoaded;
-    }
-
-    function renderChartWaitingForWeeklyContext() {
-      const svg = document.getElementById('throughput-chart');
-      if (!svg) return;
-      svg.innerHTML = '';
-      document.getElementById('chart-title-label').textContent = '3-Hour Cache-Adjusted Burn';
-      document.getElementById('chart-legend-label').textContent = 'Cache-adj tokens / 3h';
-      const nav = document.getElementById('chart-week-nav');
-      if (nav) nav.style.display = 'none';
-      const overlayLegend = document.getElementById('weekly-overlay-legend');
-      if (overlayLegend) overlayLegend.style.display = 'none';
-      const previousWeekLegend = document.getElementById('previous-week-legend');
-      if (previousWeekLegend) previousWeekLegend.style.display = 'none';
-      updateChartZoomButton(false);
-      const width = svg.clientWidth || 800;
-      const height = svg.clientHeight || 300;
-      svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">waiting for weekly context…</text>`;
-    }
-
     function quotaScaleMax(...values) {
       const finite = values.filter(v => Number.isFinite(v) && v > 0);
       const visibleMax = Math.max(10, ...finite);
@@ -2357,6 +2461,14 @@
       // Get container width
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
+      if (activeThroughputEngine === 'claude' && isAggregate && sixhourly &&
+          !(weeklyData && weeklyData.pct_per_token != null)) {
+        const nav = document.getElementById('chart-week-nav');
+        if (nav) nav.style.display = 'none';
+        updateChartZoomButton(false);
+        svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">Weekly quota context unavailable</text>`;
+        return;
+      }
       // Extra right padding when either secondary axis needs room.
       const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
       const padding = { top: 20, right: rightPad, bottom: 54, left: 60 };
@@ -3481,35 +3593,13 @@
       } catch (_) { /* best effort */ }
     }
 
-    async function loadWeeklyUsage() {
-      try {
-        resetEventInputDefault();
-        const res = await fetch('/api/weekly_usage');
-        if (!res.ok) {
-          weeklyDataLoaded = true;
-          if (lastRender && lastRender.session && lastRender.data) {
-            renderDashboard(lastRender.session, lastRender.data);
-          }
-          return;
-        }
-        const d = await res.json();
-        // Stash for use by drawChart() — weekly % overlay on daily chart.
-        const hadWeeklyData = !!weeklyData;
-        weeklyData = (d && d.available && d.pct_per_token != null) ? d : null;
-        const shouldRefreshChart = !weeklyDataLoaded || (!hadWeeklyData && weeklyData);
-        weeklyDataLoaded = true;
-        // If the aggregate chart was waiting for weekly context, render the
-        // stable billing-period view once instead of flashing the fallback
-        // all-hours chart first.
-        if (shouldRefreshChart && lastRender) {
-          if (lastRender.session && lastRender.data) renderDashboard(lastRender.session, lastRender.data);
-          else drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
-        }
-        const banner = document.getElementById('weekly-banner');
-        if (!d || !d.available || d.display_pct == null) {
-          banner.style.display = 'none';
-          return;
-        }
+    function renderWeeklyUsage(d) {
+      resetEventInputDefault();
+      const banner = document.getElementById('weekly-banner');
+      if (!d || !d.available || d.display_pct == null) {
+        banner.style.display = 'none';
+        return;
+      }
         const pct = d.display_pct;
         setWeeklyPctText(document.getElementById('weekly-pct'), pct);
         setWeeklyFill(document.getElementById('weekly-gauge-fill'), pct);
@@ -3548,11 +3638,21 @@
         if (updated) bits.push(`last updated ${updated}`);
         document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
         banner.style.display = 'flex';
-      } catch (e) {
+    }
+
+    async function loadWeeklyUsage() {
+      try {
+        const res = await fetch('/api/weekly_usage');
+        if (!res.ok) return;
+        const d = await res.json();
+        weeklyData = d && typeof d === 'object' ? d : {};
         weeklyDataLoaded = true;
+        renderWeeklyUsage(weeklyData);
         if (lastRender && lastRender.session && lastRender.data) {
           renderDashboard(lastRender.session, lastRender.data);
         }
+      } catch (e) {
+        // Keep the complete visible bootstrap unchanged on an auxiliary error.
       }
     }
 
@@ -3722,58 +3822,7 @@
       }
     });
 
-    async function refreshAggregateInBackground(_aggDefault) {
-      if (!_aggDefault) return null;
-      const engineAtStart = activeThroughputEngine;
-      setStatus('Refreshing throughput data...', true);
-      try {
-        const res = await fetch(throughputFetchUrl('/api/throughput', _aggDefault.session_id));
-        if (!res.ok) throw new Error('API failed');
-        const data = await res.json();
-        if (data && data.ok && activeSessionId === _aggDefault.session_id && activeThroughputEngine === engineAtStart) {
-          renderDashboard(_aggDefault, data);
-          setStatus('Idle');
-        }
-        return data;
-      } catch (err) {
-        console.error(err);
-        setStatus('Refresh failed; showing cached throughput');
-        return null;
-      }
-    }
-
-    async function loadInitialAggregate(_aggDefault) {
-      if (!_aggDefault) return null;
-      const engineAtStart = activeThroughputEngine;
-      activeSessionId = _aggDefault.session_id;
-      try {
-        const res = await fetch(throughputFetchUrl('/api/throughput/initial', _aggDefault.session_id));
-        if (!res.ok) throw new Error('API failed');
-        const data = await res.json();
-        if (data && data.ok && activeSessionId === _aggDefault.session_id && activeThroughputEngine === engineAtStart) {
-          renderDashboard(_aggDefault, data);
-          setStatus(data.snapshot && data.snapshot.cached ? 'Showing cached throughput' : 'Showing initial throughput');
-        }
-        refreshAggregateInBackground(_aggDefault);
-        return data;
-      } catch (err) {
-        console.error(err);
-        refreshAggregateInBackground(_aggDefault);
-        return null;
-      }
-    }
-
-    // Boot — render a cache-only default aggregate first, then refresh the
-    // expensive all_7_days aggregate without blocking the initial UI.
-    updateThroughputEngineUi();
-    const _aggDefault = currentAggregateSession();
-    loadInitialAggregate(_aggDefault);
-    toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
-    loadSessions();
-    loadResetEvents();
-    loadWeeklyUsage();
-    setInterval(loadWeeklyUsage, 120000);
-    setInterval(loadResetEvents, 120000);
+    bootThroughputPage();
   </script>
 </body>
 </html>
