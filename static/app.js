@@ -3995,13 +3995,9 @@
     if (!$view || !data) return false;
     const via = String(data.via || '');
     const stage = String(data.stage || '');
-    // Success via the Codex app-server turn: keep an alive "resuming" indicator
-    // that clears when the reply streams in (clearOptimisticAgentIndicator).
+    // A normal Codex wake is represented by the compact progress line below.
+    // Do not add a second yellow resume banner above it.
     if (data.ok && via === 'codex-app-turn') {
-      const managed = data.app_server_transport === 'managed' || !!data.managed_app_server;
-      setOptimisticAgentThinking($view, managed
-        ? '⏳ Codex resuming via managed app-server&hellip;'
-        : '⏳ Codex resuming&hellip;');
       const wakeSid = data.session_id || (currentSession && currentSession.id);
       startCodexWakeBreakdown($view, wakeSid);
       return true;
@@ -4032,9 +4028,14 @@
   // the session is at its context limit.
   let _codexWakePoll = null;
   let _codexWakePollSid = null;
+  let _codexWakeStageKey = '';
+  let _codexWakeStageChangedAt = 0;
+  const WAKE_STAGE_DETAIL_DELAY_MS = 1000;
   function stopCodexWakeBreakdown(removeEl) {
     if (_codexWakePoll) { clearInterval(_codexWakePoll); _codexWakePoll = null; }
     _codexWakePollSid = null;
+    _codexWakeStageKey = '';
+    _codexWakeStageChangedAt = 0;
     if (removeEl) {
       document.querySelectorAll('.wake-breakdown').forEach(n => n.remove());
     }
@@ -4049,6 +4050,12 @@
       case 'running': return 'Running ' + model + effort;
       default: return name;
     }
+  }
+  function _wakeStageQuietLabel(name, data) {
+    const model = data.model || 'model';
+    const effort = data.effort ? (' (' + data.effort + ')') : '';
+    if (name === 'running') return 'Thinking… ' + model + effort;
+    return _wakeStageLabel(name, data);
   }
   function _codexWakeTransportLabel(data) {
     const transport = String((data && data.app_server_transport) || '');
@@ -4076,9 +4083,17 @@
     _anchorWakeBreakdown($view);
     const stages = Array.isArray(data.stages) ? data.stages : [];
     const currentIdx = stages.findIndex(s => !s.done);
+    const stageKey = stages.map(s => s.name + ':' + !!s.done).join('|');
+    if (stageKey !== _codexWakeStageKey) {
+      _codexWakeStageKey = stageKey;
+      _codexWakeStageChangedAt = Date.now();
+    }
+    const showDetails = !!data.warning || !!data.outcome_detail
+      || (Date.now() - _codexWakeStageChangedAt >= WAKE_STAGE_DETAIL_DELAY_MS);
+    el.classList.toggle('is-detailed', showDetails);
     const checklist = document.createElement('div');
     checklist.className = 'wb-stages';
-    const appendStageRow = (labelText, done, isCurrent) => {
+    const appendStageRow = (name, done, isCurrent) => {
       const row = document.createElement('div');
       row.className = 'wb-stage' + (done ? ' is-done' : (isCurrent ? ' is-current' : ' is-pending'));
       const icon = document.createElement('span');
@@ -4086,7 +4101,7 @@
       if (done) icon.textContent = '✓';
       const label = document.createElement('span');
       label.className = 'wb-label';
-      label.textContent = labelText;
+      label.textContent = isCurrent ? _wakeStageQuietLabel(name, data) : _wakeStageLabel(name, data);
       row.appendChild(icon);
       row.appendChild(label);
       checklist.appendChild(row);
@@ -4094,7 +4109,7 @@
     if (stages.length) {
       stages.forEach((s, i) => {
         const done = !!s.done;
-        appendStageRow(_wakeStageLabel(s.name, data), done, !done && i === currentIdx);
+        appendStageRow(s.name, done, !done && i === currentIdx);
       });
     } else {
       appendStageRow('Waiting for wake request', false, true);
@@ -4123,7 +4138,7 @@
     else if (pct != null && pct >= 90) readout.classList.add('is-amber');
     el.innerHTML = '';
     el.appendChild(checklist);
-    el.appendChild(readout);
+    if (showDetails || data.warning || data.outcome_detail) el.appendChild(readout);
   }
   function handleCodexWakeOutcome($view, data) {
     const outcome = data.outcome;
@@ -4157,13 +4172,16 @@
     if (!$view || !sid) return;
     stopCodexWakeBreakdown(false);
     _codexWakePollSid = sid;
+    _codexWakeStageKey = '';
+    _codexWakeStageChangedAt = Date.now();
     const startedAt = Date.now();
     const CAP_MS = 3 * 60 * 1000;
+    let rendered = false;
     const tick = () => {
-      // Stop if the pane switched sessions, the resuming indicator is gone (the
+      // Stop if the pane switched sessions, the compact wake line is gone (the
       // real reply landed / was cleared), or we exceeded the sane cap.
       if (!currentSession || currentSession.id !== sid) { stopCodexWakeBreakdown(true); return; }
-      if (!$view.querySelector('.conv-live-tool-inline.optimistic')) { stopCodexWakeBreakdown(true); return; }
+      if (rendered && !$view.querySelector('.conv-live-tool-inline.wake-breakdown')) { stopCodexWakeBreakdown(true); return; }
       if (Date.now() - startedAt > CAP_MS) { stopCodexWakeBreakdown(true); return; }
       fetch('/api/codex-wake-status?session_id=' + encodeURIComponent(sid))
         .then(r => (r.ok ? r.json() : null))
@@ -4171,6 +4189,7 @@
           if (!data || data.sid !== sid || _codexWakePollSid !== sid) return;
           if (!currentSession || currentSession.id !== sid) return;
           renderCodexWakeBreakdown($view, data);
+          rendered = true;
           if (data.outcome) {
             stopCodexWakeBreakdown(false);
             handleCodexWakeOutcome($view, data);

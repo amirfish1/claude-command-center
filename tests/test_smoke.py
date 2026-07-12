@@ -4075,6 +4075,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("effort=reasoning_effort", server_py)
         self.assertIn("overflow-wrap: anywhere;", app_css)
 
+    def test_codex_wake_progress_is_quiet_until_it_stalls(self):
+        """A normal Codex wake should not render an alarming diagnostic stack."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function _wakeStageQuietLabel", app_js)
+        self.assertIn("return 'Thinking… ' + model + effort;", app_js)
+        self.assertIn("const WAKE_STAGE_DETAIL_DELAY_MS = 1000;", app_js)
+        self.assertIn("el.classList.toggle('is-detailed', showDetails);", app_js)
+        self.assertIn(".wake-breakdown:not(.is-detailed) .wb-stage.is-done .wb-label", app_css)
+
     def test_mobile_live_command_indicator_collapses_command_detail(self):
         """Mobile should show a compact Bash/tool pill instead of a multi-line
         command block at the bottom of the conversation pane."""
