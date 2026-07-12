@@ -25252,6 +25252,9 @@
         const workers = Number(liveWorkers) || 0;
         const drainOn = !!(q && q.auto_drain);
         const stuck = !!(q && q.stuck);
+        // Match the Queue health strip: no worker has stalled here. Work is
+        // simply waiting for a worker to be assigned.
+        const waiting = stuck && workers === 0;
         // Claimable depth (claim_types-aware). A bug-only queue full of features
         // has open depth but ZERO claimable work, so it is NOT "Draining" (nothing
         // to drain) — it's a Backlog. Fall back to raw depth when unknown.
@@ -25259,7 +25262,11 @@
         // Pill is derived client-side from the row's data fields (depth/auto_drain/
         // stuck/claimable) — no new server states. Idle (0 open) reads "Ready".
         let stateLabel, stateCls, stateTip;
-        if (stuck) {
+        if (waiting) {
+          stateLabel = 'Waiting';
+          stateCls = 'is-waiting';
+          stateTip = 'Waiting means this auto-drain queue has claimable open tickets, but no WatchTower worker is currently assigned.';
+        } else if (stuck) {
           stateLabel = 'Stuck';
           stateCls = 'is-stuck';
           stateTip = 'Stuck means this auto-drain queue has claimable open tickets but no live WatchTower worker is currently draining them.';

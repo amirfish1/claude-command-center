@@ -4940,6 +4940,9 @@
   .conv-evergreen-queue-header .ceq-state.is-backlog {
     background: rgba(139,148,158,0.16); color: var(--text-muted);
   }
+  .conv-evergreen-queue-header .ceq-state.is-waiting {
+    background: rgba(210,153,34,0.16); color: var(--yellow, #d29922);
+  }
   .conv-evergreen-queue-header .ceq-state.is-stuck {
     background: rgba(248,81,73,0.18); color: var(--red, #f85149);
   }

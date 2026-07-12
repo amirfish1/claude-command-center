@@ -1539,6 +1539,12 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
         self.assertIn("+ _evergreenAgentsBody + '</div>'", app_js)
         self.assertIn('class="conv-evergreen-queue-header', app_js)
+        # An unattended auto-drain queue is waiting for a worker, rather than
+        # genuinely stuck. The sidebar must match the Queue health strip's
+        # less alarming terminology for this zero-worker state.
+        self.assertIn("const waiting = stuck && workers === 0;", app_js)
+        self.assertIn("stateLabel = 'Waiting';", app_js)
+        self.assertIn("Waiting means this auto-drain queue has claimable open tickets, but no WatchTower worker is currently assigned.", app_js)
         # The section must NOT read Flow-object state for its data.
         self.assertNotIn("const _renderEvergreenQueueGroup", app_js)
         self.assertNotIn("_evergreenRoots", app_js)
