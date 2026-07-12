@@ -71,6 +71,24 @@ narrow widths the three sections wrap without collisions: meters first,
 status second, controls last. The banner must not rely on fixed text widths or
 allow status copy to overlap meters or controls.
 
+### Unified engine hierarchy and metrics
+
+The Claude/Fable/Codex quota row is global context and remains above engine
+selection. The Claude/Codex toggle moves immediately below that row. Aggregate
+views omit the redundant engine title and `all_7_days` identifier.
+
+Claude and Codex share one three-card operational summary with identical
+semantics: calls, cache-adjusted tokens per day, and cache-hit rate. Quota
+percentage is not repeated below the global row. Cost, hypothetical Opus cost,
+and dollar-denominated cache savings are removed from the aggregate summary.
+Per-session detail remains available when a specific conversation is selected.
+
+The aggregate chart has one billing-period renderer. Its unreachable
+all-discovered-hours fallback is removed. The weekly percentage axis is fixed
+at 0–100%; values above 100% are clamped to the top edge and retain their true
+value in an upward overflow label. Each local calendar-day divider is labeled
+`00:00` in addition to its centered day/date label.
+
 There is no staleness cutoff for display. Age is disclosed in the refresh panel;
 stale data is preferable to a loader or the legacy graph.
 
