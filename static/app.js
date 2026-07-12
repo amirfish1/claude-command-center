@@ -37959,6 +37959,18 @@
       if (ev.reasoning_effort) bits.push('effort ' + String(ev.reasoning_effort));
       return '<div class="event-model-meta" title="' + escapeAttr(bits.join(' · ')) + '">' + escapeHtml(bits.join(' · ')) + '</div>';
     }
+    function ambientContextHtml(context) {
+      if (!context || !context.text) return '';
+      const source = String(context.source || 'in-app-browser');
+      const label = source === 'ambient-ui-state' ? 'In-app browser context' : 'Injected context';
+      return '<details class="codex-ambient-context">'
+        + '<summary title="Context automatically supplied by Codex Desktop; it was not typed as part of the request.">'
+        + '<span class="codex-ambient-context__label">' + escapeHtml(label) + '</span>'
+        + '<span class="codex-ambient-context__source">' + escapeHtml(source) + '</span>'
+        + '</summary>'
+        + '<pre class="codex-ambient-context__body">' + escapeHtml(String(context.text)) + '</pre>'
+        + '</details>';
+    }
     for (const ev of events) {
       if (ev.line != null) {
         const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ev.line)) : String(ev.line);
@@ -38453,6 +38465,7 @@
         div.innerHTML = '<span class="label">User</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
           + tsSpan(ev.ts)
+          + ambientContextHtml(ev.ambient_context)
           + textHtml
           + eventModelMetaHtml(ev, 'user')
           + (_isPinned ? '' : imagesHtml)

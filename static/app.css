@@ -2363,6 +2363,42 @@
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
     font-weight: 410;
   }
+  .codex-ambient-context {
+    margin: 0 0 8px;
+    min-width: min(420px, 100%);
+    border: 1px solid rgba(57, 210, 192, 0.28);
+    border-radius: 8px;
+    background: rgba(57, 210, 192, 0.06);
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .codex-ambient-context summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .codex-ambient-context summary::-webkit-details-marker { display: none; }
+  .codex-ambient-context summary::before { content: '▸'; color: var(--cyan); }
+  .codex-ambient-context[open] summary::before { content: '▾'; }
+  .codex-ambient-context__label { color: var(--text); font-weight: 600; }
+  .codex-ambient-context__source {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .codex-ambient-context__body {
+    max-height: 260px;
+    margin: 0;
+    padding: 0 9px 9px;
+    overflow: auto;
+    white-space: pre-wrap;
+    color: var(--text-muted);
+    font: 12px/1.5 var(--font-mono);
+  }
   .conversations-view .event.user_text.has-user-steer .user-msg {
     padding-right: 44px;
   }

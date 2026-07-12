@@ -25174,6 +25174,29 @@ def _apply_codex_turn_meta(parsed, codex_turn_meta):
     return parsed
 
 
+_CODEX_IN_APP_BROWSER_CONTEXT_RE = re.compile(
+    r"^\s*<in-app-browser-context(?P<attrs>\s+[^>]*)?>(?P<body>.*?)</in-app-browser-context>\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+_CODEX_IN_APP_BROWSER_CONTEXT_SOURCE_RE = re.compile(
+    r'''\bsource\s*=\s*["'](?P<source>[^"']+)["']''', re.IGNORECASE,
+)
+
+
+def _extract_codex_in_app_browser_context(text):
+    """Split Codex Desktop's injected browser state from the typed request."""
+    text = str(text or "")
+    match = _CODEX_IN_APP_BROWSER_CONTEXT_RE.match(text)
+    if not match:
+        return text, None
+    source_match = _CODEX_IN_APP_BROWSER_CONTEXT_SOURCE_RE.search(match.group("attrs") or "")
+    context = {
+        "source": (source_match.group("source").strip() if source_match else "in-app-browser"),
+        "text": match.group("body").strip(),
+    }
+    return text[match.end():].strip(), context
+
+
 def _codex_usage_delta_from_event(ev, previous_totals=None):
     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
     if payload.get("type") != "token_count":
@@ -25234,9 +25257,12 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
     if ev_type == "event_msg":
         if ptype == "user_message":
             text = _strip_ccc_session_state_instruction(payload.get("message") or "")
+            text, ambient_context = _extract_codex_in_app_browser_context(text)
             images = []
-            if text or images:
+            if text or images or ambient_context:
                 result = {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": images}
+                if ambient_context:
+                    result["ambient_context"] = ambient_context
                 return _apply_codex_turn_meta(result, codex_turn_meta)
         if ptype == "agent_message":
             text = (payload.get("message") or "").strip()
