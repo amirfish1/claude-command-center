@@ -952,6 +952,7 @@
   }
   .queued-steer-tray .event { margin: 0; padding: 5px 10px; font-size: 12px; }
   .queued-steer-tray .event .user-msg { margin-top: 2px; font-size: 13px; }
+  .conversations-view .event.user_text.is-queued-steer-duplicate { display: none; }
   .queued-steer-tray .msg-image {
     width: 44px;
     height: 32px;

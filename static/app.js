@@ -38067,6 +38067,11 @@
     const inputBar = getConvInputBarForPane(paneId);
     if (!pane || !inputBar) return;
     let tray = pane.querySelector('.queued-steer-tray');
+    const transcriptRows = Array.from($view.querySelectorAll('.event.user_text'));
+    // A prior refresh may have hidden a durable row that duplicated a queue
+    // candidate. Start clean so it returns as ordinary history once queued
+    // input has drained.
+    transcriptRows.forEach(el => el.classList.remove('is-queued-steer-duplicate'));
     if (replaceServerCandidates && tray) {
       tray.querySelectorAll('[data-queued-steer-server="true"]').forEach(el => el.remove());
     }
@@ -38087,7 +38092,22 @@
       inputBar.insertBefore(tray, inputBar.firstChild);
     }
     candidates.forEach(el => tray.appendChild(el));
-    if (!tray.children.length) tray.remove();
+    if (!tray.children.length) { tray.remove(); return; }
+    // A durable transcript event can be present before its matching synthetic
+    // queue overlay arrives. Show just the actionable tray version until the
+    // queued copy drains; otherwise the same prompt appears twice.
+    const queuedTexts = new Set(Array.from(tray.querySelectorAll('.event.user_text'))
+      .map(el => {
+        const msg = el.querySelector('.user-msg');
+        return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+      })
+      .filter(Boolean));
+    transcriptRows.forEach(el => {
+      if (isPendingSendEchoElement(el)) return;
+      const msg = el.querySelector('.user-msg');
+      const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+      if (text && queuedTexts.has(text)) el.classList.add('is-queued-steer-duplicate');
+    });
   }
 
   function renderConversationEvents(events, paneId, opts) {
