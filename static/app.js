@@ -3805,6 +3805,80 @@
     return true;
   }
 
+  // SESSION_ICON_PRESENTATION_START
+  // Pure presentation classifiers. Keep this block dependency-free so the
+  // model/cost/activity contract can be executed directly in focused tests.
+  function sessionIconEngine(row) {
+    if (!row) return 'claude';
+    const raw = String(row.source || row.engine || 'claude').trim().toLowerCase();
+    if (raw === 'openai') return 'codex';
+    if (raw === 'gemini') return 'gemini';
+    if (raw === 'cursor') return 'cursor';
+    if (raw === 'antigravity') return 'antigravity';
+    if (raw === 'hermes') return 'hermes';
+    if (raw === 'codex') return 'codex';
+    return 'claude';
+  }
+
+  function sessionCostTier(engine, model) {
+    const engineKey = String(engine || '').trim().toLowerCase();
+    const modelKey = String(model || '').trim().toLowerCase();
+    if (!modelKey) return '';
+    const hasFamily = (family) => new RegExp('(^|[-_/])' + family + '($|[-_/\\[])').test(modelKey);
+    if (engineKey === 'claude') {
+      if (hasFamily('fable')) return 'premium';
+      if (hasFamily('opus')) return 'high';
+      if (hasFamily('sonnet')) return 'medium';
+      if (hasFamily('haiku')) return 'low';
+      return '';
+    }
+    if (engineKey === 'codex') {
+      if (hasFamily('sol')) return 'premium';
+      if (hasFamily('terra')) return 'medium';
+      if (hasFamily('luna')) return 'low';
+    }
+    return '';
+  }
+
+  function sessionIsActivelyWorking(row, optimistic) {
+    if (!row) return false;
+    if (row.pending_spawn) return true;
+    const engine = sessionIconEngine(row);
+    if (engine === 'codex') {
+      const state = String(row.codex_state || '').toLowerCase();
+      if (state) return state === 'working';
+      return !!optimistic;
+    }
+    const state = String(row.state || '').toLowerCase();
+    if (state && state !== 'interactive') return state === 'working';
+    return !!optimistic;
+  }
+
+  function sessionIconPresentation(row, optimistic) {
+    const engine = sessionIconEngine(row);
+    const engineLabels = {
+      claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
+      antigravity: 'Antigravity', hermes: 'Hermes',
+    };
+    const tierLabels = {
+      premium: 'Premium', high: 'High', medium: 'Medium', low: 'Low',
+    };
+    const engineLabel = engineLabels[engine] || 'Claude';
+    const model = String((row && row.model) || '').trim();
+    const tier = sessionCostTier(engine, model);
+    const tierLabel = tierLabels[tier] || '';
+    const working = sessionIsActivelyWorking(row, optimistic);
+    const activityLabel = working ? 'Working now' : 'Not working';
+    const title = [
+      engineLabel,
+      model || 'Model unknown',
+      tierLabel ? tierLabel + ' cost' : 'Cost tier unknown',
+      activityLabel,
+    ].join(' · ');
+    return { engine, engineLabel, tier, tierLabel, working, activityLabel, title };
+  }
+  // SESSION_ICON_PRESENTATION_END
+
   let _optimisticAgentTimer = null;
   // CCC-28: tick a live elapsed counter (1s, 2s, …) in the optimistic
   // indicator's age slot so "Sending…/🧠 Thinking…" reads as actively
