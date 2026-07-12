@@ -155,9 +155,10 @@ def test_unified_tier_palette_is_engine_independent():
     end = css.index("/* End unified session cost palette */", start)
     palette = css[start:end]
 
-    assert ".cost-premium" in palette and "color: #ffd84f;" in palette
-    assert ".cost-high" in palette and "color: #e9a84a;" in palette
-    assert ".cost-medium" in palette and "color: #68a9d8;" in palette
-    assert ".cost-low" in palette and "color: #8190a3;" in palette
+    assert ".cost-premium .session-tier-label" in palette and "color: #ffd84f;" in palette
+    assert ".cost-high .session-tier-label" in palette and "color: #e9a84a;" in palette
+    assert ".cost-medium .session-tier-label" in palette and "color: #68a9d8;" in palette
+    assert ".cost-low .session-tier-label" in palette and "color: #8190a3;" in palette
     assert ".cost-premium.claude" not in palette
     assert ".cost-premium.codex" not in palette
+    assert "filter:" not in palette

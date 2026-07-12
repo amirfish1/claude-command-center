@@ -6097,19 +6097,16 @@
     --icon-shadow-color: rgba(45, 212, 191, 0.42);
   }
   /* Unified session cost palette */
-  :is(.conv-session-icon, .conv-pane-cat-icon).cost-premium {
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-premium .session-tier-label {
     color: #ffd84f;
   }
-  :is(.conv-session-icon, .conv-pane-cat-icon).cost-premium .conv-session-svg {
-    filter: drop-shadow(0 0 3px rgba(255, 216, 79, 0.5));
-  }
-  :is(.conv-session-icon, .conv-pane-cat-icon).cost-high {
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-high .session-tier-label {
     color: #e9a84a;
   }
-  :is(.conv-session-icon, .conv-pane-cat-icon).cost-medium {
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-medium .session-tier-label {
     color: #68a9d8;
   }
-  :is(.conv-session-icon, .conv-pane-cat-icon).cost-low {
+  :is(.conv-session-icon, .conv-pane-cat-icon).cost-low .session-tier-label {
     color: #8190a3;
   }
   /* End unified session cost palette */

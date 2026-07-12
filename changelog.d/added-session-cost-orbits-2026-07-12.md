@@ -1,1 +1,1 @@
-- Session icons now show unified Claude/Codex cost tiers through compact P/H/M/L colors, with a separate actively-working indicator.
+- Session icons now retain distinct engine colors while compact P/H/M/L labels show unified cost tiers and a separate dot shows active work.
