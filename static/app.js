@@ -32985,9 +32985,9 @@
             return hay.includes(qTerm);
           })
         : typeScoped;
-      // Claim-order sort (mirrors claim_next): the TOP row is what a default
-      // execution claim would grab next. open<in_progress<closed; within open,
-      // claimable (shovel-ready/unset) before unready; then priority; then age.
+      // Keep active WIP visible at the top of the list. Within open tickets,
+      // preserve claim order: claimable (shovel-ready/unset) before unready;
+      // then priority; then age.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
@@ -32996,7 +32996,7 @@
         }
         return rawStatus;
       };
-      const _statusRank = s => (s === 'open' ? 0 : s === 'in_progress' ? 1 : 2);
+      const _statusRank = s => (s === 'in_progress' ? 0 : s === 'open' ? 1 : 2);
       const _notClaimable = it => (it && it.claimable === false ? 1 : 0);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
