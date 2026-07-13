@@ -10055,25 +10055,7 @@
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
-  const $mobileBackHome = document.getElementById('convToolbar');
-  function syncMobileBackIntoTabStrip(strip, visible) {
-    const toolbar = $mobileBackHome || document.getElementById('convToolbar');
-    if (!$mobileBackBtn || !toolbar) return;
-    const inline = !!(strip && visible && isMobile());
-    if (strip) strip.classList.toggle('has-mobile-back', inline);
-    if (inline) {
-      strip.insertBefore($mobileBackBtn, strip.firstChild);
-    } else if ($mobileBackBtn.parentNode !== toolbar) {
-      toolbar.insertBefore($mobileBackBtn, toolbar.firstChild);
-    }
-  }
-  function syncMobileBackForVisibleTabStrip() {
-    const visibleStrip = Array.from(document.querySelectorAll('.conv-tab-strip'))
-      .find(strip => strip && !strip.hidden);
-    syncMobileBackIntoTabStrip(visibleStrip || null, !!visibleStrip);
-  }
   function handleMobileBreakpointChange() {
-    syncMobileBackForVisibleTabStrip();
     // When transitioning to narrow viewport with an active conversation,
     // show the pane overlay; when transitioning to wide, hide it
     // (wide screens show both pane + sidebar side-by-side).
@@ -34226,7 +34208,6 @@
     if (!strip || !state) return;
     const taskIds = Object.keys(state.tasks);
     if (!taskIds.length) {
-      syncMobileBackIntoTabStrip(strip, false);
       strip.hidden = true;
       strip.innerHTML = '';
       return;
@@ -34244,7 +34225,6 @@
     }
     strip.innerHTML = html;
     strip.hidden = false;
-    syncMobileBackIntoTabStrip(strip, true);
   }
   function _convPaneApplyActiveTab(view) {
     const state = _convPaneTabState(view);

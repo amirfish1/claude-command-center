@@ -6691,19 +6691,6 @@
     }
     .conv-tab-strip::-webkit-scrollbar { display: none; }
     .conv-tab { flex: 0 0 auto; }
-    .conv-tab-strip.has-mobile-back {
-      align-items: center;
-      gap: 6px;
-      padding-top: 4px;
-    }
-    .conv-tab-strip.has-mobile-back #mobileBackBtn {
-      flex: 0 0 auto;
-      min-height: 28px;
-      padding: 4px 8px;
-    }
-    .conv-tab-strip.has-mobile-back #mobileBackBtn .mb-label {
-      display: none;
-    }
     /* #1 — the toolbar wrapped into ~4 rows (title / meta chips / status pills
        / Back+Today). Tighten the 16px gap + padding, and keep the engine/status
        detail on one scrollable line instead of letting it claim a full row. */
