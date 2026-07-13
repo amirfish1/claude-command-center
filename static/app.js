@@ -23955,6 +23955,10 @@
 
       let startBtn = '';
       let archiveBtn;
+      // Active is a working list: retiring a session there is an archive
+      // action. "Trash" is reserved for the All tab, where its collapsed
+      // discard section is visible and the destination is meaningful.
+      const archiveActionLabel = _sidebarTab === 'inprogress' ? 'Archive' : 'Move to Trash';
       const pinTitle = c.pinned ? 'Unpin conversation' : 'Pin conversation';
       const pinBtn = '<button class="conv-pin-btn' + (c.pinned ? ' is-unpin' : '') + '" data-role="pin" title="' + pinTitle + '" aria-label="' + pinTitle + '"><span class="conv-pin-glyph">&#128204;</span></button>';
       if (isBacklogRow) {
@@ -23972,7 +23976,7 @@
         // remain explicit for rows that are already there.
         archiveBtn = c.archived
           ? '<button class="conv-archive-btn is-restore" data-role="archive" title="Restore to Active" aria-label="Restore to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Restore</span></button>'
-          : '<button class="conv-archive-btn" data-role="archive" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>';
+          : '<button class="conv-archive-btn" data-role="archive" title="' + archiveActionLabel + '" aria-label="' + archiveActionLabel + '">&#128465;</button>';
       }
       // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
       // the meta row — it wrapped onto a second line and is redundant with the
