@@ -1,1 +1,1 @@
-- Session icons now retain distinct engine colors while compact P/H/M/L labels show unified cost tiers and a separate dot shows active work.
+- Session icons now retain distinct engine colors while brightness and readable $, $$, and $$$ markers show unified cost tiers, with a separate dot for active work.

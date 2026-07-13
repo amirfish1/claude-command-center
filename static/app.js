@@ -3889,16 +3889,17 @@
     const baseClass = opts.context === 'pane' ? 'conv-pane-cat-icon' : 'conv-session-icon';
     const tierClass = presentation.tier ? ' cost-' + presentation.tier : '';
     const activityClass = presentation.working ? ' is-working' : ' is-not-working';
-    const tierInitials = { premium: 'P', high: 'H', medium: 'M', low: 'L' };
-    const tierLabel = presentation.tier
-      ? '<span class="session-tier-label" aria-hidden="true">' + tierInitials[presentation.tier] + '</span>'
+    const tierDollarCounts = { premium: 3, high: 2, medium: 1, low: 0 };
+    const dollarCount = tierDollarCounts[presentation.tier] || 0;
+    const tierCost = dollarCount
+      ? '<span class="session-tier-cost" aria-hidden="true">' + '<i>$</i>'.repeat(dollarCount) + '</span>'
       : '';
     return '<span class="' + baseClass + ' ' + presentation.engine + tierClass + activityClass + '"'
       + ' title="' + escapeAttr(presentation.title) + '"'
       + ' role="img" aria-label="' + escapeAttr(presentation.title) + '">'
       + getEngineSvg(presentation.engine)
       + '<span class="session-activity-dot" aria-hidden="true"></span>'
-      + tierLabel
+      + tierCost
       + '</span>';
   }
 

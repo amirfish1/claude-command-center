@@ -1879,7 +1879,7 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-session-icon.is-live", app_css)
         self.assertIn("@keyframes ccc-activity-dot-pulse", app_css)
         self.assertNotIn(".session-cost-orbit", app_css)
-        self.assertIn(".session-tier-label", app_css)
+        self.assertIn(".session-tier-cost", app_css)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always
