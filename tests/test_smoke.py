@@ -10810,6 +10810,13 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("Image attachment unavailable in this transcript", js)
         self.assertIn("if (isUnavailableMarkdownImageTarget(target))", js)
 
+    def test_codex_inline_visual_reference_renders_as_a_file_link(self):
+        """Codex visual markers should be useful links, not raw transcript syntax."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("CODEX_INLINE_VIS_RE", js)
+        self.assertIn("Visual: ", js)
+        self.assertIn("linkifyPath(filename)", js)
+
     def test_archive_search_refresh_preserves_scroll(self):
         """Periodic archive refreshes should not snap active search results."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()

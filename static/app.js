@@ -8690,6 +8690,18 @@
     return /^(?:attached|shown|image)\s+(?:above|below)$/i.test(String(target || '').trim());
   }
 
+  // Codex uses this token to refer to a locally generated visual. It is not
+  // Markdown, so turn it into the same session-aware file link used elsewhere
+  // in the transcript rather than leaving its implementation syntax visible.
+  const CODEX_INLINE_VIS_RE = /::codex-inline-vis\{\s*file=&quot;([\s\S]*?)&quot;\s*\}/g;
+  function linkifyCodexInlineVisuals(escapedHtml) {
+    if (!escapedHtml) return escapedHtml;
+    return String(escapedHtml).replace(CODEX_INLINE_VIS_RE, (_match, rawFilename) => {
+      const filename = normalizeMarkdownLinkTarget(rawFilename);
+      return filename ? '<span class="codex-inline-vis">Visual: ' + linkifyPath(filename) + '</span>' : '';
+    });
+  }
+
   // Replace pasted-image references inside an already-escapeHtml'd string
   // with inline <img> tags. CCC now uploads to `.claude/command-center/
   // pasted-images/`; legacy `.claude/pasted-images/` paths still render.
@@ -9629,7 +9641,7 @@
     // Bare file paths (relative like docs/foo/bar.md, absolute /Users/..., or ~/...)
     s = s.replace(/(^|[\s(])((?:~\/|\/|(?:[\w.\-]+\/)+)[\w.\-/]+\.(?:md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))\b/g,
       (m, pre, p) => pre + '<a role="button" tabindex="0" class="path-link" data-path="' + p + '">' + p + '</a>');
-    return s;
+    return linkifyCodexInlineVisuals(s);
   }
 
   function linkifyPath(p) {
