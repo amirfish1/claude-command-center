@@ -8683,6 +8683,13 @@
     return target;
   }
 
+  // Some agents describe a visual that the native client showed transiently
+  // as `![label](attached above)`. That phrase is not a retrievable image URL;
+  // rendering it as an <img> leaves a misleading broken-image icon.
+  function isUnavailableMarkdownImageTarget(target) {
+    return /^(?:attached|shown|image)\s+(?:above|below)$/i.test(String(target || '').trim());
+  }
+
   // Replace pasted-image references inside an already-escapeHtml'd string
   // with inline <img> tags. CCC now uploads to `.claude/command-center/
   // pasted-images/`; legacy `.claude/pasted-images/` paths still render.
@@ -9597,6 +9604,10 @@
     // Images ![alt](url)
     s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
       const target = normalizeMarkdownLinkTarget(url);
+      if (isUnavailableMarkdownImageTarget(target)) {
+        return '<span class="unavailable-image" role="img" title="The source image was not saved in this transcript">'
+          + escapeHtml(alt || 'Image') + ' · Image attachment unavailable in this transcript</span>';
+      }
       return '<img src="' + escapeAttr(target) + '" alt="' + escapeHtml(alt) + '" class="msg-image" loading="lazy">';
     });
     // Markdown links [text](url)

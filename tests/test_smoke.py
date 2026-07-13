@@ -10781,6 +10781,13 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("const imagesHtml = renderImageDescriptors(ev.images);", js)
         self.assertIn("h += imagesHtml;", js)
 
+    def test_markdown_attached_above_reference_is_not_rendered_as_a_url(self):
+        """UI-only image references must not leave a broken image icon."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("function isUnavailableMarkdownImageTarget", js)
+        self.assertIn("Image attachment unavailable in this transcript", js)
+        self.assertIn("if (isUnavailableMarkdownImageTarget(target))", js)
+
     def test_archive_search_refresh_preserves_scroll(self):
         """Periodic archive refreshes should not snap active search results."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
