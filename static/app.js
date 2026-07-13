@@ -28223,7 +28223,7 @@
         // neighbour now (next sibling, falling back to previous) so we can
         // jump there once the row vanishes from the active list. Skip
         // when un-archiving, or when archiving a row that isn't selected.
-        const fromActiveList = !item.closest('.conv-archived-section');
+        const fromActiveList = !item.closest('.conv-archived-section, .conv-trash-section');
         const wasSelected = currentConversation === convId;
         let nextSelectId = null;
         if (fromActiveList && wasSelected) {
@@ -28243,7 +28243,10 @@
         try {
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId);
           const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
-          const currentlyArchived = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section') || !!(c && c.archived);
+          // The All tab renders from archiveData while `conversationsData` can
+          // lag behind it. Use the rendered row as the state authority so an
+          // active row's trash action cannot accidentally restore instead.
+          const currentlyArchived = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section, .conv-trash-section');
           const nextArchived = !currentlyArchived;
           const data = await ccPostJson('/api/conversations/' + convId + '/archive',
             archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived));
@@ -28277,7 +28280,7 @@
           }
           if (!data.archived) showOpToast('Restored to Active');
         } catch (err) {
-          const restoring = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section');
+          const restoring = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section, .conv-trash-section');
           showOpToast((restoring ? 'Restore' : 'Archive') + ' failed (' + err.message + ')', 'error');
         }
       });

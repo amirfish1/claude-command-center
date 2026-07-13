@@ -957,6 +957,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-item .conv-archive-btn.is-restore", app_css)
         self.assertIn(".conv-item.is-archived-row .conv-row-end { min-width: 76px; }", app_css)
 
+    def test_all_tab_archive_action_uses_rendered_row_state(self):
+        """An active All-tab row must not restore because another cache is stale."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "const currentlyArchived = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section, .conv-trash-section');",
+            app_js,
+        )
+        self.assertNotIn(
+            "|| !!(c && c.archived);\n          const nextArchived = !currentlyArchived;",
+            app_js,
+        )
+
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
         """When Hermes rows exist, All should expose Coding, Workers, and
         Messages lanes so plain WhatsApp/router conversations do not bury
