@@ -12338,6 +12338,15 @@ class TestModelPicker(unittest.TestCase):
         clipped = server._truncate_session_name(long)
         self.assertLessEqual(len(clipped), server.SESSION_NAME_MAX_CHARS)
         self.assertTrue(clipped.endswith("…"))
+    def test_codex_rows_keep_a_full_title_for_the_status_rail(self):
+        """CCC-566: the rail should not inherit the sidebar's 120-char cap."""
+        server_text = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('status_rail_title = title if title and title != first_message else display_name', server_text)
+        self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
+        self.assertIn("addParam('status_rail_title', row.status_rail_title || '', 500);", app_js)
+
 
     def test_parse_conversation_surfaces_compact_boundary(self):
         """The transcript pane should show feedback when `/compact` finishes."""

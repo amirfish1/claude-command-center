@@ -25248,6 +25248,11 @@ def find_codex_conversations(
             or (first_message[:80] if first_message else None)
             or (row.get("agent_nickname") or "").strip()
         )
+        # Keep the sidebar's defensive title cap, but retain Codex's complete
+        # generated title for the roomier status rail.  When Codex merely
+        # copied the opening prompt into `title`, use the compact row title so
+        # an annotation-sized prompt cannot fill the rail.
+        status_rail_title = title if title and title != first_message else display_name
         branch = row.get("git_branch") or ""
         tail_branch = tail.get("tail_branch") or ""
         tail_worktree_path = tail.get("tail_worktree_path") or ""
@@ -25299,6 +25304,7 @@ def find_codex_conversations(
             "git_branch": branch,
             "first_message": first_message[:200],
             "display_name": display_name,
+            "status_rail_title": status_rail_title,
             "ai_title": codex_ai_title,
             "name_overridden": bool(name_overrides.get(sid)),
             "last_prompt": (tail.get("last_prompt") or "")[:200],

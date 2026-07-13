@@ -10862,6 +10862,7 @@
       session_id: sessionId || undefined,
       source,
       display_name: popoutParam('title') || '',
+      status_rail_title: popoutParam('status_rail_title') || '',
       first_message: popoutParam('first_message') || '',
       folder_label: popoutParam('folder_label') || '',
       folder_label_chip: popoutParam('folder_label') || '',
@@ -28457,6 +28458,7 @@
       addParam('source', source, 40);
       addParam('session_id', row.session_id || (source === 'backlog' ? '' : convId), 120);
       addParam('title', paneTitleForRow(row), 180);
+      addParam('status_rail_title', row.status_rail_title || '', 500);
       addParam('category', paneCategoryForRow(row), 180);
       addParam('folder_label', row.folder_label_chip || row.folder_label || '', 120);
       addParam('cwd', row.session_cwd || row.cwd || '', 500);
@@ -29698,7 +29700,8 @@
         // the static "Session Utilities" label (CCC-281). The rail is global, so
         // only the active pane drives it.
         const railTitleEl = document.getElementById('statusRailTitle');
-        if (railTitleEl) railTitleEl.textContent = title || category || 'Session';
+        const railTitle = row && row.status_rail_title || title || category || 'Session';
+        if (railTitleEl) railTitleEl.textContent = railTitle;
         // CCC-505: the bold title can be a WT-worker label whose ticket
         // context was hard-clipped server-side (wt_ticket_context_rest
         // carries whatever got cut). Show it below, unbold, instead of the
