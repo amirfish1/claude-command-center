@@ -32509,6 +32509,9 @@
     const ref = _uxqItemRef(item);
     const promptText = _uxqItemPrompt(item);
     const detailTitle = _uxqItemTitle(item);
+    // Long ticket notes are prose, not one enormous heading. Keep the opening
+    // sentence prominent while preserving the complete, editable note below it.
+    const titleParts = splitFirstSentence(detailTitle);
     const status = item.needs_input ? 'blocked' : (item.status || 'open');
     const timeline = Array.isArray(item.timeline) ? item.timeline : [];
 
@@ -32756,7 +32759,9 @@
       + '</div>'
       + '<div class="uxq-td-title-wrap">'
       +   '<div class="uxq-td-title" contenteditable="true" spellcheck="true" data-field="note" role="textbox" aria-label="Ticket title">'
-      +   escapeHtml(detailTitle) + '</div>'
+      +   '<span class="uxq-td-title-first">' + escapeHtml(titleParts[0]) + '</span>'
+      +   (titleParts[1] ? '<span class="uxq-td-title-rest">' + escapeHtml(titleParts[1]) + '</span>' : '')
+      +   '</div>'
       + '</div>'
       + '<div class="uxq-td-cols">'
       +   '<div class="uxq-td-main">'
