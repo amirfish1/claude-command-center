@@ -390,7 +390,7 @@ function makeCtx(page) {
     // reload, settle, re-suppress the banner, re-install the cursor, fade
     // back in. Used where the real UI has no click affordance to change a
     // persisted preference (e.g. list -> board view).
-    async reloadWith(entries, { settleMs = 4000, cursorAt } = {}) {
+    async reloadWith(entries, { settleMs = 1200, cursorAt } = {}) {
       const pos = await page.evaluate(() => {
         const d = document.createElement('div');
         d.id = '__cap_fade__';
@@ -402,16 +402,29 @@ function makeCtx(page) {
         return { x: s.x, y: s.y };
       });
       await sleep(420);
-      await page.evaluate((data) => {
-        for (const [k, v] of Object.entries(data || {})) {
-          localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
-        }
+      // The initial seed was registered with evaluateOnNewDocument, which
+      // re-runs on EVERY navigation — including this reload — and would
+      // clobber plain localStorage writes. Register the overrides as a
+      // second on-new-document script: it runs after the first one, so the
+      // overrides win on this reload and any later ones.
+      await page.evaluateOnNewDocument((data) => {
+        try {
+          for (const [k, v] of Object.entries(data || {})) {
+            localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
+          }
+        } catch (_) { /* pre-navigation localStorage unavailable — ignore */ }
       }, entries || {});
       await Promise.all([
         page.waitForNavigation({ waitUntil: 'load', timeout: 30000 }),
         page.evaluate(() => location.reload()),
       ]);
-      await page.waitForNetworkIdle({ idleTime: 750, timeout: settleMs }).catch(() => {});
+      // Fade back in as soon as real content is on screen — a long dark hold
+      // reads as dead time in the recording.
+      await page.waitForFunction(
+        () => document.querySelector('.conv-item, .kanban-card, .flow-node'),
+        { timeout: 5000 }
+      ).catch(() => {});
+      await page.waitForNetworkIdle({ idleTime: 400, timeout: settleMs }).catch(() => {});
       await suppressDemoBanner(page);
       const at = cursorAt || pos;
       await installCursor(page, at.x, at.y);

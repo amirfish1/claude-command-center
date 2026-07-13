@@ -199,13 +199,20 @@ def write_usage(state_dir):
         seven = round(18 + frac * 45, 1)            # 18 -> 63 %
         sonnet = round(9 + frac * 29, 1)            # 9 -> 38 %
         five = round(12 + (frac * 61) % 55, 1)      # sawtooth-ish session window
+        codex = {
+            "session": {"pct": round(6 + frac * 22, 1),
+                        "resets_at": iso_s(five_reset), "window_minutes": 300},
+            "weekly": {"pct": round(11 + frac * 23, 1),
+                       "resets_at": iso_s(weekly_reset), "window_minutes": 10080},
+            "plan_type": "plus",
+        }
         snaps.append({
             "ts": iso_s(ts), "source": "native",
             "five_hour": {"utilization": five, "resets_at": iso_s(five_reset)},
             "seven_day": {"utilization": seven, "resets_at": iso_s(weekly_reset)},
             "seven_day_sonnet": {"utilization": sonnet, "resets_at": iso_s(weekly_reset)},
             "seven_day_fable": {"utilization": None, "resets_at": None},
-            "codex": None,
+            "codex": codex,
         })
     with (udir / "usage-snapshots.jsonl").open("w", encoding="utf-8") as fh:
         for s in snaps:
