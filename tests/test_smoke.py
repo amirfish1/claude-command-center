@@ -4112,6 +4112,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("not a live stuck process", app_js)
         self.assertIn("Use the wake/follow-up box below", app_js)
 
+    def test_codex_silent_turn_log_lookup_scopes_to_its_thread_repo(self):
+        """Opening a silent Codex turn must not scan every recent Codex repo."""
+        server = importlib.import_module("server")
+        with mock.patch.object(
+            server, "_codex_thread_row", return_value={"cwd": "/work/repo/subdir"}
+        ), mock.patch.object(
+            server, "_git_toplevel_for_existing_dir", return_value="/work/repo"
+        ), mock.patch.object(
+            server, "_recent_codex_ccc_log_paths", return_value=[]
+        ) as recent_logs:
+            self.assertEqual(server._codex_logs_for_session("thread-123"), [])
+
+        self.assertEqual(recent_logs.call_args.kwargs["repo_paths"], ["/work/repo"])
+
     def test_stale_optimistic_thinking_settles_when_no_process_exists(self):
         """The optimistic Thinking pill should not tick forever after the
         status poll proves there is no live/headless/terminal process."""

@@ -23660,16 +23660,28 @@ def _codex_logs_for_session(session_id):
     """Every CCC spawn/resume .log whose thread_id matches session_id, as
     (mtime, path) pairs sorted oldest-first.
 
-    Sourced from _recent_codex_ccc_log_paths (spawn registry + a glob of
-    every known repo's log dir) rather than just the live spawn registry —
-    the registry prunes an entry the moment its process exits, and a
-    turn.failed IS the process exiting, so by the time anyone investigates
-    a silent turn the registry entry is already gone (CCC-424).
+    Scope the log search to the thread's own repository. Falling back to all
+    recent Codex repositories made opening a silent result scan hundreds of
+    unrelated worktrees before its transcript could render.
     """
     if not session_id:
         return []
+    repo_paths = []
+    row = _codex_thread_row(session_id) or {}
+    cwd = row.get("cwd") or ""
+    if cwd:
+        try:
+            repo = (
+                _git_toplevel_for_existing_dir(cwd)
+                or _nearest_marked_repo_dir(cwd)
+                or str(Path(cwd).expanduser().resolve())
+            )
+        except (OSError, RuntimeError, ValueError):
+            repo = ""
+        if repo:
+            repo_paths.append(repo)
     out = []
-    for log in _recent_codex_ccc_log_paths():
+    for log in _recent_codex_ccc_log_paths(repo_paths=repo_paths):
         if _extract_codex_thread_id_from_log(log) != session_id:
             continue
         try:
