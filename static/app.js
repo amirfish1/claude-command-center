@@ -9599,7 +9599,12 @@
       }
       return '<code class="md-code">' + inner + '</code>';
     });
-    // Bold **x**
+    // Bold **x**. Keep the following prose gap in its own non-collapsing
+    // inline span: at a bold/plain-text boundary WebKit can visually swallow
+    // the ordinary whitespace, making `**repo** so` read as "reposo".
+    s = s.replace(/\*\*([^*]+)\*\*([ \t]+)(?=\S)/g, (m, inner, gap) =>
+      '<strong>' + inner + '</strong><span class="md-bold-gap">'
+        + gap.replace(/[ \t]/g, '&nbsp;') + '</span>');
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     // Images ![alt](url)
     s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
