@@ -3896,6 +3896,26 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("status === 'blocked' ? 'Agent needs your input' : 'Open'", modal_js)
 
+    def test_queue_item_payload_keeps_close_report_without_watchtower_import(self):
+        """CCC's stdlib-only queue fallback must still expose a worker's
+        close summary to the ticket-detail Activity timeline."""
+        server = importlib.import_module("server")
+        item = {
+            "status": "closed",
+            "history": [{
+                "event": "close",
+                "at": "2026-07-12T13:34:40Z",
+                "by": {"kind": "worker", "worker": "ccc-worker"},
+                "resolution": {"summary": "Restored the missing label"},
+            }],
+        }
+
+        with mock.patch.object(server, "_q", object()):
+            payload = server._uxq_item_payload(item)
+
+        self.assertEqual(payload["timeline"][0]["event"], "close")
+        self.assertEqual(payload["timeline"][0]["resolution"]["summary"], "Restored the missing label")
+
     def test_queue_status_icons_are_large_and_in_progress_glows(self):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 

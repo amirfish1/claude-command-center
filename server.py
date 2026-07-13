@@ -699,18 +699,35 @@ def _wt_past_workers(hours=24, max_per_queue=3):
 _queue_answer = _q.answer
 
 
+def _uxq_item_timeline(item):
+    """Return ticket activity even when CCC uses its stdlib-only queue fallback.
+
+    WatchTower provides a normalized ``timeline`` helper when it is importable.
+    The fallback queue reads the same durable items, including their canonical
+    history, so retain those events instead of sending the detail modal an
+    empty Activity section.
+    """
+    timeline_fn = getattr(_q, "timeline", None)
+    if callable(timeline_fn):
+        try:
+            timeline = timeline_fn(item)
+            if isinstance(timeline, list):
+                return timeline
+        except Exception:
+            pass
+
+    history = item.get("history") if isinstance(item, dict) else None
+    if not isinstance(history, list):
+        return []
+    return [dict(event) for event in history
+            if isinstance(event, dict) and str(event.get("event") or "").strip()]
+
+
 def _uxq_item_payload(item):
     if not item:
         return item
     out = dict(item)
-    timeline_fn = getattr(_q, "timeline", None)
-    if callable(timeline_fn):
-        try:
-            out["timeline"] = timeline_fn(item)
-        except Exception:
-            out["timeline"] = []
-    else:
-        out["timeline"] = []
+    out["timeline"] = _uxq_item_timeline(item)
     return out
 
 
