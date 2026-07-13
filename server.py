@@ -13497,6 +13497,30 @@ def _resolve_session_cwd(session_id, cwd):
     return _relocate_missing_session_cwd(session_id, cwd) or cwd
 
 
+def _claude_subagent_parent_session_id(session_id):
+    """Return the owning Claude session for a bare ``agent-*`` transcript id.
+
+    Claude stores child transcripts at
+    ``<project>/<parent-session>/subagents/agent-*.jsonl``.  Those child ids
+    are searchable history references, but they are not independently
+    resumable by the Claude CLI; input must resume their parent session.
+    """
+    sid = str(session_id or "").strip()
+    if not re.fullmatch(r"agent-[A-Za-z0-9-]+", sid) or not PROJECTS_ROOT.is_dir():
+        return None
+    try:
+        candidates = PROJECTS_ROOT.glob(f"*/*/subagents/{sid}.jsonl")
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            parent_sid = candidate.parent.parent.name
+            if re.fullmatch(r"[0-9a-fA-F-]{8,}", parent_sid):
+                return parent_sid
+    except OSError:
+        pass
+    return None
+
+
 def find_session_cwd(session_id):
     """Locate the .jsonl for a session_id across ~/.claude/projects/*/ and return its cwd.
 
@@ -41402,6 +41426,10 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         return _federation_proxy_session_action(owner_node, "inject", {
             "session_id": session_id, "text": text, "mode": mode,
         })
+    # Total Recall may return a Claude child transcript's bare ``agent-*``
+    # id. It is searchable, but Claude cannot resume it independently; route
+    # the message through the parent session that owns the child transcript.
+    session_id = _claude_subagent_parent_session_id(session_id) or session_id
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))

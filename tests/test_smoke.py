@@ -44,6 +44,32 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_inject_routes_claude_subagent_reference_to_parent_session(self):
+        """Recall can surface bare Claude ``agent-*`` child session IDs."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        parent_sid = "11111111-2222-3333-4444-555555555555"
+        agent_sid = "agent-a473bdecd59d4f637"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            projects_root = pathlib.Path(tmp) / "projects"
+            child_path = projects_root / "-example-project" / parent_sid / "subagents" / f"{agent_sid}.jsonl"
+            child_path.parent.mkdir(parents=True)
+            child_path.write_text(json.dumps({"cwd": tmp}) + "\n", encoding="utf-8")
+            original_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = projects_root
+            server._session_cwd_cache.pop(agent_sid, None)
+            try:
+                with mock.patch.object(server, "session_live_status", return_value={"live": False}), \
+                     mock.patch.object(server, "resume_session_headless", return_value={"ok": True}) as resume:
+                    result = server._inject_text_into_session(agent_sid, "follow up")
+                self.assertTrue(result["ok"])
+                resume.assert_called_once_with(parent_sid, "follow up")
+            finally:
+                server._session_cwd_cache.pop(agent_sid, None)
+                server.PROJECTS_ROOT = original_root
+
     def test_native_usage_snapshots_feed_weekly_usage(self):
         """Native plan-usage snapshots persist compact history and replace the
         legacy scraper cache for fresh weekly usage reads."""
