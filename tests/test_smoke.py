@@ -4649,6 +4649,14 @@ class TestServerImports(unittest.TestCase):
         ):
             self.assertIn(field, body, f"filterConversations should search {field}")
 
+    def test_visible_search_results_keep_session_name_matches_first(self):
+        """The final sidebar render must not let UUID ranking bury a title hit."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        start = app_js.index("function renderConversationList(convs) {")
+        body = app_js[start:start + 900]
+        self.assertIn("convs = _prioritizeNameMatches(", body)
+        self.assertIn("_prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '')", body)
+
     def test_archive_view_search_matches_hermes_platform_metadata(self):
         """The all-repos archive view (renderArchiveList) has its own inline
         search separate from filterConversations. It must also match Hermes

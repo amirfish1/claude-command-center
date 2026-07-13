@@ -23045,7 +23045,12 @@
   function renderConversationList(convs) {
     convs = filterGhIssues(convs);
     convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c)).map(_applyLiveOverlayToRow);
-    convs = _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '');
+    // Keep a matching session name ahead of a UUID hit in the final visible
+    // list too. filterConversations() already does this, but this renderer
+    // applies UUID prioritization again for every sidebar refresh.
+    convs = _prioritizeNameMatches(
+      _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || ''),
+      document.getElementById('convSearch')?.value || '');
     _applyOptimisticTouches(convs);
     const _activeDraftInputBefore = document.activeElement;
     const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
