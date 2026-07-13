@@ -31621,6 +31621,9 @@
   // tickets for the selected session's project scope.
   let _uxqItemsCache = { ts: 0, items: [] };
   let _uxqItemsPromise = null;
+  const _UXQ_NEW_ITEM_GLOW_MS = 4500;
+  let _uxqKnownItemRefs = null;
+  const _uxqNewItemExpires = new Map();
   let _ffcLastSidebarData = null;
   let _uxqLastResolvedProject = '';
   async function _fetchUxqItems() {
@@ -31631,7 +31634,20 @@
       const res = await fetch('/api/ux-fixes/list', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
-      _uxqItemsCache = { ts: Date.now(), items };
+      const now = Date.now();
+      const refs = new Set(items.map(_uxqItemRef).filter(Boolean));
+      // Establish the first fetched list as the baseline. Subsequent live
+      // refreshes briefly call out only refs that were not already present.
+      if (_uxqKnownItemRefs) {
+        refs.forEach(ref => {
+          if (!_uxqKnownItemRefs.has(ref)) _uxqNewItemExpires.set(ref, now + _UXQ_NEW_ITEM_GLOW_MS);
+        });
+      }
+      _uxqKnownItemRefs = refs;
+      for (const [ref, expires] of _uxqNewItemExpires) {
+        if (expires <= now) _uxqNewItemExpires.delete(ref);
+      }
+      _uxqItemsCache = { ts: now, items };
     } catch (_) { /* keep stale cache */ }
     finally { _uxqItemsPromise = null; }
     return _uxqItemsCache.items;
@@ -32985,24 +33001,22 @@
             return hay.includes(qTerm);
           })
         : typeScoped;
-      // Keep active WIP visible at the top of the list. Within open tickets,
-      // preserve claim order: claimable (shovel-ready/unset) before unready;
-      // then priority; then age.
+      // Work needing an active agent comes first, then tickets needing a human
+      // answer, then claimable work, then completed history.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
+        if (it && it.needs_input) return 'blocked';
         if (rawStatus === 'open' && it && (it.claimed_by || it.claimed_at || it.claimed_session_id)) {
           return 'in_progress';
         }
         return rawStatus;
       };
-      const _statusRank = s => (s === 'in_progress' ? 0 : s === 'open' ? 1 : 2);
+      const _statusRank = s => (s === 'in_progress' ? 0 : s === 'blocked' ? 1 : s === 'open' ? 2 : 3);
       const _notClaimable = it => (it && it.claimable === false ? 1 : 0);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
       const rows = scoped.slice().sort((a, b) => {
-        // Blocked tickets (needs_input) jump to the very top — they want a human.
-        const bl = (a.needs_input ? 0 : 1) - (b.needs_input ? 0 : 1); if (bl) return bl;
         const aStatus = _effectiveStatus(a);
         const bStatus = _effectiveStatus(b);
         const st = _statusRank(aStatus) - _statusRank(bStatus); if (st) return st;
@@ -33050,6 +33064,7 @@
         const rawStatus = it.status || 'open';
         const status = _effectiveStatus(it);
         const ref = _uxqItemRef(it);
+        const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
         const blocked = !!it.needs_input;
         const unresolvedNotes = _uxqUnresolvedNotes(it);
@@ -33076,7 +33091,7 @@
           : (it.updated_at || it.created_at);
         const ageMs = ageSrc ? Date.parse(ageSrc) : NaN;
         const ageStr = !isNaN(ageMs) ? timeAgo(ageMs) : '';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + _uxqChips(it)
