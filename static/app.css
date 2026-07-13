@@ -14055,6 +14055,215 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
 .sidebar-header-brand .sh-repo-link {
   display: none;
 }
+
+/* ── WatchTower sentinel badge ─────────────────────────────────────────
+   Live queue-health beacon: a small radar dial that sweeps while WatchTower
+   is watching, plus a notification-style count that only appears when a
+   queue needs attention. Fixed dark-glass palette (not theme-driven) to
+   match the treatment already used by .sh-title-main/.sh-title-sub. */
+.sidebar-header-brand {
+  position: relative;
+}
+.sh-wt-badge {
+  --wt-cur: #35e7cf;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 3px 0 1px;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid rgba(53, 231, 207, 0.28);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(15, 32, 34, 0.9), rgba(8, 20, 22, 0.9));
+  color: #9fd8d1;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
+}
+.sh-wt-badge:hover,
+.sh-wt-badge:focus-visible {
+  border-color: rgba(53, 231, 207, 0.6);
+  box-shadow: 0 0 0 3px rgba(53, 231, 207, 0.1);
+  outline: none;
+}
+.sh-wt-badge:active { transform: scale(0.97); }
+.sh-wt-badge.is-alert { --wt-cur: #ffb443; border-color: rgba(255, 180, 67, 0.4); }
+.sh-wt-badge.is-alert:hover,
+.sh-wt-badge.is-alert:focus-visible {
+  border-color: rgba(255, 180, 67, 0.7);
+  box-shadow: 0 0 0 3px rgba(255, 180, 67, 0.12);
+}
+.sh-wt-badge .wt-beacon svg {
+  display: block;
+  overflow: visible;
+  filter: drop-shadow(0 0 3px var(--wt-cur));
+}
+.sh-wt-badge .wt-ring { stroke: var(--wt-cur); opacity: 0.35; }
+.sh-wt-badge .wt-sweep {
+  transform-origin: 16px 16px;
+}
+.sh-wt-badge .wt-sweep path { fill: var(--wt-cur); opacity: 0.55; }
+.sh-wt-badge .wt-core {
+  fill: var(--wt-cur);
+  transform-origin: 16px 16px;
+}
+/* No idle animation — CPU-free while just sitting in the sidebar. A poll
+   lands at most every 20s (see refresh() in app.js), so .is-ticking plays
+   one short sweep+pulse per poll instead of looping forever. */
+.sh-wt-badge.is-ticking .wt-sweep { animation: wtSweep 0.7s ease-out; }
+.sh-wt-badge.is-ticking .wt-core { animation: wtPulse 0.7s ease-out; }
+.sh-wt-badge .wt-word {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background-image: linear-gradient(90deg, #7dfbe8 0%, #35e7cf 55%, #4fb8ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.sh-wt-badge.is-alert .wt-word {
+  background-image: linear-gradient(90deg, #ffe2ad 0%, #ffb443 60%, #ff8a5c 100%);
+}
+.sh-wt-badge .wt-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ffb443;
+  color: #241300;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 15px;
+  animation: wtCountIn 0.22s ease-out;
+}
+@keyframes wtSweep { to { transform: rotate(360deg); } }
+@keyframes wtPulse {
+  0%, 100% { transform: scale(1); opacity: 0.95; }
+  50% { transform: scale(1.28); opacity: 0.6; }
+}
+@keyframes wtCountIn {
+  from { transform: scale(0.4); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sh-wt-badge .wt-sweep,
+  .sh-wt-badge .wt-core,
+  .sh-wt-badge .wt-count { animation: none !important; }
+}
+
+.wt-pop {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 0;
+  z-index: 40;
+  width: 258px;
+  padding: 12px;
+  border: 1px solid rgba(53, 231, 207, 0.25);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #0e1a1c 0%, #0a1416 100%);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  animation: wtPopIn 0.14s ease-out;
+}
+.wt-pop[hidden] { display: none; }
+@keyframes wtPopIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.wt-pop-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.wt-pop-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: #7dfbe8;
+}
+.wt-pop-sub {
+  font-size: 10px;
+  color: #6f9c97;
+}
+.wt-pop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.wt-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11px;
+}
+.wt-pop-row .wt-pop-q {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #cfeeea;
+  font-weight: 600;
+}
+.wt-pop-row .wt-pop-depth { color: #6f9c97; font-size: 10px; flex: 0 0 auto; }
+.wt-pop-row.is-stuck { background: rgba(255, 180, 67, 0.1); }
+.wt-pop-row.is-stuck .wt-pop-q { color: #ffd9a0; }
+.wt-pop-row .wt-pop-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #35e7cf;
+  flex: 0 0 auto;
+}
+.wt-pop-row.is-stuck .wt-pop-dot { background: #ffb443; }
+.wt-pop-empty {
+  padding: 10px 4px;
+  color: #6f9c97;
+  font-size: 11px;
+  text-align: center;
+}
+.wt-pop-cta {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 0;
+  border: 1px solid rgba(53, 231, 207, 0.3);
+  border-radius: 8px;
+  background: rgba(53, 231, 207, 0.08);
+  color: #7dfbe8;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.wt-pop-cta:hover, .wt-pop-cta:focus-visible {
+  background: rgba(53, 231, 207, 0.16);
+  border-color: rgba(53, 231, 207, 0.55);
+  outline: none;
+}
+
+/* Momentary highlight when the popover's CTA scrolls the real queue panel
+   into view — confirms "this is what I meant" without a jarring jump. */
+.wt-panel-flash {
+  animation: wtPanelFlash 1.2s ease-out;
+}
+@keyframes wtPanelFlash {
+  0% { box-shadow: 0 0 0 2px rgba(53, 231, 207, 0.65), 0 0 22px rgba(53, 231, 207, 0.35); }
+  100% { box-shadow: 0 0 0 2px rgba(53, 231, 207, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wt-panel-flash { animation: none; outline: 2px solid rgba(53, 231, 207, 0.65); }
+}
+
 .sidebar-header-actions {
   flex-wrap: nowrap !important;
   flex-shrink: 0;

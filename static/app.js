@@ -45460,6 +45460,112 @@
     });
   }
 
+  // ── WatchTower sentinel badge ────────────────────────────────────
+  // Live beacon in the sidebar header: sweeps while WatchTower is up,
+  // flags a numeric count when a queue is stuck, and a click pops a
+  // mini health readout sourced from the same /api/ux-fixes/health
+  // payload the queue panel itself uses (WT-side data, CCC-side view).
+  (() => {
+    const $badge = document.getElementById('cccWtBadge');
+    const $count = document.getElementById('cccWtCount');
+    const $pop = document.getElementById('cccWtPop');
+    const $popSub = document.getElementById('cccWtPopSub');
+    const $popList = document.getElementById('cccWtPopList');
+    const $popCta = document.getElementById('cccWtPopCta');
+    if (!$badge || !$pop) return;
+    if (typeof READER_ONLY_POPOUT !== 'undefined' && READER_ONLY_POPOUT) return;
+
+    let lastQueues = [];
+
+    function closePop() {
+      $pop.hidden = true;
+      $badge.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('click', onOutsideClick, true);
+      document.removeEventListener('keydown', onKeydown, true);
+    }
+    function onOutsideClick(ev) {
+      if (!$pop.contains(ev.target) && !$badge.contains(ev.target)) closePop();
+    }
+    function onKeydown(ev) {
+      if (ev.key === 'Escape') closePop();
+    }
+    function openPop() {
+      renderPop();
+      $pop.hidden = false;
+      $badge.setAttribute('aria-expanded', 'true');
+      document.addEventListener('click', onOutsideClick, true);
+      document.addEventListener('keydown', onKeydown, true);
+    }
+
+    function renderPop() {
+      const total = lastQueues.length;
+      const openSum = lastQueues.reduce((n, q) => n + (q.depth || 0), 0);
+      const stuck = lastQueues.filter(q => q.stuck);
+      $popSub.textContent = total
+        ? `${openSum} open · ${total} queue${total === 1 ? '' : 's'}` + (stuck.length ? ` · ${stuck.length} stuck` : ' · all clear')
+        : 'no queues yet';
+      if (!total) {
+        $popList.innerHTML = '<div class="wt-pop-empty">WatchTower is idle — nothing queued.</div>';
+        return;
+      }
+      const sorted = lastQueues.slice().sort((a, b) => {
+        if (!!b.stuck !== !!a.stuck) return b.stuck ? 1 : -1;
+        return (b.depth || 0) - (a.depth || 0);
+      }).slice(0, 6);
+      $popList.innerHTML = sorted.map(q => (
+        '<div class="wt-pop-row' + (q.stuck ? ' is-stuck' : '') + '">'
+        + '<span class="wt-pop-dot" aria-hidden="true"></span>'
+        + '<span class="wt-pop-q">' + escapeHtml(String(q.queue || '?')) + '</span>'
+        + '<span class="wt-pop-depth">' + (q.depth || 0) + ' open' + (q.stuck ? ' · stuck' : '') + '</span>'
+        + '</div>'
+      )).join('');
+    }
+
+    async function refresh() {
+      try {
+        const r = await fetch('/api/ux-fixes/health', { cache: 'no-store' });
+        const d = await r.json();
+        lastQueues = Array.isArray(d && d.queues) ? d.queues : [];
+        const openSum = lastQueues.reduce((n, q) => n + (q.depth || 0), 0);
+        const stuck = lastQueues.filter(q => q.stuck);
+        $badge.classList.toggle('is-alert', stuck.length > 0);
+        if (stuck.length > 0) {
+          $count.textContent = String(stuck.length);
+          $count.hidden = false;
+        } else {
+          $count.hidden = true;
+        }
+        $badge.title = lastQueues.length
+          ? `WatchTower — ${openSum} open across ${lastQueues.length} queues` + (stuck.length ? `, ${stuck.length} stuck` : '')
+          : 'WatchTower — no queues yet';
+        if (!$pop.hidden) renderPop();
+        // One brief tick per poll (not an idling loop) — see the CSS comment
+        // above .is-ticking for why this replaced an `infinite` animation.
+        $badge.classList.remove('is-ticking');
+        void $badge.offsetWidth; // restart the animation if a tick is already mid-flight
+        $badge.classList.add('is-ticking');
+      } catch (_) { /* keep last known state */ }
+    }
+
+    $badge.addEventListener('click', () => {
+      if ($pop.hidden) openPop(); else closePop();
+    });
+    if ($popCta) {
+      $popCta.addEventListener('click', () => {
+        closePop();
+        const target = document.getElementById('queuePanel');
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          target.classList.add('wt-panel-flash');
+          setTimeout(() => target.classList.remove('wt-panel-flash'), 1200);
+        }
+      });
+    }
+
+    refresh();
+    setInterval(refresh, 20000);
+  })();
+
   // ── What's New Feature Showcasing ──────────────────────────────
   const $whatsNewModal = document.getElementById('whatsNewModal');
   const $whatsNewBackdrop = document.getElementById('whatsNewBackdrop');

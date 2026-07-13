@@ -403,6 +403,25 @@
           <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity — open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
         </div>
+        <button type="button" class="sh-wt-badge" id="cccWtBadge" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
+          <span class="wt-beacon" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="14" height="14">
+              <circle class="wt-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="1.5"/>
+              <g class="wt-sweep"><path d="M16 16 L16 2.2 A13.8 13.8 0 0 1 27.1 9.1 Z"/></g>
+              <circle class="wt-core" cx="16" cy="16" r="2.8"/>
+            </svg>
+          </span>
+          <span class="wt-word">WatchTower</span>
+          <span class="wt-count" id="cccWtCount" hidden>0</span>
+        </button>
+        <div class="wt-pop" id="cccWtPop" role="dialog" aria-label="WatchTower queue health" hidden>
+          <div class="wt-pop-head">
+            <span class="wt-pop-title">WatchTower</span>
+            <span class="wt-pop-sub" id="cccWtPopSub">watching…</span>
+          </div>
+          <div class="wt-pop-list" id="cccWtPopList"></div>
+          <button type="button" class="wt-pop-cta" id="cccWtPopCta">Open queue list <span aria-hidden="true">&#8595;</span></button>
+        </div>
         <span class="sh-meta-row">
           Last updated <span id="cccLastUpdated">…</span>
           <span class="sh-meta-sep">·</span>
