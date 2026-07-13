@@ -26478,20 +26478,20 @@
         + _trashHtml
         + '</div>';
     }
-    // Tabs (CCC-85): Active / All / GH Issues / Ready to merge
+    // Tabs (CCC-85): Active / All / GH Issues / WatchTower queues
     // are tabs now, one section visible at a time. Search result rows
     // (id/repo search) always render above the active tab's content.
     const _sidebarTab = (() => {
       try {
         const t = localStorage.getItem('ccc-sidebar-tab');
-        return (t === 'issues' || t === 'merge' || t === 'inprogress' || t === 'archived') ? t : 'inprogress';
+        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived') ? t : 'inprogress';
       } catch (_) { return 'inprogress'; }
     })();
     const _tabDefs = [
       ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
       ['archived', 'All', _arcCount || 0],
       ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
-      ['merge', 'Merge', (_readyToMergeConvs && _readyToMergeConvs.length) || 0],
+      ['queues', 'Queues', ((_uxqHealthCache && _uxqHealthCache.queues) || []).length],
     ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
@@ -26515,7 +26515,7 @@
         .replace(cls + ' collapsed', cls)
         .replace('aria-expanded="false"', 'aria-expanded="true"'));
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
-      : _sidebarTab === 'merge' ? (_forceOpen(_readyToMergeHtml, 'conv-readytomerge-section') || _tabEmpty('PRs waiting to merge'))
+      : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       : (_openAskHtml
           + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
@@ -26599,7 +26599,9 @@
       : null;
     const _currentSessionsScrollTop = _currentSessionsScrollBefore ? _currentSessionsScrollBefore.scrollTop : 0;
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
+    _parkSharedQueuePanelForSidebarRender();
     $convList.innerHTML = _convListHtml;
+    _mountSharedQueuePanel();
     if (_objectsSplitActive) _updateSidebarFillSection($convList);
     const _currentSessionsScrollAfter = _currentSessionsScrollBefore
       ? $convList.querySelector('[data-role="current-sessions-scroll"]')
@@ -27453,7 +27455,9 @@
         const tab = ev.target.closest('[data-conv-tab]');
         if (!tab) return;
         ev.stopPropagation();
-        try { localStorage.setItem('ccc-sidebar-tab', tab.getAttribute('data-conv-tab')); } catch (_) {}
+        const nextTab = tab.getAttribute('data-conv-tab');
+        try { localStorage.setItem('ccc-sidebar-tab', nextTab); } catch (_) {}
+        _setSharedQueuePanelHost(nextTab === 'queues' ? 'sidebar' : 'rail');
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
       });
     }
@@ -31658,6 +31662,35 @@
   // ── Files panel + UX-fixes Queue tab ─────────────────────────────────
   // Files live under Metadata. Queue is a separate status-rail tab listing
   // tickets for the selected session's project scope.
+  let _sharedQueuePanelHost = (() => {
+    try { return localStorage.getItem('ccc-sidebar-tab') === 'queues' ? 'sidebar' : 'rail'; }
+    catch (_) { return 'rail'; }
+  })();
+
+  function _sharedQueueHostElement(hostName) {
+    return document.getElementById(hostName === 'sidebar' ? 'sidebarQueueHost' : 'statusRailQueueHost');
+  }
+
+  function _mountSharedQueuePanel() {
+    const panel = document.getElementById('queuePanel');
+    const host = _sharedQueueHostElement(_sharedQueuePanelHost);
+    if (!panel || !host) return false;
+    if (panel.parentElement !== host) host.appendChild(panel);
+    if (_sharedQueuePanelHost === 'sidebar') _renderQueuePanel();
+    return true;
+  }
+
+  function _setSharedQueuePanelHost(hostName) {
+    _sharedQueuePanelHost = hostName === 'sidebar' ? 'sidebar' : 'rail';
+    _mountSharedQueuePanel();
+  }
+
+  function _parkSharedQueuePanelForSidebarRender() {
+    const panel = document.getElementById('queuePanel');
+    const railHost = _sharedQueueHostElement('rail');
+    if (panel && railHost && panel.parentElement !== railHost) railHost.appendChild(panel);
+  }
+
   let _uxqItemsCache = { ts: 0, items: [] };
   let _uxqItemsPromise = null;
   const _UXQ_NEW_ITEM_GLOW_MS = 4500;
@@ -40092,7 +40125,14 @@
       pane.classList.toggle('is-active', active);
       pane.hidden = !active;
     });
-    if (next === 'queue' && queuePane) _renderQueuePanel();
+    if (next === 'queue' && queuePane) {
+      _setSharedQueuePanelHost('rail');
+      _renderQueuePanel();
+    } else {
+      let sidebarTab = 'inprogress';
+      try { sidebarTab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
+      if (sidebarTab === 'queues') _setSharedQueuePanelHost('sidebar');
+    }
     try { localStorage.setItem('ccc-status-rail-tab', next); } catch (_) {}
   }
 

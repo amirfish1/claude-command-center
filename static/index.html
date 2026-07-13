@@ -850,29 +850,31 @@
               </div>
             </div>
             <div class="status-rail-pane" id="statusRailQueuePane" role="tabpanel" data-rail-pane="queue">
-              <div class="files-panel files-queue-panel" id="queuePanel">
-                <div class="fq-health" id="queueHealthStrip" aria-label="Queue health by project"></div>
-                <div class="fq-health-resize-handle" id="queueHealthResizeHandle" title="Drag to resize the queue list · double-click to reset" role="separator" aria-orientation="horizontal" aria-label="Resize queue health list"></div>
-                <div class="files-header">
-                  <span class="files-title-label">Queue</span>
-                  <select class="fq-scope-select" id="queueScopeSelect" aria-label="Queue scope for this session" title="Which queue this session shows"></select>
-                  <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
-                  <div class="fq-filter" id="queueFilterToggle" role="group" aria-label="Filter queue by status">
-                    <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
-                    <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
+              <div class="shared-queue-host shared-queue-host-rail" id="statusRailQueueHost">
+                <div class="files-panel files-queue-panel" id="queuePanel">
+                  <div class="fq-health" id="queueHealthStrip" aria-label="Queue health by project"></div>
+                  <div class="fq-health-resize-handle" id="queueHealthResizeHandle" title="Drag to resize the queue list · double-click to reset" role="separator" aria-orientation="horizontal" aria-label="Resize queue health list"></div>
+                  <div class="files-header">
+                    <span class="files-title-label">Queue</span>
+                    <select class="fq-scope-select" id="queueScopeSelect" aria-label="Queue scope for this session" title="Which queue this session shows"></select>
+                    <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
+                    <div class="fq-filter" id="queueFilterToggle" role="group" aria-label="Filter queue by status">
+                      <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
+                      <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
+                    </div>
+                    <div class="fq-filter fq-type-filter" id="queueTypeFilterToggle" role="group" aria-label="Filter queue by ticket type">
+                      <button class="fq-filter-btn" type="button" data-uxq-type-filter="all">All</button>
+                      <button class="fq-filter-btn" type="button" data-uxq-type-filter="bug">Bugs</button>
+                      <button class="fq-filter-btn" type="button" data-uxq-type-filter="feature">Features</button>
+                    </div>
+                    <button class="fq-wrap-toggle" id="queueWrapToggle" type="button" title="Wrap queue issue titles" aria-label="Wrap queue issue titles" aria-pressed="false">Wrap</button>
+                    <span class="files-count" id="queueCount"></span>
                   </div>
-                  <div class="fq-filter fq-type-filter" id="queueTypeFilterToggle" role="group" aria-label="Filter queue by ticket type">
-                    <button class="fq-filter-btn" type="button" data-uxq-type-filter="all">All</button>
-                    <button class="fq-filter-btn" type="button" data-uxq-type-filter="bug">Bugs</button>
-                    <button class="fq-filter-btn" type="button" data-uxq-type-filter="feature">Features</button>
+                  <div class="fq-search-row">
+                    <input type="text" id="queueSearchInput" class="fq-search-input" placeholder="Search issues…" aria-label="Search queue tickets">
                   </div>
-                  <button class="fq-wrap-toggle" id="queueWrapToggle" type="button" title="Wrap queue issue titles" aria-label="Wrap queue issue titles" aria-pressed="false">Wrap</button>
-                  <span class="files-count" id="queueCount"></span>
+                  <div class="files-queue-list" id="sidebarQueueList"></div>
                 </div>
-                <div class="fq-search-row">
-                  <input type="text" id="queueSearchInput" class="fq-search-input" placeholder="Search issues…" aria-label="Search queue tickets">
-                </div>
-                <div class="files-queue-list" id="sidebarQueueList"></div>
               </div>
             </div>
             <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>

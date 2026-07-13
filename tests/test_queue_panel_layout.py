@@ -6,6 +6,41 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueuePanelLayout(unittest.TestCase):
+    def test_main_sidebar_replaces_merge_with_shared_queues_tab(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        tab_block = app_js[
+            app_js.index("const _sidebarTab = (() => {"):
+            app_js.index("const _tabEmpty =", app_js.index("const _sidebarTab = (() => {"))
+        ]
+        self.assertIn("t === 'queues'", tab_block)
+        self.assertNotIn("t === 'merge'", tab_block)
+        self.assertIn("['queues', 'Queues'", tab_block)
+        self.assertNotIn("['merge', 'Merge'", tab_block)
+        self.assertIn('id="sidebarQueueHost"', app_js)
+        self.assertNotIn("_sidebarTab === 'merge'", tab_block)
+
+    def test_queue_panel_has_one_node_and_two_mount_points(self):
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertEqual(index_html.count('id="queuePanel"'), 1)
+        self.assertEqual(index_html.count('id="statusRailQueueHost"'), 1)
+        self.assertIn('id="sidebarQueueHost"', app_js)
+        self.assertIn("function _setSharedQueuePanelHost(hostName)", app_js)
+        self.assertIn("function _parkSharedQueuePanelForSidebarRender()", app_js)
+        self.assertIn("function _mountSharedQueuePanel()", app_js)
+        self.assertIn(
+            "_parkSharedQueuePanelForSidebarRender();\n    $convList.innerHTML = _convListHtml;",
+            app_js,
+        )
+        self.assertIn(
+            "$convList.innerHTML = _convListHtml;\n    _mountSharedQueuePanel();",
+            app_js,
+        )
+        self.assertIn("if (next === 'queue' && queuePane) {", app_js)
+        self.assertIn("_setSharedQueuePanelHost('rail');", app_js)
+
     def test_queue_panel_note_text_expands_with_rail_width(self):
         """Queue rows should not pre-truncate notes before CSS can size them."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

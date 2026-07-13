@@ -909,10 +909,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("['archived', 'All'", tab_block)
         all_pos = tab_block.index("['archived', 'All'")
         issues_pos = tab_block.index("['issues', 'Issues'")
-        merge_pos = tab_block.index("['merge', 'Merge'")
+        queues_pos = tab_block.index("['queues', 'Queues'")
         self.assertLess(active_pos, all_pos)
         self.assertLess(all_pos, issues_pos)
-        self.assertLess(issues_pos, merge_pos)
+        self.assertLess(issues_pos, queues_pos)
 
     def test_sidebar_all_tab_contains_active_and_archived_sessions(self):
         """The All tab should replay every session, not only archived rows."""

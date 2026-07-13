@@ -1,0 +1,1 @@
+- Replaced the main Merge tab with a Queues tab that reuses the full WatchTower queue view while keeping the desktop right-rail Queue tab available.

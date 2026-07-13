@@ -11323,6 +11323,20 @@
   body.status-pos-right .status-rail-pane > .files-queue-panel {
     flex: 1 1 auto;
   }
+  .shared-queue-host-rail {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  body.status-pos-right .shared-queue-host-rail > .files-queue-panel {
+    flex: 1 1 auto;
+    height: auto !important;
+    max-height: none;
+    min-height: 0;
+    padding: 8px 12px 10px;
+    border-top: none;
+    background: transparent;
+  }
   body.status-pos-right .status-rail-pane > .files-panel .files-resize-handle {
     display: none;
   }
@@ -16357,6 +16371,28 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .conv-tab.is-active .conv-tab-count {
   background: rgba(88,166,255,0.18); color: var(--accent, #58a6ff);
+}
+#convList:has(> .shared-queue-host-sidebar) {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden !important;
+}
+#convList:has(> .shared-queue-host-sidebar) > .conv-tab-bar {
+  flex: 0 0 auto;
+}
+.shared-queue-host-sidebar {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.shared-queue-host-sidebar > .files-queue-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  height: auto !important;
+  padding: 0 8px 10px;
+  border-top: 0;
+  background: transparent;
 }
 .conv-all-hermes-tabs {
   display: inline-flex;
