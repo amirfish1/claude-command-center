@@ -96,6 +96,12 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 
 To verify UI changes visually, use this repo's **puppeteer** harness: `node snapshot.js` launches headless Chrome, loads `http://127.0.0.1:8090`, and writes `snapshot.png`. Puppeteer's browser lives in `~/.cache/puppeteer`.
 
+CCC uses Puppeteer 25, which no longer exposes `page.waitForTimeout()`. For a
+short delay in an ad-hoc verification script, use
+`await new Promise((resolve) => setTimeout(resolve, ms))`; prefer
+`page.waitForSelector()`, `page.waitForFunction()`, or `page.waitForNetworkIdle()`
+when a specific condition is available.
+
 **Do not use the Codex in-app browser (`iab`) backend or Playwright for this.** `iab` is unavailable outside a desktop app context, and Playwright is not a CCC dependency — "iab browser not available" / "cannot import playwright" means wrong tool, not a breakage. Use `node snapshot.js` (Chromium is sufficient; no WebKit/Firefox needed).
 
 Depends entirely on what you touched. Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.

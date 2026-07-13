@@ -135,6 +135,12 @@ Don't mock external systems (`gh`, `claude`, `pkood`) in the smoke test. The smo
 
 To verify UI changes visually, this repo uses **puppeteer** (dependency `puppeteer`), via `snapshot.js` — `node snapshot.js` launches headless Chrome, loads `http://127.0.0.1:8090`, and writes `snapshot.png`. Puppeteer's browser lives in `~/.cache/puppeteer` (separate from any Playwright cache). The `chrome-devtools` MCP also works (drives real Chrome) for interactive checks.
 
+CCC uses Puppeteer 25, which no longer exposes `page.waitForTimeout()`. For a
+short delay in an ad-hoc verification script, use
+`await new Promise((resolve) => setTimeout(resolve, ms))`; prefer
+`page.waitForSelector()`, `page.waitForFunction()`, or `page.waitForNetworkIdle()`
+when a specific condition is available.
+
 **Do not reach for Playwright.** It is *not* a CCC dependency — "cannot import playwright" / "Playwright browser executable missing" means you picked the wrong tool, not that something is broken. Use `snapshot.js` or chrome-devtools. **Chromium is sufficient**; no WebKit/Firefox needed.
 
 ## Performance gates
