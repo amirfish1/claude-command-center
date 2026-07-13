@@ -44,6 +44,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_acp_adapter_optional_import(self):
+        """The ACP adapter (ccc_acp.py) is an optional companion. When the
+        agent-client-protocol package is installed the module must import
+        cleanly (smoke only; no ACP runtime exercised here). When the dep is
+        absent we simply skip — this mirrors the Morning plugin handling."""
+        for mod in ("server", "morning", "morning_store", "ccc_acp"):
+            sys.modules.pop(mod, None)
+        try:
+            import acp  # noqa: F401
+        except Exception:
+            self.skipTest("agent-client-protocol not installed; ACP adapter is optional")
+        ccc_acp = importlib.import_module("ccc_acp")
+        self.assertTrue(hasattr(ccc_acp, "main"))
+        self.assertTrue(hasattr(ccc_acp, "CCCACPAgent"))
+
     def test_native_usage_snapshots_feed_weekly_usage(self):
         """Native plan-usage snapshots persist compact history and replace the
         legacy scraper cache for fresh weekly usage reads."""
