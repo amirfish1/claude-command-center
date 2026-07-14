@@ -30253,6 +30253,7 @@
     const tmpl = document.querySelector('.conv-pane[data-pane-id="p1"]');
     const clone = tmpl.cloneNode(true);
     clone.setAttribute('data-pane-id', paneId);
+    clone.removeAttribute('data-presentation-mode');
     clone.classList.remove('has-pane-title', 'has-conv-bg');
     ['data-conv-bg', 'data-conv-bg-key', 'data-conv-id'].forEach(name => clone.removeAttribute(name));
     [
@@ -30267,6 +30268,16 @@
     clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
     removeSplitPaneSingletonChrome(clone);
     clone.querySelectorAll('.conv-scroll-end-btn').forEach(el => el.remove());
+    clone.querySelectorAll('.conv-presentation-dock').forEach(el => el.remove());
+    const presentationToolbar = clone.querySelector('[data-role="presentation-toolbar"]');
+    if (presentationToolbar) {
+      presentationToolbar.hidden = true;
+      presentationToolbar.querySelectorAll('[data-presentation-mode]').forEach(button => {
+        const off = button.dataset.presentationMode === 'off';
+        button.classList.toggle('is-active', off);
+        button.setAttribute('aria-pressed', off ? 'true' : 'false');
+      });
+    }
     // Replace the transcript with a Loading… empty state; the dropped
     // conversation will be loaded by selectConversation(id, paneId)
     // immediately after attach.
@@ -34637,6 +34648,7 @@
     }
     if (wasAtBottom && $view) scrollConversationToEnd($view);
     else if ($view) updateConversationEndAffordance($view);
+    try { refreshPresentationForPane(paneId || activePaneId(), { followTail: true }); } catch (_) {}
   }
 
   function stopPkoodTailPoller() {
@@ -38408,6 +38420,465 @@
     });
   }
 
+  // ── Conversation presentation modes ──────────────────────────────────
+  // A derived, client-only slide view over the existing transcript DOM.
+  // The JSONL/API shape is untouched and no model call is made: slides clone
+  // the sanitized nodes renderConversationEvents already produced. Each pane
+  // owns its mode + cursor; localStorage stores only the default for panes
+  // opened later.
+  const PRESENTATION_MODE_KEY = 'ccc-conv-presentation-mode';
+
+  function normalizePresentationMode(mode) {
+    const value = String(mode == null ? '' : mode).toLowerCase();
+    return value === '1' || value === '2' ? value : 'off';
+  }
+
+  function defaultPresentationMode() {
+    try { return normalizePresentationMode(localStorage.getItem(PRESENTATION_MODE_KEY)); }
+    catch (_) { return 'off'; }
+  }
+
+  // Pure grouping primitive, intentionally DOM-free so the semantic packing
+  // policy can be exercised directly in the static test suite. Items carry a
+  // numeric `weight`; headings set `keepWithNext` so an orphan heading moves
+  // to the next page with its first content block. Oversized atomic items get
+  // a page of their own and scroll inside the rendered slide.
+  function paginatePresentationItems(items, budget) {
+    const source = Array.isArray(items) ? items : [];
+    const limit = Math.max(1, Number(budget) || 1);
+    const pages = [];
+    let page = [];
+    let pageWeight = 0;
+    const flush = () => {
+      if (!page.length) return;
+      pages.push(page);
+      page = [];
+      pageWeight = 0;
+    };
+    for (let i = 0; i < source.length; i++) {
+      const item = source[i];
+      const group = [item];
+      let groupWeight = Math.max(1, Number(item && item.weight) || 1);
+      if (item && item.keepWithNext && i + 1 < source.length) {
+        const next = source[++i];
+        group.push(next);
+        groupWeight += Math.max(1, Number(next && next.weight) || 1);
+      }
+      if (page.length && pageWeight + groupWeight > limit) flush();
+      page.push(...group);
+      pageWeight += groupWeight;
+      if (groupWeight >= limit) flush();
+    }
+    flush();
+    return pages;
+  }
+
+  function presentationBlockWeight(node) {
+    if (!node) return 1;
+    const tag = String(node.tagName || '').toLowerCase();
+    const text = String(node.textContent || '').trim();
+    if (tag === 'table' || (node.matches && node.matches('.md-table'))) {
+      return Math.max(8, 4 + node.querySelectorAll('tr').length * 2);
+    }
+    if (tag === 'pre' || (node.matches && node.matches('.code-block,.mermaid-block'))) {
+      return Math.max(8, 4 + text.split('\n').length);
+    }
+    if (node.querySelector && node.querySelector('img,.msg-image,.mermaid-svg')) return 12;
+    if (tag === 'ul' || tag === 'ol') return Math.max(5, 2 + node.querySelectorAll('li').length * 2);
+    if (/^h[1-6]$/.test(tag)) return 2;
+    if (tag === 'blockquote') return Math.max(4, Math.ceil(text.length / 95) + 2);
+    return Math.max(2, Math.ceil(text.length / 95) + 1);
+  }
+
+  function presentationPageBudget(view) {
+    const height = view && view.clientHeight ? view.clientHeight : 620;
+    return Math.max(10, Math.floor((height - 190) / 27));
+  }
+
+  function presentationClone(node) {
+    const clone = node.cloneNode(true);
+    if (clone.removeAttribute) clone.removeAttribute('id');
+    if (clone.querySelectorAll) clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    return clone;
+  }
+
+  function presentationAnswerBlocks(eventEl) {
+    const blocks = [];
+    const containers = eventEl && eventEl.querySelectorAll
+      ? Array.from(eventEl.querySelectorAll(':scope > .assistant-text')) : [];
+    containers.forEach(container => {
+      const children = Array.from(container.children || []);
+      if (!children.length && String(container.textContent || '').trim()) {
+        const fallback = document.createElement('div');
+        fallback.textContent = container.textContent;
+        children.push(fallback);
+      }
+      children.forEach(child => {
+        const tag = String(child.tagName || '').toLowerCase();
+        blocks.push({
+          node: presentationClone(child),
+          weight: presentationBlockWeight(child),
+          keepWithNext: /^h[1-6]$/.test(tag),
+        });
+      });
+    });
+    return blocks;
+  }
+
+  function presentationPromptText(eventEl) {
+    if (!eventEl || !eventEl.querySelector) return '';
+    const message = eventEl.querySelector('.user-msg');
+    if (!message) return '';
+    return String(message.getAttribute('data-raw-text') || message.textContent || '')
+      .replace(/\s+/g, ' ').trim();
+  }
+
+  function presentationTurns(view) {
+    const turns = [];
+    let prompt = '';
+    let pendingDetails = [];
+    let answerNumber = 0;
+    const children = Array.from((view && view.children) || []);
+    children.forEach(node => {
+      if (!node.classList || node.classList.contains('conv-presentation-stage')) return;
+      if (node.matches('.event.user_text:not(.task-notification-event)')) {
+        const nextPrompt = presentationPromptText(node);
+        if (nextPrompt) prompt = nextPrompt;
+        pendingDetails = [];
+        return;
+      }
+      if (node.matches('.tool-call-group')) {
+        pendingDetails.push(node);
+        return;
+      }
+      if (node.matches('.event.assistant')) {
+        const blocks = presentationAnswerBlocks(node);
+        if (!blocks.length || node.classList.contains('is-noop-ack')) {
+          if (node.classList.contains('tool-only')) pendingDetails.push(node);
+          return;
+        }
+        answerNumber += 1;
+        const extras = Array.from(node.children || []).filter(child =>
+          !child.classList.contains('assistant-text')
+          && !child.classList.contains('line-num')
+          && !child.classList.contains('msg-ts')
+          && !child.classList.contains('assistant-message-actions')
+          && !child.classList.contains('event-model-meta')
+          && !child.classList.contains('event-token-chips')
+        );
+        turns.push({
+          answerNumber,
+          key: node.dataset.jsonlLine || node.dataset.msgId || ('answer-' + answerNumber),
+          prompt,
+          blocks,
+          details: pendingDetails.concat(extras),
+          live: false,
+        });
+        pendingDetails = [];
+        return;
+      }
+      if (node.matches('.stream-bubble:not(.stream-bubble-subagent)')) {
+        const streamBlocks = [];
+        node.querySelectorAll('.assistant-text').forEach(container => {
+          const children = Array.from(container.children || []);
+          children.forEach(child => streamBlocks.push({
+            node: presentationClone(child),
+            weight: presentationBlockWeight(child),
+            keepWithNext: /^h[1-6]$/i.test(child.tagName || ''),
+          }));
+        });
+        if (streamBlocks.length) {
+          answerNumber += 1;
+          turns.push({
+            answerNumber,
+            key: 'live-' + (node.dataset.msgId || answerNumber),
+            prompt,
+            blocks: streamBlocks,
+            details: [],
+            live: true,
+          });
+        }
+      }
+    });
+    return turns;
+  }
+
+  function buildPresentationDetails(turn) {
+    if (!turn.details || !turn.details.length) return null;
+    const details = document.createElement('details');
+    details.className = 'conv-presentation-details';
+    details.open = convVerboseOn();
+    const summary = document.createElement('summary');
+    summary.textContent = 'Details · ' + turn.details.length;
+    details.appendChild(summary);
+    const body = document.createElement('div');
+    body.className = 'conv-presentation-details-body';
+    turn.details.forEach(node => body.appendChild(presentationClone(node)));
+    details.appendChild(body);
+    return details;
+  }
+
+  function buildPresentationSlide(turn, items, partIndex, partCount, mode) {
+    const slide = document.createElement('article');
+    slide.className = 'conv-presentation-slide' + (turn.live ? ' is-live' : '');
+    slide.dataset.presentationKey = turn.key + ':' + partIndex;
+    slide.dataset.answerIndex = String(turn.answerNumber);
+    slide.dataset.partIndex = String(partIndex);
+    slide.dataset.partCount = String(partCount);
+
+    const header = document.createElement('header');
+    header.className = 'conv-presentation-slide-header';
+    const eyebrow = document.createElement('span');
+    eyebrow.className = 'conv-presentation-eyebrow';
+    eyebrow.textContent = turn.live
+      ? 'Answer ' + turn.answerNumber + ' · Live'
+      : ('Answer ' + turn.answerNumber + (mode === '2' ? ' · ' + (partIndex + 1) + ' of ' + partCount : ''));
+    header.appendChild(eyebrow);
+    if (turn.live) {
+      const live = document.createElement('span');
+      live.className = 'conv-presentation-live';
+      live.textContent = 'streaming';
+      header.appendChild(live);
+    }
+    slide.appendChild(header);
+
+    if (partIndex === 0 && turn.prompt) {
+      const prompt = document.createElement('div');
+      prompt.className = 'conv-presentation-prompt';
+      const label = document.createElement('span');
+      label.textContent = 'Prompt';
+      const text = document.createElement('p');
+      text.textContent = turn.prompt;
+      prompt.append(label, text);
+      slide.appendChild(prompt);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'conv-presentation-body assistant-text';
+    items.forEach(item => body.appendChild(presentationClone(item.node)));
+    slide.appendChild(body);
+
+    if (partIndex === partCount - 1) {
+      const details = buildPresentationDetails(turn);
+      if (details) slide.appendChild(details);
+    }
+    return slide;
+  }
+
+  function buildPresentationDeck(view, mode) {
+    const deck = [];
+    const budget = presentationPageBudget(view);
+    presentationTurns(view).forEach(turn => {
+      let pages;
+      try {
+        pages = (mode === '2' && !turn.live)
+          ? paginatePresentationItems(turn.blocks, budget)
+          : [turn.blocks];
+        if (!pages.length) pages = [turn.blocks];
+      } catch (_) {
+        // One malformed answer must not break the rest of the deck. Its
+        // fallback is exactly Mode 1: a single internally-scrollable slide.
+        pages = [turn.blocks];
+      }
+      pages.forEach((items, index) => {
+        deck.push(buildPresentationSlide(turn, items, index, pages.length, mode));
+      });
+    });
+    return deck;
+  }
+
+  function presentationPaneElement(paneId) {
+    return document.querySelector('.conv-pane[data-pane-id="' + (paneId || activePaneId()) + '"]');
+  }
+
+  function syncPresentationToolbar(pane, mode, hasAnswers) {
+    const toolbar = pane && pane.querySelector('[data-role="presentation-toolbar"]');
+    if (!toolbar) return;
+    toolbar.hidden = !hasAnswers;
+    toolbar.querySelectorAll('[data-presentation-mode]').forEach(button => {
+      const active = button.dataset.presentationMode === mode;
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      button.classList.toggle('is-active', active);
+    });
+  }
+
+  function ensurePresentationStage(view) {
+    let stage = view.querySelector(':scope > .conv-presentation-stage');
+    if (!stage) {
+      stage = document.createElement('div');
+      stage.className = 'conv-presentation-stage';
+      stage.setAttribute('role', 'region');
+      stage.setAttribute('aria-label', 'Conversation presentation');
+      view.appendChild(stage);
+    }
+    return stage;
+  }
+
+  function ensurePresentationDock(pane) {
+    let dock = pane.querySelector(':scope > .conv-presentation-dock');
+    if (dock) return dock;
+    dock = document.createElement('nav');
+    dock.className = 'conv-presentation-dock';
+    dock.setAttribute('aria-label', 'Slide navigation');
+    dock.innerHTML = ''
+      + '<button type="button" class="conv-presentation-nav" data-presentation-nav="-1" aria-label="Previous slide" title="Previous slide (Left arrow)">&#8592;</button>'
+      + '<div class="conv-presentation-progress"><span class="conv-presentation-answer-label"></span><span class="conv-presentation-dots" aria-hidden="true"></span><span class="conv-presentation-overall"></span></div>'
+      + '<button type="button" class="conv-presentation-nav" data-presentation-nav="1" aria-label="Next slide" title="Next slide (Right arrow)">&#8594;</button>';
+    const inputContext = pane.querySelector(':scope > .conv-input-context');
+    pane.insertBefore(dock, inputContext || null);
+    return dock;
+  }
+
+  function renderPresentationCursor(paneId) {
+    const pane = presentationPaneElement(paneId);
+    if (!pane) return;
+    const view = getConvViewForPane(paneId);
+    const deck = view && view._presentationDeck;
+    if (!view || !deck || !deck.length) return;
+    const index = Math.max(0, Math.min(deck.length - 1, Number(view._presentationIndex) || 0));
+    view._presentationIndex = index;
+    const stage = ensurePresentationStage(view);
+    stage.replaceChildren(deck[index]);
+    const dock = ensurePresentationDock(pane);
+    const slide = deck[index];
+    const answer = Number(slide.dataset.answerIndex || 0);
+    const part = Number(slide.dataset.partIndex || 0) + 1;
+    const parts = Number(slide.dataset.partCount || 1);
+    const label = dock.querySelector('.conv-presentation-answer-label');
+    const overall = dock.querySelector('.conv-presentation-overall');
+    const dots = dock.querySelector('.conv-presentation-dots');
+    if (label) label.textContent = 'Answer ' + answer + (parts > 1 ? ' · ' + part + ' of ' + parts : '');
+    if (overall) overall.textContent = (index + 1) + ' / ' + deck.length;
+    if (dots) {
+      dots.innerHTML = '';
+      const start = Math.max(0, Math.min(index - 3, Math.max(0, deck.length - 7)));
+      const end = Math.min(deck.length, start + 7);
+      for (let i = start; i < end; i++) {
+        const dot = document.createElement('i');
+        dot.className = i === index ? 'is-active' : '';
+        dots.appendChild(dot);
+      }
+    }
+    const prev = dock.querySelector('[data-presentation-nav="-1"]');
+    const next = dock.querySelector('[data-presentation-nav="1"]');
+    if (prev) prev.disabled = index === 0;
+    if (next) next.disabled = index === deck.length - 1;
+  }
+
+  function refreshPresentationForPane(paneId, opts) {
+    const targetPaneId = paneId || activePaneId();
+    const pane = presentationPaneElement(targetPaneId);
+    const view = getConvViewForPane(targetPaneId);
+    if (!pane || !view) return;
+    const mode = normalizePresentationMode(pane.dataset.presentationMode || defaultPresentationMode());
+    pane.dataset.presentationMode = mode;
+    const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
+    syncPresentationToolbar(pane, mode, hasAnswers);
+    if (mode === 'off' || !hasAnswers) {
+      view.classList.remove('is-presentation-mode', 'is-presentation-mode-1', 'is-presentation-mode-2');
+      const stage = view.querySelector(':scope > .conv-presentation-stage');
+      if (stage) stage.remove();
+      const dock = pane.querySelector(':scope > .conv-presentation-dock');
+      if (dock) dock.remove();
+      view._presentationDeck = null;
+      view._presentationIndex = 0;
+      return;
+    }
+
+    const previousDeck = view._presentationDeck || [];
+    const previousSlide = previousDeck[view._presentationIndex || 0];
+    const previousKey = previousSlide && previousSlide.dataset.presentationKey;
+    const deck = buildPresentationDeck(view, mode);
+    if (!deck.length) return;
+    let index = previousKey
+      ? deck.findIndex(slide => slide.dataset.presentationKey === previousKey)
+      : -1;
+    if (index < 0) index = Math.min(Number(view._presentationIndex) || deck.length - 1, deck.length - 1);
+    if ((opts && opts.followTail) || !previousDeck.length) index = deck.length - 1;
+    view._presentationDeck = deck;
+    view._presentationIndex = index;
+    view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
+    view.classList.toggle('is-presentation-mode-1', mode === '1');
+    view.classList.toggle('is-presentation-mode-2', mode === '2');
+    renderPresentationCursor(targetPaneId);
+  }
+
+  function setPresentationMode(paneId, mode, opts) {
+    const targetPaneId = paneId || activePaneId();
+    const pane = presentationPaneElement(targetPaneId);
+    const view = getConvViewForPane(targetPaneId);
+    if (!pane || !view) return;
+    const normalized = normalizePresentationMode(mode);
+    const oldMode = normalizePresentationMode(pane.dataset.presentationMode || 'off');
+    if (oldMode === 'off' && normalized !== 'off') {
+      view.dataset.presentationRestoreScroll = String(view.scrollTop || 0);
+    }
+    pane.dataset.presentationMode = normalized;
+    try { localStorage.setItem(PRESENTATION_MODE_KEY, normalized); } catch (_) {}
+    refreshPresentationForPane(targetPaneId, { followTail: normalized !== 'off' && !(opts && opts.preserveCursor) });
+    if (normalized === 'off') {
+      const restore = Number(view.dataset.presentationRestoreScroll || 0);
+      requestAnimationFrame(() => { view.scrollTop = restore; updateConversationEndAffordance(view); });
+    }
+  }
+
+  function stepPresentationSlide(paneId, delta) {
+    const targetPaneId = paneId || activePaneId();
+    const view = getConvViewForPane(targetPaneId);
+    if (!view || !view._presentationDeck || !view._presentationDeck.length) return;
+    const next = Math.max(0, Math.min(
+      view._presentationDeck.length - 1,
+      (Number(view._presentationIndex) || 0) + Number(delta || 0),
+    ));
+    if (next === view._presentationIndex) return;
+    view._presentationIndex = next;
+    renderPresentationCursor(targetPaneId);
+  }
+
+  document.addEventListener('click', (ev) => {
+    const modeButton = ev.target && ev.target.closest && ev.target.closest('[data-presentation-mode]');
+    if (modeButton) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const pane = modeButton.closest('.conv-pane[data-pane-id]');
+      const paneId = pane ? pane.dataset.paneId : activePaneId();
+      if (paneId !== activePaneId()) setActivePaneById(paneId);
+      setPresentationMode(paneId, modeButton.dataset.presentationMode);
+      return;
+    }
+    const navButton = ev.target && ev.target.closest && ev.target.closest('[data-presentation-nav]');
+    if (navButton) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const pane = navButton.closest('.conv-pane[data-pane-id]');
+      stepPresentationSlide(pane && pane.dataset.paneId, Number(navButton.dataset.presentationNav));
+    }
+  });
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+    const target = ev.target;
+    if (target && target.closest && target.closest('input,textarea,select,button,a,summary,pre,code,[contenteditable="true"]')) return;
+    const paneId = activePaneId();
+    const pane = presentationPaneElement(paneId);
+    if (!pane || normalizePresentationMode(pane.dataset.presentationMode) === 'off') return;
+    ev.preventDefault();
+    stepPresentationSlide(paneId, ev.key === 'ArrowRight' ? 1 : -1);
+  });
+
+  let _presentationResizeTimer = null;
+  window.addEventListener('resize', () => {
+    if (_presentationResizeTimer) clearTimeout(_presentationResizeTimer);
+    _presentationResizeTimer = setTimeout(() => {
+      document.querySelectorAll('.conv-pane[data-pane-id]').forEach(pane => {
+        if (normalizePresentationMode(pane.dataset.presentationMode) !== 'off') {
+          refreshPresentationForPane(pane.dataset.paneId, { preserveCursor: true });
+        }
+      });
+    }, 140);
+  });
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -39553,6 +40024,11 @@
       // into the hidden queue instead of letting it show up ahead of the
       // reveal cursor.
       _convReplaySweepNewItems($view, paneId);
+    } catch (_) {}
+    try {
+      refreshPresentationForPane(paneId, {
+        followTail: _agentReplied && !(opts && (opts.initialLoad || opts.prepending)),
+      });
     } catch (_) {}
     return true;
   }
@@ -47285,6 +47761,11 @@
     try { localStorage.setItem('ccc-conv-verbose', on ? '1' : '0'); } catch (_) {}
     _syncVerboseButtons(on);
     applyConvVerbose(on);
+    document.querySelectorAll('.conv-pane[data-pane-id]').forEach(pane => {
+      if (normalizePresentationMode(pane.dataset.presentationMode) !== 'off') {
+        refreshPresentationForPane(pane.dataset.paneId, { preserveCursor: true });
+      }
+    });
   }
   _syncVerboseButtons(convVerboseOn());
   const $verboseToggleBtn = document.getElementById('verboseToggleBtn');
