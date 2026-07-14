@@ -24,6 +24,11 @@ from urllib.parse import urlparse
 
 _CONVENTIONAL_RE = re.compile(r"^([A-Za-z]+)(?:\([^)]*\))?!?:\s+(.+)$")
 _TICKET_REF_RE = re.compile(r"\b([A-Z][A-Z0-9_-]*-\d+)\b", re.IGNORECASE)
+_HOME_PATH_RE = re.compile(
+    r"(?:(?:/Users|/home)/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+)"
+    r"(?:[/\\][^\s,;:)}\]>]+)*"
+)
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _RECORD_SEP = "\x1e"
 _FIELD_SEP = "\x1f"
 _IDLE_TIME_RE = re.compile(r'"HIDIdleTime"\s*=\s*(\d+)')
@@ -38,6 +43,14 @@ def classify_commit(subject: str) -> str:
     if prefix == "fix":
         return "fix"
     return "other"
+
+
+def sanitize_evidence_title(value: str) -> str:
+    """Remove personal filesystem/email details from browser evidence text."""
+    text = str(value or "")
+    text = _HOME_PATH_RE.sub("[local path]", text)
+    text = _EMAIL_RE.sub("[email]", text)
+    return " ".join(text.split()).strip()
 
 
 def _parse_timestamp(value) -> datetime | None:
@@ -303,7 +316,9 @@ def _delivery_evidence(commits: list[dict], tickets: list[dict], tzinfo) -> list
             "project_id": str(ticket.get("project_id") or "unknown"),
             "project_name": str(ticket.get("project_name") or "Unknown project"),
             "kind": ticket["kind"],
-            "title": str(ticket.get("title") or ref or "Closed WatchTower ticket"),
+            "title": sanitize_evidence_title(
+                ticket.get("title") or ref or "Closed WatchTower ticket"
+            ),
             "ref": ref,
             "sha": "",
             "sources": ["watchtower"],
@@ -337,7 +352,9 @@ def _delivery_evidence(commits: list[dict], tickets: list[dict], tzinfo) -> list
                 "project_id": str(commit.get("project_id") or "unknown"),
                 "project_name": str(commit.get("project_name") or "Unknown project"),
                 "kind": kind,
-                "title": str(commit.get("subject") or "Untitled commit"),
+                "title": sanitize_evidence_title(
+                    commit.get("subject") or "Untitled commit"
+                ),
                 "ref": "",
                 "sha": str(commit.get("sha") or "")[:12],
                 "sources": ["git"],
@@ -382,6 +399,13 @@ def _round_metrics(bucket: dict) -> dict:
     ):
         out[key] = round(float(out.get(key) or 0), 2)
     out["work_items"] = list(out.get("work_items") or [])
+    return out
+
+
+def _public_metrics(bucket: dict) -> dict:
+    """Return numeric metrics; delivery evidence lives once at top level."""
+    out = _round_metrics(bucket)
+    out.pop("work_items", None)
     return out
 
 
@@ -568,7 +592,7 @@ def aggregate_productivity(
                 if isinstance(value, (int, float)):
                     _metric_add(bucket, key, value)
             bucket["work_items"].extend(row["work_items"])
-        weekly.append(_round_metrics(bucket))
+        weekly.append(_public_metrics(bucket))
         week_start += timedelta(days=7)
 
     summary = _empty_metrics()
@@ -638,7 +662,7 @@ def aggregate_productivity(
             for key in ("commits", "turns", "watchtower_opened", "watchtower_closed", "deliveries")
         ):
             continue
-        project_rows.append(_round_metrics(row))
+        project_rows.append(_public_metrics(row))
     project_rows.sort(
         key=lambda row: (row["deliveries"], row["commits"], row["tokens"], row["name"]),
         reverse=True,
@@ -651,8 +675,8 @@ def aggregate_productivity(
             "end_date": end_date.isoformat(),
             "days": (end_date - start_date).days + 1,
         },
-        "summary": _round_metrics(summary),
-        "daily": [_round_metrics(daily[key]) for key in sorted(daily)],
+        "summary": _public_metrics(summary),
+        "daily": [_public_metrics(daily[key]) for key in sorted(daily)],
         "weekly": weekly,
         "projects": project_rows,
         "deliveries": deliveries,

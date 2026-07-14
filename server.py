@@ -51894,6 +51894,7 @@ def _productivity_build_snapshot(now=None):
     ]
     presence = _PRODUCTIVITY_STORE.load_presence(full_start, end_date, tzinfo=local_tz)
     sampled = presence_summary(presence, tzinfo=local_tz)
+    unique_warnings = sorted(set(warnings))
 
     datasets = {}
     for weeks in _PRODUCTIVITY_WEEKS:
@@ -51921,7 +51922,8 @@ def _productivity_build_snapshot(now=None):
             "available": bool(sampled.get("sample_minutes")),
             "source": "macos_idle_sampler" if sampled.get("sample_minutes") else "not_yet_sampled",
         },
-        "warnings": sorted(set(warnings)),
+        "warning_count": len(unique_warnings),
+        "warnings": unique_warnings[:12],
         "proxies": [
             "Pushed commits are commits by a configured local Git identity that are now reachable from remote-tracking refs, bucketed by committer date.",
             "Observed work time clusters human prompts separated by no more than 30 minutes and adds a five-minute tail.",
@@ -54440,6 +54442,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "throughput.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "throughput.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/productivity.html" or path == "/productivity":
+            try:
+                body = (STATIC_DIR / "productivity.html").read_bytes()
+            except OSError as e:
+                self.send_json(
+                    {"error": "productivity.html missing", "detail": str(e)}, 500
+                )
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)

@@ -176,7 +176,25 @@ def test_build_snapshot_reads_each_global_source_once(monkeypatch):
     assert snapshot["coverage"]["conversations_considered"] == 0
 
 
+def test_build_snapshot_caps_repository_warning_details(monkeypatch):
+    monkeypatch.setattr(server, "find_all_conversations", lambda **kwargs: [])
+    monkeypatch.setattr(server._q, "list_items", lambda: [])
+    monkeypatch.setattr(
+        server,
+        "_productivity_known_repos",
+        lambda rows: ([], [f"Unavailable candidate {number}" for number in range(20)]),
+    )
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore())
+    snapshot = server._productivity_build_snapshot(
+        now=datetime(2026, 7, 14, 12, tzinfo=UTC)
+    )
+    assert snapshot["coverage"]["warning_count"] == 20
+    assert len(snapshot["coverage"]["warnings"]) == 12
+
+
 def test_productivity_route_is_additive_and_range_limited():
     source = inspect.getsource(server.CommandCenterHandler.do_GET)
     assert 'path == "/api/productivity"' in source
     assert "(6, 8, 12, 16)" in source
+    assert 'path == "/productivity.html"' in source
+    assert 'STATIC_DIR / "productivity.html"' in source

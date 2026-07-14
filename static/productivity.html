@@ -156,6 +156,9 @@
   .coverage-stat span { color: var(--muted); font-size: 10px; }
   .coverage-copy { color: var(--muted); font-size: 11px; line-height: 1.55; }
   .coverage-copy ul { margin: 0; padding-left: 18px; }
+  .coverage-warning-details { margin: 8px 0 12px; padding: 9px 10px; border: 1px solid rgba(239, 178, 74, .3); border-radius: 8px; }
+  .coverage-warning-details summary { color: var(--orange); }
+  .coverage-warning-details ul { margin-top: 8px; }
   .warning { color: var(--orange); }
   .empty, .error { padding: 30px; color: var(--muted); text-align: center; }
   .error { color: var(--red); }
@@ -327,6 +330,18 @@
       }).join('') + '</ul></details>';
   }
 
+  function indexDeliveries(items) {
+    const byProject = {};
+    const byDate = {};
+    (Array.isArray(items) ? items : []).forEach(function (item) {
+      const project = String(item.project_id || 'unknown');
+      const day = String(item.date || '');
+      (byProject[project] || (byProject[project] = [])).push(item);
+      if (day) (byDate[day] || (byDate[day] = [])).push(item);
+    });
+    return {byProject: byProject, byDate: byDate};
+  }
+
   function card(label, value, note, type) {
     return '<article class="metric-card ' + (type || '') + '"><div class="metric-label">' + escapeHtml(label) +
       '</div><div class="metric-value">' + escapeHtml(value) + '</div><div class="metric-note">' + escapeHtml(note) + '</div></article>';
@@ -394,7 +409,7 @@
     }).join('');
   }
 
-  function renderProjects(rows) {
+  function renderProjects(rows, deliveriesByProject) {
     const body = document.querySelector('#projectTable tbody');
     rows = Array.isArray(rows) ? rows : [];
     if (!rows.length) { body.innerHTML = '<tr><td colspan="10" class="empty">No project evidence in this range.</td></tr>'; return; }
@@ -404,11 +419,11 @@
         '<td title="' + compact(row.lines_added) + ' added · ' + compact(row.lines_deleted) + ' deleted">' + compact(row.lines_changed) + '</td>' +
         '<td>' + compact(row.turns) + '</td><td>' + compact(row.tokens) + '</td><td>' + duration(row.observed_work_seconds) + '</td>' +
         '<td>' + duration(row.agent_gross_seconds) + ' / ' + duration(row.agent_net_seconds) + '</td>' +
-        '<td class="work-cell">' + workItems(row.work_items) + '</td></tr>';
+        '<td class="work-cell">' + workItems((deliveriesByProject || {})[row.id]) + '</td></tr>';
     }).join('');
   }
 
-  function renderDaily(rows) {
+  function renderDaily(rows, deliveriesByDate) {
     const body = document.querySelector('#dailyTable tbody');
     rows = Array.isArray(rows) ? rows.slice().reverse() : [];
     body.innerHTML = rows.map(function (row) {
@@ -418,7 +433,7 @@
         '</td><td>' + duration(row.observed_work_seconds) + '</td><td>' + computer + '</td><td>' + compact(row.focus_hours) + '</td>' +
         '<td>' + duration(row.agent_gross_seconds) + ' / ' + duration(row.agent_net_seconds) + '</td>' +
         '<td>' + compact(row.watchtower_opened) + ' / ' + compact(row.watchtower_closed) + '</td>' +
-        '<td class="work-cell">' + workItems(row.work_items) + '</td></tr>';
+        '<td class="work-cell">' + workItems((deliveriesByDate || {})[row.date]) + '</td></tr>';
     }).join('');
   }
 
@@ -426,6 +441,7 @@
     coverage = coverage || {};
     const presence = coverage.presence || {};
     const warnings = Array.isArray(coverage.warnings) ? coverage.warnings : [];
+    const warningCount = Number(coverage.warning_count) || warnings.length;
     const proxies = Array.isArray(coverage.proxies) ? coverage.proxies : [];
     const stats = [
       [compact(coverage.repositories), 'repositories discovered'],
@@ -439,7 +455,7 @@
       '<div class="coverage-stats">' + stats.map(function (row) { return '<div class="coverage-stat"><strong>' + escapeHtml(row[0]) + '</strong><span>' + escapeHtml(row[1]) + '</span></div>'; }).join('') + '</div>' +
       '<div class="coverage-copy">' +
         (!coverage.git_identity_available ? '<p class="warning">No configured Git email was found, so commits are intentionally omitted rather than attributed to another author.</p>' : '') +
-        (warnings.length ? '<p class="warning">' + escapeHtml(warnings.join(' · ')) + '</p>' : '') +
+        (warningCount ? '<details class="coverage-warning-details"><summary>' + warningCount + ' repository candidate' + (warningCount === 1 ? '' : 's') + ' could not be read</summary><ul>' + warnings.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') + (warningCount > warnings.length ? '<li>…and ' + (warningCount - warnings.length) + ' more</li>' : '') + '</ul></details>' : '') +
         '<ul>' + proxies.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') + '</ul>' +
         (presence.first_sampled_at ? '<p>Presence sampling starts ' + escapeHtml(new Date(presence.first_sampled_at).toLocaleString()) + '; earlier time is left blank.</p>' : '<p>Computer-presence sampling will accumulate while CCC is running. Historical time is not invented.</p>') +
       '</div>';
@@ -453,8 +469,9 @@
     renderSummary(data.summary || {});
     renderWeekly(data.weekly || []);
     renderInsights(data);
-    renderProjects(data.projects || []);
-    renderDaily(data.daily || []);
+    const deliveryIndex = indexDeliveries(data.deliveries || []);
+    renderProjects(data.projects || [], deliveryIndex.byProject);
+    renderDaily(data.daily || [], deliveryIndex.byDate);
     renderCoverage(data.coverage || {});
     const refresh = data.refresh || {};
     const generated = refresh.generated_at ? new Date(refresh.generated_at * 1000).toLocaleString() : 'unknown time';

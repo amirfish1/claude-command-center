@@ -5,6 +5,7 @@ from productivity import (
     classify_commit,
     estimate_work_intervals,
     parse_git_log,
+    sanitize_evidence_title,
     union_seconds,
 )
 
@@ -83,6 +84,14 @@ def test_classifies_conventional_outcomes():
     assert classify_commit("fix!: avoid duplicate ticket") == "fix"
     assert classify_commit("docs: explain cache") == "other"
     assert classify_commit("feature work without convention") == "other"
+
+
+def test_evidence_titles_redact_home_paths_and_email_addresses():
+    title = "feat: move /Users/person/Private/repo and notify person@example.test"
+    sanitized = sanitize_evidence_title(title)
+    assert sanitized == "feat: move [local path] and notify [email]"
+    assert "/Users/" not in sanitized
+    assert "person@example.test" not in sanitized
 
 
 def test_git_parser_filters_identity_and_sums_numstat():
@@ -194,6 +203,10 @@ def test_aggregation_keeps_project_and_time_evidence():
         "Add productivity trends",
         "feat: add trends",
     ]
+    assert "work_items" not in payload["summary"]
+    assert all("work_items" not in row for row in payload["daily"])
+    assert all("work_items" not in row for row in payload["weekly"])
+    assert all("work_items" not in row for row in payload["projects"])
 
 
 def test_trend_compares_newest_and_oldest_halves():

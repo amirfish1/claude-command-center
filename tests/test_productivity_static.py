@@ -27,6 +27,11 @@ def test_productivity_page_handles_building_stale_and_failure_states():
     assert "refresh.stale" in html
     assert "renderError" in html
     assert "escapeHtml" in html
+    assert "indexDeliveries" in html
+    assert "coverage.warning_count" in html
+    assert "coverage-warning-details" in html
+    assert "renderProjects(data.projects || [], deliveryIndex.byProject)" in html
+    assert "renderDaily(data.daily || [], deliveryIndex.byDate)" in html
     assert "localStorage.setItem(PRODUCTIVITY_RANGE_KEY" in html
 
 
