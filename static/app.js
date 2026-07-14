@@ -44645,6 +44645,7 @@
           size: c.size || 0,
           is_live: !!c.is_live,
           archived: !!c.archived,
+          trashed: !!c.trashed,
           worktree_dirty: !!c.worktree_dirty,
           has_commit: !!c.has_commit,
           has_push: !!c.has_push,
@@ -44717,6 +44718,7 @@
         // pushed/no-edits chips + PR #N + Ready-to-merge bucket.
         is_live: !!c.is_live,
         archived: !!c.archived,
+        trashed: !!c.trashed,
         worktree_dirty: !!c.worktree_dirty,
         has_commit: !!c.has_commit,
         has_push: !!c.has_push,

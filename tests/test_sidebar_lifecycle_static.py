@@ -29,6 +29,13 @@ def test_trash_bucket_depends_only_on_trashed_state():
     assert "_archivedConvs.filter(c => !c.pinned" not in APP_JS
 
 
+def test_archive_shaping_carries_trashed_state_into_tri_state_buckets():
+    start = APP_JS.index("const shaped = rows.map(c => {")
+    body = APP_JS[start:APP_JS.index("}).map(_applyLiveOverlayToRow);", start)]
+
+    assert body.count("trashed: !!c.trashed,") >= 2
+
+
 def test_archived_group_chats_follow_the_same_buckets():
     assert "_archivedGroupChatsForRender.filter(gc => !!gc.trashed)" in APP_JS
     assert "_archivedGroupChatsForRender.filter(gc => !gc.trashed)" in APP_JS
