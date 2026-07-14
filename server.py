@@ -51034,6 +51034,14 @@ def codex_usage_pace_payload(codex=None, now_epoch=None):
         now_epoch = time.time()
     if codex is None:
         codex = _latest_codex_usage_from_snapshots(now_epoch=now_epoch)
+        if codex is not None:
+            newest_epoch = _usage_snapshot_epoch({
+                "ts": codex.get("snapshot_ts") or codex.get("fetched_at")
+            })
+            # Persisted Codex data is a fallback between rollout events. Do not
+            # surface it as live usage once its source snapshot is stale.
+            if newest_epoch is None or now_epoch - newest_epoch > _USAGE_NATIVE_FRESH_SECS:
+                return {"ok": False, "weekly_pct": None, "projected_pct": None, "stale": True}
     weekly = (codex or {}).get("weekly") or {}
     weekly_pct = weekly.get("pct")
     resets_at_iso = weekly.get("resets_at")

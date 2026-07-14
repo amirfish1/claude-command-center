@@ -454,6 +454,37 @@ class TestServerImports(unittest.TestCase):
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._codex_usage_file_cache.clear()
 
+    def test_codex_usage_pace_rejects_stale_persisted_snapshot(self):
+        """The weekly meter must not present an old Codex rollout as current."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+                stale_at = 1_783_011_600
+                server._USAGE_SNAPSHOTS_FILE.write_text(json.dumps({
+                    "ts": server._usage_snapshot_iso(stale_at),
+                    "codex": {
+                        "snapshot_ts": server._usage_snapshot_iso(stale_at),
+                        "weekly": {
+                            "pct": 34.0,
+                            "resets_at": "2026-07-09T07:00:00Z",
+                            "window_minutes": 10080,
+                        },
+                    },
+                }) + "\n", encoding="utf-8")
+
+                pace = server.codex_usage_pace_payload(
+                    now_epoch=stale_at + server._USAGE_NATIVE_FRESH_SECS + 1,
+                )
+                self.assertFalse(pace["ok"])
+                self.assertTrue(pace["stale"])
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
+
     def test_open_session_in_claude_desktop_rejects_bad_input(self):
         """The helper exists and rejects empty / non-UUID session IDs
         without trying to spawn `open(1)`."""
