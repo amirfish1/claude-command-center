@@ -976,15 +976,14 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const _allTabConvs = ", app_js)
-        # CCC-468: archived rows still replay in the All tab, but demoted to a
-        # collapsed "Trash" section at the bottom instead of interleaving with
-        # live rows. Pinned and lane-overridden archived rows stay in the main
-        # flow because both are explicit visibility requests.
+        # All shows active and archived rows in its main flow. Only rows with
+        # the explicit trashed state belong in the bottom Trash bucket; pin and
+        # lane placement never change lifecycle membership.
         all_start = app_js.index("const _allTabConvs = ")
         all_block = app_js[all_start:app_js.index("const _arcHasFolderChips", all_start)]
-        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived)", all_block)
-        self.assertIn("const _trashConvs = _archivedConvs.filter(c => !c.pinned && !_allTabLaneOverride(c));", app_js)
-        self.assertIn("const _pinnedArchived = _archivedConvs.filter(c => c.pinned || _allTabLaneOverride(c));", app_js)
+        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs)", all_block)
+        self.assertIn("const _trashConvs = _archivedConvs.filter(c => !!c.trashed);", app_js)
+        self.assertIn("const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);", app_js)
         self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);", app_js)
         self.assertIn("for (const c of _allTabMainConvs)", app_js)
         self.assertIn('data-role="trash-section"', app_js)
@@ -1003,13 +1002,13 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('conv-archive-btn is-restore', app_js)
-        self.assertIn('Restore to Active', app_js)
-        self.assertIn("const archiveActionLabel = _sidebarTab === 'inprogress' ? 'Archive' : 'Move to Trash';", app_js)
-        self.assertIn('title="\' + archiveActionLabel + \'" aria-label="\' + archiveActionLabel + \'"', app_js)
-        self.assertIn("const archivedRestoreRestHtml = (c.archived && !isBacklogRow && !isGithubPrRow) ? archiveBtn : '';", app_js)
+        self.assertIn('title="Move to Active" aria-label="Move to Active"', app_js)
+        self.assertIn('data-archived="false"', app_js)
+        self.assertIn('data-role="trash" title="Move to Trash"', app_js)
+        self.assertNotIn("archivedRestoreRestHtml", app_js)
         self.assertIn("(c.archived ? ' is-archived-row' : '')", app_js)
         self.assertIn("payload.archived = archived;", app_js)
-        self.assertIn("const nextArchived = !currentlyArchived;", app_js)
+        self.assertIn("const nextArchived = btn.dataset.archived === 'true';", app_js)
         self.assertIn("archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived)", app_js)
         self.assertIn("Restored to Active", app_js)
         self.assertIn(".conv-item .conv-archive-btn.is-restore", app_css)
@@ -1020,23 +1019,17 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         sidebar_tab = app_js.index("const _sidebarTab = (() => {")
-        archive_action = app_js.index(
-            "const archiveActionLabel = _sidebarTab === 'inprogress' ? 'Archive' : 'Move to Trash';"
-        )
+        archive_action = app_js.index("const lifecycleContext = opts.lifecycleContext")
         self.assertLess(sidebar_tab, archive_action)
 
-    def test_all_tab_archive_action_uses_rendered_row_state(self):
-        """An active All-tab row must not restore because another cache is stale."""
+    def test_all_tab_archive_action_uses_explicit_button_intent(self):
+        """Archive transitions must not be inferred from stale cache or DOM state."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
-        self.assertIn(
-            "const currentlyArchived = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section, .conv-trash-section');",
-            app_js,
-        )
-        self.assertNotIn(
-            "|| !!(c && c.archived);\n          const nextArchived = !currentlyArchived;",
-            app_js,
-        )
+        self.assertIn("const nextArchived = btn.dataset.archived === 'true';", app_js)
+        self.assertIn('data-role="archive" data-archived="true"', app_js)
+        self.assertIn('data-role="archive" data-archived="false"', app_js)
+        self.assertNotIn("const currentlyArchived =", app_js)
 
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
         """When Hermes rows exist, All should expose Coding, Workers, and
@@ -1614,7 +1607,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _twWorkersByQueue = new Map();", app_js)
         # Workers resolve to the EXISTING session row via their cloud session_id.
         self.assertIn("const card = sid ? _twCardById.get(sid) : null;", app_js)
-        self.assertIn("return _renderRow(enriched, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
+        self.assertIn("return _renderRow(enriched, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
         self.assertIn("return _twFallbackRow(w);", app_js)
         self.assertIn("_twQueueHeaderHtml(q, workers.length)", app_js)
         self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
@@ -1859,7 +1852,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
         self.assertIn("const _curShown = _currentSessionRows;", app_js)
-        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
+        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
@@ -2219,7 +2212,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
         self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
-        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
+        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
 
@@ -12108,7 +12101,7 @@ class TestModelPicker(unittest.TestCase):
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
-        self.assertIn("mergeBtn + startBtn + pinBtn + archiveBtn", js)
+        self.assertIn("mergeBtn + startBtn + pinBtn + lifecycleButtons", js)
         self.assertIn("Pinned to top", js)
         self.assertIn("_minPinnedRank", js)
         self.assertNotIn("conv-pinned-section", js)

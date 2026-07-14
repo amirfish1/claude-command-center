@@ -1,0 +1,1 @@
+- Added distinct Active, Archived, and Trashed conversation states: Active and Archived remain visible in All, Trash is a separate bottom bucket, and every tab now exposes the correct Archive, Move to Active, Trash, or Untrash action.
