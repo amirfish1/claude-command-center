@@ -13178,6 +13178,68 @@ class TestPendingInputs(unittest.TestCase):
         self.assertIn("while _pending_inputs_watcher_lock_file is None:", source)
         self.assertIn("time.sleep(5)", source)
 
+    def test_queue_codex_resume_schedules_conversation_pump(self):
+        with mock.patch.object(self.server, "_schedule_codex_queue_pump") as schedule:
+            self.server._queue_codex_resume("sid-a", "first")
+
+        schedule.assert_called_once_with("sid-a")
+
+    def test_codex_queue_pump_delivers_and_removes_only_fifo_head(self):
+        sid = "sid-fifo"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["first", "second"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "accepted": True},
+             ) as resume:
+            result = self.server._pump_codex_resume_queue(sid)
+
+        self.assertTrue(result["delivered"])
+        resume.assert_called_once_with(sid, "first", _from_queue=True)
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["second"])
+
+    def test_codex_queue_pump_holds_while_turn_is_active(self):
+        sid = "sid-active"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["wait"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=True), \
+             mock.patch.object(self.server, "resume_session_codex") as resume:
+            result = self.server._pump_codex_resume_queue(sid)
+
+        self.assertEqual(result["waiting"], "busy")
+        resume.assert_not_called()
+
+    def test_codex_queue_pump_retains_head_after_delivery_failure(self):
+        sid = "sid-failure"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["keep"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(self.server, "resume_session_codex", return_value={"ok": False}):
+            self.server._pump_codex_resume_queue(sid)
+
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["keep"])
+
+    def test_codex_queue_pump_suppresses_concurrent_delivery(self):
+        sid = "sid-concurrent"
+        lock = self.server._codex_queue_pump_lock(sid)
+        lock.acquire()
+        try:
+            result = self.server._pump_codex_resume_queue(sid)
+        finally:
+            lock.release()
+
+        self.assertEqual(result["waiting"], "already-pumping")
+
     def test_get_queued_events_for_session(self):
         sid = "test-session-id"
         with self.server._pending_resume_lock:

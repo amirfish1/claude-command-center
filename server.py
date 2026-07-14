@@ -25773,6 +25773,8 @@ _pending_terminal_input_lock = threading.Lock()
 _pending_inputs_lock = threading.Lock()
 _pending_inputs_watcher_lock_file = None
 _pending_inputs_watcher_retry_started = False
+_codex_queue_pump_locks = {}
+_codex_queue_pump_locks_guard = threading.Lock()
 
 
 def _acquire_pending_inputs_watcher_lock(lock_path):
@@ -26371,6 +26373,61 @@ def _mark_pending_resume_retry(sid, now=None, delay=None):
     now = time.time() if now is None else float(now)
     delay = _PENDING_RESUME_RETRY_DELAY_S if delay is None else float(delay)
     _pending_resume_retry_after[sid] = now + max(0.0, delay)
+
+
+def _codex_queue_pump_lock(session_id):
+    """Return the process-local delivery lock for one Codex conversation."""
+    with _codex_queue_pump_locks_guard:
+        return _codex_queue_pump_locks.setdefault(session_id, threading.Lock())
+
+
+def _schedule_codex_queue_pump(session_id):
+    """Trigger FIFO delivery for one conversation without blocking the caller."""
+    if not session_id:
+        return
+    threading.Thread(
+        target=_pump_codex_resume_queue,
+        args=(session_id,),
+        daemon=True,
+        name=f"codex-queue-pump-{session_id[:8]}",
+    ).start()
+
+
+def _pump_codex_resume_queue(session_id):
+    """Deliver at most one durable Codex message, preserving FIFO order."""
+    lock = _codex_queue_pump_lock(session_id)
+    if not lock.acquire(blocking=False):
+        return {"ok": True, "waiting": "already-pumping"}
+    try:
+        if not _pending_resume_retry_due(session_id):
+            return {"ok": True, "waiting": "backoff"}
+        if _resume_queue_engine_busy(session_id):
+            return {"ok": True, "waiting": "busy"}
+        with _pending_resume_lock:
+            queue = _pending_resume_queue.get(session_id) or []
+            text = queue[0] if queue else None
+        if text is None:
+            return {"ok": True, "empty": True}
+
+        result = resume_session_codex(session_id, text, _from_queue=True)
+        if not result or not result.get("ok") or result.get("queued"):
+            _mark_pending_resume_retry(session_id)
+            return {"ok": False, "delivered": False, "result": result}
+
+        removed = False
+        with _pending_resume_lock:
+            queue = _pending_resume_queue.get(session_id) or []
+            if queue and queue[0] == text:
+                queue.pop(0)
+                removed = True
+                if not queue:
+                    _pending_resume_queue.pop(session_id, None)
+        if removed:
+            _save_pending_inputs()
+        _pending_resume_retry_after.pop(session_id, None)
+        return {"ok": True, "delivered": removed, "result": result}
+    finally:
+        lock.release()
 
 
 # ── Terminal-queue drain safety (CCC-455) ───────────────────────────────────
@@ -27145,6 +27202,7 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
             return None
         _pending_resume_queue.setdefault(session_id, []).append(text)
     _save_pending_inputs()
+    _schedule_codex_queue_pump(session_id)
     payload = {
         "ok": True,
         "queued": True,
@@ -27407,12 +27465,12 @@ def build_codex_wake_status(session_id):
     }
 
 
-def resume_session_codex(session_id, text, *, steer=False):
+def resume_session_codex(session_id, text, *, steer=False, _from_queue=False):
     """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
     text = _strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
-    if not steer:
+    if not steer and not _from_queue:
         queued_behind_earlier = _queue_codex_resume(
             session_id,
             text,
@@ -27488,6 +27546,15 @@ def resume_session_codex(session_id, text, *, steer=False):
     if app_result.get("ok"):
         return app_result
     if app_result.get("fallback") == "queue":
+        if _from_queue:
+            reason = app_result.get("error") or "Codex thread is still active"
+            return {
+                "ok": True,
+                "queued": True,
+                "via": "codex-resume-queued",
+                "queued_reason": reason,
+                "error": reason,
+            }
         queued = _queue_codex_resume(
             session_id,
             text,
@@ -27500,6 +27567,13 @@ def resume_session_codex(session_id, text, *, steer=False):
             queued["desktop_attached"] = True
         return queued
     if active_resume_entry is not None:
+        if _from_queue:
+            return {
+                "ok": True,
+                "queued": True,
+                "via": "codex-resume-queued",
+                "pid": active_resume_entry.get("pid"),
+            }
         return _queue_codex_resume(session_id, text, pid=active_resume_entry.get("pid"))
     if cwd_error is not None:
         return cwd_error.as_payload()
