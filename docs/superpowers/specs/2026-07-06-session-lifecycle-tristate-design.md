@@ -14,10 +14,10 @@ Trash with no path back to Active in view (CCC-499, fixed separately).
 
 ## Goal
 
-Three explicit, orthogonal-from-pin states, one step at a time:
+Three explicit states, orthogonal from pinning:
 
 ```
-Active  <-- Archive/Unarchive -->  Archived  <-- Trash/Restore -->  Trashed
+Active  <-- Archive/Move to Active -->  Archived  <-- Trash/Untrash -->  Trashed
 ```
 
 - **Active**: shows in the Active tab.
@@ -26,11 +26,30 @@ Active  <-- Archive/Unarchive -->  Archived  <-- Trash/Restore -->  Trashed
 - **Trashed**: out of the Active tab, folded into the collapsed Trash bucket
   at the bottom of the All tab.
 
-Restoring from Trashed goes to Archived (one rung up), not straight to
-Active — matches the ladder, no skipping.
+Untrashing goes to Archived, never directly to Active. The All tab does allow
+an Active row to move directly to Trashed because its lifecycle action is
+Trash, not Archive; the server establishes the required `archived=true`
+invariant as part of that transition.
 
-`pinned` is fully orthogonal: it only affects sort rank within whichever
-list a row lands in. Trashing or archiving a row does not touch its pin.
+`pinned` is fully orthogonal: it only affects sort rank within the Active tab
+or the All tab's main list. Pin is not offered inside Trash. Trashing or
+archiving a row does not mutate its stored pin value.
+
+## Canonical view and action matrix
+
+The visible tab and bucket are part of the action contract. Row actions cannot
+be selected from lifecycle state alone.
+
+| Location | State shown | Lifecycle actions | Pin |
+|---|---|---|---|
+| Active tab | Active | Archive | Yes |
+| All main list | Active | Trash | Yes |
+| All main list | Archived | Move to Active; Trash | Yes |
+| All / Trash bucket | Trashed | Untrash to Archived | No |
+
+The Active tab contains only Active rows. The All tab contains all three
+states: Active and Archived share the main list, while Trashed rows appear in
+the separate Trash section at the bottom.
 
 ## Scope
 
@@ -56,9 +75,10 @@ only care about "is this out of Active" (they're correct unchanged, since
 - Sessions: new flat-list sidecar file `TRASHED_CONVERSATIONS_FILE`,
   structurally identical to the existing `ARCHIVED_CONVERSATIONS_FILE`
   (`_load_archived_conversations` / `_save_archived_conversations` pattern).
-- Group chats: new `trashed_at` field next to the existing `archived_at` in
-  the per-chat metadata store, written by a new `_group_chat_set_trashed()`
-  mirroring `_group_chat_set_archived()` (server.py:34240).
+- Group chats: new `trashed: bool` field in the per-chat metadata store,
+  written by a new `_group_chat_set_trashed()` mirroring
+  `_group_chat_set_archived()`. `trashed_at` may also be stamped for ordering
+  and diagnostics, but the boolean is the lifecycle source of truth.
 - Backlog/GH-issue rows: no change.
 
 ### Migration
@@ -77,22 +97,33 @@ breaking change, adding is not):
 
 - `/api/conversations/<id>/archive` (existing, unchanged) — Active⇄Archived.
 - `/api/conversations/<id>/trash` (new, POST `{trashed: bool}`) —
-  Archived⇄Trashed. Setting `archived=false` via the archive endpoint on a
-  trashed row clears `trashed` server-side too.
-- `/api/group-chats/<path>/trash` (new) — mirrors the existing group-chat
-  archive endpoint.
+  Active/Archived→Trashed and Trashed→Archived. Trashing an Active row sets
+  `archived=true` in the same server operation. Setting `archived=false` via
+  the archive endpoint on a trashed row clears `trashed` server-side too.
+- `/api/group-chats/trash` and `/api/group-chats/untrash` (new) — mirror the
+  existing group-chat archive/unarchive endpoints and accept the same
+  `{path, id}` reference payload.
 - `trashed` field added to conversation and group-chat row payloads
   (additive field).
 
 ## UI
 
-### Buttons (static/app.js ~22645-22660, `_renderRow`)
+### Buttons (static/app.js, `_renderRow`)
 
-- **Active row**: single Archive button (📥, unchanged).
-- **Archived row** (not trashed): two buttons — Unarchive (↩, back to
-  Active) + new Trash button (🗑, down to Trashed).
-- **Trashed row**: single Restore button (↩, back to Archived — not
-  Active).
+`_renderRow` must receive or derive an explicit rendering context (`active`,
+`all-main`, or `trash`). It must not infer the action set only from
+`c.archived` / `c.trashed`.
+
+- **Active tab / Active row**: Pin + Archive (📥).
+- **All main / Active row**: Pin + Trash (🗑). There is no Archive action in
+  this location.
+- **All main / Archived row**: Pin + Move to Active (↩) + Trash (🗑).
+- **Trash / Trashed row**: Untrash (↩) only; it moves to Archived and the row
+  returns to the All main list. Pin is absent.
+
+Each lifecycle action appears once in the DOM. Archived and Trashed rows do
+not render a second rest-state Restore button in addition to the hover action
+bar. Tooltips and `aria-label`s use the same verbs as this matrix.
 
 ### Bucketing (static/app.js ~24580-24680)
 
@@ -104,8 +135,9 @@ const _archivedVisibleConvs = _archivedConvs.filter(c => !c.trashed);
 const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _archivedVisibleConvs);
 ```
 
-`pinned` no longer participates in this split — only in sort rank within
-whichever bucket a row ends up in.
+`pinned` no longer participates in this split. It affects sort rank in Active
+and All main only; Trash neither exposes pin controls nor promotes pinned rows
+out of the bucket.
 
 ### Kanban classification
 
@@ -118,7 +150,13 @@ it's already excluded from Active.
 - `tests/test_smoke.py` unaffected at the import level; add a smoke-level
   assertion that the new trash sidecar file loads/saves round-trip cleanly
   (mirrors existing archived-file test if one exists).
-- Manual puppeteer check: one Active, one Archived, one Trashed row each
-  show the correct button set and clicking each transitions to the
-  expected next state (dev server, `node` script from repo dir per house
-  convention).
+- Add static contract tests for the complete location × state action matrix,
+  including absence checks (no Archive on an Active row in All, no Pin in
+  Trash, and no duplicate Restore/Untrash buttons).
+- Add server tests for the invariants `trashed ⇒ archived`, Active→Trashed in
+  one request, Trashed→Archived on untrash, and clearing `trashed` when moving
+  to Active.
+- Puppeteer check: exercise the full round trip in both tabs using the repo's
+  harness: Active tab Archive; All main Move to Active; All main Active Trash;
+  Trash Untrash to Archived. Verify the row lands in the correct list after
+  every transition and exposes exactly the expected action set.
