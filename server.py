@@ -6663,7 +6663,7 @@ _ARCHIVE_LIST_FIELDS = (
     "session_cwd", "session_cwd_exists", "session_cwd_is_worktree", "mtime",
     "modified", "last_interacted", "size", "first_message", "ai_title",
     "branch", "git_branch", "effective_branch", "effective_kind", "display_name",
-    "spawn_named", "name_overridden", "archived", "trashed",
+    "spawn_named", "spawn_pid", "name_overridden", "archived", "trashed",
     "recently_unarchived", "verified", "pinned", "pin_rank", "all_lane_override",
     "worktree_dirty", "has_commit", "has_push", "has_edit", "tail_pr_number",
     "tail_pr_url", "pr_state", "pr_notes", "is_live", "worktree_label", "state",

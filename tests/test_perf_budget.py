@@ -57,6 +57,7 @@ def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
         "ai_title": "Lifecycle title",
         "display_name": "Lifecycle title",
         "name_overridden": True,
+        "spawn_pid": 4242,
         "branch": "main",
         "git_branch": "main",
         "effective_branch": "feature/list",
@@ -100,7 +101,7 @@ def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
     assert payload["window"] == "1d"
     assert payload["count"] == 1
     assert payload["total_count"] == 1
-    assert {"archived", "trashed", "pinned", "all_lane_override", "session_state", "goal", "codex_state"} <= set(projected[0])
+    assert {"archived", "trashed", "pinned", "all_lane_override", "session_state", "goal", "codex_state", "spawn_pid"} <= set(projected[0])
     assert "jsonl_path" not in projected[0]
     assert "last_assistant_text" not in projected[0]
     assert "debug" not in projected[0]
