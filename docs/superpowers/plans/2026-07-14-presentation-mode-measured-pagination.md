@@ -379,20 +379,15 @@ slide.dataset.presentationItemKeys = items
   .join(',');
 ```
 
-Use this pure cursor helper:
+Use this pure cursor helper. Semantic content wins over the positional
+presentation key because the same `answer:part` key can refer to different
+content after pages merge or split:
 
 ```js
 function presentationCursorIndex(deck, previousSlide, fallback) {
   const slides = Array.isArray(deck) ? deck : [];
   if (!slides.length) return 0;
   const previousData = (previousSlide && previousSlide.dataset) || {};
-  const exactKey = String(previousData.presentationKey || '');
-  if (exactKey) {
-    const exact = slides.findIndex(slide => (
-      String(((slide && slide.dataset) || {}).presentationKey || '') === exactKey
-    ));
-    if (exact >= 0) return exact;
-  }
   const itemKey = String(previousData.presentationItemKeys || '').split(',')[0];
   if (itemKey) {
     const containing = slides.findIndex(slide => (
@@ -400,6 +395,13 @@ function presentationCursorIndex(deck, previousSlide, fallback) {
         .split(',').includes(itemKey)
     ));
     if (containing >= 0) return containing;
+  }
+  const exactKey = String(previousData.presentationKey || '');
+  if (exactKey) {
+    const exact = slides.findIndex(slide => (
+      String(((slide && slide.dataset) || {}).presentationKey || '') === exactKey
+    ));
+    if (exact >= 0) return exact;
   }
   return Math.max(0, Math.min(slides.length - 1, Number(fallback) || 0));
 }
