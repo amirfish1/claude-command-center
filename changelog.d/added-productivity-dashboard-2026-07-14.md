@@ -1,0 +1,1 @@
+- Added a separate Productivity dashboard with project and daily delivery evidence, 6–16 week trends, Git/agent/token/time metrics, computer-presence coverage, and WatchTower activity.
