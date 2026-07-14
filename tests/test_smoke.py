@@ -2467,6 +2467,31 @@ class TestServerImports(unittest.TestCase):
             records,
         )
 
+    def test_engine_model_catalog_filters_foreign_observed_models(self):
+        """A stale engine tag must not put a foreign model in another picker."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        observed = [
+            {"engine": "claude", "id": "gpt-5.6-sol", "label": "gpt-5.6-sol", "source": "session-override"},
+            {"engine": "cursor", "id": "composer-2.5", "label": "composer-2.5", "source": "transcript-cache"},
+        ]
+        try:
+            with mock.patch.object(server, "_observed_model_records", return_value=observed), \
+                 mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        self.assertNotIn("gpt-5.6-sol", payload["engines"]["claude"])
+        self.assertIn("composer-2.5", payload["engines"]["cursor"])
+
     def test_codex_model_catalog_marks_missing_cli_models_unavailable(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)

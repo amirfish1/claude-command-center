@@ -3327,11 +3327,27 @@ def _model_catalog_key(model):
     return _clean_spawn_default_model(model).lower()
 
 
+def _model_catalog_known_engines(model):
+    """Return curated engines that explicitly own a model id."""
+    key = _model_catalog_key(model)
+    if not key:
+        return set()
+    return {
+        engine
+        for engine, options in _ENGINE_CURATED_MODELS.items()
+        if any(_model_catalog_key(option.get("id")) == key for option in options)
+    }
+
+
 def _model_catalog_allows_model(engine, model):
     engine = _normalize_orchestration_spawn_engine(engine)
-    if engine == "codex":
-        return _model_catalog_key(model) in _CODEX_PICKER_MODEL_IDS
-    return True
+    if engine == "codex" and _model_catalog_key(model) not in _CODEX_PICKER_MODEL_IDS:
+        return False
+    known_engines = _model_catalog_known_engines(model)
+    # Observed metadata can be stale or have been recorded before CCC learned
+    # the session's real engine. Keep custom IDs, but never surface a curated
+    # model in an engine picker that does not own that model.
+    return not known_engines or engine in known_engines
 
 
 def _model_catalog_add(catalog, engine, model, *, label=None, source="observed", **attrs):

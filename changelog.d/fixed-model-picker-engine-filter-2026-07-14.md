@@ -1,0 +1,1 @@
+- Fixed the new-session model picker showing models from a different engine.
