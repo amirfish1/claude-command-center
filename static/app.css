@@ -5642,7 +5642,8 @@
   .conv-item .conv-pin-btn,
   .conv-item .conv-wake-btn,
   .conv-item .conv-elevate-object-btn,
-  .conv-item .conv-archive-btn {
+  .conv-item .conv-archive-btn,
+  .conv-item .conv-trash-btn {
     opacity: 0; font-size: 13px; cursor: pointer;
     background: none; border: none; color: var(--text-muted);
     padding: 2px 4px; border-radius: 3px; flex-shrink: 0;
@@ -5659,7 +5660,10 @@
   .conv-item .conv-elevate-object-btn:focus-visible,
   .conv-item:hover .conv-archive-btn,
   .conv-item.active .conv-archive-btn,
-  .conv-item .conv-archive-btn:focus-visible { opacity: 0.7; }
+  .conv-item .conv-archive-btn:focus-visible,
+  .conv-item:hover .conv-trash-btn,
+  .conv-item.active .conv-trash-btn,
+  .conv-item .conv-trash-btn:focus-visible { opacity: 0.7; }
   .conv-item .conv-pin-btn:hover { opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12); }
   .conv-item .conv-wake-btn:hover { opacity: 1; color: var(--red); background: rgba(248,81,73,0.12); }
   .conv-item .conv-elevate-object-btn:hover { opacity: 1; color: var(--green); background: rgba(63,185,80,0.12); }
@@ -5686,6 +5690,8 @@
     opacity: 1;
   }
   .conv-item .conv-archive-btn:hover { opacity: 1; color: var(--orange); background: rgba(255,166,87,0.12); }
+  .conv-item .conv-trash-btn:hover { opacity: 1; color: var(--red); background: rgba(248,81,73,0.12); }
+  .conv-item .conv-trash-btn.is-restore:hover { color: var(--accent); background: rgba(88,166,255,0.12); }
   .conv-item .conv-archive-btn.is-restore {
     display: inline-flex;
     align-items: center;

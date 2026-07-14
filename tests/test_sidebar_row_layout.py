@@ -53,11 +53,17 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn("data-role=\"repeat-row-group\"", app_js)
         self.assertIn("data-role=\"repeat-row-group-toggle\"", app_js)
         self.assertIn("ccc-repeat-row-group-expanded:", app_js)
-        self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })", app_js)
-        self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: false, quietTitleChrome: true })", app_js)
+        self.assertIn(
+            "_renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: true })",
+            app_js,
+        )
+        self.assertIn(
+            "_renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true })",
+            app_js,
+        )
         self.assertIn("_arcChunks.push(sep + _renderRowsWithRepeatGroups(", app_js)
         self.assertIn("type: 'session',\n          card: c,", app_js)
-        self.assertIn("quietTitleChrome: true,\n              elevateToObject: true", app_js)
+        self.assertIn("lifecycleContext: 'active',\n              suppressFolderChip: false", app_js)
 
         self.assertIn(".conv-repeat-group-header", app_css)
         self.assertIn(".conv-repeat-group.is-collapsed .conv-repeat-group-body", app_css)
