@@ -25772,6 +25772,7 @@ _pending_terminal_input_queue: dict = {}   # session_id → [text, ...]
 _pending_terminal_input_lock = threading.Lock()
 _pending_inputs_lock = threading.Lock()
 _pending_inputs_watcher_lock_file = None
+_pending_inputs_watcher_retry_started = False
 
 
 def _acquire_pending_inputs_watcher_lock(lock_path):
@@ -26461,15 +26462,36 @@ def _verify_terminal_drain_receipts(now=None):
 
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once fire-and-watch engines or live terminal sessions go idle."""
-    global _pending_inputs_watcher_lock_file
+    global _pending_inputs_watcher_lock_file, _pending_inputs_watcher_retry_started
     if _pending_inputs_watcher_lock_file is not None:
         return
     lock_path = PENDING_INPUTS_FILE.with_suffix(".watcher.lock")
     lock_file = _acquire_pending_inputs_watcher_lock(lock_path)
     if lock_file is None:
         print("[pending-inputs] resume watcher owned by another CCC process", flush=True)
+        # Do not permanently give up when an older sibling holds the lock. If
+        # its watcher thread has died, its process still keeps the flock until
+        # restart; this process must be ready to take over as soon as it drops.
+        if not _pending_inputs_watcher_retry_started:
+            _pending_inputs_watcher_retry_started = True
+
+            def _retry_watcher_lock():
+                global _pending_inputs_watcher_retry_started
+                while _pending_inputs_watcher_lock_file is None:
+                    time.sleep(5)
+                    _start_resume_queue_watcher()
+                _pending_inputs_watcher_retry_started = False
+
+            threading.Thread(
+                target=_retry_watcher_lock,
+                daemon=True,
+                name="resume-queue-watcher-lock-retry",
+            ).start()
         return
-    _pending_inputs_watcher_lock_file = lock_file
+    # Keep the lock handle local to the watcher wrapper. A global handle keeps
+    # the flock alive if the thread exits unexpectedly, stranding every later
+    # server behind a stale sibling process.
+    _pending_inputs_watcher_lock_file = True
     _load_pending_inputs()
     # Restore durable Codex coordination events before any app-server
     # notification persists (and would otherwise clobber) the state file.
@@ -26654,7 +26676,18 @@ def _start_resume_queue_watcher() -> None:
                 _verify_terminal_drain_receipts()
             except Exception:
                 pass
-    threading.Thread(target=_watcher, daemon=True, name="resume-queue-watcher").start()
+    def _watcher_entry():
+        global _pending_inputs_watcher_lock_file
+        try:
+            _watcher()
+        finally:
+            lock_file.close()
+            _pending_inputs_watcher_lock_file = None
+            # Restart locally as well: a transient watcher exception must not
+            # leave this process dependent on a separate CCC instance.
+            _start_resume_queue_watcher()
+
+    threading.Thread(target=_watcher_entry, daemon=True, name="resume-queue-watcher").start()
 
 
 # ── UX-fixes queue fixer resolution ─────────────────────────────────────────

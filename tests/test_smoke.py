@@ -13172,6 +13172,12 @@ class TestPendingInputs(unittest.TestCase):
             fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertIsNone(self.server._acquire_pending_inputs_watcher_lock(lock_path))
 
+    def test_pending_inputs_watcher_retries_when_another_server_owns_lock(self):
+        """A sibling server must wait for ownership rather than give up forever."""
+        source = inspect.getsource(self.server._start_resume_queue_watcher)
+        self.assertIn("while _pending_inputs_watcher_lock_file is None:", source)
+        self.assertIn("time.sleep(5)", source)
+
     def test_get_queued_events_for_session(self):
         sid = "test-session-id"
         with self.server._pending_resume_lock:
