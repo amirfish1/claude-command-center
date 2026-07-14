@@ -18,6 +18,11 @@ class SnapshotHarnessTests(unittest.TestCase):
         self.assertIn("snapshot exceeded", source)
         self.assertIn("page.goto(url, { waitUntil: 'load', timeout: timeoutMs })", source)
 
+    def test_snapshot_allows_a_minute_for_a_busy_local_dashboard(self):
+        source = (ROOT / "snapshot.js").read_text()
+
+        self.assertIn("const DEFAULT_TIMEOUT_MS = 60_000;", source)
+
 
 if __name__ == "__main__":
     unittest.main()

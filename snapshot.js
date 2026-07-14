@@ -14,7 +14,7 @@
 //   SNAPSHOT_OUT          default snapshot.png
 //   SNAPSHOT_LOCALSTORAGE path to a JSON file of {"key": "value", ...} (strings)
 //   SNAPSHOT_CHROME       explicit Chrome/Chromium executable path (overrides auto-detect)
-//   SNAPSHOT_TIMEOUT_MS    dashboard/capture deadline after browser launch (default 20000)
+//   SNAPSHOT_TIMEOUT_MS    dashboard/capture deadline after browser launch (default 60000)
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -38,7 +38,10 @@ function findChromePath() {
 }
 
 const DEFAULT_URL = 'http://127.0.0.1:8090';
-const DEFAULT_TIMEOUT_MS = 20_000;
+// The dashboard can take longer than 20 seconds to settle while local workers
+// are active. Keep the default long enough for a real primary, while callers
+// that need a stricter failure budget can still override it.
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 // port.txt is written whenever any non-ephemeral server starts (including a
 // stray one-off launched on a custom PORT without CCC_EPHEMERAL=1) and is
