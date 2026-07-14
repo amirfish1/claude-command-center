@@ -4237,6 +4237,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("settleStaleOptimisticAgentIndicator($view);", app_js)
         self.assertIn(".conv-live-tool-inline.is-stale-no-process", app_css)
 
+    def test_idle_process_pill_explains_that_the_session_can_resume(self):
+        """A dormant session remains usable even when no worker is attached."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("(waking ? 'waking…' : 'idle')", app_js)
+        self.assertIn("You can still send a message; CCC will resume the session.", app_js)
+
     def test_live_inline_indicator_is_singleton(self):
         """A refreshed live status tick should not leave stacked Generating rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

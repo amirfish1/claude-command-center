@@ -22628,13 +22628,13 @@
     const waking = !modes.length && !!_pillSid
       && typeof sessionIsOptimisticallySending === 'function'
       && sessionIsOptimisticallySending(_pillSid);
-    const procLabel = modes.length ? modes.join(' · ') : (waking ? 'waking…' : 'no process');
+    const procLabel = modes.length ? modes.join(' · ') : (waking ? 'waking…' : 'idle');
     const procCls = modes.length ? (stale ? 'is-stale' : 'is-on') : (waking ? 'is-waking' : 'is-off');
     const procTitle = [headActive ? headPillTitle : '', termOn ? termTitle : '']
       .filter(Boolean).join('  •  ')
       || (waking
           ? 'Resuming this session — the process is starting up (waiting for the next liveness poll)'
-          : 'No headless agent or terminal attached to this session');
+          : 'No headless agent or terminal is currently attached. You can still send a message; CCC will resume the session.');
     const mergedPill = '<span class="ccc-proc-pill ' + procCls + (streaming ? ' is-streaming' : '') + '"'
       + ' title="' + escapeHtml(procTitle) + '">'
       + '<span class="ccc-proc-dot"></span>' + escapeHtml(procLabel) + '</span>';
