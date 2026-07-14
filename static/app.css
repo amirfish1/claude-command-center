@@ -19083,6 +19083,18 @@ body:has(.gc-reader) .pwa-install-banner {
   align-items: stretch;
   justify-content: center;
 }
+.conv-presentation-measure {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  z-index: -1;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  visibility: hidden;
+  pointer-events: none;
+  contain: layout style paint;
+}
 .conv-presentation-activity {
   flex: 0 0 auto;
   display: flex;

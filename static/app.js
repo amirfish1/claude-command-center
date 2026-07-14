@@ -38792,15 +38792,62 @@
     return slide;
   }
 
+  function ensurePresentationMeasureSurface(stage) {
+    let surface = stage.querySelector(':scope > .conv-presentation-measure');
+    if (surface) return surface;
+    surface = document.createElement('div');
+    surface.className = 'conv-presentation-measure';
+    surface.setAttribute('aria-hidden', 'true');
+    stage.appendChild(surface);
+    return surface;
+  }
+
+  function presentationCandidateFits(view, turn, items, pageIndex, includeDetails) {
+    const stage = ensurePresentationStage(view);
+    const slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
+    const width = slot && slot.clientWidth;
+    const height = slot && slot.clientHeight;
+    if (!width || !height) return null;
+    const surface = ensurePresentationMeasureSurface(stage);
+    surface.style.width = width + 'px';
+    surface.style.height = height + 'px';
+    const partCount = includeDetails ? pageIndex + 1 : pageIndex + 2;
+    const slide = buildPresentationSlide(turn, items, pageIndex, partCount, '2');
+    surface.replaceChildren(slide);
+    const body = slide.querySelector('.conv-presentation-body');
+    const fits = !!body && body.scrollHeight <= body.clientHeight + 2;
+    surface.replaceChildren();
+    return fits;
+  }
+
+  function paginatePresentationItemsMeasured(view, turn) {
+    const stage = ensurePresentationStage(view);
+    const slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
+    if (!slot || slot.clientWidth < 1 || slot.clientHeight < 1) return null;
+    const groups = presentationItemGroups(turn.blocks);
+    return paginatePresentationGroups(
+      groups,
+      (items, pageIndex) => presentationCandidateFits(
+        view, turn, items, pageIndex, false
+      ),
+      (items, pageIndex) => presentationCandidateFits(
+        view, turn, items, pageIndex, true
+      ),
+    );
+  }
+
   function buildPresentationDeck(view, mode) {
     const deck = [];
     const budget = presentationPageBudget(view);
     presentationTurns(view).forEach(turn => {
       let pages;
       try {
-        pages = (mode === '2' && !turn.live)
-          ? paginatePresentationItems(turn.blocks, budget)
-          : [turn.blocks];
+        if (mode === '2' && !turn.live) {
+          pages = paginatePresentationItemsMeasured(view, turn)
+            || paginatePresentationItems(turn.blocks, budget);
+        } else {
+          pages = [turn.blocks];
+        }
         if (!pages.length) pages = [turn.blocks];
       } catch (_) {
         // One malformed answer must not break the rest of the deck. Its
@@ -39003,6 +39050,12 @@
       return;
     }
 
+    view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
+    view.classList.toggle('is-presentation-mode-1', mode === '1');
+    view.classList.toggle('is-presentation-mode-2', mode === '2');
+    ensurePresentationStage(view);
+    syncPresentationActivity(view);
+
     const previousDeck = view._presentationDeck || [];
     const previousIndex = Number(view._presentationIndex) || 0;
     const previousSlide = previousDeck[previousIndex];
@@ -39021,9 +39074,6 @@
     }
     view._presentationDeck = deck;
     view._presentationIndex = index;
-    view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
-    view.classList.toggle('is-presentation-mode-1', mode === '1');
-    view.classList.toggle('is-presentation-mode-2', mode === '2');
     ensurePresentationActivityTimer();
     renderPresentationCursor(targetPaneId);
   }

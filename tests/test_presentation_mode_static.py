@@ -186,6 +186,22 @@ class TestPresentationModeStatic(unittest.TestCase):
             18,
         )
 
+    def test_mode_two_uses_layout_active_measurement_surface(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        css = APP_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("function ensurePresentationMeasureSurface(stage)", app_js)
+        self.assertIn("function paginatePresentationItemsMeasured(view, turn)", app_js)
+        build_deck = _javascript_function_source("buildPresentationDeck")
+        ensure_surface = _javascript_function_source("ensurePresentationMeasureSurface")
+
+        self.assertIn("paginatePresentationItemsMeasured(view, turn)", build_deck)
+        self.assertIn("paginatePresentationItems(turn.blocks, budget)", build_deck)
+        self.assertIn("aria-hidden", ensure_surface)
+        self.assertIn(".conv-presentation-measure", css)
+        self.assertIn("visibility: hidden", css)
+        self.assertIn("pointer-events: none", css)
+
     def test_mode_two_opens_on_first_slide_of_latest_answer(self):
         deck = [
             {"dataset": {"answerIndex": "8", "partIndex": "0"}},
