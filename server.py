@@ -10633,6 +10633,50 @@ def _save_trashed_conversations(trashed):
     return trashed
 
 
+def _clear_trashed_on_unarchive(sid):
+    """Remove Trash membership when a session moves back to Active."""
+    trashed = _load_trashed_conversations(sweep=False)
+    if sid in trashed:
+        trashed.remove(sid)
+        _save_trashed_conversations(trashed)
+
+
+def _set_conversation_trashed(sid, trashed):
+    """Set Trash membership while preserving ``trashed => archived``."""
+    archived_ids = _load_archived_conversations(sweep=False)
+    trashed_ids = _load_trashed_conversations(sweep=False)
+    want_trashed = bool(trashed)
+    kill_result = None
+
+    if want_trashed and sid not in archived_ids:
+        # Write the sticky marker first so a concurrent archive sweep can never
+        # observe a newly archived live session without its manual grace state.
+        _archive_grace[sid] = time.time()
+        _save_archive_grace()
+        archived_ids.append(sid)
+        _save_archived_conversations(archived_ids)
+        _log_archive_event("archive", sid, "trash")
+        try:
+            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+        except (OSError, FileNotFoundError):
+            pass
+        if sid and not sid.startswith(("backlog-", "pkood-")):
+            kill_result = _kill_session_by_id(sid)
+
+    if want_trashed and sid not in trashed_ids:
+        trashed_ids.append(sid)
+        _save_trashed_conversations(trashed_ids)
+    elif not want_trashed and sid in trashed_ids:
+        trashed_ids.remove(sid)
+        _save_trashed_conversations(trashed_ids)
+
+    return {
+        "archived": sid in archived_ids,
+        "trashed": sid in trashed_ids,
+        "killed": kill_result,
+    }
+
+
 def _load_pinned_conversations():
     """Load list of pinned session_ids."""
     try:
@@ -40438,6 +40482,7 @@ def _list_group_chats(include_archived: bool = False, only_archived: bool = Fals
             "started_at": meta.get("started_at"),
             "closed_at": closed_at,
             "archived_at": meta.get("archived_at"),
+            "trashed": bool(meta.get("trashed")),
             "last_mtime": stat.st_mtime,
             # Distinct from last_mtime: the last time a real message (human
             # or agent post) landed, not counting administrative writes like
@@ -40534,6 +40579,7 @@ def _group_chat_set_archived(raw_path: str, archived: bool, raw_uuid: str = "") 
         fields["archived_at"] = time.time()
     else:
         fields["archived_at"] = None
+        fields["trashed"] = False
     if not _update_group_chat_sidecar(real_path, **fields):
         return {"ok": False, "error": "could not update sidecar"}
     if archived:
@@ -40545,6 +40591,22 @@ def _group_chat_set_archived(raw_path: str, archived: bool, raw_uuid: str = "") 
             _active_coordinations.pop(real_path, None)
     else:
         _group_chat_log_system(real_path, "unarchived chat")
+    return {"ok": True}
+
+
+def _group_chat_set_trashed(raw_path: str, trashed: bool, raw_uuid: str = "") -> dict:
+    """Set Trash membership, archiving the chat first when necessary."""
+    real_path = _resolve_group_chat_ref(raw_path, raw_uuid)
+    if not real_path:
+        return {"ok": False, "error": "forbidden"}
+    if not os.path.exists(real_path):
+        return {"ok": False, "error": "not found"}
+    if trashed and not _load_group_chat_sidecar(real_path).get("archived"):
+        archive_result = _group_chat_set_archived(real_path, True)
+        if not archive_result.get("ok"):
+            return archive_result
+    if not _update_group_chat_sidecar(real_path, trashed=bool(trashed)):
+        return {"ok": False, "error": "could not update sidecar"}
     return {"ok": True}
 
 
@@ -58217,6 +58279,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # Already in the desired state — no-op, report it truthfully.
                     now_archived = is_arch
                 _save_archived_conversations(archived)
+                if not want:
+                    _clear_trashed_on_unarchive(sid)
                 # Archiving retires the session — drop any stale Notification-hook
                 # marker so the dashboard doesn't keep classifying it as Waiting
                 # (which would pin the row to "In progress" and undo the move).
@@ -58256,6 +58320,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except RepoContextError:
                         _bust_issue_state_cache()
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
+            except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[^/]+/trash$", path):
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = str(payload.get("session_id") or conv_id or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            if (re.match(r"^(?:backlog-issue|xrepo-issue-.+)-\d+$", conv_id)
+                    or re.match(r"^backlog-todo-\d+$", conv_id)
+                    or re.match(r"^issue-\d+$", conv_id)):
+                self.send_json({
+                    "ok": True,
+                    "archived": False,
+                    "trashed": False,
+                    "killed": None,
+                    "note": "not applicable to backlog/issue rows",
+                })
+                return
+            desired = payload.get("trashed")
+            try:
+                current = _load_trashed_conversations(sweep=False)
+                want_trashed = desired if isinstance(desired, bool) else sid not in current
+                result = _set_conversation_trashed(sid, want_trashed)
+                _clear_archive_serve_cache()
+                self.send_json({"ok": True, **result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/conversations/archive-bulk":
@@ -58322,6 +58418,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _archive_grace.pop(sid, None)
                         _log_archive_event("unarchive", sid, "bulk")
                     _save_archived_conversations(new_list)
+                    if to_remove:
+                        trashed_ids = _load_trashed_conversations(sweep=False)
+                        remaining_trashed = [sid for sid in trashed_ids if sid not in to_remove]
+                        if remaining_trashed != trashed_ids:
+                            _save_trashed_conversations(remaining_trashed)
                     _save_archive_grace()
                 self.send_json({
                     "ok": True,
@@ -59034,6 +59135,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing path or id"})
                 return
             result = _group_chat_set_archived(chat_path, False, chat_uuid)
+            if result.get("error") == "forbidden":
+                self.send_json(result, 403)
+            elif result.get("error") == "not found":
+                self.send_json(result, 404)
+            else:
+                self.send_json(result)
+        elif path in ("/api/group-chats/trash", "/api/group-chats/untrash"):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            chat_path = (payload.get("path") or "").strip()
+            chat_uuid = (payload.get("id") or payload.get("uuid") or "").strip()
+            if not chat_path and not chat_uuid:
+                self.send_json({"ok": False, "error": "missing path or id"})
+                return
+            result = _group_chat_set_trashed(
+                chat_path,
+                path == "/api/group-chats/trash",
+                chat_uuid,
+            )
             if result.get("error") == "forbidden":
                 self.send_json(result, 403)
             elif result.get("error") == "not found":
