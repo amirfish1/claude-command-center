@@ -38649,6 +38649,7 @@
         });
       });
     });
+    blocks.forEach((block, index) => { block.key = 'item-' + index; });
     return blocks;
   }
 
@@ -38714,6 +38715,7 @@
             keepWithNext: /^h[1-6]$/i.test(child.tagName || ''),
           }));
         });
+        streamBlocks.forEach((block, index) => { block.key = 'item-' + index; });
         if (streamBlocks.length) {
           answerNumber += 1;
           turns.push({
@@ -38752,6 +38754,10 @@
     slide.dataset.answerIndex = String(turn.answerNumber);
     slide.dataset.partIndex = String(partIndex);
     slide.dataset.partCount = String(partCount);
+    slide.dataset.presentationItemKeys = items
+      .map(item => String((item && item.key) || ''))
+      .filter(Boolean)
+      .join(',');
 
     const header = document.createElement('header');
     header.className = 'conv-presentation-slide-header';
@@ -39030,6 +39036,65 @@
     return index >= 0 ? index : slides.length - 1;
   }
 
+  function presentationCursorIndex(deck, previousSlide, fallback) {
+    const slides = Array.isArray(deck) ? deck : [];
+    if (!slides.length) return 0;
+    const previousData = (previousSlide && previousSlide.dataset) || {};
+    const itemKey = String(previousData.presentationItemKeys || '').split(',')[0];
+    if (itemKey) {
+      const containing = slides.findIndex(slide => (
+        String(((slide && slide.dataset) || {}).presentationItemKeys || '')
+          .split(',').includes(itemKey)
+      ));
+      if (containing >= 0) return containing;
+    }
+    const exactKey = String(previousData.presentationKey || '');
+    if (exactKey) {
+      const exact = slides.findIndex(slide => (
+        String(((slide && slide.dataset) || {}).presentationKey || '') === exactKey
+      ));
+      if (exact >= 0) return exact;
+    }
+    return Math.max(0, Math.min(slides.length - 1, Number(fallback) || 0));
+  }
+
+  function disconnectPresentationResizeObserver(view) {
+    if (!view) return;
+    if (view._presentationResizeObserver) view._presentationResizeObserver.disconnect();
+    if (view._presentationResizeTimer) clearTimeout(view._presentationResizeTimer);
+    view._presentationResizeObserver = null;
+    view._presentationResizeTimer = null;
+    view._presentationResizeSlot = null;
+    view._presentationResizeSize = null;
+  }
+
+  function ensurePresentationResizeObserver(view, paneId) {
+    if (!view || typeof ResizeObserver !== 'function') return;
+    const stage = ensurePresentationStage(view);
+    const slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
+    if (!slot || view._presentationResizeSlot === slot) return;
+    disconnectPresentationResizeObserver(view);
+    view._presentationResizeSlot = slot;
+    view._presentationResizeObserver = new ResizeObserver(entries => {
+      const rect = entries[0] && entries[0].contentRect;
+      if (!rect) return;
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      const previous = view._presentationResizeSize;
+      view._presentationResizeSize = { width, height };
+      if (!previous) return;
+      if (Math.abs(width - previous.width) < 4
+          && Math.abs(height - previous.height) < 4) return;
+      if (view._presentationResizeTimer) clearTimeout(view._presentationResizeTimer);
+      view._presentationResizeTimer = setTimeout(() => {
+        const pane = presentationPaneElement(paneId);
+        if (!pane || normalizePresentationMode(pane.dataset.presentationMode) !== '2') return;
+        refreshPresentationForPane(paneId, { preserveCursor: true });
+      }, 100);
+    });
+    view._presentationResizeObserver.observe(slot);
+  }
+
   function refreshPresentationForPane(paneId, opts) {
     const targetPaneId = paneId || activePaneId();
     const pane = presentationPaneElement(targetPaneId);
@@ -39040,6 +39105,7 @@
     const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
     syncPresentationToolbar(pane, mode, hasAnswers);
     if (mode === 'off' || !hasAnswers) {
+      disconnectPresentationResizeObserver(view);
       view.classList.remove('is-presentation-mode', 'is-presentation-mode-1', 'is-presentation-mode-2');
       const stage = view.querySelector(':scope > .conv-presentation-stage');
       if (stage) stage.remove();
@@ -39059,13 +39125,13 @@
     const previousDeck = view._presentationDeck || [];
     const previousIndex = Number(view._presentationIndex) || 0;
     const previousSlide = previousDeck[previousIndex];
-    const previousKey = previousSlide && previousSlide.dataset.presentationKey;
     const deck = buildPresentationDeck(view, mode);
     if (!deck.length) return;
-    let index = previousKey
-      ? deck.findIndex(slide => slide.dataset.presentationKey === previousKey)
-      : -1;
-    if (index < 0) index = Math.min(previousIndex || deck.length - 1, deck.length - 1);
+    let index = presentationCursorIndex(
+      deck,
+      previousSlide,
+      previousIndex || deck.length - 1,
+    );
     if (opts && opts.startAtLatestTurn) {
       index = firstSlideOfLatestPresentationTurn(deck);
     } else if (shouldFollowPresentationTail(previousIndex, previousDeck.length, opts && opts.followTail)
@@ -39076,6 +39142,8 @@
     view._presentationIndex = index;
     ensurePresentationActivityTimer();
     renderPresentationCursor(targetPaneId);
+    if (mode === '2') ensurePresentationResizeObserver(view, targetPaneId);
+    else disconnectPresentationResizeObserver(view);
   }
 
   function setPresentationMode(paneId, mode, opts) {
@@ -39151,7 +39219,8 @@
     if (_presentationResizeTimer) clearTimeout(_presentationResizeTimer);
     _presentationResizeTimer = setTimeout(() => {
       document.querySelectorAll('.conv-pane[data-pane-id]').forEach(pane => {
-        if (normalizePresentationMode(pane.dataset.presentationMode) !== 'off') {
+        const mode = normalizePresentationMode(pane.dataset.presentationMode);
+        if (mode !== 'off' && (mode !== '2' || typeof ResizeObserver !== 'function')) {
           refreshPresentationForPane(pane.dataset.paneId, { preserveCursor: true });
         }
       });

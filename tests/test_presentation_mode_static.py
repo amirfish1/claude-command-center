@@ -216,6 +216,48 @@ class TestPresentationModeStatic(unittest.TestCase):
             2,
         )
 
+    def test_repagination_preserves_the_current_semantic_item(self):
+        source = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("function presentationCursorIndex(deck, previousSlide, fallback)", source)
+        deck = [
+            {
+                "dataset": {
+                    "presentationKey": "answer:0",
+                    "presentationItemKeys": "a,b",
+                }
+            },
+            {
+                "dataset": {
+                    "presentationKey": "answer:1",
+                    "presentationItemKeys": "c,d",
+                }
+            },
+        ]
+        previous = {
+            "dataset": {
+                "presentationKey": "answer:1",
+                "presentationItemKeys": "b",
+            }
+        }
+
+        self.assertEqual(
+            _run_javascript_function("presentationCursorIndex", deck, previous, 1),
+            0,
+        )
+
+    def test_mode_two_repaginates_after_meaningful_slot_resize(self):
+        source = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("function ensurePresentationResizeObserver(view, paneId)", source)
+        observer = _javascript_function_source("ensurePresentationResizeObserver")
+
+        self.assertIn("new ResizeObserver", observer)
+        self.assertIn("Math.abs(width - previous.width) < 4", observer)
+        self.assertIn(
+            "refreshPresentationForPane(paneId, { preserveCursor: true })",
+            observer,
+        )
+        self.assertIn("disconnectPresentationResizeObserver(view)", source)
+
     def test_mode_state_is_pane_scoped_and_only_default_is_persisted(self):
         app_js = APP_JS.read_text(encoding="utf-8")
 
