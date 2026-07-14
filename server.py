@@ -64,6 +64,19 @@ import model_advisor
 # docs/superpowers/plans/2026-07-10-federated-ccc-fleet-plan.md.
 import federation
 
+# Productivity metrics and local persistence are isolated in a stdlib-only
+# sibling module.  server.py adapts CCC's transcripts, repositories, and queue
+# records into its normalized input contracts.
+from productivity import (
+    ProductivityStore,
+    aggregate_productivity,
+    collect_git_commits,
+    describe_git_repo,
+    discover_git_identities,
+    presence_summary,
+    run_presence_sampler,
+)
+
 # Tool's own assets live next to this file. Repos are never process-global:
 # every repo-scoped request must carry a concrete repo path, cwd, or session id.
 CCC_ROOT = Path(__file__).resolve().parent
@@ -51603,6 +51616,407 @@ def _throughput_history_payload(cache_only=False):
     return {"ok": True, "daily": daily, "cached": False}, 200
 
 
+# ---------------------------------------------------------------------------
+# Productivity dashboard — outcome, project, activity, and time evidence.
+#
+# Unlike Throughput, this is a 16-week cross-source view.  Its expensive build
+# never runs on the request thread: callers receive the last SQLite snapshot
+# immediately and one shared worker refreshes Git/transcript/WatchTower data.
+# ---------------------------------------------------------------------------
+
+_PRODUCTIVITY_SCHEMA = 1
+_PRODUCTIVITY_WEEKS = (6, 8, 12, 16)
+_PRODUCTIVITY_CACHE_TTL = 15 * 60
+_PRODUCTIVITY_STORE = ProductivityStore(COMMAND_CENTER_STATE_DIR / "productivity.db")
+_PRODUCTIVITY_REFRESH_LOCK = threading.Lock()
+_PRODUCTIVITY_REFRESH = {
+    "state": "idle",
+    "started_at": None,
+    "completed_at": None,
+    "error": None,
+}
+
+
+def _productivity_safe_project_name(value):
+    text = " ".join(str(value or "").split()).strip()
+    return text[:120] or "Unknown project"
+
+
+def _productivity_known_repos(conversations):
+    """Describe every CCC-observed Git repo, grouped by remote identity.
+
+    Returned ``path``/``paths`` values are private collection details and are
+    never copied into the API payload.  Warnings contain only directory names.
+    """
+    candidates = [str(Path.cwd())]
+    candidates.extend(_load_recent_repos())
+    candidates.extend(_load_custom_repos())
+    for config in (_wt_read_config() or {}).values():
+        if isinstance(config, dict) and config.get("repo_path"):
+            candidates.append(str(config["repo_path"]))
+    for row in conversations or []:
+        if not isinstance(row, dict):
+            continue
+        path = row.get("folder_path") or row.get("cwd") or row.get("repo_path")
+        if path:
+            candidates.append(str(path))
+
+    described = {}
+    warnings = []
+    seen_paths = set()
+    for candidate in candidates:
+        try:
+            resolved = str(Path(candidate).expanduser().resolve(strict=False))
+        except (OSError, ValueError):
+            continue
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
+        try:
+            repo = describe_git_repo(resolved)
+        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError):
+            name = Path(resolved).name
+            if name:
+                warnings.append(f"Git unavailable for {name}")
+            continue
+        repo_id = str(repo.get("id") or "")
+        if not repo_id:
+            continue
+        root = str(repo.get("path") or resolved)
+        existing = described.get(repo_id)
+        if existing:
+            if root not in existing["paths"]:
+                existing["paths"].append(root)
+            if resolved not in existing["paths"]:
+                existing["paths"].append(resolved)
+            continue
+        described[repo_id] = {
+            "id": repo_id,
+            "name": _productivity_safe_project_name(repo.get("name")),
+            "path": root,
+            "paths": list(dict.fromkeys([root, resolved])),
+            "identity": str(repo.get("identity") or ""),
+        }
+    return list(described.values()), sorted(set(warnings))
+
+
+def _productivity_project_for_path(path, repositories):
+    try:
+        target = Path(path).expanduser().resolve(strict=False)
+    except (OSError, ValueError, TypeError):
+        target = None
+    if target is not None:
+        for repo in repositories:
+            for candidate in repo.get("paths") or [repo.get("path")]:
+                try:
+                    root = Path(candidate).expanduser().resolve(strict=False)
+                    if target == root or root in target.parents or target in root.parents:
+                        return {"id": repo["id"], "name": repo["name"]}
+                except (OSError, ValueError, TypeError):
+                    continue
+    return None
+
+
+def _productivity_queue_projects(repositories):
+    out = {}
+    for queue, config in (_wt_read_config() or {}).items():
+        config = config if isinstance(config, dict) else {}
+        project = _productivity_project_for_path(config.get("repo_path"), repositories)
+        if project:
+            out[str(queue).upper()] = project
+    return out
+
+
+def _productivity_normalize_ticket(item, queue_projects):
+    if not isinstance(item, dict):
+        return None
+    queue = str(item.get("project") or item.get("queue") or "WatchTower").strip()
+    queue_key = queue.upper()
+    project = queue_projects.get(queue_key)
+    if not project:
+        project = {
+            "id": "watchtower-" + hashlib.sha256(queue_key.encode("utf-8")).hexdigest()[:12],
+            "name": _productivity_safe_project_name(queue),
+        }
+    raw_kind = str(item.get("type") or item.get("item_type") or "").strip().lower()
+    if raw_kind in ("feature", "feat"):
+        kind = "feature"
+    elif raw_kind in ("bug", "fix"):
+        kind = "fix"
+    else:
+        kind = "other"
+    ref = str(item.get("ref") or item.get("id") or "").strip()
+    return {
+        "ref": ref,
+        "project_id": project["id"],
+        "project_name": project["name"],
+        "kind": kind,
+        "status": str(item.get("status") or ""),
+        "title": _productivity_safe_project_name(
+            item.get("title") or item.get("note") or item.get("text") or ref
+        ),
+        "created_at": item.get("created_at"),
+        "closed_at": item.get("closed_at"),
+    }
+
+
+def _productivity_turn_rows(conversations, repositories, cutoff_epoch):
+    turns = []
+    considered = parsed_count = error_count = 0
+    for row in conversations or []:
+        if not isinstance(row, dict):
+            continue
+        modified = row.get("last_interacted") or row.get("modified") or row.get("mtime") or 0
+        try:
+            if float(modified or 0) < cutoff_epoch:
+                continue
+        except (TypeError, ValueError):
+            pass
+        project = _productivity_project_for_path(
+            row.get("folder_path") or row.get("cwd") or row.get("repo_path"),
+            repositories,
+        )
+        if not project:
+            continue
+        sid = str(row.get("session_id") or row.get("id") or "").strip()
+        if not sid:
+            continue
+        considered += 1
+        engine = str(row.get("engine") or row.get("source") or "claude").lower()
+        is_codex = engine == "codex"
+        name = row.get("display_name") or row.get("name") or "Untitled"
+        model_hint = row.get("model") or ""
+        if is_codex:
+            cache_path = _resolve_codex_rollout_path(sid)
+
+            def extract(sid=sid, name=name, model_hint=model_hint):
+                return _throughput_codex_turns_from_file(
+                    sid, session_name=name, model_hint=model_hint, cutoff_epoch=None
+                )
+        else:
+            cache_path = row.get("jsonl_path")
+
+            def extract(sid=sid, name=name, engine=engine, model_hint=model_hint):
+                parsed = parse_conversation(sid)
+                return _throughput_turns_from_events(
+                    parsed.get("events") or [],
+                    session_id=sid,
+                    session_name=name,
+                    engine=engine,
+                    model_hint=model_hint,
+                    cutoff_epoch=None,
+                )
+        try:
+            full_turns = _throughput_file_turns(cache_path, extract) if cache_path else extract()
+        except Exception:
+            error_count += 1
+            continue
+        if full_turns is None:
+            error_count += 1
+            continue
+        parsed_count += 1
+        for turn in _throughput_dedupe_turns(
+            [dict(item) for item in full_turns if isinstance(item, dict)]
+        ):
+            if not _throughput_turn_after_cutoff(turn, cutoff_epoch):
+                continue
+            tokens = int(
+                (turn.get("raw_context_tokens") or turn.get("tokens_in") or 0)
+                + (turn.get("tokens_out") or 0)
+            )
+            turns.append(
+                {
+                    "project_id": project["id"],
+                    "project_name": project["name"],
+                    "t_start": turn.get("t_start"),
+                    "t_end": turn.get("t_end"),
+                    "dur_sec": turn.get("dur_sec") or 0,
+                    "tokens": tokens,
+                    "human_trigger": turn.get("trigger_type") == "user_text",
+                    "engine": engine,
+                    "message_id": turn.get("message_id") or "",
+                }
+            )
+    return turns, {
+        "conversations_considered": considered,
+        "transcripts_parsed": parsed_count,
+        "transcript_errors": error_count,
+    }
+
+
+def _productivity_build_snapshot(now=None):
+    now = now or datetime.now().astimezone()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    local_tz = now.astimezone().tzinfo or timezone.utc
+    end_date = now.astimezone(local_tz).date()
+    full_start = end_date - timedelta(weeks=16) + timedelta(days=1)
+    cutoff = datetime.combine(full_start, datetime_time.min, tzinfo=local_tz)
+
+    conversations = find_all_conversations(
+        resolve_pr_states=False,
+        resolve_effective=False,
+        resolve_worktree_dirty=False,
+    )
+    try:
+        raw_tickets = _q.list_items() or []
+    except Exception:
+        raw_tickets = []
+    repositories, warnings = _productivity_known_repos(conversations)
+    identities = discover_git_identities(repositories)
+    commits = []
+    seen_commits = set()
+    git_scanned = 0
+    for repo in repositories:
+        try:
+            rows = collect_git_commits(repo, cutoff, identities)
+            git_scanned += 1
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            warnings.append(f"Git history unavailable for {repo['name']}")
+            continue
+        for row in rows:
+            key = (row.get("project_id"), row.get("sha"))
+            if key in seen_commits:
+                continue
+            seen_commits.add(key)
+            commits.append(row)
+
+    turns, transcript_coverage = _productivity_turn_rows(
+        conversations, repositories, cutoff.timestamp()
+    )
+    queue_projects = _productivity_queue_projects(repositories)
+    tickets = [
+        normalized
+        for normalized in (
+            _productivity_normalize_ticket(item, queue_projects) for item in raw_tickets
+        )
+        if normalized
+    ]
+    presence = _PRODUCTIVITY_STORE.load_presence(full_start, end_date, tzinfo=local_tz)
+    sampled = presence_summary(presence, tzinfo=local_tz)
+
+    datasets = {}
+    for weeks in _PRODUCTIVITY_WEEKS:
+        start_date = end_date - timedelta(weeks=weeks) + timedelta(days=1)
+        dataset = aggregate_productivity(
+            commits=commits,
+            turns=turns,
+            tickets=tickets,
+            presence=presence,
+            start_date=start_date,
+            end_date=end_date,
+            tzinfo=local_tz,
+        )
+        dataset["range"]["weeks"] = weeks
+        datasets[str(weeks)] = dataset
+
+    coverage = {
+        "repositories": len(repositories),
+        "git_repositories_scanned": git_scanned,
+        "git_identity_available": bool(identities),
+        **transcript_coverage,
+        "watchtower_items": len(tickets),
+        "presence": {
+            **sampled,
+            "available": bool(sampled.get("sample_minutes")),
+            "source": "macos_idle_sampler" if sampled.get("sample_minutes") else "not_yet_sampled",
+        },
+        "warnings": sorted(set(warnings)),
+        "proxies": [
+            "Pushed commits are commits by a configured local Git identity that are now reachable from remote-tracking refs, bucketed by committer date.",
+            "Observed work time clusters human prompts separated by no more than 30 minutes and adds a five-minute tail.",
+            "Gross agent time sums turn durations; net agent time removes overlapping agent intervals.",
+            "Computer presence is measured only while CCC is running and cannot be reconstructed historically.",
+            "Agent association is correlation, not evidence that agents caused a productivity change.",
+        ],
+    }
+    return {
+        "schema": _PRODUCTIVITY_SCHEMA,
+        "generated_at": time.time(),
+        "datasets": datasets,
+        "coverage": coverage,
+    }
+
+
+def _productivity_refresh_public():
+    with _PRODUCTIVITY_REFRESH_LOCK:
+        return dict(_PRODUCTIVITY_REFRESH)
+
+
+def _productivity_refresh_start():
+    with _PRODUCTIVITY_REFRESH_LOCK:
+        if _PRODUCTIVITY_REFRESH.get("state") == "building":
+            return dict(_PRODUCTIVITY_REFRESH)
+        _PRODUCTIVITY_REFRESH.update(
+            {"state": "building", "started_at": time.time(), "error": None}
+        )
+
+    def run():
+        try:
+            snapshot = _productivity_build_snapshot()
+            generated_at = float(snapshot.get("generated_at") or time.time())
+            _PRODUCTIVITY_STORE.save_payload(snapshot, generated_at=generated_at)
+            with _PRODUCTIVITY_REFRESH_LOCK:
+                _PRODUCTIVITY_REFRESH.update(
+                    {
+                        "state": "complete",
+                        "completed_at": time.time(),
+                        "error": None,
+                    }
+                )
+        except Exception as exc:
+            with _PRODUCTIVITY_REFRESH_LOCK:
+                _PRODUCTIVITY_REFRESH.update(
+                    {
+                        "state": "failed",
+                        "completed_at": time.time(),
+                        "error": str(exc)[:240],
+                    }
+                )
+
+    threading.Thread(
+        target=run,
+        daemon=True,
+        name="ccc-productivity-refresh",
+    ).start()
+    return _productivity_refresh_public()
+
+
+def _productivity_payload(*, weeks=8, force_refresh=False):
+    weeks = weeks if weeks in _PRODUCTIVITY_WEEKS else 8
+    cached = _PRODUCTIVITY_STORE.load_payload()
+    valid_cache = (
+        isinstance(cached, dict)
+        and isinstance(cached.get("payload"), dict)
+        and cached["payload"].get("schema") == _PRODUCTIVITY_SCHEMA
+        and str(weeks) in (cached["payload"].get("datasets") or {})
+    )
+    stale = True
+    if valid_cache:
+        stale = (time.time() - float(cached.get("generated_at") or 0)) > _PRODUCTIVITY_CACHE_TTL
+    refresh = _productivity_refresh_public()
+    if force_refresh or stale or not valid_cache:
+        refresh = _productivity_refresh_start()
+    if not valid_cache:
+        return {
+            "ok": True,
+            "state": refresh.get("state") or "building",
+            "range": {"weeks": weeks},
+            "refresh": {**refresh, "cached": False, "generated_at": None},
+        }, 202
+
+    snapshot = cached["payload"]
+    payload = dict(snapshot["datasets"][str(weeks)])
+    payload["coverage"] = snapshot.get("coverage") or {}
+    payload["refresh"] = {
+        **refresh,
+        "cached": True,
+        "stale": stale,
+        "generated_at": cached.get("generated_at"),
+    }
+    return payload, 200
+
+
 _MORNING_BRAINDUMP_PROMPT = """You are analyzing the user's morning brain-dump.
 
 For each item in the dump, classify as exactly one of:
@@ -53043,6 +53457,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # doesn't re-walk every JSONL. Atomic; only writes when dirty.
             _save_conv_meta_cache()
             self.send_json(convs)
+        elif path == "/api/productivity":
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                weeks = int((qs.get("weeks", ["8"])[0] or "8"))
+            except (TypeError, ValueError):
+                weeks = 8
+            if weeks not in (6, 8, 12, 16):
+                weeks = 8
+            force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
+                "1", "true", "yes"
+            )
+            payload, status = _productivity_payload(
+                weeks=weeks, force_refresh=force
+            )
+            self.send_json(payload, status)
+            return
         elif path == "/api/throughput/refresh/start":
             qs = urllib.parse.parse_qs(parsed.query)
             session_id = (qs.get("session_id", [""])[0] or "").strip()
@@ -64450,6 +64880,12 @@ def main():
     # user clicks "Enable" on the dashboard bar. See _telemetry_loop docs.
     threading.Thread(target=_telemetry_loop, daemon=True, name="ccc-telemetry").start()
     _start_plan_usage_poller()
+    threading.Thread(
+        target=run_presence_sampler,
+        args=(_PRODUCTIVITY_STORE,),
+        daemon=True,
+        name="ccc-productivity-presence",
+    ).start()
     # Anonymous open beacon — fires ONCE per boot. NOT opt-in, but carries
     # no install_id and no identity (3 fields: schema, version, platform).
     # The CCC_TELEMETRY_DISABLED env var kills it; that single switch is

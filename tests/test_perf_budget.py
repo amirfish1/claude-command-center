@@ -28,6 +28,35 @@ import pytest
 server = importlib.import_module("server")
 
 
+def test_productivity_refresh_reads_shared_sources_once(monkeypatch):
+    """One refresh may scan globally, but never once per project/turn."""
+    calls = {"conversations": 0, "tickets": 0}
+
+    def conversations(**kwargs):
+        calls["conversations"] += 1
+        return []
+
+    def tickets():
+        calls["tickets"] += 1
+        return []
+
+    class Store:
+        def load_presence(self, start_date, end_date, tzinfo=None):
+            return []
+
+    monkeypatch.setattr(server, "find_all_conversations", conversations)
+    monkeypatch.setattr(server._q, "list_items", tickets)
+    monkeypatch.setattr(server, "_productivity_known_repos", lambda rows: ([], []))
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", Store())
+
+    snapshot = server._productivity_build_snapshot(
+        now=server.datetime(2026, 7, 14, tzinfo=server.timezone.utc)
+    )
+
+    assert calls == {"conversations": 1, "tickets": 1}
+    assert set(snapshot["datasets"]) == {"6", "8", "12", "16"}
+
+
 def _write_transcript(path, sid, *, old_ts):
     """Minimal valid transcript: one user + one assistant turn."""
     lines = [
