@@ -4010,7 +4010,7 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(payload["timeline"][0]["event"], "close")
         self.assertEqual(payload["timeline"][0]["resolution"]["summary"], "Restored the missing label")
 
-    def test_queue_status_icons_are_large_and_in_progress_glows(self):
+    def test_queue_status_icons_are_large_and_follow_status_color_mapping(self):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         status_css = app_css[app_css.index(".fq-status {"):app_css.index(".fq-row.is-open .fq-status", app_css.index(".fq-status {"))]
@@ -4018,7 +4018,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("height: 14px;", status_css)
         self.assertIn("box-shadow:", status_css)
         self.assertIn("@keyframes fq-status-glow", app_css)
+        open_css = app_css[
+            app_css.index(".fq-row.is-open .fq-status {"):
+            app_css.index(".fq-row.is-in_progress .fq-status", app_css.index(".fq-row.is-open .fq-status {"))
+        ]
         in_progress_css = app_css[app_css.index(".fq-row.is-in_progress .fq-status {"):app_css.index(".fq-row.is-closed .fq-status", app_css.index(".fq-row.is-in_progress .fq-status {"))]
+        closed_css = app_css[
+            app_css.index(".fq-row.is-closed .fq-status {"):
+            app_css.index(".fq-row.is-closed .fq-note", app_css.index(".fq-row.is-closed .fq-status {"))
+        ]
+        self.assertIn("var(--yellow, #d29922)", open_css)
+        self.assertIn("var(--accent, #58a6ff)", in_progress_css)
+        self.assertIn("var(--green, #3fb950)", closed_css)
         self.assertIn("animation: fq-status-glow 1.5s ease-in-out infinite;", in_progress_css)
         self.assertIn("will-change: opacity, box-shadow;", in_progress_css)
 

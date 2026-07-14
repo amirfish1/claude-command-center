@@ -16798,19 +16798,19 @@ body:has(.gc-reader) .pwa-install-banner {
 @keyframes fq-status-glow {
   0%, 100% {
     opacity: 0.72;
-    box-shadow: 0 0 0 3px rgba(210,153,34,0.14), 0 0 7px rgba(210,153,34,0.26);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.14), 0 0 7px rgba(88,166,255,0.26);
   }
   50% {
     opacity: 1;
-    box-shadow: 0 0 0 4px rgba(210,153,34,0.26), 0 0 18px rgba(210,153,34,0.72);
+    box-shadow: 0 0 0 4px rgba(88,166,255,0.26), 0 0 18px rgba(88,166,255,0.72);
   }
 }
 .fq-row.is-open .fq-status {
-  background: var(--green, #3fb950);
-  box-shadow: 0 0 0 3px rgba(63,185,80,0.16);
+  background: var(--yellow, #d29922);
+  box-shadow: 0 0 0 3px rgba(210,153,34,0.16);
 }
 .fq-row.is-in_progress .fq-status {
-  background: var(--orange, #d29922);
+  background: var(--accent, #58a6ff);
   animation: fq-status-glow 1.5s ease-in-out infinite;
   will-change: opacity, box-shadow;
 }
@@ -16818,7 +16818,7 @@ body:has(.gc-reader) .pwa-install-banner {
   flex-shrink: 0; font-size: 11px; color: var(--text-muted);
   min-width: 34px; text-align: right;
 }
-.fq-row.is-closed .fq-status { background: rgba(139,148,158,0.55); }
+.fq-row.is-closed .fq-status { background: var(--green, #3fb950); }
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 .fq-row.is-closed .fq-chip { background: rgba(139,148,158,0.10) !important; color: var(--text-muted) !important; opacity: 0.6; }
 /* Closed-but-not-fully-resolved (CCC-420): resolution.unresolved means the
@@ -19036,6 +19036,7 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .conversations-view.is-presentation-mode > :not(.conv-presentation-stage) { display: none !important; }
 .conv-presentation-stage {
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
@@ -19045,6 +19046,35 @@ body:has(.gc-reader) .pwa-install-banner {
   justify-content: center;
   gap: 9px;
 }
+.conv-presentation-side-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 68px;
+  border: 1px solid color-mix(in srgb, var(--text) 24%, transparent);
+  border-radius: 17px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: 0 10px 28px rgba(0,0,0,0.3);
+  color: var(--text);
+  font-size: 31px;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.conv-presentation-side-nav.is-prev { left: 12px; }
+.conv-presentation-side-nav.is-next { right: 12px; }
+.conv-presentation-side-nav:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  box-shadow: 0 12px 34px rgba(0,0,0,0.36), 0 0 18px color-mix(in srgb, var(--accent) 25%, transparent);
+  color: color-mix(in srgb, var(--accent) 74%, white);
+}
+.conv-presentation-side-nav:disabled { opacity: 0.22; cursor: default; }
 .conv-presentation-slide-slot {
   display: flex;
   flex: 1 1 auto;
@@ -19225,21 +19255,6 @@ body:has(.gc-reader) .pwa-install-banner {
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 86%, var(--bg));
 }
-.conv-presentation-nav {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 30px;
-  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  color: var(--text);
-  font-size: 16px;
-  cursor: pointer;
-}
-.conv-presentation-nav:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--accent); }
-.conv-presentation-nav:disabled { opacity: 0.28; cursor: default; }
 .conv-presentation-progress {
   display: grid;
   grid-template-columns: minmax(80px, auto) minmax(28px, 1fr) auto;
@@ -19314,6 +19329,9 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
   .conv-presentation-segment { width: 100%; }
   .conv-presentation-mode { flex: 1 1 auto; padding-inline: 5px; }
   .conversations-view.is-presentation-mode { padding: 7px; }
+  .conv-presentation-side-nav { width: 46px; height: 56px; border-radius: 14px; font-size: 25px; }
+  .conv-presentation-side-nav.is-prev { left: 4px; }
+  .conv-presentation-side-nav.is-next { right: 4px; }
   .conv-presentation-slide { padding: 16px 14px; border-radius: 12px; }
   .conv-presentation-prompt { grid-template-columns: 1fr; gap: 3px; margin-bottom: 13px; }
   .is-presentation-mode .conv-presentation-body.assistant-text,
