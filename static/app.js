@@ -30078,22 +30078,25 @@
       ? ev.target.closest('.conv-input-bar textarea, .conv-input-bar input[type="text"]')
       : null;
     if (!input) return;
-    const pane = input.closest('.conv-pane[data-pane-id]');
-    const view = pane && pane.querySelector('.conversations-view');
-    if (!view || view.classList.contains('is-presentation-mode')
-        || !isConversationAtBottom(view)) return;
-    // Focusing the composer can change the grid height by a few pixels. Keep
-    // an already-bottom-pinned reader at the true tail after that reflow, but
-    // never move a reader who had intentionally scrolled up.
-    const restoreBottom = () => {
+    const pane = input.closest('#convSplit > .conv-pane[data-pane-id]');
+    const view = pane && pane.querySelector(':scope > .conversations-view');
+    if (!view || view.classList.contains('is-presentation-mode')) return;
+    const wasAtBottom = isConversationAtBottom(view);
+    const restoreScrollTop = view.scrollTop;
+    // Focusing the composer can remount pane chrome or change the grid height.
+    // Preserve the exact reading position for a scrolled-up reader, and keep
+    // an already-bottom-pinned reader at the true tail after that reflow.
+    const restorePosition = () => {
       if (!view.isConnected || document.activeElement !== input) return;
-      view._pinnedToBottom = true;
-      scrollConversationToEnd(view);
+      if (wasAtBottom) scrollConversationToEnd(view);
+      else view.scrollTop = restoreScrollTop;
+      view._pinnedToBottom = wasAtBottom;
+      updateConversationEndAffordance(view);
     };
     requestAnimationFrame(() => {
-      restoreBottom();
+      restorePosition();
       // WebKit can apply the focus-within grid reflow one paint later.
-      requestAnimationFrame(restoreBottom);
+      requestAnimationFrame(restorePosition);
     });
   }
   document.addEventListener('pointerdown', preserveConversationBottomOnComposerPointerDown, true);
@@ -30126,9 +30129,17 @@
     btn._convTargetView = view;
     btn.addEventListener('click', () => {
       const targetView = btn._convTargetView || view;
-      targetView._pinnedToBottom = true;
       if (jumpPresentationToEnd(targetView)) return;
-      scrollConversationToEnd(targetView, 'smooth');
+      const restoreEnd = () => {
+        if (!targetView.isConnected) return;
+        targetView._pinnedToBottom = true;
+        scrollConversationToEnd(targetView);
+      };
+      restoreEnd();
+      requestAnimationFrame(() => {
+        restoreEnd();
+        requestAnimationFrame(restoreEnd);
+      });
     });
     view._convEndButton = btn;
     // "Jump to my last message" (CCC-292): reading a fresh reply means scrolling
@@ -30651,11 +30662,15 @@
     // is about to destroy the pane anyway, and activating it first causes
     // a flicker (sidebar highlight briefly chases the doomed conv id).
     if (ev.target && ev.target.closest && ev.target.closest('[data-role="pane-close"]')) return;
-    const pane = ev.target.closest && ev.target.closest('.conv-pane');
+    const pane = ev.target.closest && ev.target.closest('#convSplit > .conv-pane[data-pane-id]');
     if (!pane) return;
     const pid = pane.getAttribute('data-pane-id');
     const idx = paneIndexByPaneId(pid);
     if (idx < 0) return;
+    // Clicking controls or transcript content inside the already-active pane
+    // must not remount its status rail. That reflow can reset a long reader's
+    // scrollTop before End/composer handlers run.
+    if (idx === splitState.activeIndex) return;
     setActivePaneById(pid);
   }, true);
 
@@ -38788,6 +38803,27 @@
       stage.setAttribute('aria-label', 'Conversation presentation');
       view.appendChild(stage);
     }
+    const pane = view.closest('.conv-pane[data-pane-id]');
+    [
+      { delta: -1, className: 'is-prev', label: 'Previous slide', glyph: '\u2190' },
+      { delta: 1, className: 'is-next', label: 'Next slide', glyph: '\u2192' },
+    ].forEach(control => {
+      let button = stage.querySelector(':scope > .conv-presentation-side-nav.' + control.className);
+      if (button) return;
+      button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'conv-presentation-side-nav ' + control.className;
+      button.dataset.presentationNav = String(control.delta);
+      button.setAttribute('aria-label', control.label);
+      button.title = control.label + (control.delta < 0 ? ' (Left arrow)' : ' (Right arrow)');
+      button.textContent = control.glyph;
+      button.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        stepPresentationSlide(pane.dataset.paneId, control.delta);
+      });
+      stage.appendChild(button);
+    });
     let activity = stage.querySelector(':scope > .conv-presentation-activity');
     if (!activity) {
       activity = document.createElement('div');
@@ -38851,18 +38887,9 @@
     if (dock) return dock;
     dock = document.createElement('nav');
     dock.className = 'conv-presentation-dock';
-    dock.setAttribute('aria-label', 'Slide navigation');
+    dock.setAttribute('aria-label', 'Slide position');
     dock.innerHTML = ''
-      + '<button type="button" class="conv-presentation-nav" data-presentation-nav="-1" aria-label="Previous slide" title="Previous slide (Left arrow)">&#8592;</button>'
-      + '<div class="conv-presentation-progress"><span class="conv-presentation-answer-label"></span><span class="conv-presentation-dots" aria-hidden="true"></span><span class="conv-presentation-overall"></span></div>'
-      + '<button type="button" class="conv-presentation-nav" data-presentation-nav="1" aria-label="Next slide" title="Next slide (Right arrow)">&#8594;</button>';
-    dock.querySelectorAll('[data-presentation-nav]').forEach(button => {
-      button.addEventListener('click', ev => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        stepPresentationSlide(pane.dataset.paneId, Number(button.dataset.presentationNav));
-      });
-    });
+      + '<div class="conv-presentation-progress"><span class="conv-presentation-answer-label"></span><span class="conv-presentation-dots" aria-hidden="true"></span><span class="conv-presentation-overall"></span></div>';
     const inputContext = pane.querySelector(':scope > .conv-input-context');
     pane.insertBefore(dock, inputContext || null);
     return dock;
@@ -38900,8 +38927,8 @@
         dots.appendChild(dot);
       }
     }
-    const prev = dock.querySelector('[data-presentation-nav="-1"]');
-    const next = dock.querySelector('[data-presentation-nav="1"]');
+    const prev = stage.querySelector(':scope > [data-presentation-nav="-1"]');
+    const next = stage.querySelector(':scope > [data-presentation-nav="1"]');
     if (prev) prev.disabled = index === 0;
     if (next) next.disabled = index === deck.length - 1;
     updateConversationEndAffordance(view);
@@ -38909,6 +38936,16 @@
 
   function shouldFollowPresentationTail(previousIndex, previousCount, requested) {
     return !!requested && previousCount > 0 && previousIndex >= previousCount - 1;
+  }
+
+  function firstSlideOfLatestPresentationTurn(deck) {
+    const slides = Array.isArray(deck) ? deck : [];
+    if (!slides.length) return 0;
+    const latestAnswer = String((slides[slides.length - 1].dataset || {}).answerIndex || '');
+    const index = slides.findIndex(slide => (
+      String(((slide && slide.dataset) || {}).answerIndex || '') === latestAnswer
+    ));
+    return index >= 0 ? index : slides.length - 1;
   }
 
   function refreshPresentationForPane(paneId, opts) {
@@ -38941,8 +38978,12 @@
       ? deck.findIndex(slide => slide.dataset.presentationKey === previousKey)
       : -1;
     if (index < 0) index = Math.min(previousIndex || deck.length - 1, deck.length - 1);
-    if (shouldFollowPresentationTail(previousIndex, previousDeck.length, opts && opts.followTail)
-        || !previousDeck.length) index = deck.length - 1;
+    if (opts && opts.startAtLatestTurn) {
+      index = firstSlideOfLatestPresentationTurn(deck);
+    } else if (shouldFollowPresentationTail(previousIndex, previousDeck.length, opts && opts.followTail)
+        || !previousDeck.length) {
+      index = deck.length - 1;
+    }
     view._presentationDeck = deck;
     view._presentationIndex = index;
     view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
@@ -38964,7 +39005,10 @@
     }
     pane.dataset.presentationMode = normalized;
     try { localStorage.setItem(PRESENTATION_MODE_KEY, normalized); } catch (_) {}
-    refreshPresentationForPane(targetPaneId, { followTail: normalized !== 'off' && !(opts && opts.preserveCursor) });
+    refreshPresentationForPane(targetPaneId, {
+      followTail: normalized !== 'off' && !(opts && opts.preserveCursor),
+      startAtLatestTurn: normalized === '2' && oldMode !== '2' && !(opts && opts.preserveCursor),
+    });
     if (normalized === 'off') {
       const restore = Number(view.dataset.presentationRestoreScroll || 0);
       requestAnimationFrame(() => { view.scrollTop = restore; updateConversationEndAffordance(view); });

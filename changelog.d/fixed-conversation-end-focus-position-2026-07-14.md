@@ -1,0 +1,1 @@
+- Fixed End and composer clicks resetting long conversations to the top instead of preserving the requested reading position.

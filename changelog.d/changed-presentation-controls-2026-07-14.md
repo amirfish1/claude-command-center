@@ -1,0 +1,1 @@
+- Changed Mode 2 to open at the newest answer's first slide and moved navigation to large, centered side controls.

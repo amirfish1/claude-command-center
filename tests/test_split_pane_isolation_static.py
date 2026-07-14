@@ -32,6 +32,19 @@ class TestSplitPaneIsolationStatic(unittest.TestCase):
         self.assertIn("removeSplitPaneSingletonChrome(clone);", build_fn)
         self.assertIn("mountStatusRailForActivePane();", active_fn)
 
+    def test_clicking_inside_the_active_pane_does_not_remount_its_chrome(self):
+        """End/composer clicks must not reset the active reader's scroll."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        handler_start = app_js.index("// Click anywhere inside a pane to mark it active")
+        handler_end = app_js.index("\n\n  // Open `convId` in a new pane", handler_start)
+        handler = app_js[handler_start:handler_end]
+
+        self.assertIn("if (idx === splitState.activeIndex) return;", handler)
+        self.assertLess(
+            handler.index("if (idx === splitState.activeIndex) return;"),
+            handler.index("setActivePaneById(pid);"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

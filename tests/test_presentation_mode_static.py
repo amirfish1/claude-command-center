@@ -112,6 +112,20 @@ class TestPresentationModeStatic(unittest.TestCase):
             18,
         )
 
+    def test_mode_two_opens_on_first_slide_of_latest_answer(self):
+        deck = [
+            {"dataset": {"answerIndex": "8", "partIndex": "0"}},
+            {"dataset": {"answerIndex": "8", "partIndex": "1"}},
+            {"dataset": {"answerIndex": "9", "partIndex": "0"}},
+            {"dataset": {"answerIndex": "9", "partIndex": "1"}},
+            {"dataset": {"answerIndex": "9", "partIndex": "2"}},
+        ]
+
+        self.assertEqual(
+            _run_javascript_function("firstSlideOfLatestPresentationTurn", deck),
+            2,
+        )
+
     def test_mode_state_is_pane_scoped_and_only_default_is_persisted(self):
         app_js = APP_JS.read_text(encoding="utf-8")
 
@@ -143,10 +157,12 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("updateConversationEndAffordance(view)", render_cursor)
 
     def test_dock_navigation_is_bound_at_the_control(self):
+        ensure_stage = _javascript_function_source("ensurePresentationStage")
         ensure_dock = _javascript_function_source("ensurePresentationDock")
 
-        self.assertIn("button.addEventListener('click'", ensure_dock)
-        self.assertIn("stepPresentationSlide(pane.dataset.paneId", ensure_dock)
+        self.assertIn("button.addEventListener('click'", ensure_stage)
+        self.assertIn("stepPresentationSlide(pane.dataset.paneId", ensure_stage)
+        self.assertNotIn("data-presentation-nav", ensure_dock)
 
     def test_durable_and_streaming_renders_refresh_the_active_deck(self):
         app_js = APP_JS.read_text(encoding="utf-8")
@@ -175,6 +191,8 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn(".conv-presentation-stage", css)
         self.assertIn(".conv-presentation-slide", css)
         self.assertIn(".conv-presentation-dock", css)
+        self.assertIn(".conv-presentation-side-nav", css)
+        self.assertIn("top: 50%", css)
         self.assertIn('"present-toolbar rail"', css)
         self.assertIn('"present-dock    rail"', css)
         self.assertIn('"present-toolbar"', css)
