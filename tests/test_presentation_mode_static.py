@@ -267,6 +267,39 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("function refreshPresentationForPane(paneId", app_js)
         self.assertIn("function stepPresentationSlide(paneId, delta)", app_js)
 
+    def test_escape_exits_mode_two_even_from_the_composer(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        scheduler = _javascript_function_source("schedulePresentationEscape")
+
+        self.assertIn("if (!ev || ev.key !== 'Escape') return false", scheduler)
+        self.assertIn("setTimeout(() =>", scheduler)
+        self.assertIn("if (ev.defaultPrevented) return", scheduler)
+        self.assertIn("!== '2'", scheduler)
+        self.assertIn("setPresentationMode(paneId, 'off')", scheduler)
+
+        handler_start = app_js.index(
+            "document.addEventListener('keydown', (ev) =>",
+            app_js.index("function schedulePresentationEscape"),
+        )
+        handler_end = app_js.index("let _presentationResizeTimer", handler_start)
+        handler = app_js[handler_start:handler_end]
+        self.assertLess(
+            handler.index("schedulePresentationEscape(ev)"),
+            handler.index("const target = ev.target"),
+        )
+
+        composer_start = app_js.index("$convInput.addEventListener('keydown', (e) =>")
+        composer_end = app_js.index("// Various callsites", composer_start)
+        composer_handler = app_js[composer_start:composer_end]
+        self.assertIn(
+            "normalizePresentationMode(presentationPane.dataset.presentationMode) === '2'",
+            composer_handler,
+        )
+        self.assertLess(
+            composer_handler.index("normalizePresentationMode"),
+            composer_handler.index("sendEscToTerminal()"),
+        )
+
     def test_live_refresh_follows_tail_only_if_reader_was_already_there(self):
         self.assertTrue(
             _run_javascript_function("shouldFollowPresentationTail", 30, 31, True)

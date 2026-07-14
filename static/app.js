@@ -8563,6 +8563,9 @@
         e.preventDefault();
         sendToTerminal();
       } else if (e.key === 'Escape') {
+        const presentationPane = presentationPaneElement(activePaneId());
+        if (presentationPane
+            && normalizePresentationMode(presentationPane.dataset.presentationMode) === '2') return;
         if ($convEscBtn && $convEscBtn.style.display !== 'none' && !$convEscBtn.disabled) {
           e.preventDefault();
           sendEscToTerminal();
@@ -39202,8 +39205,21 @@
     }
   });
 
+  function schedulePresentationEscape(ev) {
+    if (!ev || ev.key !== 'Escape') return false;
+    setTimeout(() => {
+      if (ev.defaultPrevented) return;
+      const paneId = activePaneId();
+      const pane = presentationPaneElement(paneId);
+      if (!pane || normalizePresentationMode(pane.dataset.presentationMode) !== '2') return;
+      setPresentationMode(paneId, 'off');
+    }, 0);
+    return true;
+  }
+
   document.addEventListener('keydown', (ev) => {
     if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (schedulePresentationEscape(ev)) return;
     if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
     const target = ev.target;
     if (target && target.closest && target.closest('input,textarea,select,button,a,summary,pre,code,[contenteditable="true"]')) return;

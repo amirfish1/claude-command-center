@@ -4,7 +4,7 @@
 
 **Goal:** Make an unconsumed Escape key exit the active conversation pane from presentation Mode 2 to Off, including while the composer is focused.
 
-**Architecture:** Add one named scheduler beside the existing presentation keyboard handler. The scheduler waits until keyboard-event dispatch finishes, then rechecks `defaultPrevented` and the active pane's current mode before using the existing `setPresentationMode` path.
+**Architecture:** Add one named scheduler beside the existing presentation keyboard handler. The scheduler waits until keyboard-event dispatch finishes, then rechecks `defaultPrevented` and the active pane's current mode before using the existing `setPresentationMode` path. Make the main composer's terminal Escape mapping yield while Mode 2 is active so the event can reach that scheduler.
 
 **Tech Stack:** Browser JavaScript in `static/app.js`; Python `unittest` source-contract tests.
 
@@ -30,7 +30,7 @@
 
 - [ ] **Step 1: Write the failing regression test**
 
-Add a test that extracts `schedulePresentationEscape`, verifies it defers with `setTimeout`, rechecks `ev.defaultPrevented`, requires current mode `2`, and calls `setPresentationMode(paneId, 'off')`. Verify in the document keyboard handler that `schedulePresentationEscape(ev)` appears before the editable-target exclusion.
+Add a test that extracts `schedulePresentationEscape`, verifies it defers with `setTimeout`, rechecks `ev.defaultPrevented`, requires current mode `2`, and calls `setPresentationMode(paneId, 'off')`. Verify in the document keyboard handler that `schedulePresentationEscape(ev)` appears before the editable-target exclusion, and that the main composer yields its terminal Escape mapping while Mode 2 is active.
 
 - [ ] **Step 2: Run the test and verify RED**
 
@@ -60,7 +60,7 @@ function schedulePresentationEscape(ev) {
 }
 ```
 
-In the existing document keydown listener, call the scheduler after the modifier/default-prevented guard and before filtering editable targets. Return when it schedules Escape; preserve the existing arrow-key path verbatim.
+In the existing document keydown listener, call the scheduler after the modifier/default-prevented guard and before filtering editable targets. Return when it schedules Escape; preserve the existing arrow-key path verbatim. In the main composer keydown listener, return without preventing the event or sending terminal Escape when the active pane is in Mode 2; leave slash-command handling ahead of this check.
 
 - [ ] **Step 4: Run focused verification and verify GREEN**
 
