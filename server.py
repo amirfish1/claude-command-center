@@ -19990,6 +19990,7 @@ def _codex_app_server_handle_notification(method, params):
         thread_id = str(thread["id"])
     if not thread_id:
         return
+    pump_after_notification = False
     _CODEX_APP_SERVER_EVENT_SEQ += 1
     now = time.time()
     state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
@@ -20011,6 +20012,7 @@ def _codex_app_server_handle_notification(method, params):
             state["active_flags"] = status_fields.get("active_flags") or []
             state["thread_needs_approval"] = bool(status_fields.get("thread_needs_approval"))
             if str(status).lower() == "idle":
+                pump_after_notification = True
                 state.pop("active_turn_id", None)
                 state.pop("active_writer", None)
                 state.pop("active_item", None)
@@ -20081,6 +20083,7 @@ def _codex_app_server_handle_notification(method, params):
         ):
             _codex_app_server_record_item_notification(state, method, params, now)
     elif method == "turn/completed":
+        pump_after_notification = True
         completed_writer = str(state.get("active_writer") or "external")
         state["last_activity_at"] = now
         state["last_completed_turn_id"] = turn_id
@@ -20101,6 +20104,8 @@ def _codex_app_server_handle_notification(method, params):
         _codex_telemetry_note_notification(method, params, thread_id, turn_id)
     except Exception:
         pass
+    if pump_after_notification:
+        _schedule_codex_queue_pump(thread_id)
 
 
 def _codex_app_server_handle_message(payload):
@@ -26566,6 +26571,9 @@ def _start_resume_queue_watcher() -> None:
             with _pending_resume_lock:
                 queued_sids = list(_pending_resume_queue.keys())
             for sid in queued_sids:
+                if _is_codex_session(sid):
+                    _pump_codex_resume_queue(sid)
+                    continue
                 if not _pending_resume_retry_due(sid):
                     continue
                 if _resume_queue_engine_busy(sid):

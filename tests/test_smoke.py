@@ -9737,6 +9737,33 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(state["last_completed_turn_id"], "turn-active")
         self.assertNotIn("active_turn_id", state)
 
+    def test_codex_turn_completed_schedules_queue_pump(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        with mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
+            server._codex_app_server_handle_message({
+                "method": "turn/completed",
+                "params": {"threadId": sid, "turnId": "turn-1"},
+            })
+
+        schedule.assert_called_once_with(sid)
+
+    def test_codex_idle_status_schedules_queue_pump(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        with mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
+            server._codex_app_server_handle_message({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": sid,
+                    "status": {"type": "idle", "activeFlags": []},
+                },
+            })
+
+        schedule.assert_called_once_with(sid)
+
     def test_codex_late_tool_output_does_not_resurrect_completed_turn(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
