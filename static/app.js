@@ -30078,25 +30078,22 @@
       ? ev.target.closest('.conv-input-bar textarea, .conv-input-bar input[type="text"]')
       : null;
     if (!input) return;
-    const pane = input.closest('#convSplit > .conv-pane[data-pane-id]');
-    const view = pane && pane.querySelector(':scope > .conversations-view');
-    if (!view || view.classList.contains('is-presentation-mode')) return;
-    const wasAtBottom = isConversationAtBottom(view);
-    const restoreScrollTop = view.scrollTop;
-    // Focusing the composer can remount pane chrome or change the grid height.
-    // Preserve the exact reading position for a scrolled-up reader, and keep
-    // an already-bottom-pinned reader at the true tail after that reflow.
-    const restorePosition = () => {
+    const pane = input.closest('.conv-pane[data-pane-id]');
+    const view = pane && pane.querySelector('.conversations-view');
+    if (!view || view.classList.contains('is-presentation-mode')
+        || !isConversationAtBottom(view)) return;
+    // Focusing the composer can change the grid height by a few pixels. Keep
+    // an already-bottom-pinned reader at the true tail after that reflow, but
+    // never move a reader who had intentionally scrolled up.
+    const restoreBottom = () => {
       if (!view.isConnected || document.activeElement !== input) return;
-      if (wasAtBottom) scrollConversationToEnd(view);
-      else view.scrollTop = restoreScrollTop;
-      view._pinnedToBottom = wasAtBottom;
-      updateConversationEndAffordance(view);
+      view._pinnedToBottom = true;
+      scrollConversationToEnd(view);
     };
     requestAnimationFrame(() => {
-      restorePosition();
+      restoreBottom();
       // WebKit can apply the focus-within grid reflow one paint later.
-      requestAnimationFrame(restorePosition);
+      requestAnimationFrame(restoreBottom);
     });
   }
   document.addEventListener('pointerdown', preserveConversationBottomOnComposerPointerDown, true);
@@ -30129,17 +30126,9 @@
     btn._convTargetView = view;
     btn.addEventListener('click', () => {
       const targetView = btn._convTargetView || view;
+      targetView._pinnedToBottom = true;
       if (jumpPresentationToEnd(targetView)) return;
-      const restoreEnd = () => {
-        if (!targetView.isConnected) return;
-        targetView._pinnedToBottom = true;
-        scrollConversationToEnd(targetView);
-      };
-      restoreEnd();
-      requestAnimationFrame(() => {
-        restoreEnd();
-        requestAnimationFrame(restoreEnd);
-      });
+      scrollConversationToEnd(targetView, 'smooth');
     });
     view._convEndButton = btn;
     // "Jump to my last message" (CCC-292): reading a fresh reply means scrolling
@@ -30662,15 +30651,11 @@
     // is about to destroy the pane anyway, and activating it first causes
     // a flicker (sidebar highlight briefly chases the doomed conv id).
     if (ev.target && ev.target.closest && ev.target.closest('[data-role="pane-close"]')) return;
-    const pane = ev.target.closest && ev.target.closest('#convSplit > .conv-pane[data-pane-id]');
+    const pane = ev.target.closest && ev.target.closest('.conv-pane');
     if (!pane) return;
     const pid = pane.getAttribute('data-pane-id');
     const idx = paneIndexByPaneId(pid);
     if (idx < 0) return;
-    // Clicking controls or transcript content inside the already-active pane
-    // must not remount its status rail. That reflow can reset a long reader's
-    // scrollTop before End/composer handlers run.
-    if (idx === splitState.activeIndex) return;
     setActivePaneById(pid);
   }, true);
 
@@ -39029,7 +39014,8 @@
   }
 
   document.addEventListener('click', (ev) => {
-    const modeButton = ev.target && ev.target.closest && ev.target.closest('[data-presentation-mode]');
+    const modeButton = ev.target && ev.target.closest
+      && ev.target.closest('.conv-presentation-mode[data-presentation-mode]');
     if (modeButton) {
       ev.preventDefault();
       ev.stopPropagation();

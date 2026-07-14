@@ -61,6 +61,18 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertEqual(html.count("data-presentation-mode="), 3)
         self.assertNotIn('id="presentationMode', html)
 
+    def test_mode_click_delegation_does_not_match_pane_state(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        handler_start = app_js.index("const modeButton = ev.target")
+        handler_end = app_js.index("const navButton = ev.target", handler_start)
+        handler = app_js[handler_start:handler_end]
+
+        self.assertIn(
+            "closest('.conv-presentation-mode[data-presentation-mode]')",
+            handler,
+        )
+        self.assertNotIn("closest('[data-presentation-mode]')", handler)
+
     def test_paginator_keeps_a_heading_with_the_following_block(self):
         pages = _run_paginator(
             [
