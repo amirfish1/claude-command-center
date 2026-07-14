@@ -78,9 +78,10 @@ def test_all_lane_drop_updates_render_state_immediately():
     assert "_convListRenderSig = null;" in drop_handler
 
 
-def test_all_lane_override_keeps_terminal_rows_in_lanes():
+def test_all_lane_override_never_controls_trash_membership():
     app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
-    assert "const _trashConvs = _archivedConvs.filter(c => !c.pinned && !_allTabLaneOverride(c));" in app_js
-    assert "const _pinnedArchived = _archivedConvs.filter(c => c.pinned || _allTabLaneOverride(c));" in app_js
+    assert "const _trashConvs = _archivedConvs.filter(c => !!c.trashed);" in app_js
+    assert "const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);" in app_js
+    assert "const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);" in app_js
     assert "expandAllLaneDestinationGroup(row);" in app_js

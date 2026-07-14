@@ -1535,7 +1535,7 @@
     document.addEventListener('click', function(e) {
       const t = e.target;
       if (!t || !t.closest) return;
-      const trigger = t.closest('[data-action], button.kanban-action, .conv-pin-btn, .conv-archive-btn, .conv-verify-btn');
+      const trigger = t.closest('[data-action], button.kanban-action, .conv-pin-btn, .conv-archive-btn, .conv-trash-btn, .conv-verify-btn');
       if (!trigger) return;
       // Read-only intents (open issue, jump to terminal, etc.) shouldn't
       // trigger the banner — only mutations do. The fetch wrapper above
@@ -10961,14 +10961,14 @@
   }
   if (CONV_POPOUT_MODE) { try { _popoutProcPills(); } catch (_) {} }
 
-  // Optimistic state overrides for archived/verified/pinned flags. When the user
+  // Optimistic state overrides for lifecycle/verified/pinned flags. When the user
   // archives, verifies, or pins a card we mutate the in-memory copy, but a /api/sessions
   // poll already in flight will return *pre-click* data and overwrite that
   // mutation when it lands — the card briefly reappears in its old column
   // before the next poll picks up the persisted change. This map shields the
   // optimistic value until the server's response agrees, with a 30s TTL so a
   // failed write doesn't pin a stale override forever.
-  const _optimisticOverrides = new Map();  // sid -> {archived?, verified?, pinned?, pin_rank?, ts}
+  const _optimisticOverrides = new Map();  // sid -> {archived?, trashed?, verified?, pinned?, pin_rank?, ts}
   const _OPTIMISTIC_TTL_MS = 30000;
   function setOptimisticOverride(sid, patch) {
     if (!sid) return;
@@ -10987,6 +10987,9 @@
       let allMatch = true;
       if ('archived' in ov) {
         if (c.archived !== ov.archived) { c.archived = ov.archived; allMatch = false; }
+      }
+      if ('trashed' in ov) {
+        if (c.trashed !== ov.trashed) { c.trashed = ov.trashed; allMatch = false; }
       }
       if ('verified' in ov) {
         if (c.verified !== ov.verified) { c.verified = ov.verified; allMatch = false; }
@@ -23403,6 +23406,8 @@
     const _renderRow = (c, opts = {}) => {
       const goalIconOnly = !!opts.goalIconOnly;
       const quietTitleChrome = !!opts.quietTitleChrome;
+      const lifecycleContext = opts.lifecycleContext
+        || (c.trashed ? 'trash' : (c.archived ? 'all-main' : (_sidebarTab === 'archived' ? 'all-main' : 'active')));
       // Inline NYA lookup (In-progress rows only, when Details is on). Resolved
       // once here so both the row chevron and the appended block agree.
       const _nyaInlineItem = _nyaDetailsForRows
@@ -23962,13 +23967,11 @@
         : '';
 
       let startBtn = '';
-      let archiveBtn;
-      // Active is a working list: retiring a session there is an archive
-      // action. "Trash" is reserved for the All tab, where its collapsed
-      // discard section is visible and the destination is meaningful.
-      const archiveActionLabel = _sidebarTab === 'inprogress' ? 'Archive' : 'Move to Trash';
+      let lifecycleButtons = '';
       const pinTitle = c.pinned ? 'Unpin conversation' : 'Pin conversation';
-      const pinBtn = '<button class="conv-pin-btn' + (c.pinned ? ' is-unpin' : '') + '" data-role="pin" title="' + pinTitle + '" aria-label="' + pinTitle + '"><span class="conv-pin-glyph">&#128204;</span></button>';
+      const pinBtn = lifecycleContext !== 'trash'
+        ? '<button class="conv-pin-btn' + (c.pinned ? ' is-unpin' : '') + '" data-role="pin" title="' + pinTitle + '" aria-label="' + pinTitle + '"><span class="conv-pin-glyph">&#128204;</span></button>'
+        : '';
       if (isBacklogRow) {
         const _issueAttr = escapeAttr(c.issue_number || '');
         const _titleAttr = escapeAttr(c.display_name || c.ai_title || c.first_message || '');
@@ -23976,15 +23979,18 @@
         // the right folder without relying on server state.
         const _spawnCwdAttr = escapeAttr(c.spawn_cwd || c.folder_path || '');
         startBtn = '<button class="conv-start-btn" data-role="start" data-issue="' + _issueAttr + '" data-title="' + _titleAttr + '" data-spawn-cwd="' + _spawnCwdAttr + '" title="Spawn a session to work on this issue" aria-label="Start issue session">&#9654;</button>';
-        archiveBtn = '<button class="conv-archive-btn is-close" data-role="archive" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
+        lifecycleButtons = '<button class="conv-archive-btn is-close" data-role="archive" data-archived="true" title="Archive issue (close as not planned)" aria-label="Archive issue">&#128229;</button>';
       } else if (isGithubPrRow) {
-        archiveBtn = '';
+        lifecycleButtons = '';
+      } else if (lifecycleContext === 'trash') {
+        lifecycleButtons = '<button class="conv-trash-btn is-restore" data-role="untrash" title="Untrash to Archived" aria-label="Untrash to Archived">&#8617;</button>';
+      } else if (lifecycleContext === 'all-main') {
+        lifecycleButtons = (c.archived
+          ? '<button class="conv-archive-btn is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Active</span></button>'
+          : '')
+          + '<button class="conv-trash-btn" data-role="trash" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>';
       } else {
-        // The All tab uses Trash as the session's discard action; restores
-        // remain explicit for rows that are already there.
-        archiveBtn = c.archived
-          ? '<button class="conv-archive-btn is-restore" data-role="archive" title="Restore to Active" aria-label="Restore to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Restore</span></button>'
-          : '<button class="conv-archive-btn" data-role="archive" title="' + archiveActionLabel + '" aria-label="' + archiveActionLabel + '">&#128465;</button>';
+        lifecycleButtons = '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive" aria-label="Archive">&#128229;</button>';
       }
       // CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
       // the meta row — it wrapped onto a second line and is redundant with the
@@ -24268,8 +24274,7 @@
         + '</div>'
         : '';
 
-      const archivedRestoreRestHtml = (c.archived && !isBacklogRow && !isGithubPrRow) ? archiveBtn : '';
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
@@ -24301,8 +24306,8 @@
             // narrow and there's no per-row layout shift between hover
             // states (CSS uses `position: absolute` for one of them).
             + '<span class="conv-row-end">'
-            +   (archivedRestoreRestHtml || '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>')
-            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + archiveBtn + elevateObjectBtn + '</span>'
+            +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
+            +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + lifecycleButtons + elevateObjectBtn + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
@@ -24378,6 +24383,9 @@
       const rel = latest ? relativeTime(latest) : '';
       const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
       const sessionIdsAttr = escapeAttr(JSON.stringify(cards.map(c => c.session_id || c.id).filter(Boolean)));
+      const groupArchiveAction = opts.lifecycleContext === 'active'
+        ? '<button type="button" class="conv-repeat-group-archive" data-role="repeat-row-group-archive" data-session-ids="' + sessionIdsAttr + '" title="Archive ' + cards.length + ' sessions">Archive</button>'
+        : '';
       return '<div class="conv-repeat-group' + (expanded ? '' : ' is-collapsed') + '"'
         + ' data-role="repeat-row-group" data-repeat-key="' + keyAttr + '">'
         + '<div class="conv-repeat-group-header">'
@@ -24390,8 +24398,7 @@
         + '<span class="conv-repeat-group-count">' + cards.length + '</span>'
         + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
         + '</button>'
-        + '<button type="button" class="conv-repeat-group-archive" data-role="repeat-row-group-archive"'
-        + ' data-session-ids="' + sessionIdsAttr + '" title="Archive ' + cards.length + ' sessions">Archive</button>'
+        + groupArchiveAction
         + '</div>'
         + '<div class="conv-repeat-group-body">'
         + cards.map(c => _renderRow(c, opts)).join('')
@@ -24902,7 +24909,7 @@
             +     ' title="' + (isChatCollapsed ? 'Expand participant list' : 'Collapse participant list') + '">'
             +     (isChatCollapsed ? '&#9656;' : '&#9662;') + '</button>'
           : '<span class="conv-ingroupchat-collapse-btn conv-ingroupchat-collapse-spacer" aria-hidden="true"></span>';
-        const _chatHtml = '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + (isChatCollapsed ? ' is-collapsed' : '') + '">'
+        const _renderChatHtml = (lifecycleActionHtml) => '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + (isChatCollapsed ? ' is-collapsed' : '') + '">'
           + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isPaused ? ' conv-ingroupchat-row-paused' : '') + (isActiveChat || isActiveChatById ? ' active' : '') + '"'
           +   ' data-role="ingroupchat-row"'
           +   ' data-gc-id="' + escapeHtml(chatId) + '"'
@@ -24943,19 +24950,28 @@
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
           +     ' title="Clear chat content (header + participants kept; participants re-engaged)">🧹</button>'
-          +   '<button type="button" class="conv-ingroupchat-archive-btn"'
-          +     ' data-role="ingroupchat-archive"'
-          +     ' data-gc-id="' + escapeHtml(chatId) + '"'
-          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          +     ' title="Archive this group chat">&#128229;</button>'
+          +   lifecycleActionHtml
           + '</div>'
           + chatWaitingHint
           + (partListHtml ? '<div class="conv-ingroupchat-participants">' + partListHtml + '</div>' : '')
           + '</div>';
+        const _groupChatLifecycleAction = (role, label, glyph) =>
+          '<button type="button" class="conv-ingroupchat-archive-btn"'
+          + ' data-role="' + role + '"'
+          + ' data-gc-id="' + escapeHtml(chatId) + '"'
+          + ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          + ' title="' + label + '" aria-label="' + label + '">' + glyph + '</button>';
+        const _chatHtml = _renderChatHtml(
+          _groupChatLifecycleAction('ingroupchat-archive', 'Archive', '&#128229;')
+        );
+        const _allChatHtml = _renderChatHtml(
+          _groupChatLifecycleAction('ingroupchat-trash', 'Move to Trash', '&#128465;')
+        );
         return {
           mtime: chat.last_mtime || 0,
           pinRank: Infinity,  // group chats aren't pinnable today
           html: _chatHtml,
+          allHtml: _allChatHtml,
         };
       });
     // Gate inline NYA blocks to the In-progress rows only (the toggle lives in
@@ -25090,14 +25106,14 @@
         }).join('');
         let body;
         if (archiveObjectId) {
-          const rowsHtml = _renderRowsWithRepeatGroups(cards, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup });
+          const rowsHtml = _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup });
           const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);
           const emptyHint = (!cards.length && !_objDrafts.length && !hasChildObjects)
             ? '<div class="conv-object-empty-hint">Empty — drag a session here, or use +.</div>' : '';
           body = rowsHtml + _draftsHtml + emptyHint;
         } else {
           body = cards.length
-            ? _renderRowsWithRepeatGroups(cards, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })
+            ? _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })
             : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
         }
         // GOAL-1 status + immediate-objective — real custom objects only (not
@@ -25390,7 +25406,7 @@
             if (cid) _evergreenSessionIds.add(cid);
             // Attach worker_id so _uxFixesRowIdentityKeys can match claims by worker id.
             const enriched = w.worker_id ? Object.assign(Object.create(null), card, { _worker_id: w.worker_id }) : card;
-            return _renderRow(enriched, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });
+            return _renderRow(enriched, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });
           }
           return _twFallbackRow(w);
         }).join('');
@@ -25553,6 +25569,7 @@
           const flushCards = () => {
             if (!curCards.length) return;
             chunks.push(_renderRowsWithRepeatGroups(curCards, {
+              lifecycleContext: 'active',
               suppressFolderChip: false,
               quietTitleChrome: true,
               elevateToObject: true
@@ -25565,6 +25582,7 @@
               flushCards();
               if (item && item.card) {
                 chunks.push(_renderRow(item.card, {
+                  lifecycleContext: 'active',
                   suppressFolderChip: false,
                   quietTitleChrome: true,
                   currentChildDepth: item.depth,
@@ -25577,6 +25595,7 @@
             if (!key) {
               flushCards();
               chunks.push(_renderRow(item.card, {
+                lifecycleContext: 'active',
                 suppressFolderChip: false,
                 quietTitleChrome: true,
                 elevateToObject: true
@@ -25635,7 +25654,7 @@
             const cards = pendingSingles.map(item => item.card);
             entries.push({
               mtime: (cards[0] && cards[0].modified) || 0,
-              html: _renderRowsWithRepeatGroups(cards, { suppressFolderChip: false, quietTitleChrome: true }),
+              html: _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),
             });
             pendingSingles = [];
           };
@@ -25646,7 +25665,7 @@
               flushSingles();
               entries.push({
                 mtime: cl.mtime,
-                html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
+                html: cl.rows.map(item => _renderRow(item.card, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
               });
             }
           }
@@ -25820,7 +25839,7 @@
           + ' data-folder-label="' + escapeHtml(folder) + '"';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('inprogress', folder, cards.length, hue, orphan, collapseKey, headerAttrs, dropPath)
-          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })
+          + _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: true })
           + '</div>';
       };
       // Each folder group becomes one mtime-stamped item; group chats
@@ -25838,10 +25857,10 @@
         return (b.mtime || 0) - (a.mtime || 0);
       });
       _activeRowsHtml = _isSpecificFolderFilter
-        ? _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { suppressFolderChip: true })
+        ? _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { lifecycleContext: 'active', suppressFolderChip: true })
         : _mixed.map(it => it.html).join('');
     } else {
-      _activeRowsHtml = _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { suppressFolderChip: _isSpecificFolderFilter });
+      _activeRowsHtml = _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { lifecycleContext: 'active', suppressFolderChip: _isSpecificFolderFilter });
     }
     _nyaDetailsForRows = false;  // In-progress rows done — no inline NYA elsewhere
     if (!_visibleSessionConvs.length) {
@@ -25970,7 +25989,7 @@
     if (_readyToMergeConvs.length > 0) {
       const _rtmCollapsed = localStorage.getItem('ccc-readytomerge-collapsed') === '1';
       const _rtmArrow = _rtmCollapsed ? '▸' : '▾';
-      const _rtmRows = _readyToMergeConvs.map(c => _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter })).join('');
+      const _rtmRows = _readyToMergeConvs.map(c => _renderRow(c, { lifecycleContext: 'active', suppressFolderChip: _isSpecificFolderFilter })).join('');
       _readyToMergeHtml =
         '<div class="conv-readytomerge-section' + (_rtmCollapsed ? ' collapsed' : '') + '" data-role="readytomerge-section">'
         + '<button type="button" class="conv-readytomerge-header" data-role="readytomerge-toggle" aria-expanded="' + (!_rtmCollapsed) + '">'
@@ -25992,7 +26011,7 @@
       if (!cards.length) return '';
       const collapsed = localStorage.getItem(collapseKey) === '1';
       const arrow = collapsed ? '▸' : '▾';
-      const rows = _flatRowsWithSeparators(cards, { suppressFolderChip: _isSpecificFolderFilter });
+      const rows = _flatRowsWithSeparators(cards, { lifecycleContext: 'active', suppressFolderChip: _isSpecificFolderFilter });
       // CCC-178: surface WHY a session lands here. The header carries the
       // criteria as a tooltip, plus a small ⓘ glyph (its own tooltip) so the
       // logic is discoverable instead of opaque.
@@ -26156,18 +26175,16 @@
     // below. A small "expand/collapse all" control lets the user blast
     // through everything at once — useful because archived can get long.
     let _archivedHtml = '';
-    // CCC-468: archived rows no longer interleave with the live rows in the
-    // All tab — "archive" hid nothing there. They render in a collapsed
-    // "Trash" section pinned to the very bottom instead. Pinned archived
-    // rows and lane-overridden rows are exempt: both are explicit asks to
-    // keep the session visible in the main All lanes.
+    // All keeps Active and Archived sessions in its main list. Only the
+    // explicit Trashed state moves a row into the separate bottom bucket;
+    // pinning and lane overrides never redefine lifecycle state.
     const _allTabLaneOverride = (c) => {
       const lane = String((c && c.all_lane_override) || '').trim();
       return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
     };
-    const _trashConvs = _archivedConvs.filter(c => !c.pinned && !_allTabLaneOverride(c));
-    const _pinnedArchived = _archivedConvs.filter(c => c.pinned || _allTabLaneOverride(c));
-    const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived);
+    const _trashConvs = _archivedConvs.filter(c => !!c.trashed);
+    const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);
+    const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs);
     try { _ensureEvergreenQueuesFresh(); } catch (_) {}
     const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
     const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
@@ -26238,6 +26255,8 @@
       : (Array.isArray(_archivedGroupChats)
           ? _archivedGroupChats.filter(gc => _archiveWindowAllowsRow(gc, _ipWindowCutoff))
           : []);
+    const _trashGroupChats = _archivedGroupChatsForRender.filter(gc => !!gc.trashed);
+    const _mainArchivedGroupChats = _archivedGroupChatsForRender.filter(gc => !gc.trashed);
     const _arcGrouping = (() => {
       try { return localStorage.getItem('ccc-archived-grouping') || 'time'; }
       catch (_) { return 'time'; }
@@ -26246,13 +26265,17 @@
       && _arcGrouping === 'project'
       && !_isSpecificFolderFilter;
 
-    const _renderArchivedGcRow = (gc) => {
+    const _renderArchivedGcRow = (gc, lifecycleContext = 'all-main') => {
       const gcId = gc.uuid || gc.id || '';
       const topic = gc.topic ? escapeHtml(gc.topic.slice(0, 80)) : '(untitled)';
       const partCount = (gc.session_ids || []).length;
       const partLabel = partCount
         ? '<span class="archive-row-gc-partcount">' + partCount + '</span>'
         : '';
+      const lifecycleButtons = lifecycleContext === 'trash'
+        ? '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-untrash" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Untrash to Archived" aria-label="Untrash to Archived">&#8617;</button>'
+        : '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-unarchive" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Move to Active" aria-label="Move to Active">&#8617;</button>'
+          + '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-trash" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>';
       return '<div class="conv-item conv-item-archived-gc" data-role="archived-gc-row"'
         + ' data-gc-id="' + escapeHtml(gcId) + '"'
         + ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
@@ -26262,11 +26285,7 @@
         +   '<span class="archive-row-gc-icon" title="Group chat">💬</span>'
         +   '<span class="archive-row-gc-topic">' + topic + '</span>'
         +   partLabel
-        +   '<button type="button" class="conv-archived-gc-unarchive-btn"'
-        +     ' data-role="archived-gc-unarchive"'
-        +     ' data-gc-id="' + escapeHtml(gcId) + '"'
-        +     ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
-        +     ' title="Restore from trash">&#8617;</button>'
+        +   lifecycleButtons
         + '</div>';
     };
 
@@ -26298,12 +26317,12 @@
         const archivedRepoPath = cards[0].folder_path || '';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
           + _folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)
-          + _renderRowsWithRepeatGroups(cards, { suppressFolderChip: true, goalIconOnly: true })
+          + _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'all-main', suppressFolderChip: true, goalIconOnly: true })
           + '</div>';
       }).join('');
-      // Archived group chats live in the Trash section (CCC-468), so the
-      // flat tail below the folder groups carries only unarchived chats.
-      _arcRows = _folderRowsHtml + (_allTabView === 'coding' ? (_gcItems || []).map(it => it.html).join('') : '');
+      _arcRows = _folderRowsHtml + (_allTabView === 'coding'
+        ? (_gcItems || []).map(it => it.allHtml || it.html).join('') + _mainArchivedGroupChats.map(gc => _renderArchivedGcRow(gc, 'all-main')).join('')
+        : '');
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length + _trashConvs.length;
     } else {
       // Flat chronological list — original behavior.
@@ -26321,7 +26340,14 @@
       // so they appear in the All view, not just in Current Sessions.
       if (_allTabView === 'coding') {
         for (const gci of (_gcItems || [])) {
-          _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.html });
+          _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.allHtml || gci.html });
+        }
+        for (const gc of _mainArchivedGroupChats) {
+          _archivedItems.push({
+            pinRank: Infinity,
+            mtime: (gc.archived_at || gc.closed_at || gc.last_mtime) || 0,
+            html: _renderArchivedGcRow(gc, 'all-main'),
+          });
         }
       }
       _archivedItems.sort((a, b) => {
@@ -26363,7 +26389,7 @@
         const sep = _arcSeparatorBefore(mtime, pinRank);
         _arcChunks.push(sep + _renderRowsWithRepeatGroups(
           _arcCurCards,
-          { suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }
+          { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }
         ));
         _arcCurCards = [];
         _arcCurKey = null;
@@ -26379,7 +26405,7 @@
         if (!key) {
           _arcFlushCards();
           const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
-          _arcChunks.push(sep + _renderRow(it.card, { suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }));
+          _arcChunks.push(sep + _renderRow(it.card, { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }));
           continue;
         }
         if (_arcCurKey && _arcCurKey !== key) _arcFlushCards();
@@ -26416,13 +26442,13 @@
       for (const c of _trashConvs) {
         _trashItems.push({
           mtime: c.modified || c.last_interacted || 0,
-          html: _renderRow(c, { suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }),
+          html: _renderRow(c, { lifecycleContext: 'trash', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }),
         });
       }
-      for (const gc of _archivedGroupChatsForRender) {
+      for (const gc of _trashGroupChats) {
         _trashItems.push({
           mtime: (gc.archived_at || gc.closed_at || gc.last_mtime) || 0,
-          html: _renderArchivedGcRow(gc),
+          html: _renderArchivedGcRow(gc, 'trash'),
         });
       }
       if (_trashItems.length) {
@@ -26933,7 +26959,7 @@
     // Click handler for archived group chat rows — open the reader.
     $convList.querySelectorAll('[data-role="archived-gc-row"]').forEach(row => {
       row.addEventListener('click', (ev) => {
-        if (ev.target.closest('[data-role="archived-gc-unarchive"]')) return;
+        if (ev.target.closest('[data-role="archived-gc-unarchive"], [data-role="archived-gc-trash"], [data-role="archived-gc-untrash"]')) return;
         ev.preventDefault();
         ev.stopImmediatePropagation();
         ev.stopPropagation();
@@ -26953,12 +26979,31 @@
         if (path || chatId) unarchiveGroupChat(path, chatId);
       });
     });
+    $convList.querySelectorAll('[data-role="archived-gc-trash"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
+        if (path || chatId) trashGroupChat(path, chatId);
+      });
+    });
+    $convList.querySelectorAll('[data-role="archived-gc-untrash"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
+        if (path || chatId) untrashGroupChat(path, chatId);
+      });
+    });
     // Click handlers for In Group Chat rows. Row click → open the reader
     // for that specific chat. Archive button click → POST archive and
     // refresh; stopPropagation so it doesn't also open the reader.
     $convList.querySelectorAll('[data-role="ingroupchat-row"]').forEach(row => {
       row.addEventListener('click', (ev) => {
         if (ev.target.closest('[data-role="ingroupchat-archive"]')) return;
+        if (ev.target.closest('[data-role="ingroupchat-trash"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-rename"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-clear"]')) return;
         if (ev.target.closest('[data-role="ingroupchat-pause"]')) return;
@@ -26997,6 +27042,15 @@
         const path = btn.dataset.gcPath;
         const chatId = btn.dataset.gcId || null;
         if (path || chatId) archiveGroupChat(path, chatId);
+      });
+    });
+    $convList.querySelectorAll('[data-role="ingroupchat-trash"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const path = btn.dataset.gcPath;
+        const chatId = btn.dataset.gcId || null;
+        if (path || chatId) trashGroupChat(path, chatId);
       });
     });
     $convList.querySelectorAll('[data-role="ingroupchat-pause"]').forEach(btn => {
@@ -28229,6 +28283,7 @@
         const item = btn.closest('.conv-item');
         const convId = item.dataset.id;
         const sessionId = item.dataset.sessionId;
+        const nextArchived = btn.dataset.archived === 'true';
         // If the user is archiving the currently-open row, pick its
         // neighbour now (next sibling, falling back to previous) so we can
         // jump there once the row vanishes from the active list. Skip
@@ -28251,38 +28306,36 @@
                       || findSibling(item.previousElementSibling, 'prev');
         }
         try {
-          const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId);
+          const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
+            || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
           const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
-          // The All tab renders from archiveData while `conversationsData` can
-          // lag behind it. Use the rendered row as the state authority so an
-          // active row's trash action cannot accidentally restore instead.
-          const currentlyArchived = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section, .conv-trash-section');
-          const nextArchived = !currentlyArchived;
           const data = await ccPostJson('/api/conversations/' + convId + '/archive',
             archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived));
           if (!data.ok) {
             const ghError = data.github && data.github.stderr;
             throw new Error(data.error || ghError || 'archive failed');
           }
-          if (c) {
-            c.archived = data.archived;
-            setOptimisticOverride(c.session_id, { archived: c.archived });
-          }
+          const patchLifecycle = (rows) => {
+            if (!Array.isArray(rows)) return;
+            for (const row of rows) {
+              if (!row) continue;
+              if (row.id === convId || (row.session_id || row.id) === sessionId) {
+                row.archived = !!data.archived;
+                if (!data.archived) row.trashed = false;
+              }
+            }
+          };
+          patchLifecycle(conversationsData);
+          patchLifecycle(archiveData);
+          patchLifecycle(currentRepoBacklogData);
+          setOptimisticOverride(sessionId, {
+            archived: !!data.archived,
+            ...(!data.archived ? { trashed: false } : {}),
+          });
           if ((convId || '').startsWith('xrepo-issue-') || (convId || '').startsWith('backlog-issue-')) {
             if (data.archived) _archivedBacklogIds.add(convId);
             else _archivedBacklogIds.delete(convId);
             _persistArchivedBacklog();
-          }
-          // Patch archiveData (Round 5 / #13) so the next archive
-          // re-render reflects the new archived state — same reason
-          // as the rename patch above.
-          if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) {
-            const ac = archiveData.find(x => x.session_id === sessionId);
-            if (ac) ac.archived = data.archived;
-          }
-          if (typeof currentRepoBacklogData !== 'undefined' && Array.isArray(currentRepoBacklogData)) {
-            const bc = currentRepoBacklogData.find(x => x.id === convId || x.session_id === sessionId);
-            if (bc) bc.archived = data.archived;
           }
           renderSidebar(filterConversations($convSearch.value));
           if (data.archived && nextSelectId) {
@@ -28290,8 +28343,47 @@
           }
           if (!data.archived) showOpToast('Restored to Active');
         } catch (err) {
-          const restoring = item.classList.contains('is-archived-row') || !!item.closest('.conv-archived-section, .conv-trash-section');
-          showOpToast((restoring ? 'Restore' : 'Archive') + ' failed (' + err.message + ')', 'error');
+          showOpToast((nextArchived ? 'Archive' : 'Move to Active') + ' failed (' + err.message + ')', 'error');
+        }
+      });
+    });
+    $convList.querySelectorAll('.conv-trash-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const item = btn.closest('.conv-item');
+        const convId = item && item.dataset.id;
+        const sessionId = item && item.dataset.sessionId;
+        if (!convId || !sessionId) return;
+        const wantTrashed = btn.dataset.role === 'trash';
+        try {
+          const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
+            || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
+          const repoPath = (c && rowRepoPath(c)) || item.dataset.repoPath || '';
+          const data = await ccPostJson('/api/conversations/' + encodeURIComponent(convId) + '/trash', {
+            session_id: sessionId,
+            repo_path: repoPath,
+            trashed: wantTrashed,
+          });
+          if (!data.ok) throw new Error(data.error || 'trash transition failed');
+          const patchLifecycle = (rows) => {
+            if (!Array.isArray(rows)) return;
+            for (const row of rows) {
+              if (!row) continue;
+              if (row.id === convId || (row.session_id || row.id) === sessionId) {
+                row.archived = !!data.archived;
+                row.trashed = !!data.trashed;
+              }
+            }
+          };
+          patchLifecycle(conversationsData);
+          patchLifecycle(archiveData);
+          patchLifecycle(currentRepoBacklogData);
+          setOptimisticOverride(sessionId, { archived: !!data.archived, trashed: !!data.trashed });
+          renderSidebar(filterConversations($convSearch.value));
+          showOpToast(data.trashed ? 'Moved to Trash' : 'Untrashed to Archived');
+        } catch (err) {
+          showOpToast((wantTrashed ? 'Trash' : 'Untrash') + ' failed (' + err.message + ')', 'error');
         }
       });
     });
@@ -43373,6 +43465,52 @@
       showOpToast?.('Group chat restored');
     } catch (err) {
       showOpToast?.('Could not restore group chat: ' + ((err && err.message) || 'network error'), 'error');
+    }
+  }
+
+  async function trashGroupChat(chatPath, chatId) {
+    if (!chatPath && !chatId) return;
+    try {
+      const res = await fetch('/api/group-chats/trash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not trash group chat: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      try { await pollGcActive(); } catch (_) {}
+      try { await refreshArchivedGroupChats(); } catch (_) {}
+      const $s = document.getElementById('convSearch');
+      renderArchiveList($s ? $s.value : '');
+      showOpToast?.('Group chat moved to Trash');
+    } catch (err) {
+      showOpToast?.('Could not trash group chat: ' + ((err && err.message) || 'network error'), 'error');
+    }
+  }
+
+  async function untrashGroupChat(chatPath, chatId) {
+    if (!chatPath && !chatId) return;
+    try {
+      const res = await fetch('/api/group-chats/untrash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: chatPath || '', id: chatId || '' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        showOpToast?.('Could not untrash group chat: ' + ((data && data.error) || 'unknown'), 'error');
+        return;
+      }
+      try { await pollGcActive(); } catch (_) {}
+      try { await refreshArchivedGroupChats(); } catch (_) {}
+      const $s = document.getElementById('convSearch');
+      renderArchiveList($s ? $s.value : '');
+      showOpToast?.('Group chat returned to Archived');
+    } catch (err) {
+      showOpToast?.('Could not untrash group chat: ' + ((err && err.message) || 'network error'), 'error');
     }
   }
 
