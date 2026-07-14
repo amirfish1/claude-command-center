@@ -8,9 +8,14 @@ portable calculations and Git collection.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
+import sqlite3
 import subprocess
+import sys
+import threading
+import time
 from collections import defaultdict
 from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
@@ -21,6 +26,7 @@ _CONVENTIONAL_RE = re.compile(r"^([A-Za-z]+)(?:\([^)]*\))?!?:\s+(.+)$")
 _TICKET_REF_RE = re.compile(r"\b([A-Z][A-Z0-9_-]*-\d+)\b", re.IGNORECASE)
 _RECORD_SEP = "\x1e"
 _FIELD_SEP = "\x1f"
+_IDLE_TIME_RE = re.compile(r'"HIDIdleTime"\s*=\s*(\d+)')
 
 
 def classify_commit(subject: str) -> str:
@@ -652,3 +658,228 @@ def aggregate_productivity(
         "deliveries": deliveries,
         "trends": trends,
     }
+
+
+class ProductivityStore:
+    """Small versioned SQLite store for the cached dashboard and idle samples."""
+
+    SCHEMA_VERSION = 1
+    CACHE_KEY = "full-16-weeks"
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path).expanduser()
+        self._lock = threading.RLock()
+        self._ensure_schema()
+
+    def _connect(self):
+        return sqlite3.connect(str(self.path), timeout=5)
+
+    def _read_schema_version(self) -> int | None:
+        if not self.path.is_file():
+            return None
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'"
+                ).fetchone()
+            return int(row[0]) if row else None
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            return None
+
+    def _reset_files(self) -> None:
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                Path(str(self.path) + suffix).unlink()
+            except FileNotFoundError:
+                pass
+
+    def _ensure_schema(self) -> None:
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self.path.exists() and self._read_schema_version() != self.SCHEMA_VERSION:
+                self._reset_files()
+            with self._connect() as conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS meta ("
+                    " key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS cache ("
+                    " key TEXT PRIMARY KEY, generated_at REAL NOT NULL,"
+                    " payload_json TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS presence ("
+                    " minute_epoch INTEGER PRIMARY KEY, active INTEGER NOT NULL,"
+                    " idle_seconds REAL, sampled_at REAL NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                    ("schema_version", str(self.SCHEMA_VERSION)),
+                )
+
+    def save_payload(self, payload: dict, generated_at: float | None = None) -> None:
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be a dictionary")
+        generated_at = float(time.time() if generated_at is None else generated_at)
+        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO cache(key, generated_at, payload_json)"
+                " VALUES (?, ?, ?)",
+                (self.CACHE_KEY, generated_at, encoded),
+            )
+
+    def load_payload(self) -> dict | None:
+        try:
+            with self._lock, self._connect() as conn:
+                row = conn.execute(
+                    "SELECT generated_at, payload_json FROM cache WHERE key = ?",
+                    (self.CACHE_KEY,),
+                ).fetchone()
+            if not row:
+                return None
+            payload = json.loads(row[1])
+            if not isinstance(payload, dict):
+                return None
+            return {"generated_at": float(row[0]), "payload": payload}
+        except (OSError, sqlite3.Error, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    def record_presence(
+        self,
+        sampled_at: datetime,
+        *,
+        active: bool,
+        idle_seconds: float | None,
+    ) -> None:
+        sampled_at = _parse_timestamp(sampled_at)
+        if sampled_at is None:
+            raise ValueError("sampled_at must be a timestamp")
+        epoch = sampled_at.timestamp()
+        minute_epoch = int(epoch // 60) * 60
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO presence("
+                " minute_epoch, active, idle_seconds, sampled_at) VALUES (?, ?, ?, ?)",
+                (
+                    minute_epoch,
+                    1 if active else 0,
+                    None if idle_seconds is None else float(idle_seconds),
+                    epoch,
+                ),
+            )
+
+    def load_presence(self, start_date: date, end_date: date, *, tzinfo=None) -> list[dict]:
+        tzinfo = tzinfo or datetime.now().astimezone().tzinfo or timezone.utc
+        start = datetime.combine(start_date, datetime_time.min, tzinfo=tzinfo)
+        end = datetime.combine(end_date + timedelta(days=1), datetime_time.min, tzinfo=tzinfo)
+        try:
+            with self._lock, self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT minute_epoch, active, idle_seconds FROM presence"
+                    " WHERE minute_epoch >= ? AND minute_epoch < ? ORDER BY minute_epoch",
+                    (int(start.timestamp()), int(end.timestamp())),
+                ).fetchall()
+        except (OSError, sqlite3.Error):
+            return []
+        return [
+            {
+                "sampled_at": datetime.fromtimestamp(row[0], timezone.utc).isoformat(),
+                "active": bool(row[1]),
+                "idle_seconds": row[2],
+            }
+            for row in rows
+        ]
+
+    def prune_presence(self, *, now: datetime | None = None, weeks: int = 18) -> int:
+        now = _parse_timestamp(now or datetime.now(timezone.utc))
+        cutoff = int((now - timedelta(weeks=weeks)).timestamp())
+        try:
+            with self._lock, self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM presence WHERE minute_epoch < ?", (cutoff,)
+                )
+                return max(0, int(cursor.rowcount or 0))
+        except (OSError, sqlite3.Error):
+            return 0
+
+
+def read_macos_idle_seconds(output: str) -> float | None:
+    """Parse IOHIDSystem's nanosecond idle counter from ``ioreg`` output."""
+    match = _IDLE_TIME_RE.search(str(output or ""))
+    if not match:
+        return None
+    try:
+        return int(match.group(1)) / 1_000_000_000
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def presence_summary(rows: list[dict], *, tzinfo=None) -> dict:
+    tzinfo = tzinfo or datetime.now().astimezone().tzinfo or timezone.utc
+    sampled = set()
+    active = set()
+    hour_minutes = defaultdict(set)
+    ordered_times = []
+    for row in rows:
+        timestamp = _parse_timestamp(row.get("sampled_at"))
+        if timestamp is None:
+            continue
+        local = timestamp.astimezone(tzinfo)
+        minute_epoch = int(local.timestamp() // 60)
+        sampled.add(minute_epoch)
+        ordered_times.append(local)
+        if row.get("active"):
+            active.add(minute_epoch)
+            hour_minutes[(local.date().isoformat(), local.hour)].add(local.minute)
+    first = min(ordered_times) if ordered_times else None
+    last = max(ordered_times) if ordered_times else None
+    span_minutes = int((last - first).total_seconds() // 60) + 1 if first and last else 0
+    return {
+        "sample_minutes": len(sampled),
+        "active_minutes": len(active),
+        "focus_hours": sum(1 for minutes in hour_minutes.values() if len(minutes) >= 45),
+        "coverage_pct": round(len(sampled) * 100 / span_minutes, 1) if span_minutes else 0.0,
+        "first_sampled_at": first.isoformat() if first else None,
+        "last_sampled_at": last.isoformat() if last else None,
+    }
+
+
+def sample_presence(store: ProductivityStore, now: datetime | None = None) -> dict:
+    """Take one local OS-idle sample and persist its minute bucket."""
+    now = now or datetime.now(timezone.utc)
+    if sys.platform != "darwin":
+        return {"available": False, "reason": "unsupported_platform"}
+    try:
+        proc = subprocess.run(
+            ["ioreg", "-c", "IOHIDSystem"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {"available": False, "reason": "idle_time_unavailable"}
+    idle = read_macos_idle_seconds(proc.stdout) if proc.returncode == 0 else None
+    if idle is None:
+        return {"available": False, "reason": "idle_time_unavailable"}
+    is_active = idle < 300
+    store.record_presence(now, active=is_active, idle_seconds=idle)
+    return {"available": True, "active": is_active, "idle_seconds": round(idle, 3)}
+
+
+def run_presence_sampler(
+    store: ProductivityStore,
+    stop_event: threading.Event | None = None,
+    interval: float = 60,
+) -> None:
+    """Sample presence until the daemon process or optional event stops."""
+    stop_event = stop_event or threading.Event()
+    while not stop_event.is_set():
+        try:
+            sample_presence(store)
+            store.prune_presence()
+        except Exception:
+            # Presence is optional evidence and must never take down CCC.
+            pass
+        stop_event.wait(max(1.0, float(interval)))
