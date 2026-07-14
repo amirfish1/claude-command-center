@@ -5590,6 +5590,7 @@ def _live_registry_conversation_row(
     folder_label=None,
     name_overrides=None,
     archived_set=None,
+    trashed_set=None,
     pinned_rank=None,
     repo_pins=None,
     resolve_worktree_dirty=True,
@@ -5666,6 +5667,7 @@ def _live_registry_conversation_row(
         "spawn_named": spawn_named,
         "name_overridden": bool(overrides.get(sid)),
         "archived": sid in (archived_set or set()),
+        "trashed": sid in (trashed_set or set()),
         "recently_unarchived": _is_recently_unarchived(sid),
         "verified": False,
         "pinned": sid in (pinned_rank or {}),
@@ -5757,6 +5759,10 @@ def find_all_conversations(
         archived_set = set(_load_archived_conversations(sweep=False))
     except Exception:
         archived_set = set()
+    try:
+        trashed_set = set(_load_trashed_conversations(sweep=False))
+    except Exception:
+        trashed_set = set()
     try:
         pinned_list = _load_pinned_conversations()
     except Exception:
@@ -6109,6 +6115,7 @@ def find_all_conversations(
                 "spawn_named": spawn_named,
                 "name_overridden": bool(name_overrides.get(session_id)),
                 "archived": session_id in archived_set,
+                "trashed": session_id in trashed_set,
                 "recently_unarchived": _is_recently_unarchived(session_id),
                 "pinned": session_id in pinned_rank,
                 "pin_rank": pinned_rank.get(session_id),
@@ -6177,6 +6184,7 @@ def find_all_conversations(
                 meta,
                 name_overrides=name_overrides,
                 archived_set=archived_set,
+                trashed_set=trashed_set,
                 pinned_rank=pinned_rank,
                 repo_pins=repo_pins,
                 resolve_worktree_dirty=resolve_worktree_dirty,
@@ -6833,6 +6841,10 @@ def _rehydrate_archive_cached_rows(rows):
     except Exception:
         archived_set = set()
     try:
+        trashed_set = set(_load_trashed_conversations(sweep=False))
+    except Exception:
+        trashed_set = set()
+    try:
         verified_set = set(_load_verified_conversations())
     except Exception:
         verified_set = set()
@@ -6881,6 +6893,7 @@ def _rehydrate_archive_cached_rows(rows):
                 row["name_overridden"] = False
 
             row["archived"] = sid in archived_set
+            row["trashed"] = sid in trashed_set
             row["recently_unarchived"] = _is_recently_unarchived(sid, _now_rehydrate)
             row["verified"] = sid in verified_set
             row["pinned"] = sid in pinned_rank
@@ -9592,6 +9605,7 @@ SESSION_NAMES_FILE = COMMAND_CENTER_STATE_DIR / "session-names.json"  # side-car
 SESSION_NAME_MAX_CHARS = 120
 CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  # [session_id,...]
 ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
+TRASHED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "trashed-conversations.json"  # [session_id,...] — subset of archived
 ARCHIVE_GRACE_FILE = COMMAND_CENTER_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
 ARCHIVE_EVENTS_LOG = COMMAND_CENTER_STATE_DIR / "archive-events.log"  # append-only: every archive/unarchive state change, so "why did X get unarchived" is answerable without re-deriving candidacy internals after the fact (CCC-445)
 
@@ -10597,6 +10611,26 @@ def _save_archived_conversations(archived):
         archived = []
     ARCHIVED_CONVERSATIONS_FILE.write_text(json.dumps(archived, indent=2))
     return archived
+
+
+def _load_trashed_conversations(*, sweep=True):
+    """Load trashed session ids. `sweep` exists for archive-helper parity."""
+    try:
+        data = json.loads(TRASHED_CONVERSATIONS_FILE.read_text())
+        if isinstance(data, list):
+            return [sid for sid in data if isinstance(sid, str)]
+    except (OSError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def _save_trashed_conversations(trashed):
+    """Persist trashed session ids."""
+    LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if not isinstance(trashed, list):
+        trashed = []
+    TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
+    return trashed
 
 
 def _load_pinned_conversations():
@@ -15532,6 +15566,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
         return conversations
     name_overrides = _load_session_name_overrides()
     archived_set = set(_load_archived_conversations())
+    trashed_set = set(_load_trashed_conversations())
     pinned_list = _load_pinned_conversations()
     pinned_rank = _pinned_rank_map(pinned_list)
     verified_set = set(_load_verified_conversations())
@@ -15898,6 +15933,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "parent_session_id": parent_session_id,
             "model": tail_meta.get("model"),
             "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
             "pinned": sid in pinned_rank,
             "pin_rank": pinned_rank.get(sid),
             "verified": sid in verified_set,
@@ -15938,6 +15974,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
                 folder_label=_resolve_dir_case(repo_path),
                 name_overrides=name_overrides,
                 archived_set=archived_set,
+                trashed_set=trashed_set,
                 pinned_rank=pinned_rank,
                 repo_pins=_repo_pins,
                 resolve_worktree_dirty=True,
@@ -25229,6 +25266,10 @@ def find_codex_conversations(
     except Exception:
         archived_set = set()
     try:
+        trashed_set = set(_load_trashed_conversations(sweep=False))
+    except Exception:
+        trashed_set = set()
+    try:
         verified_set = set(_load_verified_conversations())
     except Exception:
         verified_set = set()
@@ -25419,6 +25460,7 @@ def find_codex_conversations(
             "pr_state": None,
             "session_state": _parse_session_state(tail.get("last_assistant_text")),
             "archived": sid in archived_set or bool(row.get("archived")),
+            "trashed": sid in trashed_set or bool(row.get("trashed")),
             "verified": sid in verified_set,
             "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
@@ -28832,6 +28874,10 @@ def find_gemini_conversations(
     except Exception:
         archived_set = set()
     try:
+        trashed_set = set(_load_trashed_conversations(sweep=False))
+    except Exception:
+        trashed_set = set()
+    try:
         verified_set = set(_load_verified_conversations())
     except Exception:
         verified_set = set()
@@ -28957,6 +29003,7 @@ def find_gemini_conversations(
             "pr_state": None,
             "session_state": _parse_session_state(tail.get("last_assistant_text")),
             "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
             "verified": sid in verified_set,
             "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
@@ -29091,6 +29138,7 @@ def find_gemini_conversations(
             "pr_state": None,
             "session_state": None,
             "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
             "verified": sid in verified_set,
             "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
@@ -30386,6 +30434,10 @@ def find_cursor_conversations(
     except Exception:
         archived_set = set()
     try:
+        trashed_set = set(_load_trashed_conversations(sweep=False))
+    except Exception:
+        trashed_set = set()
+    try:
         verified_set = set(_load_verified_conversations())
     except Exception:
         verified_set = set()
@@ -30526,6 +30578,7 @@ def find_cursor_conversations(
             "pr_state": None,
             "session_state": _parse_session_state(tail.get("last_assistant_text")),
             "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
             "verified": sid in verified_set,
             "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
@@ -32050,6 +32103,10 @@ def find_hermes_conversations(
     except Exception:
         archived_set = set()
     try:
+        trashed_set = set(_load_trashed_conversations(sweep=False))
+    except Exception:
+        trashed_set = set()
+    try:
         verified_set = set(_load_verified_conversations())
     except Exception:
         verified_set = set()
@@ -32200,6 +32257,7 @@ def find_hermes_conversations(
                 "pr_state": None,
                 "session_state": _parse_session_state(summary.get("last_assistant")),
                 "archived": sid in archived_set or bool(row.get("archived")),
+                "trashed": sid in trashed_set or bool(row.get("trashed")),
                 "verified": sid in verified_set,
                 "pinned_repo": pinned_repo,
                 "last_interacted": last_interactions.get(sid),
@@ -32944,6 +33002,10 @@ def find_kilo_conversations(
         except Exception:
             archived_set = set()
         try:
+            trashed_set = set(_load_trashed_conversations(sweep=False))
+        except Exception:
+            trashed_set = set()
+        try:
             verified_set = set(_load_verified_conversations())
         except Exception:
             verified_set = set()
@@ -33057,6 +33119,7 @@ def find_kilo_conversations(
                 "pr_state": None,
                 "session_state": _parse_session_state(last_assistant_text),
                 "archived": sid in archived_set or bool(s.get("archived")),
+                "trashed": sid in trashed_set or bool(s.get("trashed")),
                 "verified": sid in verified_set,
                 "pinned_repo": pinned_repo,
                 "last_interacted": last_interactions.get(sid),
@@ -34148,6 +34211,10 @@ def find_antigravity_conversations(
     except Exception:
         archived_set = set()
     try:
+        trashed_set = set(_load_trashed_conversations(sweep=False))
+    except Exception:
+        trashed_set = set()
+    try:
         verified_set = set(_load_verified_conversations())
     except Exception:
         verified_set = set()
@@ -34301,6 +34368,7 @@ def find_antigravity_conversations(
             "pr_state": None,
             "session_state": _parse_session_state(tail.get("last_assistant_text")),
             "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
             "verified": sid in verified_set,
             "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
@@ -34407,6 +34475,7 @@ def find_antigravity_conversations(
             "pr_state": None,
             "session_state": None,
             "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
             "verified": sid in verified_set,
             "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
@@ -43007,6 +43076,7 @@ def find_pkood_agents():
     # consulting it here, archive toggles on a pkood-* id would persist
     # but the rendered card would still show archived=False.
     archived_set = set(_load_archived_conversations())
+    trashed_set = set(_load_trashed_conversations())
     agents = []
     for meta_file in PKOOD_STATE_DIR.glob("*_meta.json"):
         try:
@@ -43064,6 +43134,7 @@ def find_pkood_agents():
             "pending_tool": None,
             "pending_file": None,
             "archived": (f"pkood-{agent_id}" in archived_set),
+            "trashed": (f"pkood-{agent_id}" in trashed_set),
             "verified": False,
             "name_overridden": False,
             # Pkood-specific fields
