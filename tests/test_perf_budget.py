@@ -14,11 +14,13 @@ restore the gate. See CLAUDE.md "Performance gates".
 """
 import importlib
 import concurrent.futures
+import gzip
 import json
 import os
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 import warnings
 from pathlib import Path
@@ -26,6 +28,149 @@ from pathlib import Path
 import pytest
 
 server = importlib.import_module("server")
+
+
+def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
+    """The slim sidebar response must retain every current row-critical field."""
+    now = 2_000_000.0
+    transcript = " ".join(
+        f"assistant-debug-{index:04d}-{(index * 2654435761) % (2 ** 32):08x}"
+        for index in range(600)
+    )
+    row = {
+        "id": "row-1",
+        "session_id": "session-1",
+        "source": "interactive",
+        "engine": "codex",
+        "source_platform": "cli",
+        "folder_label": "demo",
+        "folder_path": "/tmp/demo",
+        "slug": "demo",
+        "session_cwd": "/tmp/demo",
+        "session_cwd_exists": True,
+        "session_cwd_is_worktree": True,
+        "mtime": now - 10,
+        "modified": now - 10,
+        "last_interacted": now - 10,
+        "size": 123,
+        "first_message": "Keep lifecycle metadata",
+        "ai_title": "Lifecycle title",
+        "display_name": "Lifecycle title",
+        "name_overridden": True,
+        "branch": "main",
+        "git_branch": "main",
+        "effective_branch": "feature/list",
+        "effective_kind": "worktree",
+        "worktree_label": "list",
+        "archived": True,
+        "trashed": True,
+        "pinned": True,
+        "pin_rank": 2,
+        "all_lane_override": "workers",
+        "state": "ended",
+        "ended_blocked": True,
+        "session_state": {"did": "preserved"},
+        "goal": "ship this",
+        "goal_status": "active",
+        "parent_session_id": "parent-1",
+        "hermes_lineage_session_ids": ["parent-1"],
+        "model": "gpt-5.5",
+        "is_live": True,
+        "sidecar_status": "working",
+        "pending_tool": "Bash",
+        "question_waiting": True,
+        "question_text": "Approve?",
+        "latest_input_tokens": 99,
+        "live_context_percent": 25,
+        "quality_score": 95,
+        "quality_summary": "healthy",
+        "codex_state": "working",
+        "codex_fresh": True,
+        "jsonl_path": "/private/transcript.jsonl",
+        "last_assistant_text": transcript,
+        "debug": {"transcript": transcript},
+    }
+
+    payload = server._archive_list_payload([row], window="1d", now=now)
+
+    projected = payload["conversations"]
+    assert projected == [
+        {key: row[key] for key in server._ARCHIVE_LIST_FIELDS if key in row}
+    ]
+    assert payload["window"] == "1d"
+    assert payload["count"] == 1
+    assert payload["total_count"] == 1
+    assert {"archived", "trashed", "pinned", "all_lane_override", "session_state", "goal", "codex_state"} <= set(projected[0])
+    assert "jsonl_path" not in projected[0]
+    assert "last_assistant_text" not in projected[0]
+    assert "debug" not in projected[0]
+    full = json.dumps({"conversations": [row]}).encode()
+    slim = json.dumps(payload).encode()
+    assert len(slim) < len(full) * 0.45
+    assert len(gzip.compress(slim)) < len(gzip.compress(full)) * 0.75
+
+
+def test_archive_list_window_filters_old_rows_but_keeps_pinned_and_hermes():
+    now = 2_000_000.0
+    rows = [
+        {"session_id": "recent", "engine": "claude", "mtime": now - 60},
+        {"session_id": "week-old", "engine": "claude", "mtime": now - 2 * 86400},
+        {"session_id": "old", "engine": "claude", "mtime": now - 8 * 86400},
+        {"session_id": "pinned-old", "engine": "claude", "pinned": True, "mtime": now - 8 * 86400},
+        {"session_id": "hermes-old", "engine": "hermes", "mtime": now - 8 * 86400},
+    ]
+
+    assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="1d", now=now)] == ["recent", "pinned-old", "hermes-old"]
+    assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="7d", now=now)] == ["recent", "week-old", "pinned-old", "hermes-old"]
+    assert [row["session_id"] for row in server._archive_list_project_rows(rows, window="all", now=now)] == ["recent", "week-old", "old", "pinned-old", "hermes-old"]
+
+
+def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
+    calls = []
+
+    def cached(options):
+        calls.append(options)
+        return ([{"session_id": "warm", "mtime": 2_000_000}], True)
+
+    monkeypatch.setattr(server, "_archive_all_rows_cached", cached)
+
+    rows, from_cache = server._archive_list_rows_cached({"include_prs": False}, window="all")
+
+    assert [row["session_id"] for row in rows] == ["warm"]
+    assert from_cache is True
+    assert calls == [{"include_prs": False}]
+
+
+def test_archive_list_http_route_projects_cached_rows(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "_archive_all_rows_cached",
+        lambda _options: ([{
+            "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
+            "archived": True, "trashed": True, "all_lane_override": "messages",
+            "last_assistant_text": "not returned",
+        }], True),
+    )
+    httpd = server.http.server.ThreadingHTTPServer(("127.0.0.1", 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=all",
+            timeout=5,
+        ) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    assert body["window"] == "all"
+    assert body["cached"] is True
+    assert body["conversations"] == [{
+        "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
+        "archived": True, "trashed": True, "all_lane_override": "messages",
+    }]
 
 
 def test_productivity_refresh_reads_shared_sources_once(monkeypatch):
