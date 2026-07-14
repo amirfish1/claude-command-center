@@ -38532,6 +38532,43 @@
     return pages;
   }
 
+  function presentationItemGroups(items) {
+    const source = Array.isArray(items) ? items : [];
+    const groups = [];
+    for (let i = 0; i < source.length; i++) {
+      const group = [source[i]];
+      if (source[i] && source[i].keepWithNext && i + 1 < source.length) {
+        group.push(source[++i]);
+      }
+      groups.push(group);
+    }
+    return groups;
+  }
+
+  function paginatePresentationGroups(groups, fits, fitsFinal) {
+    const pages = [];
+    let pageGroups = [];
+    (Array.isArray(groups) ? groups : []).forEach(group => {
+      const candidate = pageGroups.concat([group]);
+      const items = candidate.flat();
+      if (pageGroups.length && !fits(items, pages.length)) {
+        pages.push(pageGroups);
+        pageGroups = [group];
+      } else {
+        pageGroups = candidate;
+      }
+    });
+    if (pageGroups.length) pages.push(pageGroups);
+    if (typeof fitsFinal === 'function' && pages.length) {
+      while (pages[pages.length - 1].length > 1
+          && !fitsFinal(pages[pages.length - 1].flat(), pages.length - 1)) {
+        const moved = pages[pages.length - 1].pop();
+        pages.push([moved]);
+      }
+    }
+    return pages.map(page => page.flat());
+  }
+
   function presentationBlockWeight(node) {
     if (!node) return 1;
     const tag = String(node.tagName || '').toLowerCase();
@@ -38583,7 +38620,7 @@
           // A numbered point is a slide-sized idea. Unordered lists stay
           // together when they fit, but the list itself never dangles after
           // unrelated prose at the bottom of a slide.
-          breakBefore: ordered || index === 0,
+          breakBefore: index === 0,
         };
       });
   }

@@ -53,6 +53,29 @@ def _run_paginator(items, budget):
     return _run_javascript_function("paginatePresentationItems", items, budget)
 
 
+def _run_group_packer(items, capacity):
+    groups_source = _javascript_function_source("presentationItemGroups")
+    packer_source = _javascript_function_source("paginatePresentationGroups")
+    script = groups_source + "\n" + packer_source + "\n" + f"""
+const items = {json.dumps(items)};
+const capacity = {json.dumps(capacity)};
+const groups = presentationItemGroups(items);
+const pages = paginatePresentationGroups(
+  groups,
+  candidate => candidate.reduce((sum, item) => sum + item.height, 0) <= capacity,
+);
+process.stdout.write(JSON.stringify(pages.map(page => page.map(item => item.id))));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 class TestPresentationModeStatic(unittest.TestCase):
     def test_selector_is_clone_safe_and_exposes_three_modes(self):
         html = INDEX.read_text(encoding="utf-8")
@@ -101,6 +124,45 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertEqual(
             [[item["id"] for item in page] for page in pages],
             [["intro"], ["table"], ["tail"]],
+        )
+
+    def test_compact_numbered_items_share_a_page(self):
+        source = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("function presentationItemGroups(items)", source)
+        self.assertIn("function paginatePresentationGroups(groups, fits", source)
+
+        pages = _run_group_packer(
+            [
+                {"id": "heading", "keepWithNext": True, "height": 2},
+                {"id": "intro", "height": 2},
+                {"id": "number-1", "height": 3},
+                {"id": "number-2", "height": 3},
+            ],
+            capacity=12,
+        )
+
+        self.assertEqual(
+            pages,
+            [["heading", "intro", "number-1", "number-2"]],
+        )
+
+    def test_overflow_moves_a_whole_semantic_group(self):
+        source = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("function presentationItemGroups(items)", source)
+        self.assertIn("function paginatePresentationGroups(groups, fits", source)
+
+        pages = _run_group_packer(
+            [
+                {"id": "intro", "height": 5},
+                {"id": "heading", "keepWithNext": True, "height": 2},
+                {"id": "body", "height": 4},
+            ],
+            capacity=8,
+        )
+
+        self.assertEqual(
+            pages,
+            [["intro"], ["heading", "body"]],
         )
 
     def test_paginator_starts_semantic_list_boundaries_on_fresh_pages(self):
@@ -191,7 +253,8 @@ class TestPresentationModeStatic(unittest.TestCase):
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertIn("function presentationListItems(list)", app_js)
-        self.assertIn("breakBefore: ordered || index === 0", app_js)
+        self.assertIn("breakBefore: index === 0", app_js)
+        self.assertNotIn("breakBefore: ordered || index === 0", app_js)
         self.assertIn("function syncPresentationActivity(view)", app_js)
         self.assertIn("conv-presentation-activity", app_js)
         self.assertIn(".conv-presentation-activity", css)
