@@ -5712,15 +5712,6 @@
     border-color: var(--accent);
   }
   .conv-item.is-archived-row .conv-row-end { min-width: 76px; }
-  .conv-item.is-archived-row .conv-row-end > .conv-archive-btn.is-restore {
-    position: relative;
-    z-index: 1;
-  }
-  .conv-item.is-archived-row:hover .conv-row-end > .conv-archive-btn.is-restore,
-  .conv-item.is-archived-row:focus-within .conv-row-end > .conv-archive-btn.is-restore {
-    opacity: 0;
-    pointer-events: none;
-  }
   .conv-item .conv-merge-btn {
     opacity: 0; font-size: 13px; cursor: pointer;
     background: none; border: none; color: var(--text-muted);
@@ -13170,6 +13161,10 @@
 #convList .conv-item-archived-gc:hover .conv-archived-gc-unarchive-btn { opacity: 0.7; }
 #convList .conv-archived-gc-unarchive-btn:hover {
   opacity: 1; color: var(--accent); background: rgba(88,166,255,0.12);
+}
+#convList .conv-archived-gc-unarchive-btn[data-role="archived-gc-trash"]:hover,
+#convList .conv-ingroupchat-archive-btn[data-role="ingroupchat-trash"]:hover {
+  color: var(--red); background: rgba(248,81,73,0.12);
 }
 
 /* ---------------------------------------------------------------------------
