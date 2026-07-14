@@ -13163,6 +13163,15 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_terminal_input_lock:
             self.assertEqual(self.server._pending_terminal_input_queue.get(sid), ["hello term"])
 
+    def test_pending_inputs_watcher_lock_rejects_another_process(self):
+        """Only one CCC server may drain a shared durable input queue."""
+        import fcntl
+
+        lock_path = pathlib.Path(self.tmp_dir) / "pending-inputs.watcher.lock"
+        with open(lock_path, "a+") as held:
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertIsNone(self.server._acquire_pending_inputs_watcher_lock(lock_path))
+
     def test_get_queued_events_for_session(self):
         sid = "test-session-id"
         with self.server._pending_resume_lock:

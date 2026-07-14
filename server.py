@@ -25758,6 +25758,21 @@ _PENDING_RESUME_RETRY_DELAY_S = 60.0
 _pending_terminal_input_queue: dict = {}   # session_id → [text, ...]
 _pending_terminal_input_lock = threading.Lock()
 _pending_inputs_lock = threading.Lock()
+_pending_inputs_watcher_lock_file = None
+
+
+def _acquire_pending_inputs_watcher_lock(lock_path):
+    """Return an exclusive process-wide watcher lock, or None when owned."""
+    handle = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a+")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except OSError:
+        if handle is not None:
+            handle.close()
+        return None
 
 
 def _load_pending_inputs():
@@ -26433,6 +26448,15 @@ def _verify_terminal_drain_receipts(now=None):
 
 def _start_resume_queue_watcher() -> None:
     """Drain queued prompts once fire-and-watch engines or live terminal sessions go idle."""
+    global _pending_inputs_watcher_lock_file
+    if _pending_inputs_watcher_lock_file is not None:
+        return
+    lock_path = PENDING_INPUTS_FILE.with_suffix(".watcher.lock")
+    lock_file = _acquire_pending_inputs_watcher_lock(lock_path)
+    if lock_file is None:
+        print("[pending-inputs] resume watcher owned by another CCC process", flush=True)
+        return
+    _pending_inputs_watcher_lock_file = lock_file
     _load_pending_inputs()
     # Restore durable Codex coordination events before any app-server
     # notification persists (and would otherwise clobber) the state file.
@@ -26443,6 +26467,10 @@ def _start_resume_queue_watcher() -> None:
     def _watcher():
         while True:
             time.sleep(5)
+            # Another local CCC may have accepted a message since the previous
+            # pass. The single watcher owns delivery but always refreshes this
+            # durable queue before draining it.
+            _load_pending_inputs()
             with _pending_resume_lock:
                 queued_sids = list(_pending_resume_queue.keys())
             for sid in queued_sids:
