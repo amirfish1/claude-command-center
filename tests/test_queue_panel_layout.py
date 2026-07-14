@@ -41,6 +41,22 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("if (next === 'queue' && queuePane) {", app_js)
         self.assertIn("_setSharedQueuePanelHost('rail');", app_js)
 
+    def test_shared_queue_host_can_shrink_to_the_status_rail(self):
+        """Long queue rows must not expand the fixed-width status rail."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        rail_host_css = app_css[
+            app_css.index(".shared-queue-host-rail {"):
+            app_css.index("body.status-pos-right .shared-queue-host-rail > .files-queue-panel", app_css.index(".shared-queue-host-rail {"))
+        ]
+        rail_panel_css = app_css[
+            app_css.index("body.status-pos-right .shared-queue-host-rail > .files-queue-panel {"):
+            app_css.index("body.status-pos-right .status-rail-pane > .files-panel .files-resize-handle", app_css.index("body.status-pos-right .shared-queue-host-rail > .files-queue-panel {"))
+        ]
+
+        self.assertIn("min-width: 0;", rail_host_css)
+        self.assertIn("min-width: 0;", rail_panel_css)
+
     def test_queue_panel_note_text_expands_with_rail_width(self):
         """Queue rows should not pre-truncate notes before CSS can size them."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
