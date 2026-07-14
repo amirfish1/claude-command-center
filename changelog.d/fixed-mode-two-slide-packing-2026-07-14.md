@@ -1,0 +1,1 @@
+- Fixed Mode 2 presentation pagination to fill slides by rendered content height instead of splitting compact numbered and bulleted content into sparse pages.
