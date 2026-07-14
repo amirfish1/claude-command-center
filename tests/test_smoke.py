@@ -10647,7 +10647,8 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._pending_resume_queue[sid] = ["first"]
         try:
             with mock.patch.object(server, "_resolve_codex_bin") as resolve_bin, \
-                 mock.patch.object(server, "_codex_resume_or_steer_via_app_server") as app_send:
+                 mock.patch.object(server, "_codex_resume_or_steer_via_app_server") as app_send, \
+                 mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
                 result = server.resume_session_codex(sid, "second")
         finally:
             with server._pending_resume_lock:
@@ -10658,6 +10659,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["queued"])
         self.assertEqual(queued, ["first", "second"])
+        schedule.assert_called_once_with(sid)
         resolve_bin.assert_not_called()
         app_send.assert_not_called()
 
