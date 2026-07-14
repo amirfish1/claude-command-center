@@ -49,3 +49,22 @@ def test_archive_buttons_carry_explicit_desired_state():
 def test_group_chats_have_distinct_trash_and_untrash_calls():
     assert "fetch('/api/group-chats/trash'" in APP_JS
     assert "fetch('/api/group-chats/untrash'" in APP_JS
+
+
+def test_all_tab_group_chat_trash_action_uses_trash_glyph_and_accessible_labels():
+    start = APP_JS.index("const _allChatHtml =")
+    all_chat = APP_JS[start:APP_JS.index("return {", start)]
+    assert "replace(" not in all_chat
+    assert "_groupChatLifecycleAction('ingroupchat-trash', 'Move to Trash', '&#128465;')" in all_chat
+    action_start = APP_JS.index("const _groupChatLifecycleAction =")
+    action_builder = APP_JS[action_start:APP_JS.index("const _chatHtml =", action_start)]
+    assert "' data-role=\"' + role + '\"'" in action_builder
+    assert "' title=\"' + label + '\" aria-label=\"' + label + '\">'" in action_builder
+
+    start = APP_JS.index("const lifecycleButtons = lifecycleContext === 'trash'")
+    archived_gc = APP_JS[
+        start:APP_JS.index("return '<div class=\"conv-item conv-item-archived-gc\"", start)
+    ]
+    assert 'title="Untrash to Archived" aria-label="Untrash to Archived"' in archived_gc
+    assert 'title="Move to Active" aria-label="Move to Active"' in archived_gc
+    assert 'title="Move to Trash" aria-label="Move to Trash"' in archived_gc

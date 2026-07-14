@@ -58278,9 +58278,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     # Already in the desired state — no-op, report it truthfully.
                     now_archived = is_arch
-                _save_archived_conversations(archived)
                 if not want:
                     _clear_trashed_on_unarchive(sid)
+                _save_archived_conversations(archived)
                 # Archiving retires the session — drop any stale Notification-hook
                 # marker so the dashboard doesn't keep classifying it as Waiting
                 # (which would pin the row to "In progress" and undo the move).
@@ -58334,9 +58334,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not sid:
                 self.send_json({"ok": False, "error": "missing session_id"}, 400)
                 return
-            if (re.match(r"^(?:backlog-issue|xrepo-issue-.+)-\d+$", conv_id)
-                    or re.match(r"^backlog-todo-\d+$", conv_id)
-                    or re.match(r"^issue-\d+$", conv_id)):
+            non_session_id = lambda value: (
+                re.match(r"^(?:backlog-issue|xrepo-issue-.+)-\d+$", value)
+                or re.match(r"^backlog-todo-\d+$", value)
+                or re.match(r"^issue-\d+$", value)
+            )
+            if non_session_id(conv_id) or non_session_id(sid):
                 self.send_json({
                     "ok": True,
                     "archived": False,
@@ -58346,10 +58349,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
                 return
             desired = payload.get("trashed")
+            if not isinstance(desired, bool):
+                self.send_json({"ok": False, "error": "trashed must be a boolean"}, 400)
+                return
             try:
-                current = _load_trashed_conversations(sweep=False)
-                want_trashed = desired if isinstance(desired, bool) else sid not in current
-                result = _set_conversation_trashed(sid, want_trashed)
+                result = _set_conversation_trashed(sid, desired)
                 _clear_archive_serve_cache()
                 self.send_json({"ok": True, **result})
             except OSError as e:
@@ -58417,12 +58421,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     for sid in to_remove:
                         _archive_grace.pop(sid, None)
                         _log_archive_event("unarchive", sid, "bulk")
-                    _save_archived_conversations(new_list)
                     if to_remove:
                         trashed_ids = _load_trashed_conversations(sweep=False)
                         remaining_trashed = [sid for sid in trashed_ids if sid not in to_remove]
                         if remaining_trashed != trashed_ids:
                             _save_trashed_conversations(remaining_trashed)
+                    _save_archived_conversations(new_list)
                     _save_archive_grace()
                 self.send_json({
                     "ok": True,

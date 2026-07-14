@@ -1,8 +1,38 @@
 import inspect
+import json
+import threading
+import urllib.error
+import urllib.request
 
 import pytest
 
 import server
+
+
+def _post_json(path, payload):
+    httpd = server.http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), server.CommandCenterHandler,
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        request = urllib.request.Request(
+            base + path,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            with error:
+                return error.code, json.loads(error.read().decode("utf-8"))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
 
 
 def test_trashed_conversations_round_trip(tmp_path, monkeypatch):
@@ -105,6 +135,73 @@ def test_unarchive_clears_trashed_state(tmp_path, monkeypatch):
 
     server._clear_trashed_on_unarchive("sid-a")
 
+    assert server._load_trashed_conversations() == []
+
+
+def test_trash_endpoint_rejects_issue_id_supplied_in_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+
+    status, body = _post_json(
+        "/api/conversations/harmless/trash",
+        {"session_id": "issue-123", "trashed": True},
+    )
+
+    assert status == 200
+    assert body["trashed"] is False
+    assert server._load_archived_conversations(sweep=False) == []
+    assert server._load_trashed_conversations() == []
+
+
+def test_trash_endpoint_requires_explicit_boolean_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+
+    status, body = _post_json("/api/conversations/sid-a/trash", {"session_id": "sid-a"})
+
+    assert status == 400
+    assert body["error"] == "trashed must be a boolean"
+    assert server._load_archived_conversations(sweep=False) == []
+    assert server._load_trashed_conversations() == []
+
+
+def test_single_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    server._save_archived_conversations(["sid-a"])
+    server._save_trashed_conversations(["sid-a"])
+    monkeypatch.setattr(
+        server,
+        "_save_archived_conversations",
+        lambda rows: (_ for _ in ()).throw(OSError("archive write failed")),
+    )
+
+    status, _body = _post_json(
+        "/api/conversations/sid-a/archive",
+        {"session_id": "sid-a", "archived": False},
+    )
+
+    assert status == 500
+    assert server._load_trashed_conversations() == []
+
+
+def test_bulk_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    server._save_archived_conversations(["sid-a"])
+    server._save_trashed_conversations(["sid-a"])
+    monkeypatch.setattr(
+        server,
+        "_save_archived_conversations",
+        lambda rows: (_ for _ in ()).throw(OSError("archive write failed")),
+    )
+
+    status, _body = _post_json(
+        "/api/conversations/archive-bulk",
+        {"session_ids": ["sid-a"], "archived": False},
+    )
+
+    assert status == 500
     assert server._load_trashed_conversations() == []
 
 

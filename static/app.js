@@ -24906,7 +24906,7 @@
             +     ' title="' + (isChatCollapsed ? 'Expand participant list' : 'Collapse participant list') + '">'
             +     (isChatCollapsed ? '&#9656;' : '&#9662;') + '</button>'
           : '<span class="conv-ingroupchat-collapse-btn conv-ingroupchat-collapse-spacer" aria-hidden="true"></span>';
-        const _chatHtml = '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + (isChatCollapsed ? ' is-collapsed' : '') + '">'
+        const _renderChatHtml = (lifecycleActionHtml) => '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + (isChatCollapsed ? ' is-collapsed' : '') + '">'
           + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isPaused ? ' conv-ingroupchat-row-paused' : '') + (isActiveChat || isActiveChatById ? ' active' : '') + '"'
           +   ' data-role="ingroupchat-row"'
           +   ' data-gc-id="' + escapeHtml(chatId) + '"'
@@ -24947,18 +24947,23 @@
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' data-gc-topic="' + escapeHtml(chat.topic || '') + '"'
           +     ' title="Clear chat content (header + participants kept; participants re-engaged)">🧹</button>'
-          +   '<button type="button" class="conv-ingroupchat-archive-btn"'
-          +     ' data-role="ingroupchat-archive"'
-          +     ' data-gc-id="' + escapeHtml(chatId) + '"'
-          +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          +     ' title="Archive this group chat">&#128229;</button>'
+          +   lifecycleActionHtml
           + '</div>'
           + chatWaitingHint
           + (partListHtml ? '<div class="conv-ingroupchat-participants">' + partListHtml + '</div>' : '')
           + '</div>';
-        const _allChatHtml = _chatHtml
-          .replace('data-role="ingroupchat-archive"', 'data-role="ingroupchat-trash"')
-          .replace('title="Archive this group chat"', 'title="Move this group chat to Trash"');
+        const _groupChatLifecycleAction = (role, label, glyph) =>
+          '<button type="button" class="conv-ingroupchat-archive-btn"'
+          + ' data-role="' + role + '"'
+          + ' data-gc-id="' + escapeHtml(chatId) + '"'
+          + ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
+          + ' title="' + label + '" aria-label="' + label + '">' + glyph + '</button>';
+        const _chatHtml = _renderChatHtml(
+          _groupChatLifecycleAction('ingroupchat-archive', 'Archive', '&#128229;')
+        );
+        const _allChatHtml = _renderChatHtml(
+          _groupChatLifecycleAction('ingroupchat-trash', 'Move to Trash', '&#128465;')
+        );
         return {
           mtime: chat.last_mtime || 0,
           pinRank: Infinity,  // group chats aren't pinnable today
@@ -26265,9 +26270,9 @@
         ? '<span class="archive-row-gc-partcount">' + partCount + '</span>'
         : '';
       const lifecycleButtons = lifecycleContext === 'trash'
-        ? '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-untrash" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Untrash to Archived">&#8617;</button>'
-        : '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-unarchive" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Move to Active">&#8617;</button>'
-          + '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-trash" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Move to Trash">&#128465;</button>';
+        ? '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-untrash" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Untrash to Archived" aria-label="Untrash to Archived">&#8617;</button>'
+        : '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-unarchive" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Move to Active" aria-label="Move to Active">&#8617;</button>'
+          + '<button type="button" class="conv-archived-gc-unarchive-btn" data-role="archived-gc-trash" data-gc-id="' + escapeHtml(gcId) + '" data-gc-path="' + escapeHtml(gc.path_tilde) + '" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>';
       return '<div class="conv-item conv-item-archived-gc" data-role="archived-gc-row"'
         + ' data-gc-id="' + escapeHtml(gcId) + '"'
         + ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
