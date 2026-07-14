@@ -29890,8 +29890,14 @@
     if (!view._convEndAffordanceAttached) attachConversationEndAffordance(view);
     const btn = view._convEndButton;
     if (!btn) return;
-    const scrollable = view.scrollHeight > view.clientHeight + CONV_BOTTOM_TOLERANCE;
-    const show = scrollable && !isConversationAtBottom(view);
+    const presentationDeck = view.classList.contains('is-presentation-mode')
+      ? view._presentationDeck
+      : null;
+    const scrollable = !presentationDeck
+      && view.scrollHeight > view.clientHeight + CONV_BOTTOM_TOLERANCE;
+    const show = presentationDeck
+      ? (Number(view._presentationIndex) || 0) < presentationDeck.length - 1
+      : scrollable && !isConversationAtBottom(view);
     btn.classList.toggle('visible', show);
     btn.setAttribute('aria-hidden', show ? 'false' : 'true');
     btn.tabIndex = show ? 0 : -1;
@@ -30067,6 +30073,42 @@
     updateConversationEndAffordance(view);
   }
 
+  function preserveConversationBottomOnComposerPointerDown(ev) {
+    const input = ev.target && ev.target.closest
+      ? ev.target.closest('.conv-input-bar textarea, .conv-input-bar input[type="text"]')
+      : null;
+    if (!input) return;
+    const pane = input.closest('.conv-pane[data-pane-id]');
+    const view = pane && pane.querySelector('.conversations-view');
+    if (!view || view.classList.contains('is-presentation-mode')
+        || !isConversationAtBottom(view)) return;
+    // Focusing the composer can change the grid height by a few pixels. Keep
+    // an already-bottom-pinned reader at the true tail after that reflow, but
+    // never move a reader who had intentionally scrolled up.
+    const restoreBottom = () => {
+      if (!view.isConnected || document.activeElement !== input) return;
+      view._pinnedToBottom = true;
+      scrollConversationToEnd(view);
+    };
+    requestAnimationFrame(() => {
+      restoreBottom();
+      // WebKit can apply the focus-within grid reflow one paint later.
+      requestAnimationFrame(restoreBottom);
+    });
+  }
+  document.addEventListener('pointerdown', preserveConversationBottomOnComposerPointerDown, true);
+
+  function jumpPresentationToEnd(view) {
+    if (!view || !view.classList.contains('is-presentation-mode')) return false;
+    const deck = view._presentationDeck;
+    if (!deck || !deck.length) return false;
+    const pane = view.closest('.conv-pane[data-pane-id]');
+    if (!pane) return false;
+    view._presentationIndex = deck.length - 1;
+    renderPresentationCursor(pane.dataset.paneId);
+    return true;
+  }
+
   function attachConversationEndAffordance(view) {
     if (!view || view._convEndAffordanceAttached) return;
     const host = view.closest('.conv-pane') || view.closest('.conv-panel');
@@ -30083,8 +30125,10 @@
     }
     btn._convTargetView = view;
     btn.addEventListener('click', () => {
-      view._pinnedToBottom = true;
-      scrollConversationToEnd(btn._convTargetView || view, 'smooth');
+      const targetView = btn._convTargetView || view;
+      targetView._pinnedToBottom = true;
+      if (jumpPresentationToEnd(targetView)) return;
+      scrollConversationToEnd(targetView, 'smooth');
     });
     view._convEndButton = btn;
     // "Jump to my last message" (CCC-292): reading a fresh reply means scrolling
@@ -38464,6 +38508,8 @@
         group.push(next);
         groupWeight += Math.max(1, Number(next && next.weight) || 1);
       }
+      const breakBefore = group.some(groupItem => groupItem && groupItem.breakBefore);
+      if (page.length && breakBefore) flush();
       if (page.length && pageWeight + groupWeight > limit) flush();
       page.push(...group);
       pageWeight += groupWeight;
@@ -38486,13 +38532,13 @@
     if (node.querySelector && node.querySelector('img,.msg-image,.mermaid-svg')) return 12;
     if (tag === 'ul' || tag === 'ol') return Math.max(5, 2 + node.querySelectorAll('li').length * 2);
     if (/^h[1-6]$/.test(tag)) return 2;
-    if (tag === 'blockquote') return Math.max(4, Math.ceil(text.length / 95) + 2);
-    return Math.max(2, Math.ceil(text.length / 95) + 1);
+    if (tag === 'blockquote') return Math.max(4, Math.ceil(text.length / 65) + 2);
+    return Math.max(2, Math.ceil(text.length / 65) + 1);
   }
 
   function presentationPageBudget(view) {
     const height = view && view.clientHeight ? view.clientHeight : 620;
-    return Math.max(10, Math.floor((height - 190) / 27));
+    return Math.max(9, Math.min(18, Math.floor((height - 210) / 42)));
   }
 
   function presentationClone(node) {
@@ -38500,6 +38546,33 @@
     if (clone.removeAttribute) clone.removeAttribute('id');
     if (clone.querySelectorAll) clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
     return clone;
+  }
+
+  function presentationListItems(list) {
+    const tag = String((list && list.tagName) || '').toLowerCase();
+    const ordered = tag === 'ol';
+    const baseStart = ordered ? Math.max(1, Number(list.getAttribute('start')) || 1) : 1;
+    return Array.from((list && list.children) || [])
+      .filter(item => String(item.tagName || '').toLowerCase() === 'li')
+      .map((item, index) => {
+        const wrapper = list.cloneNode(false);
+        wrapper.removeAttribute('id');
+        wrapper.classList.add('conv-presentation-list-fragment');
+        if (ordered) {
+          const explicitValue = Number(item.getAttribute('value'));
+          wrapper.setAttribute('start', String(Number.isFinite(explicitValue) && explicitValue > 0
+            ? explicitValue : baseStart + index));
+        }
+        wrapper.appendChild(presentationClone(item));
+        return {
+          node: wrapper,
+          weight: Math.max(3, presentationBlockWeight(item) + 1),
+          // A numbered point is a slide-sized idea. Unordered lists stay
+          // together when they fit, but the list itself never dangles after
+          // unrelated prose at the bottom of a slide.
+          breakBefore: ordered || index === 0,
+        };
+      });
   }
 
   function presentationAnswerBlocks(eventEl) {
@@ -38515,6 +38588,10 @@
       }
       children.forEach(child => {
         const tag = String(child.tagName || '').toLowerCase();
+        if (tag === 'ul' || tag === 'ol') {
+          blocks.push(...presentationListItems(child));
+          return;
+        }
         blocks.push({
           node: presentationClone(child),
           weight: presentationBlockWeight(child),
@@ -38711,7 +38788,62 @@
       stage.setAttribute('aria-label', 'Conversation presentation');
       view.appendChild(stage);
     }
+    let activity = stage.querySelector(':scope > .conv-presentation-activity');
+    if (!activity) {
+      activity = document.createElement('div');
+      activity.className = 'conv-presentation-activity';
+      activity.hidden = true;
+      activity.setAttribute('role', 'status');
+      activity.setAttribute('aria-live', 'polite');
+      stage.appendChild(activity);
+    }
+    let slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
+    if (!slot) {
+      slot = document.createElement('div');
+      slot.className = 'conv-presentation-slide-slot';
+      stage.appendChild(slot);
+    }
     return stage;
+  }
+
+  function syncPresentationActivity(view) {
+    if (!view || !view.classList.contains('is-presentation-mode')) return;
+    const stage = ensurePresentationStage(view);
+    const activity = stage.querySelector(':scope > .conv-presentation-activity');
+    const candidates = Array.from(view.querySelectorAll(':scope > .conv-live-tool-inline'));
+    const source = candidates.reverse().find(node => !node.classList.contains('is-done'));
+    if (!source) {
+      activity.hidden = true;
+      activity.replaceChildren();
+      return;
+    }
+    const clone = presentationClone(source);
+    clone.querySelectorAll('button').forEach(button => button.remove());
+    activity.className = 'conv-presentation-activity';
+    ['optimistic', 'in-flight', 'is-question', 'is-generating', 'is-error',
+      'is-stale-no-process', 'is-wake-status', 'wake-breakdown'].forEach(name => {
+      activity.classList.toggle(name, source.classList.contains(name));
+    });
+    activity.title = source.title || 'Agent activity';
+    activity.replaceChildren(...Array.from(clone.childNodes));
+    activity.hidden = false;
+  }
+
+  let _presentationActivityTimer = null;
+  function ensurePresentationActivityTimer() {
+    if (_presentationActivityTimer) return;
+    _presentationActivityTimer = setInterval(() => {
+      let active = false;
+      document.querySelectorAll('.conv-pane[data-pane-id]').forEach(pane => {
+        if (normalizePresentationMode(pane.dataset.presentationMode) === 'off') return;
+        active = true;
+        syncPresentationActivity(getConvViewForPane(pane.dataset.paneId));
+      });
+      if (!active) {
+        clearInterval(_presentationActivityTimer);
+        _presentationActivityTimer = null;
+      }
+    }, 1000);
   }
 
   function ensurePresentationDock(pane) {
@@ -38724,6 +38856,13 @@
       + '<button type="button" class="conv-presentation-nav" data-presentation-nav="-1" aria-label="Previous slide" title="Previous slide (Left arrow)">&#8592;</button>'
       + '<div class="conv-presentation-progress"><span class="conv-presentation-answer-label"></span><span class="conv-presentation-dots" aria-hidden="true"></span><span class="conv-presentation-overall"></span></div>'
       + '<button type="button" class="conv-presentation-nav" data-presentation-nav="1" aria-label="Next slide" title="Next slide (Right arrow)">&#8594;</button>';
+    dock.querySelectorAll('[data-presentation-nav]').forEach(button => {
+      button.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        stepPresentationSlide(pane.dataset.paneId, Number(button.dataset.presentationNav));
+      });
+    });
     const inputContext = pane.querySelector(':scope > .conv-input-context');
     pane.insertBefore(dock, inputContext || null);
     return dock;
@@ -38738,7 +38877,9 @@
     const index = Math.max(0, Math.min(deck.length - 1, Number(view._presentationIndex) || 0));
     view._presentationIndex = index;
     const stage = ensurePresentationStage(view);
-    stage.replaceChildren(deck[index]);
+    const slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
+    slot.replaceChildren(deck[index]);
+    syncPresentationActivity(view);
     const dock = ensurePresentationDock(pane);
     const slide = deck[index];
     const answer = Number(slide.dataset.answerIndex || 0);
@@ -38763,6 +38904,11 @@
     const next = dock.querySelector('[data-presentation-nav="1"]');
     if (prev) prev.disabled = index === 0;
     if (next) next.disabled = index === deck.length - 1;
+    updateConversationEndAffordance(view);
+  }
+
+  function shouldFollowPresentationTail(previousIndex, previousCount, requested) {
+    return !!requested && previousCount > 0 && previousIndex >= previousCount - 1;
   }
 
   function refreshPresentationForPane(paneId, opts) {
@@ -38786,20 +38932,23 @@
     }
 
     const previousDeck = view._presentationDeck || [];
-    const previousSlide = previousDeck[view._presentationIndex || 0];
+    const previousIndex = Number(view._presentationIndex) || 0;
+    const previousSlide = previousDeck[previousIndex];
     const previousKey = previousSlide && previousSlide.dataset.presentationKey;
     const deck = buildPresentationDeck(view, mode);
     if (!deck.length) return;
     let index = previousKey
       ? deck.findIndex(slide => slide.dataset.presentationKey === previousKey)
       : -1;
-    if (index < 0) index = Math.min(Number(view._presentationIndex) || deck.length - 1, deck.length - 1);
-    if ((opts && opts.followTail) || !previousDeck.length) index = deck.length - 1;
+    if (index < 0) index = Math.min(previousIndex || deck.length - 1, deck.length - 1);
+    if (shouldFollowPresentationTail(previousIndex, previousDeck.length, opts && opts.followTail)
+        || !previousDeck.length) index = deck.length - 1;
     view._presentationDeck = deck;
     view._presentationIndex = index;
     view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
     view.classList.toggle('is-presentation-mode-1', mode === '1');
     view.classList.toggle('is-presentation-mode-2', mode === '2');
+    ensurePresentationActivityTimer();
     renderPresentationCursor(targetPaneId);
   }
 

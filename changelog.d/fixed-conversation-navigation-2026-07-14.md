@@ -1,0 +1,1 @@
+- Fixed presentation arrows and End navigation, and kept bottom-pinned transcripts at the tail when focusing the composer.

@@ -31,14 +31,12 @@ def _javascript_function_source(name):
     raise AssertionError(f"could not find the end of {name}")
 
 
-def _run_paginator(items, budget):
-    function_source = _javascript_function_source("paginatePresentationItems")
+def _run_javascript_function(name, *args):
+    function_source = _javascript_function_source(name)
     script = (
         function_source
-        + "\nconst result = paginatePresentationItems("
-        + json.dumps(items)
-        + ", "
-        + str(budget)
+        + f"\nconst result = {name}(..."
+        + json.dumps(args)
         + ");\nprocess.stdout.write(JSON.stringify(result));"
     )
     completed = subprocess.run(
@@ -49,6 +47,10 @@ def _run_paginator(items, budget):
         text=True,
     )
     return json.loads(completed.stdout)
+
+
+def _run_paginator(items, budget):
+    return _run_javascript_function("paginatePresentationItems", items, budget)
 
 
 class TestPresentationModeStatic(unittest.TestCase):
@@ -89,6 +91,27 @@ class TestPresentationModeStatic(unittest.TestCase):
             [["intro"], ["table"], ["tail"]],
         )
 
+    def test_paginator_starts_semantic_list_boundaries_on_fresh_pages(self):
+        pages = _run_paginator(
+            [
+                {"id": "intro", "weight": 3},
+                {"id": "number-1", "weight": 3, "breakBefore": True},
+                {"id": "number-2", "weight": 3, "breakBefore": True},
+            ],
+            12,
+        )
+
+        self.assertEqual(
+            [[item["id"] for item in page] for page in pages],
+            [["intro"], ["number-1"], ["number-2"]],
+        )
+
+    def test_mode_two_budget_is_capped_for_tall_windows(self):
+        self.assertLessEqual(
+            _run_javascript_function("presentationPageBudget", {"clientHeight": 1600}),
+            18,
+        )
+
     def test_mode_state_is_pane_scoped_and_only_default_is_persisted(self):
         app_js = APP_JS.read_text(encoding="utf-8")
 
@@ -97,6 +120,33 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("ccc-conv-presentation-mode", app_js)
         self.assertIn("function refreshPresentationForPane(paneId", app_js)
         self.assertIn("function stepPresentationSlide(paneId, delta)", app_js)
+
+    def test_live_refresh_follows_tail_only_if_reader_was_already_there(self):
+        self.assertTrue(
+            _run_javascript_function("shouldFollowPresentationTail", 30, 31, True)
+        )
+        self.assertFalse(
+            _run_javascript_function("shouldFollowPresentationTail", 29, 31, True)
+        )
+        self.assertFalse(
+            _run_javascript_function("shouldFollowPresentationTail", 30, 31, False)
+        )
+
+    def test_conversation_end_control_targets_presentation_tail(self):
+        attach = _javascript_function_source("attachConversationEndAffordance")
+        update = _javascript_function_source("updateConversationEndAffordance")
+        render_cursor = _javascript_function_source("renderPresentationCursor")
+
+        self.assertIn("jumpPresentationToEnd(targetView)", attach)
+        self.assertIn("function jumpPresentationToEnd(view)", APP_JS.read_text(encoding="utf-8"))
+        self.assertIn("presentationDeck.length - 1", update)
+        self.assertIn("updateConversationEndAffordance(view)", render_cursor)
+
+    def test_dock_navigation_is_bound_at_the_control(self):
+        ensure_dock = _javascript_function_source("ensurePresentationDock")
+
+        self.assertIn("button.addEventListener('click'", ensure_dock)
+        self.assertIn("stepPresentationSlide(pane.dataset.paneId", ensure_dock)
 
     def test_durable_and_streaming_renders_refresh_the_active_deck(self):
         app_js = APP_JS.read_text(encoding="utf-8")
@@ -108,6 +158,16 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("refreshPresentationForPane(paneId", app_js[durable_start:durable_end])
         self.assertIn("refreshPresentationForPane(paneId", app_js[streaming_start:streaming_end])
 
+    def test_mode_two_splits_lists_and_surfaces_live_activity(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        css = APP_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("function presentationListItems(list)", app_js)
+        self.assertIn("breakBefore: ordered || index === 0", app_js)
+        self.assertIn("function syncPresentationActivity(view)", app_js)
+        self.assertIn("conv-presentation-activity", app_js)
+        self.assertIn(".conv-presentation-activity", css)
+
     def test_presentation_css_has_stage_dock_and_right_rail_areas(self):
         css = APP_CSS.read_text(encoding="utf-8")
 
@@ -117,6 +177,8 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn(".conv-presentation-dock", css)
         self.assertIn('"present-toolbar rail"', css)
         self.assertIn('"present-dock    rail"', css)
+        self.assertIn('"present-toolbar"', css)
+        self.assertIn('"present-dock"', css)
         self.assertIn("prefers-reduced-motion: reduce", css)
 
 

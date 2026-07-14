@@ -19040,9 +19040,60 @@ body:has(.gc-reader) .pwa-install-banner {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 9px;
+}
+.conv-presentation-slide-slot {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   align-items: stretch;
   justify-content: center;
 }
+.conv-presentation-activity {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, #58a6ff 42%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, #58a6ff 10%, var(--surface));
+  color: #8fc7ff;
+  font-size: 12px;
+  overflow: hidden;
+}
+.conv-presentation-activity[hidden] { display: none; }
+.conv-presentation-activity .cl-pulse {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px color-mix(in srgb, currentColor 70%, transparent);
+  animation: pulse 1s infinite;
+}
+.conv-presentation-activity .cl-tool { font-weight: 700; white-space: nowrap; }
+.conv-presentation-activity .cl-file,
+.conv-presentation-activity .cl-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.conv-presentation-activity .cl-age { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
+.conv-presentation-activity.is-question { color: #d8b4fe; border-color: color-mix(in srgb, #a78bfa 45%, var(--border)); }
+.conv-presentation-activity.is-error,
+.conv-presentation-activity.is-stale-no-process { color: var(--red); }
+.conv-presentation-activity .wb-stages { display: flex; align-items: center; gap: 8px; }
+.conv-presentation-activity .wb-readout { color: var(--text-muted); font-size: 11px; }
+.conv-presentation-list-fragment + .conv-presentation-list-fragment { margin-top: -0.55em; }
+.conv-presentation-list-fragment > li { margin-block: 0; }
 .conv-presentation-slide {
   display: flex;
   flex: 1 1 auto;
@@ -19233,6 +19284,28 @@ body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.i
 }
 body.status-pos-right .conv-pane:has(> .status-rail) > .conv-presentation-toolbar { grid-area: present-toolbar; min-width: 0; }
 body.status-pos-right .conv-pane:has(> .status-rail) > .conv-presentation-dock { grid-area: present-dock; min-width: 0; }
+body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
+  grid-template-areas:
+    "header"
+    "present-toolbar"
+    "conv"
+    "present-dock"
+    "goal"
+    "input"
+    "hint"
+    "context";
+}
+body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(> .conv-input-context.is-new-session) {
+  grid-template-areas:
+    "header"
+    "present-toolbar"
+    "conv"
+    "present-dock"
+    "context"
+    "goal"
+    "input"
+    "hint";
+}
 
 @media (max-width: 760px) {
   .conv-presentation-toolbar { gap: 6px; padding-inline: 8px; }
@@ -19252,5 +19325,6 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .conv-presentation-dock {
 
 @media (prefers-reduced-motion: reduce) {
   .conv-presentation-slide,
-  .conv-presentation-live::before { animation: none; }
+  .conv-presentation-live::before,
+  .conv-presentation-activity .cl-pulse { animation: none; }
 }

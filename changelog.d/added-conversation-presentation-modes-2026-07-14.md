@@ -1,0 +1,1 @@
+- Added zero-token-cost presentation modes with semantic list pagination, live activity reassurance, and per-pane answer decks.
