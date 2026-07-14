@@ -1,0 +1,1 @@
+- Replace the landing-page hero mockup with a current three-pane CCC workspace showing sessions, conversation context, and its linked issue queue.
