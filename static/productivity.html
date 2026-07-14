@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0f14">
+<title>CCC — Productivity</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f14;
+    --surface: #111823;
+    --surface-2: #151f2d;
+    --border: #263244;
+    --text: #e8eef6;
+    --muted: #8fa1b5;
+    --accent: #45d1bf;
+    --blue: #65a9ff;
+    --purple: #b18cff;
+    --green: #57c96b;
+    --orange: #efb24a;
+    --red: #f06b66;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 70% -20%, rgba(69, 209, 191, .11), transparent 32rem),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--ui);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, a { font: inherit; }
+  a { color: var(--muted); text-decoration: none; }
+  a:hover { color: var(--text); }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 15px clamp(16px, 3vw, 42px);
+    border-bottom: 1px solid rgba(38, 50, 68, .85);
+    background: rgba(11, 15, 20, .92);
+    backdrop-filter: blur(16px);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .brand h1 { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+  .brand span { color: var(--muted); font-size: 12px; }
+  .top-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+  .range-tabs { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+  .range-tabs button, .refresh-btn {
+    border: 0;
+    border-radius: 7px;
+    padding: 7px 10px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .range-tabs button[aria-pressed="true"] { color: #07110f; background: var(--accent); font-weight: 700; }
+  .refresh-btn { border: 1px solid var(--border); color: var(--text); }
+  .refresh-btn:hover { border-color: var(--accent); }
+  .page {
+    width: min(1600px, 100%);
+    margin: 0 auto;
+    padding: 30px clamp(16px, 3vw, 42px) 64px;
+  }
+  .intro { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; margin-bottom: 18px; }
+  .intro h2 { margin: 0 0 8px; font-size: clamp(25px, 4vw, 43px); letter-spacing: -.04em; }
+  .intro p { margin: 0; color: var(--muted); max-width: 760px; line-height: 1.55; }
+  .date-range { color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+  .status {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(17, 24, 35, .72);
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 20px;
+  }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: 0 0 auto; }
+  .status.building .status-dot { background: var(--orange); animation: pulse 1.2s infinite; }
+  .status.failed .status-dot { background: var(--red); }
+  .status.stale .status-dot { background: var(--orange); }
+  @keyframes pulse { 50% { opacity: .35; transform: scale(.75); } }
+  .summary-grid { display: grid; grid-template-columns: repeat(6, minmax(130px, 1fr)); gap: 10px; margin-bottom: 22px; }
+  .metric-card {
+    min-height: 112px;
+    padding: 15px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: linear-gradient(145deg, rgba(21, 31, 45, .92), rgba(17, 24, 35, .78));
+  }
+  .metric-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .065em; }
+  .metric-value { margin-top: 8px; font: 700 clamp(22px, 2.4vw, 31px)/1 var(--mono); letter-spacing: -.05em; }
+  .metric-note { color: var(--muted); font-size: 11px; margin-top: 9px; line-height: 1.35; }
+  .metric-card.outcome { border-color: rgba(69, 209, 191, .32); }
+  .metric-card.agent { border-color: rgba(177, 140, 255, .28); }
+  .metric-card.time { border-color: rgba(101, 169, 255, .28); }
+  .section-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, .55fr); gap: 14px; margin-bottom: 16px; }
+  .panel { border: 1px solid var(--border); border-radius: 13px; background: rgba(17, 24, 35, .78); overflow: hidden; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 17px; border-bottom: 1px solid var(--border); }
+  .panel-head h3 { margin: 0; font-size: 14px; }
+  .panel-sub { color: var(--muted); font-size: 11px; }
+  .weekly-chart { display: flex; align-items: flex-end; gap: 8px; height: 180px; padding: 26px 17px 12px; overflow-x: auto; }
+  .week-column { display: grid; grid-template-rows: 1fr auto; align-items: end; gap: 8px; height: 100%; min-width: 46px; flex: 1 0 46px; }
+  .week-bars { height: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 3px; }
+  .week-bar { width: 13px; min-height: 2px; border-radius: 4px 4px 1px 1px; }
+  .week-bar.features { background: var(--accent); }
+  .week-bar.fixes { background: var(--blue); }
+  .week-label { color: var(--muted); font: 10px var(--mono); text-align: center; white-space: nowrap; }
+  .legend { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 11px; }
+  .legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .legend .features::before { background: var(--accent); }
+  .legend .fixes::before { background: var(--blue); }
+  .insights { padding: 10px 17px 17px; display: grid; gap: 8px; }
+  .insight { padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+  .insight strong { display: block; font-size: 13px; margin-bottom: 4px; }
+  .insight span { color: var(--muted); font-size: 11px; line-height: 1.4; }
+  .trend-up { color: var(--green); }
+  .trend-down { color: var(--red); }
+  .trend-flat { color: var(--orange); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th, td { padding: 12px 14px; border-bottom: 1px solid rgba(38, 50, 68, .72); text-align: right; font-size: 12px; vertical-align: top; }
+  th { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; background: rgba(21, 31, 45, .65); position: sticky; top: 0; }
+  th:first-child, td:first-child, td.work-cell { text-align: left; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: rgba(101, 169, 255, .035); }
+  .project-name { font-weight: 700; font-size: 13px; }
+  .work-cell { min-width: 280px; max-width: 480px; }
+  details summary { cursor: pointer; color: var(--muted); list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "+"; color: var(--accent); margin-right: 6px; }
+  details[open] summary::before { content: "−"; }
+  .work-list { margin: 9px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  .work-list li { color: var(--text); font-size: 11px; line-height: 1.4; }
+  .kind { display: inline-block; min-width: 25px; padding: 2px 4px; margin-right: 5px; border-radius: 4px; font: 9px var(--mono); text-transform: uppercase; text-align: center; }
+  .kind.feature { background: rgba(69, 209, 191, .13); color: var(--accent); }
+  .kind.fix { background: rgba(101, 169, 255, .13); color: var(--blue); }
+  .coverage { padding: 17px; display: grid; grid-template-columns: minmax(260px, .7fr) minmax(0, 1.3fr); gap: 18px; }
+  .coverage-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .coverage-stat { padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+  .coverage-stat strong { display: block; font: 16px var(--mono); }
+  .coverage-stat span { color: var(--muted); font-size: 10px; }
+  .coverage-copy { color: var(--muted); font-size: 11px; line-height: 1.55; }
+  .coverage-copy ul { margin: 0; padding-left: 18px; }
+  .warning { color: var(--orange); }
+  .empty, .error { padding: 30px; color: var(--muted); text-align: center; }
+  .error { color: var(--red); }
+  .spacer { height: 16px; }
+  body.is-loading .summary-grid { opacity: .55; }
+  @media (max-width: 1180px) { .summary-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 820px) {
+    .topbar, .intro { align-items: flex-start; flex-direction: column; }
+    .top-actions { justify-content: flex-start; }
+    .section-grid { grid-template-columns: 1fr; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .coverage { grid-template-columns: 1fr; }
+    .date-range { white-space: normal; }
+  }
+  @media (max-width: 480px) {
+    .page { padding-top: 20px; }
+    .brand span { display: none; }
+    .range-tabs { width: 100%; }
+    .range-tabs button { flex: 1; }
+    .top-actions { width: 100%; }
+    .summary-grid { gap: 8px; }
+    .metric-card { min-height: 105px; padding: 12px; }
+    .metric-value { font-size: 22px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; scroll-behavior: auto !important; } }
+</style>
+</head>
+<body class="is-loading">
+<header class="topbar">
+  <div class="brand"><h1>Productivity</h1><span>outcomes · projects · leverage</span></div>
+  <div class="top-actions">
+    <a href="/throughput.html">Token throughput</a>
+    <nav class="range-tabs" aria-label="Trend range">
+      <button type="button" data-weeks="6">6 weeks</button>
+      <button type="button" data-weeks="8">8 weeks</button>
+      <button type="button" data-weeks="12">12 weeks</button>
+      <button type="button" data-weeks="16">16 weeks</button>
+    </nav>
+    <button class="refresh-btn" id="refreshButton" type="button">Refresh data</button>
+  </div>
+</header>
+
+<main class="page">
+  <section class="intro">
+    <div>
+      <h2>What did I actually ship?</h2>
+      <p>Delivered features and fixes are the outcome. Commits, lines, turns, tokens, time, and agent parallelism are supporting evidence—not a single synthetic productivity score.</p>
+    </div>
+    <div class="date-range" id="dateRange">Loading range…</div>
+  </section>
+
+  <div class="status building" id="refreshStatus" role="status" aria-live="polite">
+    <span class="status-dot"></span><span>Building the first local productivity snapshot…</span>
+  </div>
+
+  <section class="summary-grid" id="summaryCards" aria-label="Productivity summary"></section>
+
+  <div class="section-grid">
+    <section class="panel" id="weeklyTrend" aria-label="Weekly trend">
+      <div class="panel-head">
+        <div><h3>Weekly deliveries</h3><span class="panel-sub">Features and fixes, backed by Git and WatchTower evidence</span></div>
+        <div class="legend"><span class="features">Features</span><span class="fixes">Fixes</span></div>
+      </div>
+      <div class="weekly-chart" id="weeklyChart"></div>
+    </section>
+    <aside class="panel" aria-label="Productivity signals">
+      <div class="panel-head"><h3>Signals</h3><span class="panel-sub">Association, not causation</span></div>
+      <div class="insights" id="insights"></div>
+    </aside>
+  </div>
+
+  <section class="panel" aria-label="Project breakdown">
+    <div class="panel-head">
+      <div><h3>What I worked on</h3><span class="panel-sub">Every CCC-observed repository, grouped by project</span></div>
+    </div>
+    <div class="table-wrap">
+      <table id="projectTable">
+        <thead><tr><th>Project</th><th>Features</th><th>Fixes</th><th>Commits</th><th>Lines</th><th>Turns</th><th>Tokens</th><th>Work</th><th>Agent gross / net</th><th>Delivered items</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="spacer"></div>
+
+  <section class="panel" aria-label="Daily activity">
+    <div class="panel-head">
+      <div><h3>Day by day</h3><span class="panel-sub">Measured activity and named delivery evidence</span></div>
+    </div>
+    <div class="table-wrap">
+      <table id="dailyTable">
+        <thead><tr><th>Date</th><th>Features</th><th>Fixes</th><th>Commits</th><th>Lines</th><th>Turns</th><th>Tokens</th><th>Work</th><th>Computer</th><th>45m hours</th><th>Agent gross / net</th><th>WT open / closed</th><th>Delivered items</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="spacer"></div>
+
+  <section class="panel" id="coveragePanel" aria-label="Data coverage">
+    <div class="panel-head"><div><h3>Coverage and definitions</h3><span class="panel-sub">What is measured, estimated, or unavailable</span></div></div>
+    <div class="coverage" id="coverageBody"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  const PRODUCTIVITY_RANGE_KEY = 'ccc-productivity-weeks';
+  const VALID_WEEKS = [6, 8, 12, 16];
+  let selectedWeeks = 8;
+  let lastData = null;
+  let pollTimer = null;
+
+  try {
+    const saved = Number(localStorage.getItem(PRODUCTIVITY_RANGE_KEY));
+    if (VALID_WEEKS.indexOf(saved) !== -1) selectedWeeks = saved;
+  } catch (_) {}
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (char) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char];
+    });
+  }
+
+  function compact(value) {
+    const number = Number(value) || 0;
+    if (Math.abs(number) >= 1000000000) return (number / 1000000000).toFixed(1).replace(/\.0$/, '') + 'B';
+    if (Math.abs(number) >= 1000000) return (number / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (Math.abs(number) >= 1000) return (number / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+    return Math.round(number).toLocaleString();
+  }
+
+  function duration(seconds) {
+    const total = Math.max(0, Number(seconds) || 0);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.round((total % 3600) / 60);
+    if (hours && minutes) return hours + 'h ' + minutes + 'm';
+    if (hours) return hours + 'h';
+    return minutes + 'm';
+  }
+
+  function shortDate(value) {
+    const date = new Date(String(value).length === 10 ? value + 'T12:00:00' : value);
+    return Number.isNaN(date.getTime()) ? String(value || '') : new Intl.DateTimeFormat(undefined, {month: 'short', day: 'numeric'}).format(date);
+  }
+
+  function updateRangeButtons() {
+    document.querySelectorAll('[data-weeks]').forEach(function (button) {
+      button.setAttribute('aria-pressed', String(Number(button.dataset.weeks) === selectedWeeks));
+    });
+  }
+
+  function status(message, state) {
+    const host = document.getElementById('refreshStatus');
+    host.className = 'status ' + (state || '');
+    host.innerHTML = '<span class="status-dot"></span><span>' + escapeHtml(message) + '</span>';
+  }
+
+  function workItems(items) {
+    items = Array.isArray(items) ? items : [];
+    if (!items.length) return '<span class="panel-sub">No feature/fix evidence</span>';
+    return '<details><summary>' + items.length + ' item' + (items.length === 1 ? '' : 's') + '</summary><ul class="work-list">' +
+      items.map(function (item) {
+        const kind = item.kind === 'feature' ? 'feature' : 'fix';
+        const evidence = [item.ref, item.sha].filter(Boolean).join(' · ');
+        return '<li><span class="kind ' + kind + '">' + (kind === 'feature' ? 'feat' : 'fix') + '</span>' +
+          escapeHtml(item.title) + (evidence ? ' <span class="panel-sub">' + escapeHtml(evidence) + '</span>' : '') + '</li>';
+      }).join('') + '</ul></details>';
+  }
+
+  function card(label, value, note, type) {
+    return '<article class="metric-card ' + (type || '') + '"><div class="metric-label">' + escapeHtml(label) +
+      '</div><div class="metric-value">' + escapeHtml(value) + '</div><div class="metric-note">' + escapeHtml(note) + '</div></article>';
+  }
+
+  function renderSummary(summary) {
+    const presenceMinutes = Number(summary.computer_active_minutes) || 0;
+    const cards = [
+      ['Features shipped', compact(summary.features), 'Deduplicated feat commits + WT features', 'outcome'],
+      ['Fixes shipped', compact(summary.fixes), 'Deduplicated fix commits + WT bugs', 'outcome'],
+      ['Commits pushed', compact(summary.commits), 'Authored commits now on remote refs', ''],
+      ['Lines changed', compact(summary.lines_changed), compact(summary.lines_added) + ' added · ' + compact(summary.lines_deleted) + ' deleted', ''],
+      ['Observed work', duration(summary.observed_work_seconds), compact(summary.human_prompts) + ' human prompt events', 'time'],
+      ['Computer active', presenceMinutes ? duration(presenceMinutes * 60) : '—', presenceMinutes ? 'Sampled while CCC was running' : 'Presence sampling has no history yet', 'time'],
+      ['45-minute hours', compact(summary.focus_hours), 'Clock hours with ≥45 active sampled minutes', 'time'],
+      ['Agent gross time', duration(summary.agent_gross_seconds), 'Sum of every agent turn', 'agent'],
+      ['Agent net time', duration(summary.agent_net_seconds), 'Overlapping agents counted once', 'agent'],
+      ['Parallel agent time', duration(summary.agent_parallel_seconds), 'Gross minus net runtime', 'agent'],
+      ['Assistant turns', compact(summary.turns), 'Normalized Claude + Codex turns', ''],
+      ['Tokens', compact(summary.tokens), 'Raw context + output tokens', ''],
+      ['WatchTower', compact(summary.watchtower_closed) + ' closed', compact(summary.watchtower_opened) + ' opened', ''],
+      ['Active projects', compact(summary.active_projects), 'Projects with measured work', ''],
+    ];
+    document.getElementById('summaryCards').innerHTML = cards.map(function (row) { return card(row[0], row[1], row[2], row[3]); }).join('');
+  }
+
+  function renderWeekly(rows) {
+    const host = document.getElementById('weeklyChart');
+    rows = Array.isArray(rows) ? rows : [];
+    if (!rows.length) { host.innerHTML = '<div class="empty">No weekly data yet.</div>'; return; }
+    const max = Math.max.apply(null, rows.map(function (row) { return Math.max(1, Number(row.features) || 0, Number(row.fixes) || 0); }));
+    host.innerHTML = rows.map(function (row) {
+      const features = Number(row.features) || 0;
+      const fixes = Number(row.fixes) || 0;
+      const featureHeight = Math.max(features ? 5 : 2, Math.round(features / max * 120));
+      const fixHeight = Math.max(fixes ? 5 : 2, Math.round(fixes / max * 120));
+      const title = shortDate(row.week_start) + ': ' + features + ' features, ' + fixes + ' fixes, ' + compact(row.tokens) + ' tokens';
+      return '<div class="week-column" title="' + escapeHtml(title) + '"><div class="week-bars">' +
+        '<div class="week-bar features" style="height:' + featureHeight + 'px"></div>' +
+        '<div class="week-bar fixes" style="height:' + fixHeight + 'px"></div></div>' +
+        '<div class="week-label">' + escapeHtml(shortDate(row.week_start)) + '</div></div>';
+    }).join('');
+  }
+
+  function renderInsights(data) {
+    const trend = data.trends || {};
+    const summary = data.summary || {};
+    const direction = trend.delivery_direction || 'flat';
+    const change = trend.delivery_change_pct == null ? 'No prior-half baseline' :
+      (trend.delivery_change_pct > 0 ? '+' : '') + trend.delivery_change_pct + '% newest half vs oldest';
+    const association = trend.agent_delivery_association;
+    const associationText = association == null ? 'Not enough varying weekly observations yet' :
+      (association >= .5 ? 'Strong positive' : association >= .2 ? 'Weak positive' : association <= -.5 ? 'Strong negative' : association <= -.2 ? 'Weak negative' : 'Little') +
+      ' weekly association (r=' + association.toFixed(2) + ')';
+    const rows = [
+      ['Delivery trend', direction.toUpperCase() + ' · ' + change, 'trend-' + direction],
+      ['Weekly slope', (Number(trend.delivery_slope_per_week) || 0).toFixed(2) + ' delivered items / week', ''],
+      ['Agents ↔ deliveries', associationText, ''],
+      ['Agent leverage', summary.agent_leverage == null ? 'Unavailable without observed work time' : summary.agent_leverage.toFixed(1) + ' gross agent minutes per observed work minute', ''],
+      ['Output efficiency', summary.delivery_per_million_tokens == null ? 'Unavailable without tokens' : summary.delivery_per_million_tokens + ' deliveries / 1M tokens', ''],
+      ['Outcome pace', summary.delivery_per_work_hour == null ? 'Unavailable without observed work time' : summary.delivery_per_work_hour + ' deliveries / observed work hour', ''],
+    ];
+    document.getElementById('insights').innerHTML = rows.map(function (row) {
+      return '<div class="insight"><strong class="' + row[2] + '">' + escapeHtml(row[0]) + '</strong><span>' + escapeHtml(row[1]) + '</span></div>';
+    }).join('');
+  }
+
+  function renderProjects(rows) {
+    const body = document.querySelector('#projectTable tbody');
+    rows = Array.isArray(rows) ? rows : [];
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="10" class="empty">No project evidence in this range.</td></tr>'; return; }
+    body.innerHTML = rows.map(function (row) {
+      return '<tr><td><span class="project-name">' + escapeHtml(row.name) + '</span></td>' +
+        '<td>' + compact(row.features) + '</td><td>' + compact(row.fixes) + '</td><td>' + compact(row.commits) + '</td>' +
+        '<td title="' + compact(row.lines_added) + ' added · ' + compact(row.lines_deleted) + ' deleted">' + compact(row.lines_changed) + '</td>' +
+        '<td>' + compact(row.turns) + '</td><td>' + compact(row.tokens) + '</td><td>' + duration(row.observed_work_seconds) + '</td>' +
+        '<td>' + duration(row.agent_gross_seconds) + ' / ' + duration(row.agent_net_seconds) + '</td>' +
+        '<td class="work-cell">' + workItems(row.work_items) + '</td></tr>';
+    }).join('');
+  }
+
+  function renderDaily(rows) {
+    const body = document.querySelector('#dailyTable tbody');
+    rows = Array.isArray(rows) ? rows.slice().reverse() : [];
+    body.innerHTML = rows.map(function (row) {
+      const computer = Number(row.presence_samples) ? duration((Number(row.computer_active_minutes) || 0) * 60) : '—';
+      return '<tr><td><strong>' + escapeHtml(shortDate(row.date)) + '</strong></td><td>' + compact(row.features) + '</td><td>' + compact(row.fixes) +
+        '</td><td>' + compact(row.commits) + '</td><td>' + compact(row.lines_changed) + '</td><td>' + compact(row.turns) + '</td><td>' + compact(row.tokens) +
+        '</td><td>' + duration(row.observed_work_seconds) + '</td><td>' + computer + '</td><td>' + compact(row.focus_hours) + '</td>' +
+        '<td>' + duration(row.agent_gross_seconds) + ' / ' + duration(row.agent_net_seconds) + '</td>' +
+        '<td>' + compact(row.watchtower_opened) + ' / ' + compact(row.watchtower_closed) + '</td>' +
+        '<td class="work-cell">' + workItems(row.work_items) + '</td></tr>';
+    }).join('');
+  }
+
+  function renderCoverage(coverage) {
+    coverage = coverage || {};
+    const presence = coverage.presence || {};
+    const warnings = Array.isArray(coverage.warnings) ? coverage.warnings : [];
+    const proxies = Array.isArray(coverage.proxies) ? coverage.proxies : [];
+    const stats = [
+      [compact(coverage.repositories), 'repositories discovered'],
+      [compact(coverage.git_repositories_scanned), 'Git histories scanned'],
+      [compact(coverage.transcripts_parsed) + '/' + compact(coverage.conversations_considered), 'transcripts parsed'],
+      [compact(coverage.watchtower_items), 'WatchTower items'],
+      [compact(presence.sample_minutes), 'presence sample minutes'],
+      [presence.coverage_pct ? presence.coverage_pct + '%' : '—', 'presence continuity'],
+    ];
+    document.getElementById('coverageBody').innerHTML =
+      '<div class="coverage-stats">' + stats.map(function (row) { return '<div class="coverage-stat"><strong>' + escapeHtml(row[0]) + '</strong><span>' + escapeHtml(row[1]) + '</span></div>'; }).join('') + '</div>' +
+      '<div class="coverage-copy">' +
+        (!coverage.git_identity_available ? '<p class="warning">No configured Git email was found, so commits are intentionally omitted rather than attributed to another author.</p>' : '') +
+        (warnings.length ? '<p class="warning">' + escapeHtml(warnings.join(' · ')) + '</p>' : '') +
+        '<ul>' + proxies.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') + '</ul>' +
+        (presence.first_sampled_at ? '<p>Presence sampling starts ' + escapeHtml(new Date(presence.first_sampled_at).toLocaleString()) + '; earlier time is left blank.</p>' : '<p>Computer-presence sampling will accumulate while CCC is running. Historical time is not invented.</p>') +
+      '</div>';
+  }
+
+  function render(data) {
+    lastData = data;
+    document.body.classList.remove('is-loading');
+    const range = data.range || {};
+    document.getElementById('dateRange').textContent = shortDate(range.start_date) + ' – ' + shortDate(range.end_date) + ' · ' + selectedWeeks + ' weeks';
+    renderSummary(data.summary || {});
+    renderWeekly(data.weekly || []);
+    renderInsights(data);
+    renderProjects(data.projects || []);
+    renderDaily(data.daily || []);
+    renderCoverage(data.coverage || {});
+    const refresh = data.refresh || {};
+    const generated = refresh.generated_at ? new Date(refresh.generated_at * 1000).toLocaleString() : 'unknown time';
+    if (refresh.state === 'building') status('Showing cached data from ' + generated + ' · refreshing in the background', 'building');
+    else if (refresh.state === 'failed') status('Showing the last good snapshot · refresh failed: ' + (refresh.error || 'unknown error'), 'failed');
+    else if (refresh.stale) status('Showing cached data from ' + generated + ' · refresh queued', 'stale');
+    else status('Local snapshot generated ' + generated, '');
+  }
+
+  function renderError(error) {
+    document.body.classList.remove('is-loading');
+    status('Productivity data failed to load: ' + (error && error.message ? error.message : String(error)), 'failed');
+    if (!lastData) {
+      document.getElementById('summaryCards').innerHTML = '<div class="panel error" style="grid-column:1/-1">The last good snapshot is unavailable. Refresh after CCC can read local repositories and transcripts.</div>';
+    }
+  }
+
+  async function loadData(force) {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    if (!lastData) document.body.classList.add('is-loading');
+    if (force) status('Refreshing repositories, transcripts, presence, and WatchTower data…', 'building');
+    try {
+      const url = '/api/productivity?weeks=' + selectedWeeks + (force ? '&refresh=1' : '');
+      const response = await fetch(url, {cache: 'no-store'});
+      const data = await response.json();
+      if (response.status === 202) {
+        status('Building the first 16-week local snapshot…', 'building');
+        pollTimer = setTimeout(function () { loadData(false); }, 1600);
+        return;
+      }
+      if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+      render(data);
+      if ((data.refresh || {}).state === 'building') {
+        pollTimer = setTimeout(function () { loadData(false); }, 1800);
+      }
+    } catch (error) {
+      renderError(error);
+    }
+  }
+
+  document.querySelectorAll('[data-weeks]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      selectedWeeks = Number(button.dataset.weeks);
+      try { localStorage.setItem(PRODUCTIVITY_RANGE_KEY, String(selectedWeeks)); } catch (_) {}
+      updateRangeButtons();
+      loadData(false);
+    });
+  });
+  document.getElementById('refreshButton').addEventListener('click', function () { loadData(true); });
+  updateRangeButtons();
+  loadData(false);
+})();
+</script>
+</body>
+</html>

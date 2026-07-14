@@ -1078,6 +1078,19 @@
       _bg();
       window.__advisorBgTimer = setInterval(_bg, 45000);
     }
+    // Productivity is deliberately separate from token Throughput: it opens a
+    // project/day outcome dashboard and performs no background polling here.
+    const productivityPill = document.createElement('div');
+    productivityPill.id = 'cccProductivityPill';
+    productivityPill.title = 'Productivity Dashboard — delivered features and fixes, projects, time, and agent leverage. Click to open.';
+    productivityPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
+      'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
+      'border:1px solid var(--border-color,#30363d);opacity:.8;';
+    productivityPill.innerHTML = '<span style="opacity:.7;">&#10003;</span><span>productivity</span>';
+    productivityPill.addEventListener('click', function () { window.open('/productivity.html', '_blank'); });
+    productivityPill.addEventListener('mouseenter', function () { productivityPill.style.opacity = '1'; });
+    productivityPill.addEventListener('mouseleave', function () { productivityPill.style.opacity = '.8'; });
+    wrap.appendChild(productivityPill);
     // Throughput pill: opens the standalone throughput dashboard tab; badge
     // shows today's total token count fetched from the history endpoint.
     const tputPill = document.createElement('div');
