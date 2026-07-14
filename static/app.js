@@ -23048,6 +23048,15 @@
       _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || ''),
       document.getElementById('convSearch')?.value || '');
     _applyOptimisticTouches(convs);
+    // Read the active tab before the row renderer is invoked below. Rows use
+    // this to choose Archive vs Move to Trash, while the tab markup itself is
+    // assembled later in this function.
+    const _sidebarTab = (() => {
+      try {
+        const t = localStorage.getItem('ccc-sidebar-tab');
+        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived') ? t : 'inprogress';
+      } catch (_) { return 'inprogress'; }
+    })();
     const _activeDraftInputBefore = document.activeElement;
     const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
       ? (_activeDraftInputBefore.getAttribute('data-draft-id') || '')
@@ -26468,12 +26477,6 @@
     // Tabs (CCC-85): Active / All / GH Issues / WatchTower queues
     // are tabs now, one section visible at a time. Search result rows
     // (id/repo search) always render above the active tab's content.
-    const _sidebarTab = (() => {
-      try {
-        const t = localStorage.getItem('ccc-sidebar-tab');
-        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived') ? t : 'inprogress';
-      } catch (_) { return 'inprogress'; }
-    })();
     const _tabDefs = [
       ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
       ['archived', 'All', _arcCount || 0],

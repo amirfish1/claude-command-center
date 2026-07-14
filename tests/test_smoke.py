@@ -984,6 +984,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-item .conv-archive-btn.is-restore", app_css)
         self.assertIn(".conv-item.is-archived-row .conv-row-end { min-width: 76px; }", app_css)
 
+    def test_sidebar_tab_is_initialized_before_rows_use_it(self):
+        """Archive rendering must not hit the sidebar-tab temporal dead zone."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        sidebar_tab = app_js.index("const _sidebarTab = (() => {")
+        archive_action = app_js.index(
+            "const archiveActionLabel = _sidebarTab === 'inprogress' ? 'Archive' : 'Move to Trash';"
+        )
+        self.assertLess(sidebar_tab, archive_action)
+
     def test_all_tab_archive_action_uses_rendered_row_state(self):
         """An active All-tab row must not restore because another cache is stale."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
