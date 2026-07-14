@@ -16806,8 +16806,8 @@ body:has(.gc-reader) .pwa-install-banner {
   }
 }
 .fq-row.is-open .fq-status {
-  background: var(--yellow, #d29922);
-  box-shadow: 0 0 0 3px rgba(210,153,34,0.16);
+  background: var(--text-muted, #8b949e);
+  box-shadow: 0 0 0 3px rgba(139,148,158,0.16);
 }
 .fq-row.is-in_progress .fq-status {
   background: var(--accent, #58a6ff);
