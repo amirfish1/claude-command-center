@@ -57,6 +57,22 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("min-width: 0;", rail_host_css)
         self.assertIn("min-width: 0;", rail_panel_css)
 
+    def test_shared_queue_host_can_shrink_to_the_sidebar_tab(self):
+        """Long queue rows must not expand the user-resized sidebar tab."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        sidebar_host_css = app_css[
+            app_css.index(".shared-queue-host-sidebar {"):
+            app_css.index(".shared-queue-host-sidebar > .files-queue-panel", app_css.index(".shared-queue-host-sidebar {"))
+        ]
+        sidebar_panel_css = app_css[
+            app_css.index(".shared-queue-host-sidebar > .files-queue-panel {"):
+            app_css.index(".conv-all-hermes-tabs", app_css.index(".shared-queue-host-sidebar > .files-queue-panel {"))
+        ]
+
+        self.assertIn("min-width: 0;", sidebar_host_css)
+        self.assertIn("min-width: 0;", sidebar_panel_css)
+
     def test_queue_panel_note_text_expands_with_rail_width(self):
         """Queue rows should not pre-truncate notes before CSS can size them."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

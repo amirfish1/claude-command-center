@@ -16607,10 +16607,12 @@ body:has(.gc-reader) .pwa-install-banner {
 .shared-queue-host-sidebar {
   display: flex;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
 }
 .shared-queue-host-sidebar > .files-queue-panel {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   max-height: none;
   height: auto !important;
