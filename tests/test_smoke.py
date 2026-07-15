@@ -5114,6 +5114,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.user_text.send-delivered", app_js)
         self.assertIn(".event.user_text.not-acknowledged", app_js)
 
+    def test_queued_send_echo_renders_steer_before_cancel_immediately(self):
+        """The first queued paint must not wait for tray synchronization."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        branch = app_js[
+            app_js.index("function markPendingSendQueued"):
+            app_js.index("function markPendingSendDelivered")
+        ]
+
+        self.assertIn('data-steer-queued-message', branch)
+        self.assertIn('class="send-queued-steer"', branch)
+        self.assertLess(
+            branch.index('data-steer-queued-message'),
+            branch.index('data-cancel-queued-message'),
+        )
+        self.assertIn(".event.user_text.send-queued .send-queued-steer", app_css)
+
     def test_queued_steer_candidates_stay_above_the_composer(self):
         """Queued input is a steer candidate, not history that later events bury."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

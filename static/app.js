@@ -6788,6 +6788,9 @@
     const msg = label || 'Will send when the session finishes its current step.';
     note.innerHTML = '<span class="send-queued-icon">⏳</span>'
       + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
+      + '<button type="button" class="send-queued-steer" data-steer-queued-message'
+      + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
+      + ' title="Steer the active Codex turn with this queued message">Steer</button>'
       + '<button type="button" class="send-queued-cancel" data-cancel-queued-message'
       + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
       + ' title="Cancel — discard this queued message">✕ Cancel</button>';

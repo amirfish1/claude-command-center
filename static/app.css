@@ -900,6 +900,7 @@
     flex: 1;
   }
   .event.user_text.send-queued .send-queued-cancel,
+  .event.user_text.send-queued .send-queued-steer,
   .queued-steer-tray .send-queued-steer {
     flex-shrink: 0;
     background: transparent;
@@ -914,6 +915,7 @@
     white-space: nowrap;
   }
   .event.user_text.send-queued .send-queued-cancel:hover,
+  .event.user_text.send-queued .send-queued-steer:hover,
   .queued-steer-tray .send-queued-steer:hover {
     opacity: 1;
     background: rgba(210, 153, 34, 0.12);

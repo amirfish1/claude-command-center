@@ -27,6 +27,11 @@ live Codex steer before removing anything from the FIFO. Only a confirmed
 the row. If the active turn cannot be steered, the entry stays in its original
 position and the row remains visible with a **Still queued** explanation.
 
+The optimistic queued echo renders **Steer** and **Cancel** together on its
+first paint. Moving that node into the composer tray only updates its session
+metadata and position; it is not responsible for making the Steer action
+appear.
+
 This deliberately disables the normal Steer-to-Send fallback for durable queue
 rows. Falling back there is a no-op—the message is already queued—and consuming
 then appending it would silently reorder the FIFO.
