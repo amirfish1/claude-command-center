@@ -6612,6 +6612,57 @@ class TestRepoContextHelpers(unittest.TestCase):
         resume.assert_called_once_with(sid, "hello", steer=True)
         inject.assert_not_called()
 
+    def test_codex_steer_unavailable_falls_back_to_send(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": False},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 side_effect=[
+                     {"ok": False, "code": "codex_steer_unavailable"},
+                     {"ok": True, "via": "codex-app-turn"},
+                 ],
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid, "continue", mode="steer"
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "codex-app-turn")
+        self.assertEqual(
+            resume.call_args_list,
+            [mock.call(sid, "continue", steer=True), mock.call(sid, "continue")],
+        )
+
+    def test_codex_steer_failed_does_not_retry_as_send(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": False},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": False, "code": "codex_steer_failed"},
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid, "continue", mode="steer"
+            )
+
+        self.assertFalse(result["ok"])
+        resume.assert_called_once_with(sid, "continue", steer=True)
+
     def test_codex_without_live_tty_uses_resume(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \

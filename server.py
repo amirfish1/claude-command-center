@@ -41825,7 +41825,13 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
         ):
             return _queue_terminal_input(session_id, text, {"status": "busy"})
     if is_codex and mode == "steer":
-        return resume_session_codex(session_id, text, steer=True)
+        steer_result = resume_session_codex(session_id, text, steer=True)
+        if steer_result.get("code") in (
+            "codex_no_active_turn",
+            "codex_steer_unavailable",
+        ):
+            return resume_session_codex(session_id, text)
+        return steer_result
     if status.get("live") and has_tty:
         if not _from_terminal_queue and not answering_tty_question:
             busy_or_pending = (
