@@ -102,6 +102,7 @@
 <div class="tabs" role="tablist">
   <button class="tab active" data-tab="opt-in" role="tab" aria-selected="true">Opt-in pings</button>
   <button class="tab" data-tab="beacon" role="tab" aria-selected="false">Anonymous boot beacons</button>
+  <button class="tab" data-tab="downloads" role="tab" aria-selected="false">Download clicks</button>
 </div>
 
 <div id="root">
@@ -112,6 +113,7 @@
   <p>
     Numbers come from <a href="https://github.com/amirfish1/claude-command-center/blob/main/infra/telemetry-worker/">our public Cloudflare Worker</a> over a public D1 aggregate query.
     The raw source IP is never stored; the worker computes <code>SHA-256(utc_date || daily_secret || ip)</code> at the edge so we can count distinct IPs per day without being able to link the same machine across days.
+    Download-click events do not read or store IP or any other request metadata.
     Cached at the edge for 5 minutes.
   </p>
 </footer>
@@ -136,7 +138,11 @@ function renderActiveTab() {
   if (!_data) return;
   const active = document.querySelector(".tab.active").dataset.tab;
   const root = document.getElementById("root");
-  root.innerHTML = active === "opt-in" ? renderOptIn(_data) : renderBeacon(_data);
+  root.innerHTML = active === "opt-in"
+    ? renderOptIn(_data)
+    : active === "beacon"
+      ? renderBeacon(_data)
+      : renderDownloads(_data);
 }
 
 function renderOptIn(d) {
@@ -289,6 +295,42 @@ function renderBeacon(d) {
         </details>
       </div>
 
+      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
+    </div>
+  `;
+}
+
+function renderDownloads(d) {
+  const rows = d.downloads_by_day || [];
+  const today = rows[0] && rows[0].download_clicks || 0;
+  const last30 = sumBuckets(rows.slice(0, 30), "download_clicks");
+  return `
+    <p class="tab-intro">
+      Anonymous landing-page CTA clicks. No cookie, identifier, fingerprint,
+      IP, User-Agent, Referer, or request body is stored. Repeated clicks count
+      again; this is not unique people or completed installs.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <h2>Site download clicks</h2>
+        <div class="stat-big">${d.totals?.total_downloads ?? 0}</div>
+        <div class="stat-sub">all time</div>
+      </div>
+      <div class="card">
+        <h2>Clicks today</h2>
+        <div class="stat-big">${today}</div>
+        <div class="stat-sub">landing-page CTA clicks</div>
+      </div>
+      <div class="card">
+        <h2>Clicks last 30d</h2>
+        <div class="stat-big">${last30}</div>
+        <div class="stat-sub">repeated clicks included</div>
+      </div>
+      <div class="card wide">
+        <h2>Site download clicks over time</h2>
+        ${timelineChart(rows, "download_clicks", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)" })}
+        <div style="margin-top:10px">${dayBars(rows, "download_clicks")}</div>
+      </div>
       <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
     </div>
   `;

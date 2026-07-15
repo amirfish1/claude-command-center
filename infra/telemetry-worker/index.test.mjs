@@ -58,3 +58,39 @@ test("download click remains opaque when D1 fails", async () => {
   assert.equal(response.status, 204);
   assert.equal(await response.text(), "");
 });
+
+
+test("stats exposes aggregate clicks without event rows", async () => {
+  const env = {
+    DB: {
+      prepare(sql) {
+        return {
+          first: async () => ({
+            total_opens: 3,
+            total_pings: 2,
+            distinct_installs: 1,
+            total_downloads: 7,
+          }),
+          all: async () => ({
+            results: sql.includes("FROM downloads")
+              ? [{ day: "2026-07-15", download_clicks: 4 }]
+              : [],
+          }),
+        };
+      },
+    },
+  };
+
+  const response = await worker.fetch(
+    new Request("https://telemetry.example/v1/stats"),
+    env,
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.totals.total_downloads, 7);
+  assert.deepEqual(payload.downloads_by_day, [
+    { day: "2026-07-15", download_clicks: 4 },
+  ]);
+  assert.equal(payload.downloads, undefined);
+});

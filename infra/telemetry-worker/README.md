@@ -1,14 +1,18 @@
 # Telemetry Worker
 
-Minimal Cloudflare Worker that receives the daily opt-in ping from
-`server.py` (see [`docs/telemetry.md`](../../docs/telemetry.md) for the
-full contract). The source lives here, in this repo, so the IP-drop
-guarantee is auditable.
+Minimal Cloudflare Worker for CCC's bounded daily ping, anonymous boot beacon,
+landing-page download-click counter, and public aggregate stats. See
+[`docs/telemetry.md`](../../docs/telemetry.md) for the full contract. The source
+lives here so every persisted value is auditable.
 
 ## What it does
 
 - Accepts `POST /v1/ping` with a JSON body matching the documented
   5-field schema (plus `schema_version`).
+- Accepts `POST /v1/open` with the documented anonymous boot payload.
+- Accepts an empty `POST /v1/download`; it never receives the request object
+  and writes only receive time, `ccc.dmg`, and `landing-hero`.
+- Serves aggregate-only `GET /v1/stats`, including site download clicks.
 - Drops any unknown fields silently. Rejects requests where the listed
   fields fail type validation.
 - **Drops the source IP** before writing anywhere durable. The Worker
@@ -23,14 +27,9 @@ That's the entire surface.
 
 ## Status
 
-**Not deployed.** As of this commit there is no `telemetry.claude-
-command-center.workers.dev` zone. The placeholder URL the client posts
-to DNS-fails silently — by design — so the client doesn't spam logs
-while we get the infra ready.
-
-When the Worker is deployed, [`docs/telemetry-public.md`](
-../../docs/telemetry-public.md) will be updated with the deploy SHA
-and first-aggregate date.
+Deployed at `telemetry.claude-command-center.workers.dev`. The immutable source
+revision and deployment date are recorded in
+[`docs/telemetry-public.md`](../../docs/telemetry-public.md).
 
 ## Deploying
 
@@ -42,15 +41,13 @@ cd infra/telemetry-worker
 npm install -g wrangler                # one-time
 wrangler login                         # one-time, opens browser
 wrangler d1 create ccc-telemetry       # one-time, capture DB id
-# Add the D1 binding to wrangler.toml (omitted from this repo until deploy)
-wrangler d1 execute ccc-telemetry --command "CREATE TABLE IF NOT EXISTS pings (id INTEGER PRIMARY KEY AUTOINCREMENT, received_at TEXT, install_id TEXT, version TEXT, platform TEXT, engines TEXT, last_active_date TEXT)"
+wrangler d1 execute ccc-telemetry --remote --file migrations/0001-downloads.sql
 wrangler deploy
 ```
 
-The `wrangler.toml` is intentionally absent from this repo so the D1
-binding (which contains a database id) doesn't leak. Generate it
-locally at deploy time; the commit that adds it should be paired with
-the doc updates in `telemetry-public.md`.
+The committed `wrangler.toml` binds the public D1 database. Database ids are
+resource identifiers, not credentials; authentication remains in Wrangler's
+local account configuration.
 
 ## Aggregating
 
