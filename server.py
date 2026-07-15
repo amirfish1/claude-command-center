@@ -20839,6 +20839,7 @@ def _codex_app_server_handle_notification(method, params):
     if not thread_id:
         return
     pump_after_notification = False
+    delivered_user_text = None
     _CODEX_APP_SERVER_EVENT_SEQ += 1
     now = time.time()
     state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
@@ -20935,6 +20936,13 @@ def _codex_app_server_handle_notification(method, params):
             "item/fileChange/outputDelta",
         ):
             _codex_app_server_record_item_notification(state, method, params, now)
+            item = params.get("item") if isinstance(params.get("item"), dict) else {}
+            if method == "item/completed" and item.get("type") == "userMessage":
+                delivered_user_text = str(item.get("text") or "").strip()
+                if delivered_user_text:
+                    state["last_delivered_user_text"] = delivered_user_text
+                    state["last_delivered_user_turn_id"] = str(turn_id or "")
+                    state["last_delivered_user_at"] = now
     elif method == "turn/completed":
         pump_after_notification = True
         completed_writer = str(state.get("active_writer") or "external")
@@ -20960,6 +20968,12 @@ def _codex_app_server_handle_notification(method, params):
         _codex_telemetry_note_notification(method, params, thread_id, turn_id)
     except Exception:
         pass
+    if delivered_user_text:
+        # The app-server's userMessage item is the authoritative delivery ack.
+        # Reconcile any durable copy left queued by an unconfirmed/phantom-owner
+        # attempt; duplicate prompts remain valid because only one copy is
+        # consumed.
+        _consume_matching_pending_input(thread_id, delivered_user_text)
     if pump_after_notification:
         _schedule_codex_queue_pump(thread_id)
 
@@ -21603,27 +21617,77 @@ def _codex_rollout_grew(before, session_id):
     )
 
 
-def _codex_wait_for_turn_activity(session_id, turn_id=None, *, baseline_state=None, baseline_rollout=None, timeout=5.0):
-    """Confirm that an accepted app-server turn produced observable activity."""
+def _codex_rollout_contains_user_text_since(baseline, session_id, text):
+    """True when an authoritative user-message row landed after `baseline`."""
+    expected = _strip_ccc_session_state_instruction(str(text or "")).strip()
+    if not expected:
+        return True
+    current = _codex_rollout_stat(session_id)
+    if not current:
+        return False
+    path = current.get("path")
+    offset = 0
+    if baseline and baseline.get("path") == path:
+        offset = max(0, int(baseline.get("size") or 0))
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            for raw in fh:
+                try:
+                    event = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                if event.get("type") != "event_msg" or payload.get("type") != "user_message":
+                    continue
+                actual = _strip_ccc_session_state_instruction(
+                    str(payload.get("message") or "")
+                ).strip()
+                if actual == expected:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _codex_wait_for_turn_activity(session_id, turn_id=None, *, baseline_state=None,
+                                  baseline_rollout=None, expected_text=None,
+                                  timeout=5.0):
+    """Confirm that an accepted turn durably recorded its exact user input."""
     baseline_state = baseline_state or {}
     baseline_seq = int(baseline_state.get("event_seq") or 0)
+    expected = _strip_ccc_session_state_instruction(str(expected_text or "")).strip()
     deadline = time.time() + max(0.0, float(timeout))
     while True:
         with _CODEX_APP_SERVER_LOCK:
             state = dict(_CODEX_APP_SERVER_THREAD_STATE.get(session_id) or {})
             seq = int(state.get("event_seq") or 0)
             state_turn = state.get("active_turn_id") or state.get("last_turn_id") or state.get("last_completed_turn_id")
-            if seq > baseline_seq and (not turn_id or state_turn == turn_id):
+            delivered_text = str(state.get("last_delivered_user_text") or "").strip()
+            delivered_turn = state.get("last_delivered_user_turn_id")
+            if expected and seq > baseline_seq and delivered_text == expected and (
+                not turn_id or str(delivered_turn or "") == str(turn_id)
+            ):
                 return {"confirmed": True, "source": "app-server-notification", "state": state}
-            if turn_id and state.get("last_completed_turn_id") == turn_id:
+            if not expected and seq > baseline_seq and (not turn_id or state_turn == turn_id):
+                return {"confirmed": True, "source": "app-server-notification", "state": state}
+            if not expected and turn_id and state.get("last_completed_turn_id") == turn_id:
                 return {"confirmed": True, "source": "app-server-notification", "state": state}
             remaining = deadline - time.time()
             if remaining <= 0:
                 break
             _CODEX_APP_SERVER_LOCK.wait(min(0.25, remaining))
-        if _codex_rollout_grew(baseline_rollout, session_id):
+        if expected and _codex_rollout_contains_user_text_since(
+            baseline_rollout, session_id, expected
+        ):
+            return {"confirmed": True, "source": "rollout-user-message", "state": _codex_app_server_thread_state(session_id)}
+        if not expected and _codex_rollout_grew(baseline_rollout, session_id):
             return {"confirmed": True, "source": "rollout-growth", "state": _codex_app_server_thread_state(session_id)}
-    if _codex_rollout_grew(baseline_rollout, session_id):
+    if expected and _codex_rollout_contains_user_text_since(
+        baseline_rollout, session_id, expected
+    ):
+        return {"confirmed": True, "source": "rollout-user-message", "state": _codex_app_server_thread_state(session_id)}
+    if not expected and _codex_rollout_grew(baseline_rollout, session_id):
         return {"confirmed": True, "source": "rollout-growth", "state": _codex_app_server_thread_state(session_id)}
     return {
         "confirmed": False,
@@ -21631,6 +21695,41 @@ def _codex_wait_for_turn_activity(session_id, turn_id=None, *, baseline_state=No
         "state": _codex_app_server_thread_state(session_id),
         "warning": "turn accepted but no app-server events observed",
     }
+
+
+def _codex_reconcile_thread_idle(session_id):
+    """Clear volatile ownership after Codex authoritatively reports idle."""
+    cleared_phantom = False
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(str(session_id), {})
+        previous_status = str(state.get("status") or "").lower()
+        cleared_phantom = bool(
+            state.get("active_turn_id")
+            or state.get("active_writer")
+            or previous_status == "active"
+        )
+        changed = bool(
+            cleared_phantom
+            or previous_status != "idle"
+            or state.get("active_item")
+            or state.get("active_items")
+        )
+        state["status"] = "idle"
+        state.pop("active_turn_id", None)
+        state.pop("active_writer", None)
+        state.pop("active_item", None)
+        state.pop("active_items", None)
+        if cleared_phantom:
+            _codex_coordination_event_unlocked(
+                state,
+                "external_turn_ended",
+                detail="Codex re-read found no live turn; queued input may proceed",
+            )
+        if changed:
+            _save_codex_app_server_state_unlocked()
+    if cleared_phantom:
+        _schedule_codex_queue_pump(session_id)
+    return cleared_phantom
 
 
 def _codex_app_server_thread_is_active(session_id, *, start_if_needed=False):
@@ -21658,8 +21757,16 @@ def _codex_app_server_thread_is_active(session_id, *, start_if_needed=False):
         return bool(state.get("active_turn_id") or str(state.get("status") or "").lower() == "active")
     thread = ((resumed.get("result") or {}).get("thread") or {})
     status = ((thread.get("status") or {}).get("type") or "").lower()
-    state = _codex_app_server_thread_state(session_id)
-    return status == "active" or bool(_codex_latest_active_turn(thread)) or bool(state.get("active_turn_id"))
+    if status == "active" or bool(_codex_latest_active_turn(thread)):
+        return True
+
+    # `thread/resume` is an authoritative re-read from Codex. If it says the
+    # thread is idle, discard any volatile active/unknown writer left behind by
+    # a lost notification, server restart, or ended app-server client. Keeping
+    # the stale local marker here made FIFO input wait forever until somebody
+    # opened the thread in a CLI and caused a fresh status transition.
+    _codex_reconcile_thread_idle(session_id)
+    return False
 
 
 # ── Codex desktop ↔ CCC single-writer coordination ──────────────────────────
@@ -22589,6 +22696,7 @@ def _codex_spawn_via_app_server(
             turn_id,
             baseline_state=baseline_state,
             baseline_rollout=baseline_rollout,
+            expected_text=prompt,
             timeout=confirm_timeout,
         )
         confirm_ms = _codex_elapsed_ms(confirm_at)
@@ -22979,6 +23087,7 @@ def _codex_resume_or_steer_via_app_server_locked(
             _turn_id,
             baseline_state=baseline_state,
             baseline_rollout=baseline_rollout,
+            expected_text=text,
             timeout=confirm_timeout,
         )
         confirm_ms = _codex_elapsed_ms(confirm_at)
@@ -23461,7 +23570,16 @@ def _codex_interrupt_via_app_server(session_id, cwd=None):
     active_turn = _codex_latest_active_turn(thread)
     turn_id = (active_turn or {}).get("id") or _codex_app_server_thread_state(session_id).get("active_turn_id")
     status = ((thread.get("status") or {}).get("type") or "").lower()
-    if not turn_id or (status and status != "active" and not active_turn):
+    authoritative_idle = bool(
+        _codex_response_succeeded(resumed)
+        and status
+        and status != "active"
+        and not active_turn
+    )
+    if authoritative_idle:
+        _codex_reconcile_thread_idle(session_id)
+        turn_id = None
+    if not turn_id or authoritative_idle:
         return {
             "ok": False,
             "via": "codex-app-interrupt",
@@ -27441,18 +27559,29 @@ def _resume_queue_engine_busy(sid):
     ):
         return True
     if _is_codex_session(sid):
-        # Cheap first: an external writer (Codex desktop / CLI) mid-turn on
-        # the thread means the queued message must keep waiting. One stat +
-        # a TTL-cached lsof map — no app-server RPC.
+        # Preserve proven external writers on the cheap stat/lsof path. Only an
+        # ownership-unknown turn needs the authoritative reattachment that
+        # opening a CLI would otherwise trigger for the user.
+        snap = {}
         try:
             snap = _codex_thread_writer_snapshot(sid)
             _codex_note_external_writer_transition(sid, snap)
-            if snap.get("external_active"):
+            if snap.get("external_active") and snap.get("writer") != "unknown":
                 return True
         except Exception:
-            pass
-        if _codex_app_server_thread_is_active(sid):
+            snap = {}
+        if _codex_app_server_thread_is_active(sid, start_if_needed=True):
             return True
+        if snap.get("external_active"):
+            # Re-check after idle reconciliation. A real CLI is still visible
+            # through rollout activity; a phantom in-memory owner disappears.
+            try:
+                snap = _codex_thread_writer_snapshot(sid)
+                _codex_note_external_writer_transition(sid, snap)
+                if snap.get("external_active"):
+                    return True
+            except Exception:
+                return True
     return False
 
 
@@ -27502,7 +27631,17 @@ def _pump_codex_resume_queue(session_id):
             return {"ok": True, "empty": True}
 
         result = resume_session_codex(session_id, text, _from_queue=True)
-        if not result or not result.get("ok") or result.get("queued"):
+        delivery_unconfirmed = bool(
+            result
+            and result.get("accepted")
+            and result.get("confirmed") is not True
+        )
+        if (
+            not result
+            or not result.get("ok")
+            or result.get("queued")
+            or delivery_unconfirmed
+        ):
             _mark_pending_resume_retry(session_id)
             return {"ok": False, "delivered": False, "result": result}
 
@@ -29046,6 +29185,45 @@ def resume_session_codex(session_id, text, *, steer=False, _from_queue=False):
         reasoning_effort=reasoning_effort,
     )
     if app_result.get("ok"):
+        if (
+            app_result.get("accepted")
+            and app_result.get("confirmed") is not True
+            and not _from_queue
+        ):
+            reason = (
+                app_result.get("warning")
+                or "Codex accepted the turn but the input is not visible yet"
+            )
+            queued = _queue_codex_resume(session_id, text, reason=reason)
+            # Close the notification-vs-enqueue race: if the authoritative
+            # userMessage arrived just before the durable copy was added, its
+            # state marker is still available and can reconcile the copy now.
+            delivered = _codex_app_server_thread_state(session_id)
+            if (
+                str(delivered.get("last_delivered_user_text") or "").strip()
+                == str(text or "").strip()
+                and (
+                    not app_result.get("turn_id")
+                    or str(delivered.get("last_delivered_user_turn_id") or "")
+                    == str(app_result.get("turn_id"))
+                )
+            ):
+                _consume_matching_pending_input(session_id, text)
+                confirmed = dict(app_result)
+                confirmed["confirmed"] = True
+                confirmed["confirmation_source"] = "app-server-notification"
+                return confirmed
+            accepted_via = app_result.get("via")
+            queued.update({
+                key: value
+                for key, value in app_result.items()
+                if key not in ("via", "queued", "queued_reason", "error")
+            })
+            if accepted_via:
+                queued["accepted_via"] = accepted_via
+            queued["queued"] = True
+            queued["queued_reason"] = reason
+            return queued
         return app_result
     if app_result.get("fallback") == "queue":
         if _from_queue:

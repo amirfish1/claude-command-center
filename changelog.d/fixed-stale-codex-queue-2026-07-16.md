@@ -1,0 +1,1 @@
+- Reconcile ended Codex turns before draining queued messages, and keep accepted input queued until its exact user message is visible in the conversation.

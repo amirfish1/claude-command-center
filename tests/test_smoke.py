@@ -9587,6 +9587,15 @@ class TestRepoContextHelpers(unittest.TestCase):
                     "method": "turn/started",
                     "params": {"threadId": sid, "turn": {"id": "turn-1"}},
                 })
+                server._codex_app_server_handle_message({
+                    "jsonrpc": "2.0",
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": sid,
+                        "turnId": "turn-1",
+                        "item": {"id": "user-1", "type": "userMessage", "text": "say ok"},
+                    },
+                })
                 return {"result": {"turn": {"id": "turn-1"}}}
             raise AssertionError(f"unexpected method: {method}")
 
@@ -10147,6 +10156,44 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.assertEqual(calls, ["thread/resume"])
             with server._pending_resume_lock:
                 self.assertEqual(server._pending_resume_queue.get(sid), ["keep this"])
+        finally:
+            with server._pending_resume_lock:
+                server._pending_resume_queue.clear()
+                server._pending_resume_queue.update(original_queue)
+
+    def test_resume_codex_keeps_unconfirmed_app_server_input_durable(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._pending_resume_lock:
+            original_queue = dict(server._pending_resume_queue)
+            server._pending_resume_queue.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_codex_bin",
+                return_value={"available": True, "bin": "/usr/bin/codex-test"},
+            ), mock.patch.object(server, "_codex_thread_row", return_value={"cwd": str(self.repo)}), \
+                 mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
+                 mock.patch.object(
+                     server,
+                     "_codex_resume_or_steer_via_app_server",
+                     return_value={
+                         "ok": True,
+                         "accepted": True,
+                         "confirmed": False,
+                         "via": "codex-app-turn",
+                     },
+                 ), mock.patch.object(server, "_schedule_codex_queue_pump"):
+                result = server.resume_session_codex(sid, "must become visible")
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["queued"])
+            self.assertFalse(result["confirmed"])
+            with server._pending_resume_lock:
+                self.assertEqual(
+                    server._pending_resume_queue.get(sid),
+                    ["must become visible"],
+                )
         finally:
             with server._pending_resume_lock:
                 server._pending_resume_queue.clear()
@@ -10837,6 +10884,15 @@ class TestRepoContextHelpers(unittest.TestCase):
                     "method": "turn/started",
                     "params": {"threadId": sid, "turn": {"id": "turn-next"}},
                 })
+                server._codex_app_server_handle_message({
+                    "jsonrpc": "2.0",
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": sid,
+                        "turnId": "turn-next",
+                        "item": {"id": "user-next", "type": "userMessage", "text": "wake"},
+                    },
+                })
                 return {"result": {"turn": {"id": "turn-next"}}}
             raise AssertionError(f"unexpected method: {method}")
 
@@ -10871,6 +10927,82 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["warning"], "turn accepted but no app-server events observed")
+
+    def test_codex_turn_start_alone_does_not_confirm_input_delivery(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-next"}},
+        })
+
+        result = server._codex_wait_for_turn_activity(
+            sid,
+            "turn-next",
+            baseline_state={"event_seq": 0},
+            baseline_rollout=None,
+            expected_text="report that must be durable",
+            timeout=0,
+        )
+
+        self.assertFalse(result["confirmed"])
+
+    def test_codex_user_message_notification_acknowledges_queued_copy(self):
+        server = self.server
+        sid = "queued-user-message"
+        with server._pending_resume_lock:
+            server._pending_resume_queue[sid] = ["delivered report", "later"]
+
+        with mock.patch.object(server, "_save_pending_inputs") as save:
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-next",
+                    "item": {
+                        "id": "user-1",
+                        "type": "userMessage",
+                        "text": "delivered report",
+                    },
+                },
+            })
+
+        with server._pending_resume_lock:
+            self.assertEqual(server._pending_resume_queue[sid], ["later"])
+        save.assert_called()
+
+    def test_codex_idle_resume_clears_phantom_unknown_writer(self):
+        server = self.server
+        sid = "phantom-writer"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "status": "active",
+                "active_turn_id": "ended-turn",
+                "active_writer": "unknown",
+            }
+
+        response = {
+            "result": {
+                "thread": {"id": sid, "status": {"type": "idle"}, "turns": []}
+            }
+        }
+        with mock.patch.object(server, "_codex_app_server_is_live", return_value=True), \
+             mock.patch.object(server, "_codex_app_server_request", return_value=response), \
+             mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
+            active = server._codex_app_server_thread_is_active(sid)
+
+        self.assertFalse(active)
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertNotIn("active_turn_id", state)
+        self.assertNotIn("active_writer", state)
+        schedule.assert_called_once_with(sid)
 
     def test_codex_app_server_notifications_persist_state_snapshot(self):
         server = self.server
@@ -12521,8 +12653,31 @@ class TestRepoContextHelpers(unittest.TestCase):
              mock.patch.object(
                  server, "_codex_app_server_thread_is_active",
                  side_effect=AssertionError("must not be reached"),
-             ):
+            ):
             self.assertTrue(server._resume_queue_engine_busy(sid))
+
+    def test_resume_queue_engine_busy_revalidates_unknown_writer(self):
+        """Unknown ownership is reattached once instead of blocking forever."""
+        server = self.server
+        sid = "test-sid-phantom"
+        snapshots = [
+            {"writer": "unknown", "external_active": True, "desktop_attached": False},
+            {"writer": None, "external_active": False, "desktop_attached": False},
+        ]
+        with mock.patch.object(server, "_is_codex_session", return_value=True), \
+             mock.patch.object(
+                 server,
+                 "_codex_thread_writer_snapshot",
+                 side_effect=snapshots,
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"), \
+             mock.patch.object(
+                 server,
+                 "_codex_app_server_thread_is_active",
+                 return_value=False,
+             ) as active:
+            self.assertFalse(server._resume_queue_engine_busy(sid))
+
+        active.assert_called_once_with(sid, start_if_needed=True)
 
     def test_coordination_events_are_durable_and_stable(self):
         """A coordination event becomes a synthetic system/codex_coordination
@@ -14402,7 +14557,7 @@ class TestPendingInputs(unittest.TestCase):
              mock.patch.object(
                  self.server,
                  "resume_session_codex",
-                 return_value={"ok": True, "accepted": True},
+                 return_value={"ok": True, "accepted": True, "confirmed": True},
              ) as resume:
             result = self.server._pump_codex_resume_queue(sid)
 
@@ -14436,6 +14591,24 @@ class TestPendingInputs(unittest.TestCase):
 
         with self.server._pending_resume_lock:
             self.assertEqual(self.server._pending_resume_queue[sid], ["keep"])
+
+    def test_codex_queue_pump_retains_head_until_delivery_is_confirmed(self):
+        sid = "sid-unconfirmed"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["keep until visible"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "accepted": True, "confirmed": False},
+             ):
+            result = self.server._pump_codex_resume_queue(sid)
+
+        self.assertFalse(result["delivered"])
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["keep until visible"])
 
     def test_codex_queue_pump_suppresses_concurrent_delivery(self):
         sid = "sid-concurrent"
@@ -15093,6 +15266,32 @@ class TestCodexEsc(unittest.TestCase):
             res = self.server._interrupt_session("some-codex-session-id")
             self.assertFalse(res["ok"])
             self.assertEqual(res["error"], "Codex session is not live — nothing to interrupt")
+
+    def test_no_active_turn_interrupt_clears_phantom_writer_and_pumps_queue(self):
+        sid = "phantom-interrupt-session"
+        with self.server._CODEX_APP_SERVER_LOCK:
+            self.server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "status": "active",
+                "active_turn_id": "ended-turn",
+                "active_writer": "unknown",
+            }
+        resumed = {
+            "result": {
+                "thread": {"id": sid, "status": {"type": "idle"}, "turns": []}
+            }
+        }
+
+        with mock.patch.object(self.server, "_codex_app_server_is_live", return_value=True), \
+             mock.patch.object(self.server, "_codex_app_server_request", return_value=resumed), \
+             mock.patch.object(self.server, "_schedule_codex_queue_pump") as schedule:
+            result = self.server._codex_interrupt_via_app_server(sid)
+
+        self.assertEqual(result["code"], "codex_no_active_turn")
+        state = self.server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertNotIn("active_turn_id", state)
+        self.assertNotIn("active_writer", state)
+        schedule.assert_called_once_with(sid)
 
     def test_interrupt_codex_app_server_turn(self):
         calls = []
