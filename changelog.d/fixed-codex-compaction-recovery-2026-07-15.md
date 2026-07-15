@@ -1,0 +1,1 @@
+- Detect and automatically resume Codex work stranded after context compaction, with durable per-conversation state, bounded retries, visible recovery status, and safeguards for queued messages and legitimate blocking states.

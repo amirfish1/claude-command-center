@@ -19253,6 +19253,12 @@ _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_TELEMETRY_TURNS = {}
 _CODEX_APP_SERVER_RECENT_ITEM_MAX = 24
 _CODEX_APP_SERVER_ITEM_TEXT_MAX = 1200
+_CODEX_COMPACTION_RECOVERY_GRACE_S = 10.0
+_CODEX_COMPACTION_RECOVERY_STALL_S = 120.0
+_CODEX_COMPACTION_RECOVERY_RETRY_S = 30.0
+_CODEX_COMPACTION_RECOVERY_INTERRUPT_SETTLE_S = 2.0
+_CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS = 2
+_CODEX_COMPACTION_RECOVERY_TERMINAL = {"recovered", "suppressed", "exhausted"}
 
 
 def _codex_telemetry_append(event, **fields):
@@ -19526,6 +19532,7 @@ def _codex_app_server_state_payload_unlocked():
             "last_item",
             "recent_items",
             "coordination_events",
+            "compaction_recovery",
         ):
             if key in state:
                 public[key] = state[key]
@@ -20368,6 +20375,119 @@ def _codex_app_server_record_item_notification(state, method, params, now):
         state["last_item"] = current
 
 
+def _codex_compaction_recovery_note_notification_unlocked(
+    state, method, params, turn_id, now
+):
+    """Update the durable post-compaction recovery latch from one notification."""
+    item = params.get("item") if isinstance(params.get("item"), dict) else {}
+    item_type = str(
+        item.get("type") or params.get("itemType") or params.get("item_type") or ""
+    )
+    recovery = state.get("compaction_recovery")
+
+    if item_type == "contextCompaction" and method in ("item/started", "item/completed"):
+        episode_id = _codex_app_server_item_id(item, params)
+        if not episode_id and isinstance(recovery, dict) and (
+            recovery.get("compaction_in_flight")
+            and str(recovery.get("compaction_turn_id") or "") == str(turn_id or "")
+        ):
+            episode_id = recovery.get("episode_id")
+        episode_id = episode_id or f"compaction-{turn_id or int(float(now) * 1000)}"
+        if not isinstance(recovery, dict) or recovery.get("episode_id") != episode_id:
+            recovery = {
+                "episode_id": episode_id,
+                "compaction_turn_id": str(turn_id or state.get("active_turn_id") or ""),
+                "compacted_at": float(now),
+                "last_progress_at": float(now),
+                "status": "waiting",
+                "attempts": 0,
+                "next_attempt_at": float(now) + _CODEX_COMPACTION_RECOVERY_GRACE_S,
+                "reason": "Waiting for Codex to continue after compaction",
+                "compaction_in_flight": method == "item/started",
+                "saw_agent_output": False,
+            }
+            state["compaction_recovery"] = recovery
+            _codex_coordination_event_unlocked(
+                state,
+                "compaction_recovery_armed",
+                detail="Watching for Codex to continue after compaction",
+                now=now,
+            )
+        else:
+            recovery["compaction_in_flight"] = method == "item/started"
+            recovery["last_progress_at"] = float(now)
+        return
+
+    if not isinstance(recovery, dict):
+        return
+    if str(recovery.get("status") or "") in _CODEX_COMPACTION_RECOVERY_TERMINAL:
+        return
+
+    if method == "turn/started":
+        if turn_id and str(turn_id) != str(recovery.get("compaction_turn_id") or ""):
+            recovery["status"] = "recovering"
+            recovery["recovery_turn_id"] = str(turn_id)
+            recovery["last_progress_at"] = float(now)
+            recovery["reason"] = "Codex continued after compaction"
+            recovery["saw_agent_output"] = False
+        return
+
+    if method == "item/agentMessage/delta":
+        if str(params.get("delta") or "").strip():
+            recovery["saw_agent_output"] = True
+            recovery["last_progress_at"] = float(now)
+        return
+
+    if method in ("item/started", "item/completed"):
+        recovery["last_progress_at"] = float(now)
+        if item_type == "agentMessage" and str(item.get("text") or "").strip():
+            recovery["saw_agent_output"] = True
+        return
+
+    if method.startswith("item/"):
+        recovery["last_progress_at"] = float(now)
+        return
+
+    if method == "turn/completed":
+        relevant_turns = {
+            str(recovery.get("compaction_turn_id") or ""),
+            str(recovery.get("recovery_turn_id") or ""),
+        }
+        if turn_id and str(turn_id) not in relevant_turns:
+            return
+        turn = params.get("turn") if isinstance(params.get("turn"), dict) else {}
+        completion_status = _codex_app_server_status_token(
+            turn.get("status") or params.get("status")
+        )
+        interrupted = completion_status in {
+            "aborted", "cancelled", "canceled", "failed", "interrupted"
+        }
+        if recovery.get("saw_agent_output") and not interrupted:
+            recovery["status"] = "recovered"
+            recovery["reason"] = "Codex produced a final reply after compaction"
+            recovery["recovered_at"] = float(now)
+            _codex_coordination_event_unlocked(
+                state,
+                "compaction_recovery_recovered",
+                detail=recovery["reason"],
+                now=now,
+            )
+        elif int(recovery.get("attempts") or 0) >= _CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS:
+            recovery["status"] = "exhausted"
+            recovery["reason"] = "Compaction recovery ended without a final reply"
+            _codex_coordination_event_unlocked(
+                state,
+                "compaction_recovery_exhausted",
+                detail=recovery["reason"],
+                now=now,
+            )
+        else:
+            recovery["status"] = "waiting"
+            recovery["last_progress_at"] = float(now)
+            recovery["next_attempt_at"] = float(now) + _CODEX_COMPACTION_RECOVERY_GRACE_S
+            recovery["reason"] = "Codex went idle after compaction without a final reply"
+
+
 def _codex_app_server_approval_request_summary(request_id, method, params, now):
     if not isinstance(params, dict):
         params = {}
@@ -20558,6 +20678,20 @@ def _codex_app_server_activity_fields(session_id):
             "needs_approval_message": message,
         })
         return fields
+    recovery = state.get("compaction_recovery")
+    recovery_status = str(
+        recovery.get("status") if isinstance(recovery, dict) else ""
+    )
+    if recovery_status in ("interrupting", "recovering"):
+        fields.update({
+            "sidecar_status": "active",
+            "sidecar_has_writes": False,
+            "sidecar_tool": "Recovery",
+            "sidecar_file": "Recovering after compaction",
+            "sidecar_ts": recovery.get("last_attempt_at") or state.get("last_activity_at") or time.time(),
+            "sidecar_in_flight": True,
+        })
+        return fields
     status = str(state.get("status") or "").lower()
     active = bool(state.get("active_turn_id") or status == "active")
     if not active:
@@ -20710,6 +20844,9 @@ def _codex_app_server_handle_notification(method, params):
             writer=completed_writer,
             now=now,
         )
+    _codex_compaction_recovery_note_notification_unlocked(
+        state, method, params, turn_id, now
+    )
     _save_codex_app_server_state_unlocked()
     try:
         _codex_telemetry_note_notification(method, params, thread_id, turn_id)
@@ -20913,6 +21050,7 @@ def _codex_app_server_thread_public_status(session_id):
             "last_item_id": "",
             "active_item": None,
             "token_usage": None,
+            "compaction_recovery": None,
         }
     last_item = state.get("last_item") if isinstance(state.get("last_item"), dict) else {}
     active_item = _codex_app_server_active_item_public(state)
@@ -20924,6 +21062,11 @@ def _codex_app_server_thread_public_status(session_id):
         "last_item_id": str((item or {}).get("id") or ""),
         "active_item": active_item,
         "token_usage": _codex_app_server_token_usage_public(state.get("token_usage")),
+        "compaction_recovery": (
+            dict(state.get("compaction_recovery"))
+            if isinstance(state.get("compaction_recovery"), dict)
+            else None
+        ),
     }
 
 
@@ -21626,10 +21769,11 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
 
 
 def _codex_load_coordination_state():
-    """Restore durable coordination events from the persisted app-server state.
+    """Restore durable coordination and recovery state from app-server state.
 
-    Only coordination_events are restored — volatile fields (active_turn_id,
-    status) must never survive a restart, they would report phantom turns.
+    Volatile fields (active_turn_id, status) must never survive a restart; they
+    would report phantom turns. A recovery latch is durable by design so the
+    singleton watcher can finish an episode after CCC restarts.
     """
     global _codex_coord_state_loaded
     if _codex_coord_state_loaded:
@@ -21648,13 +21792,16 @@ def _codex_load_coordination_state():
             if not isinstance(saved, dict):
                 continue
             events = saved.get("coordination_events")
-            if not isinstance(events, list) or not events:
+            recovery = saved.get("compaction_recovery")
+            if not (isinstance(events, list) and events) and not isinstance(recovery, dict):
                 continue
             state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(str(sid), {})
-            if not state.get("coordination_events"):
+            if isinstance(events, list) and events and not state.get("coordination_events"):
                 state["coordination_events"] = [
                     e for e in events if isinstance(e, dict)
                 ][-_CODEX_COORD_EVENTS_MAX:]
+            if isinstance(recovery, dict) and not state.get("compaction_recovery"):
+                state["compaction_recovery"] = dict(recovery)
 
 
 def _codex_coordination_event_unlocked(state, kind, writer=None, detail=None, now=None):
@@ -21720,6 +21867,12 @@ _CODEX_COORD_EVENT_TEXT = {
     "input_queued": "Message queued behind the active turn",
     "ccc_turn_started": "CCC started a turn via the app-server",
     "ccc_turn_completed": "CCC turn completed",
+    "compaction_recovery_armed": "Watching for progress after compaction",
+    "compaction_recovery_interrupting": "Interrupting a stalled post-compaction turn",
+    "compaction_recovery_started": "Recovering after compaction",
+    "compaction_recovery_recovered": "Codex recovered after compaction",
+    "compaction_recovery_suppressed": "Compaction recovery suppressed",
+    "compaction_recovery_exhausted": "Compaction recovery attempts exhausted",
 }
 
 
@@ -25638,6 +25791,11 @@ def _codex_activity_fields_from_tail(tail, live):
 def _codex_app_activity_superseded_by_tail(app_activity, tail):
     if not app_activity or not app_activity.get("sidecar_status") or not tail:
         return False
+    # Recovery describes why the whole turn exists, not merely its latest
+    # item. A newer rollout reasoning/tool event must not replace the recovery
+    # label with ordinary "Thinking" while the watchdog continuation runs.
+    if app_activity.get("sidecar_tool") == "Recovery":
+        return False
     try:
         app_ts = float(app_activity.get("sidecar_ts") or 0)
         tail_ts = float(tail.get("last_meaningful_ts") or 0)
@@ -27123,6 +27281,239 @@ def _pump_codex_resume_queue(session_id):
         lock.release()
 
 
+def _codex_compaction_recovery_prompt(session_id, goals=None):
+    goals = _codex_goals_snapshot() if goals is None else goals
+    goal = goals.get(session_id) if isinstance(goals, dict) else None
+    if isinstance(goal, dict) and str(goal.get("status") or "active").lower() == "active":
+        return (
+            "Continue working toward the active goal after context compaction. "
+            "Resume from the current repository and conversation state, do not "
+            "repeat completed work, and finish and verify the original objective."
+        )
+    return (
+        "Continue the task that was interrupted by context compaction. Resume "
+        "from the current repository and conversation state, do not repeat "
+        "completed work, and finish and verify the original request."
+    )
+
+
+def _codex_compaction_recovery_suppress_unlocked(state, reason, now):
+    recovery = state.get("compaction_recovery")
+    if not isinstance(recovery, dict):
+        return
+    recovery["status"] = "suppressed"
+    recovery["suppressed_reason"] = str(reason)
+    recovery["reason"] = f"Compaction recovery suppressed: {reason}"
+    recovery["suppressed_at"] = float(now)
+    _codex_coordination_event_unlocked(
+        state,
+        "compaction_recovery_suppressed",
+        detail=recovery["reason"],
+        now=now,
+    )
+
+
+def _run_codex_compaction_recovery_once(session_id, now=None):
+    """Advance one conversation's bounded post-compaction recovery episode."""
+    sid = str(session_id or "").strip()
+    now = time.time() if now is None else float(now)
+    if not sid:
+        return {"ok": False, "waiting": "missing-session"}
+
+    goals = _codex_goals_snapshot()
+    with _pending_resume_lock:
+        has_user_input = bool(_pending_resume_queue.get(sid))
+
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.get(sid)
+        recovery = state.get("compaction_recovery") if isinstance(state, dict) else None
+        if not isinstance(recovery, dict):
+            return {"ok": True, "waiting": "not-armed"}
+        recovery_status = str(recovery.get("status") or "waiting")
+        if recovery_status in _CODEX_COMPACTION_RECOVERY_TERMINAL:
+            return {"ok": True, "waiting": "terminal"}
+
+        suppressed = None
+        if state.get("thread_needs_approval") or _codex_app_server_pending_approval_item(state):
+            suppressed = "approval"
+        elif state.get("active_flags"):
+            suppressed = "active-flag"
+        elif has_user_input:
+            suppressed = "queued-user-input"
+        else:
+            goal = goals.get(sid) if isinstance(goals, dict) else None
+            goal_status = str(goal.get("status") or "") if isinstance(goal, dict) else ""
+            if goal_status.lower() in ("paused", "blocked", "complete", "completed"):
+                suppressed = f"goal-{'complete' if goal_status.lower() == 'completed' else goal_status.lower()}"
+        if suppressed:
+            _codex_compaction_recovery_suppress_unlocked(state, suppressed, now)
+            _save_codex_app_server_state_unlocked()
+            return {"ok": True, "suppressed": suppressed}
+
+        last_progress_at = float(
+            max(
+                float(recovery.get("last_progress_at") or 0.0),
+                float(recovery.get("last_attempt_at") or 0.0),
+                float(recovery.get("compacted_at") or 0.0),
+            )
+        )
+        if (
+            recovery_status == "recovering"
+            and now - last_progress_at < _CODEX_COMPACTION_RECOVERY_STALL_S
+        ):
+            return {"ok": True, "waiting": "recovery-in-flight"}
+        if (
+            recovery_status == "waiting"
+            and int(recovery.get("attempts") or 0) == 0
+            and now - last_progress_at < _CODEX_COMPACTION_RECOVERY_GRACE_S
+        ):
+            return {"ok": True, "waiting": "grace"}
+        if now < float(recovery.get("next_attempt_at") or 0.0):
+            return {"ok": True, "waiting": "backoff"}
+
+        active_item = state.get("active_item") if isinstance(state.get("active_item"), dict) else None
+        if active_item and active_item.get("in_flight", True):
+            if active_item.get("type") == "contextCompaction":
+                return {"ok": True, "waiting": "compacting"}
+            return {"ok": True, "waiting": "active-tool"}
+
+        active_turn = bool(
+            state.get("active_turn_id")
+            or str(state.get("status") or "").lower() == "active"
+        )
+
+    if active_turn:
+        # Mark and persist before the RPC: Codex can emit turn/completed while
+        # turn/interrupt is still waiting for its JSON-RPC response. Reset any
+        # partial assistant delta so that interrupt completion cannot be
+        # mistaken for a successful terminal reply.
+        with _CODEX_APP_SERVER_LOCK:
+            state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+            recovery = state.get("compaction_recovery")
+            if not isinstance(recovery, dict):
+                return {"ok": False, "waiting": "not-armed"}
+            recovery["status"] = "interrupting"
+            recovery["reason"] = "Interrupting stalled Codex turn after compaction"
+            recovery["saw_agent_output"] = False
+            recovery["last_attempt_at"] = now
+            recovery["next_attempt_at"] = now + _CODEX_COMPACTION_RECOVERY_INTERRUPT_SETTLE_S
+            _codex_coordination_event_unlocked(
+                state,
+                "compaction_recovery_interrupting",
+                detail=recovery["reason"],
+                now=now,
+            )
+            _save_codex_app_server_state_unlocked()
+        interrupted = _codex_interrupt_via_app_server(sid)
+        with _CODEX_APP_SERVER_LOCK:
+            state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+            recovery = state.get("compaction_recovery")
+            if not isinstance(recovery, dict):
+                return {"ok": False, "waiting": "not-armed"}
+            if interrupted.get("ok"):
+                # The interrupt RPC is authoritative. Clearing the volatile
+                # local turn marker prevents a lost completion notification
+                # from causing an unbounded interrupt loop; the normal writer
+                # gate still re-checks Codex before starting the retry.
+                state["status"] = "idle"
+                state.pop("active_turn_id", None)
+                state.pop("active_writer", None)
+                _save_codex_app_server_state_unlocked()
+                return {"ok": True, "interrupted": True, "result": interrupted}
+            if str(recovery.get("status") or "") not in _CODEX_COMPACTION_RECOVERY_TERMINAL:
+                recovery["status"] = "waiting"
+                recovery["reason"] = interrupted.get("error") or "Could not interrupt stalled Codex turn"
+                recovery["next_attempt_at"] = now + _CODEX_COMPACTION_RECOVERY_RETRY_S
+                if interrupted.get("code") == "codex_no_active_turn":
+                    state["status"] = "idle"
+                    state.pop("active_turn_id", None)
+                    recovery["next_attempt_at"] = now
+            _save_codex_app_server_state_unlocked()
+        return {"ok": False, "interrupted": False, "result": interrupted}
+
+    prompt = _codex_compaction_recovery_prompt(sid, goals=goals)
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+        recovery = state.get("compaction_recovery")
+        if not isinstance(recovery, dict):
+            return {"ok": False, "waiting": "not-armed"}
+        attempts = int(recovery.get("attempts") or 0) + 1
+        recovery["attempts"] = attempts
+        recovery["status"] = "recovering"
+        recovery["reason"] = "Recovering after compaction"
+        recovery["saw_agent_output"] = False
+        recovery["last_attempt_at"] = now
+        recovery["next_attempt_at"] = now + _CODEX_COMPACTION_RECOVERY_RETRY_S
+        _save_codex_app_server_state_unlocked()
+
+    result = resume_session_codex(sid, prompt, _from_queue=True)
+    started = bool(result and result.get("ok") and not result.get("queued"))
+    with _CODEX_APP_SERVER_LOCK:
+        state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+        recovery = state.get("compaction_recovery")
+        if not isinstance(recovery, dict):
+            return {"ok": False, "started": False, "result": result}
+        if started:
+            recovery["status"] = "recovering"
+            recovery["reason"] = "Recovering after compaction"
+            if result.get("turn_id"):
+                recovery["recovery_turn_id"] = str(result["turn_id"])
+            _codex_coordination_event_unlocked(
+                state,
+                "compaction_recovery_started",
+                detail=recovery["reason"],
+                now=now,
+            )
+            _save_codex_app_server_state_unlocked()
+            return {"ok": True, "started": True, "result": result}
+
+        error = (result or {}).get("error") or "Codex recovery turn did not start"
+        recovery["last_error"] = str(error)
+        if int(recovery.get("attempts") or 0) >= _CODEX_COMPACTION_RECOVERY_MAX_ATTEMPTS:
+            recovery["status"] = "exhausted"
+            recovery["reason"] = "Compaction recovery attempts exhausted"
+            _codex_coordination_event_unlocked(
+                state,
+                "compaction_recovery_exhausted",
+                detail=str(error),
+                now=now,
+            )
+            exhausted = True
+        else:
+            recovery["status"] = "waiting"
+            recovery["reason"] = str(error)
+            recovery["next_attempt_at"] = now + _CODEX_COMPACTION_RECOVERY_RETRY_S
+            exhausted = False
+        _save_codex_app_server_state_unlocked()
+    return {
+        "ok": False,
+        "started": False,
+        "exhausted": exhausted,
+        "result": result,
+    }
+
+
+def _run_codex_recovery_watchdog_once(now=None):
+    """Scan every durable armed episode; called only by the singleton watcher."""
+    _codex_load_coordination_state()
+    with _CODEX_APP_SERVER_LOCK:
+        session_ids = [
+            sid
+            for sid, state in _CODEX_APP_SERVER_THREAD_STATE.items()
+            if isinstance(state, dict)
+            and isinstance(state.get("compaction_recovery"), dict)
+            and str(state["compaction_recovery"].get("status") or "")
+            not in _CODEX_COMPACTION_RECOVERY_TERMINAL
+        ]
+    results = []
+    for sid in session_ids:
+        try:
+            results.append((sid, _run_codex_compaction_recovery_once(sid, now=now)))
+        except Exception as exc:
+            results.append((sid, {"ok": False, "error": str(exc)}))
+    return results
+
+
 # ── Terminal-queue drain safety (CCC-455) ───────────────────────────────────
 # A terminal-queue entry must NEVER be silently consumed: the 2026-07-02
 # incident (dd6f2efe) popped an entry while a foreign `claude --resume` still
@@ -27256,6 +27647,10 @@ def _start_resume_queue_watcher() -> None:
             # pass. The single watcher owns delivery but always refreshes this
             # durable queue before draining it.
             _load_pending_inputs()
+            # Recovery is lower priority than every durable user message. Run
+            # this before FIFO draining so a queued message suppresses its
+            # conversation's automatic continuation instead of racing it.
+            _run_codex_recovery_watchdog_once()
             with _pending_resume_lock:
                 queued_sids = list(_pending_resume_queue.keys())
             for sid in queued_sids:
@@ -54823,6 +55218,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status["codex_app_server_last_item_id"] = app_public["last_item_id"]
                 status["codex_app_server_active_item"] = app_public["active_item"]
                 status["codex_app_server_token_usage"] = app_public["token_usage"]
+                status["codex_compaction_recovery"] = app_public["compaction_recovery"]
                 if status.get("codex_state") == "waiting" and status.get("sidecar_tool") == "Approval":
                     status["needs_approval"] = True
                     status["needs_approval_message"] = (
