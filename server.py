@@ -53989,7 +53989,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
-                convs = find_conversations(ctx["repo_path"]) or []
+                include_old = qs.get("include_old", ["0"])[0] in ("1", "true")
+                convs = find_conversations(
+                    ctx["repo_path"],
+                    include_old=include_old,
+                ) or []
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
                 return
@@ -54002,7 +54006,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # is older than CCC_MAX_CONV_AGE_DAYS — or `last_interacted` if
             # the user touched the row from the UI more recently. Bypass
             # with ?include_old=1 (sidebar will eventually wire a toggle).
-            include_old = qs.get("include_old", ["0"])[0] in ("1", "true")
             if not include_old:
                 try:
                     _max_age_days = int(os.environ.get("CCC_MAX_CONV_AGE_DAYS", "30"))

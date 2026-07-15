@@ -7945,6 +7945,43 @@ class TestRepoContextHelpers(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_conversations_endpoint_gates_old_transcripts_before_scanning(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        calls = []
+
+        def fake_find_conversations(repo_path, **kwargs):
+            calls.append((repo_path, kwargs))
+            return []
+
+        try:
+            with mock.patch.object(
+                self.server, "find_conversations", side_effect=fake_find_conversations
+            ):
+                for suffix, expected in (("", False), ("&include_old=1", True)):
+                    url = (
+                        base
+                        + "/api/conversations?repo_path="
+                        + urllib.parse.quote(str(self.repo))
+                        + suffix
+                    )
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(json.loads(response.read().decode("utf-8")), [])
+                    self.assertEqual(calls[-1], (
+                        str(self.repo),
+                        {"include_old": expected},
+                    ))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_sessions_all_endpoint_returns_archive_and_spawned_payload(self):
         httpd = self.server.http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0),
