@@ -52,7 +52,7 @@ def test_productivity_payload_selects_cached_range(monkeypatch):
     cached = {
         "generated_at": 100.0,
         "payload": {
-            "schema": 1,
+            "schema": server._PRODUCTIVITY_SCHEMA,
             "datasets": {
                 "8": {"ok": True, "range": {"weeks": 8}, "summary": {"features": 2}}
             },
@@ -81,6 +81,29 @@ def test_productivity_payload_starts_first_build(monkeypatch):
     assert payload["ok"] is True
     assert payload["state"] == "building"
     assert payload["range"]["weeks"] == 12
+
+
+def test_hardened_payload_schema_invalidates_pre_hardening_cache(monkeypatch):
+    assert server._PRODUCTIVITY_SCHEMA != 1
+    cached = {
+        "generated_at": time.time(),
+        "payload": {
+            "schema": 1,
+            "datasets": {"8": {"ok": True, "range": {"weeks": 8}}},
+            "coverage": {},
+        },
+    }
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore(cached))
+    monkeypatch.setattr(
+        server,
+        "_productivity_refresh_start",
+        lambda: {"state": "building", "started_at": 50.0},
+    )
+
+    payload, status = server._productivity_payload(weeks=8)
+
+    assert status == 202
+    assert payload["state"] == "building"
 
 
 def test_failed_first_build_waits_for_explicit_retry(monkeypatch):
@@ -167,7 +190,7 @@ def test_status_only_payload_omits_large_dataset(monkeypatch):
     cached = {
         "generated_at": time.time(),
         "payload": {
-            "schema": 1,
+            "schema": server._PRODUCTIVITY_SCHEMA,
             "datasets": {
                 "8": {
                     "ok": True,
