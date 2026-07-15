@@ -2328,6 +2328,7 @@ class TestServerImports(unittest.TestCase):
                 with mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
                     saved = server._save_spawn_defaults({
                         "engine": "codex",
+                        "reasoning_effort": "high",
                         "models": {
                             "claude": "sonnet-4-6",
                             "codex": "gpt-5-codex",
@@ -2336,10 +2337,20 @@ class TestServerImports(unittest.TestCase):
                         },
                     })
                     self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["reasoning_effort"], "high")
 
                     engine, model = server._spawn_request_engine_and_model({})
                     self.assertEqual(engine, "codex")
                     self.assertEqual(model, "gpt-5-codex")
+                    self.assertEqual(server._spawn_request_reasoning_effort({}, engine), "high")
+                    self.assertEqual(
+                        server._spawn_request_reasoning_effort({"reasoning_effort": "low"}, engine),
+                        "low",
+                    )
+                    self.assertEqual(
+                        server._spawn_request_reasoning_effort({"reasoning_effort": ""}, engine),
+                        "",
+                    )
 
                     engine, model = server._spawn_request_engine_and_model({"engine": "claude"})
                     self.assertEqual(engine, "claude")
@@ -4082,6 +4093,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('id="filesQueueConfigure"', app_js)
         self.assertIn('name="fq-config-backend"', app_js)
         self.assertIn('name="fq-config-claim-type"', app_js)
+        self.assertIn('id="fqConfigEffort"', app_js)
+        self.assertIn("effort: fields.effort.value", app_js)
         self.assertIn("queue configuration", app_js)
         self.assertIn(".fq-config-dialog", app_css)
 
@@ -5326,6 +5339,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             "workers": "3",
             "claim_types": ["bug", "invalid", "feature"],
             "engine": "codex",
+            "effort": "max",
         })
 
         self.assertEqual(config["queue"], "DEMO_QUEUE")
@@ -5334,13 +5348,18 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(config["config"]["claim_types"], ["bug", "feature"])
         self.assertEqual(config["config"]["backend"], "file")
         self.assertEqual(config["config"]["engine"], "codex")
+        self.assertEqual(config["config"]["effort"], "max")
         self.assertNotIn("repo_path", config["config"])
+        cleared = self.server._queue_config_from_payload({"queue": "DEMO_QUEUE", "effort": ""})
+        self.assertNotIn("effort", cleared["config"])
 
     def test_queue_config_payload_rejects_bad_queue_name_and_github_without_repo(self):
         with self.assertRaises(ValueError):
             self.server._queue_config_from_payload({"queue": "not valid!"})
         with self.assertRaises(ValueError):
             self.server._queue_config_from_payload({"queue": "DEMO", "backend": "github"})
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "DEMO", "effort": "ultra"})
 
     def test_queue_config_api_creates_a_queue_and_returns_suggestions(self):
         httpd = self.server.http.server.ThreadingHTTPServer(
@@ -7940,7 +7959,11 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.server,
                 "spawn_session_codex",
                 return_value={"ok": True, "pid": 123, "name": "demo", "log": "/tmp/demo.log"},
-            ) as spawn_codex:
+            ) as spawn_codex, mock.patch.object(
+                self.server,
+                "_load_spawn_defaults",
+                return_value={"engine": "codex", "models": {"codex": "gpt-5.5"}, "reasoning_effort": "high"},
+            ):
                 req = urllib.request.Request(
                     base + "/api/sessions/spawn",
                     data=json.dumps({
@@ -7961,8 +7984,42 @@ class TestRepoContextHelpers(unittest.TestCase):
                 repo_path=None,
                 worktree=False,
                 model="gpt-5.5",
+                reasoning_effort="high",
                 parent_session_id=None,
             )
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_codex_spawn_endpoint_uses_default_reasoning_effort_when_omitted(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with mock.patch.object(
+                self.server,
+                "spawn_session_codex",
+                return_value={"ok": True, "pid": 123, "name": "demo", "log": "/tmp/demo.log"},
+            ) as spawn_codex, mock.patch.object(
+                self.server,
+                "_load_spawn_defaults",
+                return_value={"engine": "codex", "models": {"codex": "gpt-5.5"}, "reasoning_effort": "xhigh"},
+            ):
+                req = urllib.request.Request(
+                    base + "/api/sessions/spawn-codex",
+                    data=json.dumps({"prompt": "do the thing", "model": "gpt-5.5"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as res:
+                    body = json.loads(res.read().decode("utf-8"))
+            self.assertTrue(body["ok"])
+            self.assertEqual(spawn_codex.call_args.kwargs.get("reasoning_effort"), "xhigh")
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -8144,7 +8201,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "reasoning_effort", "parent_session_id"])
 
     def test_spawn_session_gemini_exists(self):
         """`spawn_session_gemini` must exist alongside the other engines
@@ -12462,7 +12519,15 @@ class TestModelPicker(unittest.TestCase):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
 
         self.assertIn('id="convInputEffortSelect"', html)
+        self.assertIn('id="spawnDefaultsEffort"', html)
         self.assertIn("const $convInputEffortSelect", js)
+        self.assertIn("reasoning_effort: spawnDefaultsState.reasoning_effort", js)
+        self.assertIn("spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value", js)
+        self.assertIn("let spawnEffortChoiceDirty = false;", js)
+        self.assertIn("if (!spawnEffortChoiceDirty && $convInputEffortSelect)", js)
+        self.assertIn("spawnEffortChoiceDirty = true;", js)
+        self.assertIn("spawnEffortChoiceDirty = false;\n    syncSpawnEngineDependentUi();", js)
+        self.assertIn("($convInputEffortSelect.value || spawnEffortChoiceDirty)", js)
         self.assertIn("spawnBody.reasoning_effort = $convInputEffortSelect.value", js)
         self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", server_py)
         self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', server_py)

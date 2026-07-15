@@ -1428,7 +1428,7 @@
     <div class="upd-dialog" style="width:min(560px,94vw);">
       <div class="upd-title" id="spawnDefaultsTitle">Spawn defaults</div>
       <div class="upd-versions">
-        Used by New session and by ccc-orchestration when engine or model is omitted.
+        Used by New session and by ccc-orchestration when engine, model, or effort is omitted.
       </div>
       <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
         <div>
@@ -1447,6 +1447,19 @@
           <input id="spawnDefaultsOtherModel" class="bug-input" type="text" style="display:none;margin-top:8px;" placeholder="Model id or Antigravity label">
           <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
             The New session model picker mirrors this value. Explicit API payloads still win.
+          </div>
+        </div>
+        <div id="spawnDefaultsEffortField" style="display:none;">
+          <label class="bug-label" for="spawnDefaultsEffort">Default reasoning effort</label>
+          <select id="spawnDefaultsEffort" class="bug-input">
+            <option value="">Engine default</option>
+            <option value="low">Light</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">Extra High</option>
+          </select>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            Used for Codex spawns unless a request chooses an explicit effort.
           </div>
         </div>
       </div>

@@ -33754,6 +33754,7 @@
       +       '<div class="fq-config-field"><label for="fqConfigEngine">Worker engine</label><select id="fqConfigEngine"><option value="claude">Claude</option><option value="codex">Codex</option></select><span class="fq-config-help">The agent runtime spawned for this queue.</span></div>'
       +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Choose a model for this engine, or use a custom model id. Leave blank for the engine default.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Use engine default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
       +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checks"><label><input id="fqConfigDrain" type="checkbox"> Auto-drain new work</label></div><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
       +       '<div class="fq-config-field wide"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
       +       '<div class="fq-config-field wide fq-config-github" hidden><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
@@ -33764,7 +33765,7 @@
       + '</div>';
     document.body.appendChild(modal);
     const $ = (sel) => modal.querySelector(sel);
-    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), drain: $('#fqConfigDrain'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
+    const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
     const setModel = (model) => {
       const choices = Array.isArray(modelsByEngine[fields.engine.value]) ? modelsByEngine[fields.engine.value] : [];
       const selected = String(model || '');
@@ -33781,7 +33782,7 @@
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
       fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || 'claude';
-      fields.path.value = c.repo_path || ''; setModel(c.model); fields.drain.checked = !!c.auto_drain;
+      fields.path.value = c.repo_path || ''; setModel(c.model); fields.effort.value = c.effort || ''; fields.drain.checked = !!c.auto_drain;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
       modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; });
@@ -33801,7 +33802,7 @@
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, auto_drain: fields.drain.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value };
       save.disabled = true;
       try {
         const res = await fetch('/api/queue/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
@@ -45371,6 +45372,7 @@
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
     models: Object.assign({}, _defaultModelsByEngine),
+    reasoning_effort: '',
     codex_context_1m: true,
   };
   // The "new session modal" was removed from index.html, but several call
@@ -45388,6 +45390,7 @@
   const $convInputEngineSelect = document.getElementById('convInputEngineSelect');
   const $convInputModelSelect = document.getElementById('convInputModelSelect');
   const $convInputEffortSelect = document.getElementById('convInputEffortSelect');
+  let spawnEffortChoiceDirty = false;
   const $kptToolbarEngineSelect = document.getElementById('kptToolbarEngineSelect');
   function getSpawnEngine() {
     return normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
@@ -45470,6 +45473,9 @@
         _defaultModelsByEngine[engine] = model;
       }
     });
+    spawnDefaultsState.reasoning_effort = CODEX_REASONING_LEVELS.some(level => level.id === data.reasoning_effort)
+      ? data.reasoning_effort
+      : '';
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
     try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
     // The engine <select> DOM nodes are set synchronously at boot from the
@@ -45553,6 +45559,9 @@
   function syncSpawnEngineDependentUi() {
     const engine = getSpawnEngine();
     const worktreeSupported = spawnSupportsWorktree(engine);
+    if (!spawnEffortChoiceDirty && $convInputEffortSelect) {
+      $convInputEffortSelect.value = engine === 'codex' ? (spawnDefaultsState.reasoning_effort || '') : '';
+    }
     ['inlineWorktreeToggle', 'nsmWorktree', 'kptWorktreeToggle'].forEach(id => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -45619,6 +45628,7 @@
     v = normalizeSpawnDefaultEngine(v);
     if (!SPAWN_DEFAULT_ENGINES.includes(v)) return;
     spawnDefaultsState.engine = v;
+    spawnEffortChoiceDirty = false;
     try { localStorage.setItem('ccc.spawnEngine', v); } catch (_) {}
     // setSpawnEngine() propagates to both selectors + dependent UI, but never
     // persists to the server — see setSpawnDefaultModel comment above.
@@ -45651,6 +45661,11 @@
         return;
       }
       setSpawnDefaultModel(engine, $convInputModelSelect.value);
+    });
+  }
+  if ($convInputEffortSelect) {
+    $convInputEffortSelect.addEventListener('change', () => {
+      spawnEffortChoiceDirty = true;
     });
   }
   const modelCatalogReady = loadEngineModelCatalog();
@@ -48809,6 +48824,8 @@
   const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
   const $spawnDefaultsModel = document.getElementById('spawnDefaultsModel');
   const $spawnDefaultsOtherModel = document.getElementById('spawnDefaultsOtherModel');
+  const $spawnDefaultsEffortField = document.getElementById('spawnDefaultsEffortField');
+  const $spawnDefaultsEffort = document.getElementById('spawnDefaultsEffort');
   const $spawnDefaultsError = document.getElementById('spawnDefaultsError');
   const $spawnDefaultsCancelBtn = document.getElementById('spawnDefaultsCancelBtn');
   const $spawnDefaultsSaveBtn = document.getElementById('spawnDefaultsSaveBtn');
@@ -48818,6 +48835,7 @@
     return {
       engine: getSpawnEngine(),
       models: Object.assign({}, spawnDefaultsState.models || {}),
+      reasoning_effort: spawnDefaultsState.reasoning_effort,
     };
   }
   function spawnDefaultsModalError(text) {
@@ -48854,6 +48872,9 @@
     if (!spawnDefaultsDraft) return;
     if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     renderSpawnDefaultsModelDraft();
+    const isCodex = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine) === 'codex';
+    if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = isCodex ? '' : 'none';
+    if ($spawnDefaultsEffort) $spawnDefaultsEffort.value = spawnDefaultsDraft.reasoning_effort || '';
   }
   async function openSpawnDefaultsModal() {
     if (!$spawnDefaultsModal) return;
@@ -48885,6 +48906,7 @@
   async function saveSpawnDefaultsDraft() {
     if (!$spawnDefaultsSaveBtn || !spawnDefaultsDraft) return;
     updateSpawnDefaultsDraftModelFromControls();
+    if ($spawnDefaultsEffort) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
     spawnDefaultsModalError('');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
@@ -49078,7 +49100,7 @@
     if (!spawnDefaultsDraft) return;
     updateSpawnDefaultsDraftModelFromControls();
     spawnDefaultsDraft.engine = normalizeSpawnDefaultEngine($spawnDefaultsEngine.value);
-    renderSpawnDefaultsModelDraft();
+    renderSpawnDefaultsDraft();
   });
   if ($spawnDefaultsModel) $spawnDefaultsModel.addEventListener('change', () => {
     if ($spawnDefaultsOtherModel) {
@@ -49088,6 +49110,9 @@
     updateSpawnDefaultsDraftModelFromControls();
   });
   if ($spawnDefaultsOtherModel) $spawnDefaultsOtherModel.addEventListener('input', updateSpawnDefaultsDraftModelFromControls);
+  if ($spawnDefaultsEffort) $spawnDefaultsEffort.addEventListener('change', () => {
+    if (spawnDefaultsDraft) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $spawnDefaultsModal && $spawnDefaultsModal.classList.contains('open')) {
       closeSpawnDefaultsModal();
@@ -51414,6 +51439,8 @@
   function enterNewSessionMode() {
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
+    spawnEffortChoiceDirty = false;
+    syncSpawnEngineDependentUi();
     // Rescue the adopted CWD controls before the innerHTML rebuild below
     // destroys the slot they live in (re-entering new-session mode).
     try { _restoreCwdControlsToInputBar(); } catch (_) {}
@@ -51726,7 +51753,7 @@
         }
       }
       if (spawnSupportsWorktree(engine)) spawnBody.worktree = useWorktree;
-      if (engine === 'codex' && $convInputEffortSelect && $convInputEffortSelect.value) {
+      if (engine === 'codex' && $convInputEffortSelect && ($convInputEffortSelect.value || spawnEffortChoiceDirty)) {
         spawnBody.reasoning_effort = $convInputEffortSelect.value;
       }
       const res = await fetch(endpoint, {

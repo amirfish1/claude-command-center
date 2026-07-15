@@ -275,6 +275,7 @@ _QUEUE_CONFIG_DEFAULTS = {
     "engine": "claude",
     "claim_types": [],
 }
+_QUEUE_CONFIG_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
 
 
 def _queue_config_from_payload(payload):
@@ -314,6 +315,11 @@ def _queue_config_from_payload(payload):
         "engine": engine,
         "claim_types": claim_types,
     })
+    effort = str(payload.get("effort") or "").strip().lower()
+    if effort not in _QUEUE_CONFIG_EFFORTS:
+        raise ValueError("effort must be low, medium, high, xhigh, max, or blank")
+    if effort:
+        config["effort"] = effort
     for source, target in (("repo_path", "repo_path"), ("model", "model"),
                            ("github_repo", "github_repo"),
                            ("github_assignee", "github_assignee")):
@@ -3803,6 +3809,7 @@ def _load_spawn_defaults():
     """
     defaults = {
         "engine": "claude",
+        "reasoning_effort": "",
         "models": {
             engine: _spawn_fallback_model_for_engine(engine)
             for engine in _ORCHESTRATION_SPAWN_ENGINES
@@ -3832,7 +3839,10 @@ def _load_spawn_defaults():
     for required in ("claude", "codex", "cursor", "hermes"):
         if not models.get(required):
             models[required] = defaults["models"].get(required) or _spawn_fallback_model_for_engine(required)
-    return {"engine": engine, "models": models}
+    reasoning_effort = str(raw.get("reasoning_effort") or raw.get("effort") or "").strip().lower()
+    if reasoning_effort not in CODEX_REASONING_EFFORTS:
+        reasoning_effort = ""
+    return {"engine": engine, "models": models, "reasoning_effort": reasoning_effort}
 
 
 def _save_spawn_defaults(config):
@@ -3848,6 +3858,19 @@ def _save_spawn_defaults(config):
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
             }
         current["engine"] = engine
+
+    if "reasoning_effort" in config or "effort" in config:
+        reasoning_effort = str((
+            config.get("reasoning_effort")
+            if "reasoning_effort" in config
+            else config.get("effort")
+        ) or "").strip().lower()
+        if reasoning_effort not in CODEX_REASONING_EFFORTS:
+            return {
+                "ok": False,
+                "error": "reasoning_effort must be low, medium, high, xhigh, or blank",
+            }
+        current["reasoning_effort"] = reasoning_effort
 
     raw_models = config.get("models")
     if raw_models is not None and not isinstance(raw_models, dict):
@@ -3870,6 +3893,7 @@ def _save_spawn_defaults(config):
 
     payload = {
         "engine": current["engine"],
+        "reasoning_effort": current.get("reasoning_effort", ""),
         "models": {
             engine: current["models"].get(engine, "")
             for engine in _ORCHESTRATION_SPAWN_ENGINES
@@ -3909,6 +3933,20 @@ def _spawn_request_engine_and_model(payload):
     if not model:
         model = _spawn_fallback_model_for_engine(engine)
     return engine, model or None
+
+
+def _spawn_request_reasoning_effort(payload, engine):
+    """Resolve an explicit Codex effort or the persisted spawn default."""
+    if engine != "codex":
+        return ""
+    payload = payload if isinstance(payload, dict) else {}
+    if "reasoning_effort" in payload or "effort" in payload:
+        value = payload.get("reasoning_effort") if "reasoning_effort" in payload else payload.get("effort")
+    else:
+        defaults = _load_spawn_defaults()
+        value = defaults.get("reasoning_effort") or ""
+    value = str(value or "").strip().lower()
+    return value if value in CODEX_REASONING_EFFORTS else ""
 
 
 # Archive view delegates all per-session JSONL inspection to the
@@ -57352,6 +57390,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             name = (payload.get("name") or "").strip() or None
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
+            reasoning_effort = _spawn_request_reasoning_effort(payload, engine)
             model_error = None
             if engine == "codex":
                 model, model_error = _validate_codex_model(model, require_available=True)
@@ -57428,6 +57467,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             repo_path=payload.get("repo_path"),
                             worktree=worktree_flag,
                             model=model,
+                            reasoning_effort=reasoning_effort,
                             parent_session_id=parent_session_id,
                         )
                     elif engine == "cursor":
@@ -57566,9 +57606,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             else:
                                 cwd_resolved = candidate
             model = payload.get("model")
-            reasoning_effort = str(payload.get("reasoning_effort") or "").strip().lower()
-            if reasoning_effort not in CODEX_REASONING_EFFORTS:
-                reasoning_effort = ""
+            reasoning_effort = _spawn_request_reasoning_effort(payload, "codex")
             model, model_error = _validate_codex_model(
                 _spawn_model_for_engine("codex", model),
                 require_available=True,
