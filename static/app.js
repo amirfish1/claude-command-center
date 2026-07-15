@@ -39107,9 +39107,45 @@
     header.append(label, count);
     const list = document.createElement('div');
     list.className = 'conv-presentation-live-list';
+    ['click', 'input', 'change'].forEach(type => {
+      list.addEventListener(type, event => {
+        const view = stage.closest('.conversations-view');
+        forwardPresentationProjectionEvent(view, event);
+      }, true);
+    });
     region.append(header, list);
     stage.appendChild(region);
     return region;
+  }
+
+  function forwardPresentationProjectionEvent(view, event) {
+    const state = view && view._presentationProjection;
+    const mirrorTarget = event && event.target;
+    const wrapper = mirrorTarget && mirrorTarget.closest
+      && mirrorTarget.closest('.conv-presentation-live-item[data-presentation-projection-id]');
+    if (!state || !wrapper) return;
+    const entry = state.entries.get(wrapper.dataset.presentationProjectionId);
+    const mirrorRoot = wrapper.firstElementChild;
+    if (!entry || !entry.source || !mirrorRoot) return;
+    const path = presentationElementPath(mirrorRoot, mirrorTarget);
+    const canonicalTarget = presentationResolvePath(entry.source, path);
+    if (!canonicalTarget) return;
+    event.stopPropagation();
+    if (event.type === 'click') {
+      event.preventDefault();
+      canonicalTarget.click();
+      return;
+    }
+    if ('value' in mirrorTarget && 'value' in canonicalTarget) {
+      canonicalTarget.value = mirrorTarget.value;
+    }
+    if ('checked' in mirrorTarget && 'checked' in canonicalTarget) {
+      canonicalTarget.checked = mirrorTarget.checked;
+    }
+    if ('selectedIndex' in mirrorTarget && 'selectedIndex' in canonicalTarget) {
+      canonicalTarget.selectedIndex = mirrorTarget.selectedIndex;
+    }
+    canonicalTarget.dispatchEvent(new Event(event.type, { bubbles: true, cancelable: true }));
   }
 
   function presentationRootIsCompletedAnswer(root) {

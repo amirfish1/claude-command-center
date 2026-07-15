@@ -374,6 +374,32 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("ensurePresentationProjection(view, targetPaneId)", refresh)
         self.assertIn("disconnectPresentationProjection(view)", refresh)
 
+    def test_projection_forwards_controls_without_an_action_allowlist(self):
+        forward = _javascript_function_source("forwardPresentationProjectionEvent")
+        live_region = _javascript_function_source("ensurePresentationLiveRegion")
+
+        for token in (
+            "presentationProjectionId",
+            "presentationElementPath",
+            "presentationResolvePath",
+            "canonicalTarget.click()",
+            "canonicalTarget.value = mirrorTarget.value",
+            "canonicalTarget.checked = mirrorTarget.checked",
+            "canonicalTarget.selectedIndex = mirrorTarget.selectedIndex",
+            "canonicalTarget.dispatchEvent",
+        ):
+            self.assertIn(token, forward)
+        for forbidden in (
+            "cl-approval-btn",
+            "send-queued-cancel",
+            "ccs-grab-back",
+            "cl-dismiss",
+        ):
+            self.assertNotIn(forbidden, forward)
+        self.assertIn("['click', 'input', 'change']", live_region)
+        self.assertIn("forwardPresentationProjectionEvent", live_region)
+        self.assertIn("true", live_region)
+
     def test_mode_state_is_pane_scoped_and_only_default_is_persisted(self):
         app_js = APP_JS.read_text(encoding="utf-8")
 
