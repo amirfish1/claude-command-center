@@ -24,6 +24,7 @@ dump_failure_logs() {
   sed -n '1,200p' "$LOG_DIR/app-server.log" >&2 2>/dev/null || true
 }
 
+# shellcheck disable=SC2329  # Invoked indirectly by the signal/exit trap below.
 cleanup() {
   if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
     kill -TERM "$APP_PID" 2>/dev/null || true
