@@ -4709,6 +4709,104 @@
   :root:not([data-theme="light"]) .conv-archived-list .conv-item.is-current-child-row .conv-title {
     color: color-mix(in srgb, #f0f4fb 65%, transparent);
   }
+  /* Parent session + compact descendant presentation. New clusters stay
+     collapsed; the body is toggled in place so live polling never jumps the
+     sidebar or exposes a wall of completed subagent rows. */
+  .conv-subagent-cluster { position: relative; }
+  .conv-subagent-cluster-body { display: none; }
+  .conv-subagent-cluster.is-expanded > .conv-subagent-cluster-body { display: block; }
+  .conv-subagent-cluster-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    min-width: 58px;
+    max-width: 148px;
+    padding: 1px 5px;
+    border: 1px solid rgba(139, 148, 158, 0.18);
+    border-radius: 999px;
+    background: rgba(139, 148, 158, 0.08);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .conv-subagent-cluster-toggle:hover,
+  .conv-subagent-cluster-toggle:focus-visible {
+    color: var(--text);
+    background: rgba(139, 148, 158, 0.16);
+    border-color: rgba(139, 148, 158, 0.30);
+    outline: none;
+  }
+  .conv-subagent-cluster-arrow { flex: 0 0 auto; opacity: 0.7; }
+  .conv-subagent-cluster-summary {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-item.is-subagent-compact {
+    min-height: 20px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .conv-item.is-subagent-compact .conv-title-row,
+  .conv-item.is-subagent-compact .conv-main-row { min-height: 20px; }
+  .conv-item.is-subagent-compact .conv-hover-extras,
+  .conv-item.is-subagent-compact .conv-goal-icon-only,
+  .conv-item.is-subagent-compact .conv-qc-badge,
+  .conv-item.is-subagent-compact .conv-pct-badge { display: none !important; }
+  .conv-item.is-subagent-bridge { opacity: 0.62; }
+  .conv-subagent-completed {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px 5px 30px;
+  }
+  .conv-subagent-completed-label {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+    opacity: 0.58;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .conv-subagent-completed-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 190px;
+    padding: 1px 6px;
+    border: 1px solid rgba(139, 148, 158, 0.14);
+    border-radius: 999px;
+    background: rgba(139, 148, 158, 0.07);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1.45;
+    cursor: pointer;
+  }
+  .conv-subagent-completed-chip:hover,
+  .conv-subagent-completed-chip:focus-visible {
+    color: var(--text);
+    background: rgba(88, 166, 255, 0.10);
+    border-color: rgba(88, 166, 255, 0.25);
+    outline: none;
+  }
+  .conv-subagent-completed-check { color: var(--green); opacity: 0.75; }
+  .conv-subagent-completed-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .conv-subagent-completed-age { flex: 0 0 auto; opacity: 0.55; font-size: 9.5px; }
   /* Current-sessions panel: meta row is the always-visible "second row".
      The brief (.conv-outcome) is hidden until the disclosure chevron opens it.
      ask/summary/history stay hidden in this panel (they belong to the reader). */

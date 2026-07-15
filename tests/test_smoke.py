@@ -1129,8 +1129,69 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best", app_js)
         self.assertIn("if (_ipSearchActive) {", app_js)
         self.assertIn("_arcRows = _allTabMainConvs.map(c => _renderRow(c, {", app_js)
-        self.assertIn("currentChildDepth: item.depth", app_js)
+        self.assertIn("currentChildDepth: entry.item.depth", app_js)
         self.assertIn(".conv-archived-list .conv-item.is-current-child-row", app_css)
+
+    def test_subagent_clusters_collapse_active_rows_and_chip_completed_children(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const SUBAGENT_CLUSTERS_EXPANDED_KEY = 'ccc-subagent-clusters-expanded';", app_js)
+        self.assertIn("function _subagentClustersExpandedSet()", app_js)
+        self.assertIn("const _subagentClusterPresentation = (cluster) => {", app_js)
+        self.assertIn("const _renderSubagentCluster = (cluster, opts = {}) => {", app_js)
+        self.assertIn("const _subagentRowIsRecentBlocked = (c) => !!(c && c.ended_blocked", app_js)
+        self.assertIn("(c.modified || c.last_interacted || 0) >= _openAskCutoff", app_js)
+        active_classifier = app_js[
+            app_js.index("const _subagentRowIsActive = (c) => {"):
+            app_js.index("const _subagentRowNeedsAttention", app_js.index("const _subagentRowIsActive = (c) => {"))
+        ]
+        self.assertIn("_subagentRowIsRecentBlocked(c)", active_classifier)
+        self.assertNotIn("state === 'idle'", active_classifier)
+        self.assertIn("_subagentRowIsRecentBlocked(c) || c.needs_approval", app_js)
+        self.assertIn('data-role="subagent-cluster-toggle"', app_js)
+        self.assertIn("const _clusterNoun = _clusterTotal === 1 ? 'agent' : 'agents';", app_js)
+        row_action_selector = app_js[
+            app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["):
+            app_js.index("].join(',');", app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["))
+        ]
+        self.assertIn("'[data-role=\"subagent-cluster-toggle\"]'", row_action_selector)
+        self.assertIn("subagentCompact: true", app_js)
+        self.assertIn('class="conv-subagent-completed"', app_js)
+        self.assertIn("data-subagent-chip-sid", app_js)
+        self.assertIn("$convList._subagentClusterToggleWired", app_js)
+        self.assertIn("$convList._subagentChipWired", app_js)
+        self.assertIn(".conv-item.is-subagent-compact", app_css)
+        self.assertIn(".conv-subagent-completed-chip", app_css)
+        compact_css = app_css[
+            app_css.index(".conv-item.is-subagent-compact {"):
+            app_css.index(".conv-item.is-subagent-bridge", app_css.index(".conv-item.is-subagent-compact {"))
+        ]
+        self.assertIn(".conv-qc-badge", compact_css)
+        toggle_css = app_css[
+            app_css.index(".conv-subagent-cluster-toggle {"):
+            app_css.index(".conv-subagent-cluster-toggle:hover", app_css.index(".conv-subagent-cluster-toggle {"))
+        ]
+        self.assertIn("flex: 0 0 auto;", toggle_css)
+        self.assertIn("min-width: 58px;", toggle_css)
+
+    def test_blocked_subagents_stay_with_visible_active_parent_clusters(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        action_partition = app_js[
+            app_js.index("const _nowSec = Math.floor(Date.now() / 1000);"):
+            app_js.index("const _byRecencyDesc", app_js.index("const _nowSec = Math.floor(Date.now() / 1000);"))
+        ]
+
+        self.assertIn("const OPEN_ASK_RECENT_S = 48 * 3600;", app_js)
+        self.assertIn("function isRecentOpenAskRow(c, nowSec = Math.floor(Date.now() / 1000)) {", app_js)
+        self.assertIn("archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff) || isRecentOpenAskRow(c))", app_js)
+        self.assertIn("const _isRecentOpenAsk = (c) =>", action_partition)
+        self.assertIn("const _openAskHasStableParent = (c, seen = new Set()) => {", action_partition)
+        self.assertIn("const parent = _actionSessionById.get(parentId);", action_partition)
+        self.assertIn("if (!_isRecentOpenAsk(parent)) return true;", action_partition)
+        self.assertIn("if (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c)) {", action_partition)
+        self.assertIn("state: c.state || '',", app_js)
+        self.assertIn("ended_blocked: !!c.ended_blocked,", app_js)
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
         """Cross-repo Ready to merge should not surface PRs from unknown repos."""
@@ -1810,7 +1871,10 @@ class TestServerImports(unittest.TestCase):
             "if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;" in app_js,
             "Current Sessions should exclude rows rendered in Triggered Workers.",
         )
-        self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionSource\n        : _currentSessionSource", app_js)
+        self.assertIn("const _currentSessionWindowed = _ipSearchActive", app_js)
+        self.assertIn("const _currentSessionLineage = _ipSearchActive", app_js)
+        self.assertIn(": _currentSessionsKeepClusteredDescendants(_currentSessionWindowed);", app_js)
+        self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionLineage.rows\n        : _currentSessionLineage.rows", app_js)
 
     def test_current_sessions_respect_inprogress_window_filter(self):
         """Current sessions should use the same 1d/7d/All window as by-objects."""
@@ -1944,7 +2008,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
         self.assertIn("const _curShown = _currentSessionRows;", app_js)
-        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
+        self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
@@ -1954,13 +2018,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("--current-child-indent: calc(var(--current-child-depth, 1) * 14px);", current_css)
         self.assertIn("--conv-icon-left: calc(10px + var(--current-child-indent));", current_css)
 
-    def test_current_sessions_hide_ended_spawned_child_rows(self):
-        """Ended spawned children should not flood the Current sessions band."""
+    def test_current_sessions_keep_ended_spawned_children_with_visible_parents(self):
+        """Completed children should become chips only inside a visible cluster."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertTrue(
             "const _currentSessionIsEndedSpawnChild = (c) => {" in app_js,
-            "Current Sessions should define the ended spawned-child filter.",
+            "Current Sessions should identify completed spawned children.",
         )
         self.assertTrue(
             "if (source === 'hermes' || engine === 'hermes') return false;" in app_js,
@@ -1968,12 +2032,32 @@ class TestServerImports(unittest.TestCase):
         )
         self.assertTrue(
             "if (c.is_live || c.pending_spawn || c.sidecar_in_flight || c.needs_approval || c.question_waiting) return false;" in app_js,
-            "Only genuinely live or waiting spawned children should stay in Current Sessions.",
+            "Genuinely live or waiting children must not be classified as completed.",
         )
-        self.assertTrue(
-            "if (_currentSessionIsEndedSpawnChild(c)) return false;" in app_js,
-            "Current Sessions should suppress ended spawned children outside search.",
-        )
+        self.assertIn("const _currentSessionsKeepClusteredDescendants = (rows) => {", app_js)
+        lineage_filter = app_js[
+            app_js.index("const _currentSessionsKeepClusteredDescendants = (rows) => {"):
+            app_js.index("const _currentSessionSource = _ipSearchActive", app_js.index("const _currentSessionsKeepClusteredDescendants = (rows) => {"))
+        ]
+        self.assertIn("if (!_currentSessionIsEndedSpawnChild(c)) return true;", lineage_filter)
+        self.assertIn("const parent = byId.get(_currentSessionParentId(c));", lineage_filter)
+        self.assertIn("return parent ? reachesVisibleRoot(parent, nextSeen) : false;", lineage_filter)
+        self.assertIn("const rehomedOpenAsks = [];", lineage_filter)
+        self.assertIn("if (_subagentRowIsRecentBlocked(c)) rehomedOpenAsks.push(c);", lineage_filter)
+        self.assertIn("return { rows: keptRows, openAsks: rehomedOpenAsks };", lineage_filter)
+        source_filter = app_js[
+            app_js.index("const _currentSessionSource = _ipSearchActive"):
+            app_js.index("const _currentSessions = _ipSearchActive", app_js.index("const _currentSessionSource = _ipSearchActive"))
+        ]
+        self.assertNotIn("_currentSessionIsEndedSpawnChild", source_filter)
+        self.assertIn("const _currentSessionLineage = _ipSearchActive", app_js)
+        self.assertIn(": _currentSessionsKeepClusteredDescendants(_currentSessionWindowed);", app_js)
+        self.assertIn("const _currentSessionVisibleIds = new Set(_currentSessionLineage.rows.map(_currentSessionId));", app_js)
+        self.assertIn("const _currentSessionRehomedOpenAsks = new Map();", app_js)
+        self.assertIn("_sessionConvs.forEach(c => {", app_js)
+        self.assertIn("if (!_isRecentOpenAsk(c) || _currentSessionVisibleIds.has(id) || _evergreenSessionIds.has(id)) return;", app_js)
+        self.assertIn("_openAskConvs.push(...Array.from(_currentSessionRehomedOpenAsks.values()));", app_js)
+        self.assertIn("? _currentSessionLineage.rows\n        : _currentSessionLineage.rows", app_js)
         self.assertTrue(
             "? (_visibleSessionConvs || []).slice()" in app_js,
             "Search should keep the full visible source list.",
@@ -2304,7 +2388,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
         self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
-        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
+        self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
 

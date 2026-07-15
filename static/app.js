@@ -2220,6 +2220,13 @@
     if (row && (row.pinned || row.source === 'hermes' || row.engine === 'hermes')) return true;
     return _archiveWindowRowTs(row) >= cutoff;
   }
+  const OPEN_ASK_RECENT_S = 48 * 3600;
+  function isRecentOpenAskRow(c, nowSec = Math.floor(Date.now() / 1000)) {
+    return !!(c
+      && String(c.state || '') === 'ended'
+      && c.ended_blocked
+      && _archiveWindowRowTs(c) >= nowSec - OPEN_ASK_RECENT_S);
+  }
   // In-progress "Details" toggle: when on, every In-progress row that has a
   // matching Needs-your-attention item renders that NYA block underneath it.
   // Persisted so the choice sticks across renders/reloads.
@@ -2269,6 +2276,17 @@
   }
   function _briefSaveExpandedSet(s) {
     try { localStorage.setItem(BRIEF_EXPANDED_KEY, JSON.stringify([...s])); } catch (_) {}
+  }
+  // Parent-session disclosures for compact subagent clusters. A parent id in
+  // the set means its descendants are visible; absent ids stay collapsed so a
+  // newly spawned fan-out cannot suddenly take over the sidebar.
+  const SUBAGENT_CLUSTERS_EXPANDED_KEY = 'ccc-subagent-clusters-expanded';
+  function _subagentClustersExpandedSet() {
+    try { return new Set(JSON.parse(localStorage.getItem(SUBAGENT_CLUSTERS_EXPANDED_KEY) || '[]')); }
+    catch (_) { return new Set(); }
+  }
+  function _subagentClustersSaveExpandedSet(s) {
+    try { localStorage.setItem(SUBAGENT_CLUSTERS_EXPANDED_KEY, JSON.stringify([...s])); } catch (_) {}
   }
   let repoListState = { repos: [], current: '', recent: [] };
 
@@ -2463,7 +2481,7 @@
   // chips and bash-command pills keep updating between archive scans.
   const _sessionLiveOverlay = new Map();
   const _LIVE_OVERLAY_KEYS = [
-    'is_live', 'state', 'sidecar_status', 'sidecar_has_writes', 'sidecar_tool', 'sidecar_file',
+    'is_live', 'state', 'ended_blocked', 'sidecar_status', 'sidecar_has_writes', 'sidecar_tool', 'sidecar_file',
     'sidecar_ts', 'sidecar_in_flight', 'pending_tool', 'pending_file', 'last_event_type',
     'needs_approval', 'needs_approval_message', 'question_waiting', 'question_text',
     'question_header', 'question_preamble', 'question_options', 'question_option_details',
@@ -17831,6 +17849,7 @@
     '[data-role="conv-pct-compact"]',
     '[data-role="coo-track-wrap"]',
     '[data-role="nya-collapse"]',
+    '[data-role="subagent-cluster-toggle"]',
     '.conv-title-input',
   ].join(',');
   let _mobileRowTap = null;
@@ -23463,9 +23482,32 @@
     // _ATTENTION_FEED_RECENT_SECS = 48 * 3600), so the two surfaces stay
     // consistent. Needs-you (waiting) needs no bound: a waiting session is live
     // by definition, so it is already recent.
-    const _OPEN_ASK_RECENT_S = 48 * 3600;
     const _nowSec = Math.floor(Date.now() / 1000);
-    const _openAskCutoff = _nowSec - _OPEN_ASK_RECENT_S;
+    const _openAskCutoff = _nowSec - OPEN_ASK_RECENT_S;
+    const _actionSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+    const _actionParentId = (c) => String((c && (
+      c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from
+    )) || '').trim();
+    const _actionSessionById = new Map();
+    _sessionConvs.forEach(c => {
+      const id = _actionSessionId(c);
+      if (id) _actionSessionById.set(id, c);
+    });
+    const _isRecentOpenAsk = (c) => isRecentOpenAskRow(c, _nowSec);
+    // A blocked descendant stays in the main list when its lineage reaches a
+    // visible non-Open-Ask parent, where the cluster renderer can keep it as a
+    // compact attention row. Standalone/orphaned Open Ask sessions retain the
+    // dedicated recovery section.
+    const _openAskHasStableParent = (c, seen = new Set()) => {
+      const parentId = _actionParentId(c);
+      if (!parentId || seen.has(parentId)) return false;
+      const parent = _actionSessionById.get(parentId);
+      if (!parent) return false;
+      if (!_isRecentOpenAsk(parent)) return true;
+      const nextSeen = new Set(seen);
+      nextSeen.add(parentId);
+      return _openAskHasStableParent(parent, nextSeen);
+    };
     // CCC-182: the "Needs you" SECTION is gone. Pulling every waiting session
     // up into a top bucket made rows jump out of their project group and back
     // the instant a turn paused/resumed — the constant churn the user called
@@ -23476,9 +23518,7 @@
     // would otherwise be buried in the archived tab.
     for (let _i = _sessionConvs.length - 1; _i >= 0; _i--) {
       const _c = _sessionConvs[_i];
-      const _st = (_c && _c.state) || '';
-      if (_st === 'ended' && _c && _c.ended_blocked
-                 && (_c.modified || 0) >= _openAskCutoff) {
+      if (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c)) {
         _openAskConvs.push(_c);
         _sessionConvs.splice(_i, 1);
       }
@@ -23494,6 +23534,8 @@
     let _nyaCollapsedRows = new Set();
     // Per-row brief disclosure state, read once per render (same pattern).
     let _briefExpandedRows = new Set();
+    // Parent ids whose compact subagent clusters are expanded.
+    let _subagentExpandedParents = new Set();
     function sessionSummaryStorageKey(sid) {
       return 'ccc-session-summary-expanded:' + String(sid || '').slice(0, 180);
     }
@@ -23523,6 +23565,9 @@
     const _renderRow = (c, opts = {}) => {
       const goalIconOnly = !!opts.goalIconOnly;
       const quietTitleChrome = !!opts.quietTitleChrome;
+      const subagentCompact = !!opts.subagentCompact;
+      const subagentBridge = !!opts.subagentBridge;
+      const subagentClusterMeta = opts.subagentClusterMeta || null;
       const lifecycleContext = opts.lifecycleContext
         || (c.trashed ? 'trash' : (c.archived ? 'all-main' : (_sidebarTab === 'archived' ? 'all-main' : 'active')));
       // Inline NYA lookup (In-progress rows only, when Details is on). Resolved
@@ -24280,6 +24325,8 @@
       const evergreenSingleLineClass = _egSingleLine ? ' is-evergreen-single-line' : '';
       const currentChildDepth = Math.max(0, Math.min(4, Number(opts.currentChildDepth || 0) || 0));
       const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';
+      const subagentCompactClass = subagentCompact ? ' is-subagent-compact' : '';
+      const subagentBridgeClass = subagentBridge ? ' is-subagent-bridge' : '';
       const currentChildStyle = currentChildDepth > 0
         ? ' style="--current-child-depth:' + currentChildDepth + '"'
         : '';
@@ -24369,6 +24416,29 @@
         ? '<span class="conv-evergreen-inline-badges">' + _evergreenBadgesInner + '</span>'
         : '';
 
+      let subagentClusterDisclosureHtml = '';
+      if (subagentClusterMeta) {
+        const _clusterTotal = Number(subagentClusterMeta.total || 0);
+        const _clusterActive = Number(subagentClusterMeta.active || 0);
+        const _clusterAttention = Number(subagentClusterMeta.attention || 0);
+        const _clusterOpen = !!subagentClusterMeta.expanded;
+        const _clusterSid = String(subagentClusterMeta.parentId || '');
+        const _clusterNoun = _clusterTotal === 1 ? 'agent' : 'agents';
+        const _clusterTotalLabel = _clusterTotal + ' ' + _clusterNoun;
+        const _clusterSummary = _clusterAttention > 0
+          ? (_clusterTotalLabel + ' · ' + _clusterAttention + (_clusterAttention === 1 ? ' needs attention' : ' need attention'))
+          : (_clusterActive > 0
+            ? (_clusterTotalLabel + ' · ' + _clusterActive + ' running')
+            : _clusterTotalLabel);
+        subagentClusterDisclosureHtml = '<button type="button" class="conv-subagent-cluster-toggle"'
+          + ' data-role="subagent-cluster-toggle" data-subagent-parent-sid="' + escapeAttr(_clusterSid) + '"'
+          + ' aria-expanded="' + (_clusterOpen ? 'true' : 'false') + '"'
+          + ' title="' + (_clusterOpen ? 'Collapse subagents' : 'Expand subagents') + '">'
+          + '<span class="conv-subagent-cluster-arrow" aria-hidden="true">' + (_clusterOpen ? '&#9662;' : '&#9656;') + '</span>'
+          + '<span class="conv-subagent-cluster-summary">' + escapeHtml(_clusterSummary) + '</span>'
+          + '</button>';
+      }
+
       // Outcome line (GOAL-1) — surfaces the session's own end-of-turn
       // self-report. The server already parses the <session-state> block into
       // c.session_state {did, insight, next_step_user}; until now it only
@@ -24391,7 +24461,7 @@
         + '</div>'
         : '';
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
@@ -24400,6 +24470,7 @@
             + cooTrackHtml
             + needsYouHtml
             + '<div class="conv-title ' + titleClass + '" data-role="title" aria-label="' + escapeAttr(title) + '">' + escapeHtml(title) + '</div>'
+            + subagentClusterDisclosureHtml
             + (goalIconOnly ? goalIconHtml : '')
             + (opts.evergreenAgent ? '' : evergreenGoalHtml)
             + (opts.evergreenAgent ? '' : uxFixesQueueProgressHtml)
@@ -24546,6 +24617,133 @@
       }
       flush();
       return chunks.join('');
+    };
+    const _subagentRowId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+    const _subagentRowParentId = (c) => String((c && (
+      c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from
+    )) || '').trim();
+    const _subagentRowIsRecentBlocked = (c) => !!(c && c.ended_blocked
+      && (c.modified || c.last_interacted || 0) >= _openAskCutoff);
+    const _subagentRowIsActive = (c) => {
+      if (!c) return false;
+      if (c.is_live || c.pending_spawn || c.sidecar_in_flight || c.needs_approval || c.question_waiting || _subagentRowIsRecentBlocked(c)) return true;
+      const state = String(c.state || '').trim().toLowerCase();
+      const codexState = String(c.codex_state || '').trim().toLowerCase();
+      return state === 'working' || state === 'waiting'
+        || codexState === 'working' || codexState === 'waiting';
+    };
+    const _subagentRowNeedsAttention = (c) => !!(c && (
+      _subagentRowIsRecentBlocked(c) || c.needs_approval || c.question_waiting || String(c.state || '').toLowerCase() === 'waiting'
+    ));
+    const _subagentRowsToClusters = (rows) => {
+      const clusters = [];
+      (rows || []).forEach(item => {
+        if (!item || !item.card) return;
+        if (!clusters.length || !(item.depth > 0)) clusters.push({ rows: [] });
+        clusters[clusters.length - 1].rows.push(item);
+      });
+      return clusters;
+    };
+    const _subagentClusterPresentation = (cluster) => {
+      const rows = (cluster && Array.isArray(cluster.rows)) ? cluster.rows : [];
+      const rootItem = rows[0] || null;
+      const descendants = rows.slice(1);
+      const byId = new Map();
+      descendants.forEach(item => {
+        const id = _subagentRowId(item.card);
+        if (id) byId.set(id, item);
+      });
+      const directActiveIds = new Set();
+      const bridgeIds = new Set();
+      descendants.forEach(item => {
+        const id = _subagentRowId(item.card);
+        if (id && _subagentRowIsActive(item.card)) directActiveIds.add(id);
+      });
+      directActiveIds.forEach(id => {
+        let item = byId.get(id);
+        const seen = new Set();
+        while (item) {
+          const pid = _subagentRowParentId(item.card);
+          if (!pid || seen.has(pid)) break;
+          seen.add(pid);
+          const parent = byId.get(pid);
+          if (!parent) break;
+          const parentId = _subagentRowId(parent.card);
+          if (parentId && !directActiveIds.has(parentId)) bridgeIds.add(parentId);
+          item = parent;
+        }
+      });
+      const activeRows = [];
+      const completedRows = [];
+      descendants.forEach(item => {
+        const id = _subagentRowId(item.card);
+        if (directActiveIds.has(id) || bridgeIds.has(id)) {
+          activeRows.push({ item, bridge: bridgeIds.has(id) });
+        } else {
+          completedRows.push(item);
+        }
+      });
+      completedRows.sort((a, b) => (
+        (b.card.modified || b.card.last_interacted || 0)
+        - (a.card.modified || a.card.last_interacted || 0)
+      ));
+      return {
+        rootItem,
+        activeRows,
+        completedRows,
+        total: descendants.length,
+        active: directActiveIds.size,
+        attention: descendants.filter(item => _subagentRowNeedsAttention(item.card)).length,
+      };
+    };
+    const _subagentChipLabel = (c) => sidebarRowDisplayTitle(
+      (c && (c.display_name || c.ai_title || cleanIssuePrompt(c.first_message || '') || c.id)) || '(untitled)'
+    );
+    const _renderSubagentCluster = (cluster, opts = {}) => {
+      const presentation = _subagentClusterPresentation(cluster);
+      const rootItem = presentation.rootItem;
+      if (!rootItem || !rootItem.card) return '';
+      if (!presentation.total) return _renderRow(rootItem.card, opts);
+      const parentId = _subagentRowId(rootItem.card);
+      const expanded = _subagentExpandedParents.has(parentId);
+      const parentOpts = Object.assign({}, opts, {
+        subagentClusterMeta: {
+          parentId,
+          total: presentation.total,
+          active: presentation.active,
+          attention: presentation.attention,
+          expanded,
+        },
+      });
+      const activeHtml = presentation.activeRows.map(entry => _renderRow(entry.item.card, Object.assign({}, opts, {
+        currentChildDepth: entry.item.depth,
+        subagentCompact: true,
+        subagentBridge: entry.bridge,
+      }))).join('');
+      const completedHtml = presentation.completedRows.length
+        ? '<div class="conv-subagent-completed">'
+          + '<span class="conv-subagent-completed-label">Completed</span>'
+          + presentation.completedRows.map(item => {
+            const card = item.card;
+            const sid = _subagentRowId(card);
+            const label = _subagentChipLabel(card);
+            const ts = card.modified || card.last_interacted || 0;
+            const age = ts ? relativeTime(ts) : '';
+            const tip = label + (age ? ' · completed ' + age : '') + (sid ? ' · ' + sid : '');
+            return '<button type="button" class="conv-subagent-completed-chip"'
+              + ' data-subagent-chip-sid="' + escapeAttr(sid) + '" title="' + escapeAttr(tip) + '">'
+              + '<span class="conv-subagent-completed-check" aria-hidden="true">&#10003;</span>'
+              + '<span class="conv-subagent-completed-name">' + escapeHtml(label) + '</span>'
+              + (age ? '<span class="conv-subagent-completed-age">' + escapeHtml(age) + '</span>' : '')
+              + '</button>';
+          }).join('')
+          + '</div>'
+        : '';
+      return '<div class="conv-subagent-cluster' + (expanded ? ' is-expanded' : '') + '"'
+        + ' data-subagent-parent-sid="' + escapeAttr(parentId) + '">'
+        + _renderRow(rootItem.card, parentOpts)
+        + '<div class="conv-subagent-cluster-body">' + activeHtml + completedHtml + '</div>'
+        + '</div>';
     };
     // Active list keeps the date-gap separators so morning/evening
     // boundaries stay visible while scanning.
@@ -25096,6 +25294,7 @@
     _nyaDetailsForRows = _ipNyaOn;
     _nyaCollapsedRows = _ipNyaOn ? _nyaCollapsedSet() : new Set();
     _briefExpandedRows = _briefExpandedSet();
+    _subagentExpandedParents = _subagentClustersExpandedSet();
     let _activeRowsHtml;
     if (_shouldGroupByObjects) {
       // Resolve a session to its grouping node (CCC-83 + CCC-88):
@@ -25562,6 +25761,34 @@
         const state = String((c && c.state) || '').trim().toLowerCase();
         return state === 'ended' || (!state && c.is_live === false);
       };
+      // Completed workers belong in their parent's collapsed cluster so they
+      // can render as history chips. Keep them only when their whole lineage
+      // reaches a visible, non-worker root in this Current-sessions window;
+      // old orphaned workers remain hidden instead of returning as loose rows.
+      const _currentSessionsKeepClusteredDescendants = (rows) => {
+        const candidates = (rows || []).slice();
+        const byId = new Map();
+        const rehomedOpenAsks = [];
+        candidates.forEach(c => {
+          const id = _currentSessionId(c);
+          if (id) byId.set(id, c);
+        });
+        const reachesVisibleRoot = (c, seen = new Set()) => {
+          if (!_currentSessionIsEndedSpawnChild(c)) return true;
+          const id = _currentSessionId(c);
+          if (!id || seen.has(id)) return false;
+          const nextSeen = new Set(seen);
+          nextSeen.add(id);
+          const parent = byId.get(_currentSessionParentId(c));
+          return parent ? reachesVisibleRoot(parent, nextSeen) : false;
+        };
+        const keptRows = candidates.filter(c => {
+          if (reachesVisibleRoot(c)) return true;
+          if (_subagentRowIsRecentBlocked(c)) rehomedOpenAsks.push(c);
+          return false;
+        });
+        return { rows: keptRows, openAsks: rehomedOpenAsks };
+      };
       const _curId = _currentSessionId;
       let _curPrevOrder = {};
       try { _curPrevOrder = JSON.parse(localStorage.getItem(_CUR_ORDER_KEY) || '{}'); } catch (_) {}
@@ -25569,16 +25796,45 @@
         ? (_visibleSessionConvs || []).slice()
         : (_visibleSessionConvs || []).filter(c => {
           if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;
-          if (_currentSessionIsEndedSpawnChild(c)) return false;
           return true;
         });
-      const _currentSessions = _ipSearchActive
+      const _currentSessionWindowed = _ipSearchActive
         ? _currentSessionSource
-        : _currentSessionSource
-          .filter(c => {
-            if (!_currentSessionsWindowS) return true;
-            return _sessionTs(c) >= _nowS - _currentSessionsWindowS;
-          })
+        : _currentSessionSource.filter(c => {
+          if (!_currentSessionsWindowS) return true;
+          return _sessionTs(c) >= _nowS - _currentSessionsWindowS;
+        });
+      const _currentSessionLineage = _ipSearchActive
+        ? { rows: _currentSessionWindowed, openAsks: [] }
+        : _currentSessionsKeepClusteredDescendants(_currentSessionWindowed);
+      const _currentSessionVisibleIds = new Set(_currentSessionLineage.rows.map(_currentSessionId));
+      const _currentSessionRehomedOpenAsks = new Map();
+      if (!_ipSearchActive) {
+        _currentSessionLineage.openAsks.forEach(c => {
+          const id = _currentSessionId(c);
+          if (id) _currentSessionRehomedOpenAsks.set(id, c);
+        });
+        // The upstream window can remove either side of a parent/child pair
+        // before lineage reconciliation sees it. Any recent blocked child that
+        // cannot actually reach the visible Active tree falls back to Open Ask
+        // instead of disappearing. Evergreen rows are already visible in their
+        // dedicated worker region and must not be duplicated here.
+        _sessionConvs.forEach(c => {
+          const id = _currentSessionId(c);
+          if (!id) return;
+          if (!_isRecentOpenAsk(c) || _currentSessionVisibleIds.has(id) || _evergreenSessionIds.has(id)) return;
+          _currentSessionRehomedOpenAsks.set(id, c);
+        });
+      }
+      if (_currentSessionRehomedOpenAsks.size) {
+        const _existingOpenAskIds = new Set(_openAskConvs.map(_currentSessionId));
+        _existingOpenAskIds.forEach(id => _currentSessionRehomedOpenAsks.delete(id));
+        _openAskConvs.push(...Array.from(_currentSessionRehomedOpenAsks.values()));
+        _openAskConvs.sort(_byRecencyDesc);
+      }
+      const _currentSessions = _ipSearchActive
+        ? _currentSessionLineage.rows
+        : _currentSessionLineage.rows
           .sort((a, b) => {
             if (Math.abs(_sessionTs(a) - _sessionTs(b)) < _CUR_HYST_S) {
               const ia = _curPrevOrder[_curId(a)], ib = _curPrevOrder[_curId(b)];
@@ -25650,6 +25906,7 @@
         });
         return groups.map(group => {
           const nestedRows = _currentSessionsTreeRows(group.cards);
+          const nestedClusters = _subagentRowsToClusters(nestedRows);
           const chunks = [];
           let curCards = [];
           let curKey = null;
@@ -25664,20 +25921,19 @@
             curCards = [];
             curKey = null;
           };
-          nestedRows.forEach(item => {
-            if (!item || !item.card || item.depth > 0) {
+          nestedClusters.forEach(cluster => {
+            if (cluster.rows.length > 1) {
               flushCards();
-              if (item && item.card) {
-                chunks.push(_renderRow(item.card, {
-                  lifecycleContext: 'active',
-                  suppressFolderChip: false,
-                  quietTitleChrome: true,
-                  currentChildDepth: item.depth,
-                  elevateToObject: true
-                }));
-              }
+              chunks.push(_renderSubagentCluster(cluster, {
+                lifecycleContext: 'active',
+                suppressFolderChip: false,
+                quietTitleChrome: true,
+                elevateToObject: true
+              }));
               return;
             }
+            const item = cluster.rows[0];
+            if (!item || !item.card) return;
             const key = _repeatGroupKey(item.card);
             if (!key) {
               flushCards();
@@ -25726,14 +25982,9 @@
         // from its children, and the sessions' hysteresis-stable order is
         // preserved by merging rather than re-sorting.
         const _currentSessionsFlatRowsWithSeparators = (items, gcItems) => {
-          const clusters = [];
-          for (const item of items) {
-            if (!clusters.length || !(item.depth > 0)) {
-              clusters.push({ mtime: (item.card && item.card.modified) || 0, rows: [item] });
-            } else {
-              clusters[clusters.length - 1].rows.push(item);
-            }
-          }
+          const clusters = _subagentRowsToClusters(items).map(cluster => Object.assign(cluster, {
+            mtime: (cluster.rows[0] && cluster.rows[0].card && cluster.rows[0].card.modified) || 0,
+          }));
           const entries = [];
           let pendingSingles = [];
           const flushSingles = () => {
@@ -25752,7 +26003,7 @@
               flushSingles();
               entries.push({
                 mtime: cl.mtime,
-                html: cl.rows.map(item => _renderRow(item.card, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),
+                html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),
               });
             }
           }
@@ -26421,10 +26672,9 @@
         if (!cluster || !cluster.rows || !cluster.rows.length) return;
         if (cluster.rows.length > 1) {
           flushRepeats();
-          chunks.push(cluster.rows.map(item => _renderRow(item.card, {
-            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true,
-            currentChildDepth: item.depth
-          })).join(''));
+          chunks.push(_renderSubagentCluster(cluster, {
+            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true
+          }));
           return;
         }
         const card = cluster.rows[0].card;
@@ -27993,6 +28243,41 @@
         chev.setAttribute('aria-expanded', nowOpen ? 'true' : 'false');
         const row = chev.closest('.conv-item');
         if (row) row.classList.toggle('is-brief-open', nowOpen);
+      });
+    }
+    // Compact subagent clusters are collapsed by default. Toggle the selected
+    // cluster in place so polling and user interaction do not move scroll.
+    if (!$convList._subagentClusterToggleWired) {
+      $convList._subagentClusterToggleWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('[data-role="subagent-cluster-toggle"]');
+        if (!btn) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        const sid = btn.getAttribute('data-subagent-parent-sid') || '';
+        if (!sid) return;
+        const cluster = btn.closest('.conv-subagent-cluster');
+        if (!cluster) return;
+        const expanded = !cluster.classList.contains('is-expanded');
+        cluster.classList.toggle('is-expanded', expanded);
+        btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        btn.title = expanded ? 'Collapse subagents' : 'Expand subagents';
+        const arrow = btn.querySelector('.conv-subagent-cluster-arrow');
+        if (arrow) arrow.innerHTML = expanded ? '&#9662;' : '&#9656;';
+        const set = _subagentClustersExpandedSet();
+        if (expanded) set.add(sid); else set.delete(sid);
+        _subagentClustersSaveExpandedSet(set);
+      });
+    }
+    if (!$convList._subagentChipWired) {
+      $convList._subagentChipWired = true;
+      $convList.addEventListener('click', (ev) => {
+        const chip = ev.target && ev.target.closest && ev.target.closest('[data-subagent-chip-sid]');
+        if (!chip) return;
+        ev.stopPropagation();
+        ev.preventDefault();
+        const sid = chip.getAttribute('data-subagent-chip-sid') || '';
+        if (sid) selectConversation(sid);
       });
     }
     // + button on Triggered Workers queue header: add a ticket directly to that queue.
@@ -45601,7 +45886,7 @@
     // Without this, old Hermes chats silently vanish in the all-repos view and
     // the only window control lives in the Archived section header.
     const _windowed = (_arcWindowCutoff && !q)
-      ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff))
+      ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff) || isRecentOpenAskRow(c))
       : archiveRows;
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
@@ -45720,6 +46005,8 @@
           last_interacted: c.modified || c.mtime || 0,
           size: c.size || 0,
           is_live: !!c.is_live,
+          state: c.state || '',
+          ended_blocked: !!c.ended_blocked,
           archived: !!c.archived,
           worktree_dirty: !!c.worktree_dirty,
           has_commit: !!c.has_commit,
@@ -45792,6 +46079,8 @@
         // caching. Powers the blue live dot + uncommitted/committed/
         // pushed/no-edits chips + PR #N + Ready-to-merge bucket.
         is_live: !!c.is_live,
+        state: c.state || '',
+        ended_blocked: !!c.ended_blocked,
         archived: !!c.archived,
         worktree_dirty: !!c.worktree_dirty,
         has_commit: !!c.has_commit,

@@ -1,0 +1,1 @@
+- Subagent-heavy sessions now start collapsed, keep active children as compact rows, and collect completed children into clickable chips.
