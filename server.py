@@ -18374,6 +18374,202 @@ def _extract_files_from_gemini_conversation(session_id):
     return {"count": len(seen), "truncated": truncated, "groups": groups}
 
 
+_PRESENTATION_ARTIFACT_FENCE_RE = re.compile(
+    r"\A(?P<prose>.*?)(?:^|\n)```ccc-slides[ \t]*\r?\n"
+    r"(?P<artifact>.*?)\r?\n```[ \t]*\Z",
+    re.DOTALL | re.MULTILINE,
+)
+_PRESENTATION_ARTIFACT_ID_RE = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
+_PRESENTATION_ARTIFACT_ACTIVE_TAG_RE = re.compile(
+    r"<\s*/?\s*(?:script|style|svg|iframe|object|html)\b",
+    re.IGNORECASE,
+)
+_PRESENTATION_ARTIFACT_LAYOUTS = {
+    "statement", "bullets", "steps", "comparison",
+    "metrics", "quote", "code", "summary",
+}
+_PRESENTATION_ARTIFACT_THEMES = {"cyan", "violet", "amber", "green", "neutral"}
+_PRESENTATION_ARTIFACT_MAX_BYTES = 24 * 1024
+
+
+class _PresentationArtifactValidationError(ValueError):
+    """Internal validation failure with a compact browser-safe code."""
+
+
+def _presentation_artifact_string(value, field, *, maximum, required=False):
+    if value is None and not required:
+        return None
+    if not isinstance(value, str):
+        raise _PresentationArtifactValidationError("invalid_" + field)
+    text = value.strip()
+    if required and not text:
+        raise _PresentationArtifactValidationError("invalid_" + field)
+    if len(text) > maximum:
+        raise _PresentationArtifactValidationError("oversized_" + field)
+    if _PRESENTATION_ARTIFACT_ACTIVE_TAG_RE.search(text):
+        raise _PresentationArtifactValidationError("active_content")
+    return text
+
+
+def _presentation_artifact_string_list(value, field, *, maximum, item_maximum=320):
+    if not isinstance(value, list) or not 1 <= len(value) <= maximum:
+        raise _PresentationArtifactValidationError("invalid_" + field)
+    return [
+        _presentation_artifact_string(item, field, maximum=item_maximum, required=True)
+        for item in value
+    ]
+
+
+def _presentation_artifact_pair_list(value, field, *, maximum, first, second,
+                                     first_maximum=120, second_maximum=320):
+    if not isinstance(value, list) or not 1 <= len(value) <= maximum:
+        raise _PresentationArtifactValidationError("invalid_" + field)
+    clean = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise _PresentationArtifactValidationError("invalid_" + field)
+        clean.append({
+            first: _presentation_artifact_string(
+                item.get(first), first, maximum=first_maximum, required=True,
+            ),
+            second: _presentation_artifact_string(
+                item.get(second), second, maximum=second_maximum, required=True,
+            ),
+        })
+    return clean
+
+
+def _validate_presentation_artifact(value):
+    if not isinstance(value, dict):
+        raise _PresentationArtifactValidationError("invalid_root")
+    if type(value.get("version")) is not int or value.get("version") != 1:
+        raise _PresentationArtifactValidationError("invalid_version")
+    theme = value.get("theme")
+    if theme not in _PRESENTATION_ARTIFACT_THEMES:
+        raise _PresentationArtifactValidationError("invalid_theme")
+    slides = value.get("slides")
+    if not isinstance(slides, list) or not 1 <= len(slides) <= 8:
+        raise _PresentationArtifactValidationError("invalid_slides")
+
+    clean = {"version": 1}
+    deck_title = _presentation_artifact_string(
+        value.get("deck_title"), "deck_title", maximum=120,
+    )
+    if deck_title is not None:
+        clean["deck_title"] = deck_title
+    clean["theme"] = theme
+    clean_slides = []
+    seen_ids = set()
+
+    for source in slides:
+        if not isinstance(source, dict):
+            raise _PresentationArtifactValidationError("invalid_slide")
+        slide_id = source.get("id")
+        if not isinstance(slide_id, str) or not _PRESENTATION_ARTIFACT_ID_RE.fullmatch(slide_id):
+            raise _PresentationArtifactValidationError("invalid_slide_id")
+        if slide_id in seen_ids:
+            raise _PresentationArtifactValidationError("duplicate_slide_id")
+        seen_ids.add(slide_id)
+        layout = source.get("layout")
+        if layout not in _PRESENTATION_ARTIFACT_LAYOUTS:
+            raise _PresentationArtifactValidationError("invalid_layout")
+        slide = {
+            "id": slide_id,
+            "layout": layout,
+            "title": _presentation_artifact_string(
+                source.get("title"), "title", maximum=120, required=True,
+            ),
+        }
+        for field, maximum in (("eyebrow", 80), ("subtitle", 320)):
+            text = _presentation_artifact_string(source.get(field), field, maximum=maximum)
+            if text is not None:
+                slide[field] = text
+
+        if layout == "statement":
+            slide["statement"] = _presentation_artifact_string(
+                source.get("statement"), "statement", maximum=320, required=True,
+            )
+        elif layout == "bullets":
+            slide["items"] = _presentation_artifact_string_list(
+                source.get("items"), "items", maximum=6,
+            )
+        elif layout == "steps":
+            slide["items"] = _presentation_artifact_pair_list(
+                source.get("items"), "items", maximum=6, first="label", second="text",
+            )
+        elif layout == "comparison":
+            for side_name in ("left", "right"):
+                side = source.get(side_name)
+                if not isinstance(side, dict):
+                    raise _PresentationArtifactValidationError("invalid_" + side_name)
+                slide[side_name] = {
+                    "title": _presentation_artifact_string(
+                        side.get("title"), side_name + "_title", maximum=120, required=True,
+                    ),
+                    "items": _presentation_artifact_string_list(
+                        side.get("items"), side_name + "_items", maximum=5,
+                    ),
+                }
+        elif layout == "metrics":
+            slide["items"] = _presentation_artifact_pair_list(
+                source.get("items"), "items", maximum=4, first="value", second="label",
+                first_maximum=80, second_maximum=160,
+            )
+        elif layout == "quote":
+            slide["quote"] = _presentation_artifact_string(
+                source.get("quote"), "quote", maximum=320, required=True,
+            )
+            attribution = _presentation_artifact_string(
+                source.get("attribution"), "attribution", maximum=160,
+            )
+            if attribution is not None:
+                slide["attribution"] = attribution
+        elif layout == "code":
+            slide["code"] = _presentation_artifact_string(
+                source.get("code"), "code", maximum=4000, required=True,
+            )
+            for field, maximum in (("language", 40), ("caption", 320)):
+                text = _presentation_artifact_string(source.get(field), field, maximum=maximum)
+                if text is not None:
+                    slide[field] = text
+        elif layout == "summary":
+            slide["takeaway"] = _presentation_artifact_string(
+                source.get("takeaway"), "takeaway", maximum=320, required=True,
+            )
+            actions = source.get("actions")
+            if actions is not None:
+                slide["actions"] = _presentation_artifact_string_list(
+                    actions, "actions", maximum=4,
+                )
+        clean_slides.append(slide)
+
+    clean["slides"] = clean_slides
+    if len(json.dumps(clean, ensure_ascii=False).encode("utf-8")) > _PRESENTATION_ARTIFACT_MAX_BYTES:
+        raise _PresentationArtifactValidationError("artifact_too_large")
+    return clean
+
+
+def _extract_presentation_artifact(text: str) -> tuple[str, dict | None, str]:
+    """Remove and validate one terminal Mode 3 fence from completed text."""
+    original = str(text or "").strip()
+    match = _PRESENTATION_ARTIFACT_FENCE_RE.match(original)
+    if not match:
+        return original, None, ""
+    prose = (match.group("prose") or "").strip()
+    encoded = (match.group("artifact") or "").strip()
+    if len(encoded.encode("utf-8")) > _PRESENTATION_ARTIFACT_MAX_BYTES:
+        return prose, None, "artifact_too_large"
+    try:
+        value = json.loads(encoded)
+    except (json.JSONDecodeError, UnicodeError):
+        return prose, None, "invalid_json"
+    try:
+        artifact = _validate_presentation_artifact(value)
+    except _PresentationArtifactValidationError as exc:
+        return prose, None, str(exc) or "invalid_artifact"
+    return prose, artifact, ""
+
+
 def _parse_conversation_event(ev, line_num):
     """Parse a single conversation JSONL event."""
     ev_type = ev.get("type", "")
@@ -18506,7 +18702,20 @@ def _parse_conversation_event(ev, line_num):
     if ev_type == "assistant":
         msg = _safe_parse_message(ev.get("message", {}))
         blocks = []
-        for block in msg.get("content", []):
+        artifact = None
+        artifact_error = ""
+        content_blocks = msg.get("content", [])
+        if not isinstance(content_blocks, list):
+            content_blocks = []
+        last_text_index = next(
+            (
+                index for index in range(len(content_blocks) - 1, -1, -1)
+                if isinstance(content_blocks[index], dict)
+                and content_blocks[index].get("type") == "text"
+            ),
+            -1,
+        )
+        for block_index, block in enumerate(content_blocks):
             if not isinstance(block, dict):
                 continue
             btype = block.get("type", "")
@@ -18546,6 +18755,8 @@ def _parse_conversation_event(ev, line_num):
                 blocks.append(tool_block)
             elif btype == "text":
                 txt = block.get("text", "").strip()
+                if block_index == last_text_index:
+                    txt, artifact, artifact_error = _extract_presentation_artifact(txt)
                 if txt:
                     blocks.append({"kind": "text", "text": txt})
             elif btype == "thinking":
@@ -18566,7 +18777,7 @@ def _parse_conversation_event(ev, line_num):
                 elif signature:
                     blocks.append({"kind": "thinking", "text": "", "signature_only": True})
 
-        if blocks:
+        if blocks or artifact is not None or artifact_error:
             out_ev = {
                 "line": line_num,
                 "ts": ts,
@@ -18576,6 +18787,10 @@ def _parse_conversation_event(ev, line_num):
                 "is_sidechain": bool(ev.get("isSidechain")),
                 "blocks": blocks,
             }
+            if artifact is not None:
+                out_ev["presentation_artifact"] = artifact
+            if artifact_error:
+                out_ev["presentation_artifact_error"] = artifact_error
             if msg.get("model"):
                 out_ev["model"] = msg.get("model")
             # Per-turn token usage: surface a "X in | Y out" chip at the end of
@@ -25844,14 +26059,19 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                 return _apply_codex_turn_meta(result, codex_turn_meta)
         if ptype == "agent_message":
             text = (payload.get("message") or "").strip()
-            if text:
+            text, artifact, artifact_error = _extract_presentation_artifact(text)
+            if text or artifact is not None or artifact_error:
                 result = {
                     "line": line_num,
                     "ts": ts,
                     "type": "assistant",
                     "message_id": f"codex-{line_num}",
-                    "blocks": [{"kind": "text", "text": text}],
+                    "blocks": ([{"kind": "text", "text": text}] if text else []),
                 }
+                if artifact is not None:
+                    result["presentation_artifact"] = artifact
+                if artifact_error:
+                    result["presentation_artifact_error"] = artifact_error
                 return _apply_codex_turn_meta(result, codex_turn_meta)
         if ptype == "task_complete":
             text = (payload.get("last_agent_message") or payload.get("message") or "").strip()
