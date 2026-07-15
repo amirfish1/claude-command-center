@@ -237,3 +237,34 @@ def test_trend_compares_newest_and_oldest_halves():
     assert payload["trends"]["delivery_direction"] == "up"
     assert payload["trends"]["delivery_change_pct"] == 200.0
     assert payload["trends"]["delivery_slope_per_week"] > 0
+
+
+def test_midweek_range_uses_exact_comparable_seven_day_buckets():
+    start = date(2026, 5, 20)  # Wednesday
+    payload = aggregate_productivity(
+        commits=[],
+        turns=[],
+        tickets=[],
+        presence=[],
+        start_date=start,
+        end_date=start + timedelta(weeks=8) - timedelta(days=1),
+    )
+    assert len(payload["weekly"]) == 8
+    assert payload["weekly"][0]["week_start"] == "2026-05-20"
+    assert payload["weekly"][-1]["week_start"] == "2026-07-08"
+
+
+def test_agent_net_time_clips_turns_to_the_requested_range():
+    turn_start = datetime(2026, 7, 13, 23, 30, tzinfo=UTC)
+    payload = aggregate_productivity(
+        commits=[],
+        turns=[_turn(turn_start, turn_start + timedelta(hours=1))],
+        tickets=[],
+        presence=[],
+        start_date=date(2026, 7, 14),
+        end_date=date(2026, 7, 14),
+        tzinfo=UTC,
+    )
+    assert payload["summary"]["agent_gross_seconds"] == 30 * 60
+    assert payload["summary"]["agent_net_seconds"] == 30 * 60
+    assert payload["summary"]["agent_parallel_seconds"] == 0

@@ -1,4 +1,5 @@
 import inspect
+import time
 from datetime import date, datetime, timezone
 
 import server
@@ -80,6 +81,114 @@ def test_productivity_payload_starts_first_build(monkeypatch):
     assert payload["ok"] is True
     assert payload["state"] == "building"
     assert payload["range"]["weeks"] == 12
+
+
+def test_failed_first_build_waits_for_explicit_retry(monkeypatch):
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore())
+    monkeypatch.setattr(
+        server,
+        "_PRODUCTIVITY_REFRESH",
+        {
+            "state": "failed",
+            "started_at": 10.0,
+            "completed_at": 11.0,
+            "error": "Productivity refresh failed. Retry manually.",
+            "error_code": "refresh_failed",
+        },
+    )
+    starts = []
+    monkeypatch.setattr(
+        server,
+        "_productivity_refresh_start",
+        lambda force=False: starts.append(force) or dict(server._PRODUCTIVITY_REFRESH),
+    )
+
+    payload, status = server._productivity_payload(weeks=8)
+
+    assert status == 503
+    assert starts == []
+    assert payload["state"] == "failed"
+    assert payload["error_code"] == "refresh_failed"
+
+
+def test_explicit_retry_can_restart_failed_refresh(monkeypatch):
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore())
+    monkeypatch.setattr(
+        server,
+        "_PRODUCTIVITY_REFRESH",
+        {"state": "failed", "error": "Productivity refresh failed. Retry manually."},
+    )
+    starts = []
+    monkeypatch.setattr(
+        server,
+        "_productivity_refresh_start",
+        lambda force=False: starts.append(force) or {"state": "building"},
+    )
+
+    payload, status = server._productivity_payload(weeks=8, force_refresh=True)
+
+    assert status == 202
+    assert payload["state"] == "building"
+    assert starts == [True]
+
+
+def test_refresh_failure_exposes_generic_error_and_logs_detail(monkeypatch, capsys):
+    class _ImmediateThread:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    private_detail = "/Users/private/work/productivity.db is locked"
+    monkeypatch.setattr(
+        server,
+        "_PRODUCTIVITY_REFRESH",
+        {"state": "idle", "started_at": None, "completed_at": None, "error": None},
+    )
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        server,
+        "_productivity_build_snapshot",
+        lambda: (_ for _ in ()).throw(RuntimeError(private_detail)),
+    )
+
+    refresh = server._productivity_refresh_start()
+
+    assert refresh["state"] == "failed"
+    assert refresh["error"] == "Productivity refresh failed. Retry manually."
+    assert refresh["error_code"] == "refresh_failed"
+    assert private_detail not in str(refresh)
+    assert private_detail in capsys.readouterr().err
+
+
+def test_status_only_payload_omits_large_dataset(monkeypatch):
+    assert "status_only" in inspect.signature(server._productivity_payload).parameters
+    cached = {
+        "generated_at": time.time(),
+        "payload": {
+            "schema": 1,
+            "datasets": {
+                "8": {
+                    "ok": True,
+                    "range": {"weeks": 8},
+                    "daily": [{"date": "2026-07-14"}],
+                    "deliveries": [{"title": "Large evidence row"}],
+                }
+            },
+            "coverage": {"repositories": 3},
+        },
+    }
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore(cached))
+    monkeypatch.setattr(server, "_productivity_refresh_public", lambda: {"state": "building"})
+
+    payload, status = server._productivity_payload(weeks=8, status_only=True)
+
+    assert status == 202
+    assert payload["ok"] is True
+    assert payload["state"] == "building"
+    assert "daily" not in payload
+    assert "deliveries" not in payload
 
 
 def test_ticket_normalization_keeps_safe_project_evidence():
@@ -174,6 +283,44 @@ def test_build_snapshot_reads_each_global_source_once(monkeypatch):
     assert calls == {"conversations": 1, "tickets": 1}
     assert set(snapshot["datasets"]) == {"6", "8", "12", "16"}
     assert snapshot["coverage"]["conversations_considered"] == 0
+
+
+def test_build_snapshot_marks_watchtower_unavailable_on_read_failure(monkeypatch):
+    monkeypatch.setattr(server, "find_all_conversations", lambda **kwargs: [])
+    monkeypatch.setattr(
+        server._q,
+        "list_items",
+        lambda: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+    )
+    monkeypatch.setattr(server, "_productivity_known_repos", lambda rows: ([], []))
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore())
+
+    snapshot = server._productivity_build_snapshot(
+        now=datetime(2026, 7, 14, 12, tzinfo=UTC)
+    )
+
+    assert snapshot["coverage"]["watchtower"] == {
+        "available": False,
+        "items": 0,
+        "reason": "read_failed",
+    }
+
+
+def test_build_snapshot_marks_unsupported_presence_sampler(monkeypatch):
+    monkeypatch.setattr(server, "find_all_conversations", lambda **kwargs: [])
+    monkeypatch.setattr(server._q, "list_items", lambda: [])
+    monkeypatch.setattr(server, "_productivity_known_repos", lambda rows: ([], []))
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore())
+    monkeypatch.setattr(server.sys, "platform", "linux")
+
+    snapshot = server._productivity_build_snapshot(
+        now=datetime(2026, 7, 14, 12, tzinfo=UTC)
+    )
+
+    presence = snapshot["coverage"]["presence"]
+    assert presence["sampler_available"] is False
+    assert presence["reason"] == "unsupported_platform"
+    assert presence["source"] == "unavailable"
 
 
 def test_build_snapshot_caps_repository_warning_details(monkeypatch):

@@ -32,6 +32,8 @@ _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _RECORD_SEP = "\x1e"
 _FIELD_SEP = "\x1f"
 _IDLE_TIME_RE = re.compile(r'"HIDIdleTime"\s*=\s*(\d+)')
+_PRESENCE_HEALTH_LOCK = threading.Lock()
+_PRESENCE_HEALTH = None
 
 
 def classify_commit(subject: str) -> str:
@@ -505,7 +507,10 @@ def aggregate_productivity(
                 project_prompt_times[project_id].append(local_start)
                 _metric_add(daily[start_day], "human_prompts", 1)
                 _metric_add(project, "human_prompts", 1)
-        all_agent_intervals.append((start.astimezone(tzinfo), end.astimezone(tzinfo)))
+        all_agent_intervals.extend(
+            (piece_start, piece_end)
+            for _day_key, piece_start, piece_end in valid_pieces
+        )
 
     for day_key, intervals in daily_agent_intervals.items():
         net = union_seconds(intervals)
@@ -578,8 +583,10 @@ def aggregate_productivity(
             bucket["work_items"].append(compact)
 
     weekly = []
-    first_monday = start_date - timedelta(days=start_date.weekday())
-    week_start = first_monday
+    # Use contiguous seven-day slices from the requested range.  Aligning to
+    # calendar Mondays creates partial endpoint buckets (and N+1 buckets for
+    # an N-week range), which biases the oldest/newest trend comparison.
+    week_start = start_date
     while week_start <= end_date:
         bucket = {"week_start": week_start.isoformat(), **_empty_metrics()}
         for offset in range(7):
@@ -870,10 +877,47 @@ def presence_summary(rows: list[dict], *, tzinfo=None) -> dict:
     }
 
 
+def _set_presence_health(*, available: bool, reason: str | None, sampled_at=None) -> None:
+    global _PRESENCE_HEALTH
+    checked_at = _parse_timestamp(sampled_at)
+    value = {
+        "sampler_available": bool(available),
+        "reason": reason,
+        "last_checked_at": (
+            checked_at.isoformat()
+            if checked_at is not None
+            else datetime.now(timezone.utc).isoformat()
+        ),
+    }
+    with _PRESENCE_HEALTH_LOCK:
+        _PRESENCE_HEALTH = value
+
+
+def presence_health() -> dict:
+    """Return privacy-safe capability health for the local idle sampler."""
+    with _PRESENCE_HEALTH_LOCK:
+        if isinstance(_PRESENCE_HEALTH, dict):
+            return dict(_PRESENCE_HEALTH)
+    if sys.platform != "darwin":
+        return {
+            "sampler_available": False,
+            "reason": "unsupported_platform",
+            "last_checked_at": None,
+        }
+    return {
+        "sampler_available": True,
+        "reason": "not_yet_sampled",
+        "last_checked_at": None,
+    }
+
+
 def sample_presence(store: ProductivityStore, now: datetime | None = None) -> dict:
     """Take one local OS-idle sample and persist its minute bucket."""
     now = now or datetime.now(timezone.utc)
     if sys.platform != "darwin":
+        _set_presence_health(
+            available=False, reason="unsupported_platform", sampled_at=now
+        )
         return {"available": False, "reason": "unsupported_platform"}
     try:
         proc = subprocess.run(
@@ -883,12 +927,19 @@ def sample_presence(store: ProductivityStore, now: datetime | None = None) -> di
             timeout=3,
         )
     except (OSError, subprocess.SubprocessError):
+        _set_presence_health(
+            available=False, reason="idle_time_unavailable", sampled_at=now
+        )
         return {"available": False, "reason": "idle_time_unavailable"}
     idle = read_macos_idle_seconds(proc.stdout) if proc.returncode == 0 else None
     if idle is None:
+        _set_presence_health(
+            available=False, reason="idle_time_unavailable", sampled_at=now
+        )
         return {"available": False, "reason": "idle_time_unavailable"}
     is_active = idle < 300
     store.record_presence(now, active=is_active, idle_seconds=idle)
+    _set_presence_health(available=True, reason=None, sampled_at=now)
     return {"available": True, "active": is_active, "idle_seconds": round(idle, 3)}
 
 
@@ -905,5 +956,5 @@ def run_presence_sampler(
             store.prune_presence()
         except Exception:
             # Presence is optional evidence and must never take down CCC.
-            pass
+            _set_presence_health(available=False, reason="sampling_failed")
         stop_event.wait(max(1.0, float(interval)))

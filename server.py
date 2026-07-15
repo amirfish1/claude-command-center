@@ -73,6 +73,7 @@ from productivity import (
     collect_git_commits,
     describe_git_repo,
     discover_git_identities,
+    presence_health,
     presence_summary,
     run_presence_sampler,
 )
@@ -53352,6 +53353,7 @@ _PRODUCTIVITY_REFRESH = {
     "started_at": None,
     "completed_at": None,
     "error": None,
+    "error_code": None,
 }
 
 
@@ -53576,10 +53578,16 @@ def _productivity_build_snapshot(now=None):
         resolve_effective=False,
         resolve_worktree_dirty=False,
     )
+    watchtower_status = {"available": True, "items": 0, "reason": None}
     try:
         raw_tickets = _q.list_items() or []
     except Exception:
         raw_tickets = []
+        watchtower_status = {
+            "available": False,
+            "items": 0,
+            "reason": "read_failed",
+        }
     repositories, warnings = _productivity_known_repos(conversations)
     identities = discover_git_identities(repositories)
     commits = []
@@ -53610,8 +53618,16 @@ def _productivity_build_snapshot(now=None):
         )
         if normalized
     ]
+    watchtower_status["items"] = len(tickets)
     presence = _PRODUCTIVITY_STORE.load_presence(full_start, end_date, tzinfo=local_tz)
     sampled = presence_summary(presence, tzinfo=local_tz)
+    sampler = presence_health()
+    if sampled.get("sample_minutes"):
+        presence_source = "macos_idle_sampler"
+    elif sampler.get("sampler_available"):
+        presence_source = "not_yet_sampled"
+    else:
+        presence_source = "unavailable"
     unique_warnings = sorted(set(warnings))
 
     datasets = {}
@@ -53635,10 +53651,12 @@ def _productivity_build_snapshot(now=None):
         "git_identity_available": bool(identities),
         **transcript_coverage,
         "watchtower_items": len(tickets),
+        "watchtower": watchtower_status,
         "presence": {
             **sampled,
             "available": bool(sampled.get("sample_minutes")),
-            "source": "macos_idle_sampler" if sampled.get("sample_minutes") else "not_yet_sampled",
+            **sampler,
+            "source": presence_source,
         },
         "warning_count": len(unique_warnings),
         "warnings": unique_warnings[:12],
@@ -53663,12 +53681,19 @@ def _productivity_refresh_public():
         return dict(_PRODUCTIVITY_REFRESH)
 
 
-def _productivity_refresh_start():
+def _productivity_refresh_start(*, force=False):
     with _PRODUCTIVITY_REFRESH_LOCK:
-        if _PRODUCTIVITY_REFRESH.get("state") == "building":
+        state = _PRODUCTIVITY_REFRESH.get("state")
+        if state == "building" or (state == "failed" and not force):
             return dict(_PRODUCTIVITY_REFRESH)
         _PRODUCTIVITY_REFRESH.update(
-            {"state": "building", "started_at": time.time(), "error": None}
+            {
+                "state": "building",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+                "error_code": None,
+            }
         )
 
     def run():
@@ -53682,15 +53707,18 @@ def _productivity_refresh_start():
                         "state": "complete",
                         "completed_at": time.time(),
                         "error": None,
+                        "error_code": None,
                     }
                 )
         except Exception as exc:
+            print(f"[productivity] refresh failed: {exc!r}", file=sys.stderr)
             with _PRODUCTIVITY_REFRESH_LOCK:
                 _PRODUCTIVITY_REFRESH.update(
                     {
                         "state": "failed",
                         "completed_at": time.time(),
-                        "error": str(exc)[:240],
+                        "error": "Productivity refresh failed. Retry manually.",
+                        "error_code": "refresh_failed",
                     }
                 )
 
@@ -53702,7 +53730,7 @@ def _productivity_refresh_start():
     return _productivity_refresh_public()
 
 
-def _productivity_payload(*, weeks=8, force_refresh=False):
+def _productivity_payload(*, weeks=8, force_refresh=False, status_only=False):
     weeks = weeks if weeks in _PRODUCTIVITY_WEEKS else 8
     cached = _PRODUCTIVITY_STORE.load_payload()
     valid_cache = (
@@ -53715,25 +53743,47 @@ def _productivity_payload(*, weeks=8, force_refresh=False):
     if valid_cache:
         stale = (time.time() - float(cached.get("generated_at") or 0)) > _PRODUCTIVITY_CACHE_TTL
     refresh = _productivity_refresh_public()
-    if force_refresh or stale or not valid_cache:
+    if force_refresh:
+        refresh = _productivity_refresh_start(force=True)
+    elif (stale or not valid_cache) and refresh.get("state") != "failed":
         refresh = _productivity_refresh_start()
     if not valid_cache:
-        return {
-            "ok": True,
-            "state": refresh.get("state") or "building",
+        state = refresh.get("state") or "building"
+        payload = {
+            "ok": state != "failed",
+            "state": state,
             "range": {"weeks": weeks},
             "refresh": {**refresh, "cached": False, "generated_at": None},
-        }, 202
+        }
+        if state == "failed":
+            payload.update(
+                {
+                    "error": "Productivity refresh failed. Retry manually.",
+                    "error_code": "refresh_failed",
+                }
+            )
+            return payload, 503
+        return payload, 202
 
     snapshot = cached["payload"]
-    payload = dict(snapshot["datasets"][str(weeks)])
-    payload["coverage"] = snapshot.get("coverage") or {}
-    payload["refresh"] = {
+    refresh_payload = {
         **refresh,
         "cached": True,
         "stale": stale,
         "generated_at": cached.get("generated_at"),
     }
+    if status_only:
+        state = refresh.get("state") or "idle"
+        return {
+            "ok": True,
+            "state": state,
+            "range": {"weeks": weeks},
+            "refresh": refresh_payload,
+        }, (202 if state == "building" else 200)
+
+    payload = dict(snapshot["datasets"][str(weeks)])
+    payload["coverage"] = snapshot.get("coverage") or {}
+    payload["refresh"] = refresh_payload
     return payload, 200
 
 
@@ -55193,8 +55243,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
                 "1", "true", "yes"
             )
+            status_only = (qs.get("status", ["0"])[0] or "0").lower() in (
+                "1", "true", "yes"
+            )
             payload, status = _productivity_payload(
-                weeks=weeks, force_refresh=force
+                weeks=weeks, force_refresh=force, status_only=status_only
             )
             self.send_json(payload, status)
             return

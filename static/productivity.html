@@ -272,6 +272,7 @@
   let selectedWeeks = 8;
   let lastData = null;
   let pollTimer = null;
+  let pollDelay = 1600;
 
   try {
     const saved = Number(localStorage.getItem(PRODUCTIVITY_RANGE_KEY));
@@ -440,6 +441,7 @@
   function renderCoverage(coverage) {
     coverage = coverage || {};
     const presence = coverage.presence || {};
+    const watchtower = coverage.watchtower || {available: true, items: coverage.watchtower_items};
     const warnings = Array.isArray(coverage.warnings) ? coverage.warnings : [];
     const warningCount = Number(coverage.warning_count) || warnings.length;
     const proxies = Array.isArray(coverage.proxies) ? coverage.proxies : [];
@@ -447,17 +449,19 @@
       [compact(coverage.repositories), 'repositories discovered'],
       [compact(coverage.git_repositories_scanned), 'Git histories scanned'],
       [compact(coverage.transcripts_parsed) + '/' + compact(coverage.conversations_considered), 'transcripts parsed'],
-      [compact(coverage.watchtower_items), 'WatchTower items'],
-      [compact(presence.sample_minutes), 'presence sample minutes'],
+      [watchtower.available === false ? '—' : compact(watchtower.items), watchtower.available === false ? 'WatchTower unavailable' : 'WatchTower items'],
+      [presence.sampler_available === false ? '—' : compact(presence.sample_minutes), presence.sampler_available === false ? 'Presence sampling unavailable' : 'presence sample minutes'],
       [presence.coverage_pct ? presence.coverage_pct + '%' : '—', 'presence continuity'],
     ];
     document.getElementById('coverageBody').innerHTML =
       '<div class="coverage-stats">' + stats.map(function (row) { return '<div class="coverage-stat"><strong>' + escapeHtml(row[0]) + '</strong><span>' + escapeHtml(row[1]) + '</span></div>'; }).join('') + '</div>' +
       '<div class="coverage-copy">' +
         (!coverage.git_identity_available ? '<p class="warning">No configured Git email was found, so commits are intentionally omitted rather than attributed to another author.</p>' : '') +
+        (watchtower.available === false ? '<p class="warning">WatchTower unavailable for this snapshot; ticket counts are left blank rather than reported as zero.</p>' : '') +
+        (presence.sampler_available === false ? '<p class="warning">Presence sampling unavailable on this system; computer-time values are left blank.</p>' : '') +
         (warningCount ? '<details class="coverage-warning-details"><summary>' + warningCount + ' repository candidate' + (warningCount === 1 ? '' : 's') + ' could not be read</summary><ul>' + warnings.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') + (warningCount > warnings.length ? '<li>…and ' + (warningCount - warnings.length) + ' more</li>' : '') + '</ul></details>' : '') +
         '<ul>' + proxies.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') + '</ul>' +
-        (presence.first_sampled_at ? '<p>Presence sampling starts ' + escapeHtml(new Date(presence.first_sampled_at).toLocaleString()) + '; earlier time is left blank.</p>' : '<p>Computer-presence sampling will accumulate while CCC is running. Historical time is not invented.</p>') +
+        (presence.first_sampled_at ? '<p>Presence sampling starts ' + escapeHtml(new Date(presence.first_sampled_at).toLocaleString()) + '; earlier time is left blank.</p>' : (presence.sampler_available === false ? '' : '<p>Computer-presence sampling will accumulate while CCC is running. Historical time is not invented.</p>')) +
       '</div>';
   }
 
@@ -489,8 +493,36 @@
     }
   }
 
+  function scheduleStatusPoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    const delay = pollDelay;
+    pollDelay = Math.min(8000, Math.round(pollDelay * 1.6));
+    pollTimer = setTimeout(pollRefreshStatus, delay);
+  }
+
+  async function pollRefreshStatus() {
+    pollTimer = null;
+    try {
+      const response = await fetch('/api/productivity?weeks=' + selectedWeeks + '&status=1', {cache: 'no-store'});
+      const data = await response.json();
+      const refresh = data.refresh || {};
+      if (response.status === 202 || data.state === 'building' || refresh.state === 'building') {
+        scheduleStatusPoll();
+        return;
+      }
+      if (!response.ok || !data.ok || data.state === 'failed' || refresh.state === 'failed') {
+        throw new Error(data.error || refresh.error || ('HTTP ' + response.status));
+      }
+      pollDelay = 1600;
+      loadData(false);
+    } catch (error) {
+      renderError(error);
+    }
+  }
+
   async function loadData(force) {
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    if (force) pollDelay = 1600;
     if (!lastData) document.body.classList.add('is-loading');
     if (force) status('Refreshing repositories, transcripts, presence, and WatchTower data…', 'building');
     try {
@@ -499,13 +531,13 @@
       const data = await response.json();
       if (response.status === 202) {
         status('Building the first 16-week local snapshot…', 'building');
-        pollTimer = setTimeout(function () { loadData(false); }, 1600);
+        scheduleStatusPoll();
         return;
       }
       if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
       render(data);
       if ((data.refresh || {}).state === 'building') {
-        pollTimer = setTimeout(function () { loadData(false); }, 1800);
+        scheduleStatusPoll();
       }
     } catch (error) {
       renderError(error);

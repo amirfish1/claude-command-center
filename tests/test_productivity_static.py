@@ -33,6 +33,17 @@ def test_productivity_page_handles_building_stale_and_failure_states():
     assert "renderProjects(data.projects || [], deliveryIndex.byProject)" in html
     assert "renderDaily(data.daily || [], deliveryIndex.byDate)" in html
     assert "localStorage.setItem(PRODUCTIVITY_RANGE_KEY" in html
+    assert "status=1" in html
+    assert "pollRefreshStatus" in html
+    assert "Math.min" in html
+
+
+def test_productivity_page_distinguishes_unavailable_sources_from_zero():
+    html = (ROOT / "static" / "productivity.html").read_text()
+    assert "coverage.watchtower" in html
+    assert "WatchTower unavailable" in html
+    assert "presence.sampler_available" in html
+    assert "Presence sampling unavailable" in html
 
 
 def test_existing_surfaces_link_to_productivity():
