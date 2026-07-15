@@ -9796,7 +9796,13 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["model"], "auto")
-        cmd = popen.call_args.args[0]
+        cursor_calls = [
+            call.args[0]
+            for call in popen.call_args_list
+            if call.args and "--resume" in call.args[0] and sid in call.args[0]
+        ]
+        self.assertEqual(len(cursor_calls), 1)
+        cmd = cursor_calls[0]
         self.assertEqual(cmd[cmd.index("--model") + 1], "auto")
 
     def test_resume_cursor_reports_immediate_usage_limit_failure(self):
