@@ -318,6 +318,7 @@ attribute class disabled enabled click input change details
 historical-cursor split-pane resize off-restore legacy-mode-one
 added edited tool-group tool-complete approval-state queue-reason
 outcome-banner dismissal frame-bound
+completion-supersede reactivation
 ```
 
 Run the Python contract test and verify RED because the script is absent.

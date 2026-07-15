@@ -13,6 +13,7 @@ const requiredLabels = [
   'change', 'details', 'historical-cursor', 'split-pane', 'resize', 'off-restore',
   'legacy-mode-one', 'added', 'edited', 'tool-group', 'tool-complete',
   'approval-state', 'queue-reason', 'outcome-banner', 'dismissal', 'frame-bound',
+  'completion-supersede', 'reactivation',
 ];
 const passed = new Set();
 
@@ -290,6 +291,23 @@ function findChromePath() {
         item.textContent.includes('Completed streamed answer')
       ));
     }, { timeout });
+    await upsert('completion-supersede', 'stream-next', 'stream-bubble', '<div class="assistant-text"><p>Next streaming answer</p></div>');
+    await page.waitForFunction(() => document.querySelector(
+      '.conv-pane[data-pane-id="p1"] .conv-presentation-live-item [data-parity-label="completion-supersede"]'
+    ), { timeout });
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-parity-key="stream-next"]');
+      root.dataset.jsonlLine = '40';
+      root.className = 'event assistant';
+      root.querySelector('p').firstChild.data = 'Newer completed answer';
+    });
+    await waitForParity('completion-supersede');
+    await page.waitForFunction(() => {
+      const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
+      return !view.querySelector('.conv-presentation-live-item [data-parity-label="completed"]')
+        && view.querySelectorAll('.conv-presentation-live-item [data-parity-label="completion-supersede"]').length === 1
+        && view._presentationDeck.some(slide => slide.textContent.includes('Newer completed answer'));
+    }, { timeout });
 
     await upsert('approval', 'approval', 'event approval-event', '<button type="button">Approve command</button>');
     await waitForParity('approval');
@@ -516,6 +534,14 @@ function findChromePath() {
         && slide.dataset.presentationKey === window.__cccLegacySlideKey;
     }, { timeout });
     pass('legacy-mode-one');
+    await upsert('reactivation', 'reactivation', 'event wake-event', '<span>One update after reactivation</span>');
+    await waitForParity('reactivation');
+    await page.waitForFunction(() => {
+      const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
+      return view.querySelectorAll('.conv-presentation-live-item [data-parity-label="reactivation"]').length === 1
+        && view._presentationProjection
+        && view._presentationProjection.entries.size === view.querySelectorAll('.conv-presentation-live-item').length;
+    }, { timeout });
 
     const missing = requiredLabels.filter(label => !passed.has(label));
     if (missing.length) throw new Error(`parity matrix did not execute: ${missing.join(', ')}`);

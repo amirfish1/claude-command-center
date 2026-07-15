@@ -37,6 +37,7 @@ class TestPresentationLiveParityHarness(unittest.TestCase):
             "split-pane", "resize", "off-restore", "legacy-mode-one", "added",
             "edited", "tool-group", "tool-complete", "approval-state",
             "queue-reason", "outcome-banner", "dismissal", "frame-bound",
+            "completion-supersede", "reactivation",
         ):
             self.assertIn(f"'{label}'", source)
 
