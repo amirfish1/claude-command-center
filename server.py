@@ -23068,7 +23068,7 @@ def _codex_fetch_threads(where="", params=(), limit=None):
                 "cwd", "title", "tokens_used", "has_user_event", "archived",
                 "archived_at", "git_sha", "git_branch", "git_origin_url",
                 "cli_version", "first_user_message", "agent_nickname",
-                "agent_role", "memory_mode", "model", "reasoning_effort",
+                "agent_path", "agent_role", "memory_mode", "model", "reasoning_effort",
                 "thread_source",
             ]
             selected = [c for c in wanted if c in cols]
@@ -23374,6 +23374,47 @@ def _codex_thread_row(thread_id):
         return None
     rows = _codex_fetch_threads("id = ?", (thread_id,), limit=1)
     return rows[0] if rows else None
+
+
+def _codex_agent_path(row):
+    raw = str((row or {}).get("agent_path") or "").strip()
+    if raw:
+        return raw
+    source = (row or {}).get("source")
+    if not isinstance(source, str) or not source.strip().startswith("{"):
+        return ""
+    try:
+        data = json.loads(source)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    spawn = ((data.get("subagent") or {}).get("thread_spawn") or {})
+    return str(spawn.get("agent_path") or "").strip()
+
+
+def _codex_agent_task_label(row):
+    path = _codex_agent_path(row).rstrip("/")
+    leaf = path.rsplit("/", 1)[-1].strip() if path else ""
+    if not leaf or leaf.lower() in ("root", "agent", "subagent"):
+        return ""
+    label = re.sub(r"[_-]+", " ", leaf).strip()
+    label = re.sub(
+        r"^([A-Za-z][A-Za-z0-9]*)\s+(\d+)(?=\s|$)",
+        lambda m: f"{m.group(1).upper()}-{m.group(2)}",
+        label,
+    )
+    if label and not re.match(r"^[A-Z]+-\d+", label):
+        label = label[:1].upper() + label[1:]
+    return _truncate_session_name(label) or ""
+
+
+def _codex_display_name(row, override=None, title="", first_message=""):
+    return (
+        _truncate_session_name(override)
+        or _truncate_session_name(title)
+        or _truncate_session_name(first_message)
+        or _codex_agent_task_label(row)
+        or _truncate_session_name((row or {}).get("agent_nickname"))
+    )
 
 
 def _codex_ts_seconds(row, prefix="updated"):
@@ -25501,12 +25542,13 @@ def find_codex_conversations(
         # original ask (first user message) — the same fallback unnamed Claude
         # sessions use — and only fall back to the codename when there's nothing
         # else to show. (CCC-296)
-        display_name = (
-            name_overrides.get(sid)
-            or _truncate_session_name(title)
-            or (first_message[:80] if first_message else None)
-            or (row.get("agent_nickname") or "").strip()
+        display_name = _codex_display_name(
+            row,
+            override=name_overrides.get(sid),
+            title=title,
+            first_message=first_message,
         )
+        agent_task_name = _codex_agent_task_label(row)
         # Keep the sidebar's defensive title cap, but retain Codex's complete
         # generated title for the roomier status rail.  When Codex merely
         # copied the opening prompt into `title`, use the compact row title so
@@ -25563,6 +25605,7 @@ def find_codex_conversations(
             "git_branch": branch,
             "first_message": first_message[:200],
             "display_name": display_name,
+            "agent_task_name": agent_task_name,
             "status_rail_title": status_rail_title,
             "ai_title": codex_ai_title,
             "name_overridden": bool(name_overrides.get(sid)),
@@ -38940,10 +38983,12 @@ def _group_chat_resolve_session_display_name(session_id):
         first_message = _strip_ccc_session_state_instruction(
             (codex_row.get("first_user_message") or "").strip()
         ).strip()
-        for raw in (title, first_message, codex_row.get("agent_nickname")):
-            name = _group_chat_storeable_display_name(raw, sid)
-            if name:
-                return name
+        name = _group_chat_storeable_display_name(
+            _codex_display_name(codex_row, title=title, first_message=first_message),
+            sid,
+        )
+        if name:
+            return name
 
     return ""
 

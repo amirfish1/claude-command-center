@@ -32,6 +32,37 @@ sys.path.insert(0, PROJECT_ROOT)
 
 
 class TestServerImports(unittest.TestCase):
+    def test_codex_agent_task_labels_humanize_cleartext_paths(self):
+        server = importlib.import_module("server")
+        self.assertEqual(
+            server._codex_agent_task_label({"agent_path": "/root/ccc_588_review"}),
+            "CCC-588 review",
+        )
+        self.assertEqual(
+            server._codex_agent_task_label({"agent_path": "/root/trash_fix_review"}),
+            "Trash fix review",
+        )
+        source = json.dumps({
+            "subagent": {"thread_spawn": {"agent_path": "/root/api_audit"}},
+        })
+        self.assertEqual(server._codex_agent_task_label({"source": source}), "Api audit")
+        self.assertEqual(server._codex_agent_task_label({"source": "vscode"}), "")
+
+    def test_codex_display_name_prefers_task_label_over_generated_nickname(self):
+        server = importlib.import_module("server")
+        row = {"agent_path": "/root/ccc_588_review", "agent_nickname": "Erdos"}
+        self.assertEqual(server._codex_display_name(row), "CCC-588 review")
+        self.assertEqual(
+            server._codex_display_name(row, first_message="Review pagination"),
+            "Review pagination",
+        )
+        self.assertEqual(
+            server._codex_display_name(row, title="Queue pagination review"),
+            "Queue pagination review",
+        )
+        self.assertEqual(server._codex_display_name(row, override="My reviewer"), "My reviewer")
+        self.assertEqual(server._codex_display_name({"agent_nickname": "Erdos"}), "Erdos")
+
     def test_server_imports_without_morning(self):
         """server.py must import cleanly even when the optional Morning
         plugin (morning.py, morning_store.py, etc.) isn't on disk. The
