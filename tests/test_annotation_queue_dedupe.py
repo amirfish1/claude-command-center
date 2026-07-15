@@ -34,7 +34,10 @@ class TestAnnotationQueueDedupe(unittest.TestCase):
         }
         first_result = []
 
-        with mock.patch.object(server, "_q", queue):
+        with (
+            mock.patch.object(server, "_q", queue),
+            mock.patch.object(server, "_WT_WORKERS_AVAILABLE", False),
+        ):
             first = threading.Thread(
                 target=lambda: first_result.append(
                     server.enqueue_annotation_ux_fixes_queue("The button is broken", meta=meta)

@@ -100,8 +100,8 @@ class TestQueuePanelLayout(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         queue_js = app_js[
-            app_js.index("function _renderQueuePanel()"):
-            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel()"))
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
         ]
         self.assertNotIn("noteFull.length > 30", queue_js)
         self.assertIn("+ '<span class=\"fq-note\">' + escapeHtml(noteShown) + '</span>'", queue_js)
@@ -122,8 +122,8 @@ class TestQueuePanelLayout(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         queue_js = app_js[
-            app_js.index("function _renderQueuePanel()"):
-            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel()"))
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
         ]
         self.assertIn("function _uxqEmptyHtml(project, totalCount)", app_js)
         self.assertIn("No tickets for ' + escapeHtml(project)", app_js)
@@ -136,8 +136,8 @@ class TestQueuePanelLayout(unittest.TestCase):
         """Claim metadata should force the row out of the open/green state."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         queue_js = app_js[
-            app_js.index("function _renderQueuePanel()"):
-            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel()"))
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
         ]
 
         self.assertIn("const _effectiveStatus = it =>", queue_js)

@@ -8,7 +8,24 @@ json.loads + parses a slice — `tail=N` (last N lines, for the initial open) or
 import json
 from pathlib import Path
 
+import pytest
+
 import server
+
+
+@pytest.fixture(autouse=True)
+def _isolate_queued_events(monkeypatch):
+    """Keep line-window tests independent of live synthetic overlays."""
+    monkeypatch.setattr(
+        server,
+        "_get_queued_events_for_session",
+        lambda _session_id: [],
+    )
+    monkeypatch.setattr(
+        server,
+        "_merge_synthetic_conversation_events",
+        lambda events, _synthetic: list(events),
+    )
 
 
 def _write_claude_jsonl(path, n):

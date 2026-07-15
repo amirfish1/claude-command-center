@@ -50,11 +50,16 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
         lambda sid: (_ for _ in ()).throw(AssertionError(f"probed {sid}")),
     )
 
-    assert server._list_active_group_chat_summaries(now=2_000) == [{
-        "topic": "Active",
-        "state": "active",
-        "session_ids": ["a"],
-    }]
+    summaries = server._list_active_group_chat_summaries(now=2_000)
+
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary["topic"] == "Active"
+    assert summary["state"] == "active"
+    assert summary["session_ids"] == ["a"]
+    assert summary["path"] == str(active_md)
+    assert summary["path_tilde"] == "~/.claude/group-chats/active.md"
+    assert summary["id"] == summary["uuid"]
 
 
 def test_active_chat_route_uses_lightweight_active_summary():

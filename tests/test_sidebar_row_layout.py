@@ -34,7 +34,7 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn("left: var(--conv-icon-left);", icon_css)
         self.assertIn("top: 50%;", icon_css)
         self.assertIn("transform: translateY(-50%);", icon_css)
-        self.assertIn("opacity: 0.5;", icon_css)
+        self.assertIn("opacity: 0.88;", icon_css)
         self.assertIn(
             ".conv-item:hover .conv-session-icon,\n"
             "  .conv-item:focus-within .conv-session-icon",

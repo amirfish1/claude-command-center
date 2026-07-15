@@ -79,7 +79,7 @@ class TestSearchUiStatic(unittest.TestCase):
         health_start = app_js.index("async function _renderQueueHealthStrip")
         health_end = app_js.index("// Repo-basename", health_start)
         health_body = app_js[health_start:health_end]
-        panel_start = app_js.index("function _renderQueuePanel()")
+        panel_start = app_js.index("function _renderQueuePanel(options)")
         panel_end = app_js.index("// Jump the conversation pane", panel_start)
         panel_body = app_js[panel_start:panel_end]
 

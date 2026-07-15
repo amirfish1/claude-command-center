@@ -11,8 +11,8 @@ class TestQueueWipOrder(unittest.TestCase):
     def test_all_history_is_newest_created_first_while_open_keeps_work_order(self):
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
         queue_render = app_js[
-            app_js.index("function _renderQueuePanel()"):
-            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel()"))
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
         ]
 
         self.assertIn("const historyOrder = _uxqGetFilter() === 'all';", queue_render)
