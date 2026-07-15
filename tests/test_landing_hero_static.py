@@ -28,6 +28,12 @@ def test_landing_page_declares_its_existing_favicon():
     assert '<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">' in page
 
 
+def test_public_stats_page_declares_its_existing_favicon():
+    page = (ROOT / "docs" / "stats" / "index.html").read_text(encoding="utf-8")
+
+    assert '<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">' in page
+
+
 def test_landing_hero_has_one_direct_download_cta():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
     hero = _hero(page)
