@@ -14240,6 +14240,7 @@ def _claude_session_jsonl_path(session_id):
 # Model-drift advisor — fleet scan + savings monitor
 # --------------------------------------------------------------------------
 MODEL_ADVISOR_LOG_FILE = str(COMMAND_CENTER_STATE_DIR / "model-advisor-log.json")
+_model_advisor_report_cache = model_advisor.AdvisorReportCache(min_refresh_seconds=300)
 
 # Cache cumulative output-token counts by (mtime,size) so the savings refresh
 # does not re-walk a session JSONL on every poll. Bounded to the logged set.
@@ -14402,6 +14403,21 @@ def build_model_advisor_report(persist=True):
         "log": list(reversed(data.get("recommendations", [])))[:100],
         "summary": model_advisor.summarize(data),
     }
+
+
+def get_model_advisor_report(fresh=""):
+    """Read cached advice, or explicitly request a coalesced refresh.
+
+    ``fresh=1`` is cooldown-limited background work. ``fresh=force`` is reserved
+    for the user's explicit modal-open action and bypasses that cooldown.
+    """
+    mode = str(fresh or "").lower()
+    if mode not in ("1", "true", "force"):
+        return _model_advisor_report_cache.get_cached()
+    return _model_advisor_report_cache.refresh(
+        build_model_advisor_report,
+        force=mode == "force",
+    )
 
 
 def apply_model_advisor_recommendation(rec_id, session_id, model, context_1m=False):
@@ -54642,7 +54658,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Fleet model-drift report: live recommendations (downgrade /
             # upgrade / spawn-worker) + the savings monitor log. Reuses the
             # gated live-session set, so no extra full scan.
-            self.send_json(build_model_advisor_report())
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(get_model_advisor_report(qs.get("fresh", [""])[0]))
         elif path == "/api/sessions/events":
             # SSE: push session-state changes to a subscriber (e.g. a COO /
             # monitor session) instead of having it poll /api/sessions on a
