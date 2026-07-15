@@ -172,6 +172,21 @@ async function handleOpen(request, env) {
   return new Response(null, { status: 204 });
 }
 
+async function handleDownload(env) {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO downloads (received_at, artifact, source) VALUES (?, ?, ?)"
+    ).bind(
+      new Date().toISOString(),
+      "ccc.dmg",
+      "landing-hero",
+    ).run();
+  } catch (_) {
+    // Counting never exposes storage health or enters the download path.
+  }
+  return new Response(null, { status: 204 });
+}
+
 // Public read-only stats endpoint. Returns aggregates only — never
 // per-install rows, never raw timestamps. Cached at the edge for 5
 // minutes so the docs/stats/ page can be hammered without hitting D1.
@@ -260,6 +275,7 @@ export default {
     }
     if (url.pathname === "/v1/ping") return handlePing(request, env);
     if (url.pathname === "/v1/open") return handleOpen(request, env);
+    if (url.pathname === "/v1/download") return handleDownload(env);
     return new Response("not found", { status: 404 });
   },
 };

@@ -76,3 +76,14 @@ jobs:
           # or background tasks that would only surface in the maintainer's setup.
           ! grep -i "morning" /tmp/server.log
           kill $SERVER_PID
+
+  telemetry-worker:
+    name: telemetry-worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test telemetry Worker
+        run: npm test --prefix infra/telemetry-worker
