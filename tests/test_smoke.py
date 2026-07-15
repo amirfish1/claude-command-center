@@ -14002,6 +14002,10 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
         self.assertEqual(recovery["episode_id"], "compact-1")
         self.assertEqual(recovery["status"], "waiting")
+        self.assertEqual(
+            server._codex_app_server_thread_state(sid)["last_activity_at"],
+            100.0,
+        )
 
     def test_codex_recovery_status_is_visible(self):
         sid = self._armed_state()
@@ -14030,6 +14034,159 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         ))
         self.assertEqual(public["compaction_recovery"]["status"], "recovering")
         self.assertTrue(any(e.get("kind") == "compaction_recovery_started" for e in events))
+
+    def test_watchdog_recovers_silent_active_goal_without_compaction(self):
+        sid = "sid-silent-goal"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "status": "active",
+                "active_turn_id": "turn-stalled",
+                "last_turn_id": "turn-stalled",
+                "last_event_at": 100.0,
+                "last_activity_at": 100.0,
+            }
+        goals = {sid: {"objective": "finish mode 3", "status": "active"}}
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+             mock.patch.object(
+                 server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": True, "turn_id": "turn-stalled"},
+             ) as interrupt, mock.patch.object(
+                 server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "turn_id": "turn-recovery"},
+             ) as resume:
+            first = server._run_codex_recovery_watchdog_once(now=1001.0)
+            second = server._run_codex_recovery_watchdog_once(now=1004.0)
+
+        self.assertTrue(first[0][1]["interrupted"])
+        self.assertTrue(second[0][1]["started"])
+        interrupt.assert_called_once_with(sid)
+        resume.assert_called_once()
+        self.assertIn("active goal", resume.call_args.args[1])
+        self.assertIn("turn went silent", resume.call_args.args[1])
+        self.assertNotIn("context compaction", resume.call_args.args[1])
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["trigger"], "silent-turn")
+        self.assertEqual(recovery["source_turn_id"], "turn-stalled")
+        activity = server._codex_app_server_activity_fields(sid)
+        self.assertEqual(activity["sidecar_tool"], "Recovery")
+        self.assertEqual(activity["sidecar_file"], "Recovering stalled Codex turn")
+        self.assertTrue(any(
+            event.get("kind") == "turn_recovery_armed"
+            for event in server._get_codex_coordination_events_for_session(sid)
+        ))
+
+    def test_watchdog_reconciles_silent_goal_turn_after_server_restart(self):
+        sid = "sid-restarted-goal"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "last_turn_id": "turn-stalled",
+                "last_event_at": 100.0,
+                "last_activity_at": 100.0,
+                "coordination_events": [],
+            }
+        goals = {sid: {"objective": "finish after restart", "status": "active"}}
+
+        def reconcile(session_id, *, start_if_needed=False):
+            self.assertEqual(session_id, sid)
+            self.assertTrue(start_if_needed)
+            with server._CODEX_APP_SERVER_LOCK:
+                server._codex_app_server_record_thread(session_id, {
+                    "id": session_id,
+                    "status": {"type": "active"},
+                    "turns": [{"id": "turn-stalled", "status": "inProgress"}],
+                })
+            return True
+
+        with mock.patch.object(server.time, "time", return_value=1001.0), \
+             mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+             mock.patch.object(
+                 server, "_codex_app_server_thread_is_active", side_effect=reconcile
+             ) as refresh, mock.patch.object(
+                 server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": True, "turn_id": "turn-stalled"},
+             ) as interrupt:
+            result = server._run_codex_recovery_watchdog_once(now=1001.0)
+
+        refresh.assert_called_once_with(sid, start_if_needed=True)
+        interrupt.assert_called_once_with(sid)
+        self.assertTrue(result[0][1]["interrupted"])
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["compaction_recovery"]["trigger"], "silent-turn")
+
+    def test_watchdog_does_not_arm_silent_turn_without_recovery_intent(self):
+        server = self.server
+        cases = (
+            ("below-threshold", 100.0, 999.0, {"sid-silent": {"objective": "x", "status": "active"}}, None),
+            ("no-goal-or-queue", 100.0, 1001.0, {}, None),
+            ("active-tool", 100.0, 1001.0, {"sid-silent": {"objective": "x", "status": "active"}}, {
+                "id": "tool-1", "type": "commandExecution", "in_flight": True,
+            }),
+            ("waiting-on-user", 100.0, 1001.0, {"sid-silent": {"objective": "x", "status": "active"}}, None),
+        )
+        for name, last_activity, now, goals, active_item in cases:
+            with self.subTest(name=name):
+                with server._CODEX_APP_SERVER_LOCK:
+                    server._CODEX_APP_SERVER_THREAD_STATE.clear()
+                    server._CODEX_APP_SERVER_THREAD_STATE["sid-silent"] = {
+                        "thread_id": "sid-silent",
+                        "status": "active",
+                        "active_turn_id": "turn-stalled",
+                        "last_activity_at": last_activity,
+                    }
+                    if active_item:
+                        server._CODEX_APP_SERVER_THREAD_STATE["sid-silent"]["active_item"] = active_item
+                    if name == "waiting-on-user":
+                        server._CODEX_APP_SERVER_THREAD_STATE["sid-silent"]["active_flags"] = [
+                            "waitingOnUserInput"
+                        ]
+                with mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+                     mock.patch.object(server, "_codex_interrupt_via_app_server") as interrupt:
+                    result = server._run_codex_recovery_watchdog_once(now=now)
+
+                self.assertEqual(result, [])
+                self.assertNotIn(
+                    "compaction_recovery",
+                    server._codex_app_server_thread_state("sid-silent"),
+                )
+                interrupt.assert_not_called()
+
+    def test_silent_turn_with_queued_input_interrupts_then_hands_off_to_fifo(self):
+        sid = "sid-silent-queued"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "status": "active",
+                "active_turn_id": "turn-stalled",
+                "last_activity_at": 100.0,
+            }
+        with server._pending_resume_lock:
+            server._pending_resume_queue[sid] = ["user message must go first"]
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": True, "turn_id": "turn-stalled"},
+             ) as interrupt, mock.patch.object(
+                 server, "_schedule_codex_queue_pump"
+             ) as schedule, mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_recovery_watchdog_once(now=1001.0)
+
+        self.assertTrue(result[0][1]["interrupted"])
+        self.assertTrue(result[0][1]["queue_handoff"])
+        interrupt.assert_called_once_with(sid)
+        schedule.assert_called_once_with(sid)
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "suppressed")
+        self.assertEqual(recovery["suppressed_reason"], "queued-user-input")
 
     def test_resume_watcher_runs_compaction_recovery_scan(self):
         source = inspect.getsource(self.server._start_resume_queue_watcher)
