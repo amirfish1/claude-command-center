@@ -1,6 +1,8 @@
+import concurrent.futures
 import inspect
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -114,6 +116,49 @@ def test_trash_active_session_archives_and_trashes(tmp_path, monkeypatch):
     assert result == {"archived": True, "trashed": True, "killed": {"ok": True}}
     assert server._load_archived_conversations(sweep=False) == ["sid-a"]
     assert server._load_trashed_conversations() == ["sid-a"]
+
+
+def test_lifecycle_load_repairs_trashed_without_archived(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    server._save_archived_conversations([])
+    server._save_trashed_conversations(["worker-a"])
+
+    archived, trashed = server._load_conversation_lifecycle_state()
+
+    assert archived == ["worker-a"]
+    assert trashed == ["worker-a"]
+    assert server._load_archived_conversations(sweep=False) == ["worker-a"]
+
+
+def test_parallel_trash_operations_do_not_lose_worker(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    real_save = server._save_archived_conversations
+
+    def delayed_save(rows):
+        time.sleep(0.03)
+        return real_save(rows)
+
+    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    start = threading.Event()
+
+    def trash(sid):
+        start.wait(timeout=1)
+        return server._set_conversation_trashed(sid, True)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(trash, sid) for sid in ("worker-a", "worker-b")]
+        start.set()
+        [future.result(timeout=2) for future in futures]
+
+    assert set(server._load_archived_conversations(sweep=False)) == {"worker-a", "worker-b"}
+    assert set(server._load_trashed_conversations()) == {"worker-a", "worker-b"}
 
 
 def test_untrash_returns_to_archived(tmp_path, monkeypatch):

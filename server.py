@@ -9645,6 +9645,7 @@ CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  
 ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
 TRASHED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "trashed-conversations.json"  # [session_id,...] — subset of archived
 ARCHIVE_GRACE_FILE = COMMAND_CENTER_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
+_conversation_lifecycle_lock = threading.RLock()
 ARCHIVE_EVENTS_LOG = COMMAND_CENTER_STATE_DIR / "archive-events.log"  # append-only: every archive/unarchive state change, so "why did X get unarchived" is answerable without re-deriving candidacy internals after the fact (CCC-445)
 
 
@@ -10632,43 +10633,69 @@ def _auto_unarchive_live_sessions(archived):
 
 def _load_archived_conversations(*, sweep=True):
     """Load list of archived session_ids from the side-car file."""
-    try:
-        data = json.loads(ARCHIVED_CONVERSATIONS_FILE.read_text())
-        if isinstance(data, list):
-            archived = [s for s in data if isinstance(s, str)]
-            return _auto_unarchive_live_sessions(archived) if sweep else archived
-    except (OSError, json.JSONDecodeError):
-        pass
-    return []
+    with _conversation_lifecycle_lock:
+        try:
+            data = json.loads(ARCHIVED_CONVERSATIONS_FILE.read_text())
+            archived = [s for s in data if isinstance(s, str)] if isinstance(data, list) else []
+        except (OSError, json.JSONDecodeError):
+            archived = []
+        # Trash is a terminal subset of Archive. Repair older split-brain
+        # sidecars here so every caller — including refresh-time row builders —
+        # observes the invariant even if a previous concurrent write lost the
+        # archive entry while preserving the trash marker.
+        trashed = _load_trashed_conversations(sweep=False)
+        repaired = archived + [sid for sid in trashed if sid not in archived]
+        if repaired != archived:
+            _write_archived_conversations(repaired)
+        return _auto_unarchive_live_sessions(repaired) if sweep else repaired
 
 
-def _save_archived_conversations(archived):
-    """Persist list of archived session_ids."""
+def _write_archived_conversations(archived):
+    """Write an already-normalized archive list while the lifecycle lock is held."""
     LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if not isinstance(archived, list):
-        archived = []
     ARCHIVED_CONVERSATIONS_FILE.write_text(json.dumps(archived, indent=2))
     return archived
 
 
+def _save_archived_conversations(archived):
+    """Persist list of archived session_ids."""
+    with _conversation_lifecycle_lock:
+        if not isinstance(archived, list):
+            archived = []
+        archived = [sid for sid in archived if isinstance(sid, str)]
+        trashed = _load_trashed_conversations(sweep=False)
+        normalized = archived + [sid for sid in trashed if sid not in archived]
+        return _write_archived_conversations(normalized)
+
+
 def _load_trashed_conversations(*, sweep=True):
     """Load trashed session ids. `sweep` exists for archive-helper parity."""
-    try:
-        data = json.loads(TRASHED_CONVERSATIONS_FILE.read_text())
-        if isinstance(data, list):
-            return [sid for sid in data if isinstance(sid, str)]
-    except (OSError, json.JSONDecodeError):
-        pass
-    return []
+    with _conversation_lifecycle_lock:
+        try:
+            data = json.loads(TRASHED_CONVERSATIONS_FILE.read_text())
+            if isinstance(data, list):
+                return [sid for sid in data if isinstance(sid, str)]
+        except (OSError, json.JSONDecodeError):
+            pass
+        return []
 
 
 def _save_trashed_conversations(trashed):
     """Persist trashed session ids."""
-    LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if not isinstance(trashed, list):
-        trashed = []
-    TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
-    return trashed
+    with _conversation_lifecycle_lock:
+        LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        if not isinstance(trashed, list):
+            trashed = []
+        TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
+        return trashed
+
+
+def _load_conversation_lifecycle_state():
+    """Return repaired Archive and Trash lists as one consistent snapshot."""
+    with _conversation_lifecycle_lock:
+        trashed = _load_trashed_conversations(sweep=False)
+        archived = _load_archived_conversations(sweep=False)
+        return archived, trashed
 
 
 def _clear_trashed_on_unarchive(sid):
@@ -10681,36 +10708,45 @@ def _clear_trashed_on_unarchive(sid):
 
 def _set_conversation_trashed(sid, trashed):
     """Set Trash membership while preserving ``trashed => archived``."""
-    archived_ids = _load_archived_conversations(sweep=False)
-    trashed_ids = _load_trashed_conversations(sweep=False)
     want_trashed = bool(trashed)
     kill_result = None
+    should_kill = False
 
-    if want_trashed and sid not in archived_ids:
-        # Write the sticky marker first so a concurrent archive sweep can never
-        # observe a newly archived live session without its manual grace state.
-        _archive_grace[sid] = time.time()
-        _save_archive_grace()
-        archived_ids.append(sid)
-        _save_archived_conversations(archived_ids)
-        _log_archive_event("archive", sid, "trash")
-        try:
-            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
-        except (OSError, FileNotFoundError):
-            pass
-        if sid and not sid.startswith(("backlog-", "pkood-")):
+    with _conversation_lifecycle_lock:
+        archived_ids, trashed_ids = _load_conversation_lifecycle_state()
+        if want_trashed and sid not in archived_ids:
+            # Write the sticky marker first so a concurrent archive sweep can
+            # never observe a newly archived live session without its manual
+            # grace state.
+            _archive_grace[sid] = time.time()
+            _save_archive_grace()
+            archived_ids.append(sid)
+            _save_archived_conversations(archived_ids)
+            _log_archive_event("archive", sid, "trash")
+            try:
+                (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+            except (OSError, FileNotFoundError):
+                pass
+            should_kill = bool(sid and not sid.startswith(("backlog-", "pkood-")))
+
+        if want_trashed and sid not in trashed_ids:
+            trashed_ids.append(sid)
+            _save_trashed_conversations(trashed_ids)
+        elif not want_trashed and sid in trashed_ids:
+            trashed_ids.remove(sid)
+            _save_trashed_conversations(trashed_ids)
+
+        archived_now = sid in archived_ids
+        trashed_now = sid in trashed_ids
+        # Keep the retire action ordered with the state transition. Otherwise
+        # a concurrent Untrash/Move to Active could complete before this kill
+        # and then have its newly-restored session terminated afterward.
+        if should_kill:
             kill_result = _kill_session_by_id(sid)
 
-    if want_trashed and sid not in trashed_ids:
-        trashed_ids.append(sid)
-        _save_trashed_conversations(trashed_ids)
-    elif not want_trashed and sid in trashed_ids:
-        trashed_ids.remove(sid)
-        _save_trashed_conversations(trashed_ids)
-
     return {
-        "archived": sid in archived_ids,
-        "trashed": sid in trashed_ids,
+        "archived": archived_now,
+        "trashed": trashed_now,
         "killed": kill_result,
     }
 
