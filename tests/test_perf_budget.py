@@ -581,6 +581,27 @@ _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,
 _ALL_KEY = server._archive_response_cache_key(**_ALL_OPTS)
 
 
+def test_archive_cache_clear_rejects_inflight_stale_write(isolated_archive_cache):
+    """A refresh started before Archive must not restore its old row afterward."""
+    generation = server._archive_serve_generation
+
+    server._clear_archive_serve_cache()
+
+    assert server._archive_serve_generation == generation + 1
+    assert server._archive_serve_cache_store(
+        _ALL_KEY,
+        [{"session_id": "sid-a", "archived": False}],
+        generation,
+    ) is False
+    assert _ALL_KEY not in server._archive_serve_cache
+    assert server._archive_serve_cache_store(
+        _ALL_KEY,
+        [{"session_id": "sid-a", "archived": True}],
+        server._archive_serve_generation,
+    ) is True
+    assert server._archive_serve_cache[_ALL_KEY]["rows"][0]["archived"] is True
+
+
 def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated_archive_cache, monkeypatch):
     """The signature-gated build cache must NOT re-scan all sessions when the
     transcript corpus is unchanged.

@@ -6600,12 +6600,23 @@ except ValueError:
 _archive_serve_cache = {}      # key -> {"ts", "rows"}
 _archive_serve_lock = threading.Lock()
 _archive_serve_refreshing = set()  # keys with a background refresh in flight
+_archive_serve_generation = 0
+
+
+def _archive_serve_cache_store(key, rows, generation):
+    """Store rows only if no lifecycle mutation invalidated their build."""
+    with _archive_serve_lock:
+        if generation != _archive_serve_generation:
+            return False
+        _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
+        return True
 
 
 def _clear_archive_serve_cache():
+    global _archive_serve_generation
     with _archive_serve_lock:
         _archive_serve_cache.clear()
-        _archive_serve_refreshing.clear()
+        _archive_serve_generation += 1
 
 
 # Coalescing cache for the spawned-session list on the ?all=1 hot path.
@@ -6737,7 +6748,7 @@ def _stamp_archive_goals(rows):
     return rows
 
 
-def _archive_compute_rows(key, cache_options):
+def _archive_compute_rows(key, cache_options, serve_generation=None):
     """Produce archive rows under the per-key build lock (single-flight).
 
     Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
@@ -6746,6 +6757,9 @@ def _archive_compute_rows(key, cache_options):
     both the persisted response cache and the in-memory serve snapshot.
     Returns (rows, from_cache).
     """
+    if serve_generation is None:
+        with _archive_serve_lock:
+            serve_generation = _archive_serve_generation
     sig = _archive_corpus_signature()
     lock = _archive_build_lock(key)
     with lock:
@@ -6762,15 +6776,14 @@ def _archive_compute_rows(key, cache_options):
     _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
     _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
     if _ARCHIVE_SERVE_TTL > 0:
-        with _archive_serve_lock:
-            _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
+        _archive_serve_cache_store(key, rows, serve_generation)
     return rows, from_cache
 
 
-def _archive_serve_refresh(key, cache_options):
+def _archive_serve_refresh(key, cache_options, serve_generation):
     global _archive_serve_refreshing
     try:
-        _archive_compute_rows(key, cache_options)
+        _archive_compute_rows(key, cache_options, serve_generation)
     except Exception as e:
         print(f"  [archive-serve] background refresh failed: {e}")
     finally:
@@ -6805,6 +6818,7 @@ def _archive_serve_rows(key, cache_options):
         return _archive_compute_rows(key, cache_options)
     now = time.time()
     with _archive_serve_lock:
+        serve_generation = _archive_serve_generation
         sc = _archive_serve_cache.get(key)
         if sc is not None:
             rows = [dict(r) for r in sc.get("rows") or []]
@@ -6820,7 +6834,9 @@ def _archive_serve_rows(key, cache_options):
     if rows is not None:
         if spawn:
             threading.Thread(
-                target=_archive_serve_refresh, args=(key, cache_options), daemon=True
+                target=_archive_serve_refresh,
+                args=(key, cache_options, serve_generation),
+                daemon=True,
             ).start()
         return rows, True
     # Cold (e.g. just after a restart): the in-memory serve snapshot is empty.
@@ -6834,20 +6850,22 @@ def _archive_serve_rows(key, cache_options):
         _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
         _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
         _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
+        stored = _archive_serve_cache_store(key, rows, serve_generation)
         with _archive_serve_lock:
-            _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
-            if key not in _archive_serve_refreshing:
+            if stored and key not in _archive_serve_refreshing:
                 _archive_serve_refreshing.add(key)
                 spawn = True
             else:
                 spawn = False
         if spawn:
             threading.Thread(
-                target=_archive_serve_refresh, args=(key, cache_options), daemon=True
+                target=_archive_serve_refresh,
+                args=(key, cache_options, serve_generation),
+                daemon=True,
             ).start()
         return [dict(r) for r in rows], True
     # Nothing persisted yet — build once synchronously.
-    return _archive_compute_rows(key, cache_options)
+    return _archive_compute_rows(key, cache_options, serve_generation)
 
 
 _ARCHIVE_SIDECAR_DEFAULTS = {
