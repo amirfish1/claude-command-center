@@ -105,6 +105,13 @@ class PresentationMode3Tests(unittest.TestCase):
         self.assertIsNone(artifact)
         self.assertEqual(error, "")
 
+    def test_extracts_fence_before_ccc_session_state_metadata(self):
+        text = self.fenced(self.valid()) + "\n\n<session-state>\nDID: made slides\nINSIGHT: stable keys\nNEXT_STEP_USER: none\n</session-state>"
+        prose, artifact, error = server._extract_presentation_artifact(text)
+        self.assertEqual(prose, "Human prose.")
+        self.assertEqual(artifact["slides"][0]["id"], "cause")
+        self.assertEqual(error, "")
+
     def test_claude_parser_attaches_artifact_and_keeps_prose(self):
         event = {
             "type": "assistant",
