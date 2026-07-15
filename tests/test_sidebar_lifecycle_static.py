@@ -40,6 +40,22 @@ def test_session_trash_handler_calls_additive_endpoint():
     assert "{ archived: !!data.archived, trashed: !!data.trashed }" in APP_JS
 
 
+def test_trashing_open_row_selects_visible_neighbor_after_success():
+    assert "const _visibleConversationNeighborId = (convId, sourceItem = null) =>" in APP_JS
+    start = APP_JS.index("$convList.querySelectorAll('.conv-trash-btn')")
+    handler = APP_JS[start:APP_JS.index("$convList.querySelectorAll('.conv-wake-btn')", start)]
+    assert "wantTrashed && currentConversation === convId" in handler
+    assert "_visibleConversationNeighborId(convId, item)" in handler
+    assert "if (data.trashed && nextSelectId)" in handler
+    assert "selectConversation(nextSelectId);" in handler
+
+
+def test_workers_lane_rows_use_all_main_lifecycle_actions():
+    assert "const _allTabWorkerConvs = _allTabConvs.filter" in APP_JS
+    assert "const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')" in APP_JS
+    assert "{ lifecycleContext: 'all-main', suppressFolderChip:" in APP_JS
+
+
 def test_archive_buttons_carry_explicit_desired_state():
     assert 'data-archived="true"' in APP_JS
     assert 'data-archived="false"' in APP_JS
