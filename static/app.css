@@ -19226,10 +19226,6 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: clamp(16px, 1.65vw, 24px);
   line-height: 1.58;
 }
-.is-presentation-mode-1 .conv-presentation-body.assistant-text {
-  font-size: clamp(17px, 1.85vw, 27px);
-  line-height: 1.62;
-}
 .conv-presentation-body > :first-child { margin-top: 0 !important; }
 .conv-presentation-body > :last-child { margin-bottom: 0 !important; }
 .conv-presentation-body img,
@@ -19347,8 +19343,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
   .conv-presentation-side-nav.is-next { right: 4px; }
   .conv-presentation-slide { padding: 16px 14px; border-radius: 12px; }
   .conv-presentation-prompt { grid-template-columns: 1fr; gap: 3px; margin-bottom: 13px; }
-  .is-presentation-mode .conv-presentation-body.assistant-text,
-  .is-presentation-mode-1 .conv-presentation-body.assistant-text { font-size: 16px; line-height: 1.55; }
+  .is-presentation-mode .conv-presentation-body.assistant-text { font-size: 16px; line-height: 1.55; }
   .conv-presentation-dock { min-height: 44px; padding-inline: 8px; }
   .conv-presentation-progress { grid-template-columns: minmax(70px, 1fr) auto; gap: 6px; }
   .conv-presentation-dots { display: none; }

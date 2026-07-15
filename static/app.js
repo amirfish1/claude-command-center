@@ -38582,7 +38582,7 @@
 
   function normalizePresentationMode(mode) {
     const value = String(mode == null ? '' : mode).toLowerCase();
-    return value === '1' || value === '2' ? value : 'off';
+    return value === '1' || value === '2' || value === 'present' ? '2' : 'off';
   }
 
   function defaultPresentationMode() {
@@ -38952,7 +38952,7 @@
         if (!pages.length) pages = [turn.blocks];
       } catch (_) {
         // One malformed answer must not break the rest of the deck. Its
-        // fallback is exactly Mode 1: a single internally-scrollable slide.
+        // fallback is a single internally-scrollable slide.
         pages = [turn.blocks];
       }
       pages.forEach((items, index) => {
@@ -39201,7 +39201,7 @@
     syncPresentationToolbar(pane, mode, hasAnswers);
     if (mode === 'off' || !hasAnswers) {
       disconnectPresentationResizeObserver(view);
-      view.classList.remove('is-presentation-mode', 'is-presentation-mode-1', 'is-presentation-mode-2');
+      view.classList.remove('is-presentation-mode', 'is-presentation-mode-2');
       const stage = view.querySelector(':scope > .conv-presentation-stage');
       if (stage) stage.remove();
       const dock = pane.querySelector(':scope > .conv-presentation-dock');
@@ -39212,7 +39212,6 @@
     }
 
     view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
-    view.classList.toggle('is-presentation-mode-1', mode === '1');
     view.classList.toggle('is-presentation-mode-2', mode === '2');
     ensurePresentationStage(view);
     syncPresentationActivity(view);

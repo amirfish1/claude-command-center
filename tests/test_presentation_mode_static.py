@@ -77,12 +77,22 @@ process.stdout.write(JSON.stringify(pages.map(page => page.map(item => item.id))
 
 
 class TestPresentationModeStatic(unittest.TestCase):
-    def test_selector_is_clone_safe_and_exposes_three_modes(self):
+    def test_selector_exposes_only_off_and_present(self):
         html = INDEX.read_text(encoding="utf-8")
 
         self.assertIn('data-role="presentation-toolbar"', html)
-        self.assertEqual(html.count("data-presentation-mode="), 3)
+        self.assertEqual(html.count("data-presentation-mode="), 2)
+        self.assertIn('data-presentation-mode="off"', html)
+        self.assertIn('data-presentation-mode="2"', html)
+        self.assertNotIn('data-presentation-mode="1"', html)
+        self.assertNotIn("Mode 1", html)
         self.assertNotIn('id="presentationMode', html)
+
+    def test_legacy_mode_one_migrates_to_present(self):
+        self.assertEqual(_run_javascript_function("normalizePresentationMode", "1"), "2")
+        self.assertEqual(_run_javascript_function("normalizePresentationMode", "2"), "2")
+        self.assertEqual(_run_javascript_function("normalizePresentationMode", "present"), "2")
+        self.assertEqual(_run_javascript_function("normalizePresentationMode", "off"), "off")
 
     def test_mode_click_delegation_does_not_match_pane_state(self):
         app_js = APP_JS.read_text(encoding="utf-8")
