@@ -1,0 +1,1 @@
+- Fixed New session composers showing queued or steered messages from the previously viewed session.

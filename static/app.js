@@ -51542,6 +51542,11 @@
   function enterNewSessionMode() {
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
+    // The queued-steer tray lives in the persistent composer, outside the
+    // transcript replaced below. It belongs to the previously open session,
+    // so remove it before exposing a session-less composer.
+    const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
+    if (staleQueuedTray) staleQueuedTray.remove();
     spawnEffortChoiceDirty = false;
     syncSpawnEngineDependentUi();
     // Rescue the adopted CWD controls before the innerHTML rebuild below
