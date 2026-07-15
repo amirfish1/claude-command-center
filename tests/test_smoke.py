@@ -1084,7 +1084,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_uxqHealthCache && _uxqHealthCache.worker_session_ids", app_js)
         self.assertIn("c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c)", app_js)
         self.assertIn("const _allTabLaneOverride = (c) => {", app_js)
-        self.assertIn("const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);", app_js)
+        self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
         self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
         self.assertIn("const _savedAllTabView = (() => {", app_js)
@@ -1099,6 +1099,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("/all-lane", app_js)
         self.assertIn(".conv-all-hermes-tabs", app_css)
         self.assertIn(".conv-all-hermes-tab.is-drop-target", app_css)
+
+    def test_all_view_nests_subagents_and_inherits_parent_lane(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _allTabById = new Map();", app_js)
+        self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
+        self.assertIn("const parent = _allTabById.get(_currentSessionParentId(c));", app_js)
+        self.assertIn("if (parent) return _allTabLaneFor(parent, seen);", app_js)
+        self.assertIn("const _allTabTreeRows = _currentSessionsTreeRows(_allTabMainConvs);", app_js)
+        self.assertIn("const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);", app_js)
+        self.assertIn("const root = cluster.rows[0].card;", app_js)
+        self.assertIn("_byFolder.get(key).push(cluster);", app_js)
+        self.assertIn("if (_ipSearchActive) {", app_js)
+        self.assertIn("_arcRows = _allTabMainConvs.map(c => _renderRow(c, {", app_js)
+        self.assertIn("currentChildDepth: item.depth", app_js)
+        self.assertIn(".conv-archived-list .conv-item.is-current-child-row", app_css)
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
         """Cross-repo Ready to merge should not surface PRs from unknown repos."""
@@ -1900,7 +1917,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
         self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
-        self.assertIn(".conv-current-sessions-scroll .conv-item.is-current-child-row {", app_css)
+        self.assertIn(".conv-current-sessions-scroll .conv-item.is-current-child-row,", app_css)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn("--current-child-indent: calc(var(--current-child-depth, 1) * 14px);", current_css)
         self.assertIn("--conv-icon-left: calc(10px + var(--current-child-indent));", current_css)

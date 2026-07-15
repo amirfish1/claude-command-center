@@ -26272,6 +26272,11 @@
     const _trashConvs = _archivedConvs.filter(c => !!c.trashed);
     const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs);
+    const _allTabById = new Map();
+    _allTabConvs.forEach(c => {
+      const id = _currentSessionId(c);
+      if (id) _allTabById.set(id, c);
+    });
     try { _ensureEvergreenQueuesFresh(); } catch (_) {}
     const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
     const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
@@ -26318,7 +26323,16 @@
       if (_isHermesMessageRow(c)) return 'messages';
       return 'coding';
     };
-    const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);
+    const _allTabLaneFor = (c, seen = new Set()) => {
+      const override = _allTabLaneOverride(c);
+      if (override) return override;
+      const id = _currentSessionId(c);
+      if (id && seen.has(id)) return _allTabNaturalLane(c);
+      if (id) seen.add(id);
+      const parent = _allTabById.get(_currentSessionParentId(c));
+      if (parent) return _allTabLaneFor(parent, seen);
+      return _allTabNaturalLane(c);
+    };
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
@@ -26339,6 +26353,55 @@
       : ((_allTabHasHermesSplit && _allTabView === 'messages')
         ? _allTabHermesMessageConvs
         : _allTabCodingConvs);
+    const _allTabTreeRows = _currentSessionsTreeRows(_allTabMainConvs);
+    const _allTabRowsToClusters = (rows) => {
+      const clusters = [];
+      (rows || []).forEach(item => {
+        if (!item || !item.card) return;
+        if (!clusters.length || item.depth === 0) clusters.push({ rows: [] });
+        clusters[clusters.length - 1].rows.push(item);
+      });
+      return clusters;
+    };
+    const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);
+    const _renderAllTabClusters = (clusters, suppressFolderChip) => {
+      const chunks = [];
+      let repeatCards = [];
+      let repeatKey = null;
+      const flushRepeats = () => {
+        if (!repeatCards.length) return;
+        chunks.push(_renderRowsWithRepeatGroups(repeatCards, {
+          lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true
+        }));
+        repeatCards = [];
+        repeatKey = null;
+      };
+      (clusters || []).forEach(cluster => {
+        if (!cluster || !cluster.rows || !cluster.rows.length) return;
+        if (cluster.rows.length > 1) {
+          flushRepeats();
+          chunks.push(cluster.rows.map(item => _renderRow(item.card, {
+            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true,
+            currentChildDepth: item.depth
+          })).join(''));
+          return;
+        }
+        const card = cluster.rows[0].card;
+        const key = _repeatGroupKey(card);
+        if (!key) {
+          flushRepeats();
+          chunks.push(_renderRow(card, {
+            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true
+          }));
+          return;
+        }
+        if (repeatKey && repeatKey !== key) flushRepeats();
+        repeatKey = key;
+        repeatCards.push(card);
+      });
+      flushRepeats();
+      return chunks.join('');
+    };
     const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
@@ -26351,7 +26414,8 @@
       try { return localStorage.getItem('ccc-archived-grouping') || 'time'; }
       catch (_) { return 'time'; }
     })();
-    const _arcShouldGroupByFolder = _arcHasFolderChips
+    const _arcShouldGroupByFolder = !_ipSearchActive
+      && _arcHasFolderChips
       && _arcGrouping === 'project'
       && !_isSpecificFolderFilter;
 
@@ -26383,31 +26447,43 @@
     let _arcCount = 0;
     let _arcFolderCollapseKeys = [];
 
-    if (_arcShouldGroupByFolder) {
+    if (_ipSearchActive) {
+      // Search results are already relevance ordered; hierarchy must not
+      // reorder or visually group them.
+      _arcRows = _allTabMainConvs.map(c => _renderRow(c, {
+        lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true
+      })).join('');
+      _arcCount = _allTabMainConvs.length;
+    } else if (_arcShouldGroupByFolder) {
       // Bucket session rows by folder; chats stay flat below the folder
-      // groups (they're not project-scoped). Sort folders by their
-      // most-recent archived-row mtime, descending.
+      // groups (they're not project-scoped). Clusters follow their root
+      // parent's folder so cross-worktree children remain contiguous.
       const _byFolder = new Map();
-      for (const c of _allTabMainConvs) {
-        const key = c.folder_label_chip || c.folder_path || '(unknown)';
+      for (const cluster of _allTabClusters) {
+        const root = cluster.rows[0].card;
+        const key = root.folder_label_chip || root.folder_path || '(unknown)';
         if (!_byFolder.has(key)) _byFolder.set(key, []);
-        _byFolder.get(key).push(c);
+        _byFolder.get(key).push(cluster);
       }
       const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
-        const aMax = a[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
-        const bMax = b[1].reduce((m, c) => Math.max(m, c.modified || 0), 0);
+        const newest = clusters => clusters.reduce((max, cluster) => Math.max(max,
+          ...cluster.rows.map(item => item.card.modified || item.card.last_interacted || 0)), 0);
+        const aMax = newest(a[1]);
+        const bMax = newest(b[1]);
         return bMax - aMax;
       });
-      const _folderRowsHtml = _folderEntries.map(([folder, cards]) => {
-        const hue = (cards[0].folder_chip_hue | 0);
-        const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
-        const collapseKey = cards[0].folder_path || folder;
+      const _folderRowsHtml = _folderEntries.map(([folder, clusters]) => {
+        const root = clusters[0].rows[0].card;
+        const count = clusters.reduce((n, cluster) => n + cluster.rows.length, 0);
+        const hue = (root.folder_chip_hue | 0);
+        const orphan = root.folder_chip_orphan ? ' is-orphan' : '';
+        const collapseKey = root.folder_path || folder;
         _arcFolderCollapseKeys.push(_folderGroupStorageKey('archived', collapseKey));
         const collapsed = _isFolderGroupCollapsed('archived', collapseKey);
-        const archivedRepoPath = cards[0].folder_path || '';
+        const archivedRepoPath = root.folder_path || '';
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
-          + _folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)
-          + _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'all-main', suppressFolderChip: true, goalIconOnly: true })
+          + _folderGroupHeaderHtml('archived', folder, count, hue, orphan, collapseKey, '', archivedRepoPath)
+          + _renderAllTabClusters(clusters, true)
           + '</div>';
       }).join('');
       _arcRows = _folderRowsHtml + (_allTabView === 'coding'
@@ -26417,12 +26493,15 @@
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
-      for (const c of _allTabMainConvs) {
+      for (const cluster of _allTabClusters) {
+        const root = cluster.rows[0].card;
         _archivedItems.push({
-          type: 'session',
-          card: c,
-          pinRank: c.pinned ? _pinRankValue(c) : Infinity,
-          mtime: c.modified || c.last_interacted || 0,
+          type: 'session-cluster',
+          cluster,
+          pinRank: root.pinned ? _pinRankValue(root) : Infinity,
+          mtime: cluster.rows.reduce((m, item) => Math.max(
+            m, item.card.modified || item.card.last_interacted || 0
+          ), 0),
         });
       }
       // Archived group chats live in the Trash section (CCC-468).
@@ -26485,22 +26564,29 @@
         _arcCurKey = null;
       };
       for (const it of _archivedItems) {
-        if (it.type !== 'session') {
+        if (it.type !== 'session-cluster') {
           _arcFlushCards();
           const sep = _arcSeparatorBefore(it.mtime || 0, it.pinRank);
           _arcChunks.push(sep + (it.html || ''));
           continue;
         }
-        const key = _repeatGroupKey(it.card);
+        if (it.cluster.rows.length > 1) {
+          _arcFlushCards();
+          const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
+          _arcChunks.push(sep + _renderAllTabClusters([it.cluster], _isSpecificFolderFilter));
+          continue;
+        }
+        const card = it.cluster.rows[0].card;
+        const key = _repeatGroupKey(card);
         if (!key) {
           _arcFlushCards();
           const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
-          _arcChunks.push(sep + _renderRow(it.card, { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }));
+          _arcChunks.push(sep + _renderRow(card, { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }));
           continue;
         }
         if (_arcCurKey && _arcCurKey !== key) _arcFlushCards();
         _arcCurKey = key;
-        _arcCurCards.push(it.card);
+        _arcCurCards.push(card);
       }
       _arcFlushCards();
       _arcRows = _arcChunks.join('');

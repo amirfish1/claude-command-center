@@ -4680,7 +4680,8 @@
   .conv-current-sessions-scroll .conv-item:hover {
     background: rgba(255, 255, 255, 0.045);
   }
-  .conv-current-sessions-scroll .conv-item.is-current-child-row {
+  .conv-current-sessions-scroll .conv-item.is-current-child-row,
+  .conv-archived-list .conv-item.is-current-child-row {
     --current-child-indent: calc(var(--current-child-depth, 1) * 14px);
     --conv-icon-left: calc(10px + var(--current-child-indent));
     border-left-color: rgba(154, 173, 194, 0.24);
@@ -4698,12 +4699,14 @@
   :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item .conv-title {
     color: #f0f4fb;
   }
-  .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title {
+  .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title,
+  .conv-archived-list .conv-item.is-current-child-row .conv-title {
     font-weight: 450;
     font-style: italic;
     color: var(--text-secondary);
   }
-  :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title {
+  :root:not([data-theme="light"]) .conv-current-sessions-scroll .conv-item.is-current-child-row .conv-title,
+  :root:not([data-theme="light"]) .conv-archived-list .conv-item.is-current-child-row .conv-title {
     color: color-mix(in srgb, #f0f4fb 65%, transparent);
   }
   /* Current-sessions panel: meta row is the always-visible "second row".
