@@ -2916,8 +2916,7 @@ def _resolve_repo_path_check(raw, *, known):
     if not p.is_dir():
         return None, "not_dir"
     s = str(p)
-    git_marker = p / ".git"
-    looks_like_repo = git_marker.exists() or (p / ".claude").is_dir()
+    looks_like_repo = _has_project_marker(p)
     if s not in known and not looks_like_repo:
         return s, "not_allowed"
     return s, None

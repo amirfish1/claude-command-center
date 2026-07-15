@@ -2160,7 +2160,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
@@ -4301,7 +4301,8 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("if (railTitleEl) railTitleEl.textContent = title || category || 'Session';", app_js)
+        self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
+        self.assertIn("if (railTitleEl) railTitleEl.textContent = railTitle;", app_js)
         self.assertIn(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {", app_css)
         self.assertIn("display: none;", app_css[
             app_css.index(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {"):
@@ -7759,6 +7760,14 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result.get("code"), "claude_unavailable")
         self.assertIn(str(scratch), self.server._load_custom_repos())
         popen.assert_not_called()
+
+    def test_global_claude_home_is_not_a_project_marker(self):
+        pathlib.Path(self.tmp_home, ".claude").mkdir(exist_ok=True)
+
+        with self.assertRaises(self.server.RepoContextError) as ctx:
+            self.server.resolve_repo_path(self.tmp_home)
+
+        self.assertEqual(ctx.exception.code, "repo_not_allowed")
 
     def test_unknown_repo_path_is_rejected(self):
         unknown = pathlib.Path(self.tmp_home, "not-a-repo").resolve()
@@ -15867,7 +15876,8 @@ def test_inject_input_honors_wt_origin_marker():
     thread that into _inject_text_into_session and skip the wt-send hook there,
     or a failed delivery recurses CCC -> wt -> CCC."""
     server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
-    assert 'wt_origin=(str(payload.get("origin") or "").lower() == "wt")' in server_py
+    assert '"wt_origin": (str(payload.get("origin") or "").lower() == "wt")' in server_py
+    assert "**inject_options" in server_py
     assert "if not wt_origin and not skip_wt:" in server_py
 
 
@@ -15880,7 +15890,8 @@ def test_wt_receipt_route_and_staged_send_feedback():
     assert '"--no-queue", "--json"' in server_py
     assert 'elif path.startswith("/api/wt/receipt/"):' in server_py
     assert '["wt", "receipts", "get", rid]' in server_py
-    assert 'skip_wt=bool(payload.get("skip_wt"))' in server_py
+    assert '"skip_wt": bool(payload.get("skip_wt"))' in server_py
+    assert "**inject_options" in server_py
     app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
     assert "function beginWtReceiptTracking(" in app_js
     assert "'/api/wt/receipt/'" in app_js
