@@ -17290,6 +17290,30 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-health-row:hover { background: rgba(139,148,158,0.06); }
 .fq-health-row:last-child { border-bottom: none; }
+.fq-health-group {
+  border-bottom: 1px solid rgba(139,148,158,0.06);
+}
+.fq-health-group > .fq-health-row { border-bottom: 0; }
+.fq-health-worker-list {
+  padding: 0 8px 5px 20px;
+  background: rgba(139,148,158,0.025);
+}
+.fq-health-worker-list .conv-evergreen-worker-fallback {
+  padding: 3px 4px;
+  cursor: default;
+}
+.fq-health-worker-list [data-fq-worker-sid],
+.fq-health-worker-list .cepw-row[data-cepw-sid] { cursor: pointer; }
+.fq-health-worker-list [data-fq-worker-sid]:hover,
+.fq-health-worker-list .cepw-row[data-cepw-sid]:hover { background: rgba(88,166,255,0.10); }
+.wt-worker-session-meta {
+  margin-left: auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-muted); opacity: 0.72; font-size: 10px;
+}
+.fq-health-worker-list .conv-evergreen-past-workers {
+  padding: 4px 4px 0;
+}
 .fq-health-del {
   flex: 0 0 auto; width: 14px; height: 14px; margin-right: 1px;
   display: flex; align-items: center; justify-content: center;

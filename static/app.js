@@ -25308,19 +25308,7 @@
       } catch (_) {}
       // Minimal fallback when a worker's session isn't in the loaded list.
       const _twFallbackRow = (w) => {
-        const wid = String((w && w.worker_id) || 'worker');
-        const q = String((w && w.queue) || '');
-        const sid = (w && w.session_id) || '';
-        // If we have a cloud session_id, make the row clickable to open that session.
-        const clickAttr = sid
-          ? ' role="button" tabindex="0" style="cursor:pointer" onclick="selectConversation(' + JSON.stringify(sid) + ')"'
-          : '';
-        const tip = escapeAttr(wid + (q ? ' · ' + q : '') + (sid ? ' · ' + sid.slice(0, 8) : ''));
-        return '<div class="conv-evergreen-worker-fallback"' + clickAttr + ' title="' + tip + '">'
-          + '<span class="cewf-dot" aria-hidden="true">&#9679;</span>'
-          + '<span class="cewf-id">' + escapeHtml(wid.slice(0, 28)) + '</span>'
-          + (q ? '<span class="cewf-queue">' + escapeHtml(q) + '</span>' : '')
-          + '</div>';
+        return _renderWtWorkerCompactRow(w, { showQueue: true });
       };
       const _twQueueHeaderHtml = (q, liveWorkers) => {
         const label = String((q && q.queue) || '').trim() || 'Untitled';
@@ -25428,24 +25416,7 @@
         }).join('');
         // Past workers for this queue (last 24h, log-file based).
         const pastWorkers = _twPastByQueue.get(key) || [];
-        const pastRows = pastWorkers.length === 0 ? '' :
-          '<div class="conv-evergreen-past-workers">'
-          + '<span class="cepw-label">Past 24h</span>'
-          + pastWorkers.map((pw) => {
-            const wid = String(pw.worker_id || '');
-            const agoS = Number(pw.ended_ago_seconds) || 0;
-            const age = _uxqFmtAge(agoS);
-            const endedAt = String(pw.ended_at_iso || '');
-            const sid = String(pw.session_id || '');
-            const clickAttrs = sid
-              ? ' role="button" tabindex="0" style="cursor:pointer" data-cepw-sid="' + escapeAttr(sid) + '"'
-              : '';
-            return '<span class="cepw-row"' + clickAttrs + ' title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
-              + '<span class="cepw-id">' + escapeHtml(wid.slice(0, 24)) + '</span>'
-              + '<span class="cepw-age">' + escapeHtml(age) + ' ago</span>'
-              + '</span>';
-          }).join('')
-          + '</div>';
+        const pastRows = _renderWtPastWorkers(pastWorkers);
         return '<div class="conv-evergreen-queue-group">'
           + _twQueueHeaderHtml(q, workers.length)
           + rows
@@ -27852,15 +27823,16 @@
         if (typeof _renderQueuePanel === 'function') _renderQueuePanel();
       });
     }
-    // Past-worker chip click — opens the worker's session in the conv pane.
+    // Compact live-worker rows and past-worker chips open their session in the
+    // conversation pane. The same data attributes are used in Queue health.
     if (!$convList._cepwChipWired) {
       $convList._cepwChipWired = true;
       $convList.addEventListener('click', (ev) => {
-        const chip = ev.target && ev.target.closest && ev.target.closest('.cepw-row[data-cepw-sid]');
+        const chip = ev.target && ev.target.closest && ev.target.closest('[data-fq-worker-sid], .cepw-row[data-cepw-sid]');
         if (!chip) return;
         ev.stopPropagation();
         ev.preventDefault();
-        const sid = chip.getAttribute('data-cepw-sid') || '';
+        const sid = chip.getAttribute('data-fq-worker-sid') || chip.getAttribute('data-cepw-sid') || '';
         if (sid) selectConversation(sid);
       });
     }
@@ -32238,6 +32210,58 @@
     if (s < 86400) return Math.round(s / 3600) + 'h';
     return Math.round(s / 86400) + 'd';
   }
+  function _uxqWorkersByQueue(workers) {
+    const byQueue = new Map();
+    (Array.isArray(workers) ? workers : []).forEach(worker => {
+      if (!worker) return;
+      const key = String(worker.queue || '').trim().toUpperCase();
+      if (!key) return;
+      (byQueue.get(key) || byQueue.set(key, []).get(key)).push(worker);
+    });
+    return byQueue;
+  }
+  function _renderWtWorkerCompactRow(worker, opts) {
+    const wid = String((worker && worker.worker_id) || 'worker');
+    const queue = String((worker && worker.queue) || '');
+    const sid = String((worker && worker.session_id) || '');
+    const model = String((worker && worker.model) || '');
+    const startedMs = Date.parse((worker && worker.started_at) || '');
+    const startedAge = Number.isFinite(startedMs)
+      ? _uxqFmtAge(Math.max(0, (Date.now() - startedMs) / 1000))
+      : '';
+    const meta = [model, startedAge ? ('live ' + startedAge) : ''].filter(Boolean).join(' · ');
+    const clickAttrs = sid
+      ? ' role="button" tabindex="0" data-fq-worker-sid="' + escapeAttr(sid) + '"'
+      : '';
+    const tip = wid + (queue ? ' · ' + queue : '') + (model ? ' · ' + model : '')
+      + (sid ? ' · ' + sid.slice(0, 8) : '');
+    return '<div class="conv-evergreen-worker-fallback wt-worker-session-card"' + clickAttrs
+      + ' title="' + escapeAttr(tip) + '">'
+      + '<span class="cewf-dot" aria-hidden="true">&#9679;</span>'
+      + '<span class="cewf-id">' + escapeHtml(wid.slice(0, 28)) + '</span>'
+      + (meta ? '<span class="wt-worker-session-meta">' + escapeHtml(meta) + '</span>' : '')
+      + (opts && opts.showQueue && queue ? '<span class="cewf-queue">' + escapeHtml(queue) + '</span>' : '')
+      + '</div>';
+  }
+  function _renderWtPastWorkers(pastWorkers) {
+    if (!Array.isArray(pastWorkers) || !pastWorkers.length) return '';
+    return '<div class="conv-evergreen-past-workers">'
+      + '<span class="cepw-label">Past 24h</span>'
+      + pastWorkers.map((worker) => {
+        const wid = String((worker && worker.worker_id) || '');
+        const age = _uxqFmtAge(Number(worker && worker.ended_ago_seconds) || 0);
+        const endedAt = String((worker && worker.ended_at_iso) || '');
+        const sid = String((worker && worker.session_id) || '');
+        const clickAttrs = sid
+          ? ' role="button" tabindex="0" data-cepw-sid="' + escapeAttr(sid) + '"'
+          : '';
+        return '<span class="cepw-row"' + clickAttrs + ' title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
+          + '<span class="cepw-id">' + escapeHtml(wid.slice(0, 24)) + '</span>'
+          + '<span class="cepw-age">' + escapeHtml(age) + ' ago</span>'
+          + '</span>';
+      }).join('')
+      + '</div>';
+  }
   // Render the health strip at the top of the Queue tab. Scoped to the same
   // project the ticket list shows when one is resolvable; otherwise shows all
   // projects with open tickets. Bust the cache with force=true after a write.
@@ -32307,6 +32331,8 @@
     const _workersByQueue = new Map();
     const _claimTypesByQueue = new Map();
     const _claimableByQueue = new Map();
+    const _liveWorkersByQueue = _uxqWorkersByQueue(health.wt_workers);
+    const _pastWorkersByQueue = _uxqWorkersByQueue(health.past_workers);
     (health.queues || []).forEach(q => {
       if (q && q.queue != null) {
         const key = String(q.queue).toUpperCase();
@@ -32399,7 +32425,14 @@
           + ' title="' + escapeAttr(delTitle) + '" aria-label="' + escapeAttr(delTitle) + '">×</button>';
         const configBtn = '<button class="fq-health-config" data-fq-config-queue="' + escapeAttr(project) + '"'
           + ' title="Edit ' + escapeAttr(project) + ' queue configuration" aria-label="Edit ' + escapeAttr(project) + ' queue configuration">⚙</button>';
-        return '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
+        const liveWorkerRows = (_liveWorkersByQueue.get(_ckey) || [])
+          .map(worker => _renderWtWorkerCompactRow(worker, { showQueue: false })).join('');
+        const pastWorkerRows = _renderWtPastWorkers(_pastWorkersByQueue.get(_ckey) || []);
+        const workerRows = (liveWorkerRows || pastWorkerRows)
+          ? '<div class="fq-health-worker-list">' + liveWorkerRows + pastWorkerRows + '</div>'
+          : '';
+        return '<div class="fq-health-group">'
+          + '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
           + ' role="button" tabindex="0"'
           + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' — click to scope queue') + '">'
           + delBtn
@@ -32412,6 +32445,8 @@
           + badge
           + drainToggle
           + typeToggle
+          + '</div>'
+          + workerRows
           + '</div>';
       }).join('');
     }
@@ -33500,6 +33535,14 @@
     // throttled /api/inject-input channel the worker-row pill uses.
     const $health = document.getElementById('queueHealthStrip');
     if ($health) {
+      const openWorkerSession = (ev) => {
+        const card = ev.target && ev.target.closest && ev.target.closest('[data-fq-worker-sid], .cepw-row[data-cepw-sid]');
+        if (!card) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = card.getAttribute('data-fq-worker-sid') || card.getAttribute('data-cepw-sid') || '';
+        if (sid) selectConversation(sid);
+      };
       const nudgeFromBadge = (ev) => {
         const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid]');
         if (!badge) return;
@@ -33619,6 +33662,7 @@
         _uxqItemsCache.ts = 0;
         _renderQueuePanel();
       };
+      $health.addEventListener('click', openWorkerSession);
       $health.addEventListener('click', nudgeFromBadge);
       $health.addEventListener('click', toggleDrain);
       $health.addEventListener('click', cycleClaimTypes);
@@ -33631,7 +33675,7 @@
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); scopeFromRow(ev); }
       });
     }
   }
