@@ -11847,6 +11847,7 @@
   (function () {
     const $health = document.getElementById('queueHealthStrip');
     const $handle = document.getElementById('queueHealthResizeHandle');
+    const $logBtn = document.getElementById('queueHealthLogBtn');
     if (!$health || !$handle) return;
     const HEALTH_MAX_KEY = 'ccc-queue-health-max';
     const HEALTH_MIN_PX = 30;
@@ -11878,6 +11879,7 @@
     let startH = 0;
     let activePointerId = null;
     $handle.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('[data-role="evergreen-log-btn"]')) return;
       e.preventDefault();
       e.stopPropagation();
       activePointerId = e.pointerId;
@@ -11899,6 +11901,17 @@
       const finalH = $health.getBoundingClientRect().height;
       try { localStorage.setItem(HEALTH_MAX_KEY, String(Math.round(finalH))); } catch (_) {}
     };
+    if ($logBtn) {
+      $logBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (document.getElementById('wtLogPanel')) _closeWtLogPanel();
+        else _openWtLogPanel();
+      });
+      $logBtn.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    }
     $handle.addEventListener('pointerup', endDrag);
     $handle.addEventListener('pointercancel', endDrag);
     $handle.addEventListener('dblclick', (e) => {

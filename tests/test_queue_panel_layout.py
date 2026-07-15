@@ -41,6 +41,27 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("if (next === 'queue' && queuePane) {", app_js)
         self.assertIn("_setSharedQueuePanelHost('rail');", app_js)
 
+    def test_queue_splitter_exposes_watchtower_log_without_starting_a_drag(self):
+        """The Queue tab should expose the existing activity log at its section boundary."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        health_pos = index_html.index('id="queueHealthStrip"')
+        log_pos = index_html.index('id="queueHealthLogBtn"')
+        tickets_pos = index_html.index('<div class="files-header">', log_pos)
+        self.assertLess(health_pos, log_pos)
+        self.assertLess(log_pos, tickets_pos)
+        self.assertIn('data-role="evergreen-log-btn"', index_html[health_pos:tickets_pos])
+
+        resize_js = app_js[
+            app_js.index("const $health = document.getElementById('queueHealthStrip');"):
+            app_js.index("function relativeTime(ts)")
+        ]
+        self.assertIn("const $logBtn = document.getElementById('queueHealthLogBtn');", resize_js)
+        self.assertIn("if (e.target.closest('[data-role=\"evergreen-log-btn\"]')) return;", resize_js)
+        self.assertIn("if (document.getElementById('wtLogPanel')) _closeWtLogPanel();", resize_js)
+        self.assertIn("else _openWtLogPanel();", resize_js)
+
     def test_shared_queue_host_can_shrink_to_the_status_rail(self):
         """Long queue rows must not expand the fixed-width status rail."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

@@ -17254,22 +17254,29 @@ body:has(.gc-reader) .pwa-install-banner {
    when many queues are configured, starving the ticket list of room. */
 .fq-health-resize-handle {
   flex: 0 0 auto;
-  height: 9px; margin: -1px 0; cursor: ns-resize;
+  position: relative;
+  height: 24px; margin: -1px 0; cursor: ns-resize;
   display: flex; align-items: center; justify-content: center;
   touch-action: none; user-select: none;
   background: transparent;
   transition: background 0.12s;
 }
-.fq-health-resize-handle::before {
-  content: ''; display: block;
+.fq-health-resize-grip {
+  display: block;
   width: 40px; height: 3px; border-radius: 2px;
   background: rgba(139,148,158,0.45);
   transition: background 0.12s, width 0.12s;
 }
-.fq-health-resize-handle:hover::before,
-.fq-health-resize-handle.is-dragging::before {
+.fq-health-resize-handle:hover .fq-health-resize-grip,
+.fq-health-resize-handle.is-dragging .fq-health-resize-grip {
   background: var(--accent);
   width: 60px;
+}
+.fq-health-resize-handle .evergreen-log-btn {
+  position: absolute;
+  right: 8px;
+  font-family: inherit;
+  line-height: 1.3;
 }
 .fq-health-resize-handle:hover,
 .fq-health-resize-handle.is-dragging {
