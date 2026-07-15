@@ -442,6 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popoutWindows: [CCCWebWindow] = []
     private var nativeBridge: CCCNativeBridge?
     private var bridgedContentControllers = Set<ObjectIdentifier>()
+    private var terminationSignalSources: [DispatchSourceSignal] = []
     var serverProcess: Process?
     var serverLogHandle: FileHandle?
     var pollTimer: Timer?
@@ -462,6 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var updaterController: SPUStandardUpdaterController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installTerminationSignalHandlers()
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
@@ -514,6 +516,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (launchd service, foreground ./run.sh elsewhere), leave it alone.
         stopOwnedProcess()
         closeServerLog()
+        terminationSignalSources.forEach { $0.cancel() }
+        terminationSignalSources.removeAll()
+    }
+
+    func installTerminationSignalHandlers() {
+        // Cocoa does not route a raw SIGTERM through applicationWillTerminate.
+        // Convert process-manager / test-harness termination into a normal app
+        // quit so an installer/server child cannot be orphaned.
+        for signalNumber in [SIGTERM, SIGINT] {
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(
+                signal: signalNumber,
+                queue: .main
+            )
+            source.setEventHandler {
+                NSApp.terminate(nil)
+            }
+            source.resume()
+            terminationSignalSources.append(source)
+        }
     }
 
     // MARK: Menu bar
