@@ -56722,13 +56722,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "resolve_worktree_dirty": resolve_worktrees,
             }
             if stale_ok:
-                cached = _archive_cached_payload(cache_key)
-                if cached:
-                    if cached.get("stale"):
-                        _archive_refresh_response_cache_async(cache_key, cache_options)
-                        cached["refreshing"] = True
-                    self.send_json(cached, etag=True)
-                    return
+                # Dashboard tabs poll this large, all-session payload in
+                # parallel. Share the same short-lived serve snapshot and
+                # single-flight refresh used by /api/sessions?all=1; otherwise
+                # every tab independently rehydrates thousands of rows and can
+                # starve even cached requests behind sustained CPU work.
+                convs, from_cache = _archive_serve_rows(cache_key, cache_options)
+                self.send_json({
+                    "conversations": convs,
+                    "count": len(convs),
+                    "cached": from_cache,
+                }, etag=True)
+                return
             if not background:
                 _archive_load_begin()
             def progress_step(*args, **kwargs):
@@ -62702,11 +62707,13 @@ def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
     if exclude_kinds is None:
         exclude_kinds = _ATTENTION_FEED_DEFAULT_EXCLUDE if recent_only else frozenset()
     try:
-        convs = find_all_conversations(
-            resolve_pr_states=False,
-            resolve_effective=False,
-            resolve_worktree_dirty=False,
-        ) or []
+        convs, _from_cache = _archive_all_rows_cached({
+            "include_prs": False,
+            "resolve_pr_states": False,
+            "resolve_effective": False,
+            "resolve_worktree_dirty": False,
+        })
+        convs = convs or []
     except Exception:
         convs = []
     now = time.time()

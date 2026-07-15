@@ -226,7 +226,11 @@ def _conv(kind, priority, *, modified, is_live=False):
 def _stub_feed(monkeypatch, rows):
     """Drive compute_attention_feed off `rows` with a controlled classifier so
     we test the feed's own filtering (recency / exclude / P1), not git state."""
-    monkeypatch.setattr(server, "find_all_conversations", lambda **k: rows)
+    monkeypatch.setattr(
+        server,
+        "_archive_all_rows_cached",
+        lambda options: (rows, True),
+    )
     monkeypatch.setattr(server, "_attention_read_turns", lambda *a, **k: [])
 
     def classify(c):
@@ -235,6 +239,45 @@ def _stub_feed(monkeypatch, rows):
         return {"kind": c["_kind"], "priority": c["_priority"],
                 "session_id": c["session_id"], "name": "n", "where": "w"}
     monkeypatch.setattr(server, "_classify_attention", classify)
+
+
+def test_attention_feed_reuses_lightweight_archive_snapshot(monkeypatch):
+    now = time.time()
+    rows = [_conv("soft_block", 2, modified=now)]
+    calls = []
+
+    def cached_rows(options):
+        calls.append(options)
+        return rows, True
+
+    monkeypatch.setattr(server, "_archive_all_rows_cached", cached_rows)
+    monkeypatch.setattr(
+        server,
+        "find_all_conversations",
+        lambda **kwargs: pytest.fail("attention bypassed the archive snapshot"),
+    )
+    monkeypatch.setattr(server, "_attention_read_turns", lambda *a, **k: [])
+    monkeypatch.setattr(
+        server,
+        "_classify_attention",
+        lambda c: {
+            "kind": c["_kind"],
+            "priority": c["_priority"],
+            "session_id": c["session_id"],
+            "name": "n",
+            "where": "w",
+        },
+    )
+
+    result = server.compute_attention_feed()
+
+    assert result["shown"] == 1
+    assert calls == [{
+        "include_prs": False,
+        "resolve_pr_states": False,
+        "resolve_effective": False,
+        "resolve_worktree_dirty": False,
+    }]
 
 
 def test_feed_default_excludes_committed_not_pushed(monkeypatch):
@@ -293,7 +336,11 @@ def test_attention_feed_bounds_turn_reads(monkeypatch):
         rows.append(_row("Want me to proceed?", session_id=str(uuid.uuid4()),
                          jsonl_path=f"/nonexistent/{i}.jsonl",
                          folder_label="repo", modified=now - i))
-    monkeypatch.setattr(server, "find_all_conversations", lambda **k: rows)
+    monkeypatch.setattr(
+        server,
+        "_archive_all_rows_cached",
+        lambda options: (rows, True),
+    )
 
     reads = []
     orig = server._attention_read_turns

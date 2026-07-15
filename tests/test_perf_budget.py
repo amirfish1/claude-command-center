@@ -19,6 +19,7 @@ import os
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 import warnings
 from pathlib import Path
@@ -579,6 +580,46 @@ _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,
 
 
 _ALL_KEY = server._archive_response_cache_key(**_ALL_OPTS)
+
+
+def test_conversations_all_stale_ok_uses_coalesced_serve_cache(monkeypatch):
+    """Dashboard archive polls must share the serve cache instead of each
+    rehydrating the full archive response independently."""
+    calls = []
+    expected = [{"session_id": "sid-cached", "mtime": 1}]
+
+    def serve_rows(key, options):
+        calls.append((key, options))
+        return expected, True
+
+    monkeypatch.setattr(server, "_archive_serve_rows", serve_rows)
+    monkeypatch.setattr(
+        server,
+        "_build_archive_conversations",
+        lambda **kwargs: pytest.fail("stale_ok bypassed the coalesced serve cache"),
+    )
+
+    httpd = server.http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), server.CommandCenterHandler,
+    )
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = (
+            f"http://127.0.0.1:{httpd.server_address[1]}"
+            "/api/conversations/all?stale_ok=1"
+        )
+        with urllib.request.urlopen(url, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+    assert payload["conversations"] == expected
+    assert payload["count"] == 1
+    assert len(calls) == 1
+    assert calls[0] == (_ALL_KEY, _ALL_OPTS)
 
 
 def test_archive_cache_clear_rejects_inflight_stale_write(isolated_archive_cache):
