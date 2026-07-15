@@ -83,7 +83,10 @@ def test_all_lane_override_never_controls_trash_membership():
 
     assert "const _trashConvs = _archivedConvs.filter(c => !!c.trashed);" in app_js
     assert "const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);" in app_js
-    assert "const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);" in app_js
+    assert "const _allTabLaneFor = (c, seen = new Set()) =>" in app_js
+    assert "const override = _allTabLaneOverride(c);" in app_js
+    assert "if (override) return override;" in app_js
+    assert "return _allTabNaturalLane(c);" in app_js
     assert "expandAllLaneDestinationGroup(row);" in app_js
 
 
