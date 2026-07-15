@@ -26494,11 +26494,12 @@
       // Flat chronological list — original behavior.
       const _archivedItems = [];
       for (const cluster of _allTabClusters) {
-        const root = cluster.rows[0].card;
         _archivedItems.push({
           type: 'session-cluster',
           cluster,
-          pinRank: root.pinned ? _pinRankValue(root) : Infinity,
+          pinRank: cluster.rows.reduce((best, item) => (
+            item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best
+          ), Infinity),
           mtime: cluster.rows.reduce((m, item) => Math.max(
             m, item.card.modified || item.card.last_interacted || 0
           ), 0),

@@ -1112,6 +1112,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);", app_js)
         self.assertIn("const root = cluster.rows[0].card;", app_js)
         self.assertIn("_byFolder.get(key).push(cluster);", app_js)
+        self.assertIn("item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best", app_js)
         self.assertIn("if (_ipSearchActive) {", app_js)
         self.assertIn("_arcRows = _allTabMainConvs.map(c => _renderRow(c, {", app_js)
         self.assertIn("currentChildDepth: item.depth", app_js)
