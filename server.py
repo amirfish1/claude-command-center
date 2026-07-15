@@ -53344,7 +53344,7 @@ def _throughput_history_payload(cache_only=False):
 # immediately and one shared worker refreshes Git/transcript/WatchTower data.
 # ---------------------------------------------------------------------------
 
-_PRODUCTIVITY_SCHEMA = 2
+_PRODUCTIVITY_SCHEMA = 3
 _PRODUCTIVITY_WEEKS = (6, 8, 12, 16)
 _PRODUCTIVITY_CACHE_TTL = 15 * 60
 _PRODUCTIVITY_STORE = ProductivityStore(COMMAND_CENTER_STATE_DIR / "productivity.db")

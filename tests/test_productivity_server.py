@@ -118,6 +118,29 @@ def test_hardened_payload_schema_invalidates_pre_hardening_cache(monkeypatch):
     assert payload["state"] == "building"
 
 
+def test_attribution_schema_invalidates_schema_two_snapshot(monkeypatch):
+    assert server._PRODUCTIVITY_SCHEMA != 2
+    cached = {
+        "generated_at": time.time(),
+        "payload": {
+            "schema": 2,
+            "datasets": {"8": {"ok": True, "range": {"weeks": 8}}},
+            "coverage": {},
+        },
+    }
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore(cached))
+    monkeypatch.setattr(
+        server,
+        "_productivity_refresh_start",
+        lambda: {"state": "building", "started_at": 50.0},
+    )
+
+    payload, status = server._productivity_payload(weeks=8)
+
+    assert status == 202
+    assert payload["state"] == "building"
+
+
 def test_failed_first_build_waits_for_explicit_retry(monkeypatch):
     monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore())
     monkeypatch.setattr(
