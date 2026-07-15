@@ -7399,6 +7399,11 @@
         return;
       } else {
         const payload = { session_id: sid, text, mode: injectMode };
+        if (injectMode === 'send'
+            && _paneEl
+            && String(_paneEl.dataset.presentationMode || '').toLowerCase() === '3') {
+          payload.presentation_mode3 = true;
+        }
         if (announcedFrom) payload.announced_from = announcedFrom;
         res = await fetch('/api/inject-input', {
           method: 'POST',

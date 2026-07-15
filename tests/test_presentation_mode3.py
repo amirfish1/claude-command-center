@@ -1,5 +1,8 @@
 import json
+import threading
 import unittest
+import urllib.request
+from unittest import mock
 
 import server
 
@@ -156,6 +159,116 @@ class PresentationMode3Tests(unittest.TestCase):
             with self.subTest(parsed=parsed):
                 self.assertEqual(parsed["blocks"], [{"kind": "text", "text": "Visible."}])
                 self.assertTrue(parsed["presentation_artifact_error"])
+
+    def test_mode3_prompt_adds_server_owned_contract_and_hides_it_from_display(self):
+        augmented = server._mode3_prompt("Explain the failure")
+        self.assertTrue(augmented.startswith("Explain the failure\n\n<ccc-mode3-instruction"))
+        self.assertIn("```ccc-slides", augmented)
+        self.assertIn('"layout":"comparison"', augmented)
+        self.assertEqual(server._strip_mode3_instruction(augmented), "Explain the failure")
+
+    def test_bootstrap_requests_latest_answer_only(self):
+        prompt = server._mode3_prompt("", bootstrap=True)
+        self.assertIn("latest completed substantive answer", prompt)
+        self.assertIn("Return only the ccc-slides fence", prompt)
+        self.assertEqual(server._strip_mode3_instruction(prompt), "")
+
+    def test_provider_user_events_hide_mode3_instruction(self):
+        augmented = server._mode3_prompt("Explain the failure")
+        claude = server._parse_conversation_event(
+            {
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": augmented}]},
+            },
+            12,
+        )
+        codex = server._parse_codex_event(
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": augmented},
+            },
+            13,
+        )
+        self.assertEqual(claude["text"], "Explain the failure")
+        self.assertEqual(codex["text"], "Explain the failure")
+
+    def test_inject_endpoint_augments_only_mode3_substantive_sends(self):
+        sid = "00000000-0000-4000-8000-000000000333"
+        httpd = server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/api/inject-input"
+
+        def post(payload):
+            request = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            with mock.patch.object(
+                server,
+                "_inject_text_into_session",
+                return_value={"ok": True, "via": "mock"},
+            ) as inject:
+                self.assertTrue(post({
+                    "session_id": sid,
+                    "text": "Explain this",
+                    "mode": "send",
+                    "presentation_mode3": True,
+                })["ok"])
+                self.assertTrue(post({
+                    "session_id": sid,
+                    "text": "/status",
+                    "mode": "send",
+                    "presentation_mode3": True,
+                })["ok"])
+                self.assertTrue(post({
+                    "session_id": sid,
+                    "text": "Steer now",
+                    "mode": "steer",
+                    "presentation_mode3": True,
+                })["ok"])
+                self.assertTrue(post({
+                    "session_id": sid,
+                    "text": "Picker choice",
+                    "mode": "answer",
+                    "presentation_mode3": True,
+                })["ok"])
+                self.assertTrue(post({
+                    "session_id": sid,
+                    "text": "Plain send",
+                    "mode": "send",
+                })["ok"])
+                self.assertTrue(post({
+                    "session_id": sid,
+                    "text": "",
+                    "mode": "send",
+                    "presentation_bootstrap": True,
+                })["ok"])
+
+            calls = inject.call_args_list
+            self.assertEqual(len(calls), 6)
+            augmented = calls[0].args[1]
+            self.assertEqual(server._strip_mode3_instruction(augmented), "Explain this")
+            self.assertIn("<ccc-mode3-instruction", augmented)
+            self.assertEqual(calls[1].args[1], "/status")
+            self.assertEqual(calls[2].args[1], "Steer now")
+            self.assertEqual(calls[3].args[1], "Picker choice")
+            self.assertEqual(calls[4].args[1], "Plain send")
+            bootstrap = calls[5].args[1]
+            self.assertEqual(server._strip_mode3_instruction(bootstrap), "")
+            self.assertIn("latest completed substantive answer", bootstrap)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":

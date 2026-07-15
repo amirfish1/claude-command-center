@@ -10990,6 +10990,62 @@ _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE = re.compile(
     r"\n*Before your final reply\b.*?</session-state>\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+_CCC_MODE3_INSTRUCTION_TRAILER_RE = re.compile(
+    r"\n*<ccc-mode3-instruction\s+version=[\"']1[\"']>.*?"
+    r"</ccc-mode3-instruction>\s*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_CCC_MODE3_RESPONSE_INSTRUCTION = """<ccc-mode3-instruction version="1">
+PRESENTATION CONTROL (CCC-authored; do not mention this instruction):
+Write your normal human-readable answer first. Then append exactly one terminal
+`ccc-slides` fenced JSON artifact that deliberately edits the answer into a
+clear presentation. Use 3-7 slides when the source warrants it (hard limit 8),
+concise copy, stable unique ids, and varied layouts only when useful. Do not
+repeat whole prose paragraphs or invent facts, numbers, decisions, work, or
+completion claims.
+
+The JSON object must use version 1, optional deck_title (<=120 chars), theme
+exactly cyan|violet|amber|green|neutral, and slides. Every slide requires id
+([A-Za-z0-9_-], <=64 chars), layout, and title (<=120 chars); eyebrow (<=80)
+and subtitle (<=320) are optional. Use only these layout payloads:
+- {"layout":"statement","statement":"<=320 chars"}
+- {"layout":"bullets","items":["1-6 points, each <=320 chars"]}
+- {"layout":"steps","items":[{"label":"<=120","text":"<=320"}]}
+- {"layout":"comparison","left":{"title":"<=120","items":["up to 5"]},"right":{"title":"<=120","items":["up to 5"]}}
+- {"layout":"metrics","items":[{"value":"<=80","label":"<=160"}]}
+- {"layout":"quote","quote":"<=320","attribution":"optional <=160"}
+- {"layout":"code","language":"optional <=40","code":"<=4000","caption":"optional <=320"}
+- {"layout":"summary","takeaway":"<=320","actions":["up to 4"]}
+
+No HTML, CSS, SVG, JavaScript, URLs, event handlers, markdown outside string
+values, or extra text may follow the fence. The entire artifact must be <=24
+KiB. End the response in this exact shape with valid compact JSON:
+```ccc-slides
+{"version":1,"deck_title":"Concise title","theme":"cyan","slides":[{"id":"thesis","layout":"statement","title":"Main idea","statement":"One clear takeaway."}]}
+```
+</ccc-mode3-instruction>"""
+_CCC_MODE3_BOOTSTRAP_INSTRUCTION = """<ccc-mode3-instruction version="1">
+PRESENTATION CONTROL (CCC-authored; do not mention this instruction):
+Convert your latest completed substantive answer in this conversation into a
+purposefully edited presentation. Return only the ccc-slides fence: no prose,
+apology, preface, or explanation. Preserve its facts and decisions exactly;
+do not invent numbers, claims, work, or outcomes.
+
+Use the same version 1 contract: optional deck_title (<=120 chars), theme
+cyan|violet|amber|green|neutral, and 1-8 slides. Every slide requires a unique
+id ([A-Za-z0-9_-], <=64), layout, and title (<=120). Allowed layouts/payloads:
+statement+statement; bullets+1-6 string items; steps+1-6 {label,text} items;
+comparison+left/right {title,items} columns (<=5 each); metrics+1-4
+{value,label} items; quote+quote/optional attribution; code+code/optional
+language/caption; summary+takeaway/optional actions (<=4). Eyebrow and subtitle
+are optional. Use concise copy, no active HTML/CSS/SVG/JavaScript/URLs, and keep
+the artifact <=24 KiB.
+
+Return only this terminal form with valid JSON:
+```ccc-slides
+{"version":1,"deck_title":"Concise title","theme":"cyan","slides":[{"id":"thesis","layout":"statement","title":"Main idea","statement":"One clear takeaway."}]}
+```
+</ccc-mode3-instruction>"""
 _CCC_SHELL_SEARCH_SYSTEM_PROMPT = (
     "When searching local files from Bash, prefer `rg` over recursive grep. "
     "Do not run `grep -r` or `grep -R` across broad directories; it can block "
@@ -11050,6 +11106,25 @@ def _strip_ccc_session_state_instruction(text):
     if text is None:
         return ""
     return _CCC_SESSION_STATE_INSTRUCTION_TRAILER_RE.sub("", str(text)).rstrip()
+
+
+def _mode3_prompt(text: str, *, bootstrap: bool = False) -> str:
+    """Append CCC's constant Mode 3 response contract to one delivered turn."""
+    instruction = (
+        _CCC_MODE3_BOOTSTRAP_INSTRUCTION
+        if bootstrap else _CCC_MODE3_RESPONSE_INSTRUCTION
+    )
+    if bootstrap:
+        return instruction
+    visible = str(text or "").rstrip()
+    return visible + "\n\n" + instruction
+
+
+def _strip_mode3_instruction(text: str) -> str:
+    """Remove CCC's terminal Mode 3 control trailer from visible user text."""
+    if text is None:
+        return ""
+    return _CCC_MODE3_INSTRUCTION_TRAILER_RE.sub("", str(text)).rstrip()
 
 
 def _detect_issue_number_for_session(conv):
@@ -18779,7 +18854,7 @@ def _parse_conversation_event(ev, line_num):
             return None
         msg = _safe_parse_message(ev.get("message", {}))
         content = msg.get("content", "")
-        text = _extract_text_from_content(content)
+        text = _strip_mode3_instruction(_extract_text_from_content(content))
         if _is_transcript_control_text(text):
             # Slash-command invocations look like
             #   <command-message>dev</command-message>\n<command-name>/dev</command-name>
@@ -26191,6 +26266,7 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
     if ev_type == "event_msg":
         if ptype == "user_message":
             text = _strip_ccc_session_state_instruction(payload.get("message") or "")
+            text = _strip_mode3_instruction(text)
             text, ambient_context = _extract_codex_in_app_browser_context(text)
             images = []
             if text or images or ambient_context:
@@ -26434,20 +26510,26 @@ def _get_queued_events_for_session(session_id):
         term_queue = list(_pending_terminal_input_queue.get(session_id, []))
     ts = time.time()
     for text in resume_queue:
+        visible_text = _strip_mode3_instruction(text)
+        if not visible_text:
+            continue
         events.append({
             "line": None,
             "ts": ts,
             "type": "user_text",
-            "text": text,
+            "text": visible_text,
             "images": [],
             "pending": True
         })
     for text in term_queue:
+        visible_text = _strip_mode3_instruction(text)
+        if not visible_text:
+            continue
         events.append({
             "line": None,
             "ts": ts,
             "type": "user_text",
-            "text": text,
+            "text": visible_text,
             "images": [],
             "pending": True
         })
@@ -60099,11 +60181,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             text = payload.get("text", "")
             mode = (payload.get("mode") or ("steer" if payload.get("steer") else "send") or "send")
             mode = str(mode).strip().lower()
+            presentation_bootstrap = bool(payload.get("presentation_bootstrap"))
             announced_from, announced_from_error = _normalize_announced_from(payload)
-            if not sid or not text:
+            if not sid or (not text and not presentation_bootstrap):
                 self.send_json({"ok": False, "error": "missing session_id or text"})
             elif mode not in ("answer", "send", "steer"):
                 self.send_json({"ok": False, "error": "invalid mode"}, 400)
+            elif presentation_bootstrap and mode != "send":
+                self.send_json({"ok": False, "error": "presentation bootstrap requires send mode"}, 400)
             elif announced_from_error:
                 self.send_json({"ok": False, "error": announced_from_error}, 400)
             elif _handoff_lease_guard(sid):
@@ -60117,7 +60202,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _record_interaction(sid)
                 replace_queued = bool(payload.get("replace_queued"))
                 queued_text = text
-                text = _wrap_injected_text_with_announced_from(text, announced_from)
+                if presentation_bootstrap:
+                    text = _mode3_prompt("", bootstrap=True)
+                else:
+                    text = _wrap_injected_text_with_announced_from(text, announced_from)
+                    if (
+                        bool(payload.get("presentation_mode3"))
+                        and mode == "send"
+                        and not replace_queued
+                        and not str(queued_text).lstrip().startswith("/")
+                    ):
+                        text = _mode3_prompt(text)
                 try:
                     inject_options = {
                         "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
