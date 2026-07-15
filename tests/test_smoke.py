@@ -2599,6 +2599,16 @@ class TestServerImports(unittest.TestCase):
             self.assertFalse(server.MORNING_ENABLED,
                              "MORNING_ENABLED must be False when plugin missing")
 
+    def test_morning_session_ids_is_empty_when_plugin_disabled(self):
+        """Core conversation routes must not import the optional store."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with mock.patch.object(server, "MORNING_ENABLED", False), \
+             mock.patch.dict(sys.modules, {"morning_store": None}):
+            self.assertEqual(server._morning_session_ids(), {})
+
     def test_page_annotation_is_bounded_and_persisted(self):
         """Browser annotations should store local context without requiring
         screenshot support or touching the real user state directory."""

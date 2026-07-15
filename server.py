@@ -52674,6 +52674,8 @@ def _morning_session_ids():
     for every strategy across all goal.md files that has a claude_session_id.
     Used to route sessions to the Morning Kanban vs. the Dev Kanban.
     """
+    if not MORNING_ENABLED:
+        return {}
     import morning_store as _store
     out = {}
     try:
