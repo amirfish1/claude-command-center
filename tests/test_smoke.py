@@ -5105,6 +5105,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("el.classList.contains('send-queued')", app_js)
         self.assertIn("data-steer-queued-message", app_js)
         self.assertIn("el.appendChild(steer)", app_js)
+        self.assertIn("data-cancel-queued-message", app_js)
+        self.assertIn("el.appendChild(cancel)", app_js)
+        cancel_handler = app_js[
+            app_js.index("const btn = ev.target.closest('[data-cancel-queued-message]')"):
+            app_js.index("const btn = ev.target.closest('[data-steer-queued-message]')")
+        ]
+        self.assertIn("'/api/pending-input/cancel'", cancel_handler)
+        self.assertIn("if (row && row._pendingRef) removePendingSendEcho(row._pendingRef)", cancel_handler)
+        self.assertIn("else if (row) row.remove()", cancel_handler)
         queued_handler = app_js[
             app_js.index("const btn = ev.target.closest('[data-steer-queued-message]')"):
             app_js.index("const btn = ev.target.closest('[data-steer-user-message]')")
@@ -5117,6 +5126,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.user_text.is-queued-steer-duplicate", app_css)
         self.assertIn(".queued-steer-tray .msg-image", app_css)
         self.assertIn(".queued-steer-tray .send-queued-steer {", app_css)
+        self.assertIn(".queued-steer-tray .cancel-queued-message", app_css)
         self.assertIn("position: absolute;", app_css)
         self.assertIn("top: 6px;", app_css)
         self.assertIn("right: 8px;", app_css)
@@ -13679,6 +13689,24 @@ class TestPendingInputs(unittest.TestCase):
             self.assertEqual(self.server._pending_resume_queue[sid], ["keep"])
         with self.server._pending_terminal_input_lock:
             self.assertEqual(self.server._pending_terminal_input_queue[sid], ["later"])
+
+    def test_consume_matching_pending_input_persists_cancel(self):
+        sid = "cancel-session"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["cancel me", "keep me"]
+
+        with mock.patch.object(self.server, "_save_pending_inputs") as save:
+            removed = self.server._consume_matching_pending_input(sid, "cancel me")
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(self.server._pending_resume_queue[sid], ["keep me"])
+        save.assert_called_once_with()
+
+    def test_pending_input_cancel_endpoint_is_wired(self):
+        source = inspect.getsource(self.server.CommandCenterHandler.do_POST)
+        self.assertIn('path == "/api/pending-input/cancel"', source)
+        self.assertIn("_consume_matching_pending_input(sid, text)", source)
+        self.assertIn('"cancelled": 1', source)
 
     def test_conv_bytes_cache_misses_when_pending_input_queued(self):
         """Pre-serialized /api/conversations bodies must not hide dynamic overlays."""

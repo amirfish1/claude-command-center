@@ -59954,6 +59954,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if result.get("error") == "missing session_id":
                 status_code = 400
             self.send_json(result, status_code)
+        elif path == "/api/pending-input/cancel":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            text = str(payload.get("text") or "").strip()
+            if not sid or not text:
+                self.send_json({"ok": False, "error": "session_id and text required"}, 400)
+            elif _consume_matching_pending_input(sid, text):
+                self.send_json({"ok": True, "cancelled": 1, "session_id": sid})
+            else:
+                self.send_json({
+                    "ok": False,
+                    "cancelled": 0,
+                    "error": "queued message no longer exists",
+                }, 409)
         elif path == "/api/inject-input":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
