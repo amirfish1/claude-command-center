@@ -249,9 +249,14 @@ function findChromePath() {
         currentCount: view._presentationDeck.length,
         currentIndex: view._presentationIndex,
         selectedNewAnswer: selectedText.includes('New answer while following the presentation tail'),
+        firstNewAnswerIndex: view._presentationDeck.findIndex(slide => (
+          slide.textContent.includes('New answer while following the presentation tail')
+        )),
         followed: window.__cccAutoAdvancePreviousIndex === window.__cccAutoAdvancePreviousCount - 1
         && view._presentationDeck.length > window.__cccAutoAdvancePreviousCount
-        && view._presentationIndex === view._presentationDeck.length - 1
+        && view._presentationIndex === view._presentationDeck.findIndex(slide => (
+          slide.textContent.includes('New answer while following the presentation tail')
+        ))
         && selectedText.includes('New answer while following the presentation tail'),
       };
     });

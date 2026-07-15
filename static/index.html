@@ -769,6 +769,11 @@
             <button type="button" class="conv-presentation-mode" data-presentation-mode="2" aria-pressed="false" title="Present assistant answers as semantic slides with complete live updates">Present</button>
             <button type="button" class="conv-presentation-mode" data-presentation-mode="3" aria-pressed="false" title="Ask the working agent to design a structured slide deck alongside each answer">Mode 3</button>
           </div>
+          <div class="conv-presentation-progress" data-role="presentation-progress" hidden>
+            <span class="conv-presentation-answer-label"></span>
+            <span class="conv-presentation-dots" aria-hidden="true"></span>
+            <span class="conv-presentation-overall"></span>
+          </div>
           <span class="conv-presentation-zero-cost" data-role="presentation-cost" title="Present is local; Mode 3 asks the working agent to author slides">0 extra tokens</span>
         </div>
         <div class="conversations-view" id="conversationsView">

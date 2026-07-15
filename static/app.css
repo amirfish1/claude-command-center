@@ -19099,11 +19099,14 @@ body:has(.gc-reader) .pwa-install-banner {
   box-shadow: 0 1px 5px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 .conv-presentation-zero-cost {
-  margin-left: auto;
   color: var(--text-muted);
   font: 550 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
   opacity: 0.72;
   white-space: nowrap;
+}
+.conv-presentation-toolbar > .conv-presentation-progress {
+  flex: 1 1 auto;
+  margin-left: auto;
 }
 
 .conversations-view.is-presentation-mode {
@@ -19346,6 +19349,45 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-presentation-body pre,
 .conv-presentation-body .code-block,
 .conv-presentation-body table { max-height: 100%; overflow: auto; }
+.conv-mode3-slide {
+  --mode3-accent: var(--accent);
+  gap: clamp(18px, 3vh, 34px);
+}
+.conv-mode3-slide[data-mode3-theme="violet"] { --mode3-accent: #a78bfa; }
+.conv-mode3-slide[data-mode3-theme="amber"] { --mode3-accent: #fbbf24; }
+.conv-mode3-slide[data-mode3-theme="green"] { --mode3-accent: #4ade80; }
+.conv-mode3-slide[data-mode3-theme="neutral"] { --mode3-accent: #cbd5e1; }
+.conv-mode3-header { display: flex; align-items: start; justify-content: space-between; gap: 24px; }
+.conv-mode3-heading { min-width: 0; }
+.conv-mode3-title { margin: 5px 0 0; font-size: clamp(26px, 4vw, 52px); line-height: 1.08; }
+.conv-mode3-subtitle { margin: 10px 0 0; color: var(--text-muted); font-size: clamp(15px, 1.7vw, 22px); }
+.conv-mode3-deck-label { max-width: 28%; color: var(--text-muted); font: 650 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+.conv-mode3-body { display: flex; flex: 1 1 auto; min-height: 0; align-items: center; overflow: auto; }
+.conv-mode3-statement,
+.conv-mode3-takeaway { max-width: 22ch; margin: auto 0; font-size: clamp(30px, 5.2vw, 68px); font-weight: 680; line-height: 1.08; text-wrap: balance; }
+.conv-mode3-list { width: 100%; margin: 0; padding-left: 1.25em; font-size: clamp(20px, 3vw, 38px); line-height: 1.35; }
+.conv-mode3-list li + li { margin-top: 0.42em; }
+.conv-mode3-steps { width: 100%; margin: 0; padding: 0; list-style: none; counter-reset: mode3-step; }
+.conv-mode3-steps li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: baseline; counter-increment: mode3-step; }
+.conv-mode3-steps li + li { margin-top: 18px; }
+.conv-mode3-steps li::before { content: counter(mode3-step, decimal-leading-zero); color: var(--mode3-accent); font: 750 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.conv-mode3-step-label { display: block; font-size: clamp(18px, 2.3vw, 30px); }
+.conv-mode3-step-text { display: block; margin-top: 3px; color: var(--text-muted); font-size: clamp(14px, 1.5vw, 19px); }
+.conv-mode3-comparison { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.conv-mode3-comparison-side { padding: clamp(16px, 2vw, 26px); border: 1px solid color-mix(in srgb, var(--mode3-accent) 28%, var(--border)); border-radius: 14px; background: color-mix(in srgb, var(--mode3-accent) 6%, transparent); }
+.conv-mode3-comparison-side h3 { margin: 0 0 16px; font-size: clamp(18px, 2.2vw, 28px); }
+.conv-mode3-comparison-side .conv-mode3-list { font-size: clamp(14px, 1.65vw, 20px); }
+.conv-mode3-metrics { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; }
+.conv-mode3-metric { padding: clamp(18px, 3vw, 34px); border-top: 3px solid var(--mode3-accent); background: color-mix(in srgb, var(--mode3-accent) 7%, transparent); }
+.conv-mode3-metric-value { display: block; color: var(--mode3-accent); font-size: clamp(30px, 4.4vw, 58px); line-height: 1; }
+.conv-mode3-metric-label { display: block; margin-top: 12px; color: var(--text-muted); font-size: clamp(14px, 1.5vw, 19px); }
+.conv-mode3-quote { max-width: 28ch; margin: auto; font-size: clamp(25px, 3.8vw, 48px); line-height: 1.22; text-wrap: balance; }
+.conv-mode3-quote p { margin: 0; }
+.conv-mode3-quote cite { display: block; margin-top: 18px; color: var(--mode3-accent); font-size: 0.38em; font-style: normal; }
+.conv-mode3-code { width: 100%; max-height: 100%; margin: 0; overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); font-size: clamp(12px, 1.3vw, 17px); line-height: 1.5; }
+.conv-mode3-caption { margin: 12px 0 0; color: var(--text-muted); }
+.conv-mode3-actions { margin: 24px 0 0; padding-left: 1.2em; font-size: clamp(16px, 2vw, 24px); }
+.conv-presentation-slide.is-mode3-fallback { border-style: dashed; }
 .conv-presentation-details {
   flex: 0 0 auto;
   max-height: min(34%, 240px);
@@ -19367,16 +19409,6 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-presentation-details-body { padding: 2px 0 8px; font-size: 12px; }
 .conv-presentation-details-body .tool-call-group { margin: 4px 0; }
 
-.conv-presentation-dock {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 46px;
-  padding: 6px clamp(10px, 2vw, 18px);
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 86%, var(--bg));
-}
 .conv-presentation-progress {
   display: grid;
   grid-template-columns: minmax(80px, auto) minmax(28px, 1fr) auto;
@@ -19394,15 +19426,14 @@ body:has(.gc-reader) .pwa-install-banner {
 .conv-presentation-dots i.is-active { background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 50%, transparent); }
 
 /* The optional right-side status rail turns each pane into a grid. Reserve
-   explicit rows for the per-pane selector and bottom dock so neither falls
+   an explicit row for the per-pane selector so it does not fall
    into implicit-grid placement or displaces the composer. */
 body.status-pos-right .conv-pane:has(> .status-rail) {
-  grid-template-rows: auto auto 1fr auto auto auto auto auto;
+  grid-template-rows: auto auto 1fr auto auto auto auto;
   grid-template-areas:
     "header rail"
     "present-toolbar rail"
     "conv rail"
-    "present-dock    rail"
     "goal rail"
     "input rail"
     "context rail"
@@ -19413,20 +19444,17 @@ body.status-pos-right .conv-pane:has(> .status-rail):has(> .conv-input-context.i
     "header rail"
     "present-toolbar rail"
     "conv rail"
-    "present-dock    rail"
     "context rail"
     "goal rail"
     "input rail"
     "hint rail";
 }
 body.status-pos-right .conv-pane:has(> .status-rail) > .conv-presentation-toolbar { grid-area: present-toolbar; min-width: 0; }
-body.status-pos-right .conv-pane:has(> .status-rail) > .conv-presentation-dock { grid-area: present-dock; min-width: 0; }
 body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
   grid-template-areas:
     "header"
     "present-toolbar"
     "conv"
-    "present-dock"
     "goal"
     "input"
     "hint"
@@ -19437,7 +19465,6 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
     "header"
     "present-toolbar"
     "conv"
-    "present-dock"
     "context"
     "goal"
     "input"
@@ -19457,7 +19484,6 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
   .conv-presentation-slide { padding: 16px 14px; border-radius: 12px; }
   .conv-presentation-prompt { grid-template-columns: 1fr; gap: 3px; margin-bottom: 13px; }
   .is-presentation-mode .conv-presentation-body.assistant-text { font-size: 16px; line-height: 1.55; }
-  .conv-presentation-dock { min-height: 44px; padding-inline: 8px; }
   .conv-presentation-progress { grid-template-columns: minmax(70px, 1fr) auto; gap: 6px; }
   .conv-presentation-dots { display: none; }
 }
@@ -19465,5 +19491,6 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
 @media (prefers-reduced-motion: reduce) {
   .conv-presentation-slide,
   .conv-presentation-live::before,
-  .conv-presentation-live-region .cl-pulse { animation: none; }
+  .conv-presentation-live-region .cl-pulse,
+  .conv-mode3-status-pulse { animation: none; }
 }

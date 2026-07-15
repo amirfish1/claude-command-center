@@ -286,6 +286,41 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("visibility: hidden", css)
         self.assertIn("pointer-events: none", css)
 
+    def test_mode_three_uses_safe_authored_layouts_with_present_fallback(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        renderer = _javascript_function_source("buildMode3Slide")
+        build_deck = _javascript_function_source("buildPresentationDeck")
+
+        for layout in (
+            "statement", "bullets", "steps", "comparison",
+            "metrics", "quote", "code", "summary",
+        ):
+            self.assertIn("'" + layout + "'", renderer)
+        self.assertIn("mode3Text", renderer)
+        self.assertIn("textContent", _javascript_function_source("mode3Text"))
+        self.assertNotIn("innerHTML", renderer)
+        self.assertIn("mode3SlidesForTurn", build_deck)
+        self.assertIn("paginatePresentationItemsMeasured(view, turn)", build_deck)
+        self.assertIn("is-mode3-fallback", app_js)
+
+    def test_tail_refresh_opens_first_slide_of_new_answer_only_at_tail(self):
+        old = [
+            {"dataset": {"answerKey": "a", "presentationKey": "a:0"}},
+            {"dataset": {"answerKey": "a", "presentationKey": "a:1"}},
+        ]
+        new = old + [
+            {"dataset": {"answerKey": "b", "presentationKey": "b:0"}},
+            {"dataset": {"answerKey": "b", "presentationKey": "b:1"}},
+        ]
+        self.assertEqual(
+            _run_javascript_function("presentationRefreshIndex", new, old, 1, True),
+            2,
+        )
+        self.assertEqual(
+            _run_javascript_function("presentationRefreshIndex", new, old, 0, True),
+            0,
+        )
+
     def test_mode_two_opens_on_first_slide_of_latest_answer(self):
         deck = [
             {"dataset": {"answerIndex": "8", "partIndex": "0"}},
@@ -489,13 +524,12 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("presentationDeck.length - 1", update)
         self.assertIn("updateConversationEndAffordance(view)", render_cursor)
 
-    def test_dock_navigation_is_bound_at_the_control(self):
+    def test_side_navigation_is_bound_at_the_control(self):
         ensure_stage = _javascript_function_source("ensurePresentationStage")
-        ensure_dock = _javascript_function_source("ensurePresentationDock")
 
         self.assertIn("button.addEventListener('click'", ensure_stage)
         self.assertIn("stepPresentationSlide(pane.dataset.paneId", ensure_stage)
-        self.assertNotIn("data-presentation-nav", ensure_dock)
+        self.assertNotIn("function ensurePresentationDock", APP_JS.read_text(encoding="utf-8"))
 
     def test_durable_and_streaming_renders_refresh_the_active_deck(self):
         app_js = APP_JS.read_text(encoding="utf-8")
@@ -515,23 +549,26 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("breakBefore: index === 0", app_js)
         self.assertNotIn("breakBefore: ordered || index === 0", app_js)
         self.assertIn("function ensurePresentationProjection(view, paneId)", app_js)
+        flush = _javascript_function_source("flushPresentationProjection")
+        self.assertIn("=== 'off'", flush)
+        self.assertNotIn("!== '2'", flush)
         self.assertIn("conv-presentation-live-region", app_js)
         self.assertIn(".conv-presentation-live-region", css)
         self.assertNotIn("function syncPresentationActivity(view)", app_js)
 
-    def test_presentation_css_has_stage_dock_and_right_rail_areas(self):
+    def test_presentation_css_has_stage_and_toolbar_progress(self):
         css = APP_CSS.read_text(encoding="utf-8")
+        html = INDEX.read_text(encoding="utf-8")
 
         self.assertIn(".conv-presentation-toolbar", css)
         self.assertIn(".conv-presentation-stage", css)
         self.assertIn(".conv-presentation-slide", css)
-        self.assertIn(".conv-presentation-dock", css)
+        self.assertIn('data-role="presentation-progress"', html)
+        self.assertNotIn(".conv-presentation-dock", css)
         self.assertIn(".conv-presentation-side-nav", css)
         self.assertIn("top: 50%", css)
         self.assertIn('"present-toolbar rail"', css)
-        self.assertIn('"present-dock    rail"', css)
         self.assertIn('"present-toolbar"', css)
-        self.assertIn('"present-dock"', css)
         self.assertIn("prefers-reduced-motion: reduce", css)
 
 

@@ -30519,7 +30519,6 @@
     clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
     removeSplitPaneSingletonChrome(clone);
     clone.querySelectorAll('.conv-scroll-end-btn').forEach(el => el.remove());
-    clone.querySelectorAll('.conv-presentation-dock').forEach(el => el.remove());
     const presentationToolbar = clone.querySelector('[data-role="presentation-toolbar"]');
     if (presentationToolbar) {
       presentationToolbar.hidden = true;
@@ -39252,6 +39251,8 @@
           prompt,
           blocks,
           details: pendingDetails.concat(extras),
+          presentationArtifact: node._presentationArtifact || null,
+          presentationArtifactError: node.dataset.presentationArtifactError || '',
           live: false,
         });
         pendingDetails = [];
@@ -39303,6 +39304,7 @@
     const slide = document.createElement('article');
     slide.className = 'conv-presentation-slide' + (turn.live ? ' is-live' : '');
     slide.dataset.presentationKey = turn.key + ':' + partIndex;
+    slide.dataset.answerKey = turn.key;
     slide.dataset.answerIndex = String(turn.answerNumber);
     slide.dataset.partIndex = String(partIndex);
     slide.dataset.partCount = String(partCount);
@@ -39348,6 +39350,120 @@
       if (details) slide.appendChild(details);
     }
     return slide;
+  }
+
+  function mode3Text(tag, className, value) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    node.textContent = String(value == null ? '' : value);
+    return node;
+  }
+
+  function mode3StringList(items, className) {
+    const list = document.createElement('ul');
+    list.className = className || 'conv-mode3-list';
+    (Array.isArray(items) ? items : []).forEach(value => {
+      list.appendChild(mode3Text('li', '', value));
+    });
+    return list;
+  }
+
+  function buildMode3Slide(turn, artifact, source, slideIndex, slideCount) {
+    const slide = document.createElement('article');
+    const layout = String(source.layout || 'statement');
+    slide.className = 'conv-presentation-slide conv-mode3-slide layout-' + layout;
+    slide.dataset.presentationKey = turn.key + ':mode3:' + source.id;
+    slide.dataset.answerKey = turn.key;
+    slide.dataset.artifactSlideId = String(source.id || '');
+    slide.dataset.answerIndex = String(turn.answerNumber);
+    slide.dataset.partIndex = String(slideIndex);
+    slide.dataset.partCount = String(slideCount);
+    slide.dataset.mode3Theme = String(artifact.theme || 'neutral');
+
+    const header = document.createElement('header');
+    header.className = 'conv-mode3-header';
+    const heading = document.createElement('div');
+    heading.className = 'conv-mode3-heading';
+    if (source.eyebrow) heading.appendChild(mode3Text('span', 'conv-presentation-eyebrow', source.eyebrow));
+    heading.appendChild(mode3Text('h2', 'conv-mode3-title', source.title));
+    if (source.subtitle) heading.appendChild(mode3Text('p', 'conv-mode3-subtitle', source.subtitle));
+    header.appendChild(heading);
+    header.appendChild(mode3Text('span', 'conv-mode3-deck-label',
+      String(artifact.deck_title || ('Answer ' + turn.answerNumber))));
+    slide.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'conv-mode3-body';
+    if (layout === 'statement') {
+      body.appendChild(mode3Text('p', 'conv-mode3-statement', source.statement));
+    } else if (layout === 'bullets') {
+      body.appendChild(mode3StringList(source.items, 'conv-mode3-list'));
+    } else if (layout === 'steps') {
+      const list = document.createElement('ol');
+      list.className = 'conv-mode3-steps';
+      (source.items || []).forEach(item => {
+        const row = document.createElement('li');
+        row.append(
+          mode3Text('strong', 'conv-mode3-step-label', item.label),
+          mode3Text('span', 'conv-mode3-step-text', item.text),
+        );
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+    } else if (layout === 'comparison') {
+      const comparison = document.createElement('div');
+      comparison.className = 'conv-mode3-comparison';
+      ['left', 'right'].forEach(sideName => {
+        const side = document.createElement('section');
+        side.className = 'conv-mode3-comparison-side is-' + sideName;
+        side.append(
+          mode3Text('h3', '', source[sideName].title),
+          mode3StringList(source[sideName].items, 'conv-mode3-list'),
+        );
+        comparison.appendChild(side);
+      });
+      body.appendChild(comparison);
+    } else if (layout === 'metrics') {
+      const metrics = document.createElement('div');
+      metrics.className = 'conv-mode3-metrics';
+      (source.items || []).forEach(item => {
+        const metric = document.createElement('div');
+        metric.className = 'conv-mode3-metric';
+        metric.append(
+          mode3Text('strong', 'conv-mode3-metric-value', item.value),
+          mode3Text('span', 'conv-mode3-metric-label', item.label),
+        );
+        metrics.appendChild(metric);
+      });
+      body.appendChild(metrics);
+    } else if (layout === 'quote') {
+      const quote = document.createElement('blockquote');
+      quote.className = 'conv-mode3-quote';
+      quote.appendChild(mode3Text('p', '', source.quote));
+      if (source.attribution) quote.appendChild(mode3Text('cite', '', source.attribution));
+      body.appendChild(quote);
+    } else if (layout === 'code') {
+      const pre = document.createElement('pre');
+      pre.className = 'conv-mode3-code';
+      pre.appendChild(mode3Text('code', '', source.code));
+      body.appendChild(pre);
+      if (source.caption) body.appendChild(mode3Text('p', 'conv-mode3-caption', source.caption));
+    } else if (layout === 'summary') {
+      body.appendChild(mode3Text('p', 'conv-mode3-takeaway', source.takeaway));
+      if (source.actions && source.actions.length) {
+        body.appendChild(mode3StringList(source.actions, 'conv-mode3-actions'));
+      }
+    }
+    slide.appendChild(body);
+    return slide;
+  }
+
+  function mode3SlidesForTurn(turn) {
+    const artifact = turn && turn.presentationArtifact;
+    if (!artifact || !Array.isArray(artifact.slides) || !artifact.slides.length) return [];
+    return artifact.slides.map((source, index) => (
+      buildMode3Slide(turn, artifact, source, index, artifact.slides.length)
+    ));
   }
 
   function ensurePresentationMeasureSurface(stage) {
@@ -39398,9 +39514,16 @@
     const deck = [];
     const budget = presentationPageBudget(view);
     presentationTurns(view).forEach(turn => {
+      if (mode === '3' && !turn.live) {
+        const authored = mode3SlidesForTurn(turn);
+        if (authored.length) {
+          deck.push(...authored);
+          return;
+        }
+      }
       let pages;
       try {
-        if (mode === '2' && !turn.live) {
+        if ((mode === '2' || mode === '3') && !turn.live) {
           pages = paginatePresentationItemsMeasured(view, turn)
             || paginatePresentationItems(turn.blocks, budget);
         } else {
@@ -39413,7 +39536,14 @@
         pages = [turn.blocks];
       }
       pages.forEach((items, index) => {
-        deck.push(buildPresentationSlide(turn, items, index, pages.length, mode));
+        const fallback = buildPresentationSlide(turn, items, index, pages.length, '2');
+        if (mode === '3') {
+          fallback.classList.add('is-mode3-fallback');
+          fallback.dataset.presentationFallback = '1';
+          const eyebrow = fallback.querySelector('.conv-presentation-eyebrow');
+          if (eyebrow) eyebrow.textContent += ' · Transcript slides · AI deck unavailable';
+        }
+        deck.push(fallback);
       });
     });
     return deck;
@@ -39572,6 +39702,8 @@
     });
     const cost = toolbar.querySelector('[data-role="presentation-cost"]');
     if (cost) cost.textContent = mode === '3' ? 'agent-authored deck' : '0 extra tokens';
+    const progress = toolbar.querySelector('[data-role="presentation-progress"]');
+    if (progress) progress.hidden = mode === 'off' || !hasAnswers;
   }
 
   function ensurePresentationStage(view) {
@@ -39710,7 +39842,7 @@
     if (!state) return;
     state.raf = 0;
     const pane = presentationPaneElement(state.paneId);
-    if (!pane || normalizePresentationMode(pane.dataset.presentationMode) !== '2') return;
+    if (!pane || normalizePresentationMode(pane.dataset.presentationMode) === 'off') return;
     const stage = ensurePresentationStage(view);
     const region = ensurePresentationLiveRegion(stage);
     const list = region.querySelector('.conv-presentation-live-list');
@@ -39838,19 +39970,6 @@
     view._presentationProjection = null;
   }
 
-  function ensurePresentationDock(pane) {
-    let dock = pane.querySelector(':scope > .conv-presentation-dock');
-    if (dock) return dock;
-    dock = document.createElement('nav');
-    dock.className = 'conv-presentation-dock';
-    dock.setAttribute('aria-label', 'Slide position');
-    dock.innerHTML = ''
-      + '<div class="conv-presentation-progress"><span class="conv-presentation-answer-label"></span><span class="conv-presentation-dots" aria-hidden="true"></span><span class="conv-presentation-overall"></span></div>';
-    const inputContext = pane.querySelector(':scope > .conv-input-context');
-    pane.insertBefore(dock, inputContext || null);
-    return dock;
-  }
-
   function renderPresentationCursor(paneId, opts) {
     const pane = presentationPaneElement(paneId);
     if (!pane) return;
@@ -39864,13 +39983,14 @@
     const slide = deck[index];
     slide.classList.toggle('is-entering', !!(opts && opts.animate));
     slot.replaceChildren(slide);
-    const dock = ensurePresentationDock(pane);
+    const toolbar = pane.querySelector('[data-role="presentation-toolbar"]');
+    const progress = toolbar && toolbar.querySelector('[data-role="presentation-progress"]');
     const answer = Number(slide.dataset.answerIndex || 0);
     const part = Number(slide.dataset.partIndex || 0) + 1;
     const parts = Number(slide.dataset.partCount || 1);
-    const label = dock.querySelector('.conv-presentation-answer-label');
-    const overall = dock.querySelector('.conv-presentation-overall');
-    const dots = dock.querySelector('.conv-presentation-dots');
+    const label = progress && progress.querySelector('.conv-presentation-answer-label');
+    const overall = progress && progress.querySelector('.conv-presentation-overall');
+    const dots = progress && progress.querySelector('.conv-presentation-dots');
     if (label) label.textContent = 'Answer ' + answer + (parts > 1 ? ' · ' + part + ' of ' + parts : '');
     if (overall) overall.textContent = (index + 1) + ' / ' + deck.length;
     if (dots) {
@@ -39892,6 +40012,45 @@
 
   function shouldFollowPresentationTail(previousIndex, previousCount, requested) {
     return !!requested && previousCount > 0 && previousIndex >= previousCount - 1;
+  }
+
+  function presentationRefreshIndex(deck, previousDeck, previousIndex, followTail) {
+    const slides = Array.isArray(deck) ? deck : [];
+    const oldSlides = Array.isArray(previousDeck) ? previousDeck : [];
+    if (!slides.length) return 0;
+    if (!oldSlides.length) return slides.length - 1;
+    const oldIndex = Math.max(0, Math.min(oldSlides.length - 1, Number(previousIndex) || 0));
+    const oldSlide = oldSlides[oldIndex] || {};
+    const oldData = oldSlide.dataset || {};
+    const oldLastData = (oldSlides[oldSlides.length - 1] || {}).dataset || {};
+    const newLastData = (slides[slides.length - 1] || {}).dataset || {};
+    if (followTail && oldIndex === oldSlides.length - 1
+        && String(oldLastData.answerKey || '') !== String(newLastData.answerKey || '')) {
+      const newAnswer = String(newLastData.answerKey || '');
+      const first = slides.findIndex(item => String(((item || {}).dataset || {}).answerKey || '') === newAnswer);
+      return first >= 0 ? first : slides.length - 1;
+    }
+    const artifactId = String(oldData.artifactSlideId || '');
+    if (artifactId) {
+      const sameArtifact = slides.findIndex(item => {
+        const data = ((item || {}).dataset || {});
+        return String(data.answerKey || '') === String(oldData.answerKey || '')
+          && String(data.artifactSlideId || '') === artifactId;
+      });
+      if (sameArtifact >= 0) return sameArtifact;
+    }
+    const itemKey = String(oldData.presentationItemKeys || '').split(',')[0];
+    if (itemKey) {
+      const containing = slides.findIndex(item => String((((item || {}).dataset || {}).presentationItemKeys || ''))
+        .split(',').includes(itemKey));
+      if (containing >= 0) return containing;
+    }
+    const exactKey = String(oldData.presentationKey || '');
+    if (exactKey) {
+      const exact = slides.findIndex(item => String((((item || {}).dataset || {}).presentationKey || '')) === exactKey);
+      if (exact >= 0) return exact;
+    }
+    return Math.max(0, Math.min(slides.length - 1, oldIndex));
   }
 
   function firstSlideOfLatestPresentationTurn(deck) {
@@ -39985,8 +40144,6 @@
       view.classList.remove('is-presentation-mode', 'is-presentation-mode-2', 'is-presentation-mode-3');
       const stage = view.querySelector(':scope > .conv-presentation-stage');
       if (stage) stage.remove();
-      const dock = pane.querySelector(':scope > .conv-presentation-dock');
-      if (dock) dock.remove();
       view._presentationDeck = null;
       view._presentationIndex = 0;
       return;
@@ -40002,16 +40159,11 @@
     const previousSlide = previousDeck[previousIndex];
     const deck = buildPresentationDeck(view, mode);
     if (!deck.length) return;
-    let index = presentationCursorIndex(
-      deck,
-      previousSlide,
-      previousIndex || deck.length - 1,
+    let index = presentationRefreshIndex(
+      deck, previousDeck, previousIndex, !!(opts && opts.followTail),
     );
     if (opts && opts.startAtLatestTurn) {
       index = firstSlideOfLatestPresentationTurn(deck);
-    } else if (shouldFollowPresentationTail(previousIndex, previousDeck.length, opts && opts.followTail)
-        || !previousDeck.length) {
-      index = deck.length - 1;
     }
     view._presentationDeck = deck;
     view._presentationIndex = index;
