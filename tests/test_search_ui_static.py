@@ -62,6 +62,18 @@ class TestSearchUiStatic(unittest.TestCase):
         )
         self.assertIn("modified: _historyTsSeconds(hit.ts),", app_js)
 
+    def test_archive_search_keeps_name_matches_above_recall_results(self):
+        """A late Total Recall repaint must preserve the search-result bands."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        start = app_js.index("function renderArchiveList(filter, opts) {")
+        end = app_js.index("async function setArchiveMode", start)
+        body = app_js[start:end]
+
+        self.assertIn(
+            "_prioritizeSearchResultBands(applyConvSort(_applyOptimisticTouches(rowsForRender), { persist: true }), q)",
+            body,
+        )
+
     def test_throughput_boot_renders_complete_browser_snapshot_before_network(self):
         html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 

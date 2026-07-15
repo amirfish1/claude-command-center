@@ -44857,7 +44857,9 @@
     // transcript / repo-name matches that the filter + history augment also
     // return.
     conversationsData = _prioritizeNameMatches(
-      _prioritizeSessionIdMatches(applyConvSort(_applyOptimisticTouches(rowsForRender), { persist: true }), q),
+      _prioritizeSessionIdMatches(
+        _prioritizeSearchResultBands(applyConvSort(_applyOptimisticTouches(rowsForRender), { persist: true }), q),
+        q),
       q);
     clearInputDraftKeyCache();
 
