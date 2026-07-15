@@ -23182,6 +23182,7 @@
     convs = _prioritizeNameMatches(
       _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || ''),
       document.getElementById('convSearch')?.value || '');
+    const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
     _applyOptimisticTouches(convs);
     // Read the active tab before the row renderer is invoked below. Rows use
     // this to choose Archive vs Move to Trash, while the tab markup itself is
@@ -25128,7 +25129,6 @@
       };
       const _byObject = new Map();
       const _unclassified = [];
-      const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
       const _objectHasVisibleDrafts = (node) =>
         (flowDraftSessions || []).some(d => d && flowDraftParentNode(d) === node);
       // Match any object whose title starts with "evergreen" — "Evergreen

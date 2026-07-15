@@ -1278,6 +1278,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _objectHasVisibleDrafts = (node) =>", app_js)
         self.assertIn("if (_ipSearchActive && !_byObject.has(node) && !_objectHasVisibleDrafts(node)) continue;", app_js)
 
+    def test_archive_search_flag_is_scoped_for_all_render_branches(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        renderer = app_js[
+            app_js.index("function renderConversationList(convs) {"):
+            app_js.index("async function setArchiveMode()")
+        ]
+        declaration = (
+            "const _ipSearchActive = "
+            "!!(document.getElementById('convSearch')?.value || '').trim();"
+        )
+
+        self.assertEqual(renderer.count(declaration), 1)
+        self.assertLess(
+            renderer.index(declaration),
+            renderer.index("if (_shouldGroupByObjects) {")
+        )
+
     def test_object_group_rows_align_under_object_titles(self):
         """Rows inside object groups should start under the object title column."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
