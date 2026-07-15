@@ -80,7 +80,9 @@ that already exists.
 
 **Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) — read-only kanban with seeded fake data, no install required.
 
-Requirements: macOS, Linux, or Windows, Python 3, and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed.
+Requirements: Git and Python 3.10+. Install at least one supported agent CLI to
+launch sessions: [Claude Code](https://docs.claude.com/en/docs/claude-code),
+Codex, Gemini, or Antigravity. The dashboard itself starts without an agent CLI.
 Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.
 Linux is supported for headless / remote-box use (see [Running on Linux](#running-on-linux)); the macOS-only desktop conveniences degrade cleanly there.
 Windows is supported for native foreground use with PowerShell, and WSL2 remains
@@ -108,7 +110,12 @@ ccc                              # foreground
 brew services start ccc          # or run as a brew-managed background service
 ```
 
-**DMG** — drag `CCC.app` to Applications, double-click to launch. Under the hood this runs the same `install.sh` (clones into `~/.ccc/claude-command-center` and asks whether to install the launchd service). First launch shows the macOS "unidentified developer" prompt — right-click `CCC.app` → **Open** → **Open**. Only required once. Download from the [latest release](https://github.com/amirfish1/claude-command-center/releases/latest).
+**DMG** — drag the app to Applications and double-click to launch. On first
+launch, the signed and notarized app installs its local source into
+`~/.ccc/claude-command-center`, shows progress, and opens the dashboard when its
+loopback server is ready. Installation errors include the real log plus Retry,
+Open Log, and Quit actions. CCC does not automate Terminal or request macOS
+Automation access. Download the [latest release](https://github.com/amirfish1/claude-command-center/releases/latest).
 
 If you'd rather clone first and run the script directly, pass the channel as a flag instead: `./scripts/install.sh --from=readme`.
 
