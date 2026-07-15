@@ -31839,7 +31839,11 @@
   const _uxqNewItemExpires = new Map();
   let _ffcLastSidebarData = null;
   let _uxqLastResolvedProject = '';
-  async function _fetchUxqItems() {
+  async function _fetchUxqItems(allowStale) {
+    // Scope changes only filter this already-complete snapshot. Let that
+    // interaction repaint immediately even when the normal TTL has elapsed;
+    // the live poll can finish any refresh independently.
+    if (allowStale && _uxqItemsCache.ts) return _uxqItemsCache.items;
     if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
     if (_uxqItemsPromise) return _uxqItemsPromise;
     _uxqItemsPromise = (async () => {
@@ -31871,7 +31875,8 @@
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
   let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
   let _uxqHealthPromise = null;
-  async function _fetchUxqHealth() {
+  async function _fetchUxqHealth(allowStale) {
+    if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
     if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
     if (_uxqHealthPromise) return _uxqHealthPromise;
     _uxqHealthPromise = (async () => {
@@ -32265,11 +32270,11 @@
   // Render the health strip at the top of the Queue tab. Scoped to the same
   // project the ticket list shows when one is resolvable; otherwise shows all
   // projects with open tickets. Bust the cache with force=true after a write.
-  async function _renderQueueHealthStrip(force, scopeProject) {
+  async function _renderQueueHealthStrip(force, scopeProject, allowStale) {
     const $strip = document.getElementById('queueHealthStrip');
     if (!$strip) return;
     if (force) _uxqHealthCache.ts = 0;
-    const health = await _fetchUxqHealth();
+    const health = await _fetchUxqHealth(allowStale);
     let rows = (health.rows || []).slice();
     // Keep recently-active queues visible even when fully drained (0 open), and
     // always keep explicitly configured queues visible even before their first
@@ -33252,27 +33257,28 @@
       answerInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
     }
   }
-  function _renderQueuePanel() {
+  function _renderQueuePanel(options) {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
+    const allowStale = !!(options && options.allowStale);
     const queuePanel = document.getElementById('queuePanel');
     if (queuePanel) queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());
     _uxqRenderWrapToggle();
-    _fetchUxqItems().then(async items => {
+    _fetchUxqItems(allowStale).then(async items => {
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
       _uxqRenderFilterToggle();
       _uxqRenderTypeFilterToggle();
-      _renderQueueHealthStrip(false, null); // always show all queues regardless of scope/dropdown
+      _renderQueueHealthStrip(false, null, allowStale); // always show all queues regardless of scope/dropdown
       // Ensure _uxqHealthCache.queues (auto_drain per queue) is populated
       // before building rows below — _renderQueueHealthStrip above is
       // fire-and-forget, so without this await the per-row "drain once"
       // button (CCC-437) would race an empty cache on first paint and
       // wrongly show on auto-drain queues too. _fetchUxqHealth has its own
       // 15s TTL cache, so this is normally a no-op await, not a fetch.
-      await _fetchUxqHealth();
+      await _fetchUxqHealth(allowStale);
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       // Status filter: 'open' hides closed (shows open + in_progress).
       const statusScoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
@@ -33729,15 +33735,14 @@
   // Queue scope picker: change the source the Queue reads this session's
   // project code from. Picking a code stores a per-session override so e.g. a
   // CCC session can show WT; "Auto (repo)" clears it back to the repo-derived
-  // code. Bust caches and re-render so the swap is immediate.
+  // code. Repaint from completed caches so this client-side filter is
+  // immediate; the normal live poll remains responsible for freshness.
   {
     const $scope = document.getElementById('queueScopeSelect');
     if ($scope) {
       $scope.addEventListener('change', () => {
         _uxqSetScopeOverride($scope.value);
-        _uxqItemsCache.ts = 0;
-        _uxqHealthCache.ts = 0;
-        _renderQueuePanel();
+        _renderQueuePanel({ allowStale: true });
       });
     }
     const $queueAdd = document.getElementById('filesQueueAdd');

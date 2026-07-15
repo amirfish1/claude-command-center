@@ -3002,6 +3002,30 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (typeof currentConversation !== 'undefined' && currentConversation) return currentConversation;", key_body)
         self.assertIn("return '__queue_global__';", key_body)
 
+    def test_queue_scope_switch_repaints_from_completed_caches(self):
+        """Changing a client-side scope must not wait for multi-MB refetches."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        items_fetch = app_js[
+            app_js.index("async function _fetchUxqItems"):
+            app_js.index("// Per-project queue-health snapshot", app_js.index("async function _fetchUxqItems"))
+        ]
+        health_fetch = app_js[
+            app_js.index("async function _fetchUxqHealth"):
+            app_js.index("// Live WatchTower workers", app_js.index("async function _fetchUxqHealth"))
+        ]
+        scope_handler = app_js[
+            app_js.index("// Queue scope picker:"):
+            app_js.index("const $queueAdd", app_js.index("// Queue scope picker:"))
+        ]
+
+        self.assertIn("async function _fetchUxqItems(allowStale)", items_fetch)
+        self.assertIn("allowStale && _uxqItemsCache.ts", items_fetch)
+        self.assertIn("async function _fetchUxqHealth(allowStale)", health_fetch)
+        self.assertIn("allowStale && _uxqHealthCache.ts", health_fetch)
+        self.assertIn("_renderQueuePanel({ allowStale: true });", scope_handler)
+        self.assertNotIn("_uxqItemsCache.ts = 0;", scope_handler)
+        self.assertNotIn("_uxqHealthCache.ts = 0;", scope_handler)
+
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         fn_start = app_js.index("function _uxFixesPlausibleSessionId(value)")
