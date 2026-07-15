@@ -8661,7 +8661,7 @@
       } else if (e.key === 'Escape') {
         const presentationPane = presentationPaneElement(activePaneId());
         if (presentationPane
-            && normalizePresentationMode(presentationPane.dataset.presentationMode) === '2') return;
+            && normalizePresentationMode(presentationPane.dataset.presentationMode) !== 'off') return;
         if ($convEscBtn && $convEscBtn.style.display !== 'none' && !$convEscBtn.disabled) {
           e.preventDefault();
           sendEscToTerminal();
@@ -30504,6 +30504,7 @@
     const clone = tmpl.cloneNode(true);
     clone.setAttribute('data-pane-id', paneId);
     clone.removeAttribute('data-presentation-mode');
+    clone.removeAttribute('data-presentation-conversation-id');
     clone.classList.remove('has-pane-title', 'has-conv-bg');
     ['data-conv-bg', 'data-conv-bg-key', 'data-conv-id'].forEach(name => clone.removeAttribute(name));
     [
@@ -38901,21 +38902,70 @@
   }
 
   // ── Conversation presentation modes ──────────────────────────────────
-  // A derived, client-only slide view over the existing transcript DOM.
-  // The JSONL/API shape is untouched and no model call is made: slides clone
-  // the sanitized nodes renderConversationEvents already produced. Each pane
-  // owns its mode + cursor; localStorage stores only the default for panes
-  // opened later.
+  // Present is a derived local view over transcript DOM. Mode 3 uses the same
+  // stage/navigation but consumes a safe slide artifact authored by the
+  // working agent. The selected mode is stored per conversation so split
+  // panes and conversation switches cannot leak state into one another.
   const PRESENTATION_MODE_KEY = 'ccc-conv-presentation-mode';
+  const PRESENTATION_MODE_BY_CONVERSATION_KEY = 'ccc-conv-presentation-mode-by-conversation';
+  const _mode3BootstrapByAnswer = new Map();
 
   function normalizePresentationMode(mode) {
     const value = String(mode == null ? '' : mode).toLowerCase();
+    if (value === '3' || value === 'mode3' || value === 'mode-3') return '3';
     return value === '1' || value === '2' || value === 'present' ? '2' : 'off';
   }
 
   function defaultPresentationMode() {
     try { return normalizePresentationMode(localStorage.getItem(PRESENTATION_MODE_KEY)); }
     catch (_) { return 'off'; }
+  }
+
+  function presentationModeState() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(PRESENTATION_MODE_BY_CONVERSATION_KEY) || 'null');
+      if (!parsed || parsed.version !== 1 || !parsed.modes || typeof parsed.modes !== 'object') {
+        return { version: 1, modes: {} };
+      }
+      const modes = {};
+      Object.keys(parsed.modes).forEach(conversationId => {
+        if (!conversationId) return;
+        const raw = String(parsed.modes[conversationId] == null ? '' : parsed.modes[conversationId]).toLowerCase();
+        if (raw === 'off' || raw === '1' || raw === '2' || raw === '3' || raw === 'present'
+            || raw === 'mode3' || raw === 'mode-3') {
+          modes[conversationId] = normalizePresentationMode(raw);
+        }
+      });
+      return { version: 1, modes };
+    } catch (_) {
+      return { version: 1, modes: {} };
+    }
+  }
+
+  function presentationModeForConversation(conversationId) {
+    const id = String(conversationId || '');
+    if (!id) return defaultPresentationMode();
+    const state = presentationModeState();
+    return Object.prototype.hasOwnProperty.call(state.modes, id)
+      ? normalizePresentationMode(state.modes[id])
+      : defaultPresentationMode();
+  }
+
+  function persistPresentationModeForConversation(conversationId, mode) {
+    const id = String(conversationId || '');
+    const normalized = normalizePresentationMode(mode);
+    if (!id) return normalized;
+    const state = presentationModeState();
+    state.modes[id] = normalized;
+    try {
+      localStorage.setItem(PRESENTATION_MODE_BY_CONVERSATION_KEY, JSON.stringify(state));
+    } catch (_) {}
+    return normalized;
+  }
+
+  function presentationConversationIdForPane(paneId) {
+    const paneState = paneByPaneId(paneId || activePaneId());
+    return String((paneState && paneState.conversationId) || '');
   }
 
   // Pure grouping primitive, intentionally DOM-free so the semantic packing
@@ -39373,6 +39423,144 @@
     return document.querySelector('.conv-pane[data-pane-id="' + (paneId || activePaneId()) + '"]');
   }
 
+  function latestCompletedPresentationAnswer(view) {
+    const answers = Array.from((view && view.querySelectorAll
+      ? view.querySelectorAll('.event.assistant:not(.tool-only):not(.is-noop-ack)') : []))
+      .filter(answer => answer.querySelector('.assistant-text'));
+    return answers.length ? answers[answers.length - 1] : null;
+  }
+
+  function mode3BootstrapAnswerKey(conversationId, answer) {
+    const answerKey = answer && (
+      answer.dataset.jsonlLine || answer.dataset.msgId || answer.dataset.presentationArtifactSource
+    );
+    return String(conversationId || '') + ':' + String(answerKey || 'latest');
+  }
+
+  function renderMode3BootstrapState(paneId, conversationId) {
+    const pane = presentationPaneElement(paneId);
+    const view = getConvViewForPane(paneId);
+    if (!pane || !view) return;
+    const stage = ensurePresentationStage(view);
+    let notice = stage.querySelector(':scope > .conv-mode3-status');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'conv-mode3-status';
+      notice.setAttribute('role', 'status');
+      stage.appendChild(notice);
+    }
+    const mode = normalizePresentationMode(pane.dataset.presentationMode);
+    const answer = latestCompletedPresentationAnswer(view);
+    if (mode !== '3' || !answer || answer._presentationArtifact) {
+      notice.hidden = true;
+      notice.replaceChildren();
+      return;
+    }
+    const key = mode3BootstrapAnswerKey(conversationId, answer);
+    const entry = _mode3BootstrapByAnswer.get(key);
+    notice.hidden = false;
+    notice.replaceChildren();
+    if (entry && entry.status === 'pending') {
+      notice.classList.add('is-pending');
+      notice.classList.remove('is-failed');
+      const pulse = document.createElement('span');
+      pulse.className = 'conv-mode3-status-pulse';
+      pulse.setAttribute('aria-hidden', 'true');
+      const text = document.createElement('span');
+      text.textContent = 'Designing AI deck…';
+      notice.append(pulse, text);
+      return;
+    }
+    notice.classList.remove('is-pending');
+    notice.classList.add('is-failed');
+    const text = document.createElement('span');
+    text.textContent = 'AI deck unavailable';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.setAttribute('data-mode3-retry', '');
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', () => {
+      _mode3BootstrapByAnswer.delete(key);
+      requestMode3Bootstrap(paneId, conversationId);
+    });
+    notice.append(text, document.createTextNode(' · '), retry);
+  }
+
+  async function requestMode3Bootstrap(paneId, conversationId) {
+    const targetPaneId = paneId || activePaneId();
+    const pane = presentationPaneElement(targetPaneId);
+    const paneState = paneByPaneId(targetPaneId);
+    const view = getConvViewForPane(targetPaneId);
+    const id = String(conversationId || (paneState && paneState.conversationId) || '');
+    if (!pane || !view || !id) return;
+    const answer = latestCompletedPresentationAnswer(view);
+    if (!answer) return;
+    const key = mode3BootstrapAnswerKey(id, answer);
+    if (answer._presentationArtifact) {
+      _mode3BootstrapByAnswer.delete(key);
+      renderMode3BootstrapState(targetPaneId, id);
+      return;
+    }
+    const existing = _mode3BootstrapByAnswer.get(key);
+    if (existing && existing.status === 'pending') return;
+    _mode3BootstrapByAnswer.set(key, { status: 'pending' });
+    renderMode3BootstrapState(targetPaneId, id);
+    const sid = String(
+      (paneState && paneState.currentSession && paneState.currentSession.id)
+      || sessionIdByConv[id]
+      || id
+    );
+    try {
+      const response = await fetch('/api/inject-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sid,
+          text: '',
+          mode: 'send',
+          presentation_bootstrap: true,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || ('HTTP ' + response.status));
+      }
+    } catch (error) {
+      _mode3BootstrapByAnswer.set(key, {
+        status: 'failed',
+        error: String((error && error.message) || error || 'Mode 3 bootstrap failed'),
+      });
+      renderMode3BootstrapState(targetPaneId, id);
+    }
+  }
+
+  function attachPresentationArtifactToAssistant(view, assistantRoot, event, conversationId) {
+    if (!view || !assistantRoot || !event || event.type !== 'assistant') return assistantRoot;
+    const hasVisibleAnswer = !!assistantRoot.querySelector('.assistant-text');
+    const target = hasVisibleAnswer
+      ? assistantRoot
+      : (latestCompletedPresentationAnswer(view) || assistantRoot);
+    if (!hasVisibleAnswer && target !== assistantRoot) {
+      assistantRoot.classList.add('presentation-artifact-only');
+      const source = assistantRoot.dataset.jsonlLine || assistantRoot.dataset.msgId || '';
+      if (source) target.dataset.presentationArtifactSource = source;
+    }
+    if (event.presentation_artifact && typeof event.presentation_artifact === 'object') {
+      target._presentationArtifact = event.presentation_artifact;
+      target.dataset.presentationArtifact = '1';
+      delete target.dataset.presentationArtifactError;
+      _mode3BootstrapByAnswer.delete(mode3BootstrapAnswerKey(conversationId, target));
+    } else if (event.presentation_artifact_error) {
+      target._presentationArtifact = null;
+      target.dataset.presentationArtifactError = String(event.presentation_artifact_error);
+      _mode3BootstrapByAnswer.set(mode3BootstrapAnswerKey(conversationId, target), {
+        status: 'failed',
+        error: String(event.presentation_artifact_error),
+      });
+    }
+    return target;
+  }
+
   function syncPresentationToolbar(pane, mode, hasAnswers) {
     const toolbar = pane && pane.querySelector('[data-role="presentation-toolbar"]');
     if (!toolbar) return;
@@ -39382,6 +39570,8 @@
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
       button.classList.toggle('is-active', active);
     });
+    const cost = toolbar.querySelector('[data-role="presentation-cost"]');
+    if (cost) cost.textContent = mode === '3' ? 'agent-authored deck' : '0 extra tokens';
   }
 
   function ensurePresentationStage(view) {
@@ -39778,14 +39968,21 @@
     const pane = presentationPaneElement(targetPaneId);
     const view = getConvViewForPane(targetPaneId);
     if (!pane || !view) return;
-    const mode = normalizePresentationMode(pane.dataset.presentationMode || defaultPresentationMode());
+    const conversationId = presentationConversationIdForPane(targetPaneId);
+    if (pane.dataset.presentationConversationId !== conversationId) {
+      pane.dataset.presentationConversationId = conversationId;
+      pane.dataset.presentationMode = presentationModeForConversation(conversationId);
+    }
+    const mode = normalizePresentationMode(
+      pane.dataset.presentationMode || presentationModeForConversation(conversationId)
+    );
     pane.dataset.presentationMode = mode;
     const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
     syncPresentationToolbar(pane, mode, hasAnswers);
     if (mode === 'off' || !hasAnswers) {
       disconnectPresentationProjection(view);
       disconnectPresentationResizeObserver(view);
-      view.classList.remove('is-presentation-mode', 'is-presentation-mode-2');
+      view.classList.remove('is-presentation-mode', 'is-presentation-mode-2', 'is-presentation-mode-3');
       const stage = view.querySelector(':scope > .conv-presentation-stage');
       if (stage) stage.remove();
       const dock = pane.querySelector(':scope > .conv-presentation-dock');
@@ -39797,6 +39994,7 @@
 
     view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
     view.classList.toggle('is-presentation-mode-2', mode === '2');
+    view.classList.toggle('is-presentation-mode-3', mode === '3');
     ensurePresentationStage(view);
 
     const previousDeck = view._presentationDeck || [];
@@ -39819,6 +40017,7 @@
     view._presentationIndex = index;
     renderPresentationCursor(targetPaneId, { animate: !previousDeck.length });
     ensurePresentationProjection(view, targetPaneId);
+    renderMode3BootstrapState(targetPaneId, conversationId);
     if (mode === '2') ensurePresentationResizeObserver(view, targetPaneId);
     else disconnectPresentationResizeObserver(view);
   }
@@ -39830,6 +40029,7 @@
     if (!pane || !view) return;
     const normalized = normalizePresentationMode(mode);
     const oldMode = normalizePresentationMode(pane.dataset.presentationMode || 'off');
+    const conversationId = presentationConversationIdForPane(targetPaneId);
     if (oldMode === 'off' && normalized !== 'off') {
       view.dataset.presentationRestoreScroll = String(view.scrollTop || 0);
       view.dataset.presentationRestorePinned = view._pinnedToBottom ? '1' : '0';
@@ -39838,11 +40038,15 @@
       && view.dataset.presentationRestorePinned === '1';
     if (normalized === 'off') view._pinnedToBottom = false;
     pane.dataset.presentationMode = normalized;
-    try { localStorage.setItem(PRESENTATION_MODE_KEY, normalized); } catch (_) {}
+    pane.dataset.presentationConversationId = conversationId;
+    persistPresentationModeForConversation(conversationId, normalized);
     refreshPresentationForPane(targetPaneId, {
       followTail: normalized !== 'off' && !(opts && opts.preserveCursor),
-      startAtLatestTurn: normalized === '2' && oldMode !== '2' && !(opts && opts.preserveCursor),
+      startAtLatestTurn: normalized !== 'off' && oldMode !== normalized && !(opts && opts.preserveCursor),
     });
+    if (normalized === '3' && oldMode !== '3') {
+      requestMode3Bootstrap(targetPaneId, conversationId);
+    }
     if (normalized === 'off') {
       const restore = Number(view.dataset.presentationRestoreScroll || 0);
       requestAnimationFrame(() => {
@@ -39897,7 +40101,7 @@
       if (ev.defaultPrevented) return;
       const paneId = activePaneId();
       const pane = presentationPaneElement(paneId);
-      if (!pane || normalizePresentationMode(pane.dataset.presentationMode) !== '2') return;
+      if (!pane || normalizePresentationMode(pane.dataset.presentationMode) === 'off') return;
       setPresentationMode(paneId, 'off');
     }, 0);
     return true;
@@ -40830,6 +41034,10 @@
           }
         }
         continue;
+      }
+
+      if (ev.type === 'assistant') {
+        attachPresentationArtifactToAssistant($view, div, ev, renderedConversationId);
       }
 
       // Route tool-only assistant events into a fused group so the chat

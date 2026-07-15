@@ -19126,6 +19126,44 @@ body:has(.gc-reader) .pwa-install-banner {
   justify-content: center;
   gap: 9px;
 }
+.conv-mode3-status {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: calc(100% - 140px);
+  padding: 6px 10px;
+  transform: translateX(-50%);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 7px 20px rgba(0,0,0,0.22);
+  color: var(--text-muted);
+  font: 650 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+.conv-mode3-status[hidden] { display: none; }
+.conv-mode3-status-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: conv-presentation-live-pulse 1.1s ease-in-out infinite;
+}
+.conv-mode3-status button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .conv-presentation-side-nav {
   position: absolute;
   top: 50%;

@@ -115,13 +115,15 @@ process.stdout.write(JSON.stringify({ path, resolved: resolved && resolved.name 
 
 
 class TestPresentationModeStatic(unittest.TestCase):
-    def test_selector_exposes_only_off_and_present(self):
+    def test_selector_exposes_off_present_and_mode_three(self):
         html = INDEX.read_text(encoding="utf-8")
 
         self.assertIn('data-role="presentation-toolbar"', html)
-        self.assertEqual(html.count("data-presentation-mode="), 2)
+        self.assertEqual(html.count("data-presentation-mode="), 3)
         self.assertIn('data-presentation-mode="off"', html)
         self.assertIn('data-presentation-mode="2"', html)
+        self.assertIn('data-presentation-mode="3"', html)
+        self.assertIn("Mode 3", html)
         self.assertNotIn('data-presentation-mode="1"', html)
         self.assertNotIn("Mode 1", html)
         self.assertNotIn('id="presentationMode', html)
@@ -130,6 +132,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertEqual(_run_javascript_function("normalizePresentationMode", "1"), "2")
         self.assertEqual(_run_javascript_function("normalizePresentationMode", "2"), "2")
         self.assertEqual(_run_javascript_function("normalizePresentationMode", "present"), "2")
+        self.assertEqual(_run_javascript_function("normalizePresentationMode", "3"), "3")
         self.assertEqual(_run_javascript_function("normalizePresentationMode", "off"), "off")
 
     def test_projection_helpers_are_generic_and_clone_safe(self):
@@ -401,27 +404,45 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("forwardPresentationProjectionEvent", live_region)
         self.assertIn("true", live_region)
 
-    def test_mode_state_is_pane_scoped_and_only_default_is_persisted(self):
+    def test_mode_state_is_conversation_scoped_and_versioned(self):
         app_js = APP_JS.read_text(encoding="utf-8")
         setter = _javascript_function_source("setPresentationMode")
 
         self.assertIn("function setPresentationMode(paneId, mode", app_js)
         self.assertIn("pane.dataset.presentationMode", app_js)
-        self.assertIn("ccc-conv-presentation-mode", app_js)
+        self.assertIn("ccc-conv-presentation-mode-by-conversation", app_js)
+        self.assertIn("function presentationModeForConversation", app_js)
+        self.assertIn("function persistPresentationModeForConversation", app_js)
+        self.assertIn("presentationConversationId", app_js)
         self.assertIn("function refreshPresentationForPane(paneId", app_js)
         self.assertIn("function stepPresentationSlide(paneId, delta)", app_js)
+        self.assertIn("persistPresentationModeForConversation", setter)
         self.assertIn("presentationRestorePinned", setter)
         self.assertIn("view._pinnedToBottom = false", setter)
         self.assertIn("scrollConversationToEnd(view)", setter)
 
-    def test_escape_exits_mode_two_even_from_the_composer(self):
+    def test_mode_three_bootstrap_is_hidden_retryable_and_answer_scoped(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        request = _javascript_function_source("requestMode3Bootstrap")
+        state = _javascript_function_source("renderMode3BootstrapState")
+
+        self.assertIn("presentation_bootstrap: true", request)
+        self.assertIn("/api/inject-input", request)
+        self.assertIn("latestCompletedPresentationAnswer", request)
+        self.assertIn("presentationArtifact", request)
+        self.assertIn("Designing AI deck", state)
+        self.assertIn("AI deck unavailable", state)
+        self.assertIn("Retry", state)
+        self.assertIn("data-mode3-retry", app_js)
+
+    def test_escape_exits_either_presentation_mode_even_from_the_composer(self):
         app_js = APP_JS.read_text(encoding="utf-8")
         scheduler = _javascript_function_source("schedulePresentationEscape")
 
         self.assertIn("if (!ev || ev.key !== 'Escape') return false", scheduler)
         self.assertIn("setTimeout(() =>", scheduler)
         self.assertIn("if (ev.defaultPrevented) return", scheduler)
-        self.assertIn("!== '2'", scheduler)
+        self.assertIn("=== 'off'", scheduler)
         self.assertIn("setPresentationMode(paneId, 'off')", scheduler)
 
         handler_start = app_js.index(
@@ -439,7 +460,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         composer_end = app_js.index("// Various callsites", composer_start)
         composer_handler = app_js[composer_start:composer_end]
         self.assertIn(
-            "normalizePresentationMode(presentationPane.dataset.presentationMode) === '2'",
+            "normalizePresentationMode(presentationPane.dataset.presentationMode) !== 'off'",
             composer_handler,
         )
         self.assertLess(
