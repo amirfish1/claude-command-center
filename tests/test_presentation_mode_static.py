@@ -317,6 +317,10 @@ class TestPresentationModeStatic(unittest.TestCase):
             2,
         )
         self.assertEqual(
+            _run_javascript_function("presentationRefreshIndex", new, old, 1, False),
+            2,
+        )
+        self.assertEqual(
             _run_javascript_function("presentationRefreshIndex", new, old, 0, True),
             0,
         )

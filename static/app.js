@@ -40014,7 +40014,7 @@
     return !!requested && previousCount > 0 && previousIndex >= previousCount - 1;
   }
 
-  function presentationRefreshIndex(deck, previousDeck, previousIndex, followTail) {
+  function presentationRefreshIndex(deck, previousDeck, previousIndex) {
     const slides = Array.isArray(deck) ? deck : [];
     const oldSlides = Array.isArray(previousDeck) ? previousDeck : [];
     if (!slides.length) return 0;
@@ -40024,7 +40024,7 @@
     const oldData = oldSlide.dataset || {};
     const oldLastData = (oldSlides[oldSlides.length - 1] || {}).dataset || {};
     const newLastData = (slides[slides.length - 1] || {}).dataset || {};
-    if (followTail && oldIndex === oldSlides.length - 1
+    if (oldIndex === oldSlides.length - 1
         && String(oldLastData.answerKey || '') !== String(newLastData.answerKey || '')) {
       const newAnswer = String(newLastData.answerKey || '');
       const first = slides.findIndex(item => String(((item || {}).dataset || {}).answerKey || '') === newAnswer);
@@ -40160,7 +40160,7 @@
     const deck = buildPresentationDeck(view, mode);
     if (!deck.length) return;
     let index = presentationRefreshIndex(
-      deck, previousDeck, previousIndex, !!(opts && opts.followTail),
+      deck, previousDeck, previousIndex,
     );
     if (opts && opts.startAtLatestTurn) {
       index = firstSlideOfLatestPresentationTurn(deck);

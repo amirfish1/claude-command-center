@@ -232,6 +232,7 @@ function findChromePath() {
       while (next && !next.disabled) next.click();
       window.__cccAutoAdvancePreviousCount = view._presentationDeck.length;
       window.__cccAutoAdvancePreviousIndex = view._presentationIndex;
+      window.__cccAutoAdvancePreviousAnswerKey = view._presentationDeck[view._presentationIndex].dataset.answerKey;
     });
     await upsert(
       'tail-auto-advance',
@@ -246,8 +247,11 @@ function findChromePath() {
       return {
         previousCount: window.__cccAutoAdvancePreviousCount,
         previousIndex: window.__cccAutoAdvancePreviousIndex,
+        previousAnswerKey: window.__cccAutoAdvancePreviousAnswerKey,
         currentCount: view._presentationDeck.length,
         currentIndex: view._presentationIndex,
+        currentAnswerKey: view._presentationDeck[view._presentationIndex].dataset.answerKey,
+        lastAnswerKey: view._presentationDeck[view._presentationDeck.length - 1].dataset.answerKey,
         selectedNewAnswer: selectedText.includes('New answer while following the presentation tail'),
         firstNewAnswerIndex: view._presentationDeck.findIndex(slide => (
           slide.textContent.includes('New answer while following the presentation tail')
