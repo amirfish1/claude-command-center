@@ -19485,6 +19485,9 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
   .conv-presentation-side-nav.is-prev { left: 4px; }
   .conv-presentation-side-nav.is-next { right: 4px; }
   .conv-presentation-slide { padding: 16px 14px; border-radius: 12px; }
+  .conv-mode3-header { gap: 10px; }
+  .conv-mode3-deck-label { display: none; }
+  .conv-mode3-comparison { grid-template-columns: 1fr; }
   .conv-presentation-prompt { grid-template-columns: 1fr; gap: 3px; margin-bottom: 13px; }
   .is-presentation-mode .conv-presentation-body.assistant-text { font-size: 16px; line-height: 1.55; }
   .conv-presentation-progress { grid-template-columns: minmax(70px, 1fr) auto; gap: 6px; }

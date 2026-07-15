@@ -302,6 +302,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("mode3SlidesForTurn", build_deck)
         self.assertIn("paginatePresentationItemsMeasured(view, turn)", build_deck)
         self.assertIn("is-mode3-fallback", app_js)
+        self.assertIn(".conv-mode3-comparison { grid-template-columns: 1fr; }", APP_CSS.read_text(encoding="utf-8"))
 
     def test_tail_refresh_opens_first_slide_of_new_answer_only_at_tail(self):
         old = [
