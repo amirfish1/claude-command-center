@@ -6,10 +6,12 @@ end-to-end (it clones a repo and launches a server), but we do exercise
 ``parse_channel`` directly so attribution wiring can't silently regress —
 see the `CCC_FROM` / `--from=<channel>` resolution tests below.
 """
+import glob
 import os
 import shutil
 import stat
 import subprocess
+import tempfile
 import unittest
 
 
@@ -54,8 +56,11 @@ def _run_parse_channel(env_extra=None, args=()):
     return result.stdout.strip()
 
 
-def _run_install_script_function(function_call, prelude=""):
+def _run_install_script_function(function_call, prelude="", env_extra=None):
     """Source install.sh and invoke one function without running main."""
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
     bash_program = (
         f'{prelude}\n'
         f'source "{INSTALL_SCRIPT}"; '
@@ -65,6 +70,7 @@ def _run_install_script_function(function_call, prelude=""):
         ["bash", "-c", bash_program],
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -126,6 +132,137 @@ class TestInstallScript(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("macOS or Linux", result.stderr)
+
+
+class TestInstallBehavior(unittest.TestCase):
+    PUBLIC_REPO_URL = "https://github.com/amirfish1/claude-command-center"
+
+    def test_app_mode_is_explicit(self):
+        result = _run_install_script_function(
+            "is_app_install",
+            env_extra={"CCC_INSTALL_MODE": "app"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_default_mode_is_not_app(self):
+        result = _run_install_script_function("is_app_install")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_environment_overrides_install_location_and_repository(self):
+        result = _run_install_script_function(
+            'printf "%s\\n%s" "$INSTALL_DIR" "$REPO_URL"',
+            env_extra={
+                "CCC_INSTALL_DIR": "/tmp/ccc-test-install",
+                "CCC_REPO_URL": "/tmp/ccc-test-repository",
+            },
+        )
+        self.assertEqual(
+            result.stdout,
+            "/tmp/ccc-test-install\n/tmp/ccc-test-repository",
+        )
+
+    def _create_repository(self, root):
+        repo = os.path.join(root, "source")
+        os.mkdir(repo)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                repo,
+                "config",
+                "user.email",
+                "test@example.invalid",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", repo, "config", "user.name", "CCC Test"],
+            check=True,
+        )
+        with open(
+            os.path.join(repo, "sentinel.txt"), "w", encoding="utf-8"
+        ) as fh:
+            fh.write("installed\n")
+        subprocess.run(
+            ["git", "-C", repo, "add", "sentinel.txt"], check=True
+        )
+        subprocess.run(
+            ["git", "-C", repo, "commit", "-qm", "test fixture"],
+            check=True,
+        )
+        return repo
+
+    def _isolated_git_env(self, root, fallback_repo):
+        """Keep pre-override RED runs away from the real home and network."""
+        return {
+            "HOME": root,
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"url.{fallback_repo}.insteadOf",
+            "GIT_CONFIG_VALUE_0": self.PUBLIC_REPO_URL,
+        }
+
+    def test_new_clone_is_published_only_after_git_succeeds(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = self._create_repository(root)
+            destination = os.path.join(root, "installed", "ccc")
+            env = self._isolated_git_env(root, repo)
+            env.update(
+                {"CCC_INSTALL_DIR": destination, "CCC_REPO_URL": repo}
+            )
+            result = _run_install_script_function(
+                "sync_repo",
+                env_extra=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(os.path.isdir(os.path.join(destination, ".git")))
+            with open(
+                os.path.join(destination, "sentinel.txt"), encoding="utf-8"
+            ) as fh:
+                self.assertEqual(fh.read(), "installed\n")
+            self.assertEqual(glob.glob(destination + ".installing.*"), [])
+
+    def test_failed_clone_leaves_no_partial_destination(self):
+        with tempfile.TemporaryDirectory() as root:
+            fallback_repo = self._create_repository(root)
+            destination = os.path.join(root, "installed", "ccc")
+            env = self._isolated_git_env(root, fallback_repo)
+            env.update(
+                {
+                    "CCC_INSTALL_DIR": destination,
+                    "CCC_REPO_URL": os.path.join(root, "missing-repository"),
+                }
+            )
+            result = _run_install_script_function(
+                "sync_repo",
+                env_extra=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(os.path.exists(destination))
+            self.assertEqual(glob.glob(destination + ".installing.*"), [])
+
+    def test_non_git_destination_is_preserved(self):
+        with tempfile.TemporaryDirectory() as root:
+            fallback_repo = self._create_repository(root)
+            destination = os.path.join(root, "installed", "ccc")
+            os.makedirs(destination)
+            sentinel = os.path.join(destination, "keep-me.txt")
+            with open(sentinel, "w", encoding="utf-8") as fh:
+                fh.write("preserve\n")
+            env = self._isolated_git_env(root, fallback_repo)
+            env.update(
+                {
+                    "CCC_INSTALL_DIR": destination,
+                    "CCC_REPO_URL": os.path.join(root, "unused"),
+                }
+            )
+            result = _run_install_script_function(
+                "sync_repo",
+                env_extra=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            with open(sentinel, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "preserve\n")
 
 
 class TestParseChannel(unittest.TestCase):
