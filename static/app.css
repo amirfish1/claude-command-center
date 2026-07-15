@@ -17152,6 +17152,18 @@ body:has(.gc-reader) .pwa-install-banner {
 .uxq-reopen-row { display: flex; justify-content: flex-end; margin-top: 8px; }
 
 .fq-empty { padding: 12px 10px; font-size: 13px; color: var(--text-muted); }
+.fq-history-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border-top: 1px solid rgba(139,148,158,0.10);
+  border-bottom: 1px solid rgba(139,148,158,0.10);
+  color: var(--text-muted); font-size: 11px;
+}
+.fq-history-pager button {
+  border: 1px solid var(--border); border-radius: 5px; padding: 3px 8px;
+  background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer;
+}
+.fq-history-pager button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.fq-history-pager button:disabled { opacity: 0.4; cursor: default; }
 .fq-add-row {
   width: 100%; border: 0; border-bottom: 1px solid rgba(139,148,158,0.08);
   padding: 8px 10px; background: transparent; color: var(--text-muted);

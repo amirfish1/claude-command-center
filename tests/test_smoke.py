@@ -3967,6 +3967,31 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".uxq-td-title", app_css)
         self.assertIn(".uxq-detail-meta", app_css)
 
+    def test_queue_all_history_renders_a_bounded_page_at_scale(self):
+        """All-history filtering may scan every ticket, but DOM work stays bounded."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        render_js = app_js[
+            app_js.index("function _renderQueuePanel"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel"))
+        ]
+
+        self.assertIn("const _UXQ_HISTORY_PAGE_SIZE = 80;", app_js)
+        self.assertIn(
+            "const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;",
+            render_js,
+        )
+        self.assertIn("const queueRowsHtml = visibleRows.map(it =>", render_js)
+        self.assertNotIn("const queueRowsHtml = rows.map(it =>", render_js)
+        self.assertIn("data-uxq-history-page=", render_js)
+        self.assertIn("_uxqHistoryPage += direction;", app_js)
+        scope_setter = app_js[
+            app_js.index("function _uxqSetScopeOverride"):
+            app_js.index("const _UXQ_FILTER_LS", app_js.index("function _uxqSetScopeOverride"))
+        ]
+        self.assertIn("_uxqResetHistoryPage();", scope_setter)
+        self.assertIn(".fq-history-pager", app_css)
+
     def test_queue_state_badges_explain_stuck(self):
         """Queue health badges should answer what each compact state means."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

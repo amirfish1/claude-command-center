@@ -32556,10 +32556,14 @@
     const v = _uxqProjectKey(val);
     if (!v || v === 'AUTO') delete map[k]; else map[k] = v;
     try { localStorage.setItem(_UXQ_SCOPE_LS, JSON.stringify(map)); } catch (_) {}
+    _uxqResetHistoryPage();
   }
   // Status filter for the Queue panel: 'all' or 'open' (open + in_progress,
   // i.e. everything not closed). A simple global view pref, not per-session.
   const _UXQ_FILTER_LS = 'ccc-uxq-filter';
+  const _UXQ_HISTORY_PAGE_SIZE = 80;
+  let _uxqHistoryPage = 0;
+  function _uxqResetHistoryPage() { _uxqHistoryPage = 0; }
   function _uxqGetFilter() {
     try { return localStorage.getItem(_UXQ_FILTER_LS) === 'all' ? 'all' : 'open'; } catch (_) { return 'open'; }
   }
@@ -33321,6 +33325,19 @@
         }
         return (b.number || 0) - (a.number || 0);       // closed/in_progress: newest first
       });
+      // All-history can contain thousands of closed tickets. Keep filtering
+      // and newest-first ordering global, but cap the DOM to one fixed page so
+      // a refresh never rebuilds the full corpus on the browser main thread.
+      // True pagination (rather than cumulative "show more") keeps the bound
+      // intact even after someone browses all the way back through history.
+      const historyPageCount = historyOrder
+        ? Math.max(1, Math.ceil(rows.length / _UXQ_HISTORY_PAGE_SIZE))
+        : 1;
+      if (!historyOrder) _uxqHistoryPage = 0;
+      _uxqHistoryPage = Math.max(0, Math.min(_uxqHistoryPage, historyPageCount - 1));
+      const historyStart = historyOrder ? _uxqHistoryPage * _UXQ_HISTORY_PAGE_SIZE : 0;
+      const historyEnd = historyOrder ? historyStart + _UXQ_HISTORY_PAGE_SIZE : rows.length;
+      const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;
       const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
       const _typeShort = { 'feature': 'feat', 'bug': 'bug' };
       // A closed ticket can still carry resolution.unresolved (CCC-420): the
@@ -33352,7 +33369,7 @@
       (((_uxqHealthCache || {}).queues) || []).forEach(q => {
         if (q && q.queue != null) _drainByQueueRow.set(String(q.queue).toUpperCase(), !!q.auto_drain);
       });
-      const queueRowsHtml = rows.map(it => {
+      const queueRowsHtml = visibleRows.map(it => {
         const noteFull = String(it.note || '');
         const rawStatus = it.status || 'open';
         const status = _effectiveStatus(it);
@@ -33396,10 +33413,18 @@
           + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed — unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
+      const historyPagerHtml = historyOrder && rows.length > _UXQ_HISTORY_PAGE_SIZE
+        ? '<div class="fq-history-pager">'
+          + '<button type="button" data-uxq-history-page="-1"' + (_uxqHistoryPage === 0 ? ' disabled' : '') + '>Newer</button>'
+          + '<span>' + (historyStart + 1) + '–' + Math.min(historyEnd, rows.length) + ' of ' + rows.length + '</span>'
+          + '<button type="button" data-uxq-history-page="1"' + (_uxqHistoryPage >= historyPageCount - 1 ? ' disabled' : '') + '>Older</button>'
+          + '</div>'
+        : '';
       // Keep creation with the tickets it affects, instead of crowding the
       // queue header. This stays after the empty state too, so an empty queue
       // still offers its primary action.
       $queue.innerHTML = queueRowsHtml
+        + historyPagerHtml
         + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>';
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
@@ -33437,6 +33462,15 @@
     const $queueList = document.getElementById('sidebarQueueList');
     if ($queueList) {
       $queueList.addEventListener('click', async (ev) => {
+        const historyPageBtn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-history-page]');
+        if (historyPageBtn) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const direction = Number(historyPageBtn.getAttribute('data-uxq-history-page')) || 0;
+          _uxqHistoryPage += direction;
+          _renderQueuePanel();
+          return;
+        }
         const addBtn = ev.target && ev.target.closest && ev.target.closest('#filesQueueAdd');
         if (addBtn) {
           ev.stopPropagation();
@@ -33720,6 +33754,7 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-filter]');
         if (!btn) return;
         _uxqSetFilter(btn.getAttribute('data-uxq-filter'));
+        _uxqResetHistoryPage();
         _renderQueuePanel();
       });
     }
@@ -33729,6 +33764,7 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-type-filter]');
         if (!btn) return;
         _uxqSetTypeFilter(btn.getAttribute('data-uxq-type-filter'));
+        _uxqResetHistoryPage();
         _renderQueuePanel();
       });
     }
@@ -33741,7 +33777,7 @@
     }
     const $queueSearch = document.getElementById('queueSearchInput');
     if ($queueSearch) {
-      $queueSearch.addEventListener('input', () => { _renderQueuePanel(); });
+      $queueSearch.addEventListener('input', () => { _uxqResetHistoryPage(); _renderQueuePanel(); });
       $queueSearch.addEventListener('click', (e) => e.stopPropagation());
     }
   }
