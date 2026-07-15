@@ -39081,62 +39081,207 @@
       });
       stage.appendChild(button);
     });
-    let activity = stage.querySelector(':scope > .conv-presentation-activity');
-    if (!activity) {
-      activity = document.createElement('div');
-      activity.className = 'conv-presentation-activity';
-      activity.hidden = true;
-      activity.setAttribute('role', 'status');
-      activity.setAttribute('aria-live', 'polite');
-      stage.appendChild(activity);
-    }
     let slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
     if (!slot) {
       slot = document.createElement('div');
       slot.className = 'conv-presentation-slide-slot';
       stage.appendChild(slot);
     }
+    ensurePresentationLiveRegion(stage);
     return stage;
   }
 
-  function syncPresentationActivity(view) {
-    if (!view || !view.classList.contains('is-presentation-mode')) return;
-    const stage = ensurePresentationStage(view);
-    const activity = stage.querySelector(':scope > .conv-presentation-activity');
-    const candidates = Array.from(view.querySelectorAll(':scope > .conv-live-tool-inline'));
-    const source = candidates.reverse().find(node => !node.classList.contains('is-done'));
-    if (!source) {
-      activity.hidden = true;
-      activity.replaceChildren();
-      return;
-    }
-    const clone = presentationClone(source);
-    clone.querySelectorAll('button').forEach(button => button.remove());
-    activity.className = 'conv-presentation-activity';
-    ['optimistic', 'in-flight', 'is-question', 'is-generating', 'is-error',
-      'is-stale-no-process', 'is-wake-status', 'wake-breakdown'].forEach(name => {
-      activity.classList.toggle(name, source.classList.contains(name));
-    });
-    activity.title = source.title || 'Agent activity';
-    activity.replaceChildren(...Array.from(clone.childNodes));
-    activity.hidden = false;
+  function ensurePresentationLiveRegion(stage) {
+    let region = stage.querySelector(':scope > .conv-presentation-live-region');
+    if (region) return region;
+    region = document.createElement('section');
+    region.className = 'conv-presentation-live-region';
+    region.hidden = true;
+    region.setAttribute('aria-label', 'Live conversation updates');
+    region.setAttribute('aria-live', 'polite');
+    const header = document.createElement('header');
+    const label = document.createElement('span');
+    label.textContent = 'Live updates';
+    const count = document.createElement('span');
+    count.setAttribute('data-presentation-live-count', '');
+    header.append(label, count);
+    const list = document.createElement('div');
+    list.className = 'conv-presentation-live-list';
+    region.append(header, list);
+    stage.appendChild(region);
+    return region;
   }
 
-  let _presentationActivityTimer = null;
-  function ensurePresentationActivityTimer() {
-    if (_presentationActivityTimer) return;
-    _presentationActivityTimer = setInterval(() => {
-      let active = false;
-      document.querySelectorAll('.conv-pane[data-pane-id]').forEach(pane => {
-        if (normalizePresentationMode(pane.dataset.presentationMode) === 'off') return;
-        active = true;
-        syncPresentationActivity(getConvViewForPane(pane.dataset.paneId));
-      });
-      if (!active) {
-        clearInterval(_presentationActivityTimer);
-        _presentationActivityTimer = null;
+  function presentationRootIsCompletedAnswer(root) {
+    return !!(root && root.matches && root.matches('.event.assistant')
+      && !root.classList.contains('tool-only') && root.querySelector('.assistant-text'));
+  }
+
+  function presentationRootRefreshesDeck(root) {
+    return !!(root && root.matches
+      && root.matches('.event.assistant, .stream-bubble:not(.stream-bubble-subagent)'));
+  }
+
+  function presentationProjectionSignature(view) {
+    return Array.from((view && view.children) || [])
+      .filter(node => !(node.classList && node.classList.contains('conv-presentation-stage')))
+      .map(node => node.outerHTML || node.textContent || '').join('\n');
+  }
+
+  function removePresentationProjectionEntry(state, id) {
+    const entry = state && state.entries.get(id);
+    if (!entry) return;
+    if (entry.mirror && entry.mirror.remove) entry.mirror.remove();
+    state.entries.delete(id);
+  }
+
+  function schedulePresentationProjectionFlush(view, roots, refreshDeck) {
+    const state = view && view._presentationProjection;
+    if (!state) return;
+    const sourceRoots = Array.isArray(roots) ? roots : (roots ? [roots] : []);
+    sourceRoots.forEach(root => {
+      if (root && root.parentElement === view
+          && !(root.classList && root.classList.contains('conv-presentation-stage'))) {
+        state.dirtyRoots.add(root);
       }
-    }, 1000);
+      if (presentationRootRefreshesDeck(root)) state.refreshDeck = true;
+    });
+    if (refreshDeck) state.refreshDeck = true;
+    if (state.raf) return;
+    state.raf = requestAnimationFrame(() => flushPresentationProjection(view));
+  }
+
+  function flushPresentationProjection(view) {
+    const state = view && view._presentationProjection;
+    if (!state) return;
+    state.raf = 0;
+    const pane = presentationPaneElement(state.paneId);
+    if (!pane || normalizePresentationMode(pane.dataset.presentationMode) !== '2') return;
+    const stage = ensurePresentationStage(view);
+    const region = ensurePresentationLiveRegion(stage);
+    const list = region.querySelector('.conv-presentation-live-list');
+    const wasPinned = list.scrollHeight - list.scrollTop - list.clientHeight < 8;
+
+    state.entries.forEach((entry, id) => {
+      if (!view.contains(entry.source)) removePresentationProjectionEntry(state, id);
+    });
+
+    if (state.refreshDeck) {
+      const currentTail = new Set(presentationRootsAfterLatestAnswer(view));
+      state.entries.forEach((entry, id) => {
+        if (!currentTail.has(entry.source)) removePresentationProjectionEntry(state, id);
+      });
+    }
+
+    const dirtyRoots = Array.from(state.dirtyRoots);
+    state.dirtyRoots.clear();
+    dirtyRoots.forEach(source => {
+      if (!view.contains(source) || presentationRootIsCompletedAnswer(source)) return;
+      let id = state.sourceIds.get(source);
+      if (!id) {
+        id = 'live-' + state.nextId++;
+        state.sourceIds.set(source, id);
+      }
+      let entry = state.entries.get(id);
+      let mirror;
+      try {
+        mirror = presentationCloneForProjection(source, 'presentation-' + state.paneId + '-' + id);
+      } catch (_) {
+        mirror = document.createElement('div');
+        mirror.className = 'conv-presentation-projection-fallback';
+        mirror.dataset.sourceClass = String(source.className || '');
+        mirror.textContent = String(source.innerText || source.textContent || 'Update');
+      }
+      let wrapper = entry && entry.mirror;
+      if (!wrapper) {
+        wrapper = document.createElement('div');
+        wrapper.className = 'conv-presentation-live-item';
+        wrapper.dataset.presentationProjectionId = id;
+      }
+      wrapper.replaceChildren(mirror);
+      list.appendChild(wrapper);
+      state.entries.set(id, { source, mirror: wrapper });
+    });
+
+    region.hidden = state.entries.size === 0;
+    const count = region.querySelector('[data-presentation-live-count]');
+    if (count) count.textContent = state.entries.size ? String(state.entries.size) : '';
+    if (wasPinned) list.scrollTop = list.scrollHeight;
+
+    const refreshDeck = state.refreshDeck;
+    state.refreshDeck = false;
+    if (refreshDeck) refreshPresentationForPane(state.paneId, { preserveCursor: true });
+  }
+
+  function ensurePresentationProjection(view, paneId) {
+    if (!view) return null;
+    const existing = view._presentationProjection;
+    if (existing && existing.paneId === paneId) return existing;
+    if (existing) disconnectPresentationProjection(view);
+    const state = {
+      paneId,
+      sourceIds: new WeakMap(),
+      entries: new Map(),
+      dirtyRoots: new Set(),
+      nextId: 1,
+      raf: 0,
+      refreshDeck: false,
+      observer: null,
+      poll: null,
+      signature: presentationProjectionSignature(view),
+    };
+    view._presentationProjection = state;
+    if (typeof MutationObserver === 'function') {
+      state.observer = new MutationObserver(records => {
+        let needsFlush = false;
+        records.forEach(record => {
+          const targetElement = record.target && (record.target.nodeType === 3
+            ? record.target.parentElement : record.target);
+          if (targetElement && targetElement.closest
+              && targetElement.closest('.conv-presentation-stage')) return;
+          const root = presentationSourceRoot(view, record.target);
+          if (root) {
+            state.dirtyRoots.add(root);
+            if (presentationRootRefreshesDeck(root)) state.refreshDeck = true;
+          }
+          if (record.type === 'childList') {
+            Array.from(record.addedNodes || []).forEach(node => {
+              const addedRoot = presentationSourceRoot(view, node);
+              if (!addedRoot) return;
+              state.dirtyRoots.add(addedRoot);
+              if (presentationRootRefreshesDeck(addedRoot)) state.refreshDeck = true;
+            });
+          }
+          needsFlush = true;
+        });
+        if (needsFlush) schedulePresentationProjectionFlush(view);
+      });
+      state.observer.observe(view, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+      });
+    } else {
+      state.poll = setInterval(() => {
+        const signature = presentationProjectionSignature(view);
+        if (signature === state.signature) return;
+        state.signature = signature;
+        schedulePresentationProjectionFlush(view, Array.from(view.children || []), true);
+      }, 250);
+    }
+    schedulePresentationProjectionFlush(view, presentationRootsAfterLatestAnswer(view));
+    return state;
+  }
+
+  function disconnectPresentationProjection(view) {
+    const state = view && view._presentationProjection;
+    if (!state) return;
+    if (state.observer) state.observer.disconnect();
+    if (state.poll) clearInterval(state.poll);
+    if (state.raf) cancelAnimationFrame(state.raf);
+    state.entries.forEach((entry, id) => removePresentationProjectionEntry(state, id));
+    view._presentationProjection = null;
   }
 
   function ensurePresentationDock(pane) {
@@ -39163,7 +39308,6 @@
     const stage = ensurePresentationStage(view);
     const slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
     slot.replaceChildren(deck[index]);
-    syncPresentationActivity(view);
     const dock = ensurePresentationDock(pane);
     const slide = deck[index];
     const answer = Number(slide.dataset.answerIndex || 0);
@@ -39274,6 +39418,7 @@
     const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
     syncPresentationToolbar(pane, mode, hasAnswers);
     if (mode === 'off' || !hasAnswers) {
+      disconnectPresentationProjection(view);
       disconnectPresentationResizeObserver(view);
       view.classList.remove('is-presentation-mode', 'is-presentation-mode-2');
       const stage = view.querySelector(':scope > .conv-presentation-stage');
@@ -39288,7 +39433,6 @@
     view.classList.add('is-presentation-mode', 'is-presentation-mode-' + mode);
     view.classList.toggle('is-presentation-mode-2', mode === '2');
     ensurePresentationStage(view);
-    syncPresentationActivity(view);
 
     const previousDeck = view._presentationDeck || [];
     const previousIndex = Number(view._presentationIndex) || 0;
@@ -39308,8 +39452,8 @@
     }
     view._presentationDeck = deck;
     view._presentationIndex = index;
-    ensurePresentationActivityTimer();
     renderPresentationCursor(targetPaneId);
+    ensurePresentationProjection(view, targetPaneId);
     if (mode === '2') ensurePresentationResizeObserver(view, targetPaneId);
     else disconnectPresentationResizeObserver(view);
   }

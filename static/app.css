@@ -16798,12 +16798,12 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 @keyframes fq-status-glow {
   0%, 100% {
-    opacity: 0.72;
-    box-shadow: 0 0 0 3px rgba(88,166,255,0.14), 0 0 7px rgba(88,166,255,0.26);
+    opacity: 0.82;
+    box-shadow: 0 0 0 3px rgba(33,150,243,0.28), 0 0 10px rgba(33,150,243,0.5);
   }
   50% {
     opacity: 1;
-    box-shadow: 0 0 0 4px rgba(88,166,255,0.26), 0 0 18px rgba(88,166,255,0.72);
+    box-shadow: 0 0 0 5px rgba(33,150,243,0.45), 0 0 24px rgba(33,150,243,0.95);
   }
 }
 .fq-row.is-open .fq-status {
@@ -16811,7 +16811,7 @@ body:has(.gc-reader) .pwa-install-banner {
   box-shadow: 0 0 0 3px rgba(139,148,158,0.16);
 }
 .fq-row.is-in_progress .fq-status {
-  background: var(--accent, #58a6ff);
+  background: #0b3d91;
   animation: fq-status-glow 1.5s ease-in-out infinite;
   will-change: opacity, box-shadow;
 }
@@ -19104,45 +19104,41 @@ body:has(.gc-reader) .pwa-install-banner {
   pointer-events: none;
   contain: layout style paint;
 }
-.conv-presentation-activity {
-  flex: 0 0 auto;
+.conv-presentation-live-region {
+  flex: 0 1 42%;
+  min-height: 0;
+  max-height: 42%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, #58a6ff 42%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #58a6ff 7%, var(--surface));
+  box-shadow: 0 8px 22px rgba(0,0,0,0.18);
+}
+.conv-presentation-live-region[hidden] { display: none; }
+.conv-presentation-live-region > header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, #58a6ff 42%, var(--border));
-  border-radius: 9px;
-  background: color-mix(in srgb, #58a6ff 10%, var(--surface));
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, #58a6ff 28%, var(--border));
   color: #8fc7ff;
-  font-size: 12px;
-  overflow: hidden;
+  font: 750 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-.conv-presentation-activity[hidden] { display: none; }
-.conv-presentation-activity .cl-pulse {
-  flex: 0 0 8px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 8px color-mix(in srgb, currentColor 70%, transparent);
-  animation: pulse 1s infinite;
+.conv-presentation-live-list {
+  max-height: calc(100% - 30px);
+  overflow: auto;
+  padding: 7px 9px;
+  scrollbar-gutter: stable;
 }
-.conv-presentation-activity .cl-tool { font-weight: 700; white-space: nowrap; }
-.conv-presentation-activity .cl-file,
-.conv-presentation-activity .cl-hint {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-}
-.conv-presentation-activity .cl-age { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
-.conv-presentation-activity.is-question { color: #d8b4fe; border-color: color-mix(in srgb, #a78bfa 45%, var(--border)); }
-.conv-presentation-activity.is-error,
-.conv-presentation-activity.is-stale-no-process { color: var(--red); }
-.conv-presentation-activity .wb-stages { display: flex; align-items: center; gap: 8px; }
-.conv-presentation-activity .wb-readout { color: var(--text-muted); font-size: 11px; }
+.conv-presentation-live-item + .conv-presentation-live-item { margin-top: 7px; }
+.conv-presentation-live-item > .event,
+.conv-presentation-live-item > .tool-call-group,
+.conv-presentation-live-item > .stream-bubble,
+.conv-presentation-live-item > .conv-live-tool-inline { margin-block: 0; }
+.conv-presentation-projection-fallback { color: var(--text-muted); white-space: pre-wrap; }
 .conv-presentation-list-fragment + .conv-presentation-list-fragment { margin-top: -0.55em; }
 .conv-presentation-list-fragment > li { margin-block: 0; }
 .conv-presentation-slide {
@@ -19360,5 +19356,5 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail):has(>
 @media (prefers-reduced-motion: reduce) {
   .conv-presentation-slide,
   .conv-presentation-live::before,
-  .conv-presentation-activity .cl-pulse { animation: none; }
+  .conv-presentation-live-region .cl-pulse { animation: none; }
 }

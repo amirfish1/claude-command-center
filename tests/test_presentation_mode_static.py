@@ -339,6 +339,41 @@ class TestPresentationModeStatic(unittest.TestCase):
         )
         self.assertIn("disconnectPresentationResizeObserver(view)", source)
 
+    def test_projection_observes_every_canonical_mutation_and_cleans_up(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        css = APP_CSS.read_text(encoding="utf-8")
+        ensure = _javascript_function_source("ensurePresentationProjection")
+        flush = _javascript_function_source("flushPresentationProjection")
+        disconnect = _javascript_function_source("disconnectPresentationProjection")
+        live_region = _javascript_function_source("ensurePresentationLiveRegion")
+
+        for token in (
+            "new MutationObserver",
+            "childList: true",
+            "subtree: true",
+            "characterData: true",
+            "attributes: true",
+            "sourceIds: new WeakMap()",
+            "entries: new Map()",
+            "dirtyRoots: new Set()",
+            "presentationRootsAfterLatestAnswer(view)",
+            "250",
+        ):
+            self.assertIn(token, ensure)
+        self.assertIn("requestAnimationFrame", app_js)
+        self.assertIn("view.contains(entry.source)", flush)
+        self.assertIn("presentationCloneForProjection", flush)
+        self.assertIn("observer.disconnect()", disconnect)
+        self.assertIn("cancelAnimationFrame", disconnect)
+        self.assertIn("conv-presentation-live-region", live_region)
+        self.assertIn("aria-live", live_region)
+        self.assertIn(".conv-presentation-live-region", css)
+        self.assertIn("overflow: auto", css)
+
+        refresh = _javascript_function_source("refreshPresentationForPane")
+        self.assertIn("ensurePresentationProjection(view, targetPaneId)", refresh)
+        self.assertIn("disconnectPresentationProjection(view)", refresh)
+
     def test_mode_state_is_pane_scoped_and_only_default_is_persisted(self):
         app_js = APP_JS.read_text(encoding="utf-8")
 
@@ -420,16 +455,17 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("refreshPresentationForPane(paneId", app_js[durable_start:durable_end])
         self.assertIn("refreshPresentationForPane(paneId", app_js[streaming_start:streaming_end])
 
-    def test_mode_two_splits_lists_and_surfaces_live_activity(self):
+    def test_present_splits_lists_and_uses_generic_live_projection(self):
         app_js = APP_JS.read_text(encoding="utf-8")
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertIn("function presentationListItems(list)", app_js)
         self.assertIn("breakBefore: index === 0", app_js)
         self.assertNotIn("breakBefore: ordered || index === 0", app_js)
-        self.assertIn("function syncPresentationActivity(view)", app_js)
-        self.assertIn("conv-presentation-activity", app_js)
-        self.assertIn(".conv-presentation-activity", css)
+        self.assertIn("function ensurePresentationProjection(view, paneId)", app_js)
+        self.assertIn("conv-presentation-live-region", app_js)
+        self.assertIn(".conv-presentation-live-region", css)
+        self.assertNotIn("function syncPresentationActivity(view)", app_js)
 
     def test_presentation_css_has_stage_dock_and_right_rail_areas(self):
         css = APP_CSS.read_text(encoding="utf-8")
