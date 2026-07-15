@@ -6,6 +6,7 @@
 <title>CCC: Your coding agents outgrew your terminal</title>
 <meta name="description" content="CCC puts every coding-agent session, every engine, however you launched it, on one local board and tells you which one needs you. Local, open source, MIT.">
 <link rel="canonical" href="https://ccc.amirfish.ai">
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
 
 <meta property="og:title" content="CCC: Your coding agents outgrew your terminal">
 <meta property="og:description" content="Every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on one local board. See what needs you, steer any session, let work run unattended.">
@@ -56,22 +57,13 @@
     position: sticky; top: 0; z-index: 10;
   }
   .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
-  .brand { font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 10px; }
+  .brand { font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 10px; flex-shrink: 0; white-space: nowrap; }
   .brand .dot { display: inline-block; width: 8px; height: 8px; background: var(--orange); border-radius: 50%; box-shadow: 0 0 12px var(--orange); }
   .brand .version { font-size: 11px; color: var(--orange); background: var(--orange-soft); padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(245, 166, 35, 0.4); }
   .nav-links { display: flex; gap: 22px; font-size: 14px; align-items: center; }
   .nav-links a { text-decoration: none; color: var(--fg-dim); }
   .nav-links a:hover { color: var(--fg); }
-  .nav-links a.star {
-    color: var(--orange);
-    border: 1px solid rgba(245, 166, 35, 0.4);
-    background: var(--orange-soft);
-    padding: 4px 12px;
-    border-radius: 6px;
-    font-family: var(--mono);
-    font-size: 12px;
-  }
-  @media (max-width: 640px) { .nav-links a:not(.star):not(.gh) { display: none; } }
+  @media (max-width: 640px) { .nav-links a:not(.gh) { display: none; } }
 
   /* Hero */
   .hero { padding: 70px 0 40px; position: relative; }
@@ -121,25 +113,20 @@
   .btn:hover .arrow { transform: translateX(2px); }
   .btn-soft { background: transparent; border-color: var(--line-strong); color: var(--fg-dim); }
   .btn-soft:hover { color: var(--fg); border-color: var(--orange); }
-
-  /* Quick install */
-  .quick-install {
-    margin: 32px auto 0; padding: 14px 18px;
-    background: var(--code-bg); border: 1px solid var(--line);
-    border-radius: 8px; display: flex; align-items: center; gap: 12px;
-    max-width: 700px;
+  .download-cta {
+    justify-content: center;
+    min-width: 220px;
+    padding: 16px 32px;
+    font-size: 16px;
+    letter-spacing: 0.055em;
+    box-shadow: 0 14px 34px -18px rgba(245, 166, 35, 0.8);
   }
-  .quick-install code { color: var(--fg); flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-size: 13px; }
-  .quick-install .copy {
-    background: transparent; color: var(--fg-dim);
-    border: 1px solid var(--line-strong); border-radius: 6px;
-    padding: 5px 12px; font-family: var(--mono); font-size: 12px; cursor: pointer;
+  .download-meta {
+    margin: 13px auto 0;
+    color: var(--fg-mute);
+    font: 12px/1.6 var(--mono);
   }
-  .quick-install .copy:hover { color: var(--fg); border-color: var(--orange); }
-  .quick-install .copy.ok { color: var(--green-bright); border-color: var(--green-bright); }
-
-  .install-meta { margin-top: 14px; color: var(--fg-mute); font-size: 13px; font-family: var(--mono); }
-  .install-meta .sep { color: var(--line-strong); margin: 0 8px; }
+  .download-meta a { color: var(--fg-dim); }
 
   /* Demo block + shared framed media */
   .demo {
@@ -434,15 +421,15 @@
     <div class="brand">
       <span class="dot"></span>
       <span>claude command center</span>
-      <span class="version">v5.6</span>
+      <span class="version">v5.8</span>
     </div>
     <nav class="nav-links">
       <a href="#moment">The problem</a>
       <a href="#families">What it solves</a>
       <a href="#compare">Compare</a>
       <a href="#install">Install</a>
-      <a class="gh" href="/demo" rel="noopener">Demo</a>
-      <a class="star" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; Star on GitHub</a>
+      <a href="/demo" rel="noopener">Demo</a>
+      <a class="gh" href="https://github.com/amirfish1/claude-command-center" rel="noopener">GitHub</a>
     </nav>
   </div>
 </header>
@@ -451,7 +438,7 @@
   <section class="hero" style="border-top: 0;">
     <div class="wrap hero-inner">
       <div class="eyebrow fade-target">
-        <span class="badge">v5.6</span>
+        <span class="badge">v5.8</span>
         <span>Local &middot; Open source &middot; MIT &middot; For developers running many coding agents</span>
       </div>
       <h1 class="hero-title fade-target">
@@ -462,21 +449,13 @@
       </p>
 
       <div class="cta-row fade-target">
-        <a class="btn btn-primary" href="/demo">
-          Tour the live demo <span class="arrow">&rarr;</span>
-        </a>
-        <a class="btn btn-soft" href="#install">Install</a>
-        <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; GitHub</a>
+        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/latest/download/ccc.dmg">DOWNLOAD CCC</a>
       </div>
-
-      <div class="quick-install fade-target" id="quickInstall">
-        <code id="quickCmd">curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing bash</code>
-        <button class="copy" type="button" data-target="quickCmd" aria-live="polite">copy</button>
-      </div>
-
-      <div class="install-meta fade-target">
-        Or use <a href="#install" style="color: var(--fg-dim); text-decoration: underline; text-underline-offset: 3px;">Homebrew / DMG</a> <span class="sep">&middot;</span> macOS + Linux + Windows <span class="sep">&middot;</span> No telemetry by default <span class="sep">&middot;</span> MIT
-      </div>
+      <p class="download-meta fade-target">
+        Apple-notarized for macOS 11+ &middot; v5.8.0 &middot;
+        <a href="#install">Homebrew, Linux, and Windows</a> &middot;
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md#landing-page-download-clicks">anonymous click count</a>
+      </p>
 
       <div class="demo boot-target" aria-label="CCC dashboard, fleet scan">
         <div class="demo-bar">
@@ -809,7 +788,7 @@
           <thead>
             <tr>
               <th></th>
-              <th class="us">CCC v5.6</th>
+              <th class="us">CCC v5.8</th>
               <th>claude-squad</th>
               <th>Conductor</th>
               <th>Sculptor</th>
@@ -945,7 +924,7 @@ brew install ccc</pre>
           <li><strong>Architecture</strong>A stdlib-only Python server and a no-build vanilla-JS browser UI. No pip installs, no bundler, no framework. Nothing hidden, nothing to audit but the source in front of you.</li>
           <li><strong>State</strong>Human-readable JSON sidecars under <code>~/.claude/command-center/</code>. Rewriteable by hand.</li>
           <li><strong>Workers</strong>No required background jobs. The optional queue watcher only runs when you use the work queue.</li>
-          <li><strong>Telemetry</strong>Anonymous, opt-in, off by default. Five fields, all bounded. Inspectable locally. Source of the worker is in the repo.</li>
+          <li><strong>Telemetry</strong>Public contract, bounded schemas, and no transcripts. The daily usage ping is opt-in; anonymous boot and site-click counters are documented and auditable.</li>
           <li><strong>Scope</strong>Local dev tool. macOS desktop, headless Linux, native Windows install. No hosted multi-user control plane. Expose it only on trusted loopback or a private network.</li>
         </ul>
       </div>
@@ -955,8 +934,8 @@ brew install ccc</pre>
   <section class="whats-new-strip" id="whats-new" style="padding: 0;">
     <div class="wrap">
       <div class="wn-inner fade-target">
-        <span class="ver">v5.6.0</span>
-        <span>2026-07-08 &middot; Native Windows install, Codex reasoning-effort picker, faster history loading.</span>
+        <span class="ver">v5.8.0</span>
+        <span>2026-07-15 &middot; Reliable native macOS installation, actionable recovery, and safer in-app updates.</span>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Full changelog &rarr;</a>
       </div>
     </div>
@@ -999,26 +978,23 @@ brew install ccc</pre>
 </footer>
 
 <script>
-  // Copy-to-clipboard on the quick-install command.
-  document.querySelectorAll('.copy[data-target]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const target = document.getElementById(btn.dataset.target);
-      if (!target) return;
+  const DOWNLOAD_EVENT_URL = "https://telemetry.claude-command-center.workers.dev/v1/download";
+  const downloadCta = document.getElementById("downloadCta");
+  if (downloadCta) {
+    downloadCta.addEventListener("click", () => {
       try {
-        await navigator.clipboard.writeText(target.textContent.trim());
-        const prev = btn.textContent;
-        btn.textContent = 'copied';
-        btn.classList.add('ok');
-        setTimeout(() => { btn.textContent = prev; btn.classList.remove('ok'); }, 1400);
-      } catch (e) {
-        const range = document.createRange();
-        range.selectNodeContents(target);
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
+        if (navigator.sendBeacon && navigator.sendBeacon(DOWNLOAD_EVENT_URL)) return;
+      } catch (_) {
+        // Direct GitHub navigation remains authoritative.
       }
+      fetch(DOWNLOAD_EVENT_URL, {
+        method: "POST",
+        mode: "no-cors",
+        keepalive: true,
+        referrerPolicy: "no-referrer",
+      }).catch(() => {});
     });
-  });
+  }
 
   document.addEventListener('DOMContentLoaded', () => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
