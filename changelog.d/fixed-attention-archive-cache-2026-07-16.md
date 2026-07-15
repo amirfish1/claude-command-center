@@ -1,0 +1,1 @@
+- Reduced dashboard CPU usage by sharing the cached conversation archive with the attention feed instead of rescanning every transcript.
