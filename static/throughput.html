@@ -1369,6 +1369,10 @@
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #f5c842;background:transparent;"></span>
                   <span style="color:#f5c842;">Fable % of weekly</span>
                 </div>
+                <div class="legend-item" id="account-usage-legend" style="display:none;">
+                  <span class="legend-color" style="height:5px;border-radius:1px;background:#60a5fa;"></span>
+                  <span style="color:#60a5fa;">Codex account daily total</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1537,6 +1541,7 @@
         ...(claude.per_model || []).map(row => ({ ...row, engine: row.engine || 'claude' })),
         ...(codex.per_model || []).map(row => ({ ...row, engine: row.engine || 'codex' })),
       ];
+      if (codex.account_usage) merged.account_usage = codex.account_usage;
       merged.components = { claude, codex };
       return merged;
     }
@@ -3134,6 +3139,78 @@
       svg.appendChild(text);
     }
 
+    function renderAccountUsageStrip(svg, sourceRows, xScale, slotW, padding, summary) {
+      const accountUsage = summary && summary.account_usage;
+      const daily = accountUsage && Array.isArray(accountUsage.daily) ? accountUsage.daily : [];
+      if (!daily.length || !Array.isArray(sourceRows) || !sourceRows.length) return false;
+
+      const accountByDay = new Map(daily.map(row => [row.day, Number(row.tokens || 0)]));
+      const detailSummary = summary && summary.components && summary.components.codex
+        ? summary.components.codex
+        : summary;
+      const localByDay = new Map(((detailSummary && detailSummary.daily) || []).map(row => [
+        row.day,
+        Number(row.raw_context_tokens || 0) + Number(row.output_tokens || 0),
+      ]));
+      const spans = new Map();
+      sourceRows.forEach((row, index) => {
+        const day = row && row.day;
+        if (!day || !accountByDay.has(day)) return;
+        const span = spans.get(day) || { first: index, last: index };
+        span.last = index;
+        spans.set(day, span);
+      });
+      if (!spans.size) return false;
+
+      const stripY = Math.max(4, padding.top - 24);
+      spans.forEach((span, day) => {
+        const accountTokens = accountByDay.get(day) || 0;
+        const localTokens = localByDay.get(day) || 0;
+        const unattributed = Math.max(0, accountTokens - localTokens);
+        const left = Math.max(padding.left, xScale(span.first + 1) - slotW / 2);
+        const right = xScale(span.last + 1) + slotW / 2;
+        const width = Math.max(2, right - left - 2);
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', left + 1);
+        rect.setAttribute('y', stripY);
+        rect.setAttribute('width', width);
+        rect.setAttribute('height', 14);
+        rect.setAttribute('rx', '3');
+        rect.setAttribute('fill', 'rgba(96,165,250,0.20)');
+        rect.setAttribute('stroke', 'rgba(96,165,250,0.65)');
+        rect.setAttribute('data-role', 'account-usage-day');
+        rect.style.cursor = 'pointer';
+        rect.addEventListener('mouseover', event => {
+          rect.setAttribute('fill', 'rgba(96,165,250,0.38)');
+          showTooltip(event, [
+            `${dayLabel(day)} account usage`,
+            `Account: <strong>${fmtNum(accountTokens)} tokens</strong>`,
+            `Local detail: ${fmtNum(localTokens)} tokens`,
+            `Unattributed: ${fmtNum(unattributed)} tokens`,
+          ].join('<br>'));
+        });
+        rect.addEventListener('mouseout', () => {
+          rect.setAttribute('fill', 'rgba(96,165,250,0.20)');
+          hideTooltip();
+        });
+        svg.appendChild(rect);
+
+        if (width >= 62) {
+          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          label.setAttribute('x', left + width / 2);
+          label.setAttribute('y', stripY + 10);
+          label.setAttribute('fill', 'rgba(191,219,254,0.9)');
+          label.setAttribute('font-size', '9px');
+          label.setAttribute('text-anchor', 'middle');
+          label.setAttribute('font-family', 'var(--font-mono)');
+          label.setAttribute('pointer-events', 'none');
+          label.textContent = `${formatCompactTokens(accountTokens)} acct`;
+          svg.appendChild(label);
+        }
+      });
+      return true;
+    }
+
     function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
       const svg = document.getElementById('throughput-chart');
       if (!svg) return;
@@ -3150,8 +3227,16 @@
       // Determine whether the weekly % overlay is available for this view.
       const weeklyChart = (daily || sixhourly) ? weeklyChartContext(summary) : null;
       const showWeeklyOverlay = !!weeklyChart;
+      const accountUsage = sixhourly && activeThroughputEngine !== 'claude'
+        ? summary && summary.account_usage
+        : null;
+      const showAccountUsage = !!(
+        accountUsage && Array.isArray(accountUsage.daily) && accountUsage.daily.length
+      );
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
+      const accountLegend = document.getElementById('account-usage-legend');
+      if (accountLegend) accountLegend.style.display = showAccountUsage ? 'flex' : 'none';
       // Hide week nav when not in sixhourly aggregate mode
       if (!sixhourly) {
         const _nav = document.getElementById('chart-week-nav');
@@ -3170,7 +3255,7 @@
       }
       // Extra right padding when either secondary axis needs room.
       const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
-      const padding = { top: 20, right: rightPad, bottom: 54, left: 60 };
+      const padding = { top: showAccountUsage ? 44 : 20, right: rightPad, bottom: 54, left: 60 };
 
       // Build sourceRows — aggregate hourly data into 3h buckets scoped to billing period.
       let buckets;
@@ -3396,6 +3481,10 @@
         </linearGradient>
       `;
       svg.appendChild(defs);
+
+      if (showAccountUsage) {
+        renderAccountUsageStrip(svg, sourceRows, xScale, slotW, padding, summary);
+      }
       
       if (sixhourly) {
         // Column bars for the 3h aggregate view

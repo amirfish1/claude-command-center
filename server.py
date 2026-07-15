@@ -48759,25 +48759,116 @@ def _codex_usage_iso_from_epoch(epoch):
         return None
 
 
-def _codex_usage_window(rate_limits, key):
-    block = (rate_limits or {}).get(key) or {}
-    pct = block.get("used_percent")
-    resets_at = block.get("resets_at")
+def _codex_usage_value(data, snake_key, camel_key):
+    if not isinstance(data, dict):
+        return None
+    if snake_key in data:
+        return data.get(snake_key)
+    return data.get(camel_key)
+
+
+def _codex_usage_window_block(block):
+    if not isinstance(block, dict):
+        return None
+    pct = _codex_usage_value(block, "used_percent", "usedPercent")
+    resets_at = _codex_usage_value(block, "resets_at", "resetsAt")
     if pct is None or resets_at is None:
         return None
     try:
         pct = float(pct)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(pct) or pct < 0 or pct > 100:
+        return None
     resets_iso = _codex_usage_iso_from_epoch(resets_at)
     if not resets_iso:
         return None
-    window_minutes = block.get("window_minutes")
+    window_minutes = _codex_usage_value(
+        block, "window_minutes", "windowDurationMins"
+    )
     try:
         window_minutes = int(window_minutes) if window_minutes is not None else None
     except (TypeError, ValueError):
         window_minutes = None
     return {"pct": pct, "resets_at": resets_iso, "window_minutes": window_minutes}
+
+
+def _codex_usage_window(rate_limits, key):
+    return _codex_usage_window_block((rate_limits or {}).get(key))
+
+
+def _codex_usage_from_rate_limit_snapshot(
+    rate_limits,
+    *,
+    snapshot_ts=None,
+    now_epoch=None,
+):
+    if not isinstance(rate_limits, dict):
+        return None
+    if now_epoch is None:
+        now_epoch = time.time()
+    primary = _codex_usage_window_block(rate_limits.get("primary"))
+    secondary = _codex_usage_window_block(rate_limits.get("secondary"))
+    windows = [window for window in (primary, secondary) if window]
+
+    weekly = None
+    session = None
+    for window in windows:
+        duration = window.get("window_minutes")
+        if isinstance(duration, int):
+            if duration >= 7 * 24 * 60:
+                if weekly is None or duration > weekly.get("window_minutes", 0):
+                    weekly = window
+            elif session is None or duration < session.get("window_minutes", duration + 1):
+                session = window
+
+    # Older events did not always include durations. Preserve their historical
+    # primary=session / secondary=weekly meaning as a compatibility fallback.
+    if (
+        weekly is None
+        and secondary is not None
+        and secondary.get("window_minutes") is None
+    ):
+        weekly = secondary
+    if (
+        session is None
+        and primary is not None
+        and primary is not weekly
+        and primary.get("window_minutes") is None
+    ):
+        session = primary
+    if weekly is None:
+        return None
+
+    plan_type = _codex_usage_value(rate_limits, "plan_type", "planType")
+    return {
+        "weekly": weekly,
+        "session": session,
+        "plan_type": plan_type,
+        "snapshot_ts": snapshot_ts or _usage_snapshot_iso(now_epoch),
+        "fetched_at": _usage_snapshot_iso(now_epoch),
+        "from_cache": False,
+    }
+
+
+def _codex_usage_from_account_rate_limits(response, now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return None
+    by_id = result.get("rateLimitsByLimitId")
+    rate_limits = by_id.get("codex") if isinstance(by_id, dict) else None
+    if not isinstance(rate_limits, dict):
+        legacy = result.get("rateLimits")
+        limit_id = _codex_usage_value(legacy, "limit_id", "limitId")
+        if isinstance(legacy, dict) and limit_id in (None, "", "codex"):
+            rate_limits = legacy
+    return _codex_usage_from_rate_limit_snapshot(
+        rate_limits,
+        snapshot_ts=_usage_snapshot_iso(now_epoch),
+        now_epoch=now_epoch,
+    )
 
 
 def _iter_recent_codex_rollouts(now_epoch=None):
@@ -48826,6 +48917,9 @@ def _codex_file_latest_rate_limits(path):
                 ts = rec.get("timestamp")
                 if not isinstance(rate_limits, dict) or not ts:
                     continue
+                limit_id = rate_limits.get("limit_id")
+                if limit_id not in (None, "", "codex"):
+                    continue
                 if best is None or str(ts) > str(best.get("timestamp")):
                     best = {"timestamp": ts, "rate_limits": rate_limits}
     except OSError:
@@ -48835,7 +48929,9 @@ def _codex_file_latest_rate_limits(path):
     return best
 
 
-def _read_codex_usage(now_epoch=None):
+def _read_codex_usage_from_rollouts(now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
     best = None
     for path in _iter_recent_codex_rollouts(now_epoch=now_epoch):
         snap = _codex_file_latest_rate_limits(path)
@@ -48845,18 +48941,107 @@ def _read_codex_usage(now_epoch=None):
             best = snap
     if not best:
         return None
-    rate_limits = best.get("rate_limits") or {}
-    weekly = _codex_usage_window(rate_limits, "secondary")
-    if weekly is None:
+    return _codex_usage_from_rate_limit_snapshot(
+        best.get("rate_limits"),
+        snapshot_ts=best.get("timestamp"),
+        now_epoch=now_epoch,
+    )
+
+
+def _read_codex_usage(now_epoch=None):
+    # An explicit timestamp asks for a deterministic historical view, which a
+    # current account snapshot cannot provide. Live callers omit it and prefer
+    # the complete multi-bucket app-server response.
+    if now_epoch is None:
+        now_epoch = time.time()
+        try:
+            response = _codex_app_server_request(
+                "account/rateLimits/read", {}, timeout=5
+            )
+        except Exception:
+            response = None
+        usage = _codex_usage_from_account_rate_limits(
+            response, now_epoch=now_epoch
+        )
+        if usage:
+            return usage
+    return _read_codex_usage_from_rollouts(now_epoch=now_epoch)
+
+
+def _codex_nonnegative_int(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if not isinstance(value, str) or not value.isdigit():
+        return None
+    try:
+        value = int(value)
+    except (ValueError, OverflowError):
+        return None
+    return value if value >= 0 else None
+
+
+def _codex_account_usage_from_response(response, now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return None
+
+    summary_raw = result.get("summary")
+    summary_raw = summary_raw if isinstance(summary_raw, dict) else {}
+    summary_fields = {
+        "lifetimeTokens": "lifetime_tokens",
+        "peakDailyTokens": "peak_daily_tokens",
+        "longestRunningTurnSec": "longest_running_turn_sec",
+        "currentStreakDays": "current_streak_days",
+        "longestStreakDays": "longest_streak_days",
+    }
+    summary = {}
+    for source_key, public_key in summary_fields.items():
+        value = _codex_nonnegative_int(summary_raw.get(source_key))
+        if value is not None:
+            summary[public_key] = value
+
+    daily_by_day = {}
+    buckets = result.get("dailyUsageBuckets")
+    for bucket in buckets if isinstance(buckets, list) else []:
+        if not isinstance(bucket, dict):
+            continue
+        day = bucket.get("startDate")
+        try:
+            valid_day = datetime.strptime(str(day), "%Y-%m-%d").strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            continue
+        if valid_day != day:
+            continue
+        tokens = _codex_nonnegative_int(bucket.get("tokens"))
+        if tokens is None:
+            continue
+        daily_by_day[day] = tokens
+
+    if not summary and not daily_by_day:
         return None
     return {
-        "weekly": weekly,
-        "session": _codex_usage_window(rate_limits, "primary"),
-        "plan_type": rate_limits.get("plan_type"),
-        "snapshot_ts": best.get("timestamp"),
+        "source": "codex_app_server",
         "fetched_at": _usage_snapshot_iso(now_epoch),
-        "from_cache": False,
+        "summary": summary,
+        "daily": [
+            {"day": day, "tokens": daily_by_day[day]}
+            for day in sorted(daily_by_day)
+        ],
     }
+
+
+def _read_codex_account_usage(now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    try:
+        response = _codex_app_server_request("account/usage/read", {}, timeout=5)
+    except Exception:
+        return None
+    return _codex_account_usage_from_response(response, now_epoch=now_epoch)
 
 
 def _usage_snapshot_epoch(snapshot):
@@ -50675,6 +50860,16 @@ def _throughput_build_bootstrap(
     }
 
 
+def _throughput_attach_account_usage(payload, account_usage):
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return False
+    summary = payload.get("summary")
+    if not isinstance(summary, dict) or not isinstance(account_usage, dict):
+        return False
+    summary["account_usage"] = account_usage
+    return True
+
+
 def _throughput_bootstrap_valid(model, session_id, engine_filter=None):
     engine = _throughput_engine_filter(engine_filter)
     if not isinstance(model, dict):
@@ -50853,6 +51048,16 @@ def _throughput_refresh_start(session_id, engine_filter=None):
             )
             if status != 200 or not isinstance(payload, dict) or not payload.get("ok"):
                 raise RuntimeError((payload or {}).get("error") or "Throughput refresh failed")
+            if engine == "codex":
+                progress("phase", "account_context")
+                account_usage = _read_codex_account_usage()
+                if _throughput_attach_account_usage(payload, account_usage):
+                    # _throughput_payload persisted before account context was
+                    # available. Refresh that compatible snapshot so direct
+                    # cache readers receive the enriched summary too.
+                    _throughput_persist_aggregate_snapshot(
+                        session_id, payload, status, engine
+                    )
             progress("phase", "weekly_context")
             weekly = _weekly_usage_block()
             completed = time.time()
