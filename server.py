@@ -18010,6 +18010,57 @@ def _tool_use_detail(name, tool_input, max_len=200):
     return _prompt_fragment(detail, max_len)
 
 
+def _tool_input_payload(tool_input):
+    """Serialize a complete tool input while preserving the UI redaction boundary."""
+    if isinstance(tool_input, str):
+        payload = tool_input
+    else:
+        try:
+            payload = json.dumps(tool_input, ensure_ascii=False, indent=2)
+        except (TypeError, ValueError):
+            payload = str(tool_input or "")
+    return _PROMPT_SECRET_RE.sub("[redacted]", payload)
+
+
+def _tool_input_at_jsonl_line(filepath, line_num, tool_use_id=""):
+    """Read one Claude JSONL line and return its matching tool input."""
+    try:
+        target_line = int(line_num)
+    except (TypeError, ValueError):
+        return None
+    if target_line <= 0:
+        return None
+    try:
+        with Path(filepath).open("r", encoding="utf-8", errors="replace") as f:
+            for current_line, raw in enumerate(f, 1):
+                if current_line != target_line:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return None
+                msg = _safe_parse_message(ev.get("message", {}))
+                for block in msg.get("content", []):
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    if tool_use_id and block.get("id", "") != tool_use_id:
+                        continue
+                    if "input" not in block:
+                        return None
+                    return _tool_input_payload(block.get("input"))
+                return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return None
+
+
+def _conversation_tool_input(conversation_id, line_num, tool_use_id=""):
+    filepath, parser = _resolve_conversation_reader(conversation_id)
+    if parser is not _parse_conversation_event:
+        return None
+    return _tool_input_at_jsonl_line(filepath, line_num, tool_use_id)
+
+
 def _ask_question_blocking_inject(session_id, status=None):
     """True if typed input must be HELD because a question awaits an answer.
 
@@ -18541,6 +18592,7 @@ def _parse_conversation_event(ev, line_num):
                     "kind": "tool_use",
                     "name": name,
                     "detail": detail,
+                    "has_input": "input" in block,
                     "id": block.get("id", ""),
                 }
                 if raw_command:
@@ -54593,6 +54645,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status["state"] = _stamp_session_state(_state_view)
             status["ended_blocked"] = _session_ended_blocked(_state_view)
             self.send_json(status)
+        elif re.match(r"^/api/conversations/[^/]+/tool-input$", path):
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            qs = urllib.parse.parse_qs(parsed.query)
+            line_num = qs.get("line", [""])[0]
+            tool_use_id = qs.get("tool_use_id", [""])[0]
+            payload = _conversation_tool_input(conv_id, line_num, tool_use_id)
+            if payload is None:
+                self.send_json({"ok": False, "error": "Tool input not found"}, 404)
+            else:
+                self.send_json({"ok": True, "input": payload})
         elif re.match(r"^/api/conversations/[^/]+/files$", path):
             conv_id = path.split("/")[-2]
             payload = _extract_files_from_conversation(conv_id)

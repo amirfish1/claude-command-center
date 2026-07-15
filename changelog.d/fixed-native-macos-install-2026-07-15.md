@@ -1,0 +1,1 @@
+- Fixed first-launch installation from the macOS DMG by replacing fragile Terminal automation with an observable native installer, actionable recovery, and a built-DMG integration test.

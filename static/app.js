@@ -25308,19 +25308,7 @@
       } catch (_) {}
       // Minimal fallback when a worker's session isn't in the loaded list.
       const _twFallbackRow = (w) => {
-        const wid = String((w && w.worker_id) || 'worker');
-        const q = String((w && w.queue) || '');
-        const sid = (w && w.session_id) || '';
-        // If we have a cloud session_id, make the row clickable to open that session.
-        const clickAttr = sid
-          ? ' role="button" tabindex="0" style="cursor:pointer" onclick="selectConversation(' + JSON.stringify(sid) + ')"'
-          : '';
-        const tip = escapeAttr(wid + (q ? ' · ' + q : '') + (sid ? ' · ' + sid.slice(0, 8) : ''));
-        return '<div class="conv-evergreen-worker-fallback"' + clickAttr + ' title="' + tip + '">'
-          + '<span class="cewf-dot" aria-hidden="true">&#9679;</span>'
-          + '<span class="cewf-id">' + escapeHtml(wid.slice(0, 28)) + '</span>'
-          + (q ? '<span class="cewf-queue">' + escapeHtml(q) + '</span>' : '')
-          + '</div>';
+        return _renderWtWorkerCompactRow(w, { showQueue: true });
       };
       const _twQueueHeaderHtml = (q, liveWorkers) => {
         const label = String((q && q.queue) || '').trim() || 'Untitled';
@@ -25428,24 +25416,7 @@
         }).join('');
         // Past workers for this queue (last 24h, log-file based).
         const pastWorkers = _twPastByQueue.get(key) || [];
-        const pastRows = pastWorkers.length === 0 ? '' :
-          '<div class="conv-evergreen-past-workers">'
-          + '<span class="cepw-label">Past 24h</span>'
-          + pastWorkers.map((pw) => {
-            const wid = String(pw.worker_id || '');
-            const agoS = Number(pw.ended_ago_seconds) || 0;
-            const age = _uxqFmtAge(agoS);
-            const endedAt = String(pw.ended_at_iso || '');
-            const sid = String(pw.session_id || '');
-            const clickAttrs = sid
-              ? ' role="button" tabindex="0" style="cursor:pointer" data-cepw-sid="' + escapeAttr(sid) + '"'
-              : '';
-            return '<span class="cepw-row"' + clickAttrs + ' title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
-              + '<span class="cepw-id">' + escapeHtml(wid.slice(0, 24)) + '</span>'
-              + '<span class="cepw-age">' + escapeHtml(age) + ' ago</span>'
-              + '</span>';
-          }).join('')
-          + '</div>';
+        const pastRows = _renderWtPastWorkers(pastWorkers);
         return '<div class="conv-evergreen-queue-group">'
           + _twQueueHeaderHtml(q, workers.length)
           + rows
@@ -27852,15 +27823,16 @@
         if (typeof _renderQueuePanel === 'function') _renderQueuePanel();
       });
     }
-    // Past-worker chip click — opens the worker's session in the conv pane.
+    // Compact live-worker rows and past-worker chips open their session in the
+    // conversation pane. The same data attributes are used in Queue health.
     if (!$convList._cepwChipWired) {
       $convList._cepwChipWired = true;
       $convList.addEventListener('click', (ev) => {
-        const chip = ev.target && ev.target.closest && ev.target.closest('.cepw-row[data-cepw-sid]');
+        const chip = ev.target && ev.target.closest && ev.target.closest('[data-fq-worker-sid], .cepw-row[data-cepw-sid]');
         if (!chip) return;
         ev.stopPropagation();
         ev.preventDefault();
-        const sid = chip.getAttribute('data-cepw-sid') || '';
+        const sid = chip.getAttribute('data-fq-worker-sid') || chip.getAttribute('data-cepw-sid') || '';
         if (sid) selectConversation(sid);
       });
     }
@@ -31874,7 +31846,11 @@
   const _uxqNewItemExpires = new Map();
   let _ffcLastSidebarData = null;
   let _uxqLastResolvedProject = '';
-  async function _fetchUxqItems() {
+  async function _fetchUxqItems(allowStale) {
+    // Scope changes only filter this already-complete snapshot. Let that
+    // interaction repaint immediately even when the normal TTL has elapsed;
+    // the live poll can finish any refresh independently.
+    if (allowStale && _uxqItemsCache.ts) return _uxqItemsCache.items;
     if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
     if (_uxqItemsPromise) return _uxqItemsPromise;
     _uxqItemsPromise = (async () => {
@@ -31906,7 +31882,8 @@
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
   let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
   let _uxqHealthPromise = null;
-  async function _fetchUxqHealth() {
+  async function _fetchUxqHealth(allowStale) {
+    if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
     if (Date.now() - _uxqHealthCache.ts < 15000) return _uxqHealthCache;
     if (_uxqHealthPromise) return _uxqHealthPromise;
     _uxqHealthPromise = (async () => {
@@ -32245,14 +32222,66 @@
     if (s < 86400) return Math.round(s / 3600) + 'h';
     return Math.round(s / 86400) + 'd';
   }
+  function _uxqWorkersByQueue(workers) {
+    const byQueue = new Map();
+    (Array.isArray(workers) ? workers : []).forEach(worker => {
+      if (!worker) return;
+      const key = String(worker.queue || '').trim().toUpperCase();
+      if (!key) return;
+      (byQueue.get(key) || byQueue.set(key, []).get(key)).push(worker);
+    });
+    return byQueue;
+  }
+  function _renderWtWorkerCompactRow(worker, opts) {
+    const wid = String((worker && worker.worker_id) || 'worker');
+    const queue = String((worker && worker.queue) || '');
+    const sid = String((worker && worker.session_id) || '');
+    const model = String((worker && worker.model) || '');
+    const startedMs = Date.parse((worker && worker.started_at) || '');
+    const startedAge = Number.isFinite(startedMs)
+      ? _uxqFmtAge(Math.max(0, (Date.now() - startedMs) / 1000))
+      : '';
+    const meta = [model, startedAge ? ('live ' + startedAge) : ''].filter(Boolean).join(' · ');
+    const clickAttrs = sid
+      ? ' role="button" tabindex="0" data-fq-worker-sid="' + escapeAttr(sid) + '"'
+      : '';
+    const tip = wid + (queue ? ' · ' + queue : '') + (model ? ' · ' + model : '')
+      + (sid ? ' · ' + sid.slice(0, 8) : '');
+    return '<div class="conv-evergreen-worker-fallback wt-worker-session-card"' + clickAttrs
+      + ' title="' + escapeAttr(tip) + '">'
+      + '<span class="cewf-dot" aria-hidden="true">&#9679;</span>'
+      + '<span class="cewf-id">' + escapeHtml(wid.slice(0, 28)) + '</span>'
+      + (meta ? '<span class="wt-worker-session-meta">' + escapeHtml(meta) + '</span>' : '')
+      + (opts && opts.showQueue && queue ? '<span class="cewf-queue">' + escapeHtml(queue) + '</span>' : '')
+      + '</div>';
+  }
+  function _renderWtPastWorkers(pastWorkers) {
+    if (!Array.isArray(pastWorkers) || !pastWorkers.length) return '';
+    return '<div class="conv-evergreen-past-workers">'
+      + '<span class="cepw-label">Past 24h</span>'
+      + pastWorkers.map((worker) => {
+        const wid = String((worker && worker.worker_id) || '');
+        const age = _uxqFmtAge(Number(worker && worker.ended_ago_seconds) || 0);
+        const endedAt = String((worker && worker.ended_at_iso) || '');
+        const sid = String((worker && worker.session_id) || '');
+        const clickAttrs = sid
+          ? ' role="button" tabindex="0" data-cepw-sid="' + escapeAttr(sid) + '"'
+          : '';
+        return '<span class="cepw-row"' + clickAttrs + ' title="' + escapeAttr(wid + ' · ended ' + endedAt) + '">'
+          + '<span class="cepw-id">' + escapeHtml(wid.slice(0, 24)) + '</span>'
+          + '<span class="cepw-age">' + escapeHtml(age) + ' ago</span>'
+          + '</span>';
+      }).join('')
+      + '</div>';
+  }
   // Render the health strip at the top of the Queue tab. Scoped to the same
   // project the ticket list shows when one is resolvable; otherwise shows all
   // projects with open tickets. Bust the cache with force=true after a write.
-  async function _renderQueueHealthStrip(force, scopeProject) {
+  async function _renderQueueHealthStrip(force, scopeProject, allowStale) {
     const $strip = document.getElementById('queueHealthStrip');
     if (!$strip) return;
     if (force) _uxqHealthCache.ts = 0;
-    const health = await _fetchUxqHealth();
+    const health = await _fetchUxqHealth(allowStale);
     let rows = (health.rows || []).slice();
     // Keep recently-active queues visible even when fully drained (0 open), and
     // always keep explicitly configured queues visible even before their first
@@ -32314,6 +32343,8 @@
     const _workersByQueue = new Map();
     const _claimTypesByQueue = new Map();
     const _claimableByQueue = new Map();
+    const _liveWorkersByQueue = _uxqWorkersByQueue(health.wt_workers);
+    const _pastWorkersByQueue = _uxqWorkersByQueue(health.past_workers);
     (health.queues || []).forEach(q => {
       if (q && q.queue != null) {
         const key = String(q.queue).toUpperCase();
@@ -32406,7 +32437,14 @@
           + ' title="' + escapeAttr(delTitle) + '" aria-label="' + escapeAttr(delTitle) + '">×</button>';
         const configBtn = '<button class="fq-health-config" data-fq-config-queue="' + escapeAttr(project) + '"'
           + ' title="Edit ' + escapeAttr(project) + ' queue configuration" aria-label="Edit ' + escapeAttr(project) + ' queue configuration">⚙</button>';
-        return '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
+        const liveWorkerRows = (_liveWorkersByQueue.get(_ckey) || [])
+          .map(worker => _renderWtWorkerCompactRow(worker, { showQueue: false })).join('');
+        const pastWorkerRows = _renderWtPastWorkers(_pastWorkersByQueue.get(_ckey) || []);
+        const workerRows = (liveWorkerRows || pastWorkerRows)
+          ? '<div class="fq-health-worker-list">' + liveWorkerRows + pastWorkerRows + '</div>'
+          : '';
+        return '<div class="fq-health-group">'
+          + '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
           + ' role="button" tabindex="0"'
           + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' — click to scope queue') + '">'
           + delBtn
@@ -32419,6 +32457,8 @@
           + badge
           + drainToggle
           + typeToggle
+          + '</div>'
+          + workerRows
           + '</div>';
       }).join('');
     }
@@ -32528,10 +32568,14 @@
     const v = _uxqProjectKey(val);
     if (!v || v === 'AUTO') delete map[k]; else map[k] = v;
     try { localStorage.setItem(_UXQ_SCOPE_LS, JSON.stringify(map)); } catch (_) {}
+    _uxqResetHistoryPage();
   }
   // Status filter for the Queue panel: 'all' or 'open' (open + in_progress,
   // i.e. everything not closed). A simple global view pref, not per-session.
   const _UXQ_FILTER_LS = 'ccc-uxq-filter';
+  const _UXQ_HISTORY_PAGE_SIZE = 80;
+  let _uxqHistoryPage = 0;
+  function _uxqResetHistoryPage() { _uxqHistoryPage = 0; }
   function _uxqGetFilter() {
     try { return localStorage.getItem(_UXQ_FILTER_LS) === 'all' ? 'all' : 'open'; } catch (_) { return 'open'; }
   }
@@ -33220,27 +33264,28 @@
       answerInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
     }
   }
-  function _renderQueuePanel() {
+  function _renderQueuePanel(options) {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
+    const allowStale = !!(options && options.allowStale);
     const queuePanel = document.getElementById('queuePanel');
     if (queuePanel) queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());
     _uxqRenderWrapToggle();
-    _fetchUxqItems().then(async items => {
+    _fetchUxqItems(allowStale).then(async items => {
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
       _uxqRenderFilterToggle();
       _uxqRenderTypeFilterToggle();
-      _renderQueueHealthStrip(false, null); // always show all queues regardless of scope/dropdown
+      _renderQueueHealthStrip(false, null, allowStale); // always show all queues regardless of scope/dropdown
       // Ensure _uxqHealthCache.queues (auto_drain per queue) is populated
       // before building rows below — _renderQueueHealthStrip above is
       // fire-and-forget, so without this await the per-row "drain once"
       // button (CCC-437) would race an empty cache on first paint and
       // wrongly show on auto-drain queues too. _fetchUxqHealth has its own
       // 15s TTL cache, so this is normally a no-op await, not a fetch.
-      await _fetchUxqHealth();
+      await _fetchUxqHealth(allowStale);
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       // Status filter: 'open' hides closed (shows open + in_progress).
       const statusScoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
@@ -33256,8 +33301,9 @@
             return hay.includes(qTerm);
           })
         : typeScoped;
-      // Work needing an active agent comes first, then tickets needing a human
-      // answer, then claimable work, then completed history.
+      // ALL is a history view: show the newest-filed tickets first regardless
+      // of their current state. OPEN remains the operational work view, where
+      // agent work, human answers, and claimable tickets stay prioritized.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
@@ -33271,7 +33317,16 @@
       const _notClaimable = it => (it && it.claimable === false ? 1 : 0);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
+      const _uxqCreatedAtMs = it => {
+        const parsed = Date.parse((it && it.created_at) || '');
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+      const historyOrder = _uxqGetFilter() === 'all';
       const rows = scoped.slice().sort((a, b) => {
+        if (historyOrder) {
+          return _uxqCreatedAtMs(b) - _uxqCreatedAtMs(a)
+            || (b.number || 0) - (a.number || 0);
+        }
         const aStatus = _effectiveStatus(a);
         const bStatus = _effectiveStatus(b);
         const st = _statusRank(aStatus) - _statusRank(bStatus); if (st) return st;
@@ -33283,6 +33338,19 @@
         }
         return (b.number || 0) - (a.number || 0);       // closed/in_progress: newest first
       });
+      // All-history can contain thousands of closed tickets. Keep filtering
+      // and newest-first ordering global, but cap the DOM to one fixed page so
+      // a refresh never rebuilds the full corpus on the browser main thread.
+      // True pagination (rather than cumulative "show more") keeps the bound
+      // intact even after someone browses all the way back through history.
+      const historyPageCount = historyOrder
+        ? Math.max(1, Math.ceil(rows.length / _UXQ_HISTORY_PAGE_SIZE))
+        : 1;
+      if (!historyOrder) _uxqHistoryPage = 0;
+      _uxqHistoryPage = Math.max(0, Math.min(_uxqHistoryPage, historyPageCount - 1));
+      const historyStart = historyOrder ? _uxqHistoryPage * _UXQ_HISTORY_PAGE_SIZE : 0;
+      const historyEnd = historyOrder ? historyStart + _UXQ_HISTORY_PAGE_SIZE : rows.length;
+      const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;
       const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
       const _typeShort = { 'feature': 'feat', 'bug': 'bug' };
       // A closed ticket can still carry resolution.unresolved (CCC-420): the
@@ -33314,7 +33382,7 @@
       (((_uxqHealthCache || {}).queues) || []).forEach(q => {
         if (q && q.queue != null) _drainByQueueRow.set(String(q.queue).toUpperCase(), !!q.auto_drain);
       });
-      const queueRowsHtml = rows.map(it => {
+      const queueRowsHtml = visibleRows.map(it => {
         const noteFull = String(it.note || '');
         const rawStatus = it.status || 'open';
         const status = _effectiveStatus(it);
@@ -33358,10 +33426,18 @@
           + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed — unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
+      const historyPagerHtml = historyOrder && rows.length > _UXQ_HISTORY_PAGE_SIZE
+        ? '<div class="fq-history-pager">'
+          + '<button type="button" data-uxq-history-page="-1"' + (_uxqHistoryPage === 0 ? ' disabled' : '') + '>Newer</button>'
+          + '<span>' + (historyStart + 1) + '–' + Math.min(historyEnd, rows.length) + ' of ' + rows.length + '</span>'
+          + '<button type="button" data-uxq-history-page="1"' + (_uxqHistoryPage >= historyPageCount - 1 ? ' disabled' : '') + '>Older</button>'
+          + '</div>'
+        : '';
       // Keep creation with the tickets it affects, instead of crowding the
       // queue header. This stays after the empty state too, so an empty queue
       // still offers its primary action.
       $queue.innerHTML = queueRowsHtml
+        + historyPagerHtml
         + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>';
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
@@ -33399,6 +33475,15 @@
     const $queueList = document.getElementById('sidebarQueueList');
     if ($queueList) {
       $queueList.addEventListener('click', async (ev) => {
+        const historyPageBtn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-history-page]');
+        if (historyPageBtn) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const direction = Number(historyPageBtn.getAttribute('data-uxq-history-page')) || 0;
+          _uxqHistoryPage += direction;
+          _renderQueuePanel();
+          return;
+        }
         const addBtn = ev.target && ev.target.closest && ev.target.closest('#filesQueueAdd');
         if (addBtn) {
           ev.stopPropagation();
@@ -33497,6 +33582,14 @@
     // throttled /api/inject-input channel the worker-row pill uses.
     const $health = document.getElementById('queueHealthStrip');
     if ($health) {
+      const openWorkerSession = (ev) => {
+        const card = ev.target && ev.target.closest && ev.target.closest('[data-fq-worker-sid], .cepw-row[data-cepw-sid]');
+        if (!card) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sid = card.getAttribute('data-fq-worker-sid') || card.getAttribute('data-cepw-sid') || '';
+        if (sid) selectConversation(sid);
+      };
       const nudgeFromBadge = (ev) => {
         const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid]');
         if (!badge) return;
@@ -33616,6 +33709,7 @@
         _uxqItemsCache.ts = 0;
         _renderQueuePanel();
       };
+      $health.addEventListener('click', openWorkerSession);
       $health.addEventListener('click', nudgeFromBadge);
       $health.addEventListener('click', toggleDrain);
       $health.addEventListener('click', cycleClaimTypes);
@@ -33628,7 +33722,7 @@
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); scopeFromRow(ev); }
       });
     }
   }
@@ -33648,15 +33742,14 @@
   // Queue scope picker: change the source the Queue reads this session's
   // project code from. Picking a code stores a per-session override so e.g. a
   // CCC session can show WT; "Auto (repo)" clears it back to the repo-derived
-  // code. Bust caches and re-render so the swap is immediate.
+  // code. Repaint from completed caches so this client-side filter is
+  // immediate; the normal live poll remains responsible for freshness.
   {
     const $scope = document.getElementById('queueScopeSelect');
     if ($scope) {
       $scope.addEventListener('change', () => {
         _uxqSetScopeOverride($scope.value);
-        _uxqItemsCache.ts = 0;
-        _uxqHealthCache.ts = 0;
-        _renderQueuePanel();
+        _renderQueuePanel({ allowStale: true });
       });
     }
     const $queueAdd = document.getElementById('filesQueueAdd');
@@ -33673,6 +33766,7 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-filter]');
         if (!btn) return;
         _uxqSetFilter(btn.getAttribute('data-uxq-filter'));
+        _uxqResetHistoryPage();
         _renderQueuePanel();
       });
     }
@@ -33682,6 +33776,7 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-type-filter]');
         if (!btn) return;
         _uxqSetTypeFilter(btn.getAttribute('data-uxq-type-filter'));
+        _uxqResetHistoryPage();
         _renderQueuePanel();
       });
     }
@@ -33694,7 +33789,7 @@
     }
     const $queueSearch = document.getElementById('queueSearchInput');
     if ($queueSearch) {
-      $queueSearch.addEventListener('input', () => { _renderQueuePanel(); });
+      $queueSearch.addEventListener('input', () => { _uxqResetHistoryPage(); _renderQueuePanel(); });
       $queueSearch.addEventListener('click', (e) => e.stopPropagation());
     }
   }
@@ -37900,6 +37995,46 @@
       + '</details>';
   }
 
+  function renderToolInputDisclosure(block, conversationId, line) {
+    if (!block || !block.has_input || !conversationId || !line) return '';
+    const toolUseId = String(block.id || block.tool_use_id || '').trim();
+    return '<details class="tool-command-disclosure tool-input-disclosure"'
+      + ' data-conversation-id="' + escapeAttr(conversationId) + '"'
+      + ' data-jsonl-line="' + escapeAttr(line) + '"'
+      + ' data-tool-use-id="' + escapeAttr(toolUseId) + '"'
+      + (convVerboseOn() ? ' open' : '') + '>'
+      + '<summary><span>Input</span></summary>'
+      + '<pre class="tool-input-payload">Loading…</pre>'
+      + '</details>';
+  }
+
+  async function loadToolInputDisclosure(details) {
+    if (!details || details.dataset.loaded === '1' || details.dataset.loading === '1') return;
+    const payload = details.querySelector('.tool-input-payload');
+    if (!payload) return;
+    details.dataset.loading = '1';
+    payload.textContent = 'Loading…';
+    try {
+      const convId = details.dataset.conversationId || '';
+      const line = details.dataset.jsonlLine || '';
+      const toolUseId = details.dataset.toolUseId || '';
+      const url = '/api/conversations/' + encodeURIComponent(convId)
+        + '/tool-input?line=' + encodeURIComponent(line)
+        + '&tool_use_id=' + encodeURIComponent(toolUseId);
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !data.ok || typeof data.input !== 'string') {
+        throw new Error(data.error || 'Tool input unavailable');
+      }
+      payload.textContent = data.input;
+      details.dataset.loaded = '1';
+    } catch (err) {
+      payload.textContent = 'Input unavailable.';
+    } finally {
+      delete details.dataset.loading;
+    }
+  }
+
   function renderEditDisclosure(b) {
     const editInput = b && b.edit_input;
     if (!editInput) return '';
@@ -39687,6 +39822,7 @@
     paneId = paneId || activePaneId();
     opts = opts || {};
     const pane = paneByPaneId(paneId);
+    const renderedConversationId = (pane && pane.conversationId) || currentConversation || '';
     if (pane && opts.isTruncated) {
       pane.firstUserMsgRendered = true;
     }
@@ -40336,6 +40472,7 @@
                 return '<div class="ask-user-block">' + headerHtml + questionHtml + optsHtml + '</div>';
               }).join('');
             }
+            const inputDisclosure = renderToolInputDisclosure(b, renderedConversationId, ev.line);
             const commandDisclosure = renderToolCommandDisclosure(b, detail);
             const editDisclosure = renderEditDisclosure(b);
             const commandClass = (commandDisclosure || editDisclosure) ? ' has-command-disclosure' : '';
@@ -40347,6 +40484,7 @@
               + (askBody
                   ? askBody
                   : (detail.display ? ' <span class="tool-detail" title="' + escapeAttr(detail.full) + '">' + escapeHtml(detail.display) + '</span>' : ''))
+              + inputDisclosure
               + commandDisclosure
               + editDisclosure
               + '</div>');
@@ -40440,6 +40578,12 @@
         const _ackHasTool = _ackBlocks.some(b => b && b.kind === 'tool_use');
         if (!_ackHasTool && _isNoopAckText(_ackText)) div.classList.add('is-noop-ack');
         div.innerHTML = html;
+        div.querySelectorAll('details.tool-input-disclosure').forEach(function (details) {
+          details.addEventListener('toggle', function () {
+            if (details.open) loadToolInputDisclosure(details);
+          });
+          if (details.open) loadToolInputDisclosure(details);
+        });
         div._agentAnswerText = agentAnswerParts.join('\n\n').trim();
       } else if (ev.type === 'result') {
         const dur = typeof ev.duration_ms === 'number' ? (ev.duration_ms / 1000).toFixed(1) + 's' : ev.duration_ms;
@@ -51549,6 +51693,11 @@
   function enterNewSessionMode() {
     const initialPrompt = typeof arguments[0] === 'string' ? arguments[0] : null;
     const paneId = activePaneId();
+    // The queued-steer tray lives in the persistent composer, outside the
+    // transcript replaced below. It belongs to the previously open session,
+    // so remove it before exposing a session-less composer.
+    const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
+    if (staleQueuedTray) staleQueuedTray.remove();
     spawnEffortChoiceDirty = false;
     syncSpawnEngineDependentUi();
     // Rescue the adopted CWD controls before the innerHTML rebuild below

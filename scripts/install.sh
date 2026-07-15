@@ -17,16 +17,29 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/amirfish1/claude-command-center"
-INSTALL_DIR="$HOME/.ccc/claude-command-center"
+REPO_URL="${CCC_REPO_URL:-https://github.com/amirfish1/claude-command-center}"
+INSTALL_DIR="${CCC_INSTALL_DIR:-$HOME/.ccc/claude-command-center}"
 PORT="${PORT:-8090}"
 DASHBOARD_URL="http://localhost:${PORT}"
 SOURCE_FILE="$HOME/.claude/command-center/install-source"
+INSTALL_STAGING=""
 
 VALID_CHANNELS="readme landing-hero hn ph devto yt gh-trending dmg unknown"
 
 err() {
   printf 'install: %s\n' "$*" >&2
+}
+
+cleanup_install_staging() {
+  if [ -n "$INSTALL_STAGING" ] && [ -e "$INSTALL_STAGING" ]; then
+    rm -rf "$INSTALL_STAGING"
+  fi
+}
+
+trap cleanup_install_staging EXIT HUP INT TERM
+
+is_app_install() {
+  [ "${CCC_INSTALL_MODE:-}" = "app" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -132,17 +145,53 @@ sync_repo() {
   if [ -d "$INSTALL_DIR/.git" ]; then
     printf 'install: updating existing checkout at %s\n' "$INSTALL_DIR"
     git -C "$INSTALL_DIR" pull --ff-only
-  else
-    printf 'install: cloning %s to %s\n' "$REPO_URL" "$INSTALL_DIR"
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    git clone "$REPO_URL" "$INSTALL_DIR"
+    return
   fi
+
+  if [ -e "$INSTALL_DIR" ]; then
+    err "install destination exists but is not a Git checkout: ${INSTALL_DIR}. Move it aside or choose CCC_INSTALL_DIR, then retry. No files were changed."
+    return 1
+  fi
+
+  local parent staging
+  parent="$(dirname "$INSTALL_DIR")"
+  staging="${INSTALL_DIR}.installing.$$"
+  mkdir -p "$parent"
+  INSTALL_STAGING="$staging"
+
+  printf 'install: cloning %s to %s\n' "$REPO_URL" "$INSTALL_DIR"
+  if ! git clone "$REPO_URL" "$staging"; then
+    cleanup_install_staging
+    INSTALL_STAGING=""
+    err "clone failed; no partial installation was published"
+    return 1
+  fi
+
+  # A concurrent installer may have published while this clone was running.
+  # Never turn its checkout into a parent directory or overwrite it.
+  if [ -e "$INSTALL_DIR" ]; then
+    cleanup_install_staging
+    INSTALL_STAGING=""
+    err "another installer published ${INSTALL_DIR}; leaving it untouched"
+    return 1
+  fi
+  if ! mv "$staging" "$INSTALL_DIR"; then
+    cleanup_install_staging
+    INSTALL_STAGING=""
+    err "could not publish completed checkout at ${INSTALL_DIR}"
+    return 1
+  fi
+  INSTALL_STAGING=""
 }
 
 # ---------------------------------------------------------------------------
 # Launch + open browser
 # ---------------------------------------------------------------------------
 open_when_ready() {
+  if is_app_install; then
+    return 0
+  fi
+
   # Background watcher: poll the port, then `open` the URL.
   # Bounded by ~60 seconds so we never wedge if the server fails to start.
   (
@@ -184,6 +233,12 @@ ask_install_service() {
 }
 
 launch_server() {
+  if is_app_install; then
+    printf 'install: launching CCC for the native app on port %s\n' "$PORT"
+    cd "$INSTALL_DIR"
+    exec ./run.sh
+  fi
+
   if ask_install_service; then
     printf 'install: installing launchd service...\n'
     open_when_ready

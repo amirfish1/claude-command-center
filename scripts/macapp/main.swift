@@ -6,9 +6,9 @@
 // installed as a launchd agent), we don't double-start — we just point
 // the WebView at it and leave it alone on quit.
 //
-// First launch (no ~/.ccc/claude-command-center on disk) opens Terminal
-// with the bundled install.sh — same UX as the curl install, since we
-// need user consent to clone into their home dir anyway.
+// First launch (no ~/.ccc/claude-command-center on disk) runs the bundled
+// install.sh as an owned child process. The app observes installation and
+// server startup directly, with no Terminal automation or extra permission.
 
 import Cocoa
 import WebKit
@@ -16,8 +16,13 @@ import Sparkle
 
 // MARK: - Constants
 
-let CCC_PORT = 8090
-let CCC_INSTALL_DIR = NSString(string: "~/.ccc/claude-command-center").expandingTildeInPath
+let CCC_ENV = ProcessInfo.processInfo.environment
+let CCC_PORT = Int(CCC_ENV["CCC_PORT"] ?? "") ?? 8090
+let CCC_INSTALL_DIR = CCC_ENV["CCC_INSTALL_DIR"]
+    ?? NSString(string: "~/.ccc/claude-command-center").expandingTildeInPath
+let CCC_LOG_DIR = CCC_ENV["CCC_LOG_DIR"]
+    ?? NSString(string: "~/.claude/command-center/logs").expandingTildeInPath
+let CCC_LOG_PATH = "\(CCC_LOG_DIR)/app-server.log"
 // Optional local "Car Mode (Voice)" launcher. The public app ships no voice helper;
 // if the user has wired one (see ccc-voice), they drop an executable .command here and
 // the menu item appears. Graceful absence, like the Morning view plugin.
@@ -67,12 +72,6 @@ func augmentedPath() -> String {
     return extras.joined(separator: ":") + ":" + current
 }
 
-func runAppleScript(_ source: String) {
-    guard let script = NSAppleScript(source: source) else { return }
-    var error: NSDictionary?
-    script.executeAndReturnError(&error)
-}
-
 func python3Works() -> Bool {
     let proc = Process()
     proc.launchPath = "/bin/bash"
@@ -85,6 +84,41 @@ func python3Works() -> Bool {
     do { try proc.run() } catch { return false }
     proc.waitUntilExit()
     return proc.terminationStatus == 0
+}
+
+func attachProcessLog(_ process: Process) throws -> FileHandle {
+    try FileManager.default.createDirectory(
+        atPath: CCC_LOG_DIR,
+        withIntermediateDirectories: true
+    )
+    if !FileManager.default.fileExists(atPath: CCC_LOG_PATH) {
+        guard FileManager.default.createFile(atPath: CCC_LOG_PATH, contents: nil) else {
+            throw NSError(
+                domain: "CCCInstall",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Cannot create \(CCC_LOG_PATH)"
+                ]
+            )
+        }
+    }
+    guard let handle = FileHandle(forWritingAtPath: CCC_LOG_PATH) else {
+        throw NSError(
+            domain: "CCCInstall",
+            code: 2,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Cannot open \(CCC_LOG_PATH) for writing"
+            ]
+        )
+    }
+    handle.seekToEndOfFile()
+    let header = "\n--- CCC app bootstrap \(Date()) ---\n"
+    if let data = header.data(using: .utf8) {
+        handle.write(data)
+    }
+    process.standardOutput = handle
+    process.standardError = handle
+    return handle
 }
 
 func logTail(_ path: String, lines: Int = 12) -> String {
@@ -408,7 +442,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popoutWindows: [CCCWebWindow] = []
     private var nativeBridge: CCCNativeBridge?
     private var bridgedContentControllers = Set<ObjectIdentifier>()
+    private var terminationSignalSources: [DispatchSourceSignal] = []
     var serverProcess: Process?
+    var serverLogHandle: FileHandle?
     var pollTimer: Timer?
     // Watchdog state — see startWatchdog(). Recovers a dashboard that wedges
     // with the loading overlay up forever (stalled server thread, or a hung
@@ -427,6 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var updaterController: SPUStandardUpdaterController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installTerminationSignalHandlers()
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
@@ -477,16 +514,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer?.invalidate()
         // Only kill the server if we started it. If it was already up
         // (launchd service, foreground ./run.sh elsewhere), leave it alone.
-        if let proc = serverProcess, proc.isRunning {
-            proc.terminate()
-            // Give it 2 seconds to exit gracefully, then SIGKILL.
-            let deadline = Date().addingTimeInterval(2.0)
-            while proc.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.1)
+        stopOwnedProcess()
+        closeServerLog()
+        terminationSignalSources.forEach { $0.cancel() }
+        terminationSignalSources.removeAll()
+    }
+
+    func installTerminationSignalHandlers() {
+        // Cocoa does not route a raw SIGTERM through applicationWillTerminate.
+        // Convert process-manager / test-harness termination into a normal app
+        // quit so an installer/server child cannot be orphaned.
+        for signalNumber in [SIGTERM, SIGINT] {
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(
+                signal: signalNumber,
+                queue: .main
+            )
+            source.setEventHandler {
+                NSApp.terminate(nil)
             }
-            if proc.isRunning {
-                kill(proc.processIdentifier, SIGKILL)
-            }
+            source.resume()
+            terminationSignalSources.append(source)
         }
     }
 
@@ -803,7 +851,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func bootstrap() {
         if !FileManager.default.fileExists(atPath: CCC_INSTALL_DIR) {
-            // First-time install. Pop Terminal with bundled install.sh.
+            // First-time install. Run the bundled installer as our child so
+            // progress, failures, and the resulting server stay observable.
             runInstaller()
             return
         }
@@ -818,33 +867,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func runInstaller() {
         guard let installScript = Bundle.main.path(forResource: "install", ofType: "sh") else {
-            showFatal("Install script missing", "The .app bundle is incomplete. Re-download from github.com/amirfish1/claude-command-center/releases")
+            showFatal(
+                "Install script missing",
+                "The app bundle is incomplete. Re-download it from github.com/amirfish1/claude-command-center/releases."
+            )
             return
         }
-        loadingLabel.stringValue = "First-time install — see the Terminal window…"
+        loadingLabel.stringValue = "Installing Command Center…"
 
-        // Copy to a temp location so Terminal can read it without bundle-path drama
-        let tmpPath = NSTemporaryDirectory() + "ccc-install-\(getpid()).sh"
+        let proc = Process()
+        proc.launchPath = "/bin/bash"
+        proc.arguments = [installScript, "--from=dmg"]
+
+        var env = CCC_ENV
+        env["PATH"] = augmentedPath()
+        env["PORT"] = "\(CCC_PORT)"
+        env["CCC_FROM"] = "dmg"
+        env["CCC_INSTALL_MODE"] = "app"
+        env["CCC_INSTALL_DIR"] = CCC_INSTALL_DIR
+        proc.environment = env
+        proc.currentDirectoryPath = env["HOME"] ?? NSHomeDirectory()
+
         do {
-            if FileManager.default.fileExists(atPath: tmpPath) {
-                try FileManager.default.removeItem(atPath: tmpPath)
-            }
-            try FileManager.default.copyItem(atPath: installScript, toPath: tmpPath)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmpPath)
+            closeServerLog()
+            serverLogHandle = try attachProcessLog(proc)
+            try proc.run()
+            serverProcess = proc
         } catch {
-            showFatal("Install setup failed", "\(error)")
+            closeServerLog()
+            showBootstrapFailure("Installation could not start", "\(error)")
             return
         }
 
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "clear; echo '→ Claude Command Center first-time install'; echo; CCC_FROM=dmg bash '\(tmpPath)'; echo; echo '(Once you see CCC running, you can close this Terminal — the CCC window stays.)'"
-        end tell
-        """
-        runAppleScript(script)
-        // Poll for the install to finish + the port to bind, then load.
-        pollUntilReady()
+        pollUntilReady(process: proc, operation: "installation")
     }
 
     func spawnServer() {
@@ -874,36 +929,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         proc.arguments = [runSh]
         proc.currentDirectoryPath = CCC_INSTALL_DIR
 
-        var env = ProcessInfo.processInfo.environment
+        var env = CCC_ENV
         env["PATH"] = augmentedPath()
         env["PORT"] = "\(CCC_PORT)"
         env["CCC_FROM"] = "dmg"
         proc.environment = env
 
-        // Drain output to the log file CCC's launchd service uses, so we
-        // share log location with the service path.
-        let logDir = NSString(string: "~/.claude/command-center/logs").expandingTildeInPath
-        try? FileManager.default.createDirectory(atPath: logDir, withIntermediateDirectories: true)
-        let logPath = "\(logDir)/app-server.log"
-        FileManager.default.createFile(atPath: logPath, contents: nil)
-        if let logHandle = FileHandle(forWritingAtPath: logPath) {
-            logHandle.seekToEndOfFile()
-            proc.standardOutput = logHandle
-            proc.standardError = logHandle
-        }
-
         do {
+            closeServerLog()
+            serverLogHandle = try attachProcessLog(proc)
             try proc.run()
             serverProcess = proc
         } catch {
-            showFatal("Server failed to start", "\(error)\n\nCheck \(logPath) for details.")
+            closeServerLog()
+            showBootstrapFailure("Server could not start", "\(error)")
             return
         }
 
-        pollUntilReady()
+        pollUntilReady(process: proc, operation: "server startup")
     }
 
-    func pollUntilReady() {
+    func pollUntilReady(process: Process?, operation: String) {
         let start = Date()
         let timeout: TimeInterval = 60
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
@@ -914,15 +960,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.loadDashboard()
                 return
             }
+            if let process = process, !process.isRunning {
+                timer.invalidate()
+                self.pollTimer = nil
+                let tail = logTail(CCC_LOG_PATH)
+                let detail = "The \(operation) exited with status \(process.terminationStatus)."
+                    + (tail.isEmpty ? "" : "\n\nLast log lines:\n\n\(tail)")
+                self.showBootstrapFailure("Command Center could not start", detail)
+                return
+            }
+            if FileManager.default.fileExists(atPath: "\(CCC_INSTALL_DIR)/run.sh") {
+                self.loadingLabel.stringValue = "Starting CCC server…"
+            }
             if Date().timeIntervalSince(start) > timeout {
                 timer.invalidate()
                 self.pollTimer = nil
-                let logPath = NSString(string: "~/.claude/command-center/logs/app-server.log").expandingTildeInPath
-                let tail = logTail(logPath)
-                let detail = tail.isEmpty
-                    ? "Port \(CCC_PORT) never bound. Check ~/.claude/command-center/logs/app-server.log"
-                    : "Port \(CCC_PORT) never bound. Last lines of app-server.log:\n\n\(tail)"
-                self.showFatal("Server didn't start in \(Int(timeout))s", detail)
+                let tail = logTail(CCC_LOG_PATH)
+                let detail = "The \(operation) did not bind port \(CCC_PORT) within \(Int(timeout)) seconds."
+                    + (tail.isEmpty ? "" : "\n\nLast log lines:\n\n\(tail)")
+                self.showBootstrapFailure("Command Center could not start", detail)
             }
         }
     }
@@ -1023,6 +1079,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.startWatchdog()
             }
         }.resume()
+    }
+
+    func stopOwnedProcess() {
+        guard let proc = serverProcess, proc.isRunning else { return }
+        proc.terminate()
+        let deadline = Date().addingTimeInterval(2.0)
+        while proc.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if proc.isRunning {
+            kill(proc.processIdentifier, SIGKILL)
+        }
+    }
+
+    func closeServerLog() {
+        try? serverLogHandle?.close()
+        serverLogHandle = nil
+    }
+
+    func showBootstrapFailure(_ title: String, _ message: String) {
+        stopOwnedProcess()
+        closeServerLog()
+        while true {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message + "\n\nLog: \(CCC_LOG_PATH)"
+            alert.alertStyle = .critical
+            alert.addButton(withTitle: "Retry")
+            alert.addButton(withTitle: "Open Log")
+            alert.addButton(withTitle: "Quit")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                serverProcess = nil
+                bootstrap()
+                return
+            case .alertSecondButtonReturn:
+                NSWorkspace.shared.open(URL(fileURLWithPath: CCC_LOG_PATH))
+            default:
+                NSApp.terminate(nil)
+                return
+            }
+        }
     }
 
     func showFatal(_ title: String, _ message: String) {

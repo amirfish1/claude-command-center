@@ -3012,6 +3012,30 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (typeof currentConversation !== 'undefined' && currentConversation) return currentConversation;", key_body)
         self.assertIn("return '__queue_global__';", key_body)
 
+    def test_queue_scope_switch_repaints_from_completed_caches(self):
+        """Changing a client-side scope must not wait for multi-MB refetches."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        items_fetch = app_js[
+            app_js.index("async function _fetchUxqItems"):
+            app_js.index("// Per-project queue-health snapshot", app_js.index("async function _fetchUxqItems"))
+        ]
+        health_fetch = app_js[
+            app_js.index("async function _fetchUxqHealth"):
+            app_js.index("// Live WatchTower workers", app_js.index("async function _fetchUxqHealth"))
+        ]
+        scope_handler = app_js[
+            app_js.index("// Queue scope picker:"):
+            app_js.index("const $queueAdd", app_js.index("// Queue scope picker:"))
+        ]
+
+        self.assertIn("async function _fetchUxqItems(allowStale)", items_fetch)
+        self.assertIn("allowStale && _uxqItemsCache.ts", items_fetch)
+        self.assertIn("async function _fetchUxqHealth(allowStale)", health_fetch)
+        self.assertIn("allowStale && _uxqHealthCache.ts", health_fetch)
+        self.assertIn("_renderQueuePanel({ allowStale: true });", scope_handler)
+        self.assertNotIn("_uxqItemsCache.ts = 0;", scope_handler)
+        self.assertNotIn("_uxqHealthCache.ts = 0;", scope_handler)
+
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         fn_start = app_js.index("function _uxFixesPlausibleSessionId(value)")
@@ -3370,6 +3394,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".tool-result-output::before", app_css)
         self.assertIn("content: attr(data-result-label);", app_css)
 
+    def test_tool_calls_render_complete_input_disclosure(self):
+        """Persisted tool payloads should load lazily behind an Input toggle."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function renderToolInputDisclosure(block, conversationId, line)", app_js)
+        self.assertIn("async function loadToolInputDisclosure(details)", app_js)
+        self.assertIn("<span>Input</span>", app_js)
+        self.assertIn("/tool-input?line=", app_js)
+        self.assertIn("tool_use_id=", app_js)
+        self.assertIn("const inputDisclosure = renderToolInputDisclosure(b,", app_js)
+        self.assertIn("+ inputDisclosure", app_js)
+        self.assertNotIn("escapeHtml(block.input)", app_js)
+
     def test_recoverable_tool_failures_use_a_subdued_warning_treatment(self):
         """A failed tool call should not look like a CCC or session failure."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -3581,6 +3618,26 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('"Cycle Through Windows"', macapp)
         # Bound to Cmd+` and Cmd+Shift+` in the Window menu.
         self.assertIn('keyEquivalent: "`"', macapp)
+
+    def test_macapp_first_launch_is_native_and_observable(self):
+        """DMG first launch must not depend on Terminal automation.
+
+        The app owns the bundled installer process, observes an early exit,
+        and gives the user recovery actions backed by the actual process log.
+        """
+        macapp = pathlib.Path(
+            PROJECT_ROOT, "scripts", "macapp", "main.swift"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("NSAppleScript", macapp)
+        self.assertNotIn('tell application "Terminal"', macapp)
+        self.assertNotIn("ccc-install-", macapp)
+        self.assertIn(
+            'proc.arguments = [installScript, "--from=dmg"]', macapp
+        )
+        self.assertIn('env["CCC_INSTALL_MODE"] = "app"', macapp)
+        self.assertIn("process.terminationStatus", macapp)
+        self.assertIn('alert.addButton(withTitle: "Retry")', macapp)
+        self.assertIn('alert.addButton(withTitle: "Open Log")', macapp)
 
     def test_macapp_does_not_quit_when_last_window_closes(self):
         """Closing a conversation pop-out (or the main window momentarily)
@@ -3963,6 +4020,31 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".uxq-td-title-wrap", app_css)
         self.assertIn(".uxq-td-title", app_css)
         self.assertIn(".uxq-detail-meta", app_css)
+
+    def test_queue_all_history_renders_a_bounded_page_at_scale(self):
+        """All-history filtering may scan every ticket, but DOM work stays bounded."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        render_js = app_js[
+            app_js.index("function _renderQueuePanel"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel"))
+        ]
+
+        self.assertIn("const _UXQ_HISTORY_PAGE_SIZE = 80;", app_js)
+        self.assertIn(
+            "const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;",
+            render_js,
+        )
+        self.assertIn("const queueRowsHtml = visibleRows.map(it =>", render_js)
+        self.assertNotIn("const queueRowsHtml = rows.map(it =>", render_js)
+        self.assertIn("data-uxq-history-page=", render_js)
+        self.assertIn("_uxqHistoryPage += direction;", app_js)
+        scope_setter = app_js[
+            app_js.index("function _uxqSetScopeOverride"):
+            app_js.index("const _UXQ_FILTER_LS", app_js.index("function _uxqSetScopeOverride"))
+        ]
+        self.assertIn("_uxqResetHistoryPage();", scope_setter)
+        self.assertIn(".fq-history-pager", app_css)
 
     def test_queue_state_badges_explain_stuck(self):
         """Queue health badges should answer what each compact state means."""
@@ -7197,6 +7279,66 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("Half auto", detail)
         rich = parsed["blocks"][0]["question"]["questions"][0]["options"]
         self.assertEqual(rich[0]["description"], "Run everything without checking back.")
+
+    def test_tool_use_marks_input_for_lazy_disclosure(self):
+        ev = {
+            "type": "assistant",
+            "timestamp": "2026-07-13T03:25:10Z",
+            "message": {
+                "id": "msg-tool-search",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu-tool-search",
+                    "name": "ToolSearch",
+                    "input": {
+                        "query": "select:PushNotification",
+                        "limit": 5,
+                    },
+                }],
+            },
+        }
+
+        parsed = self.server._parse_conversation_event(ev, 8)
+
+        block = parsed["blocks"][0]
+        self.assertEqual(block["detail"], "select:PushNotification")
+        self.assertTrue(block["has_input"])
+        self.assertNotIn("input", block)
+
+    def test_lazy_tool_input_is_complete_and_redacts_secrets(self):
+        secret = "sk-testabcdefghijklmnop"
+        ev = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu-lazy-input",
+                    "name": "ToolSearch",
+                    "input": {
+                        "query": "select:PushNotification",
+                        "note": "x" * 20000,
+                        "token": secret,
+                    },
+                }],
+            },
+        }
+
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps(ev) + "\n")
+            path = f.name
+        try:
+            payload = self.server._tool_input_at_jsonl_line(
+                pathlib.Path(path), 1, "toolu-lazy-input"
+            )
+        finally:
+            os.unlink(path)
+
+        self.assertIn('"query": "select:PushNotification"', payload)
+        self.assertIn("x" * 20000, payload)
+        self.assertNotIn(secret, payload)
+        self.assertIn("[redacted]", payload)
 
     def test_bash_tool_detail_strips_shell_wrapper(self):
         ev = {

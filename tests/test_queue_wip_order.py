@@ -8,6 +8,18 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueueWipOrder(unittest.TestCase):
+    def test_all_history_is_newest_created_first_while_open_keeps_work_order(self):
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        queue_render = app_js[
+            app_js.index("function _renderQueuePanel()"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel()"))
+        ]
+
+        self.assertIn("const historyOrder = _uxqGetFilter() === 'all';", queue_render)
+        self.assertIn("if (historyOrder)", queue_render)
+        self.assertIn("_uxqCreatedAtMs(b) - _uxqCreatedAtMs(a)", queue_render)
+        self.assertIn("const st = _statusRank(aStatus) - _statusRank(bStatus);", queue_render)
+
     def test_wip_then_blocked_then_open_then_closed(self):
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 

@@ -160,6 +160,24 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("typeScoped = _uxqGetTypeFilter() === 'all'", app_js)
         self.assertIn("[data-uxq-type-filter]", app_js)
 
+    def test_queue_health_rows_include_live_and_recent_worker_sessions(self):
+        """Queue health should carry Triggered Workers' live and Past 24h sessions inline."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        health_js = app_js[
+            app_js.index("async function _renderQueueHealthStrip"):
+            app_js.index("const _REPO_PROJECT_MAP", app_js.index("async function _renderQueueHealthStrip"))
+        ]
+
+        self.assertIn("const _liveWorkersByQueue = _uxqWorkersByQueue(health.wt_workers);", health_js)
+        self.assertIn("const _pastWorkersByQueue = _uxqWorkersByQueue(health.past_workers);", health_js)
+        self.assertIn("_renderWtWorkerCompactRow", health_js)
+        self.assertIn("_renderWtPastWorkers", health_js)
+        self.assertIn('class="fq-health-group"', health_js)
+        self.assertIn("data-fq-worker-sid", app_js)
+        self.assertIn("selectConversation(sid);", app_js)
+        self.assertIn(".fq-health-worker-list", app_css)
+
     def test_right_rail_queue_items_use_larger_type(self):
         """Queue ticket rows in the right rail should be readable at a glance."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
