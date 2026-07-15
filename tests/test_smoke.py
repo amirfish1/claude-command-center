@@ -3962,6 +3962,24 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('" aria-label="\' + escapeAttr(badgeTip)', app_js)
         self.assertIn('" aria-label="\' + escapeAttr(stateTip)', app_js)
 
+    def test_queue_drain_toggle_reports_parked_and_failed_updates(self):
+        """Turning on drain must explain why zero-claimable queues stay idle."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        toggle_js = app_js[
+            app_js.index("const toggleDrain = async (ev) =>"):
+            app_js.index("const cycleClaimTypes = async (ev) =>")
+        ]
+
+        self.assertIn("if (!res.ok || !data.ok)", toggle_js)
+        self.assertIn("has no runnable tickets", toggle_js)
+        self.assertIn("Auto-drain enabled for", toggle_js)
+        self.assertIn("Auto-drain disabled for", toggle_js)
+        self.assertIn("Auto-drain update failed", toggle_js)
+        self.assertLess(
+            toggle_js.index("const queueHealth ="),
+            toggle_js.index("await fetch('/api/queue/drain'"),
+        )
+
     def test_queue_detail_uses_watchtower_timeline_contract(self):
         """Ticket detail should come from WT timeline, not CCC's old private
         progress_notes/answers reconstruction."""

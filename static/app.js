@@ -33504,17 +33504,37 @@
         ev.stopPropagation();
         const queue = btn.getAttribute('data-drain-queue');
         const newVal = btn.getAttribute('data-drain-on') !== '1';
+        // Drain policy does not change ticket depth/claimability, so classify
+        // the outcome from the same snapshot that rendered the clicked row.
+        // A concurrent health request may have started before this POST and
+        // must not make the post-write toast generic or misleading.
+        const queueHealth = (_uxqHealthCache.queues || []).find(q =>
+          q && String(q.queue || '').toUpperCase() === String(queue || '').toUpperCase()
+        );
         btn.style.opacity = '0.4';
         try {
-          await fetch('/api/queue/drain', {
+          const res = await fetch('/api/queue/drain', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({queue, auto_drain: newVal}),
           });
-        } catch (_) {}
-        btn.style.opacity = '';
-        _uxqHealthCache.ts = 0;
-        _renderQueueHealthStrip(true, null);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          _uxqHealthCache.ts = 0;
+          if (newVal && queueHealth && Number(queueHealth.depth) > 0 && Number(queueHealth.claimable) === 0) {
+            showOpToast('Auto-drain enabled for ' + queue + ', but it has no runnable tickets (' + Number(queueHealth.depth) + ' open).', 'info');
+          } else if (newVal) {
+            showOpToast('Auto-drain enabled for ' + queue + '.', 'success');
+          } else {
+            showOpToast('Auto-drain disabled for ' + queue + '.', 'success');
+          }
+        } catch (err) {
+          showOpToast('Auto-drain update failed: ' + ((err && err.message) || 'unknown'), 'error');
+        } finally {
+          btn.style.opacity = '';
+          _uxqHealthCache.ts = 0;
+          _renderQueueHealthStrip(true, null);
+        }
       };
       const cycleClaimTypes = async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('.fq-health-type-toggle[data-claim-queue]');

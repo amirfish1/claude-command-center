@@ -1,0 +1,1 @@
+- Explain when auto-drain is enabled but no queue tickets are runnable, and surface drain-toggle failures instead of silently ignoring them.
