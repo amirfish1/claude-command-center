@@ -56,3 +56,6 @@ claude-command-center = "server:main"
 # Setuptools-style hint:
 [tool.setuptools.package-data]
 "*" = ["skills/*.md", "static/**/*", "hooks/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
