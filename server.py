@@ -58684,25 +58684,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # explicit desired state so re-runs don't un-archive.
             desired = payload.get("archived")
             try:
-                now_archived, _changed = _set_conversation_archived(
-                    sid, desired, source="manual",
-                )
-                # Archiving retires the session — drop any stale Notification-hook
-                # marker so the dashboard doesn't keep classifying it as Waiting
-                # (which would pin the row to "In progress" and undo the move).
-                kill_result = None
-                if now_archived:
-                    try:
-                        (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
-                    except (OSError, FileNotFoundError):
-                        pass
-                    # Free the headless agent. Resume via Jump rebuilds full
-                    # context from the on-disk JSONL — keeping the process
-                    # alive past the user's "done" gesture only accumulates
-                    # MCP children. Backlog rows have no process; pkood is
-                    # uninstalled.
-                    if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
-                        kill_result = _kill_session_by_id(sid)
+                # Keep retirement ordered with the state transition. If Move
+                # to Active races this request, it must run after the kill so
+                # the final Active state never points at a just-killed session.
+                with _conversation_lifecycle_lock:
+                    now_archived, _changed = _set_conversation_archived(
+                        sid, desired, source="manual",
+                    )
+                    # Archiving retires the session — drop any stale Notification-hook
+                    # marker so the dashboard doesn't keep classifying it as Waiting
+                    # (which would pin the row to "In progress" and undo the move).
+                    kill_result = None
+                    if now_archived:
+                        try:
+                            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+                        except (OSError, FileNotFoundError):
+                            pass
+                        # Free the headless agent. Resume via Jump rebuilds full
+                        # context from the on-disk JSONL — keeping the process
+                        # alive past the user's "done" gesture only accumulates
+                        # MCP children. Backlog rows have no process; pkood is
+                        # uninstalled.
+                        if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
+                            kill_result = _kill_session_by_id(sid)
                 # If this card represents a GitHub issue (id `issue-N`),
                 # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
@@ -58897,11 +58901,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     pr_state = (state_data.get("state") or "").upper()
                     if pr_state == "MERGED":
                         archived_now = False
-                        archived_set = _load_archived_conversations()
-                        if sid and sid not in archived_set:
-                            archived_set.append(sid)
-                            _save_archived_conversations(archived_set)
-                            archived_now = True
+                        if sid:
+                            _now_archived, archived_now = _set_conversation_archived(
+                                sid, True, source="merge",
+                            )
+                            _clear_archive_serve_cache()
                         _bust_issue_state_cache(ctx["repo_path"])
                         self.send_json({
                             "ok": True,
@@ -58958,10 +58962,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # so re-clicking gets a confusing second "merged" toast
                     # (gh is idempotent on already-merged PRs). Mirrors the
                     # user mental model: merged → done.
-                    archived_set = _load_archived_conversations()
-                    if sid and sid not in archived_set:
-                        archived_set.append(sid)
-                        _save_archived_conversations(archived_set)
+                    if sid:
+                        _set_conversation_archived(sid, True, source="merge")
+                        _clear_archive_serve_cache()
                     # PR merges typically close the linked issue (via
                     # "Closes #N" in the body); refresh the GH issues
                     # section so it reflects that on next poll. Also bust
@@ -59152,10 +59155,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             # Success — same archive + cache-bust as the direct merge path.
-            archived_set = _load_archived_conversations()
-            if sid and sid not in archived_set:
-                archived_set.append(sid)
-                _save_archived_conversations(archived_set)
+            if sid:
+                _set_conversation_archived(sid, True, source="merge")
+                _clear_archive_serve_cache()
             _bust_issue_state_cache(ctx["repo_path"])
             self.send_json({
                 "ok": True,

@@ -252,6 +252,50 @@ def test_parallel_bulk_archive_calls_do_not_lose_sessions(tmp_path, monkeypatch)
     assert set(server._load_archived_conversations(sweep=False)) == {"sid-a", "sid-b"}
 
 
+def test_archive_retirement_finishes_before_concurrent_move_active(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    kill_started = threading.Event()
+    allow_kill = threading.Event()
+
+    def blocking_kill(_sid):
+        kill_started.set()
+        assert allow_kill.wait(timeout=2)
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_kill_session_by_id", blocking_kill)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        archive_future = pool.submit(
+            _post_json,
+            "/api/conversations/sid-a/archive",
+            {"session_id": "sid-a", "archived": True},
+        )
+        assert kill_started.wait(timeout=2)
+        activate_future = pool.submit(server._set_conversation_archived, "sid-a", False)
+        time.sleep(0.03)
+        assert not activate_future.done()
+        allow_kill.set()
+        assert archive_future.result(timeout=3)[0] == 200
+        assert activate_future.result(timeout=3)[0] is False
+
+    assert "sid-a" not in server._load_archived_conversations(sweep=False)
+
+
+def test_every_pr_merge_archive_uses_atomic_lifecycle_helper():
+    source = inspect.getsource(server.CommandCenterHandler.do_POST)
+    merge_source = source[
+        source.index('/merge-pr$') : source.index('/verify$', source.index('/merge-pr$'))
+    ]
+
+    assert merge_source.count('source="merge"') == 3
+    assert "archived_set.append(sid)" not in merge_source
+
+
 def test_unarchive_does_not_erase_concurrent_worker_trash(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
     monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
