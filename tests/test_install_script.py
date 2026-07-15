@@ -13,10 +13,12 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALL_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "install.sh")
+PRE_PUSH_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "pre-push.sh")
 
 
 def _run_parse_channel(env_extra=None, args=()):
@@ -263,6 +265,37 @@ class TestInstallBehavior(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             with open(sentinel, encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "preserve\n")
+class TestPrePushScript(unittest.TestCase):
+    def test_discovers_a_pytest_capable_python3_in_bash(self):
+        """The Bash gate must not use zsh-only `command -v -a` lookup."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script_dir = root / "scripts"
+            tests_dir = root / "tests"
+            bin_dir = root / "bin"
+            script_dir.mkdir()
+            tests_dir.mkdir()
+            bin_dir.mkdir()
+            shutil.copy2(PRE_PUSH_SCRIPT, script_dir / "pre-push.sh")
+            (tests_dir / "test_perf_budget.py").write_text("# stub\n")
+            python3 = bin_dir / "python3"
+            python3.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [ \"$1\" = \"-c\" ]; then exit 0; fi\n"
+                "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then exit 0; fi\n"
+                "exit 1\n"
+            )
+            python3.chmod(0o755)
+            env = os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+            result = subprocess.run(
+                ["bash", str(script_dir / "pre-push.sh")],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("pre-push: running perf-budget gate", result.stdout)
+        self.assertIn("pre-push: perf gate passed", result.stdout)
 
 
 class TestParseChannel(unittest.TestCase):
