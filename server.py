@@ -58651,6 +58651,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _bust_issue_state_cache(repo_from_session(sid)["repo_path"])
                     except RepoContextError:
                         _bust_issue_state_cache()
+                _clear_archive_serve_cache()
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -58757,6 +58758,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _clear_trashed_on_unarchive_many(to_remove)
                     _save_archived_conversations(new_list)
                     _save_archive_grace()
+                _clear_archive_serve_cache()
                 self.send_json({
                     "ok": True,
                     "archived": want,

@@ -283,6 +283,27 @@ def test_single_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatc
     assert server._load_trashed_conversations() == []
 
 
+def test_single_archive_invalidates_served_session_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    invalidations = []
+    monkeypatch.setattr(server, "_clear_archive_serve_cache", lambda: invalidations.append(True))
+
+    status, body = _post_json(
+        "/api/conversations/sid-a/archive",
+        {"session_id": "sid-a", "archived": True},
+    )
+
+    assert status == 200
+    assert body["archived"] is True
+    assert invalidations == [True]
+
+
 def test_bulk_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
     monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
@@ -301,6 +322,26 @@ def test_bulk_unarchive_clears_trash_before_archive_write(tmp_path, monkeypatch)
 
     assert status == 500
     assert server._load_trashed_conversations() == []
+
+
+def test_bulk_archive_invalidates_served_session_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    invalidations = []
+    monkeypatch.setattr(server, "_clear_archive_serve_cache", lambda: invalidations.append(True))
+
+    status, body = _post_json(
+        "/api/conversations/archive-bulk",
+        {"session_ids": ["sid-a", "sid-b"], "archived": True},
+    )
+
+    assert status == 200
+    assert body["changed"] == ["sid-a", "sid-b"]
+    assert invalidations == [True]
 
 
 def test_group_chat_trash_archives_first(tmp_path, monkeypatch):
