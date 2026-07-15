@@ -1,0 +1,1 @@
+- Restored conversations now prefetch their bounded transcript tail and paint before the full archive sidebar render, substantially reducing time spent on the conversation loading state.

@@ -35193,6 +35193,36 @@
   // slowly and a fresh click can still pick up the appended tail.
   const _convPrefetched = new Set();
   const _convPrefetchTimers = new Map();
+  const _convTailPrefetches = new Map();
+  const CONV_TAIL_PREFETCH_MAX = 4;
+  const CONV_TAIL_PREFETCH_TTL_MS = 30000;
+  function _prefetchConversationTail(id) {
+    if (!id || id.startsWith('backlog-') || id.startsWith('spawning-')) return null;
+    if (id.startsWith('pkood-') || id.startsWith('issue-')) return null;
+    const existing = _convTailPrefetches.get(id);
+    if (existing) return existing;
+    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + CONV_TAIL_LINES, {
+      cache: 'no-store',
+    }).then(r => r.ok ? r.json() : null).catch(() => null);
+    _convTailPrefetches.set(id, pending);
+    while (_convTailPrefetches.size > CONV_TAIL_PREFETCH_MAX) {
+      _convTailPrefetches.delete(_convTailPrefetches.keys().next().value);
+    }
+    setTimeout(() => {
+      if (_convTailPrefetches.get(id) === pending) _convTailPrefetches.delete(id);
+    }, CONV_TAIL_PREFETCH_TTL_MS);
+    return pending;
+  }
+  function _takePrefetchedConversationTail(id) {
+    const pending = _convTailPrefetches.get(id) || null;
+    if (pending) _convTailPrefetches.delete(id);
+    return pending;
+  }
+  function prefetchRestoredConversationTails() {
+    for (const pane of splitState.panes) {
+      if (pane && pane.conversationId) _prefetchConversationTail(pane.conversationId);
+    }
+  }
   function _convPrefetchSchedule(id) {
     if (!id || _convPrefetched.has(id)) return;
     if (id.startsWith('backlog-') || id.startsWith('spawning-')) return;
@@ -35201,11 +35231,9 @@
     const t = setTimeout(() => {
       _convPrefetchTimers.delete(id);
       _convPrefetched.add(id);
-      // Fire-and-forget. The browser may discard the response body, but
-      // the server-side response cache is now warm for the eventual click.
-      fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + CONV_TAIL_LINES, {
-        cache: 'no-store',
-      }).catch(() => {});
+      // Keep the parsed response as well as warming the server-side cache. A
+      // click can consume it immediately, then SSE catches any later lines.
+      _prefetchConversationTail(id);
     }, 120);
     _convPrefetchTimers.set(id, t);
   }
@@ -35480,8 +35508,18 @@
         : (_freshOpen && !_wantFull)
         ? '/api/conversations/' + id + '?tail=' + CONV_TAIL_LINES
         : '/api/conversations/' + id + '?after=' + convLastLine;
-      const res = await fetch(_url);
-      const data = await res.json();
+      let data = null;
+      if (_freshOpen && !_wantFull && !_loadingEarlier) {
+        const _prefetchRow = (conversationsData || []).find(x => x.id === id)
+          || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
+        const _prefetchSource = sessionSourceByConv[id] || (_prefetchRow && _prefetchRow.source) || '';
+        const prefetched = _takePrefetchedConversationTail(id);
+        if (prefetched && _prefetchSource !== 'hermes') data = await prefetched;
+      }
+      if (!data) {
+        const res = await fetch(_url);
+        data = await res.json();
+      }
       // Guard: if the pane's conv id shifted (e.g. user navigated away
       // while the fetch was in-flight), discard the stale response.
       const currentPane = paneByPaneId(fetchPaneId);
@@ -45152,7 +45190,7 @@
     }
     if (CONV_POPOUT_MODE) {
       maybeSelectPopoutConversation({ allowMissing: archiveLoaded });
-    } else {
+    } else if (!(opts && opts.skipRestore)) {
       restoreLastViewOrConversation();
     }
     _finishArchiveRender();
@@ -45184,6 +45222,27 @@
       $list.innerHTML = _archiveLoadingPlaceholderHtml('Loading archive…');
     }
     await refreshArchiveData();
+    // Shape only the saved active row first. This uses the normal archive
+    // pipeline to initialize session metadata/capabilities, but avoids making
+    // transcript restoration wait behind shaping and mounting every row.
+    const savedPane = splitState.panes[splitState.activeIndex] || null;
+    const savedConversationId = savedPane && !savedPane.restored ? savedPane.conversationId : '';
+    let savedLastView = null;
+    try {
+      const rawLastView = localStorage.getItem('ccc-last-view');
+      savedLastView = rawLastView ? JSON.parse(rawLastView) : null;
+    } catch (_) {}
+    const savedConversationExists = savedConversationId && Array.isArray(archiveData)
+      && archiveData.some(c => (c.id || c.session_id) === savedConversationId)
+      && !(savedLastView && savedLastView.type === 'gc');
+    if (savedConversationExists) {
+      renderArchiveList(savedConversationId, { force: true, skipRestore: true });
+      await selectConversation(savedConversationId, savedPane.id);
+      // selectConversation has painted the prefetched transcript. Yield to a
+      // new browser task before the synchronous full-list render so that paint
+      // reaches the screen instead of being trapped behind archive shaping.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
     renderArchiveList(document.getElementById('convSearch')?.value || '');
   }
 
@@ -52621,6 +52680,10 @@
     });
   } else {
     restoreSplitState();
+    // Start the bounded transcript request before the cross-repo archive is
+    // shaped and rendered. That render can monopolize the main thread for
+    // seconds on large histories; the saved pane should not wait behind it.
+    prefetchRestoredConversationTails();
     loadConversationList();
   }
   attachAllPaneDropZones();
