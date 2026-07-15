@@ -38693,6 +38693,85 @@
     return clone;
   }
 
+  function presentationSourceRoot(view, node) {
+    let current = node && (node.nodeType === 3 ? node.parentElement : node);
+    if (!view || !current || current === view) return null;
+    while (current && current.parentElement !== view) current = current.parentElement;
+    if (!current || current.parentElement !== view) return null;
+    if (current.classList && current.classList.contains('conv-presentation-stage')) return null;
+    return current;
+  }
+
+  function presentationElementPath(root, target) {
+    if (!root || !target || !root.contains(target)) return null;
+    const path = [];
+    for (let node = target; node && node !== root; node = node.parentElement) {
+      const parent = node.parentElement;
+      if (!parent) return null;
+      path.push(Array.prototype.indexOf.call(parent.children, node));
+    }
+    return path.reverse();
+  }
+
+  function presentationResolvePath(root, path) {
+    let node = root;
+    for (const index of Array.isArray(path) ? path : []) {
+      node = node && node.children && node.children[index];
+      if (!node) return null;
+    }
+    return node;
+  }
+
+  function presentationCloneForProjection(source, prefix) {
+    const clone = source.cloneNode(true);
+    const sourceElements = [source].concat(Array.from(source.querySelectorAll ? source.querySelectorAll('*') : []));
+    const cloneElements = [clone].concat(Array.from(clone.querySelectorAll ? clone.querySelectorAll('*') : []));
+    const idMap = new Map();
+    const safePrefix = String(prefix || 'presentation-projection').replace(/[^a-zA-Z0-9_-]/g, '-');
+    sourceElements.forEach((sourceElement, index) => {
+      const cloneElement = cloneElements[index];
+      if (!cloneElement) return;
+      ['value', 'checked', 'indeterminate', 'selectedIndex', 'open', 'scrollTop'].forEach(property => {
+        if (!(property in sourceElement) || !(property in cloneElement)) return;
+        try { cloneElement[property] = sourceElement[property]; } catch (_) {}
+      });
+      const sourceId = sourceElement.getAttribute && sourceElement.getAttribute('id');
+      if (sourceId) {
+        const projectedId = safePrefix + '-' + sourceId;
+        idMap.set(sourceId, projectedId);
+        cloneElement.setAttribute('id', projectedId);
+      }
+    });
+    const rewriteTokens = (value) => String(value || '').split(/\s+/).filter(Boolean)
+      .map(token => idMap.get(token) || token).join(' ');
+    cloneElements.forEach(element => {
+      ['for', 'aria-labelledby', 'aria-describedby', 'aria-controls'].forEach(attribute => {
+        if (!element.hasAttribute || !element.hasAttribute(attribute)) return;
+        element.setAttribute(attribute, rewriteTokens(element.getAttribute(attribute)));
+      });
+      ['href', 'xlink:href'].forEach(attribute => {
+        if (!element.hasAttribute || !element.hasAttribute(attribute)) return;
+        const value = element.getAttribute(attribute) || '';
+        if (value.startsWith('#') && idMap.has(value.slice(1))) {
+          element.setAttribute(attribute, '#' + idMap.get(value.slice(1)));
+        }
+      });
+    });
+    return clone;
+  }
+
+  function presentationRootsAfterLatestAnswer(view) {
+    const directChildren = Array.from((view && view.children) || [])
+      .filter(node => !(node.classList && node.classList.contains('conv-presentation-stage')));
+    let boundary = -1;
+    directChildren.forEach((node, index) => {
+      if (node.matches && node.matches('.event.assistant')
+          && !node.classList.contains('tool-only')
+          && node.querySelector('.assistant-text')) boundary = index;
+    });
+    return directChildren.slice(boundary + 1);
+  }
+
   function presentationListItems(list) {
     const tag = String((list && list.tagName) || '').toLowerCase();
     const ordered = tag === 'ol';

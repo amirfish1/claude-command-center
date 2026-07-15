@@ -76,6 +76,44 @@ process.stdout.write(JSON.stringify(pages.map(page => page.map(item => item.id))
     return json.loads(completed.stdout)
 
 
+def _run_projection_path_fixture():
+    path_source = _javascript_function_source("presentationElementPath")
+    resolve_source = _javascript_function_source("presentationResolvePath")
+    script = path_source + "\n" + resolve_source + r"""
+function makeNode(name) {
+  return {
+    name,
+    children: [],
+    parentElement: null,
+    contains(target) {
+      if (target === this) return true;
+      return this.children.some(child => child.contains(target));
+    },
+  };
+}
+function append(parent, child) {
+  parent.children.push(child);
+  child.parentElement = parent;
+  return child;
+}
+const root = makeNode('root');
+append(root, makeNode('first'));
+const second = append(root, makeNode('second'));
+const target = append(second, makeNode('target'));
+const path = presentationElementPath(root, target);
+const resolved = presentationResolvePath(root, path);
+process.stdout.write(JSON.stringify({ path, resolved: resolved && resolved.name }));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
 class TestPresentationModeStatic(unittest.TestCase):
     def test_selector_exposes_only_off_and_present(self):
         html = INDEX.read_text(encoding="utf-8")
@@ -93,6 +131,39 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertEqual(_run_javascript_function("normalizePresentationMode", "2"), "2")
         self.assertEqual(_run_javascript_function("normalizePresentationMode", "present"), "2")
         self.assertEqual(_run_javascript_function("normalizePresentationMode", "off"), "off")
+
+    def test_projection_helpers_are_generic_and_clone_safe(self):
+        source_root = _javascript_function_source("presentationSourceRoot")
+        clone = _javascript_function_source("presentationCloneForProjection")
+        roots_after_answer = _javascript_function_source(
+            "presentationRootsAfterLatestAnswer"
+        )
+
+        self.assertEqual(
+            _run_projection_path_fixture(),
+            {"path": [1, 0], "resolved": "target"},
+        )
+        self.assertIn("parentElement !== view", source_root)
+        self.assertIn("conv-presentation-stage", source_root)
+        self.assertNotIn("pending", source_root)
+        self.assertNotIn("tool", source_root.lower())
+
+        for token in (
+            "cloneNode(true)",
+            "value",
+            "checked",
+            "indeterminate",
+            "selectedIndex",
+            "open",
+            "scrollTop",
+            "aria-labelledby",
+            "aria-describedby",
+            "aria-controls",
+        ):
+            self.assertIn(token, clone)
+        self.assertIn("directChildren", roots_after_answer)
+        self.assertIn("event.assistant", roots_after_answer)
+        self.assertNotIn("conv-live-tool-inline", roots_after_answer)
 
     def test_mode_click_delegation_does_not_match_pane_state(self):
         app_js = APP_JS.read_text(encoding="utf-8")
