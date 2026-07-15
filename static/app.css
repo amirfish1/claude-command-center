@@ -17239,6 +17239,14 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-health:empty { display: none; }
 .fq-health:empty + .fq-health-resize-handle { display: none; }
+.fq-health-add {
+  width: 100%; border: 0; border-top: 1px solid rgba(139,148,158,0.12);
+  padding: 7px 10px; background: transparent; color: var(--text-muted);
+  font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.fq-health-add:hover, .fq-health-add:focus-visible {
+  color: var(--accent); background: var(--surface-hover); outline: none;
+}
 /* Drag bar between the per-project health rows and the ticket list below
    (CCC-426) — the health list can otherwise grow to fill the whole panel
    when many queues are configured, starving the ticket list of room. */

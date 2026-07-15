@@ -32399,6 +32399,8 @@
           + '</div>';
       }).join('');
     }
+    // Queue creation changes the list above, rather than the tickets below.
+    html += '<button class="fq-health-add" id="filesQueueConfigure" type="button" title="Create a WatchTower queue" aria-label="Add a queue">⚙ Add queue</button>';
     $strip.innerHTML = html;
   }
   // Repo-basename → project code, mirroring ux_fixes_queue.py `_REPO_PROJECT`
@@ -33337,8 +33339,7 @@
       // queue header. This stays after the empty state too, so an empty queue
       // still offers its primary action.
       $queue.innerHTML = queueRowsHtml
-        + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>'
-        + '<button class="fq-add-row fq-configure-row" id="filesQueueConfigure" type="button" title="Create or edit a WatchTower queue" aria-label="Add or manage queues">⚙ Add queue</button>';
+        + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>';
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
     });
@@ -33379,12 +33380,6 @@
         if (addBtn) {
           ev.stopPropagation();
           await _addQueueTicket();
-          return;
-        }
-        const configureBtn = ev.target && ev.target.closest && ev.target.closest('#filesQueueConfigure');
-        if (configureBtn) {
-          ev.stopPropagation();
-          await openQueueManager(_uxqLastResolvedProject || _uxqWorkerProject());
           return;
         }
         const runBtn = ev.target && ev.target.closest && ev.target.closest('.fq-run[data-ref]');
@@ -33563,7 +33558,7 @@
         }
       };
       const scopeFromRow = (ev) => {
-        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle, .fq-health-del, .fq-health-config');
+        const badge = ev.target && ev.target.closest && ev.target.closest('.fq-health-badge[data-nudge-sid], .fq-health-drain-toggle, .fq-health-type-toggle, .fq-health-del, .fq-health-config, .fq-health-add');
         if (badge) return;
         const row = ev.target && ev.target.closest && ev.target.closest('.fq-health-row[data-fq-project]');
         if (!row) return;
@@ -33583,10 +33578,10 @@
       $health.addEventListener('click', cycleClaimTypes);
       $health.addEventListener('click', deleteQueue);
       $health.addEventListener('click', async (ev) => {
-        const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue]');
+        const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
         ev.preventDefault(); ev.stopPropagation();
-        await openQueueManager(btn.getAttribute('data-fq-config-queue'));
+        await openQueueManager(btn.getAttribute('data-fq-config-queue') || _uxqLastResolvedProject || _uxqWorkerProject());
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {

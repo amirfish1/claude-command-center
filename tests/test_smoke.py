@@ -4061,11 +4061,6 @@ class TestServerImports(unittest.TestCase):
             app_js.index('class="fq-add-row" id="filesQueueAdd"'),
             app_js.index("$queue.innerHTML = queueRowsHtml"),
         )
-        self.assertIn('class="fq-add-row fq-configure-row" id="filesQueueConfigure"', app_js)
-        self.assertGreater(
-            app_js.index('class="fq-add-row fq-configure-row" id="filesQueueConfigure"'),
-            app_js.index('class="fq-add-row" id="filesQueueAdd"'),
-        )
         self.assertIn('class="fq-ticket-textarea"', app_js)
         self.assertIn('rows="7"', app_js)
         self.assertIn('data-fq-ticket-submit', app_js)

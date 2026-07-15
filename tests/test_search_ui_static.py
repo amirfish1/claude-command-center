@@ -74,6 +74,18 @@ class TestSearchUiStatic(unittest.TestCase):
             body,
         )
 
+    def test_add_queue_action_is_after_queue_health_rows_not_tickets(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        health_start = app_js.index("async function _renderQueueHealthStrip")
+        health_end = app_js.index("// Repo-basename", health_start)
+        health_body = app_js[health_start:health_end]
+        panel_start = app_js.index("function _renderQueuePanel()")
+        panel_end = app_js.index("// Jump the conversation pane", panel_start)
+        panel_body = app_js[panel_start:panel_end]
+
+        self.assertIn('id="filesQueueConfigure"', health_body)
+        self.assertNotIn('id="filesQueueConfigure"', panel_body)
+
     def test_throughput_boot_renders_complete_browser_snapshot_before_network(self):
         html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
