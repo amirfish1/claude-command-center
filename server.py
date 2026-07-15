@@ -23975,7 +23975,14 @@ def _codex_agent_path(row):
         data = json.loads(source)
     except (TypeError, ValueError, json.JSONDecodeError):
         return ""
-    spawn = ((data.get("subagent") or {}).get("thread_spawn") or {})
+    if not isinstance(data, dict):
+        return ""
+    subagent = data.get("subagent")
+    if not isinstance(subagent, dict):
+        return ""
+    spawn = subagent.get("thread_spawn")
+    if not isinstance(spawn, dict):
+        return ""
     return str(spawn.get("agent_path") or "").strip()
 
 

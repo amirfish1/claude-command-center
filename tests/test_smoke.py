@@ -47,6 +47,15 @@ class TestServerImports(unittest.TestCase):
         })
         self.assertEqual(server._codex_agent_task_label({"source": source}), "Api audit")
         self.assertEqual(server._codex_agent_task_label({"source": "vscode"}), "")
+        for malformed in (
+            {"subagent": "bad"},
+            {"subagent": {"thread_spawn": []}},
+        ):
+            with self.subTest(source=malformed):
+                self.assertEqual(
+                    server._codex_agent_task_label({"source": json.dumps(malformed)}),
+                    "",
+                )
 
     def test_codex_display_name_prefers_task_label_over_generated_nickname(self):
         server = importlib.import_module("server")
