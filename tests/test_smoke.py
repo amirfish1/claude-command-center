@@ -3360,6 +3360,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".tool-result-output::before", app_css)
         self.assertIn("content: attr(data-result-label);", app_css)
 
+    def test_tool_calls_render_complete_input_disclosure(self):
+        """Persisted tool payloads should load lazily behind an Input toggle."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function renderToolInputDisclosure(block, conversationId, line)", app_js)
+        self.assertIn("async function loadToolInputDisclosure(details)", app_js)
+        self.assertIn("<span>Input</span>", app_js)
+        self.assertIn("/tool-input?line=", app_js)
+        self.assertIn("tool_use_id=", app_js)
+        self.assertIn("const inputDisclosure = renderToolInputDisclosure(b,", app_js)
+        self.assertIn("+ inputDisclosure", app_js)
+        self.assertNotIn("escapeHtml(block.input)", app_js)
+
     def test_recoverable_tool_failures_use_a_subdued_warning_treatment(self):
         """A failed tool call should not look like a CCC or session failure."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -7187,6 +7200,66 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("Half auto", detail)
         rich = parsed["blocks"][0]["question"]["questions"][0]["options"]
         self.assertEqual(rich[0]["description"], "Run everything without checking back.")
+
+    def test_tool_use_marks_input_for_lazy_disclosure(self):
+        ev = {
+            "type": "assistant",
+            "timestamp": "2026-07-13T03:25:10Z",
+            "message": {
+                "id": "msg-tool-search",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu-tool-search",
+                    "name": "ToolSearch",
+                    "input": {
+                        "query": "select:PushNotification",
+                        "limit": 5,
+                    },
+                }],
+            },
+        }
+
+        parsed = self.server._parse_conversation_event(ev, 8)
+
+        block = parsed["blocks"][0]
+        self.assertEqual(block["detail"], "select:PushNotification")
+        self.assertTrue(block["has_input"])
+        self.assertNotIn("input", block)
+
+    def test_lazy_tool_input_is_complete_and_redacts_secrets(self):
+        secret = "sk-testabcdefghijklmnop"
+        ev = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu-lazy-input",
+                    "name": "ToolSearch",
+                    "input": {
+                        "query": "select:PushNotification",
+                        "note": "x" * 20000,
+                        "token": secret,
+                    },
+                }],
+            },
+        }
+
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps(ev) + "\n")
+            path = f.name
+        try:
+            payload = self.server._tool_input_at_jsonl_line(
+                pathlib.Path(path), 1, "toolu-lazy-input"
+            )
+        finally:
+            os.unlink(path)
+
+        self.assertIn('"query": "select:PushNotification"', payload)
+        self.assertIn("x" * 20000, payload)
+        self.assertNotIn(secret, payload)
+        self.assertIn("[redacted]", payload)
 
     def test_bash_tool_detail_strips_shell_wrapper(self):
         ev = {

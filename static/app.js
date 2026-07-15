@@ -37947,6 +37947,46 @@
       + '</details>';
   }
 
+  function renderToolInputDisclosure(block, conversationId, line) {
+    if (!block || !block.has_input || !conversationId || !line) return '';
+    const toolUseId = String(block.id || block.tool_use_id || '').trim();
+    return '<details class="tool-command-disclosure tool-input-disclosure"'
+      + ' data-conversation-id="' + escapeAttr(conversationId) + '"'
+      + ' data-jsonl-line="' + escapeAttr(line) + '"'
+      + ' data-tool-use-id="' + escapeAttr(toolUseId) + '"'
+      + (convVerboseOn() ? ' open' : '') + '>'
+      + '<summary><span>Input</span></summary>'
+      + '<pre class="tool-input-payload">Loading…</pre>'
+      + '</details>';
+  }
+
+  async function loadToolInputDisclosure(details) {
+    if (!details || details.dataset.loaded === '1' || details.dataset.loading === '1') return;
+    const payload = details.querySelector('.tool-input-payload');
+    if (!payload) return;
+    details.dataset.loading = '1';
+    payload.textContent = 'Loading…';
+    try {
+      const convId = details.dataset.conversationId || '';
+      const line = details.dataset.jsonlLine || '';
+      const toolUseId = details.dataset.toolUseId || '';
+      const url = '/api/conversations/' + encodeURIComponent(convId)
+        + '/tool-input?line=' + encodeURIComponent(line)
+        + '&tool_use_id=' + encodeURIComponent(toolUseId);
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !data.ok || typeof data.input !== 'string') {
+        throw new Error(data.error || 'Tool input unavailable');
+      }
+      payload.textContent = data.input;
+      details.dataset.loaded = '1';
+    } catch (err) {
+      payload.textContent = 'Input unavailable.';
+    } finally {
+      delete details.dataset.loading;
+    }
+  }
+
   function renderEditDisclosure(b) {
     const editInput = b && b.edit_input;
     if (!editInput) return '';
@@ -39734,6 +39774,7 @@
     paneId = paneId || activePaneId();
     opts = opts || {};
     const pane = paneByPaneId(paneId);
+    const renderedConversationId = (pane && pane.conversationId) || currentConversation || '';
     if (pane && opts.isTruncated) {
       pane.firstUserMsgRendered = true;
     }
@@ -40383,6 +40424,7 @@
                 return '<div class="ask-user-block">' + headerHtml + questionHtml + optsHtml + '</div>';
               }).join('');
             }
+            const inputDisclosure = renderToolInputDisclosure(b, renderedConversationId, ev.line);
             const commandDisclosure = renderToolCommandDisclosure(b, detail);
             const editDisclosure = renderEditDisclosure(b);
             const commandClass = (commandDisclosure || editDisclosure) ? ' has-command-disclosure' : '';
@@ -40394,6 +40436,7 @@
               + (askBody
                   ? askBody
                   : (detail.display ? ' <span class="tool-detail" title="' + escapeAttr(detail.full) + '">' + escapeHtml(detail.display) + '</span>' : ''))
+              + inputDisclosure
               + commandDisclosure
               + editDisclosure
               + '</div>');
@@ -40487,6 +40530,12 @@
         const _ackHasTool = _ackBlocks.some(b => b && b.kind === 'tool_use');
         if (!_ackHasTool && _isNoopAckText(_ackText)) div.classList.add('is-noop-ack');
         div.innerHTML = html;
+        div.querySelectorAll('details.tool-input-disclosure').forEach(function (details) {
+          details.addEventListener('toggle', function () {
+            if (details.open) loadToolInputDisclosure(details);
+          });
+          if (details.open) loadToolInputDisclosure(details);
+        });
         div._agentAnswerText = agentAnswerParts.join('\n\n').trim();
       } else if (ev.type === 'result') {
         const dur = typeof ev.duration_ms === 'number' ? (ev.duration_ms / 1000).toFixed(1) + 's' : ev.duration_ms;
