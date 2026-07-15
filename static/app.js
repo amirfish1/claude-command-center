@@ -2565,19 +2565,21 @@
   }
 
   let _liveSessionsActivityPromise = null;
+  let _liveSessionsActivityLast = { sessions: {} };
   async function refreshLiveSessionsActivity() {
     // Dashboard-wide overlay: patches WIP/live chips onto conversation-list
     // rows. Reader-only popouts have no such list, so this is pure waste —
     // and openGroupChatReader's setCurrentSession(null,…) would otherwise
     // start the live-status timer that polls /api/sessions/live-activity
     // forever in the group-chat popout.
-    if (READER_ONLY_POPOUT) return;
+    if (READER_ONLY_POPOUT || document.hidden) return _liveSessionsActivityLast;
     if (_liveSessionsActivityPromise) return _liveSessionsActivityPromise;
     _liveSessionsActivityPromise = (async () => {
     try {
       const res = await fetch('/api/sessions/live-activity?_=' + Date.now());
-      if (!res.ok) return;
+      if (!res.ok) return _liveSessionsActivityLast;
       const data = await res.json();
+      _liveSessionsActivityLast = data || { sessions: {} };
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {
@@ -2589,7 +2591,8 @@
       if (archiveLoaded && typeof _scheduleSidebarRender === 'function') {
         _scheduleSidebarRender();
       }
-    } catch (_) { /* best-effort */ }
+      return _liveSessionsActivityLast;
+    } catch (_) { return _liveSessionsActivityLast; }
     finally { _liveSessionsActivityPromise = null; }
     })();
     return _liveSessionsActivityPromise;
@@ -11653,7 +11656,7 @@
     // In-progress row). This function survives ONLY to fetch the attention
     // feed and refresh the inline cache (_nyaItemsBySid). The Push-all
     // ship-log feed borrows the same DOM container, so skip while it owns it.
-    if (_shipLogActive) return;
+    if (_shipLogActive || document.hidden) return;
     const repoPath = popoutRepoPath();
     // No repo selected → drive NYA off the cross-repo attention feed. The repo
     // dropdown was removed from the UI, so requiring a selection left NYA
@@ -54658,19 +54661,13 @@
     if (el) el.remove();
   }
   function loadLive() {
-    return fetchJSON('/api/sessions/live-activity', 9000)
+    return refreshLiveSessionsActivity()
       .then(function (data) {
         var sessions = data && data.sessions && typeof data.sessions === 'object' ? data.sessions : {};
         var ids = Object.keys(sessions).filter(function (id) { return sessions[id] && sessions[id].is_live; });
         return { ids: ids, sessions: sessions };
       })
-      .catch(function () {
-        return fetchJSON('/api/sessions?all=1', 9000).then(function (data) {
-          var rows = data.sessions || data.conversations || data.rows || [];
-          var ids = rows.filter(function (r) { return r && r.is_live; }).map(function (r) { return r.session_id || r.id; }).filter(Boolean);
-          return { ids: ids, sessions: {} };
-        });
-      });
+      .catch(function () { return { ids: [], sessions: {} }; });
   }
   function loadConversations() {
     return fetchJSON('/api/conversations?all=1', 14000).then(function (data) {
