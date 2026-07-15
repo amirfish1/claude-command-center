@@ -1,0 +1,1 @@
+- Presentation controls now use a simpler `Off | Present` choice; saved Mode 1 preferences automatically migrate to Present.
