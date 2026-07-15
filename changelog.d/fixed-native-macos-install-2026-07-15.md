@@ -1,1 +1,1 @@
-- Fixed first-launch installation from the macOS DMG by replacing fragile Terminal automation with an observable native installer, actionable recovery, and a built-DMG integration test.
+- Fixed first-launch installation from the macOS DMG by replacing fragile Terminal automation with an observable native installer, actionable recovery, and a built-DMG integration test. Update checks now wait until the dashboard loads so Sparkle's first-run prompt cannot dismiss an installation error or accidentally select Retry or Quit.
