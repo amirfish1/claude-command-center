@@ -28301,6 +28301,23 @@
         }
       });
     });
+    const _visibleConversationNeighborId = (convId, sourceItem = null) => {
+      const target = sourceItem && sourceItem.isConnected
+        ? sourceItem
+        : Array.from($convList.querySelectorAll('.conv-item[data-id]')).find(row =>
+            row.dataset.id === convId && row.offsetParent !== null
+          );
+      if (!target) return null;
+      const targetIsTrash = !!target.closest('.conv-trash-section');
+      const rows = Array.from($convList.querySelectorAll('.conv-item[data-id]')).filter(row =>
+        row.offsetParent !== null
+        && !!row.closest('.conv-trash-section') === targetIsTrash
+      );
+      const index = rows.indexOf(target);
+      if (index < 0) return null;
+      const neighbor = rows[index + 1] || rows[index - 1];
+      return neighbor ? neighbor.dataset.id : null;
+    };
     $convList.querySelectorAll('.conv-archive-btn').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
@@ -28308,27 +28325,11 @@
         const convId = item.dataset.id;
         const sessionId = item.dataset.sessionId;
         const nextArchived = btn.dataset.archived === 'true';
-        // If the user is archiving the currently-open row, pick its
-        // neighbour now (next sibling, falling back to previous) so we can
-        // jump there once the row vanishes from the active list. Skip
-        // when un-archiving, or when archiving a row that isn't selected.
-        const fromActiveList = !item.closest('.conv-archived-section, .conv-trash-section');
-        const wasSelected = currentConversation === convId;
-        let nextSelectId = null;
-        if (fromActiveList && wasSelected) {
-          const findSibling = (start, dir) => {
-            let probe = start;
-            while (probe) {
-              if (probe.classList && probe.classList.contains('conv-item') && probe.dataset && probe.dataset.id) {
-                return probe.dataset.id;
-              }
-              probe = dir === 'next' ? probe.nextElementSibling : probe.previousElementSibling;
-            }
-            return null;
-          };
-          nextSelectId = findSibling(item.nextElementSibling, 'next')
-                      || findSibling(item.previousElementSibling, 'prev');
-        }
+        // Capture visual order before the selected row disappears. This works
+        // across folder/group wrappers instead of assuming direct siblings.
+        const nextSelectId = nextArchived && currentConversation === convId
+          ? _visibleConversationNeighborId(convId, item)
+          : null;
         try {
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
             || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
@@ -28380,6 +28381,9 @@
         const sessionId = item && item.dataset.sessionId;
         if (!convId || !sessionId) return;
         const wantTrashed = btn.dataset.role === 'trash';
+        const nextSelectId = wantTrashed && currentConversation === convId
+          ? _visibleConversationNeighborId(convId, item)
+          : null;
         try {
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
             || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
@@ -28405,6 +28409,9 @@
           patchLifecycle(currentRepoBacklogData);
           setOptimisticOverride(sessionId, { archived: !!data.archived, trashed: !!data.trashed });
           renderSidebar(filterConversations($convSearch.value));
+          if (data.trashed && nextSelectId) {
+            selectConversation(nextSelectId);
+          }
           showOpToast(data.trashed ? 'Moved to Trash' : 'Untrashed to Archived');
         } catch (err) {
           showOpToast((wantTrashed ? 'Trash' : 'Untrash') + ' failed (' + err.message + ')', 'error');

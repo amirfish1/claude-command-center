@@ -13,6 +13,7 @@ function pass(label) {
   const browser = await puppeteer.launch({ args: ['--no-sandbox'] });
   const page = await browser.newPage();
   let candidate = null;
+  let workerCandidate = null;
 
   async function post(path, payload) {
     return page.evaluate(async ({ path, payload }) => {
@@ -64,6 +65,15 @@ function pass(label) {
         return;
       } catch (_) {}
     }
+  }
+
+  async function selectAllLane(lane) {
+    await page.waitForSelector(`[data-all-hermes-tab="${lane}"]`, { timeout });
+    await page.evaluate(laneName => {
+      const tab = document.querySelector(`[data-all-hermes-tab="${laneName}"]`);
+      if (!tab) throw new Error(`missing All lane ${laneName}`);
+      tab.click();
+    }, lane);
   }
 
   async function waitForActions(container, sid, expected) {
@@ -141,7 +151,51 @@ function pass(label) {
     await selectAllLaneForRow(sid);
     await waitForActions('.conv-archived-list', sid, { archive: 1, trash: 1, untrash: 0 });
     pass('Untrash returns the conversation to Archived in All main');
+
+    await selectAllLane('workers');
+    const workerSids = new Set(await page.$$eval(
+      '.conv-archived-list .conv-item[data-session-id]',
+      elements => elements.map(el => el.dataset.sessionId).filter(Boolean),
+    ));
+    workerCandidate = rows.find(row => {
+      const rowSid = row && (row.session_id || row.id);
+      return rowSid && rowSid !== sid && workerSids.has(rowSid) && eligible(row) && !row.trashed;
+    });
+    if (!workerCandidate) throw new Error('no dormant Workers-lane conversation is available for Trash verification');
+    const workerSid = workerCandidate.session_id || workerCandidate.id;
+    await waitForActions('.conv-archived-list', workerSid, { trash: 1, untrash: 0 });
+    const trashResponse = page.waitForResponse(response =>
+      response.request().method() === 'POST'
+      && response.url().includes(`/api/conversations/${encodeURIComponent(workerSid)}/trash`),
+      { timeout },
+    );
+    await clickAction('.conv-archived-list', workerSid, 'trash');
+    await trashResponse;
+    await page.reload({ waitUntil: 'load', timeout });
+    await selectTab('archived');
+    await selectAllLane('workers');
+    await waitForActions('.conv-trash-list', workerSid, { trash: 0, untrash: 1 });
+    pass('All / Workers Trash survives refresh in the Trash bucket');
   } finally {
+    if (workerCandidate) {
+      const sid = workerCandidate.session_id || workerCandidate.id;
+      const convId = workerCandidate.id || sid;
+      const archivePath = `/api/conversations/${encodeURIComponent(convId)}/archive`;
+      const trashPath = `/api/conversations/${encodeURIComponent(convId)}/trash`;
+      try {
+        if (workerCandidate.trashed) {
+          await post(trashPath, { session_id: sid, trashed: true });
+        } else if (workerCandidate.archived) {
+          await post(trashPath, { session_id: sid, trashed: false });
+          await post(archivePath, { session_id: sid, archived: true });
+        } else {
+          await post(trashPath, { session_id: sid, trashed: false });
+          await post(archivePath, { session_id: sid, archived: false });
+        }
+      } catch (error) {
+        process.stderr.write(`WARN could not restore worker ${sid}: ${error.message}\n`);
+      }
+    }
     if (candidate) {
       const sid = candidate.session_id || candidate.id;
       const convId = candidate.id || sid;

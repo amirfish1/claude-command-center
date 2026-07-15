@@ -2630,6 +2630,16 @@ class TestServerImports(unittest.TestCase):
             self.assertFalse(server.MORNING_ENABLED,
                              "MORNING_ENABLED must be False when plugin missing")
 
+    def test_morning_session_ids_is_empty_when_plugin_disabled(self):
+        """Core conversation routes must not import the optional store."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with mock.patch.object(server, "MORNING_ENABLED", False), \
+             mock.patch.dict(sys.modules, {"morning_store": None}):
+            self.assertEqual(server._morning_session_ids(), {})
+
     def test_page_annotation_is_bounded_and_persisted(self):
         """Browser annotations should store local context without requiring
         screenshot support or touching the real user state directory."""
@@ -8113,6 +8123,43 @@ class TestRepoContextHelpers(unittest.TestCase):
             gone_body = gone.exception.read().decode("utf-8")
             gone.exception.close()
             self.assertIn("repo_switch_removed", gone_body)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_conversations_endpoint_gates_old_transcripts_before_scanning(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        calls = []
+
+        def fake_find_conversations(repo_path, **kwargs):
+            calls.append((repo_path, kwargs))
+            return []
+
+        try:
+            with mock.patch.object(
+                self.server, "find_conversations", side_effect=fake_find_conversations
+            ):
+                for suffix, expected in (("", False), ("&include_old=1", True)):
+                    url = (
+                        base
+                        + "/api/conversations?repo_path="
+                        + urllib.parse.quote(str(self.repo))
+                        + suffix
+                    )
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(json.loads(response.read().decode("utf-8")), [])
+                    self.assertEqual(calls[-1], (
+                        str(self.repo),
+                        {"include_old": expected},
+                    ))
         finally:
             httpd.shutdown()
             httpd.server_close()

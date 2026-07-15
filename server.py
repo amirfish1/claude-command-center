@@ -5794,13 +5794,9 @@ def find_all_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations(sweep=False))
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
-        archived_set = set()
-    try:
-        trashed_set = set(_load_trashed_conversations(sweep=False))
-    except Exception:
-        trashed_set = set()
+        archived_set, trashed_set = set(), set()
     try:
         pinned_list = _load_pinned_conversations()
     except Exception:
@@ -6600,12 +6596,23 @@ except ValueError:
 _archive_serve_cache = {}      # key -> {"ts", "rows"}
 _archive_serve_lock = threading.Lock()
 _archive_serve_refreshing = set()  # keys with a background refresh in flight
+_archive_serve_generation = 0
+
+
+def _archive_serve_cache_store(key, rows, generation):
+    """Store rows only if no lifecycle mutation invalidated their build."""
+    with _archive_serve_lock:
+        if generation != _archive_serve_generation:
+            return False
+        _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
+        return True
 
 
 def _clear_archive_serve_cache():
+    global _archive_serve_generation
     with _archive_serve_lock:
         _archive_serve_cache.clear()
-        _archive_serve_refreshing.clear()
+        _archive_serve_generation += 1
 
 
 # Coalescing cache for the spawned-session list on the ?all=1 hot path.
@@ -6737,7 +6744,7 @@ def _stamp_archive_goals(rows):
     return rows
 
 
-def _archive_compute_rows(key, cache_options):
+def _archive_compute_rows(key, cache_options, serve_generation=None):
     """Produce archive rows under the per-key build lock (single-flight).
 
     Signature-gated: unchanged transcript corpus → rehydrate the persisted rows
@@ -6746,6 +6753,9 @@ def _archive_compute_rows(key, cache_options):
     both the persisted response cache and the in-memory serve snapshot.
     Returns (rows, from_cache).
     """
+    if serve_generation is None:
+        with _archive_serve_lock:
+            serve_generation = _archive_serve_generation
     sig = _archive_corpus_signature()
     lock = _archive_build_lock(key)
     with lock:
@@ -6762,15 +6772,14 @@ def _archive_compute_rows(key, cache_options):
     _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
     _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
     if _ARCHIVE_SERVE_TTL > 0:
-        with _archive_serve_lock:
-            _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
+        _archive_serve_cache_store(key, rows, serve_generation)
     return rows, from_cache
 
 
-def _archive_serve_refresh(key, cache_options):
+def _archive_serve_refresh(key, cache_options, serve_generation):
     global _archive_serve_refreshing
     try:
-        _archive_compute_rows(key, cache_options)
+        _archive_compute_rows(key, cache_options, serve_generation)
     except Exception as e:
         print(f"  [archive-serve] background refresh failed: {e}")
     finally:
@@ -6805,6 +6814,7 @@ def _archive_serve_rows(key, cache_options):
         return _archive_compute_rows(key, cache_options)
     now = time.time()
     with _archive_serve_lock:
+        serve_generation = _archive_serve_generation
         sc = _archive_serve_cache.get(key)
         if sc is not None:
             rows = [dict(r) for r in sc.get("rows") or []]
@@ -6820,7 +6830,9 @@ def _archive_serve_rows(key, cache_options):
     if rows is not None:
         if spawn:
             threading.Thread(
-                target=_archive_serve_refresh, args=(key, cache_options), daemon=True
+                target=_archive_serve_refresh,
+                args=(key, cache_options, serve_generation),
+                daemon=True,
             ).start()
         return rows, True
     # Cold (e.g. just after a restart): the in-memory serve snapshot is empty.
@@ -6834,20 +6846,22 @@ def _archive_serve_rows(key, cache_options):
         _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
         _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
         _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
+        stored = _archive_serve_cache_store(key, rows, serve_generation)
         with _archive_serve_lock:
-            _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
-            if key not in _archive_serve_refreshing:
+            if stored and key not in _archive_serve_refreshing:
                 _archive_serve_refreshing.add(key)
                 spawn = True
             else:
                 spawn = False
         if spawn:
             threading.Thread(
-                target=_archive_serve_refresh, args=(key, cache_options), daemon=True
+                target=_archive_serve_refresh,
+                args=(key, cache_options, serve_generation),
+                daemon=True,
             ).start()
         return [dict(r) for r in rows], True
     # Nothing persisted yet — build once synchronously.
-    return _archive_compute_rows(key, cache_options)
+    return _archive_compute_rows(key, cache_options, serve_generation)
 
 
 _ARCHIVE_SIDECAR_DEFAULTS = {
@@ -6875,13 +6889,9 @@ def _rehydrate_archive_cached_rows(rows):
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations(sweep=False))
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
-        archived_set = set()
-    try:
-        trashed_set = set(_load_trashed_conversations(sweep=False))
-    except Exception:
-        trashed_set = set()
+        archived_set, trashed_set = set(), set()
     try:
         verified_set = set(_load_verified_conversations())
     except Exception:
@@ -9645,6 +9655,7 @@ CONVERSATION_ORDER_FILE = COMMAND_CENTER_STATE_DIR / "conversation-order.json"  
 ARCHIVED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "archived-conversations.json"  # [session_id,...]
 TRASHED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "trashed-conversations.json"  # [session_id,...] — subset of archived
 ARCHIVE_GRACE_FILE = COMMAND_CENTER_STATE_DIR / "archive-sticky.json"  # {session_id: archived_at_epoch} — manual archives, sticky vs auto-unarchive
+_conversation_lifecycle_lock = threading.RLock()
 ARCHIVE_EVENTS_LOG = COMMAND_CENTER_STATE_DIR / "archive-events.log"  # append-only: every archive/unarchive state change, so "why did X get unarchived" is answerable without re-deriving candidacy internals after the fact (CCC-445)
 
 
@@ -10632,85 +10643,204 @@ def _auto_unarchive_live_sessions(archived):
 
 def _load_archived_conversations(*, sweep=True):
     """Load list of archived session_ids from the side-car file."""
-    try:
-        data = json.loads(ARCHIVED_CONVERSATIONS_FILE.read_text())
-        if isinstance(data, list):
-            archived = [s for s in data if isinstance(s, str)]
-            return _auto_unarchive_live_sessions(archived) if sweep else archived
-    except (OSError, json.JSONDecodeError):
-        pass
-    return []
+    with _conversation_lifecycle_lock:
+        try:
+            data = json.loads(ARCHIVED_CONVERSATIONS_FILE.read_text())
+            archived = [s for s in data if isinstance(s, str)] if isinstance(data, list) else []
+        except (OSError, json.JSONDecodeError):
+            archived = []
+        # Trash is a terminal subset of Archive. Repair older split-brain
+        # sidecars here so every caller — including refresh-time row builders —
+        # observes the invariant even if a previous concurrent write lost the
+        # archive entry while preserving the trash marker.
+        trashed = _load_trashed_conversations(sweep=False)
+        repaired = archived + [sid for sid in trashed if sid not in archived]
+        if repaired != archived:
+            _write_archived_conversations(repaired)
+        if not sweep:
+            return repaired
+        trashed_set = set(trashed)
+        sweepable = [sid for sid in repaired if sid not in trashed_set]
+        swept = _auto_unarchive_live_sessions(sweepable)
+        swept_set = set(swept)
+        return [sid for sid in repaired if sid in trashed_set or sid in swept_set]
 
 
-def _save_archived_conversations(archived):
-    """Persist list of archived session_ids."""
+def _write_archived_conversations(archived):
+    """Write an already-normalized archive list while the lifecycle lock is held."""
     LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if not isinstance(archived, list):
-        archived = []
     ARCHIVED_CONVERSATIONS_FILE.write_text(json.dumps(archived, indent=2))
     return archived
 
 
+def _save_archived_conversations(archived):
+    """Persist list of archived session_ids."""
+    with _conversation_lifecycle_lock:
+        if not isinstance(archived, list):
+            archived = []
+        archived = [sid for sid in archived if isinstance(sid, str)]
+        trashed = _load_trashed_conversations(sweep=False)
+        normalized = archived + [sid for sid in trashed if sid not in archived]
+        return _write_archived_conversations(normalized)
+
+
 def _load_trashed_conversations(*, sweep=True):
     """Load trashed session ids. `sweep` exists for archive-helper parity."""
-    try:
-        data = json.loads(TRASHED_CONVERSATIONS_FILE.read_text())
-        if isinstance(data, list):
-            return [sid for sid in data if isinstance(sid, str)]
-    except (OSError, json.JSONDecodeError):
-        pass
-    return []
+    with _conversation_lifecycle_lock:
+        try:
+            data = json.loads(TRASHED_CONVERSATIONS_FILE.read_text())
+            if isinstance(data, list):
+                return [sid for sid in data if isinstance(sid, str)]
+        except (OSError, json.JSONDecodeError):
+            pass
+        return []
 
 
 def _save_trashed_conversations(trashed):
     """Persist trashed session ids."""
-    LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if not isinstance(trashed, list):
-        trashed = []
-    TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
-    return trashed
+    with _conversation_lifecycle_lock:
+        LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        if not isinstance(trashed, list):
+            trashed = []
+        TRASHED_CONVERSATIONS_FILE.write_text(json.dumps(trashed, indent=2))
+        return trashed
+
+
+def _load_conversation_lifecycle_state():
+    """Return repaired Archive and Trash lists as one consistent snapshot."""
+    with _conversation_lifecycle_lock:
+        trashed = _load_trashed_conversations(sweep=False)
+        archived = _load_archived_conversations(sweep=False)
+        return archived, trashed
+
+
+def _load_conversation_lifecycle_sets(*, sweep=False):
+    """Return one atomic row-building snapshot, preserving Trash ⊆ Archive."""
+    with _conversation_lifecycle_lock:
+        archived = set(_load_archived_conversations(sweep=sweep))
+        trashed = set(_load_trashed_conversations(sweep=False))
+        archived.update(trashed)
+        return archived, trashed
 
 
 def _clear_trashed_on_unarchive(sid):
     """Remove Trash membership when a session moves back to Active."""
-    trashed = _load_trashed_conversations(sweep=False)
-    if sid in trashed:
-        trashed.remove(sid)
-        _save_trashed_conversations(trashed)
+    _clear_trashed_on_unarchive_many({sid})
+
+
+def _clear_trashed_on_unarchive_many(session_ids):
+    """Atomically remove sessions from Trash during an Active transition."""
+    remove = {sid for sid in session_ids if isinstance(sid, str) and sid}
+    if not remove:
+        return
+    with _conversation_lifecycle_lock:
+        trashed = _load_trashed_conversations(sweep=False)
+        remaining = [sid for sid in trashed if sid not in remove]
+        if remaining != trashed:
+            _save_trashed_conversations(remaining)
+
+
+def _set_conversation_archived(sid, desired=None, *, source="manual"):
+    """Atomically set/toggle one Archive state and its Trash/grace invariants."""
+    with _conversation_lifecycle_lock:
+        archived = _load_archived_conversations()
+        is_archived = sid in archived
+        want_archived = desired if isinstance(desired, bool) else not is_archived
+        changed = want_archived != is_archived
+
+        if want_archived and not is_archived:
+            archived.append(sid)
+            _archive_grace[sid] = time.time()
+            _save_archive_grace()
+            _log_archive_event("archive", sid, source)
+        elif not want_archived and is_archived:
+            archived.remove(sid)
+            _archive_grace.pop(sid, None)
+            _save_archive_grace()
+            _log_archive_event("unarchive", sid, source)
+
+        if not want_archived:
+            _clear_trashed_on_unarchive(sid)
+        _save_archived_conversations(archived)
+        return want_archived, changed
+
+
+def _set_conversations_archived(session_ids, want_archived):
+    """Atomically set Archive state for a deduplicated batch."""
+    with _conversation_lifecycle_lock:
+        archived = _load_archived_conversations()
+        archived_set = set(archived)
+        changed, unchanged, to_add, to_remove = [], [], [], set()
+        for sid in session_ids:
+            is_archived = sid in archived_set
+            if want_archived and not is_archived:
+                to_add.append(sid)
+                archived_set.add(sid)
+                changed.append(sid)
+            elif not want_archived and is_archived:
+                to_remove.add(sid)
+                archived_set.discard(sid)
+                changed.append(sid)
+            else:
+                unchanged.append(sid)
+
+        if changed:
+            new_list = [sid for sid in archived if sid not in to_remove] + to_add
+            now = time.time()
+            for sid in to_add:
+                _archive_grace[sid] = now
+                _log_archive_event("archive", sid, "bulk")
+            for sid in to_remove:
+                _archive_grace.pop(sid, None)
+                _log_archive_event("unarchive", sid, "bulk")
+            if to_remove:
+                _clear_trashed_on_unarchive_many(to_remove)
+            _save_archived_conversations(new_list)
+            _save_archive_grace()
+        return changed, unchanged, to_add, to_remove
 
 
 def _set_conversation_trashed(sid, trashed):
     """Set Trash membership while preserving ``trashed => archived``."""
-    archived_ids = _load_archived_conversations(sweep=False)
-    trashed_ids = _load_trashed_conversations(sweep=False)
     want_trashed = bool(trashed)
     kill_result = None
+    should_kill = False
 
-    if want_trashed and sid not in archived_ids:
-        # Write the sticky marker first so a concurrent archive sweep can never
-        # observe a newly archived live session without its manual grace state.
-        _archive_grace[sid] = time.time()
-        _save_archive_grace()
-        archived_ids.append(sid)
-        _save_archived_conversations(archived_ids)
-        _log_archive_event("archive", sid, "trash")
-        try:
-            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
-        except (OSError, FileNotFoundError):
-            pass
-        if sid and not sid.startswith(("backlog-", "pkood-")):
+    with _conversation_lifecycle_lock:
+        archived_ids, trashed_ids = _load_conversation_lifecycle_state()
+        if want_trashed and sid not in archived_ids:
+            # Write the sticky marker first so a concurrent archive sweep can
+            # never observe a newly archived live session without its manual
+            # grace state.
+            _archive_grace[sid] = time.time()
+            _save_archive_grace()
+            archived_ids.append(sid)
+            _save_archived_conversations(archived_ids)
+            _log_archive_event("archive", sid, "trash")
+            try:
+                (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+            except (OSError, FileNotFoundError):
+                pass
+            should_kill = bool(sid and not sid.startswith(("backlog-", "pkood-")))
+
+        if want_trashed and sid not in trashed_ids:
+            trashed_ids.append(sid)
+            _save_trashed_conversations(trashed_ids)
+        elif not want_trashed and sid in trashed_ids:
+            trashed_ids.remove(sid)
+            _save_trashed_conversations(trashed_ids)
+
+        archived_now = sid in archived_ids
+        trashed_now = sid in trashed_ids
+        # Keep the retire action ordered with the state transition. Otherwise
+        # a concurrent Untrash/Move to Active could complete before this kill
+        # and then have its newly-restored session terminated afterward.
+        if should_kill:
             kill_result = _kill_session_by_id(sid)
 
-    if want_trashed and sid not in trashed_ids:
-        trashed_ids.append(sid)
-        _save_trashed_conversations(trashed_ids)
-    elif not want_trashed and sid in trashed_ids:
-        trashed_ids.remove(sid)
-        _save_trashed_conversations(trashed_ids)
-
     return {
-        "archived": sid in archived_ids,
-        "trashed": sid in trashed_ids,
+        "archived": archived_now,
+        "trashed": trashed_now,
         "killed": kill_result,
     }
 
@@ -15647,8 +15777,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
         _dec_inflight()
         return conversations
     name_overrides = _load_session_name_overrides()
-    archived_set = set(_load_archived_conversations())
-    trashed_set = set(_load_trashed_conversations())
+    archived_set, trashed_set = _load_conversation_lifecycle_sets(sweep=True)
     pinned_list = _load_pinned_conversations()
     pinned_rank = _pinned_rank_map(pinned_list)
     verified_set = set(_load_verified_conversations())
@@ -25661,13 +25790,9 @@ def find_codex_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations(sweep=False))
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
-        archived_set = set()
-    try:
-        trashed_set = set(_load_trashed_conversations(sweep=False))
-    except Exception:
-        trashed_set = set()
+        archived_set, trashed_set = set(), set()
     try:
         verified_set = set(_load_verified_conversations())
     except Exception:
@@ -29276,13 +29401,9 @@ def find_gemini_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations(sweep=False))
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
-        archived_set = set()
-    try:
-        trashed_set = set(_load_trashed_conversations(sweep=False))
-    except Exception:
-        trashed_set = set()
+        archived_set, trashed_set = set(), set()
     try:
         verified_set = set(_load_verified_conversations())
     except Exception:
@@ -30836,13 +30957,9 @@ def find_cursor_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations(sweep=False))
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
-        archived_set = set()
-    try:
-        trashed_set = set(_load_trashed_conversations(sweep=False))
-    except Exception:
-        trashed_set = set()
+        archived_set, trashed_set = set(), set()
     try:
         verified_set = set(_load_verified_conversations())
     except Exception:
@@ -32505,13 +32622,9 @@ def find_hermes_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations(sweep=False))
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
-        archived_set = set()
-    try:
-        trashed_set = set(_load_trashed_conversations(sweep=False))
-    except Exception:
-        trashed_set = set()
+        archived_set, trashed_set = set(), set()
     try:
         verified_set = set(_load_verified_conversations())
     except Exception:
@@ -33404,13 +33517,9 @@ def find_kilo_conversations(
         except Exception:
             name_overrides = {}
         try:
-            archived_set = set(_load_archived_conversations(sweep=False))
+            archived_set, trashed_set = _load_conversation_lifecycle_sets()
         except Exception:
-            archived_set = set()
-        try:
-            trashed_set = set(_load_trashed_conversations(sweep=False))
-        except Exception:
-            trashed_set = set()
+            archived_set, trashed_set = set(), set()
         try:
             verified_set = set(_load_verified_conversations())
         except Exception:
@@ -34613,13 +34722,9 @@ def find_antigravity_conversations(
     except Exception:
         name_overrides = {}
     try:
-        archived_set = set(_load_archived_conversations(sweep=False))
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
     except Exception:
-        archived_set = set()
-    try:
-        trashed_set = set(_load_trashed_conversations(sweep=False))
-    except Exception:
-        trashed_set = set()
+        archived_set, trashed_set = set(), set()
     try:
         verified_set = set(_load_verified_conversations())
     except Exception:
@@ -43507,8 +43612,7 @@ def find_pkood_agents():
     # Pkood cards share the same archive list as claude sessions — without
     # consulting it here, archive toggles on a pkood-* id would persist
     # but the rendered card would still show archived=False.
-    archived_set = set(_load_archived_conversations())
-    trashed_set = set(_load_trashed_conversations())
+    archived_set, trashed_set = _load_conversation_lifecycle_sets(sweep=True)
     agents = []
     for meta_file in PKOOD_STATE_DIR.glob("*_meta.json"):
         try:
@@ -52955,6 +53059,8 @@ def _morning_session_ids():
     for every strategy across all goal.md files that has a claude_session_id.
     Used to route sessions to the Morning Kanban vs. the Dev Kanban.
     """
+    if not MORNING_ENABLED:
+        return {}
     import morning_store as _store
     out = {}
     try:
@@ -54253,7 +54359,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
-                convs = find_conversations(ctx["repo_path"]) or []
+                include_old = qs.get("include_old", ["0"])[0] in ("1", "true")
+                convs = find_conversations(
+                    ctx["repo_path"],
+                    include_old=include_old,
+                ) or []
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
                 return
@@ -54266,7 +54376,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # is older than CCC_MAX_CONV_AGE_DAYS — or `last_interacted` if
             # the user touched the row from the UI more recently. Bypass
             # with ?include_old=1 (sidebar will eventually wire a toggle).
-            include_old = qs.get("include_old", ["0"])[0] in ("1", "true")
             if not include_old:
                 try:
                     _max_age_days = int(os.environ.get("CCC_MAX_CONV_AGE_DAYS", "30"))
@@ -58840,48 +58949,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # explicit desired state so re-runs don't un-archive.
             desired = payload.get("archived")
             try:
-                archived = _load_archived_conversations()
-                is_arch = sid in archived
-                want = desired if isinstance(desired, bool) else (not is_arch)
-                if want and not is_arch:
-                    archived.append(sid)
-                    now_archived = True
-                    # Make this deliberate archive STICKY against the auto-
-                    # unarchive sweep (CCC-117) — otherwise a live, streaming
-                    # session (its transcript mtime kept fresh by the agent or
-                    # an attached terminal) bounces straight back to active,
-                    # which read as "archive refuses to work" (CCC-149 follow-up).
-                    _archive_grace[sid] = time.time()
-                    _save_archive_grace()
-                    _log_archive_event("archive", sid, "manual")
-                elif (not want) and is_arch:
-                    archived.remove(sid)
-                    now_archived = False
-                    _archive_grace.pop(sid, None)
-                    _save_archive_grace()
-                    _log_archive_event("unarchive", sid, "manual")
-                else:
-                    # Already in the desired state — no-op, report it truthfully.
-                    now_archived = is_arch
-                if not want:
-                    _clear_trashed_on_unarchive(sid)
-                _save_archived_conversations(archived)
-                # Archiving retires the session — drop any stale Notification-hook
-                # marker so the dashboard doesn't keep classifying it as Waiting
-                # (which would pin the row to "In progress" and undo the move).
-                kill_result = None
-                if now_archived:
-                    try:
-                        (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
-                    except (OSError, FileNotFoundError):
-                        pass
-                    # Free the headless agent. Resume via Jump rebuilds full
-                    # context from the on-disk JSONL — keeping the process
-                    # alive past the user's "done" gesture only accumulates
-                    # MCP children. Backlog rows have no process; pkood is
-                    # uninstalled.
-                    if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
-                        kill_result = _kill_session_by_id(sid)
+                # Keep retirement ordered with the state transition. If Move
+                # to Active races this request, it must run after the kill so
+                # the final Active state never points at a just-killed session.
+                with _conversation_lifecycle_lock:
+                    now_archived, _changed = _set_conversation_archived(
+                        sid, desired, source="manual",
+                    )
+                    # Archiving retires the session — drop any stale Notification-hook
+                    # marker so the dashboard doesn't keep classifying it as Waiting
+                    # (which would pin the row to "In progress" and undo the move).
+                    kill_result = None
+                    if now_archived:
+                        try:
+                            (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
+                        except (OSError, FileNotFoundError):
+                            pass
+                        # Free the headless agent. Resume via Jump rebuilds full
+                        # context from the on-disk JSONL — keeping the process
+                        # alive past the user's "done" gesture only accumulates
+                        # MCP children. Backlog rows have no process; pkood is
+                        # uninstalled.
+                        if sid and not sid.startswith("backlog-") and not sid.startswith("pkood-"):
+                            kill_result = _kill_session_by_id(sid)
                 # If this card represents a GitHub issue (id `issue-N`),
                 # also close/reopen the issue on archive/unarchive.
                 issue_match = re.match(r"^issue-(\d+)$", conv_id)
@@ -58904,6 +58994,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _bust_issue_state_cache(repo_from_session(sid)["repo_path"])
                     except RepoContextError:
                         _bust_issue_state_cache()
+                _clear_archive_serve_cache()
                 self.send_json({"ok": True, "archived": now_archived, "github": gh_result, "killed": kill_result})
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
@@ -58979,40 +59070,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "batch too large (max 1000 ids)"}, 400)
                 return
             try:
-                archived = _load_archived_conversations()
-                arch_set = set(archived)
-                changed, unchanged, to_add, to_remove = [], [], [], set()
-                for sid in seen:
-                    is_arch = sid in arch_set
-                    if want and not is_arch:
-                        to_add.append(sid); arch_set.add(sid); changed.append(sid)
-                    elif (not want) and is_arch:
-                        to_remove.add(sid); arch_set.discard(sid); changed.append(sid)
-                    else:
-                        unchanged.append(sid)
+                changed, unchanged, to_add, to_remove = _set_conversations_archived(
+                    seen, want,
+                )
                 if changed:
-                    # Rebuild preserving original order, then append new archives.
-                    new_list = [s for s in archived if s not in to_remove] + to_add
-                    now = time.time()
                     for sid in to_add:
-                        _archive_grace[sid] = now
-                        _log_archive_event("archive", sid, "bulk")
                         # Retire any stale Notification-hook marker so the row
                         # doesn't bounce back to "Waiting" / In progress.
                         try:
                             (SIDECAR_STATE_DIR / f"{sid}_needs_approval.json").unlink()
                         except (OSError, FileNotFoundError):
                             pass
-                    for sid in to_remove:
-                        _archive_grace.pop(sid, None)
-                        _log_archive_event("unarchive", sid, "bulk")
-                    if to_remove:
-                        trashed_ids = _load_trashed_conversations(sweep=False)
-                        remaining_trashed = [sid for sid in trashed_ids if sid not in to_remove]
-                        if remaining_trashed != trashed_ids:
-                            _save_trashed_conversations(remaining_trashed)
-                    _save_archived_conversations(new_list)
-                    _save_archive_grace()
+                _clear_archive_serve_cache()
                 self.send_json({
                     "ok": True,
                     "archived": want,
@@ -59097,11 +59166,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     pr_state = (state_data.get("state") or "").upper()
                     if pr_state == "MERGED":
                         archived_now = False
-                        archived_set = _load_archived_conversations()
-                        if sid and sid not in archived_set:
-                            archived_set.append(sid)
-                            _save_archived_conversations(archived_set)
-                            archived_now = True
+                        if sid:
+                            _now_archived, archived_now = _set_conversation_archived(
+                                sid, True, source="merge",
+                            )
+                            _clear_archive_serve_cache()
                         _bust_issue_state_cache(ctx["repo_path"])
                         self.send_json({
                             "ok": True,
@@ -59158,10 +59227,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # so re-clicking gets a confusing second "merged" toast
                     # (gh is idempotent on already-merged PRs). Mirrors the
                     # user mental model: merged → done.
-                    archived_set = _load_archived_conversations()
-                    if sid and sid not in archived_set:
-                        archived_set.append(sid)
-                        _save_archived_conversations(archived_set)
+                    if sid:
+                        _set_conversation_archived(sid, True, source="merge")
+                        _clear_archive_serve_cache()
                     # PR merges typically close the linked issue (via
                     # "Closes #N" in the body); refresh the GH issues
                     # section so it reflects that on next poll. Also bust
@@ -59352,10 +59420,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             # Success — same archive + cache-bust as the direct merge path.
-            archived_set = _load_archived_conversations()
-            if sid and sid not in archived_set:
-                archived_set.append(sid)
-                _save_archived_conversations(archived_set)
+            if sid:
+                _set_conversation_archived(sid, True, source="merge")
+                _clear_archive_serve_cache()
             _bust_issue_state_cache(ctx["repo_path"])
             self.send_json({
                 "ok": True,
