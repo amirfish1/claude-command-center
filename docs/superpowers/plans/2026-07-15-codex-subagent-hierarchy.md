@@ -4,7 +4,7 @@
 
 **Goal:** Show Codex-spawned agents directly beneath their parent sessions in the All view and replace opaque generated codenames with reliable task-oriented labels.
 
-**Architecture:** Keep the `/api/*` response flat and additive. The backend derives a task label from Codex's clear-text `agent_path`, while the frontend reuses its existing `parent_session_id` tree builder in the All view and makes unoverridden children inherit their parent's lane.
+**Architecture:** Keep the `/api/*` response flat and additive. The backend derives a task label from Codex's clear-text `agent_path`, while the frontend applies the same cycle-safe `parent_session_id` tree rules within the All render branch and makes unoverridden children inherit their parent's lane.
 
 **Tech Stack:** Python 3 standard library, SQLite, single-file browser JavaScript/CSS, `unittest`, Puppeteer 25.
 
@@ -198,7 +198,9 @@ This makes generated Codex children follow WatchTower parents into Workers while
 
 - [ ] **Step 4: Render All session rows as parent/child clusters**
 
-Build `_allTabTreeRows` with the existing cycle-safe `_currentSessionsTreeRows()` helper. In project-grouped mode, tree-order each group's cards and pass `currentChildDepth: item.depth` to `_renderRow()`.
+Build `_allTabTreeRows` with an All-branch cycle-safe tree helper. In
+project-grouped mode, assign each complete tree cluster to its root parent's
+project and pass `currentChildDepth: item.depth` to `_renderRow()`.
 
 In time-grouped mode, convert `_allTabTreeRows` into clusters: each depth-0 row starts a cluster and following depth>0 rows join it. Sort clusters against group-chat rows using the cluster's newest activity time, render every cluster contiguously, and keep singleton root rows eligible for `_renderRowsWithRepeatGroups()`.
 

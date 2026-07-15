@@ -53,13 +53,15 @@ lane recursively. This keeps WatchTower reviewers under the WatchTower parent
 in Workers and ordinary coding subagents under their parent in Coding. An
 explicit user lane override wins and intentionally separates that child.
 
-Use one generic tree helper for both Active and All views so their hierarchy
-rules cannot drift. Child-row indentation applies in both containers, without
-changing search results, which remain flat and relevance ordered.
+Use equivalent cycle-safe tree helpers scoped to the Active and All render
+branches. The render branches currently have separate local lifetimes, so
+sharing the Active helper directly would make the All branch depend on a
+conditional declaration. Child-row indentation applies in both containers,
+without changing search results, which remain flat and relevance ordered.
 
-In project-grouped All mode, tree nesting is computed within each project
-group. A parent filtered into another project leaves the child visible at the
-top level of its own group.
+In project-grouped All mode, a complete parent/descendant cluster follows the
+root parent's project. This keeps cross-worktree Codex children attached to
+their originating session rather than splitting the hierarchy across folders.
 
 ## Alternatives Considered
 
