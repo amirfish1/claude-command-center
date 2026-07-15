@@ -417,6 +417,23 @@ The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can als
 
 For any other env var (not just the network ones above), `run.sh` sources `~/.claude/command-center/config.local.env` if present, before doing anything else — plain `KEY=value` lines, same as a shell `.env` file. This machine-local file is never part of the repo (it lives outside the working tree, so there's nothing to gitignore). It's the fix for a real gap: `launchctl setenv`/`systemctl --user set-environment`-style overrides don't survive a reboot, but a var set in this file does, and it's baked into the launchd plist / systemd unit the same way a real env var is when you run `--install-service`.
 
+## Python stack diagnostics
+
+On macOS and Linux, a running CCC server can dump every Python thread's stack
+without `sudo`, installing a debugger, or restarting the service. Resolve the
+server's current port and send it `SIGUSR2`:
+
+```bash
+CCC_PORT="$(sed 's/.*://' ~/.claude/command-center/port.txt)"
+CCC_PID="$(lsof -nP -iTCP:"$CCC_PORT" -sTCP:LISTEN -t | head -1)"
+kill -USR2 "$CCC_PID"
+tail -n 200 ~/.claude/command-center/logs/python-stacks.log
+```
+
+Each signal appends a traceback for all Python threads to the same diagnostics
+log. This is useful when the dashboard is alive but a request appears stuck.
+The signal is unavailable on Windows.
+
 ## Roadmap
 
 **Shipped**

@@ -15,6 +15,7 @@ __version__ = "5.8.0"
 
 import ast
 import base64
+import faulthandler
 import fcntl
 import gzip
 import html
@@ -85,6 +86,41 @@ CCC_ROOT = Path(__file__).resolve().parent
 COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
+PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
+_PYTHON_STACK_DUMP_FILE = None
+
+
+def _install_python_stack_dump_handler(log_path=None):
+    """Append all-thread Python tracebacks to a log when SIGUSR2 arrives."""
+    global _PYTHON_STACK_DUMP_FILE
+    if _PYTHON_STACK_DUMP_FILE is not None:
+        return True
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is None:
+        return False
+    path = Path(log_path) if log_path is not None else PYTHON_STACK_DUMP_LOG
+    dump_file = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        dump_file = open(path, "a", buffering=1)
+        dump_file.write(
+            f"\n=== CCC Python stack handler started "
+            f"{datetime.now(tz=timezone.utc).isoformat()} pid={os.getpid()} ===\n"
+        )
+        dump_file.flush()
+        faulthandler.register(sigusr2, file=dump_file, all_threads=True, chain=False)
+    except (OSError, RuntimeError, ValueError) as exc:
+        if dump_file is not None:
+            try:
+                dump_file.close()
+            except OSError:
+                pass
+        print(f"⚠️  Could not install Python stack diagnostics: {exc}", file=sys.stderr)
+        return False
+    _PYTHON_STACK_DUMP_FILE = dump_file
+    return True
+
+
 # AskUserQuestion relay: headless `claude -p` auto-declines AskUserQuestion
 # (no TUI picker), so for CCC-spawned sessions the PreToolUse hook blocks and
 # waits here for the dashboard to drop an answer file. Kept in sync with
@@ -66678,6 +66714,7 @@ def main():
         daemon_threads = True
     _raise_open_file_limit()
     migrate_state_dir()
+    _install_python_stack_dump_handler()
     # Diagnostic: mark every server start in the resume ledger so a burst of
     # cold_resume events right after this line implicates restart-EOF as the
     # cause of warm processes dying.

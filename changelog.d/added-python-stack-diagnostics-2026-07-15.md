@@ -1,0 +1,1 @@
+- Added a non-root `SIGUSR2` diagnostic that appends every CCC Python thread's stack to `~/.claude/command-center/logs/python-stacks.log`.
