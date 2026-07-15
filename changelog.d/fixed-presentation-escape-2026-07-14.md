@@ -1,1 +1,0 @@
-- Pressing Escape now exits conversation presentation Mode 2, including while the composer is focused.

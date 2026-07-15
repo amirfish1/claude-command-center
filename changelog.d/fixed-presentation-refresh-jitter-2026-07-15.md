@@ -1,1 +1,0 @@
-- Prevented background presentation refreshes from replaying the slide entrance animation and making the view jitter.

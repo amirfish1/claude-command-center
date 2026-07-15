@@ -1,1 +1,0 @@
-- Session icons now retain distinct engine colors while brightness and readable $, $$, and $$$ markers show unified cost tiers, with a separate dot for active work.

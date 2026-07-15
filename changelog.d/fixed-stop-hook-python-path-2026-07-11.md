@@ -1,1 +1,0 @@
-- Keep Claude Code hooks on macOS from breaking after Homebrew Python upgrades.

@@ -1,1 +1,0 @@
-- Stop labeling an active Codex turn as “another writer” when CCC reconnects after a restart; messages still queue safely behind the turn in FIFO order.

@@ -1,1 +1,0 @@
-- Add reasoning-effort defaults to global Codex spawn settings and per-queue WatchTower configuration.

@@ -1,1 +1,0 @@
-- Keep queue tickets constrained to the resized sidebar width instead of letting long titles expand the Queue tab.

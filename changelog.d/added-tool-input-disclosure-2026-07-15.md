@@ -1,1 +1,0 @@
-- Added a lazy expandable Input disclosure that shows complete redacted payloads for Claude transcript tool calls.

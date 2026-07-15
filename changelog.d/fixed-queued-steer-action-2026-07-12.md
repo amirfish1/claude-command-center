@@ -1,1 +1,0 @@
-- Keep queued-message trays scoped and ordered, prevent late tool output from resurrecting completed Codex turns as “Thinking,” and place CCC coordination/tool rows at their actual chronological positions.

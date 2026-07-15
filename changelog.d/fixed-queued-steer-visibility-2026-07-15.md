@@ -1,1 +1,0 @@
-- Keep queued composer messages visible and in FIFO order when a Steer attempt cannot reach the active Codex turn.

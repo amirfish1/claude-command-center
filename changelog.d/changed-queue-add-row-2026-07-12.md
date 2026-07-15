@@ -1,1 +1,0 @@
-- Moved the Queue panel’s Add control into a trailing queue row.

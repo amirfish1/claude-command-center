@@ -1,1 +1,0 @@
-- Avoid a broken image icon when a transcript refers to an image that was not saved.

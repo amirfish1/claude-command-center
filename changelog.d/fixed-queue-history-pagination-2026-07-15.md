@@ -1,1 +1,0 @@
-- Paginated the Queue All-history view so large ticket corpora no longer freeze the browser main thread.

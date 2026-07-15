@@ -1,1 +1,0 @@
-- Read current Codex multi-bucket quota data correctly and show authoritative account-wide daily totals alongside locally attributed graph detail.

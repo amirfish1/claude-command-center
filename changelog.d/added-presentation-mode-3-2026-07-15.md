@@ -1,1 +1,0 @@
-- Added conversation-scoped Mode 3: working agents can return safe, designed slide artifacts alongside normal answers, with Present fallback, toolbar progress, complete live updates, keyboard navigation, and answer-aware auto-advance.

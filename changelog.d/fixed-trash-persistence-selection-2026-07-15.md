@@ -1,1 +1,0 @@
-- Fixed Trash persistence across refresh, including Workers in All, and advance to the next visible conversation when trashing the open row.

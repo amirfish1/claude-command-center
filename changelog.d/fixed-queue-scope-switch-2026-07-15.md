@@ -1,1 +1,0 @@
-- Make Queue scope changes repaint immediately from the loaded ticket data instead of waiting for a full queue refetch.

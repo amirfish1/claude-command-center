@@ -1,1 +1,0 @@
-- Make in-progress Queue status dots use a dark blue core with a stronger electric-blue glow.

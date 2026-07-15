@@ -1,1 +1,0 @@
-- Keep queued Codex prompts draining when another CCC server's watcher exits.

@@ -1,1 +1,0 @@
-- Presentation mode now mirrors every live transcript update and interactive control, keeps newly completed answers visible, and restores the regular view's exact scroll/pin state on exit.

@@ -1,1 +1,0 @@
-Rebuilt the ccc.amirfish.ai landing page around the product story: pain-first hero, six problem-family chapters with visual proof slots and expandable capability depth, corrected version pill and Windows support cells, honest architecture claims, and AA contrast on muted text. Backed by the new canonical docs under docs/product-story/.

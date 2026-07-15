@@ -1,1 +1,0 @@
-- Add a durable Cancel action to queued composer messages so they can be withdrawn without disturbing later FIFO entries.

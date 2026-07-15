@@ -1,1 +1,0 @@
-- Detect and automatically resume Codex work stranded after context compaction or a silent active goal turn, including across CCC restarts, with durable per-conversation state, bounded retries, visible recovery status, FIFO handoff for queued messages, and safeguards for legitimate blocking states.

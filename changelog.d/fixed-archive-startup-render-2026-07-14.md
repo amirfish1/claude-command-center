@@ -1,1 +1,0 @@
-- Fixed the conversation archive getting stuck on its startup loading screen.

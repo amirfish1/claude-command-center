@@ -1,1 +1,0 @@
-- Show Codex Desktop's injected in-app browser state as a compact, expandable context card instead of user-written prompt text.

@@ -1,1 +1,0 @@
-- Fixed Present mode so readers already following the final slide advance when a new answer adds slides, while readers browsing earlier slides stay in place.

@@ -1,1 +1,0 @@
-- Fixed presentation-mode pane state from intercepting End, composer, and transcript clicks and resetting the conversation position.

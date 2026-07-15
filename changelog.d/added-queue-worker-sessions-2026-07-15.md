@@ -1,1 +1,0 @@
-- Show live WatchTower worker sessions and Past 24h worker history inline beneath each Queue health row.

@@ -1,1 +1,0 @@
-- Sort the Queue panel's All history view by ticket creation time, newest first, while preserving work-priority ordering in Open.

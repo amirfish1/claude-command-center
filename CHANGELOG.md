@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.8.0] - 2026-07-15
+
+### Added
+- All-tab lane headers now accept dragged sessions to pin them under Coding, Workers, or Messages.
+- Car Mode: a first-class hands-free voice operator. Launch it from the sidebar (🚗) or Settings → Advanced. The modal explains the feature and its cost (~$0.35/hr), lets you store optional Anthropic/Deepgram API keys locally, and starts/stops the voice agent. Degrades gracefully by which keys are set — with both you get hands-free voice; without a Deepgram key it points you to CCC's free built-in browser mic and read-aloud instead of erroring.
+- Add confirmed bulk archive controls for repeated session clusters.
+- Codex desktop ↔ CCC single-writer sync: CCC now detects when the Codex desktop app is attached to (or actively writing) a thread, shows "Desktop writing" / "⧉ desktop" on the conversation badge, blocks overlapping turns with a write-gate that queues CCC messages durably until the desktop turn finishes, and records durable coordination events (desktop turn detected, message queued, CCC turn boundaries) in the conversation.
+- Added zero-token-cost presentation modes with semantic list pagination, live activity reassurance, and per-pane answer decks.
+- Add drag-and-drop file attachments to session composers, with managed 100 MiB uploads.
+- Added a server-backed model catalog that merges local harness model data and lets new custom model IDs be selected without a CCC release.
+- **Federated CCC fleet**: pair CCC instances across machines (Settings → Nodes & peers…) and get one control plane — a Fleet view showing every repo's worktree/dirty/unpublished/PR/deployment state per node with honest staleness, "Continue on…" session handoff that pushes-then-fetches via git (never copies files), rewrites transcript paths, and lease-guards ownership on both sides, location-transparent spawn/inject/ask/group-chats through global `node:session` references, and a reviewed Resolve-all plan that pushes, pulls, marks-ready, merges, pings owning sessions, and removes only provably merged worktrees — as a persisted, restart-resumable job. Loopback bind and pairing-secret auth throughout; unpaired peers are rejected.
+- Group-chat replay now presents each participant message at 2× scale near the
+lower third of the screen, grows text downward from a fixed top edge, pauses
+for reading, then animates it into its transcript position.
+- Split the All sidebar tab into Coding, Workers, and Messages lanes, including Hermes and WatchTower workers.
+- Replaced the main Merge tab with a Queues tab that reuses the full WatchTower queue view while keeping the desktop right-rail Queue tab available.
+- Added conversation-scoped Mode 3: working agents can return safe, designed slide artifacts alongside normal answers, with Present fallback, toolbar progress, complete live updates, keyboard navigation, and answer-aware auto-advance.
+- Added a separate Productivity dashboard with project and daily delivery evidence, 6–16 week trends, Git/agent/token/time metrics, computer-presence coverage, and WatchTower activity.
+- Added a Queue manager for creating and editing WatchTower queue configurations from the dashboard.
+- Add a WatchTower activity-log shortcut between the Queue list and its tickets.
+- Add All, Bugs, and Features filters to the Queue panel.
+- Show live WatchTower worker sessions and Past 24h worker history inline beneath each Queue health row.
+- Add a durable Cancel action to queued composer messages so they can be withdrawn without disturbing later FIFO entries.
+- Session icons now retain distinct engine colors while brightness and readable $, $$, and $$$ markers show unified cost tiers, with a separate dot for active work.
+- Added distinct Active, Archived, and Trashed conversation states: Active and Archived remain visible in All, Trash is a separate bottom bucket, and every tab now exposes the correct Archive, Move to Active, Trash, or Untrash action.
+- Add reasoning-effort defaults to global Codex spawn settings and per-queue WatchTower configuration.
+- Added a lazy expandable Input disclosure that shows complete redacted payloads for Claude transcript tool calls.
+- **WatchTower sentinel badge** in the sidebar header, next to the version label. A small beacon shows live queue health (open count, queue count, stuck count) sourced from the existing `/api/ux-fixes/health` payload; the count pill and beacon color switch to amber when any queue is stuck. Click it for a popover breakdown of the top queues, with a CTA that scrolls to and highlights the queue panel. The beacon only animates a brief tick once per poll (~20s) instead of looping continuously, so it costs nothing while idle or backgrounded.
+
+### Changed
+- Codex status and wake indicators now show when CCC is using the managed app-server path.
+- Changed Codex model options to the current 5.5, 5.6 Sol/Terra/Luna, 5.4, 5.4 Mini, and 5.3 Codex Spark set.
+- Conversation panes now reveal newly arriving assistant prose word by word, matching replay mode's type-in feel without replaying old transcript loads.
+- Replace the landing-page hero mockup with a current three-pane CCC workspace showing sessions, conversation context, and its linked issue queue.
+- Model Advisor now refreshes after meaningful session changes, coalesces scans, and avoids continuous footer polling.
+- Rebuilt the ccc.amirfish.ai landing page around the product story: pain-first hero, six problem-family chapters with visual proof slots and expandable capability depth, corrected version pill and Windows support cells, honest architecture claims, and AA contrast on muted text. Backed by the new canonical docs under docs/product-story/.
+- Changed Mode 2 to open at the newest answer's first slide and moved navigation to large, centered side controls.
+- Moved the Queue panel’s Add control into a trailing queue row.
+
+### Removed
+- Presentation controls now use a simpler `Off | Present` choice; saved Mode 1 preferences automatically migrate to Present.
+
+### Fixed
+- All-tab lane drops now repaint the session into the selected Coding, Workers, or Messages lane immediately, without requiring a browser refresh.
+- All-tab lane overrides now persist across row id aliases and keep overridden terminal rows visible in their selected lane instead of leaving them hidden in Trash.
+- Preserve the last-opened conversation and the selected All subtab across hard refreshes and periodic sidebar updates.
+- Annotate stays visible on non-macOS installs; only the native Screen capture button is hidden when desktop screenshot support is unavailable.
+- Fixed the conversation archive getting stuck on its startup loading screen.
+- Fixed archived session rows so they show an explicit Restore action that moves the session back to Active.
+- Show Codex Desktop's injected in-app browser state as a compact, expandable context card instead of user-written prompt text.
+- Detect and automatically resume Codex work stranded after context compaction or a silent active goal turn, including across CCC restarts, with durable per-conversation state, bounded retries, visible recovery status, FIFO handoff for queued messages, and safeguards for legitimate blocking states.
+- Queued Codex messages now advance immediately on new input and turn completion while preserving per-conversation FIFO order; the periodic watcher is retained only for recovery.
+- Codex wakes now prefer the managed app-server, track turn notifications, warn when accepted turns show no activity, and can interrupt active app-server turns.
+- Codex sessions spawned by CCC now appear in Codex mobile, and CCC user-renamed Codex sessions sync their title into Codex's local session metadata.
+- Reject Codex models missing from the installed `codex debug models` catalog instead of starting silent sessions.
+- Codex model picker effort choices now mark the currently active reasoning effort, even when it comes from the latest session usage rather than a queued override.
+- Fixed slow opening of Codex conversations that end without visible output.
+- Codex Steer controls now hide unless the current turn can actually be steered from CCC, and stale Steer attempts fall back to a normal follow-up send.
+- Codex messages now fall back from a stale or unavailable Steer action to the normal ordered Send queue instead of failing with a misleading external-process error.
+- Show Codex-spawned agents beneath their parent session in the All view and use task-oriented labels when Codex exposes reliable task metadata.
+- Read current Codex multi-bucket quota data correctly and show authoritative account-wide daily totals alongside locally attributed graph detail.
+- Fixed dormant Codex sends so the conversation pane shows wake progress immediately instead of staying opaque while input is still being accepted.
+- Queued Codex follow-up messages now use one durable queue watcher across local CCC server instances, preventing stale queue snapshots from blocking wake delivery.
+- Stop labeling an active Codex turn as “another writer” when CCC reconnects after a restart; messages still queue safely behind the turn in FIFO order.
+- Stop a stalled conversation compaction from leaving its progress banner and controls stuck indefinitely.
+- Fixed End and composer clicks resetting long conversations to the top instead of preserving the requested reading position.
+- Make in-conversation find search the full transcript after a short typing pause and skip matches hidden inside collapsed content.
+- Fixed presentation arrows and End navigation, and kept bottom-pinned transcripts at the tail when focusing the composer.
+- Fixed Current Sessions flooding with ended spawned child-worker sessions.
+- Prevent dormant Codex `/goal` updates from leaving a permanent “Delivered — waiting” message bubble.
+- Fixed new-session model pickers to keep cached models scoped to their engine.
+- Show Codex reasoning effort next to the model in the conversation footer.
+- Conversation word-by-word reveal now stops auto-following as soon as you scroll away from the exact transcript tail.
+- Keep the mobile conversation Back button available when switching sessions after viewing subagent task tabs.
+- Fixed Mode 2 presentation pagination to fill slides by rendered content height instead of splitting compact numbered and bulleted content into sparse pages.
+- Fixed the new-session model picker showing models from a different engine.
+- Fixed first-launch installation from the macOS DMG by replacing fragile Terminal automation with an observable native installer, actionable recovery, and a built-DMG integration test. Update checks now wait until the dashboard loads so Sparkle's first-run prompt cannot dismiss an installation error or accidentally select Retry or Quit.
+- Fixed New session composers showing queued or steered messages from the previously viewed session.
+- Keep queued Codex prompts draining when another CCC server's watcher exits.
+- Pressing Escape now exits conversation presentation Mode 2, including while the composer is focused.
+- Presentation mode now mirrors every live transcript update and interactive control, keeps newly completed answers visible, and restores the regular view's exact scroll/pin state on exit.
+- Fixed presentation-mode pane state from intercepting End, composer, and transcript clicks and resetting the conversation position.
+- Prevented background presentation refreshes from replaying the slide entrance animation and making the view jitter.
+- Fixed Present mode so readers already following the final slide advance when a new answer adds slides, while readers browsing earlier slides stay in place.
+- Sort the Queue panel's All history view by ticket creation time, newest first, while preserving work-priority ordering in Open.
+- Explain when auto-drain is enabled but no queue tickets are runnable, and surface drain-toggle failures instead of silently ignoring them.
+- Paginated the Queue All-history view so large ticket corpora no longer freeze the browser main thread.
+- Fixed Queue panel overflow in the status rail when queue details are long.
+- Fixed the Queue scope picker so manually selected queues stay selected while the Queue tab rerenders.
+- Make Queue scope changes repaint immediately from the loaded ticket data instead of waiting for a full queue refetch.
+- Keep queue tickets constrained to the resized sidebar width instead of letting long titles expand the Queue tab.
+- Queue status dots now distinguish inert open work (gray) from active WIP (blue) and successfully closed work (green).
+- Queue health badges now explain what STUCK, WAITING, PARKED, CLEAR, and LIVE mean in their tooltip/ARIA labels.
+- Make in-progress Queue status dots use a dark blue core with a stronger electric-blue glow.
+- Keep queued-message trays scoped and ordered, prevent late tool output from resurrecting completed Codex turns as “Thinking,” and place CCC coordination/tool rows at their actual chronological positions.
+- Show Steer immediately beside Cancel when a Codex composer message enters the durable queue.
+- Keep queued composer messages visible and in FIFO order when a Steer attempt cannot reach the active Codex turn.
+- Restored conversations now prefetch their bounded transcript tail and paint before the full archive sidebar render, substantially reducing time spent on the conversation loading state.
+- Session-name matches now remain at the top of visible search results.
+- Keep Claude Code hooks on macOS from breaking after Homebrew Python upgrades.
+- The throughput dashboard now restores its complete billing-period graph instantly from stale cache, refreshes atomically in the background with live timing and session progress, limits discovery to the latest 14 days, and shows counted discovery/read/cache/parse phases instead of an opaque first-run wait. Claude and Codex now share the same billing-period chart experience, metric cards, weekly scale, and reset boundary; redundant quota/cost cards and the legacy aggregate fallback have been removed. Usage rate, cache totals, model quota contributions, and next-reset times now use explicit authoritative values, while empty auxiliary sections stay hidden. A Combined mode composes the existing engine snapshots without another scan and shows normalized Claude/Codex quota lines on a compact timeline with two prior-cycle days and a forecast ending at 100%. The chart keeps those real prior-cycle bars but no longer draws a misleading position-aligned “Last week” line across the compressed timeline.
+- Show a WatchTower ticket's configured repository in its detail view.
+- Show cached input counts in per-turn transcript token chips.
+- Show recoverable tool-call failures as amber warnings instead of alarming red errors.
+- Fixed Trash persistence across refresh, including Workers in All, and advance to the next visible conversation when trashing the open row.
+- Conversation Speak now skips queued or otherwise pending user echoes, so it reads the latest agent reply instead of a parked Codex send.
+- Avoid a broken image icon when a transcript refers to an image that was not saved.
+- Fixed word-by-word playback so list bullets and other markdown structure do not appear before their words are revealed.
+
 ## [5.6.0] - 2026-07-08
 
 ### Added
@@ -1921,7 +2030,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.6.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.8.0...HEAD
+[5.8.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.0
 [5.6.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.6.0
 [5.5.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.5.0
 [5.4.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.4.0

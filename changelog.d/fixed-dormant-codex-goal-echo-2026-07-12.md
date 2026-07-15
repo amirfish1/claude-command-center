@@ -1,1 +1,0 @@
-- Prevent dormant Codex `/goal` updates from leaving a permanent “Delivered — waiting” message bubble.
