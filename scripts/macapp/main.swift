@@ -354,6 +354,9 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loadingLabel?.isHidden = true
         stampMacAppFlag(on: webView)
+        if isMain {
+            appDelegate?.startUpdaterAfterBootstrap()
+        }
         // A reused named popout (window.open with an existing target name)
         // re-navigates without passing through createWebViewWith, so nothing
         // raises it — bring it to the front whenever it finishes a page load.
@@ -461,17 +464,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // check (interval and "automatically check" flag are controlled by the
     // user via the standard Sparkle update prompt the first time it runs).
     var updaterController: SPUStandardUpdaterController!
+    var updaterStarted = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignalHandlers()
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            // Sparkle can present first-run modal UI. Starting it while a
+            // bootstrap error alert is active stops that app-global modal
+            // session and can accidentally select Retry or Quit. Defer until
+            // the live dashboard has finished loading.
+            startingUpdater: false,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
         buildMenuBar()
         buildWindow()
         bootstrap()
+    }
+
+    func startUpdaterAfterBootstrap() {
+        guard !updaterStarted else { return }
+        updaterStarted = true
+        updaterController.startUpdater()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

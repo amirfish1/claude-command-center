@@ -3670,6 +3670,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('alert.addButton(withTitle: "Retry")', macapp)
         self.assertIn('alert.addButton(withTitle: "Open Log")', macapp)
 
+    def test_macapp_defers_sparkle_until_dashboard_loaded(self):
+        """Sparkle modal UI must not dismiss bootstrap recovery alerts."""
+        macapp = pathlib.Path(
+            PROJECT_ROOT, "scripts", "macapp", "main.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("startingUpdater: false", macapp)
+        self.assertIn("func startUpdaterAfterBootstrap()", macapp)
+        self.assertIn("updaterController.startUpdater()", macapp)
+        self.assertIn("appDelegate?.startUpdaterAfterBootstrap()", macapp)
+
     def test_macapp_does_not_quit_when_last_window_closes(self):
         """Closing a conversation pop-out (or the main window momentarily)
         must NOT terminate the app — that kills the server we spawned
