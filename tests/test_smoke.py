@@ -3585,6 +3585,26 @@ class TestServerImports(unittest.TestCase):
         # Bound to Cmd+` and Cmd+Shift+` in the Window menu.
         self.assertIn('keyEquivalent: "`"', macapp)
 
+    def test_macapp_first_launch_is_native_and_observable(self):
+        """DMG first launch must not depend on Terminal automation.
+
+        The app owns the bundled installer process, observes an early exit,
+        and gives the user recovery actions backed by the actual process log.
+        """
+        macapp = pathlib.Path(
+            PROJECT_ROOT, "scripts", "macapp", "main.swift"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("NSAppleScript", macapp)
+        self.assertNotIn('tell application "Terminal"', macapp)
+        self.assertNotIn("ccc-install-", macapp)
+        self.assertIn(
+            'proc.arguments = [installScript, "--from=dmg"]', macapp
+        )
+        self.assertIn('env["CCC_INSTALL_MODE"] = "app"', macapp)
+        self.assertIn("process.terminationStatus", macapp)
+        self.assertIn('alert.addButton(withTitle: "Retry")', macapp)
+        self.assertIn('alert.addButton(withTitle: "Open Log")', macapp)
+
     def test_macapp_does_not_quit_when_last_window_closes(self):
         """Closing a conversation pop-out (or the main window momentarily)
         must NOT terminate the app — that kills the server we spawned
