@@ -1104,12 +1104,22 @@ class TestServerImports(unittest.TestCase):
     def test_all_view_nests_subagents_and_inherits_parent_lane(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        all_view = app_js[
+            app_js.index("let _archivedHtml = '';"):
+            app_js.index("// Trash section (CCC-468)")
+        ]
 
+        self.assertIn("const _allTabSessionId = (c) =>", all_view)
+        self.assertIn("const _allTabParentId = (c) =>", all_view)
+        self.assertIn("const _allTabTreeRowsFor = (rows) => {", all_view)
+        self.assertNotIn("_currentSessionId(", all_view)
+        self.assertNotIn("_currentSessionParentId(", all_view)
+        self.assertNotIn("_currentSessionsTreeRows(", all_view)
         self.assertIn("const _allTabById = new Map();", app_js)
         self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
-        self.assertIn("const parent = _allTabById.get(_currentSessionParentId(c));", app_js)
+        self.assertIn("const parent = _allTabById.get(_allTabParentId(c));", app_js)
         self.assertIn("if (parent) return _allTabLaneFor(parent, seen);", app_js)
-        self.assertIn("const _allTabTreeRows = _currentSessionsTreeRows(_allTabMainConvs);", app_js)
+        self.assertIn("const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);", app_js)
         self.assertIn("const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);", app_js)
         self.assertIn("const root = cluster.rows[0].card;", app_js)
         self.assertIn("_byFolder.get(key).push(cluster);", app_js)

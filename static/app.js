@@ -26272,9 +26272,44 @@
     const _trashConvs = _archivedConvs.filter(c => !!c.trashed);
     const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);
     const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs);
+    const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+    const _allTabParentId = (c) =>
+      String((c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)) || '').trim();
+    const _allTabTreeRowsFor = (rows) => {
+      const byId = new Map();
+      (rows || []).forEach(c => {
+        const id = _allTabSessionId(c);
+        if (id) byId.set(id, c);
+      });
+      const childrenByParent = new Map();
+      const childIds = new Set();
+      (rows || []).forEach(c => {
+        const id = _allTabSessionId(c);
+        const pid = _allTabParentId(c);
+        if (!id || !pid || id === pid || !byId.has(pid)) return;
+        childIds.add(id);
+        (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
+      });
+      const out = [];
+      const emitted = new Set();
+      const emit = (c, depth) => {
+        const id = _allTabSessionId(c);
+        if (!id || emitted.has(id)) return;
+        emitted.add(id);
+        out.push({ card: c, depth });
+        (childrenByParent.get(id) || []).forEach(child => emit(child, depth + 1));
+      };
+      (rows || []).forEach(c => {
+        const id = _allTabSessionId(c);
+        if (!id || childIds.has(id)) return;
+        emit(c, 0);
+      });
+      (rows || []).forEach(c => emit(c, 0)); // cycle/orphan guard
+      return out;
+    };
     const _allTabById = new Map();
     _allTabConvs.forEach(c => {
-      const id = _currentSessionId(c);
+      const id = _allTabSessionId(c);
       if (id) _allTabById.set(id, c);
     });
     try { _ensureEvergreenQueuesFresh(); } catch (_) {}
@@ -26326,10 +26361,10 @@
     const _allTabLaneFor = (c, seen = new Set()) => {
       const override = _allTabLaneOverride(c);
       if (override) return override;
-      const id = _currentSessionId(c);
+      const id = _allTabSessionId(c);
       if (id && seen.has(id)) return _allTabNaturalLane(c);
       if (id) seen.add(id);
-      const parent = _allTabById.get(_currentSessionParentId(c));
+      const parent = _allTabById.get(_allTabParentId(c));
       if (parent) return _allTabLaneFor(parent, seen);
       return _allTabNaturalLane(c);
     };
@@ -26353,7 +26388,7 @@
       : ((_allTabHasHermesSplit && _allTabView === 'messages')
         ? _allTabHermesMessageConvs
         : _allTabCodingConvs);
-    const _allTabTreeRows = _currentSessionsTreeRows(_allTabMainConvs);
+    const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
       (rows || []).forEach(item => {
