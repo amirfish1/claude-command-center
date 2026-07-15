@@ -13,7 +13,7 @@ const requiredLabels = [
   'change', 'details', 'historical-cursor', 'split-pane', 'resize', 'off-restore',
   'legacy-mode-one', 'added', 'edited', 'tool-group', 'tool-complete',
   'approval-state', 'queue-reason', 'outcome-banner', 'dismissal', 'frame-bound',
-  'completion-supersede', 'reactivation',
+  'completion-supersede', 'reactivation', 'refresh-stable', 'tail-auto-advance',
 ];
 const passed = new Set();
 
@@ -185,6 +185,80 @@ function findChromePath() {
       const stage = pane && pane.querySelector('.conv-presentation-stage');
       return pane && pane.dataset.presentationMode === '2' && stage && stage.getClientRects().length > 0;
     }, { timeout });
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    const refreshAnimationStarts = await page.evaluate(() => new Promise((resolve, reject) => {
+      const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
+      const slot = view && view.querySelector('.conv-presentation-slide-slot');
+      const source = view && view.querySelector(':scope > .event.assistant');
+      if (!view || !slot || !slot.firstElementChild || !source) {
+        reject(new Error('presentation refresh probe could not find its fixture'));
+        return;
+      }
+      const previousSlide = slot.firstElementChild;
+      let animationStarts = 0;
+      const onAnimationStart = event => {
+        if (event.animationName === 'conv-presentation-enter'
+            && event.target.closest('.conv-presentation-slide-slot')) animationStarts += 1;
+      };
+      view.addEventListener('animationstart', onAnimationStart, true);
+      source.dataset.refreshProbe = String(Date.now());
+      const deadline = performance.now() + 2000;
+      const waitForRefresh = () => {
+        if (slot.firstElementChild !== previousSlide) {
+          setTimeout(() => {
+            view.removeEventListener('animationstart', onAnimationStart, true);
+            resolve(animationStarts);
+          }, 250);
+          return;
+        }
+        if (performance.now() >= deadline) {
+          view.removeEventListener('animationstart', onAnimationStart, true);
+          reject(new Error('presentation slide was not refreshed'));
+          return;
+        }
+        requestAnimationFrame(waitForRefresh);
+      };
+      requestAnimationFrame(waitForRefresh);
+    }));
+    if (refreshAnimationStarts !== 0) {
+      throw new Error(`unchanged presentation refresh replayed ${refreshAnimationStarts} entrance animation(s)`);
+    }
+    pass('refresh-stable');
+
+    await page.evaluate(() => {
+      const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
+      const next = view.querySelector('[data-presentation-nav="1"]');
+      while (next && !next.disabled) next.click();
+      window.__cccAutoAdvancePreviousCount = view._presentationDeck.length;
+      window.__cccAutoAdvancePreviousIndex = view._presentationIndex;
+    });
+    await upsert(
+      'tail-auto-advance',
+      'tail-auto-advance',
+      'event assistant',
+      '<div class="assistant-text"><p>New answer while following the presentation tail</p></div>',
+    );
+    await waitForParity('tail-auto-advance');
+    const autoAdvanceState = await page.evaluate(() => {
+      const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
+      const selectedText = view.querySelector('.conv-presentation-slide-slot').textContent;
+      return {
+        previousCount: window.__cccAutoAdvancePreviousCount,
+        previousIndex: window.__cccAutoAdvancePreviousIndex,
+        currentCount: view._presentationDeck.length,
+        currentIndex: view._presentationIndex,
+        selectedNewAnswer: selectedText.includes('New answer while following the presentation tail'),
+        followed: window.__cccAutoAdvancePreviousIndex === window.__cccAutoAdvancePreviousCount - 1
+        && view._presentationDeck.length > window.__cccAutoAdvancePreviousCount
+        && view._presentationIndex === view._presentationDeck.length - 1
+        && selectedText.includes('New answer while following the presentation tail'),
+      };
+    });
+    if (!autoAdvanceState.followed) {
+      throw new Error('presentation stayed on the old tail after a new answer added slides: '
+        + JSON.stringify(autoAdvanceState));
+    }
 
     await upsert('pending', 'send', 'event user_text is-pending', '<div class="user-msg">Pending message</div>');
     await waitForParity('pending');
@@ -446,6 +520,8 @@ function findChromePath() {
       const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
       const prev = view.querySelector('[data-presentation-nav="-1"]');
       while (prev && !prev.disabled) prev.click();
+      const liveList = view.querySelector('.conv-presentation-live-list');
+      if (liveList) liveList.scrollTop = liveList.scrollHeight;
       window.__cccHistoricalCursor = view._presentationIndex;
     });
     await upsert('historical-cursor', 'history-update', 'event wake-event', '<span>Live update while reading history</span>');

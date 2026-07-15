@@ -30216,7 +30216,7 @@
     const pane = view.closest('.conv-pane[data-pane-id]');
     if (!pane) return false;
     view._presentationIndex = deck.length - 1;
-    renderPresentationCursor(pane.dataset.paneId);
+    renderPresentationCursor(pane.dataset.paneId, { animate: true });
     return true;
   }
 
@@ -38966,7 +38966,7 @@
     slide.dataset.partIndex = String(partIndex);
     slide.dataset.partCount = String(partCount);
     slide.dataset.presentationItemKeys = items
-      .map(item => String((item && item.key) || ''))
+      .map(item => String(turn.key || '') + ':' + String((item && item.key) || ''))
       .filter(Boolean)
       .join(',');
 
@@ -39283,7 +39283,7 @@
 
     const refreshDeck = state.refreshDeck;
     state.refreshDeck = false;
-    if (refreshDeck) refreshPresentationForPane(state.paneId, { preserveCursor: true });
+    if (refreshDeck) refreshPresentationForPane(state.paneId, { followTail: true });
   }
 
   function ensurePresentationProjection(view, paneId) {
@@ -39370,7 +39370,7 @@
     return dock;
   }
 
-  function renderPresentationCursor(paneId) {
+  function renderPresentationCursor(paneId, opts) {
     const pane = presentationPaneElement(paneId);
     if (!pane) return;
     const view = getConvViewForPane(paneId);
@@ -39380,9 +39380,10 @@
     view._presentationIndex = index;
     const stage = ensurePresentationStage(view);
     const slot = stage.querySelector(':scope > .conv-presentation-slide-slot');
-    slot.replaceChildren(deck[index]);
-    const dock = ensurePresentationDock(pane);
     const slide = deck[index];
+    slide.classList.toggle('is-entering', !!(opts && opts.animate));
+    slot.replaceChildren(slide);
+    const dock = ensurePresentationDock(pane);
     const answer = Number(slide.dataset.answerIndex || 0);
     const part = Number(slide.dataset.partIndex || 0) + 1;
     const parts = Number(slide.dataset.partCount || 1);
@@ -39525,7 +39526,7 @@
     }
     view._presentationDeck = deck;
     view._presentationIndex = index;
-    renderPresentationCursor(targetPaneId);
+    renderPresentationCursor(targetPaneId, { animate: !previousDeck.length });
     ensurePresentationProjection(view, targetPaneId);
     if (mode === '2') ensurePresentationResizeObserver(view, targetPaneId);
     else disconnectPresentationResizeObserver(view);
@@ -39575,7 +39576,7 @@
     ));
     if (next === view._presentationIndex) return;
     view._presentationIndex = next;
-    renderPresentationCursor(targetPaneId);
+    renderPresentationCursor(targetPaneId, { animate: true });
   }
 
   document.addEventListener('click', (ev) => {

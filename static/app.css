@@ -19157,8 +19157,8 @@ body:has(.gc-reader) .pwa-install-banner {
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--surface) 90%, #182033), color-mix(in srgb, var(--bg) 94%, #0f172a));
   box-shadow: 0 20px 55px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.035);
-  animation: conv-presentation-enter 160ms ease-out;
 }
+.conv-presentation-slide.is-entering { animation: conv-presentation-enter 160ms ease-out; }
 @keyframes conv-presentation-enter {
   from { opacity: 0; transform: translateY(5px) scale(0.995); }
   to { opacity: 1; transform: none; }
