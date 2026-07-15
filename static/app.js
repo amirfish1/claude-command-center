@@ -33249,8 +33249,9 @@
             return hay.includes(qTerm);
           })
         : typeScoped;
-      // Work needing an active agent comes first, then tickets needing a human
-      // answer, then claimable work, then completed history.
+      // ALL is a history view: show the newest-filed tickets first regardless
+      // of their current state. OPEN remains the operational work view, where
+      // agent work, human answers, and claimable tickets stay prioritized.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
@@ -33264,7 +33265,16 @@
       const _notClaimable = it => (it && it.claimable === false ? 1 : 0);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
+      const _uxqCreatedAtMs = it => {
+        const parsed = Date.parse((it && it.created_at) || '');
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+      const historyOrder = _uxqGetFilter() === 'all';
       const rows = scoped.slice().sort((a, b) => {
+        if (historyOrder) {
+          return _uxqCreatedAtMs(b) - _uxqCreatedAtMs(a)
+            || (b.number || 0) - (a.number || 0);
+        }
         const aStatus = _effectiveStatus(a);
         const bStatus = _effectiveStatus(b);
         const st = _statusRank(aStatus) - _statusRank(bStatus); if (st) return st;
