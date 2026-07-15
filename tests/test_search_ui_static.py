@@ -33,8 +33,18 @@ class TestSearchUiStatic(unittest.TestCase):
             app_js,
         )
         self.assertIn(
-            "const _currentSessions = _ipSearchActive\n"
+            "const _currentSessionWindowed = _ipSearchActive\n"
             "        ? _currentSessionSource",
+            app_js,
+        )
+        self.assertIn(
+            "const _currentSessionLineage = _ipSearchActive\n"
+            "        ? { rows: _currentSessionWindowed, openAsks: [] }",
+            app_js,
+        )
+        self.assertIn(
+            "const _currentSessions = _ipSearchActive\n"
+            "        ? _currentSessionLineage.rows",
             app_js,
         )
         self.assertIn(
