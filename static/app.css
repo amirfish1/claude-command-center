@@ -955,7 +955,7 @@
   .queued-steer-tray .event {
     position: relative;
     margin: 0;
-    padding: 5px 64px 5px 10px;
+    padding: 5px 122px 5px 10px;
     font-size: 12px;
   }
   .queued-steer-tray .event.user_text {
@@ -966,6 +966,30 @@
     position: absolute;
     top: 6px;
     right: 8px;
+  }
+  .queued-steer-tray .cancel-queued-message {
+    position: absolute;
+    top: 6px;
+    right: 58px;
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 10px;
+    cursor: pointer;
+    opacity: 0.85;
+    white-space: nowrap;
+  }
+  .queued-steer-tray .cancel-queued-message:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  }
+  .queued-steer-tray .cancel-queued-message:disabled,
+  .queued-steer-tray .send-queued-steer:disabled {
+    cursor: default;
+    opacity: 0.45;
   }
   .queued-steer-tray .event .user-msg { margin-top: 2px; font-size: 13px; }
   .conversations-view .event.user_text.is-queued-steer-duplicate { display: none; }

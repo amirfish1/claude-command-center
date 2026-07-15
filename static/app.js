@@ -5263,17 +5263,51 @@
     showOpToast('Copied assistant message', 'ok');
   });
 
-  // Cancel a queued (server-parked) outbound message via the × button in the note.
-  document.addEventListener('click', (ev) => {
-    const btn = ev.target.closest('.send-queued-cancel');
+  // Cancel one durable queued message. Remove the row only after the server
+  // confirms the persisted FIFO entry was withdrawn.
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-cancel-queued-message]');
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
-    const div = btn.closest('.event.user_text.send-queued');
-    if (div && div._pendingRef) {
-      removePendingSendEcho(div._pendingRef);
-    } else if (div) {
-      div.remove(); // fallback: just remove the echo
+    const row = btn.closest('.event.user_text');
+    const msg = row && row.querySelector('.user-msg');
+    const text = (msg && (msg.getAttribute('data-raw-text') || msg.textContent || '')).trim();
+    const sid = btn.dataset.sessionId || '';
+    if (!sid || !text) {
+      showOpToast('Queued message is missing its session or text.', 'error');
+      return;
+    }
+    const actions = row ? Array.from(row.querySelectorAll(
+      '[data-cancel-queued-message], [data-steer-queued-message]'
+    )) : [btn];
+    const original = btn.textContent;
+    actions.forEach(action => { action.disabled = true; });
+    btn.textContent = 'Cancelling…';
+    try {
+      const response = await fetch('/api/pending-input/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, text }),
+      });
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || ('HTTP ' + response.status));
+      }
+      if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
+      else if (row) row.remove();
+      showOpToast('Queued message cancelled.');
+      setTimeout(refreshConversationList, 500);
+    } catch (err) {
+      btn.textContent = '!';
+      showOpToast('Cancel failed: ' + ((err && err.message) || 'unknown'), 'error');
+    } finally {
+      setTimeout(() => {
+        if (!btn.isConnected) return;
+        btn.textContent = original || 'Cancel';
+        actions.forEach(action => { action.disabled = false; });
+      }, 900);
     }
   });
 
@@ -6705,7 +6739,9 @@
     const msg = label || 'Will send when the session finishes its current step.';
     note.innerHTML = '<span class="send-queued-icon">⏳</span>'
       + '<span class="send-queued-text">' + escapeHtml(msg) + '</span>'
-      + '<button type="button" class="send-queued-cancel" title="Cancel — discard this queued message">✕ Cancel</button>';
+      + '<button type="button" class="send-queued-cancel" data-cancel-queued-message'
+      + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
+      + ' title="Cancel — discard this queued message">✕ Cancel</button>';
   }
 
   // State 2 of the echo lifecycle: the server confirmed the inject reached the
@@ -38754,6 +38790,18 @@
     ));
     const sessionId = String((selected && selected.session_id) || conversationId);
     candidates.forEach(el => {
+      let cancel = el.querySelector('[data-cancel-queued-message]');
+      if (!cancel) {
+        cancel = el.querySelector('.send-queued-cancel');
+        if (!cancel) {
+          cancel = document.createElement('button');
+          cancel.type = 'button';
+          cancel.textContent = 'Cancel';
+          el.appendChild(cancel);
+        }
+        cancel.classList.add('cancel-queued-message');
+        cancel.setAttribute('data-cancel-queued-message', '');
+      }
       let steer = el.querySelector('[data-steer-queued-message]');
       if (!steer) {
         steer = document.createElement('button');
@@ -38763,6 +38811,7 @@
         steer.textContent = 'Steer';
         el.appendChild(steer);
       }
+      cancel.dataset.sessionId = sessionId;
       steer.dataset.sessionId = sessionId;
       tray.appendChild(el);
     });
