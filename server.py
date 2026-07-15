@@ -2820,6 +2820,29 @@ def _git_toplevel_for_existing_dir(path):
     return None
 
 
+def _has_project_marker(path):
+    """Return whether ``path`` is an explicit project root.
+
+    A project-local ``.claude/`` directory is a valid marker, but the global
+    ``~/.claude/`` configuration directory is not. Treating that global
+    directory as a marker makes every plain folder under the user's home look
+    like a child of one giant project, so typed scratch folders never get
+    registered as their own CCC workspaces.
+    """
+    try:
+        p = Path(path).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return False
+    try:
+        if (p / ".git").exists():
+            return True
+        if not (p / ".claude").is_dir():
+            return False
+        return p != Path.home().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 def _nearest_marked_repo_dir(path):
     """Return the closest existing ancestor that CCC can treat as a repo root.
 
@@ -2835,7 +2858,7 @@ def _nearest_marked_repo_dir(path):
         return None
     for candidate in (p, *p.parents):
         try:
-            if (candidate / ".git").exists() or (candidate / ".claude").is_dir():
+            if _has_project_marker(candidate):
                 return str(candidate)
         except OSError:
             continue
@@ -18596,8 +18619,9 @@ def _extract_files_from_gemini_conversation(session_id):
 
 _PRESENTATION_ARTIFACT_FENCE_RE = re.compile(
     r"\A(?P<prose>.*?)(?:^|\n)```ccc-slides[ \t]*\r?\n"
-    r"(?P<artifact>.*?)\r?\n```[ \t]*\Z",
-    re.DOTALL | re.MULTILINE,
+    r"(?P<artifact>.*?)\r?\n```[ \t]*"
+    r"(?:\r?\n+[ \t]*<session-state>.*?</session-state>[ \t]*)?\Z",
+    re.DOTALL | re.MULTILINE | re.IGNORECASE,
 )
 _PRESENTATION_ARTIFACT_ID_RE = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
 _PRESENTATION_ARTIFACT_ACTIVE_TAG_RE = re.compile(
