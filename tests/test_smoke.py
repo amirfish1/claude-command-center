@@ -5140,6 +5140,12 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true })", queued_handler)
         self.assertNotIn("postInjectInput(sid, text, 'send')", queued_handler)
+        self.assertIn("if (data && data.queued_preserved)", queued_handler)
+        self.assertIn("if (!data.queued_consumed)", queued_handler)
+        self.assertGreater(
+            queued_handler.index("if (row && row._pendingRef) removePendingSendEcho(row._pendingRef)"),
+            queued_handler.index("if (!data.queued_consumed)"),
+        )
         self.assertIn("tray.dataset.conversationId", app_js)
         self.assertIn("replace_queued", app_js)
         self.assertIn("is-queued-steer-duplicate", app_js)
@@ -6820,6 +6826,38 @@ class TestRepoContextHelpers(unittest.TestCase):
             resume.call_args_list,
             [mock.call(sid, "continue", steer=True), mock.call(sid, "continue")],
         )
+
+    def test_queued_codex_steer_unavailable_preserves_existing_queue(self):
+        """A Steer click on a durable row must not dequeue then append it."""
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": False},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={
+                     "ok": False,
+                     "code": "codex_steer_unavailable",
+                     "error": "another writer owns the turn",
+                 },
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid,
+                "continue",
+                mode="steer",
+                preserve_queued_steer=True,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["queued"])
+        self.assertTrue(result["queued_preserved"])
+        resume.assert_called_once_with(sid, "continue", steer=True)
 
     def test_codex_steer_failed_does_not_retry_as_send(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -13764,6 +13802,55 @@ class TestPendingInputs(unittest.TestCase):
         self.assertIn('path == "/api/pending-input/cancel"', source)
         self.assertIn("_consume_matching_pending_input(sid, text)", source)
         self.assertIn('"cancelled": 1', source)
+
+    def test_queued_steer_is_consumed_only_after_confirmed_delivery(self):
+        source = inspect.getsource(self.server.CommandCenterHandler.do_POST)
+        branch = source[
+            source.index('elif path == "/api/inject-input"'):
+            source.index('elif path == "/api/session/compact"')
+        ]
+        inject_pos = branch.index("_inject_text_into_session(")
+        finalize_pos = branch.index("_finalize_queued_steer_result(sid, queued_text, result)")
+
+        self.assertLess(inject_pos, finalize_pos)
+        self.assertIn('inject_options["preserve_queued_steer"] = True', branch)
+
+    def test_finalize_queued_steer_preserves_fifo_on_failure(self):
+        sid = "queued-steer-failure"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["first", "target", "last"]
+
+        result = self.server._finalize_queued_steer_result(
+            sid,
+            "target",
+            {"ok": False, "code": "codex_steer_unavailable"},
+        )
+
+        self.assertTrue(result["queued"])
+        self.assertTrue(result["queued_preserved"])
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue[sid],
+                ["first", "target", "last"],
+            )
+
+    def test_finalize_queued_steer_consumes_one_copy_on_success(self):
+        sid = "queued-steer-success"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["target", "target", "last"]
+
+        result = self.server._finalize_queued_steer_result(
+            sid,
+            "target",
+            {"ok": True, "via": "codex-steer"},
+        )
+
+        self.assertEqual(result["queued_consumed"], 1)
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue[sid],
+                ["target", "last"],
+            )
 
     def test_conv_bytes_cache_misses_when_pending_input_queued(self):
         """Pre-serialized /api/conversations bodies must not hide dynamic overlays."""

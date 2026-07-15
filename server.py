@@ -26551,6 +26551,23 @@ def _consume_matching_pending_input(session_id, text):
     return 0
 
 
+def _finalize_queued_steer_result(session_id, text, result):
+    """Commit a queued-row Steer only when Codex confirmed delivery.
+
+    The durable FIFO remains untouched for unavailable/failed steering. This
+    prevents a retry from silently moving the selected item to the queue tail.
+    """
+    result = dict(result or {})
+    if result.get("ok") and result.get("via") == "codex-steer":
+        consumed = _consume_matching_pending_input(session_id, text)
+        if consumed:
+            result["queued_consumed"] = consumed
+        return result
+    result["queued"] = True
+    result["queued_preserved"] = True
+    return result
+
+
 _CCC_HOOK_SCRIPTS = CCC_HOOK_SCRIPT_NAMES
 
 
@@ -42171,7 +42188,16 @@ def _try_wt_ask_for_headless_delivery(session_id, text, timeout_ms):
     return _map_wt_ask_json_to_ccc_result(payload)
 
 
-def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, mode="send", wt_origin=False, skip_wt=False):
+def _inject_text_into_session(
+    session_id,
+    text,
+    *,
+    _from_terminal_queue=False,
+    mode="send",
+    wt_origin=False,
+    skip_wt=False,
+    preserve_queued_steer=False,
+):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
     else `claude --resume` headless. Returns a dict with at least
@@ -42299,6 +42325,11 @@ def _inject_text_into_session(session_id, text, *, _from_terminal_queue=False, m
             "codex_no_active_turn",
             "codex_steer_unavailable",
         ):
+            if preserve_queued_steer:
+                steer_result = dict(steer_result)
+                steer_result["queued"] = True
+                steer_result["queued_preserved"] = True
+                return steer_result
             return resume_session_codex(session_id, text)
         return steer_result
     if status.get("live") and has_tty:
@@ -60067,15 +60098,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # card, which is the whole signal we want — independent of
                 # whether the keystroke injection itself ends up succeeding.
                 _record_interaction(sid)
-                queued_consumed = 0
-                if bool(payload.get("replace_queued")):
-                    queued_consumed = _consume_matching_pending_input(sid, text)
+                replace_queued = bool(payload.get("replace_queued"))
+                queued_text = text
                 text = _wrap_injected_text_with_announced_from(text, announced_from)
                 try:
+                    inject_options = {
+                        "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
+                        "skip_wt": bool(payload.get("skip_wt")),
+                    }
+                    if replace_queued:
+                        inject_options["preserve_queued_steer"] = True
                     result = _inject_text_into_session(
                         sid, text, mode=mode,
-                        wt_origin=(str(payload.get("origin") or "").lower() == "wt"),
-                        skip_wt=bool(payload.get("skip_wt")),
+                        **inject_options,
                     )
                 except Exception as e:
                     # An uncaught exception anywhere in this deep, subprocess-
@@ -60086,8 +60121,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # "Failed to fetch" with no way to tell what went wrong.
                     # Turn it into a readable error instead.
                     result = {"ok": False, "error": str(e) or "internal error"}
-                if queued_consumed and isinstance(result, dict):
-                    result["queued_consumed"] = queued_consumed
+                if replace_queued:
+                    result = _finalize_queued_steer_result(sid, queued_text, result)
                 self.send_json(result)
         elif path == "/api/session/compact":
             length = int(self.headers.get("Content-Length", "0"))

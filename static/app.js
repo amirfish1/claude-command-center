@@ -5364,10 +5364,21 @@
     btn.textContent = 'Steering…';
     try {
       const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
+      if (data && data.queued_preserved) {
+        const reason = formatInjectFailure(data, 0) || data.error || 'the active turn cannot be steered from CCC';
+        showOpToast('Still queued: ' + reason, 'error');
+        setTimeout(refreshConversationList, 500);
+        return;
+      }
       if (!data || !data.ok) throw new Error((data && (formatInjectFailure(data, 0) || data.error)) || 'steer failed');
+      if (!data.queued_consumed) {
+        showOpToast('Queue changed while steering; refreshing.', 'error');
+        setTimeout(refreshConversationList, 200);
+        return;
+      }
       if (row && row._pendingRef) removePendingSendEcho(row._pendingRef);
       else if (row) row.remove();
-      showOpToast(data.via === 'codex-steer' ? 'Steered running Codex turn.' : 'Sent to Codex.');
+      showOpToast('Steered running Codex turn.');
       setTimeout(refreshConversationList, 500);
     } catch (err) {
       btn.textContent = '!';
