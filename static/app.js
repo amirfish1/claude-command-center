@@ -5001,15 +5001,18 @@
     // so it's obvious CCC sends will queue behind that writer. Only meaningful while
     // working — an idle/stuck thread isn't holding a turn.
     const writer = (st === 'working') ? (liveStatus.codexWriter || null) : null;
-    const writerCls = writer === 'desktop' ? ' writer-desktop' : (writer === 'external' ? ' writer-external' : '');
+    const writerCls = writer === 'desktop' ? ' writer-desktop' : ((writer === 'external' || writer === 'unknown') ? ' writer-external' : '');
     const writerTitle = writer === 'desktop'
       ? 'Codex desktop is running a turn — messages sent from CCC will queue until it finishes'
       : (writer === 'external'
           ? 'Another Codex process is running a turn — messages sent from CCC will queue until it finishes'
-          : '');
+          : (writer === 'unknown'
+              ? 'An active Codex turn is running — messages sent from CCC will queue until it finishes'
+              : ''));
     let label = LABELS[st] || st;
     if (writer === 'desktop') label = 'Desktop writing';
     else if (writer === 'external') label = 'External writer';
+    else if (writer === 'unknown') label = 'Active turn';
     // Not mid-turn but the desktop app still has the thread loaded — hang a quiet
     // "⧉ desktop" marker off the pill so concurrent-edit risk stays visible.
     const attachedSuffix = (st !== 'working' && liveStatus.codexDesktopAttached)
@@ -22476,7 +22479,7 @@
     if (!currentSession || currentSession.source !== 'codex') return false;
     if (!liveStatusMatchesOpenConv() || !liveStatus || liveStatus.codexState !== 'working') return false;
     const writer = liveStatus.codexWriter || null;
-    return writer !== 'desktop' && writer !== 'external';
+    return writer !== 'desktop' && writer !== 'external' && writer !== 'unknown';
   }
 
   function syncUserMessageSteerButtons(root) {

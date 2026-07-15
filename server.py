@@ -20151,7 +20151,12 @@ def _codex_app_server_handle_notification(method, params):
         if turn_id:
             state["active_turn_id"] = turn_id
             state["last_activity_at"] = now
-        writer = "ccc" if state.get("ccc_turn_start_pending") or known_ccc_turn else "external"
+        # A notification without our transient start marker proves that a turn
+        # is active, but not who started it. This commonly happens when CCC
+        # reconnects after a restart while its own earlier turn is still
+        # running. Treat unproven ownership as unknown; the writer gate still
+        # serializes behind it.
+        writer = "ccc" if state.get("ccc_turn_start_pending") or known_ccc_turn else "unknown"
         state["active_writer"] = writer
         state["active_items"] = {}
         state.pop("active_item", None)
@@ -21063,7 +21068,7 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
     """Attribute the current writer of one Codex thread.
 
     Returns {writer, desktop_attached, external_active, mtime_age_s}:
-      writer ∈ "ccc" | "desktop" | "external" | None (quiet).
+      writer ∈ "ccc" | "desktop" | "external" | "unknown" | None (quiet).
     Keyword args exist for unit tests; production callers pass none of them.
     """
     now = time.time() if now is None else float(now)
@@ -21125,11 +21130,11 @@ def _codex_thread_writer_snapshot(session_id, now=None, *, rollout=None,
     # precise than rollout mtime and prevents CCC from becoming a second writer.
     if active_status and active_writer != "ccc":
         snap["external_active"] = True
-        snap["writer"] = "desktop" if snap["desktop_attached"] else "external"
+        snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
         return snap
     if mtime_recent and not ccc_recent:
         snap["external_active"] = True
-        snap["writer"] = "desktop" if snap["desktop_attached"] else "external"
+        snap["writer"] = "desktop" if snap["desktop_attached"] else "unknown"
     return snap
 
 
@@ -21206,22 +21211,26 @@ def _codex_note_external_writer_transition(session_id, snap):
             return  # first observation of a quiet thread — nothing to record
     writer = snap.get("writer") if cur else None
     if cur:
-        label = "desktop" if writer == "desktop" else "an external Codex process"
+        detail = (
+            "Turn detected from Codex desktop"
+            if writer == "desktop"
+            else "Active Codex turn detected"
+        )
         _codex_coordination_event(
             session_id, "external_turn_started", writer=writer,
-            detail=f"Turn detected from {label}",
+            detail=detail,
         )
     else:
         _codex_coordination_event(
             session_id, "external_turn_ended",
-            detail="External turn went quiet; CCC may send again",
+            detail="Active turn went quiet; CCC may send again",
         )
 
 
 _CODEX_COORD_EVENT_TEXT = {
-    "external_turn_started": "Codex desktop started a turn on this thread",
-    "external_turn_ended": "Desktop turn finished — thread is free",
-    "input_queued": "Message queued while another writer was active",
+    "external_turn_started": "Active Codex turn detected",
+    "external_turn_ended": "Active Codex turn finished — thread is free",
+    "input_queued": "Message queued behind the active turn",
     "ccc_turn_started": "CCC started a turn via the app-server",
     "ccc_turn_completed": "CCC turn completed",
 }
@@ -21254,8 +21263,8 @@ def _get_codex_coordination_events_for_session(session_id):
         ts = ev.get("ts")
         writer = ev.get("writer")
         text = _CODEX_COORD_EVENT_TEXT.get(kind) or kind.replace("_", " ")
-        if kind == "external_turn_started" and writer == "external":
-            text = "Another Codex process started a turn on this thread"
+        if kind == "external_turn_started" and writer == "desktop":
+            text = "Codex desktop started a turn on this thread"
         # ts as ISO-8601: the frontend's tsSpan does `new Date(ts)`, which
         # reads a bare number as epoch MILLISECONDS — raw epoch seconds
         # would render as January 1970.
@@ -21392,7 +21401,7 @@ def _codex_writer_gate_response(session_id, snap, *, stage="writer-gate",
     elif writer == "ccc":
         reason = "Another CCC send is already running a turn on this thread — queued"
     else:
-        reason = "Another Codex process is writing this thread — queued until it goes quiet"
+        reason = "An active Codex turn is writing this thread — queued until it finishes"
     _resume_ledger_append(
         "codex_wake_queued", sid=session_id, stage=stage, reason=reason,
     )
@@ -25270,14 +25279,14 @@ def _codex_state_fields(sid, now=None):
     except Exception:
         pass
     if snap.get("external_active"):
-        # A desktop/CLI turn is in flight: the session is live and busy even
-        # though CCC's own app-server has no active turn for it.
+        # A desktop or ownership-unknown turn is in flight: the session is live
+        # and busy even though CCC cannot prove that it owns the active turn.
         fields["codex_state"] = "working"
         fields["codex_fresh"] = True
         fields["codex_state_reason"] = (
             "Codex desktop is writing this thread"
             if snap.get("writer") == "desktop"
-            else "Another Codex process is writing this thread"
+            else "An active Codex turn is writing this thread"
         )
         return fields
     if not path or mtime is None:

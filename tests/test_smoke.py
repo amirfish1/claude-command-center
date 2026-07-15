@@ -6458,18 +6458,18 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertFalse(snap_idle["external_active"])
         self.assertIsNone(snap_idle["writer"])
         # No status (thread we haven't heard from) -> mtime fallback still flags
-        # an external writer, so unrelated behavior isn't regressed.
+        # a busy turn, but does not invent an external owner.
         snap_unknown = self.server._codex_thread_writer_snapshot(
             sid, now=now, rollout=fresh_rollout,
             app_state={}, attached={}, exec_child=False,
         )
         self.assertTrue(snap_unknown["external_active"])
-        self.assertEqual(snap_unknown["writer"], "external")
+        self.assertEqual(snap_unknown["writer"], "unknown")
 
     def test_codex_writer_snapshot_attributes_active_status_by_owner(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         old_rollout = {"path": "/tmp/rollout.jsonl", "mtime_ns": 1}
-        external = self.server._codex_thread_writer_snapshot(
+        unknown = self.server._codex_thread_writer_snapshot(
             sid,
             now=1_000_000.0,
             rollout=old_rollout,
@@ -6481,8 +6481,8 @@ class TestRepoContextHelpers(unittest.TestCase):
             attached={},
             exec_child=False,
         )
-        self.assertTrue(external["external_active"])
-        self.assertEqual(external["writer"], "external")
+        self.assertTrue(unknown["external_active"])
+        self.assertEqual(unknown["writer"], "unknown")
 
         ccc = self.server._codex_thread_writer_snapshot(
             sid,
@@ -9920,7 +9920,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             "params": {"threadId": sid, "turn": {"id": "external-turn"}},
         })
         state = server._codex_app_server_thread_state(sid)
-        self.assertEqual(state["active_writer"], "external")
+        self.assertEqual(state["active_writer"], "unknown")
 
     def test_codex_app_server_turn_start_response_marks_ccc_owner(self):
         server = self.server
@@ -11940,12 +11940,12 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(snap["external_active"])
         self.assertTrue(snap["desktop_attached"])
 
-        # same, but nothing attached to a desktop app-server → external writer
+        # same, but nothing attached to a desktop app-server → owner unknown
         snap = server._codex_thread_writer_snapshot(
             "sid", now, rollout=recent, app_state={},
             attached={}, exec_child=False,
         )
-        self.assertEqual(snap["writer"], "external")
+        self.assertEqual(snap["writer"], "unknown")
         self.assertTrue(snap["external_active"])
         self.assertFalse(snap["desktop_attached"])
 
@@ -11957,6 +11957,16 @@ class TestRepoContextHelpers(unittest.TestCase):
         )
         self.assertEqual(snap["writer"], "ccc")
         self.assertFalse(snap["external_active"])
+
+        # An authoritative active turn observed after reconnect is busy, but
+        # its owner is unknown unless CCC or desktop ownership is proven.
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent,
+            app_state={"status": "active", "active_turn_id": "t2", "active_writer": "unknown"},
+            attached={}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "unknown")
+        self.assertTrue(snap["external_active"])
 
         # a CCC-spawned `codex exec` child owns the thread → ccc writer
         snap = server._codex_thread_writer_snapshot(
@@ -12066,6 +12076,31 @@ class TestRepoContextHelpers(unittest.TestCase):
             with server._CODEX_APP_SERVER_LOCK:
                 server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
 
+    def test_coordination_events_do_not_claim_an_unproven_external_writer(self):
+        """Reconnect-era events describe the active turn without inventing a
+        second process or person."""
+        server = self.server
+        sid = "test-sid-unknown-writer-copy"
+        prev_loaded = server._codex_coord_state_loaded
+        server._codex_coord_state_loaded = True
+        try:
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                    "coordination_events": [
+                        {"ts": 1.0, "kind": "external_turn_started", "writer": "unknown"},
+                        {"ts": 2.0, "kind": "input_queued", "writer": "unknown"},
+                    ],
+                }
+            events = server._get_codex_coordination_events_for_session(sid)
+            self.assertEqual(
+                [event["text"] for event in events],
+                ["Active Codex turn detected", "Message queued behind the active turn"],
+            )
+        finally:
+            server._codex_coord_state_loaded = prev_loaded
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
+
     def test_app_server_state_payload_includes_coordination_events(self):
         """The persisted app-server payload surfaces a thread's durable
         coordination_events."""
@@ -12103,6 +12138,26 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(fields["codex_writer"], "desktop")
         self.assertTrue(fields["codex_desktop_attached"])
         self.assertIn("desktop", fields["codex_state_reason"])
+
+    def test_codex_state_fields_unknown_writer_uses_neutral_reason(self):
+        """An active turn with unproven ownership must not be presented as a
+        second Codex process."""
+        server = self.server
+        sid = "test-sid-unknown-state"
+        with mock.patch.object(server, "_codex_app_server_thread_state", return_value={}), \
+             mock.patch.object(
+                 server, "_codex_thread_writer_snapshot",
+                 return_value={"writer": "unknown", "desktop_attached": False, "external_active": True},
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"):
+            fields = server._codex_state_fields(sid)
+        self.assertEqual(fields["codex_state"], "working")
+        self.assertEqual(fields["codex_writer"], "unknown")
+        self.assertEqual(fields["codex_state_reason"], "An active Codex turn is writing this thread")
+
+    def test_codex_unknown_writer_is_not_offered_steer(self):
+        """Unknown ownership remains queue-only until the active turn ends."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("writer !== 'unknown'", js)
 
 
 class TestModelPicker(unittest.TestCase):
