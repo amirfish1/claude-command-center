@@ -26017,7 +26017,14 @@ def _codex_pool_alive(now=None):
     return alive
 
 
-def _codex_state_fields(sid, now=None):
+def _codex_state_fields(
+    sid,
+    now=None,
+    note_writer_transition=True,
+    rollout_path=None,
+    rollout_stat=None,
+    rollout_tail=None,
+):
     """Resolve {codex_state, codex_fresh} for one codex session id.
 
     Applies the recency gate (no chip for sessions whose rollout hasn't
@@ -26030,15 +26037,20 @@ def _codex_state_fields(sid, now=None):
     # Resolve + stat the rollout ONCE (the thread-row lookup behind
     # _resolve_codex_rollout_path is a sqlite query — this function sits on
     # liveness paths, so it must not pay it twice).
-    path = None
+    path = Path(rollout_path) if rollout_path is not None else None
     rollout = {}
     mtime = None
     try:
-        path = _resolve_codex_rollout_path(sid)
+        if path is None:
+            path = _resolve_codex_rollout_path(sid)
         if path:
-            st = Path(path).stat()
+            st = rollout_stat if rollout_stat is not None else Path(path).stat()
             mtime = st.st_mtime
-            rollout = {"path": str(path), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+            rollout = {
+                "path": str(path),
+                "size": getattr(st, "st_size", 0),
+                "mtime_ns": getattr(st, "st_mtime_ns", int(mtime * 1_000_000_000)),
+            }
     except OSError:
         path = None
         rollout = {}
@@ -26047,12 +26059,13 @@ def _codex_state_fields(sid, now=None):
         app_state = _codex_app_server_thread_state(sid)
     except Exception:
         app_state = {}
-    tail = {}
+    tail = rollout_tail if isinstance(rollout_tail, dict) else {}
     if path and mtime is not None and (now - mtime) <= _codex_recent_window_s():
-        try:
-            tail = _extract_codex_tail_meta(path) or {}
-        except Exception:
-            tail = {}
+        if rollout_tail is None:
+            try:
+                tail = _extract_codex_tail_meta(path) or {}
+            except Exception:
+                tail = {}
         if tail.get("needs_approval"):
             fields["codex_state"] = "waiting"
             fields["codex_fresh"] = True
@@ -26078,7 +26091,8 @@ def _codex_state_fields(sid, now=None):
         # stat above + the TTL-cached desktop-attachment map. Also feeds the
         # durable external-turn transition events.
         snap = _codex_thread_writer_snapshot(sid, now, app_state=app_state, rollout=rollout)
-        _codex_note_external_writer_transition(sid, snap)
+        if note_writer_transition:
+            _codex_note_external_writer_transition(sid, snap)
         if snap.get("writer"):
             fields["codex_writer"] = snap["writer"]
         if snap.get("desktop_attached"):
@@ -26148,6 +26162,98 @@ def _codex_stuck_reason(tail, mtime, now):
         label = (f"{pending} {target}".strip())
         return f"No output for {ago} while running {label} — the tool call looks hung."
     return f"No output for {ago} after the last message — the turn stalled with no tool running."
+
+
+_codex_stuck_summary_cache = {"ts": 0.0, "value": None}
+_codex_stuck_summary_lock = threading.Lock()
+
+
+def _codex_stuck_summary_ttl_s():
+    try:
+        value = float(os.environ.get("CCC_CODEX_STUCK_SUMMARY_TTL_SEC", "60"))
+    except (TypeError, ValueError):
+        value = 60.0
+    return max(1.0, value)
+
+
+def build_codex_stuck_summary(now=None, force=False):
+    """Count recent Codex threads carrying the dashboard's ``Stuck`` label.
+
+    The cheap pure classifier prefilters recent rollout tails before the more
+    authoritative app-server/writer check. Results are cached because the
+    footer is monitoring a fleet-level heuristic, not a millisecond-precise
+    process signal. The read-only confirmation deliberately avoids recording
+    writer-transition events: observing the counter must not mutate threads.
+    """
+    now = float(now if now is not None else time.time())
+    cache_now = time.monotonic()
+    with _codex_stuck_summary_lock:
+        cached = _codex_stuck_summary_cache.get("value")
+        cached_at = float(_codex_stuck_summary_cache.get("ts") or 0)
+        if (
+            not force
+            and cached is not None
+            and (cache_now - cached_at) < _codex_stuck_summary_ttl_s()
+        ):
+            return dict(cached)
+
+    rows = _codex_fetch_threads()
+    pool_alive = _codex_pool_alive(now)
+    live_ids = _live_engine_session_ids()
+    recent_sessions = 0
+    candidates = 0
+    stuck_ids = []
+    recent_window = _codex_recent_window_s()
+    threshold = _codex_stale_tool_threshold_s()
+
+    for row in rows:
+        sid = row.get("id") or ""
+        if not sid:
+            continue
+        path = _codex_rollout_path_from_row(row)
+        if not path:
+            continue
+        try:
+            rollout_stat = path.stat()
+            mtime = rollout_stat.st_mtime
+        except OSError:
+            continue
+        if max(0.0, now - float(mtime or 0)) > recent_window:
+            continue
+        recent_sessions += 1
+        try:
+            tail = _extract_codex_tail_meta(path) or {}
+            coarse = _codex_row_state(tail, mtime, now, pool_alive, sid in live_ids)
+        except Exception:
+            continue
+        if coarse != "stuck":
+            continue
+        candidates += 1
+        confirmed = _codex_state_fields(
+            sid,
+            now,
+            note_writer_transition=False,
+            rollout_path=path,
+            rollout_stat=rollout_stat,
+            rollout_tail=tail,
+        )
+        if confirmed.get("codex_state") == "stuck":
+            stuck_ids.append(sid)
+
+    value = {
+        "count": len(stuck_ids),
+        "session_ids": stuck_ids,
+        "candidates": candidates,
+        "recent_sessions": recent_sessions,
+        "threshold_s": int(threshold),
+        "recent_window_s": int(recent_window),
+        "as_of": now,
+        "heuristic": True,
+    }
+    with _codex_stuck_summary_lock:
+        _codex_stuck_summary_cache["ts"] = cache_now
+        _codex_stuck_summary_cache["value"] = dict(value)
+    return value
 
 
 def find_codex_conversations(
@@ -55510,6 +55616,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Cheap poll target for the sidebar: refresh WIP / tool chips for
             # every live session without re-running the multi-MB archive scan.
             self.send_json({"sessions": build_live_sessions_activity()})
+        elif path == "/api/codex/stuck-summary":
+            # Cached fleet-level count for the footer monitor. This intentionally
+            # reports the same stale-transcript heuristic as the row badge; it is
+            # not a claim that every labeled thread owns a live hung process.
+            self.send_json(build_codex_stuck_summary())
         elif path == "/api/model-advisor":
             # Fleet model-drift report: live recommendations (downgrade /
             # upgrade / spawn-worker) + the savings monitor log. Reuses the

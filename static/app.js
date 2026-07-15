@@ -17,7 +17,7 @@
   const _PAUSE_WHEN_HIDDEN = new Set([
     'liveStatus', 'liveToolStrip', 'sessionsList', 'gcActive', 'issues',
     'vercelDeploy', 'localhost', 'worktreesBadge', 'archiveTimes',
-    'uxFixesQueueMeta',
+    'uxFixesQueueMeta', 'stuckSessions',
   ]);
   function _pollerSkip(name) {
     return _pollerOff(name) || (_PAUSE_WHEN_HIDDEN.has(name) && document.hidden);
@@ -66,6 +66,7 @@
     codexLog:       { ms: null,  label: 'codex',   surface: 'Open conversation pane — codex log',          desc: 'Codex session log (open codex convo only).' },
     archiveProgress:{ ms: 250,   label: 'archive', surface: 'Sidebar — archive loading bar',               desc: 'Archive load progress bar (transient, self-clears).' },
     cccHealth:      { ms: 5000,  label: 'health',  surface: 'Sidebar — bottom-left CCC health bar',         desc: 'CCC self-health: server CPU%, live-activity build latency, recent errors.' },
+    stuckSessions:  { ms: 60000, label: 'stuck',   surface: 'Sidebar — bottom-left stuck-session count',    desc: 'Recent Codex sessions currently labeled Stuck by the stale-transcript heuristic.' },
   };
   // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
   const _pollerStats = {};
@@ -217,6 +218,29 @@
     });
     tick();
     setInterval(tick, 5000);
+  }
+  function _startStuckSessionsPoll(host) {
+    const metric = host.querySelector('#cccStuckPill');
+    if (!metric) return;
+    const tick = _gated('stuckSessions', function () {
+      return fetch('/api/codex/stuck-summary', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((summary) => {
+          if (!summary || typeof summary.count !== 'number') return;
+          const count = summary.count;
+          metric.classList.remove('ccchealth-ok', 'ccchealth-warn', 'ccchealth-crit');
+          metric.classList.add(count === 0 ? 'ccchealth-ok' : 'ccchealth-warn');
+          const value = metric.querySelector('.ccchealth-val');
+          if (value) value.textContent = 'stuck ' + count;
+          const mins = Math.max(1, Math.round((summary.threshold_s || 900) / 60));
+          metric.title = count + ' recent Codex session' + (count === 1 ? '' : 's') +
+            ' currently labeled Stuck after at least ' + mins +
+            'm without transcript output. This is a stale-transcript heuristic, not proof that every session owns a live hung process.';
+        })
+        .catch(() => {});
+    });
+    tick();
+    setInterval(tick, 60000);
   }
   // ---- System Health panel -------------------------------------------------
   // Full-screen overlay opened from the footer health cluster. While open it
@@ -1071,7 +1095,8 @@
       '<span class="ccchealth-metric" data-k="cpu"><span class="ccchealth-dot"></span><span class="ccchealth-val">cpu —</span></span>' +
       '<span class="ccchealth-metric" data-k="build"><span class="ccchealth-dot"></span><span class="ccchealth-val">build —</span></span>' +
       '<span class="ccchealth-metric" data-k="err"><span class="ccchealth-dot"></span><span class="ccchealth-val">err —</span></span>' +
-      '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">warm 0/0</span></span>';
+      '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">warm 0/0</span></span>' +
+      '<span class="ccchealth-metric" id="cccStuckPill" data-k="stuck"><span class="ccchealth-dot"></span><span class="ccchealth-val">stuck —</span></span>';
     const toggle = document.createElement('div');
     toggle.id = 'pollerToggle';
     const _triggerCount = Object.keys(_POLLER_META).length;
@@ -1176,6 +1201,7 @@
     const spacer = footer.querySelector('.sidebar-footer-spacer');
     if (spacer) footer.insertBefore(wrap, spacer); else footer.appendChild(wrap);
     _startHealthPoll(health);
+    _startStuckSessionsPoll(health);
 
     function _refreshStripState() {
       const now = Date.now();

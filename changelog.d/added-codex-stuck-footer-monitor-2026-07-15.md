@@ -1,0 +1,1 @@
+- Show the current Codex `Stuck` session count in the lower-left health bar, backed by a cached fleet summary and an explicit stale-transcript heuristic tooltip.
