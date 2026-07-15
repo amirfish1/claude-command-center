@@ -85,3 +85,13 @@ def test_all_lane_override_never_controls_trash_membership():
     assert "const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);" in app_js
     assert "const _allTabLaneFor = (c) => _allTabLaneOverride(c) || _allTabNaturalLane(c);" in app_js
     assert "expandAllLaneDestinationGroup(row);" in app_js
+
+
+def test_saved_all_lane_survives_a_transient_empty_worker_snapshot():
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    split_start = app_js.index("const _savedAllTabView")
+    split_js = app_js[split_start:app_js.index("const _allTabMainConvs", split_start)]
+
+    assert "const _savedAllTabView" in split_js
+    assert "|| _savedAllTabView !== 'coding'" in split_js
+    assert "const _allTabView = _allTabHasHermesSplit ? _savedAllTabView : 'coding';" in split_js

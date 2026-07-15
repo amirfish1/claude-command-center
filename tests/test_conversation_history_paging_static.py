@@ -38,6 +38,15 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         self.assertIn("!(opts && opts.skipRestore)", app_js)
         self.assertIn("savedLastView.type === 'gc'", mode_js)
 
+    def test_restore_finds_saved_conversation_outside_the_visible_all_lane(self):
+        """A saved Coding session must restore while the All sidebar shows Workers."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        restore_start = app_js.index("async function restoreLastConversation()")
+        restore_js = app_js[restore_start:app_js.index("function activePaneId()", restore_start)]
+
+        self.assertIn("conversationRowsContainId(conversationsData, pane.conversationId)", restore_js)
+        self.assertIn("conversationRowsContainId(archiveData, pane.conversationId)", restore_js)
+
     def test_hover_prefetch_uses_tail_window(self):
         """Hover warming must not full-parse huge transcripts."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

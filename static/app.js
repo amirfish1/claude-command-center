@@ -10668,6 +10668,11 @@
     restoreLastConversation();
   }
 
+  function conversationRowsContainId(rows, id) {
+    return !!id && Array.isArray(rows)
+      && rows.some(c => c && (c.id === id || c.session_id === id));
+  }
+
   async function restoreLastConversation() {
     if (CONV_POPOUT_MODE) return;
     if (!conversationsLoaded) return;
@@ -10679,7 +10684,8 @@
       const pane = splitState.panes[i];
       if (!pane.conversationId || pane.restored) continue;
 
-      const exists = conversationsData.some(c => c.id === pane.conversationId);
+      const exists = conversationRowsContainId(conversationsData, pane.conversationId)
+        || conversationRowsContainId(archiveData, pane.conversationId);
       if (exists) {
         pane.restored = true;
         anyRestored = true;
@@ -26311,15 +26317,18 @@
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
-    const _allTabHasLaneOverride = _allTabConvs.some(c => !!_allTabLaneOverride(c));
-    const _allTabHasHermesSplit = _allTabHasLaneOverride || _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;
-    const _allTabView = (() => {
-      if (!_allTabHasHermesSplit) return 'coding';
+    const _savedAllTabView = (() => {
       try {
         const v = localStorage.getItem('ccc-all-hermes-tab');
         return (v === 'workers' || v === 'messages') ? v : 'coding';
       } catch (_) { return 'coding'; }
     })();
+    const _allTabHasLaneOverride = _allTabConvs.some(c => !!_allTabLaneOverride(c));
+    const _allTabHasHermesSplit = _allTabHasLaneOverride
+      || _allTabWorkerConvs.length > 0
+      || _allTabHermesMessageConvs.length > 0
+      || _savedAllTabView !== 'coding';
+    const _allTabView = _allTabHasHermesSplit ? _savedAllTabView : 'coding';
     const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
       ? _allTabWorkerConvs
       : ((_allTabHasHermesSplit && _allTabView === 'messages')
@@ -45519,8 +45528,7 @@
       const rawLastView = localStorage.getItem('ccc-last-view');
       savedLastView = rawLastView ? JSON.parse(rawLastView) : null;
     } catch (_) {}
-    const savedConversationExists = savedConversationId && Array.isArray(archiveData)
-      && archiveData.some(c => (c.id || c.session_id) === savedConversationId)
+    const savedConversationExists = conversationRowsContainId(archiveData, savedConversationId)
       && !(savedLastView && savedLastView.type === 'gc');
     if (savedConversationExists) {
       renderArchiveList(savedConversationId, { force: true, skipRestore: true });

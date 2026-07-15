@@ -1,0 +1,1 @@
+- Preserve the last-opened conversation and the selected All subtab across hard refreshes and periodic sidebar updates.
