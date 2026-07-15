@@ -1,0 +1,1 @@
+- Show Codex-spawned agents beneath their parent session in the All view and use task-oriented labels when Codex exposes reliable task metadata.
