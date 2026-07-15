@@ -19,6 +19,9 @@ from pathlib import Path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALL_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "install.sh")
 PRE_PUSH_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "pre-push.sh")
+INSTALL_SMOKE_DOCKERFILE = os.path.join(
+    PROJECT_ROOT, "tests", "install-smoke", "Dockerfile"
+)
 
 
 def _run_parse_channel(env_extra=None, args=()):
@@ -111,6 +114,21 @@ class TestInstallScript(unittest.TestCase):
             result.returncode,
             0,
             f"shellcheck failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}",
+        )
+
+    def test_install_smoke_uses_real_local_clone_into_empty_destination(self):
+        with open(INSTALL_SMOKE_DOCKERFILE, encoding="utf-8") as fh:
+            dockerfile = fh.read()
+
+        self.assertIn("git init -q /repo-source", dockerfile)
+        self.assertIn("CCC_REPO_URL=/repo-source", dockerfile)
+        self.assertNotIn(
+            "cp -r /repo /root/.ccc/claude-command-center",
+            dockerfile,
+        )
+        self.assertNotIn(
+            "> /usr/local/sbin/git",
+            dockerfile,
         )
 
     def test_platform_gate_allows_macos_and_linux(self):
