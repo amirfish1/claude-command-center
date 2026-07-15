@@ -56,8 +56,11 @@ def test_trashed_loader_ignores_non_string_entries(tmp_path, monkeypatch):
 
 def test_archive_cache_rehydrate_refreshes_trashed_state(monkeypatch):
     monkeypatch.setattr(server, "_load_session_name_overrides", lambda: {})
-    monkeypatch.setattr(server, "_load_archived_conversations", lambda **kwargs: ["sid-a"])
-    monkeypatch.setattr(server, "_load_trashed_conversations", lambda **kwargs: ["sid-a"])
+    monkeypatch.setattr(
+        server,
+        "_load_conversation_lifecycle_sets",
+        lambda **kwargs: ({"sid-a"}, {"sid-a"}),
+    )
     monkeypatch.setattr(server, "_load_verified_conversations", lambda: [])
     monkeypatch.setattr(server, "_load_pinned_conversations", lambda: [])
     monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda: {})
@@ -98,8 +101,19 @@ def test_live_registry_row_stamps_trashed_state():
 def test_every_conversation_builder_stamps_trashed_state(builder_name):
     source = inspect.getsource(getattr(server, builder_name))
 
-    assert "_load_trashed_conversations" in source
+    assert "_load_conversation_lifecycle_sets" in source
     assert '"trashed":' in source
+
+
+def test_lifecycle_sets_never_report_trashed_without_archived(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    server._save_trashed_conversations(["worker-a"])
+
+    archived, trashed = server._load_conversation_lifecycle_sets()
+
+    assert trashed == {"worker-a"}
+    assert archived == {"worker-a"}
 
 
 def test_trash_active_session_archives_and_trashes(tmp_path, monkeypatch):
@@ -176,6 +190,66 @@ def test_parallel_trash_operations_do_not_lose_worker(tmp_path, monkeypatch):
 
     assert set(server._load_archived_conversations(sweep=False)) == {"worker-a", "worker-b"}
     assert set(server._load_trashed_conversations()) == {"worker-a", "worker-b"}
+
+
+def test_parallel_archive_endpoints_do_not_lose_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "SIDECAR_STATE_DIR", tmp_path)
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_kill_session_by_id", lambda sid: {"ok": True})
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    real_save = server._save_archived_conversations
+
+    def delayed_save(rows):
+        time.sleep(0.03)
+        return real_save(rows)
+
+    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    start = threading.Event()
+
+    def archive(sid):
+        start.wait(timeout=1)
+        return _post_json(
+            f"/api/conversations/{sid}/archive",
+            {"session_id": sid, "archived": True},
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(archive, sid) for sid in ("sid-a", "sid-b")]
+        start.set()
+        results = [future.result(timeout=5) for future in futures]
+
+    assert [status for status, _body in results] == [200, 200]
+    assert set(server._load_archived_conversations(sweep=False)) == {"sid-a", "sid-b"}
+
+
+def test_parallel_bulk_archive_calls_do_not_lose_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "ARCHIVED_CONVERSATIONS_FILE", tmp_path / "archived.json")
+    monkeypatch.setattr(server, "TRASHED_CONVERSATIONS_FILE", tmp_path / "trashed.json")
+    monkeypatch.setattr(server, "_archive_grace", {})
+    monkeypatch.setattr(server, "_save_archive_grace", lambda: None)
+    monkeypatch.setattr(server, "_log_archive_event", lambda *args: None)
+    real_save = server._save_archived_conversations
+
+    def delayed_save(rows):
+        time.sleep(0.03)
+        return real_save(rows)
+
+    monkeypatch.setattr(server, "_save_archived_conversations", delayed_save)
+    start = threading.Event()
+
+    def archive(sid):
+        start.wait(timeout=1)
+        return server._set_conversations_archived([sid], True)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(archive, sid) for sid in ("sid-a", "sid-b")]
+        start.set()
+        [future.result(timeout=2) for future in futures]
+
+    assert set(server._load_archived_conversations(sweep=False)) == {"sid-a", "sid-b"}
 
 
 def test_unarchive_does_not_erase_concurrent_worker_trash(tmp_path, monkeypatch):
@@ -380,11 +454,12 @@ def test_group_chat_unarchive_clears_trash(tmp_path, monkeypatch):
 
 def test_post_router_exposes_trash_endpoints():
     source = inspect.getsource(server.CommandCenterHandler.do_POST)
+    bulk_source = inspect.getsource(server._set_conversations_archived)
 
     assert '/api/conversations/[^/]+/trash' in source
     assert '"/api/group-chats/trash"' in source
     assert '"/api/group-chats/untrash"' in source
-    assert "_clear_trashed_on_unarchive_many(to_remove)" in source
+    assert "_clear_trashed_on_unarchive_many(to_remove)" in bulk_source
     assert '"trashed": bool(meta.get("trashed"))' in inspect.getsource(
         server._list_group_chats
     )
