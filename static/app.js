@@ -26399,6 +26399,12 @@
       return clusters;
     };
     const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);
+    const _allTabClusterPinRank = (cluster) => (cluster.rows || []).reduce((best, item) => (
+      item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best
+    ), Infinity);
+    const _allTabClusterMtime = (cluster) => (cluster.rows || []).reduce((m, item) => Math.max(
+      m, item.card.modified || item.card.last_interacted || 0
+    ), 0);
     const _renderAllTabClusters = (clusters, suppressFolderChip) => {
       const chunks = [];
       let repeatCards = [];
@@ -26500,9 +26506,17 @@
         if (!_byFolder.has(key)) _byFolder.set(key, []);
         _byFolder.get(key).push(cluster);
       }
+      for (const clusters of _byFolder.values()) {
+        clusters.sort((a, b) => {
+          const pinDelta = _allTabClusterPinRank(a) - _allTabClusterPinRank(b);
+          if (!Number.isNaN(pinDelta) && pinDelta !== 0) return pinDelta;
+          return _allTabClusterMtime(b) - _allTabClusterMtime(a);
+        });
+      }
       const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
-        const newest = clusters => clusters.reduce((max, cluster) => Math.max(max,
-          ...cluster.rows.map(item => item.card.modified || item.card.last_interacted || 0)), 0);
+        const newest = clusters => clusters.reduce((max, cluster) => Math.max(
+          max, _allTabClusterMtime(cluster)
+        ), 0);
         const aMax = newest(a[1]);
         const bMax = newest(b[1]);
         return bMax - aMax;
@@ -26532,12 +26546,8 @@
         _archivedItems.push({
           type: 'session-cluster',
           cluster,
-          pinRank: cluster.rows.reduce((best, item) => (
-            item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best
-          ), Infinity),
-          mtime: cluster.rows.reduce((m, item) => Math.max(
-            m, item.card.modified || item.card.last_interacted || 0
-          ), 0),
+          pinRank: _allTabClusterPinRank(cluster),
+          mtime: _allTabClusterMtime(cluster),
         });
       }
       // Archived group chats live in the Trash section (CCC-468).
