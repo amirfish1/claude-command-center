@@ -505,7 +505,7 @@
   }
 
   // ---- Model Advisor panel -------------------------------------------------
-  // Full-screen overlay opened from the footer. Polls /api/model-advisor and
+  // Full-screen overlay opened from the footer. Reads the cached advisor report
   // shows live model-drift recommendations (downgrade an Opus session gone
   // mechanical, upgrade a cheap session doing hard reasoning, or spawn a worker
   // on a plan->execute drift) plus the savings monitor: what was recommended,
@@ -516,6 +516,12 @@
   let _maTimeframe = '7d';
   let _maTab = 'scanned';
   const _maModels = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable' };
+  const _ADVISOR_DEBOUNCE_MS = 30000;
+  const _ADVISOR_REFRESH_MIN_MS = 300000;
+  const _ADVISOR_SUBSTANTIAL_BYTES = 32768;
+  let _advisorSessionSnapshot = null;
+  let _advisorRefreshTimer = null;
+  let _advisorLastRefreshRequest = 0;
   function _maEsc(s) { return _shEsc(s); }
   function _maTok(n) {
     if (!n || n <= 0) return '—';
@@ -642,7 +648,7 @@
   function _openModelAdvisor() {
     const ov = _ensureModelAdvisorModal();
     ov.classList.add('open');
-    _pollModelAdvisor();
+    _pollModelAdvisor('force');
     if (_maTimer) clearInterval(_maTimer);
     _maTimer = setInterval(_pollModelAdvisor, 5000);
   }
@@ -653,10 +659,11 @@
   }
   let _maLastScan = 0;
   let _maPollPromise = null;
-  function _pollModelAdvisor() {
+  function _pollModelAdvisor(fresh) {
     if (document.hidden) return;
     if (_maPollPromise) return _maPollPromise;
-    _maPollPromise = fetch('/api/model-advisor', { cache: 'no-store' })
+    const url = fresh ? '/api/model-advisor?fresh=' + encodeURIComponent(fresh) : '/api/model-advisor';
+    _maPollPromise = fetch(url, { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (d) {
@@ -669,6 +676,48 @@
       .catch(function () {})
       .finally(function () { _maPollPromise = null; });
     return _maPollPromise;
+  }
+  function _advisorSessionState(row) {
+    return {
+      live: !!row.is_live,
+      model: String(row.current_model || row.model || row.model_name || ''),
+      size: Number(row.size || 0),
+    };
+  }
+  function _requestScheduledAdvisorRefresh() {
+    _advisorRefreshTimer = null;
+    if (document.hidden) return;
+    _advisorLastRefreshRequest = Date.now();
+    _pollModelAdvisor('1');
+  }
+  function _scheduleAdvisorRefresh() {
+    if (_advisorRefreshTimer) clearTimeout(_advisorRefreshTimer);
+    const sinceLast = Date.now() - _advisorLastRefreshRequest;
+    const delay = Math.max(_ADVISOR_DEBOUNCE_MS, _ADVISOR_REFRESH_MIN_MS - sinceLast);
+    _advisorRefreshTimer = setTimeout(_requestScheduledAdvisorRefresh, delay);
+  }
+  function _observeAdvisorSessionChanges(rows) {
+    const next = {};
+    (Array.isArray(rows) ? rows : []).forEach(function (row) {
+      const sid = row && row.session_id;
+      if (sid && !String(sid).startsWith('spawning-')) next[sid] = _advisorSessionState(row);
+    });
+    if (_advisorSessionSnapshot === null) {
+      _advisorSessionSnapshot = next;
+      if (Object.keys(next).length) _scheduleAdvisorRefresh();
+      return;
+    }
+    let qualifies = false;
+    const ids = new Set(Object.keys(_advisorSessionSnapshot).concat(Object.keys(next)));
+    ids.forEach(function (sid) {
+      const before = _advisorSessionSnapshot[sid];
+      const after = next[sid];
+      if (!before || !after) { qualifies = true; return; }
+      if (before.live !== after.live || before.model !== after.model) qualifies = true;
+      if (after.size - before.size >= _ADVISOR_SUBSTANTIAL_BYTES) qualifies = true;
+    });
+    _advisorSessionSnapshot = next;
+    if (qualifies) _scheduleAdvisorRefresh();
   }
   function _maApply(recId, sid, model) {
     fetch('/api/model-advisor/apply', {
@@ -749,7 +798,7 @@
     if (!live.length) {
       html += '<div class="ma-empty"><div class="ma-empty-ok">✓</div>' +
               'All live sessions are on the right model.' +
-              '<div class="ma-empty-hint">The advisor checks every 45 seconds.</div></div>';
+              '<div class="ma-empty-hint">The advisor checks after meaningful session changes.</div></div>';
     } else {
       live.forEach(function (r) {
         const from = _maModels[r.current_model] || r.current_model || '?';
@@ -1065,19 +1114,8 @@
       document.head.appendChild(aps);
     }
     wrap.appendChild(advPill);
-    // Light background poll so the pill badge reflects drift without opening the
-    // modal. Reuses the coalesced live-activity snapshot server-side, so cheap.
-    if (!window.__advisorBgTimer) {
-      const _bg = function () {
-        if (document.hidden) return;
-        fetch('/api/model-advisor', { cache: 'no-store' })
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (d) { if (d) _updateAdvisorPill(d); })
-          .catch(function () {});
-      };
-      _bg();
-      window.__advisorBgTimer = setInterval(_bg, 45000);
-    }
+    // Keep a neutral cached state until a meaningful session change schedules
+    // a refresh, or the user opens the advisor for a forced fresh report.
     // Productivity is deliberately separate from token Throughput: it opens a
     // project/day outcome dashboard and performs no background polling here.
     const productivityPill = document.createElement('div');
@@ -11476,6 +11514,7 @@
       // Keep still-pending placeholders on top until they materialize.
       const placeholders = Array.from(pendingSpawns.values());
       conversationsData = [...placeholders, ...fresh];
+      _observeAdvisorSessionChanges(fresh);
       reconcilePendingNewSessionObjectAssignments();
       clearInputDraftKeyCache();
       // Re-apply any in-flight archive/verify overrides so an /api/sessions
