@@ -29,7 +29,7 @@ For every mutation, the projector finds the nearest direct child of the canonica
 
 Projection work is coalesced into one animation frame. A per-view `WeakMap` assigns each source root an ephemeral projection identifier without mutating the source DOM. The live region maintains at most one mirror per source root and replaces that mirror from the current canonical root on every flush. Each flush also reconciles tracked roots against `view.contains(sourceRoot)`, so removed roots lose their mirror. Attribute changes, text timers, nested content, control enabled state, and class transitions therefore remain equivalent to the regular view.
 
-Completed assistant roots already represented by the semantic deck are refreshed through the deck path and are not duplicated indefinitely in the live region. Transient roots and current-turn roots remain in the live region until removed from the canonical view or incorporated into the completed answer boundary.
+Completed assistant roots refresh the semantic deck, but the newly completed root also remains in the live region so a reader parked on an older slide cannot miss the stream-to-complete transition. When a newer completed-answer boundary arrives, older completed mirrors are pruned and the newest completion takes their place. Transient roots and current-turn roots remain until removed from the canonical view or superseded by that newer boundary.
 
 ## Interaction Parity
 

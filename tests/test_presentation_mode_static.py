@@ -363,6 +363,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("requestAnimationFrame", app_js)
         self.assertIn("view.contains(entry.source)", flush)
         self.assertIn("presentationCloneForProjection", flush)
+        self.assertNotIn("presentationRootIsCompletedAnswer(source)", flush)
         self.assertIn("observer.disconnect()", disconnect)
         self.assertIn("cancelAnimationFrame", disconnect)
         self.assertIn("conv-presentation-live-region", live_region)
@@ -402,12 +403,16 @@ class TestPresentationModeStatic(unittest.TestCase):
 
     def test_mode_state_is_pane_scoped_and_only_default_is_persisted(self):
         app_js = APP_JS.read_text(encoding="utf-8")
+        setter = _javascript_function_source("setPresentationMode")
 
         self.assertIn("function setPresentationMode(paneId, mode", app_js)
         self.assertIn("pane.dataset.presentationMode", app_js)
         self.assertIn("ccc-conv-presentation-mode", app_js)
         self.assertIn("function refreshPresentationForPane(paneId", app_js)
         self.assertIn("function stepPresentationSlide(paneId, delta)", app_js)
+        self.assertIn("presentationRestorePinned", setter)
+        self.assertIn("view._pinnedToBottom = false", setter)
+        self.assertIn("scrollConversationToEnd(view)", setter)
 
     def test_escape_exits_mode_two_even_from_the_composer(self):
         app_js = APP_JS.read_text(encoding="utf-8")

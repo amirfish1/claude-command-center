@@ -39152,11 +39152,6 @@
     canonicalTarget.dispatchEvent(new Event(event.type, { bubbles: true, cancelable: true }));
   }
 
-  function presentationRootIsCompletedAnswer(root) {
-    return !!(root && root.matches && root.matches('.event.assistant')
-      && !root.classList.contains('tool-only') && root.querySelector('.assistant-text'));
-  }
-
   function presentationRootRefreshesDeck(root) {
     return !!(root && root.matches
       && root.matches('.event.assistant, .stream-bubble:not(.stream-bubble-subagent)'));
@@ -39216,7 +39211,7 @@
     const dirtyRoots = Array.from(state.dirtyRoots);
     state.dirtyRoots.clear();
     dirtyRoots.forEach(source => {
-      if (!view.contains(source) || presentationRootIsCompletedAnswer(source)) return;
+      if (!view.contains(source)) return;
       let id = state.sourceIds.get(source);
       if (!id) {
         id = 'live-' + state.nextId++;
@@ -39507,7 +39502,11 @@
     const oldMode = normalizePresentationMode(pane.dataset.presentationMode || 'off');
     if (oldMode === 'off' && normalized !== 'off') {
       view.dataset.presentationRestoreScroll = String(view.scrollTop || 0);
+      view.dataset.presentationRestorePinned = view._pinnedToBottom ? '1' : '0';
     }
+    const restorePinned = normalized === 'off'
+      && view.dataset.presentationRestorePinned === '1';
+    if (normalized === 'off') view._pinnedToBottom = false;
     pane.dataset.presentationMode = normalized;
     try { localStorage.setItem(PRESENTATION_MODE_KEY, normalized); } catch (_) {}
     refreshPresentationForPane(targetPaneId, {
@@ -39516,7 +39515,15 @@
     });
     if (normalized === 'off') {
       const restore = Number(view.dataset.presentationRestoreScroll || 0);
-      requestAnimationFrame(() => { view.scrollTop = restore; updateConversationEndAffordance(view); });
+      requestAnimationFrame(() => {
+        if (restorePinned) {
+          scrollConversationToEnd(view);
+        } else {
+          view.scrollTop = restore;
+          updateConversationEndAffordance(view);
+          view._pinnedToBottom = false;
+        }
+      });
     }
   }
 

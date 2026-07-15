@@ -1,6 +1,6 @@
 # Presentation Live Parity Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make presentation mode expose and operate every canonical regular-view update within one animation frame while retaining semantic slides for completed answers.
 
@@ -32,7 +32,7 @@
 - Consumes: `normalizePresentationMode(mode)` and `PRESENTATION_MODE_KEY`.
 - Produces: two UI states (`off`, `2`) and legacy `1 -> 2` migration.
 
-- [ ] **Step 1: Write the failing two-state tests**
+- [x] **Step 1: Write the failing two-state tests**
 
 Change the selector test to require exactly two controls, labels `Off` and `Present`, no `Mode 1` copy, and no `data-presentation-mode="1"`. Add pure normalization assertions:
 
@@ -51,7 +51,7 @@ def test_legacy_mode_one_migrates_to_present(self):
     self.assertEqual(_run_javascript_function("normalizePresentationMode", "off"), "off")
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -63,7 +63,7 @@ python3 -m unittest \
 
 Expected: failures showing three controls and `normalizePresentationMode("1") == "1"`.
 
-- [ ] **Step 3: Implement the two-state selector and migration**
+- [x] **Step 3: Implement the two-state selector and migration**
 
 Replace the toolbar buttons with:
 
@@ -84,7 +84,7 @@ function normalizePresentationMode(mode) {
 
 Remove `.is-presentation-mode-1` toggles and CSS. Update fallback comments to say “one internally scrollable slide” rather than Mode 1.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run:
 
@@ -119,7 +119,7 @@ git commit --only static/index.html static/app.js static/app.css tests/test_pres
   - `presentationCloneForProjection(source, prefix) -> Element`
   - `presentationRootsAfterLatestAnswer(view) -> Element[]`
 
-- [ ] **Step 1: Write failing pure-helper tests**
+- [x] **Step 1: Write failing pure-helper tests**
 
 Use source extraction plus a Node script with a tiny element fixture to prove path round-tripping. Add source contracts proving `presentationSourceRoot` climbs to a direct child and excludes `.conv-presentation-stage`, `presentationCloneForProjection` rewrites `id`, `for`, `aria-labelledby`, `aria-describedby`, `aria-controls`, and local hash references, and form properties are copied.
 
@@ -131,7 +131,7 @@ const resolved = presentationResolvePath(sourceRoot, path);
 assert(resolved === sourceButton);
 ```
 
-- [ ] **Step 2: Run helper tests and verify RED**
+- [x] **Step 2: Run helper tests and verify RED**
 
 Run:
 
@@ -141,7 +141,7 @@ python3 -m unittest tests.test_presentation_mode_static.TestPresentationModeStat
 
 Expected: failure because the projection helpers are absent.
 
-- [ ] **Step 3: Implement the primitives**
+- [x] **Step 3: Implement the primitives**
 
 Implement path helpers over `Element.children`, never selectors tied to update classes:
 
@@ -171,7 +171,7 @@ function presentationResolvePath(root, path) {
 
 `presentationRootsAfterLatestAnswer` scans only direct children, ignores presentation-owned nodes, finds the last meaningful completed `.event.assistant` root, and returns every subsequent canonical root without filtering by update type.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run presentation tests, `node --check static/app.js`, and `git diff --check`. Commit `static/app.js` and the test file with:
 
@@ -197,17 +197,17 @@ feat(ui): add generic presentation projection primitives
   - `flushPresentationProjection(view)`
   - `disconnectPresentationProjection(view)`
 
-- [ ] **Step 1: Write failing observer lifecycle tests**
+- [x] **Step 1: Write failing observer lifecycle tests**
 
 Require a `MutationObserver` configured with all four mutation dimensions, a per-view state containing `sourceIds: new WeakMap()`, `entries: new Map()`, `dirtyRoots: new Set()`, and one rAF handle. Assert the callback ignores targets within `.conv-presentation-stage`, derives roots generically, and reconciles removed roots with `view.contains(entry.source)`.
 
 Require activation seeding from `presentationRootsAfterLatestAnswer(view)`, disconnection on Off, and fallback polling at `250` ms when `MutationObserver` is unavailable.
 
-- [ ] **Step 2: Run observer tests and verify RED**
+- [x] **Step 2: Run observer tests and verify RED**
 
 Run the new test alone; expect missing `ensurePresentationProjection`.
 
-- [ ] **Step 3: Implement the live region and projector**
+- [x] **Step 3: Implement the live region and projector**
 
 Create this stage child:
 
@@ -234,7 +234,7 @@ Replace the one-row `syncPresentationActivity` timer with the generic live regio
 
 Style the stage as two rows, with a flexible slide slot and an independently scrollable live region capped near 42% of the stage. The live region must remain visible on mobile and while historical slides are selected.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run all presentation tests, JavaScript syntax, and diff checks. Commit `static/app.js`, `static/app.css`, and tests with:
 
@@ -256,17 +256,17 @@ feat(ui): mirror every live conversation mutation
   - `forwardPresentationProjectionEvent(view, event)`
   - capture listeners for `click`, `input`, and `change` on the live list.
 
-- [ ] **Step 1: Write the failing interaction test**
+- [x] **Step 1: Write the failing interaction test**
 
 Create a browserless Node fixture where a mirrored nested button resolves to the canonical nested button. Assert clicks call the canonical `.click()`, `input`/`change` synchronize `value`, `checked`, and `selectedIndex` before dispatching an equivalent bubbling event, and a missing path is a safe no-op.
 
 Require click delegation in capture phase so `<summary>`, links, and form controls cannot perform a second clone-local default action.
 
-- [ ] **Step 2: Run interaction test and verify RED**
+- [x] **Step 2: Run interaction test and verify RED**
 
 Expected: missing `forwardPresentationProjectionEvent`.
 
-- [ ] **Step 3: Implement generic forwarding**
+- [x] **Step 3: Implement generic forwarding**
 
 Resolve the wrapper ID to `state.entries`, calculate the target path relative to the mirrored source root, resolve the same path in the canonical root, and:
 
@@ -285,7 +285,7 @@ if (event.type === 'click') {
 
 Do not branch on button classes, tool names, or action types.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run presentation tests and syntax checks. Commit `static/app.js` and tests with:
 
@@ -306,7 +306,7 @@ feat(ui): forward presentation live controls
 - Consumes: local CCC server at `CCC_PRESENTATION_PARITY_URL` or `http://127.0.0.1:8090` and Puppeteer from `require-puppeteer.js`.
 - Produces: a deterministic non-destructive parity verifier with nonzero exit on any mismatch.
 
-- [ ] **Step 1: Write the failing harness contract test**
+- [x] **Step 1: Write the failing harness contract test**
 
 Require the verifier to use repository Puppeteer, bound navigation, `try/finally`, browser close, condition-based waits (no `page.waitForTimeout`), and matrix labels for:
 
@@ -316,11 +316,13 @@ sending thinking long-thinking generating tool tokens elapsed
 stream completed approval question wake warning error done
 attribute class disabled enabled click input change details
 historical-cursor split-pane resize off-restore legacy-mode-one
+added edited tool-group tool-complete approval-state queue-reason
+outcome-banner dismissal frame-bound
 ```
 
 Run the Python contract test and verify RED because the script is absent.
 
-- [ ] **Step 2: Create the synthetic canonical-view fixture**
+- [x] **Step 2: Create the synthetic canonical-view fixture**
 
 The script loads the dashboard, replaces one pane's conversation contents with public fake events, programmatically clicks Present, and then mutates canonical roots one transition at a time. It must not select or modify a real conversation or call mutation APIs.
 
@@ -344,11 +346,11 @@ function snapshot(node) {
 
 Strip only projection-specific ID prefixes before comparison. Verify removals by proving both source and mirror are absent.
 
-- [ ] **Step 3: Add interaction, cursor, split, resize, and Off checks**
+- [x] **Step 3: Add interaction, cursor, split, resize, and Off checks**
 
 Attach canonical listeners to fake controls and prove mirror interaction increments canonical state. Park on an older slide, add updates, and prove the slide key is unchanged. Clone a second pane and prove observers/mirrors do not cross panes. Resize the viewport and prove both slide cursor and mirrors survive. Switch Off and prove the observer/live stage is removed while the canonical transcript remains unchanged. Seed localStorage with legacy `1`, reload, and prove Present is selected.
 
-- [ ] **Step 4: Run Chromium verification and focused tests**
+- [x] **Step 4: Run Chromium verification and focused tests**
 
 Run:
 
@@ -365,7 +367,7 @@ git diff --check
 
 Expected: every named parity row prints `PASS`, all focused tests pass, and syntax/diff checks exit 0.
 
-- [ ] **Step 5: Add changelog and commit**
+- [x] **Step 5: Add changelog and commit**
 
 Create `changelog.d/fixed-presentation-live-parity-2026-07-15.md`:
 
@@ -387,11 +389,11 @@ fix(ui): preserve every live update in presentation
 - Inspect all files changed by Tasks 1-5
 - Inspect `docs/superpowers/specs/2026-07-15-presentation-live-parity-design.md`
 
-- [ ] **Step 1: Run the complete parity verifier twice**
+- [x] **Step 1: Run the complete parity verifier twice**
 
 The second run proves lifecycle cleanup prevents duplicate observers or stale projection state.
 
-- [ ] **Step 2: Run the full repository suite**
+- [x] **Step 2: Run the full repository suite**
 
 Run:
 
@@ -401,10 +403,10 @@ Run:
 
 Record exact pass/failure counts and distinguish failures in changed presentation files from unrelated shared-main failures.
 
-- [ ] **Step 3: Audit every spec requirement against evidence**
+- [x] **Step 3: Audit every spec requirement against evidence**
 
 Map each Required Parity Evidence bullet to a named Chromium `PASS` line or focused automated assertion. Treat missing evidence as incomplete work and add the missing test before completion.
 
-- [ ] **Step 4: Verify repository state**
+- [x] **Step 4: Verify repository state**
 
 Run `git status --short`, `git diff --check`, and `git log --oneline` for the task commits. Do not push without explicit user authorization.
