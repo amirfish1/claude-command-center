@@ -4021,10 +4021,11 @@ class TestServerImports(unittest.TestCase):
             app_css.index(".fq-row.is-closed .fq-note", app_css.index(".fq-row.is-closed .fq-status {"))
         ]
         self.assertIn("var(--text-muted, #8b949e)", open_css)
-        self.assertIn("var(--accent, #58a6ff)", in_progress_css)
+        self.assertIn("#0b3d91", in_progress_css)
         self.assertIn("var(--green, #3fb950)", closed_css)
         self.assertIn("animation: fq-status-glow 1.5s ease-in-out infinite;", in_progress_css)
         self.assertIn("will-change: opacity, box-shadow;", in_progress_css)
+        self.assertIn("0 0 24px rgba(33,150,243,0.95)", app_css)
 
     def test_queue_header_can_toggle_wrapped_titles(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
