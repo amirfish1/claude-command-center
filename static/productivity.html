@@ -348,7 +348,11 @@
       '</div><div class="metric-value">' + escapeHtml(value) + '</div><div class="metric-note">' + escapeHtml(note) + '</div></article>';
   }
 
-  function renderSummary(summary) {
+  function renderSummary(summary, coverage) {
+    coverage = coverage || {};
+    const presence = coverage.presence || {};
+    const watchtower = coverage.watchtower || {available: true};
+    const presenceAvailable = Boolean(presence.available || Number(presence.sample_minutes));
     const presenceMinutes = Number(summary.computer_active_minutes) || 0;
     const cards = [
       ['Features shipped', compact(summary.features), 'Deduplicated feat commits + WT features', 'outcome'],
@@ -356,14 +360,14 @@
       ['Commits pushed', compact(summary.commits), 'Authored commits now on remote refs', ''],
       ['Lines changed', compact(summary.lines_changed), compact(summary.lines_added) + ' added · ' + compact(summary.lines_deleted) + ' deleted', ''],
       ['Observed work', duration(summary.observed_work_seconds), compact(summary.human_prompts) + ' human prompt events', 'time'],
-      ['Computer active', presenceMinutes ? duration(presenceMinutes * 60) : '—', presenceMinutes ? 'Sampled while CCC was running' : 'Presence sampling has no history yet', 'time'],
-      ['45-minute hours', compact(summary.focus_hours), 'Clock hours with ≥45 active sampled minutes', 'time'],
+      ['Computer active', presenceAvailable ? duration(presenceMinutes * 60) : '—', presenceAvailable ? 'Sampled while CCC was running' : (presence.sampler_available === false ? 'Presence sampling unavailable' : 'Presence sampling has no history yet'), 'time'],
+      ['45-minute hours', presenceAvailable ? compact(summary.focus_hours) : '—', presenceAvailable ? 'Clock hours with ≥45 active sampled minutes' : 'Requires computer-presence samples', 'time'],
       ['Agent gross time', duration(summary.agent_gross_seconds), 'Sum of every agent turn', 'agent'],
       ['Agent net time', duration(summary.agent_net_seconds), 'Overlapping agents counted once', 'agent'],
       ['Parallel agent time', duration(summary.agent_parallel_seconds), 'Gross minus net runtime', 'agent'],
       ['Assistant turns', compact(summary.turns), 'Normalized Claude + Codex turns', ''],
       ['Tokens', compact(summary.tokens), 'Raw context + output tokens', ''],
-      ['WatchTower', compact(summary.watchtower_closed) + ' closed', compact(summary.watchtower_opened) + ' opened', ''],
+      ['WatchTower', watchtower.available === false ? '—' : compact(summary.watchtower_closed) + ' closed', watchtower.available === false ? 'Unavailable for this snapshot' : compact(summary.watchtower_opened) + ' opened', ''],
       ['Active projects', compact(summary.active_projects), 'Projects with measured work', ''],
     ];
     document.getElementById('summaryCards').innerHTML = cards.map(function (row) { return card(row[0], row[1], row[2], row[3]); }).join('');
@@ -424,16 +428,20 @@
     }).join('');
   }
 
-  function renderDaily(rows, deliveriesByDate) {
+  function renderDaily(rows, deliveriesByDate, coverage) {
     const body = document.querySelector('#dailyTable tbody');
+    const watchtower = (coverage || {}).watchtower || {available: true};
     rows = Array.isArray(rows) ? rows.slice().reverse() : [];
     body.innerHTML = rows.map(function (row) {
-      const computer = Number(row.presence_samples) ? duration((Number(row.computer_active_minutes) || 0) * 60) : '—';
+      const presenceAvailable = Number(row.presence_samples) > 0;
+      const computer = presenceAvailable ? duration((Number(row.computer_active_minutes) || 0) * 60) : '—';
+      const focus = presenceAvailable ? compact(row.focus_hours) : '—';
+      const watchtowerCounts = watchtower.available === false ? '—' : compact(row.watchtower_opened) + ' / ' + compact(row.watchtower_closed);
       return '<tr><td><strong>' + escapeHtml(shortDate(row.date)) + '</strong></td><td>' + compact(row.features) + '</td><td>' + compact(row.fixes) +
         '</td><td>' + compact(row.commits) + '</td><td>' + compact(row.lines_changed) + '</td><td>' + compact(row.turns) + '</td><td>' + compact(row.tokens) +
-        '</td><td>' + duration(row.observed_work_seconds) + '</td><td>' + computer + '</td><td>' + compact(row.focus_hours) + '</td>' +
+        '</td><td>' + duration(row.observed_work_seconds) + '</td><td>' + computer + '</td><td>' + focus + '</td>' +
         '<td>' + duration(row.agent_gross_seconds) + ' / ' + duration(row.agent_net_seconds) + '</td>' +
-        '<td>' + compact(row.watchtower_opened) + ' / ' + compact(row.watchtower_closed) + '</td>' +
+        '<td>' + watchtowerCounts + '</td>' +
         '<td class="work-cell">' + workItems((deliveriesByDate || {})[row.date]) + '</td></tr>';
     }).join('');
   }
@@ -470,12 +478,12 @@
     document.body.classList.remove('is-loading');
     const range = data.range || {};
     document.getElementById('dateRange').textContent = shortDate(range.start_date) + ' – ' + shortDate(range.end_date) + ' · ' + selectedWeeks + ' weeks';
-    renderSummary(data.summary || {});
+    renderSummary(data.summary || {}, data.coverage || {});
     renderWeekly(data.weekly || []);
     renderInsights(data);
     const deliveryIndex = indexDeliveries(data.deliveries || []);
     renderProjects(data.projects || [], deliveryIndex.byProject);
-    renderDaily(data.daily || [], deliveryIndex.byDate);
+    renderDaily(data.daily || [], deliveryIndex.byDate, data.coverage || {});
     renderCoverage(data.coverage || {});
     const refresh = data.refresh || {};
     const generated = refresh.generated_at ? new Date(refresh.generated_at * 1000).toLocaleString() : 'unknown time';

@@ -76,6 +76,7 @@ from productivity import (
     presence_health,
     presence_summary,
     run_presence_sampler,
+    system_local_timezone,
 )
 
 # Tool's own assets live next to this file. Repos are never process-global:
@@ -53377,7 +53378,12 @@ def _productivity_known_repos(conversations):
     for row in conversations or []:
         if not isinstance(row, dict):
             continue
-        path = row.get("folder_path") or row.get("cwd") or row.get("repo_path")
+        path = (
+            row.get("session_cwd")
+            or row.get("cwd")
+            or row.get("folder_path")
+            or row.get("repo_path")
+        )
         if path:
             candidates.append(str(path))
 
@@ -53430,7 +53436,7 @@ def _productivity_project_for_path(path, repositories):
             for candidate in repo.get("paths") or [repo.get("path")]:
                 try:
                     root = Path(candidate).expanduser().resolve(strict=False)
-                    if target == root or root in target.parents or target in root.parents:
+                    if target == root or root in target.parents:
                         return {"id": repo["id"], "name": repo["name"]}
                 except (OSError, ValueError, TypeError):
                     continue
@@ -53493,7 +53499,10 @@ def _productivity_turn_rows(conversations, repositories, cutoff_epoch):
         except (TypeError, ValueError):
             pass
         project = _productivity_project_for_path(
-            row.get("folder_path") or row.get("cwd") or row.get("repo_path"),
+            row.get("session_cwd")
+            or row.get("cwd")
+            or row.get("folder_path")
+            or row.get("repo_path"),
             repositories,
         )
         if not project:
@@ -53568,7 +53577,7 @@ def _productivity_build_snapshot(now=None):
     now = now or datetime.now().astimezone()
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    local_tz = now.astimezone().tzinfo or timezone.utc
+    local_tz = system_local_timezone()
     end_date = now.astimezone(local_tz).date()
     full_start = end_date - timedelta(weeks=16) + timedelta(days=1)
     cutoff = datetime.combine(full_start, datetime_time.min, tzinfo=local_tz)
@@ -53699,6 +53708,20 @@ def _productivity_refresh_start(*, force=False):
     def run():
         try:
             snapshot = _productivity_build_snapshot()
+            watchtower = (snapshot.get("coverage") or {}).get("watchtower") or {}
+            if watchtower.get("available") is False:
+                previous = _PRODUCTIVITY_STORE.load_payload() or {}
+                previous_payload = previous.get("payload") or {}
+                previous_watchtower = (
+                    (previous_payload.get("coverage") or {}).get("watchtower") or {}
+                )
+                if (
+                    previous_payload.get("schema") == _PRODUCTIVITY_SCHEMA
+                    and previous_watchtower.get("available") is True
+                ):
+                    raise RuntimeError(
+                        "WatchTower unavailable; preserving the last good productivity snapshot"
+                    )
             generated_at = float(snapshot.get("generated_at") or time.time())
             _PRODUCTIVITY_STORE.save_payload(snapshot, generated_at=generated_at)
             with _PRODUCTIVITY_REFRESH_LOCK:

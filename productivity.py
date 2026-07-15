@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 import subprocess
@@ -20,6 +21,7 @@ from collections import defaultdict
 from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 _CONVENTIONAL_RE = re.compile(r"^([A-Za-z]+)(?:\([^)]*\))?!?:\s+(.+)$")
@@ -34,6 +36,38 @@ _FIELD_SEP = "\x1f"
 _IDLE_TIME_RE = re.compile(r'"HIDIdleTime"\s*=\s*(\d+)')
 _PRESENCE_HEALTH_LOCK = threading.Lock()
 _PRESENCE_HEALTH = None
+
+
+def _zone_name_from_localtime_path(path: str | Path) -> str | None:
+    try:
+        resolved = Path(path).expanduser().resolve(strict=True).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    marker = "/zoneinfo/"
+    if marker not in resolved:
+        return None
+    return resolved.split(marker, 1)[1] or None
+
+
+def system_local_timezone():
+    """Return the system's rule-aware timezone, with a fixed-offset fallback."""
+    candidates = []
+    configured = str(os.environ.get("TZ") or "").strip().lstrip(":")
+    if configured:
+        if configured.startswith("/"):
+            configured = _zone_name_from_localtime_path(configured) or ""
+        if configured:
+            candidates.append(configured)
+    for path in ("/etc/localtime", "/var/db/timezone/localtime"):
+        name = _zone_name_from_localtime_path(path)
+        if name:
+            candidates.append(name)
+    for name in dict.fromkeys(candidates):
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return datetime.now().astimezone().tzinfo or timezone.utc
 
 
 def classify_commit(subject: str) -> str:
@@ -339,7 +373,7 @@ def _delivery_evidence(commits: list[dict], tickets: list[dict], tzinfo) -> list
         linked = None
         for ref in _ticket_refs(commit.get("subject") or ""):
             candidate = by_ref.get(ref)
-            if candidate and candidate["kind"] == kind:
+            if candidate:
                 linked = candidate
                 break
         if linked:

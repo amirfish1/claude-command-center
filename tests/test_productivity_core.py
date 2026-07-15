@@ -1,5 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
+import productivity
+
 from productivity import (
     aggregate_productivity,
     classify_commit,
@@ -161,6 +163,21 @@ def test_linked_watchtower_ticket_and_commit_are_one_delivery():
     assert payload["deliveries"][0]["sources"] == ["git", "watchtower"]
 
 
+def test_shared_ticket_reference_deduplicates_even_when_kinds_disagree():
+    payload = aggregate_productivity(
+        commits=[_commit("abc", "fix", "fix: close PRODUCTIVITY-7")],
+        turns=[],
+        tickets=[_ticket("PRODUCTIVITY-7", "feature")],
+        presence=[],
+        start_date=date(2026, 7, 14),
+        end_date=date(2026, 7, 14),
+    )
+    assert payload["summary"]["deliveries"] == 1
+    assert payload["summary"]["features"] == 1
+    assert payload["summary"]["fixes"] == 0
+    assert payload["deliveries"][0]["sources"] == ["git", "watchtower"]
+
+
 def test_aggregation_keeps_project_and_time_evidence():
     start = datetime(2026, 7, 14, 8, tzinfo=UTC)
     payload = aggregate_productivity(
@@ -268,3 +285,13 @@ def test_agent_net_time_clips_turns_to_the_requested_range():
     assert payload["summary"]["agent_gross_seconds"] == 30 * 60
     assert payload["summary"]["agent_net_seconds"] == 30 * 60
     assert payload["summary"]["agent_parallel_seconds"] == 0
+
+
+def test_system_local_timezone_preserves_historical_dst(monkeypatch):
+    assert hasattr(productivity, "system_local_timezone")
+    monkeypatch.setenv("TZ", "Asia/Jerusalem")
+    tzinfo = productivity.system_local_timezone()
+    winter = datetime(2026, 3, 20, 12, tzinfo=tzinfo)
+    summer = datetime(2026, 7, 15, 12, tzinfo=tzinfo)
+    assert winter.utcoffset() == timedelta(hours=2)
+    assert summer.utcoffset() == timedelta(hours=3)

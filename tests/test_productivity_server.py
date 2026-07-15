@@ -1,6 +1,7 @@
 import inspect
 import time
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import server
 
@@ -46,6 +47,17 @@ def test_productivity_repo_discovery_deduplicates_remote(monkeypatch, tmp_path):
     assert len(repos) == 1
     assert repos[0]["id"] == "same"
     assert warnings == []
+
+
+def test_project_lookup_does_not_assign_shared_parent_to_first_child(tmp_path):
+    workspace = tmp_path / "workspace"
+    repo = workspace / "child-repo"
+    repo.mkdir(parents=True)
+    project = server._productivity_project_for_path(
+        workspace,
+        [{"id": "child", "name": "Child", "path": str(repo), "paths": [str(repo)]}],
+    )
+    assert project is None
 
 
 def test_productivity_payload_selects_cached_range(monkeypatch):
@@ -185,6 +197,50 @@ def test_refresh_failure_exposes_generic_error_and_logs_detail(monkeypatch, caps
     assert private_detail in capsys.readouterr().err
 
 
+def test_refresh_preserves_last_good_snapshot_when_watchtower_is_unavailable(monkeypatch):
+    class _ImmediateThread:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    cached = {
+        "generated_at": 100.0,
+        "payload": {
+            "schema": server._PRODUCTIVITY_SCHEMA,
+            "datasets": {"8": {"ok": True, "summary": {"watchtower_closed": 4}}},
+            "coverage": {"watchtower": {"available": True, "items": 4, "reason": None}},
+        },
+    }
+    store = _FakeStore(cached)
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", store)
+    monkeypatch.setattr(
+        server,
+        "_PRODUCTIVITY_REFRESH",
+        {"state": "idle", "started_at": None, "completed_at": None, "error": None},
+    )
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        server,
+        "_productivity_build_snapshot",
+        lambda: {
+            "schema": server._PRODUCTIVITY_SCHEMA,
+            "generated_at": 200.0,
+            "datasets": {"8": {"ok": True, "summary": {"watchtower_closed": 0}}},
+            "coverage": {
+                "watchtower": {"available": False, "items": 0, "reason": "read_failed"}
+            },
+        },
+    )
+
+    refresh = server._productivity_refresh_start()
+
+    assert refresh["state"] == "failed"
+    assert store.saved is None
+    assert store.cached["payload"]["datasets"]["8"]["summary"]["watchtower_closed"] == 4
+
+
 def test_status_only_payload_omits_large_dataset(monkeypatch):
     assert "status_only" in inspect.signature(server._productivity_payload).parameters
     cached = {
@@ -283,6 +339,68 @@ def test_productivity_turn_rows_deduplicate_replayed_messages(monkeypatch, tmp_p
     assert rows[0]["tokens"] == 120
     assert rows[0]["human_trigger"] is True
     assert coverage["transcripts_parsed"] == 1
+
+
+def test_productivity_turn_rows_prefer_effective_session_cwd(monkeypatch, tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("{}\n")
+    monkeypatch.setattr(
+        server,
+        "_throughput_file_turns",
+        lambda path, extract: [
+            {
+                "message_id": "message-a",
+                "trigger_type": "user_text",
+                "t_start": "2026-07-14T08:00:00Z",
+                "t_end": "2026-07-14T08:01:00Z",
+                "dur_sec": 60,
+                "tokens_in": 10,
+                "tokens_out": 5,
+            }
+        ],
+    )
+    rows, _coverage = server._productivity_turn_rows(
+        [
+            {
+                "session_id": "session-a",
+                "engine": "claude",
+                "session_cwd": str(repo_b),
+                "folder_path": str(repo_a),
+                "jsonl_path": str(transcript),
+                "modified": datetime(2026, 7, 14, 9, tzinfo=UTC).timestamp(),
+            }
+        ],
+        [
+            {"id": "repo-a", "name": "Repo A", "path": str(repo_a), "paths": [str(repo_a)]},
+            {"id": "repo-b", "name": "Repo B", "path": str(repo_b), "paths": [str(repo_b)]},
+        ],
+        datetime(2026, 7, 14, tzinfo=UTC).timestamp(),
+    )
+    assert rows[0]["project_id"] == "repo-b"
+
+
+def test_snapshot_uses_rule_aware_local_timezone(monkeypatch):
+    marker = ZoneInfo("Asia/Jerusalem")
+    captured = []
+    monkeypatch.setattr(server, "system_local_timezone", lambda: marker, raising=False)
+    monkeypatch.setattr(server, "find_all_conversations", lambda **kwargs: [])
+    monkeypatch.setattr(server._q, "list_items", lambda: [])
+    monkeypatch.setattr(server, "_productivity_known_repos", lambda rows: ([], []))
+    monkeypatch.setattr(server, "_PRODUCTIVITY_STORE", _FakeStore())
+
+    def aggregate(**kwargs):
+        captured.append(kwargs["tzinfo"])
+        return {"range": {}}
+
+    monkeypatch.setattr(server, "aggregate_productivity", aggregate)
+    server._productivity_build_snapshot(
+        now=datetime(2026, 7, 15, 12, tzinfo=UTC)
+    )
+    assert captured == [marker, marker, marker, marker]
 
 
 def test_build_snapshot_reads_each_global_source_once(monkeypatch):
