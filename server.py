@@ -10647,7 +10647,13 @@ def _load_archived_conversations(*, sweep=True):
         repaired = archived + [sid for sid in trashed if sid not in archived]
         if repaired != archived:
             _write_archived_conversations(repaired)
-        return _auto_unarchive_live_sessions(repaired) if sweep else repaired
+        if not sweep:
+            return repaired
+        trashed_set = set(trashed)
+        sweepable = [sid for sid in repaired if sid not in trashed_set]
+        swept = _auto_unarchive_live_sessions(sweepable)
+        swept_set = set(swept)
+        return [sid for sid in repaired if sid in trashed_set or sid in swept_set]
 
 
 def _write_archived_conversations(archived):
@@ -10700,10 +10706,19 @@ def _load_conversation_lifecycle_state():
 
 def _clear_trashed_on_unarchive(sid):
     """Remove Trash membership when a session moves back to Active."""
-    trashed = _load_trashed_conversations(sweep=False)
-    if sid in trashed:
-        trashed.remove(sid)
-        _save_trashed_conversations(trashed)
+    _clear_trashed_on_unarchive_many({sid})
+
+
+def _clear_trashed_on_unarchive_many(session_ids):
+    """Atomically remove sessions from Trash during an Active transition."""
+    remove = {sid for sid in session_ids if isinstance(sid, str) and sid}
+    if not remove:
+        return
+    with _conversation_lifecycle_lock:
+        trashed = _load_trashed_conversations(sweep=False)
+        remaining = [sid for sid in trashed if sid not in remove]
+        if remaining != trashed:
+            _save_trashed_conversations(remaining)
 
 
 def _set_conversation_trashed(sid, trashed):
@@ -58718,10 +58733,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _archive_grace.pop(sid, None)
                         _log_archive_event("unarchive", sid, "bulk")
                     if to_remove:
-                        trashed_ids = _load_trashed_conversations(sweep=False)
-                        remaining_trashed = [sid for sid in trashed_ids if sid not in to_remove]
-                        if remaining_trashed != trashed_ids:
-                            _save_trashed_conversations(remaining_trashed)
+                        _clear_trashed_on_unarchive_many(to_remove)
                     _save_archived_conversations(new_list)
                     _save_archive_grace()
                 self.send_json({
