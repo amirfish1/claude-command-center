@@ -55710,6 +55710,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if engine_filter:
                 rows = [r for r in rows if (r.get("engine") or "").lower() == engine_filter]
             self.send_json(rows)
+        elif path == "/api/sessions/children":
+            # Lightweight lineage lookup: children of a dispatcher session,
+            # straight from the on-disk spawn registry. No liveness probes,
+            # no per-row work — cheap enough for orchestrators to poll.
+            qs = urllib.parse.parse_qs(parsed.query)
+            parent = (qs.get("parent", [""])[0] or "").strip()
+            if len(parent) < 8:
+                self.send_json(
+                    {"ok": False, "error": "parent query param required (at least 8 chars of a session id)"},
+                    400,
+                )
+            else:
+                child_fields = (
+                    "session_id", "resumed_sid", "pid", "engine", "model",
+                    "repo_path", "cwd", "spawned_at", "name",
+                    "command_summary", "parent_session_id",
+                )
+                children = [
+                    {k: entry.get(k) for k in child_fields if entry.get(k) is not None}
+                    for entry in _load_spawn_registry()
+                    if str(entry.get("parent_session_id") or "").strip().startswith(parent)
+                ]
+                self.send_json({"ok": True, "parent": parent, "count": len(children), "children": children})
         elif re.match(r"^/api/sessions/spawned/\d+/log$", path):
             try:
                 pid = int(path.split("/")[-2])
