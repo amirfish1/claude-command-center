@@ -50,23 +50,23 @@
   // and a one-line description for the transparency strip. ms:null = cadence
   // varies (driven by external state), so no overrun check and "~" in the UI.
   const _POLLER_META = {
-    liveToolStrip:  { ms: 1000,  label: 'tools',   surface: 'Open conversation pane — inline tool activity', desc: 'Live tool-activity indicator at the bottom of the open transcript.' },
-    gcReader:       { ms: 3000,  label: 'gc-read', surface: 'Open conversation pane — group-chat transcript', desc: 'Group-chat transcript reader (open chat only).' },
-    hiStatus:       { ms: 4000,  label: 'hist-ix', surface: 'Top bar — history/search index pill',         desc: 'History-index progress (4s while indexing, else 60s).' },
-    liveStatus:     { ms: 5000,  label: 'status',  surface: 'Sidebar — conversation row status',           desc: 'Session statuses — the live row dots + state.' },
-    issues:         { ms: 10000, label: 'issues',  surface: 'Sidebar — GitHub Issues section',             desc: 'GitHub issues for the active repo.' },
-    sessionsList:   { ms: 60000, label: 'sessions',surface: 'Sidebar — session list',                      desc: 'Archive/session refresh (~3MB, stale-cache).' },
-    archiveTimes:   { ms: 90000, label: 'archive-t',surface: 'Sidebar — archive row times',                  desc: 'Refresh archive last_interacted/modified so row times stay live.' },
-    uxFixesQueueMeta:{ ms: 15000, label: 'uxq',     surface: 'Sidebar — UX-fixes queue row',                 desc: 'UX-fixes queue current/last-number badge.' },
-    gcActive:       { ms: 15000, label: 'gc-live', surface: 'Sidebar — active-group-chat footer pill',     desc: 'Active group-chat coordinations badge.' },
-    vercelDeploy:   { ms: 15000, label: 'vercel',  surface: 'Top bar — Vercel deploy badge',               desc: 'Latest Vercel deploy status.' },
-    localhost:      { ms: 15000, label: 'localhost',surface: 'Top bar — localhost pill',                   desc: 'Localhost dev-server reachability probe.' },
-    worktreesBadge: { ms: 60000, label: 'worktrees',surface: 'Top bar — worktrees badge',                  desc: 'Git worktree count badge.' },
-    peer:           { ms: null,  label: 'peer',    surface: 'Sidebar — repo/peer picker',                  desc: 'Peer-session registry (picker open).' },
-    codexLog:       { ms: null,  label: 'codex',   surface: 'Open conversation pane — codex log',          desc: 'Codex session log (open codex convo only).' },
-    archiveProgress:{ ms: 250,   label: 'archive', surface: 'Sidebar — archive loading bar',               desc: 'Archive load progress bar (transient, self-clears).' },
-    cccHealth:      { ms: 5000,  label: 'health',  surface: 'Sidebar — bottom-left CCC health bar',         desc: 'CCC self-health: server CPU%, live-activity build latency, recent errors.' },
-    stuckSessions:  { ms: 60000, label: 'stuck',   surface: 'Sidebar — bottom-left stuck-session count',    desc: 'Recent Codex sessions currently labeled Stuck by the stale-transcript heuristic.' },
+    liveToolStrip:  { ms: 1000,  label: 'tools',   surface: 'Open conversation pane - inline tool activity', desc: 'Live tool-activity indicator at the bottom of the open transcript.' },
+    gcReader:       { ms: 3000,  label: 'gc-read', surface: 'Open conversation pane - group-chat transcript', desc: 'Group-chat transcript reader (open chat only).' },
+    hiStatus:       { ms: 4000,  label: 'hist-ix', surface: 'Top bar - history/search index pill',         desc: 'History-index progress (4s while indexing, else 60s).' },
+    liveStatus:     { ms: 5000,  label: 'status',  surface: 'Sidebar - conversation row status',           desc: 'Session statuses - the live row dots + state.' },
+    issues:         { ms: 10000, label: 'issues',  surface: 'Sidebar - GitHub Issues section',             desc: 'GitHub issues for the active repo.' },
+    sessionsList:   { ms: 60000, label: 'sessions',surface: 'Sidebar - session list',                      desc: 'Archive/session refresh (~3MB, stale-cache).' },
+    archiveTimes:   { ms: 90000, label: 'archive-t',surface: 'Sidebar - archive row times',                  desc: 'Refresh archive last_interacted/modified so row times stay live.' },
+    uxFixesQueueMeta:{ ms: 15000, label: 'uxq',     surface: 'Sidebar - UX-fixes queue row',                 desc: 'UX-fixes queue current/last-number badge.' },
+    gcActive:       { ms: 15000, label: 'gc-live', surface: 'Sidebar - active-group-chat footer pill',     desc: 'Active group-chat coordinations badge.' },
+    vercelDeploy:   { ms: 15000, label: 'vercel',  surface: 'Top bar - Vercel deploy badge',               desc: 'Latest Vercel deploy status.' },
+    localhost:      { ms: 15000, label: 'localhost',surface: 'Top bar - localhost pill',                   desc: 'Localhost dev-server reachability probe.' },
+    worktreesBadge: { ms: 60000, label: 'worktrees',surface: 'Top bar - worktrees badge',                  desc: 'Git worktree count badge.' },
+    peer:           { ms: null,  label: 'peer',    surface: 'Sidebar - repo/peer picker',                  desc: 'Peer-session registry (picker open).' },
+    codexLog:       { ms: null,  label: 'codex',   surface: 'Open conversation pane - codex log',          desc: 'Codex session log (open codex convo only).' },
+    archiveProgress:{ ms: 250,   label: 'archive', surface: 'Sidebar - archive loading bar',               desc: 'Archive load progress bar (transient, self-clears).' },
+    cccHealth:      { ms: 5000,  label: 'health',  surface: 'Sidebar - bottom-left CCC health bar',         desc: 'CCC self-health: server CPU%, live-activity build latency, recent errors.' },
+    stuckSessions:  { ms: 60000, label: 'stuck',   surface: 'Sidebar - bottom-left stuck-session count',    desc: 'Recent Codex sessions currently labeled Stuck by the stale-transcript heuristic.' },
   };
   // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
   const _pollerStats = {};
@@ -136,7 +136,7 @@
   // you can SEE the 1s/5s/15s cadences, see when something stops (kill-switch,
   // visibility-pause, typing-mute), and see which one is hot.
   function _agoStr(ms) {
-    if (!ms) return '—';
+    if (!ms) return '-';
     const s = Math.floor(ms / 1000);
     if (s < 60) return s + 's';
     const m = Math.floor(s / 60);
@@ -158,22 +158,22 @@
     }
     // CPU%: this daemon's own process. >60% warn, >120% crit (multi-core).
     const cpu = (h && typeof h.cpu === 'number') ? h.cpu : null;
-    if (cpu == null) _set('cpu', 'cpu —', '', 'Server CPU% unavailable');
+    if (cpu == null) _set('cpu', 'cpu -', '', 'Server CPU% unavailable');
     else _set('cpu', 'cpu ' + cpu.toFixed(0) + '%',
       cpu >= 120 ? 'ccchealth-crit' : (cpu >= 60 ? 'ccchealth-warn' : 'ccchealth-ok'),
       'CCC daemon process CPU: ' + cpu.toFixed(1) + '% (pid ' + (h.pid || '?') + ')');
     // Build latency: avg ms of the real live-activity build. >200 warn, >500 crit.
     const b = (h && h.build_ms) || {};
     const avg = (typeof b.avg === 'number') ? b.avg : null;
-    if (avg == null) _set('build', 'build —', '', 'No live-activity builds recorded yet');
+    if (avg == null) _set('build', 'build -', '', 'No live-activity builds recorded yet');
     else _set('build', 'build ' + Math.round(avg) + 'ms',
       avg >= 500 ? 'ccchealth-crit' : (avg >= 200 ? 'ccchealth-warn' : 'ccchealth-ok'),
-      'live-activity build: avg ' + avg + 'ms, last ' + (b.last == null ? '—' : b.last + 'ms') +
+      'live-activity build: avg ' + avg + 'ms, last ' + (b.last == null ? '-' : b.last + 'ms') +
       ' over ' + (b.count || 0) + ' real builds');
     // Recent errors: in-process count over the trailing window. >0 warn, >=5 crit.
     const errs = (h && typeof h.recent_errors === 'number') ? h.recent_errors : null;
     const win = (h && h.error_window_min) || 15;
-    if (errs == null) _set('err', 'err —', '', 'Error count unavailable');
+    if (errs == null) _set('err', 'err -', '', 'Error count unavailable');
     else _set('err', 'err ' + errs,
       errs >= 5 ? 'ccchealth-crit' : (errs > 0 ? 'ccchealth-warn' : 'ccchealth-ok'),
       errs + ' server error(s) in the last ' + win + ' min' +
@@ -201,9 +201,9 @@
       ' · ' + hits + ' warm / ' + attempts + ' attempts' +
       (warmPct == null ? '' : ' (' + warmPct + '%)') +
       ' · cold resumes ' + cold +
-      ' · cache eff ' + (eff == null ? '—' : eff + '%') +
-      ' · worst ' + (worst == null ? '—' : worst + '%') +
-      ' · avg lifetime ' + (life == null ? '—' : life + 's');
+      ' · cache eff ' + (eff == null ? '-' : eff + '%') +
+      ' · worst ' + (worst == null ? '-' : worst + '%') +
+      ' · avg lifetime ' + (life == null ? '-' : life + 's');
     if (!attempts) _set('cache', 'warm 0/0', '', cacheTitle);
     else _set('cache', 'warm ' + hits + '/' + attempts,
       warmPct < 50 ? 'ccchealth-crit' : (warmPct < 80 ? 'ccchealth-warn' : 'ccchealth-ok'),
@@ -250,12 +250,12 @@
   // server-side — only headless/idle/stale trees can die.
   let _sysHealthTimer = null;
   function _shFmtMB(mb) {
-    if (mb == null) return '—';
+    if (mb == null) return '-';
     if (mb >= 1024) { const g = mb / 1024; return (g >= 10 ? g.toFixed(0) : g.toFixed(1)) + ' GB'; }
     return Math.round(mb) + ' MB';
   }
   function _shFmtIdle(min) {
-    if (min == null) return '—';
+    if (min == null) return '-';
     if (min < 60) return min.toFixed(0) + 'm';
     if (min < 1440) return (min / 60).toFixed(1) + 'h';
     return (min / 1440).toFixed(1) + 'd';
@@ -377,7 +377,7 @@
 
     // CPU + hogs
     html += '<div><div class="sh-sec-title">CPU</div>';
-    html += '<div class="sh-meta">load ' + [cpu.load1, cpu.load5, cpu.load15].map(function (x) { return x == null ? '—' : x.toFixed(2); }).join(' / ') +
+    html += '<div class="sh-meta">load ' + [cpu.load1, cpu.load5, cpu.load15].map(function (x) { return x == null ? '-' : x.toFixed(2); }).join(' / ') +
             ' · ' + (cpu.cores || '?') + ' cores</div>';
     if (d.hogs && d.hogs.length) {
       d.hogs.forEach(function (h) {
@@ -393,7 +393,7 @@
     const apps = d.apps || [];
     const at = d.app_totals || {};
     if (apps.length) {
-      html += '<div><div class="sh-sec-title">GUI apps — ' + (at.count || apps.length) + ' · ' + _shFmtMB(at.rss_mb) + '</div>';
+      html += '<div><div class="sh-sec-title">GUI apps - ' + (at.count || apps.length) + ' · ' + _shFmtMB(at.rss_mb) + '</div>';
       html += '<div class="sh-def">These are shared app-server processes, not per-session trees. Quit asks macOS to close the app cleanly. Sessions stay on disk and reopen later. Hard kill is not offered.</div>';
       apps.forEach(function (a) {
         const quitBtn = a.quit_supported
@@ -416,7 +416,7 @@
     const sm = pol.stale_min || 120;
     const staleLabel = sm >= 60 ? (sm % 60 === 0 ? (sm / 60) + 'h' : (sm / 60).toFixed(1) + 'h') : sm + 'm';
     html += '<div><div class="sh-sec-title" style="display:flex;align-items:center;gap:8px">' +
-            '<span>Claude sessions — ' + (t.count || 0) + ' · ' + _shFmtMB(t.tree_rss_mb) +
+            '<span>Claude sessions - ' + (t.count || 0) + ' · ' + _shFmtMB(t.tree_rss_mb) +
             (t.reapable ? ' · <span class="sh-warn">' + t.reapable + ' reapable (' + _shFmtMB(t.reapable_rss_mb) + ')</span>' : '') + '</span>' +
             (t.reapable > 1 ? '<button class="sh-btn sh-btn-danger" data-reapall="1" title="Reap every stale tree below">Reap all stale</button>' : '') +
             '</div>';
@@ -427,11 +427,11 @@
       let badge, btn = '', badgeTitle = '', badgeCls = '';
       if (s.concurrent) {
         badge = '⚠ concurrent'; btn = ''; badgeCls = ' sh-warn';
-        badgeTitle = '2+ live processes share this session id (e.g. a terminal + a headless agent). Killing one is the riskiest move — resolve it deliberately, not from here.';
-      } else if (s.interactive) { badge = '⌨ in use'; badgeTitle = 'A terminal is attached (you’re in this session) — never reaped'; }
-      else if (s.busy) { badge = '⚙ ' + (s.worker || (s.tree_cpu + '% cpu')); badgeCls = ' sh-ok'; badgeTitle = 'Working (encode/transcode child or live CPU) — never reaped'; }
-      else if (s.reapable) { badge = '🧹 stale'; btn = 'danger'; badgeCls = ' sh-warn'; badgeTitle = 'Headless · idle ≥ ' + staleLabel + ' · not working — safe to reap'; }
-      else { badge = 'idle'; btn = 'plain'; badgeTitle = 'Headless and idle, but more recent than ' + staleLabel + ' — not stale yet'; }
+        badgeTitle = '2+ live processes share this session id (e.g. a terminal + a headless agent). Killing one is the riskiest move - resolve it deliberately, not from here.';
+      } else if (s.interactive) { badge = '⌨ in use'; badgeTitle = 'A terminal is attached (you’re in this session) - never reaped'; }
+      else if (s.busy) { badge = '⚙ ' + (s.worker || (s.tree_cpu + '% cpu')); badgeCls = ' sh-ok'; badgeTitle = 'Working (encode/transcode child or live CPU) - never reaped'; }
+      else if (s.reapable) { badge = '🧹 stale'; btn = 'danger'; badgeCls = ' sh-warn'; badgeTitle = 'Headless · idle ≥ ' + staleLabel + ' · not working - safe to reap'; }
+      else { badge = 'idle'; btn = 'plain'; badgeTitle = 'Headless and idle, but more recent than ' + staleLabel + ' - not stale yet'; }
       const when = s.idle_known ? 'idle ' + _shFmtIdle(s.idle_min) : 'up ' + _shFmtIdle(s.age_min);
       const epTag = s.entrypoint ? ' · ' + _shEsc(s.entrypoint) : '';
       const nameMain = s.name ? _shEsc(s.name) : _shEsc(s.cwd_short);
@@ -548,7 +548,7 @@
   let _advisorLastRefreshRequest = 0;
   function _maEsc(s) { return _shEsc(s); }
   function _maTok(n) {
-    if (!n || n <= 0) return '—';
+    if (!n || n <= 0) return '-';
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
     if (n >= 1e3) return Math.round(n / 1e3) + 'k';
     return String(Math.round(n));
@@ -750,7 +750,7 @@
     }).then(function (r) { return r.json(); })
       .then(function (d) {
         if (d && !d.ok && typeof showOpToast === 'function') showOpToast('Switch failed: ' + (d.error || 'unknown'), 'error');
-        else if (typeof showOpToast === 'function') showOpToast('Queued ' + (_maModels[model] || model) + ' — applies on next turn', 'success');
+        else if (typeof showOpToast === 'function') showOpToast('Queued ' + (_maModels[model] || model) + ' - applies on next turn', 'success');
         // If the switched session is the one open in the reader, re-pull its
         // usage so the footer model pill flips to "<model> → next" immediately
         // instead of waiting for the next poll. The switch is queued server-side
@@ -813,7 +813,7 @@
             '<div class="ma-stat-sub">' + (live.length ? 'need attention' : 'all good') + '</div></div>';
     html += '<div class="ma-stat ma-stat-blue">' +
             '<div class="ma-stat-lbl">Output on Sonnet</div>' +
-            '<b>' + (savedTok > 0 ? _maTok(savedTok) : '—') + '</b>' +
+            '<b>' + (savedTok > 0 ? _maTok(savedTok) : '-') + '</b>' +
             '<div class="ma-stat-sub">tokens on cheaper model</div></div>';
     html += '</div>';
 
@@ -857,7 +857,7 @@
       const scanHours = d.scan_window_hours || 2;
       if (!scanned.length) {
         html += '<div class="ma-empty">No sessions active in the last ' + scanHours + 'h.' +
-                '<div class="ma-empty-hint">Pure heuristic — no model calls.</div></div>';
+                '<div class="ma-empty-hint">Pure heuristic - no model calls.</div></div>';
       } else {
         html += '<table class="ma-scan-table"><thead><tr>' +
                 '<th>Session</th><th>Model</th><th>Score</th><th>Signals</th><th>Verdict</th>' +
@@ -894,7 +894,7 @@
             '<span class="ma-score-bar"><span class="ma-score-dot" style="left:' + dotPct + '%;color:' + scoreColor + ';"></span></span>' +
             '<span style="color:' + scoreColor + ';font-size:11px;font-family:ui-monospace,Menlo,monospace;">' + Math.round(score) + '</span>' +
             '<span style="font-size:10px;opacity:.5;margin-left:4px;">' + _maEsc(s.phase || '') + '</span></td>' +
-            '<td>' + (sigsHtml || '<span style="opacity:.35">—</span>') + '</td>' +
+            '<td>' + (sigsHtml || '<span style="opacity:.35">-</span>') + '</td>' +
             '<td>' + verdict + '</td>' +
             '</tr>';
         });
@@ -1000,8 +1000,8 @@
     nudge.className = rec.action === 'upgrade' ? 'ma-n-up' : rec.action === 'spawn_worker' ? 'ma-n-spawn' : '';
     const to = _maModels[rec.to_model] || rec.to_model;
     const verb = rec.action === 'upgrade' ? 'needs more muscle'
-               : rec.action === 'spawn_worker' ? 'is executing — offload to a' : 'looks';
-    const lead = rec.action === 'upgrade' ? ('This session ' + verb + ' — bump to ')
+               : rec.action === 'spawn_worker' ? 'is executing - offload to a' : 'looks';
+    const lead = rec.action === 'upgrade' ? ('This session ' + verb + ' - bump to ')
                : rec.action === 'spawn_worker' ? ('This session ' + verb + ' ')
                : ('This session ' + verb + ' ' + to + '-grade');
     const ico = rec.action === 'upgrade' ? '⬆' : rec.action === 'spawn_worker' ? '◆' : '⬇';
@@ -1067,7 +1067,7 @@
     wrap.id = 'pollerWrap';
     const strip = document.createElement('div');
     strip.id = 'pollerStrip';
-    strip.title = 'Periodic triggers — blink = fired, number = time since last fire. Click to toggle.';
+    strip.title = 'Periodic triggers - blink = fired, number = time since last fire. Click to toggle.';
     const chips = {};
     Object.keys(_POLLER_META).forEach((name) => {
       const meta = _POLLER_META[name];
@@ -1088,15 +1088,15 @@
     // footer; the trigger strip is collapsed behind a toggle to make room.
     const health = document.createElement('div');
     health.id = 'cccHealth';
-    health.title = 'CCC daemon health — server CPU%, live-activity build latency, recent errors.\nClick for full System Health (memory/swap, CPU hogs, session reaping).';
+    health.title = 'CCC daemon health - server CPU%, live-activity build latency, recent errors.\nClick for full System Health (memory/swap, CPU hogs, session reaping).';
     health.style.cursor = 'pointer';
     health.addEventListener('click', _openSystemHealth);
     health.innerHTML =
-      '<span class="ccchealth-metric" data-k="cpu"><span class="ccchealth-dot"></span><span class="ccchealth-val">cpu —</span></span>' +
-      '<span class="ccchealth-metric" data-k="build"><span class="ccchealth-dot"></span><span class="ccchealth-val">build —</span></span>' +
-      '<span class="ccchealth-metric" data-k="err"><span class="ccchealth-dot"></span><span class="ccchealth-val">err —</span></span>' +
+      '<span class="ccchealth-metric" data-k="cpu"><span class="ccchealth-dot"></span><span class="ccchealth-val">cpu -</span></span>' +
+      '<span class="ccchealth-metric" data-k="build"><span class="ccchealth-dot"></span><span class="ccchealth-val">build -</span></span>' +
+      '<span class="ccchealth-metric" data-k="err"><span class="ccchealth-dot"></span><span class="ccchealth-val">err -</span></span>' +
       '<span class="ccchealth-metric" data-k="cache"><span class="ccchealth-dot"></span><span class="ccchealth-val">warm 0/0</span></span>' +
-      '<span class="ccchealth-metric" id="cccStuckPill" data-k="stuck"><span class="ccchealth-dot"></span><span class="ccchealth-val">stuck —</span></span>';
+      '<span class="ccchealth-metric" id="cccStuckPill" data-k="stuck"><span class="ccchealth-dot"></span><span class="ccchealth-val">stuck -</span></span>';
     const toggle = document.createElement('div');
     toggle.id = 'pollerToggle';
     const _triggerCount = Object.keys(_POLLER_META).length;
@@ -1121,7 +1121,7 @@
     // live sessions are on the wrong model right now.
     const advPill = document.createElement('div');
     advPill.id = 'cccAdvisorPill';
-    advPill.title = 'Model Advisor — sessions drifting onto the wrong model (too strong or too weak), and tokens saved. Click to open.';
+    advPill.title = 'Model Advisor - sessions drifting onto the wrong model (too strong or too weak), and tokens saved. Click to open.';
     advPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
       'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
@@ -1145,7 +1145,7 @@
     // project/day outcome dashboard and performs no background polling here.
     const productivityPill = document.createElement('div');
     productivityPill.id = 'cccProductivityPill';
-    productivityPill.title = 'Productivity Dashboard — delivered features and fixes, projects, time, and agent leverage. Click to open.';
+    productivityPill.title = 'Productivity Dashboard - delivered features and fixes, projects, time, and agent leverage. Click to open.';
     productivityPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
       'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
@@ -1158,7 +1158,7 @@
     // shows today's total token count fetched from the history endpoint.
     const tputPill = document.createElement('div');
     tputPill.id = 'cccThroughputPill';
-    tputPill.title = 'Throughput Dashboard — daily token usage, output speed, and session rankings. Click to open.';
+    tputPill.title = 'Throughput Dashboard - daily token usage, output speed, and session rankings. Click to open.';
     tputPill.style.cssText = 'display:flex;align-items:center;gap:5px;flex:0 0 auto;cursor:pointer;' +
       'font:600 11px/1 ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;' +
       'border:1px solid var(--border-color,#30363d);opacity:.8;';
@@ -1226,7 +1226,7 @@
         chip.title = meta.label + ' · ' + (meta.ms ? 'every ' + (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : 'variable') +
           (s ? ' · ' + s.count + ' fires · last ' + _agoStr(ago) + ' ago' : ' · idle') +
           (off ? ' · OFF (click to enable)' : ' · click to disable') +
-          '\nSurface: ' + (meta.surface || '—') + '\n' + meta.desc;
+          '\nSurface: ' + (meta.surface || '-') + '\n' + meta.desc;
       });
     }
     // Blink on real fire.
@@ -1436,8 +1436,8 @@
       });
       const frames = (new Error().stack || '').split('\n').map(s => s.trim()).filter(Boolean);
       const trigger = (frames.find(s => /refreshLiveStatus|pollGcActive|loadConversationList|issuesPoll|_hiRefresh|loadArchive|refreshArchive|renderSidebar|pollGroupChatReader|\btick\b/.test(s)) || frames[3] || frames[2] || '?').replace(/^at\s+/, '').slice(0, 80);
-      const tag = bulkSuppressed ? ' — BULK LAYOUT SHIFT (slide suppressed)' : ' — reorder (animated)';
-      console.groupCollapsed('%c[RESHUFFLE #' + window.__reshuffleCount + ']%c ' + moves.length + ' rows moved' + tag + ' — trigger: ' + trigger,
+      const tag = bulkSuppressed ? ' - BULK LAYOUT SHIFT (slide suppressed)' : ' - reorder (animated)';
+      console.groupCollapsed('%c[RESHUFFLE #' + window.__reshuffleCount + ']%c ' + moves.length + ' rows moved' + tag + ' - trigger: ' + trigger,
         'color:#fff;background:' + (bulkSuppressed ? '#555' : '#c0392b') + ';padding:1px 5px;border-radius:3px;font-weight:700', 'color:#999');
       top.forEach(t => console.log('  ' + t));
       console.log('  stack:\n' + frames.slice(2, 11).join('\n'));
@@ -1498,7 +1498,7 @@
         // Defer the show class to next frame so the transition runs.
         requestAnimationFrame(() => el.classList.add('show'));
         el._hideTimer = setTimeout(() => el.classList.remove('show'), 4200);
-      } catch (_) { /* banner is decorative — never block on it */ }
+      } catch (_) { /* banner is decorative - never block on it */ }
     }
     // Normalize a URL like "/api/conversations/all?include_prs=1" to the
     // fixture path "./api/conversations/all.json". Query strings are dropped
@@ -1738,7 +1738,7 @@
     // The popout owns Flow view for this page load only. Do not persist
     // `flow` into shared sidebar storage or the main window can reopen with
     // Flow embedded inline instead of showing the conversation list/board.
-    try { document.title = 'Flow — CCC'; } catch (_) {}
+    try { document.title = 'Flow - CCC'; } catch (_) {}
   }
   // Group-chat popout: same shape as the conversation popout, but the
   // surface is a single group-chat reader. When set, the page boots
@@ -1756,7 +1756,7 @@
   const GROUPCHAT_POPOUT_MODE_PARAM = (_bootUrlParams.get('mode') || 'topic').trim();
   if (GROUPCHAT_POPOUT_MODE && document.body) {
     document.body.classList.add('groupchat-popout');
-    try { document.title = GROUPCHAT_POPOUT_TOPIC || 'Group Chat — CCC'; } catch (_) {}
+    try { document.title = GROUPCHAT_POPOUT_TOPIC || 'Group Chat - CCC'; } catch (_) {}
   }
   // A "reader-only" popout is a single-conversation OR single-group-chat reader
   // window: it renders and live-updates exactly one thing and must NOT run the
@@ -1874,7 +1874,7 @@
   // Legacy client-side trailer that older CCC builds appended to spawn
   // prompts. Kept so the UI can scrub existing transcripts; current Claude
   // spawns receive the reminder as a hidden backend system prompt instead.
-  const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the Command Center dashboard parses it):\n<session-state>\nDID: <one sentence — what you actually changed/learned>\nINSIGHT: <one sentence — the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence — the exact next thing the user should do>\n</session-state>";
+  const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the Command Center dashboard parses it):\n<session-state>\nDID: <one sentence - what you actually changed/learned>\nINSIGHT: <one sentence - the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence - the exact next thing the user should do>\n</session-state>";
 
   // When a prompt starts with the sibling-orchestrator preamble ("You are
   // a sibling Claude Code session…"), the boilerplate that follows (your
@@ -1919,7 +1919,7 @@
       .replace(/^\s*Fix GitHub issue #\d+:\s*/i, '')
       .replace(/\.?\s*Read the issue first with[^.]*?,\s*then implement the fix\.?\s*$/i, '')
       // Current template: "Fix issue #N — {title}\n\nRun `gh issue view N` …"
-      .replace(/^\s*Fix issue #\d+\s*(?:—|-)\s*/i, '')
+      .replace(/^\s*Fix issue #\d+\s*(?:-|-)\s*/i, '')
       .replace(/\n+Run `gh issue view \d+`[^\n]*(title may be truncated\)\.?)?\s*$/i, '')
       // Slash-command markup Claude Code injects into user messages
       // (`<command-name>/foo</command-name> <command-message>foo</command-message>
@@ -2184,7 +2184,7 @@
     function beat() {
       if (document.visibilityState !== 'visible') return;
       fetch('/api/telemetry/heartbeat', { method: 'POST', keepalive: true })
-        .catch(() => { /* swallow — best effort, retries next tick */ });
+        .catch(() => { /* swallow - best effort, retries next tick */ });
     }
     function start() {
       if (timer) return;
@@ -2362,7 +2362,7 @@
     const convId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
     const sess = (typeof currentSession !== 'undefined' && currentSession) ? currentSession : null;
     if (!sess) return null;
-    if (!sess.id) return sess;            // a new session being composed — keep
+    if (!sess.id) return sess;            // a new session being composed - keep
     if (convId && sess.id === convId) return sess;
     return null;                          // stale: holds a previous conversation
   }
@@ -2412,7 +2412,7 @@
   function requireConvRepo(actionLabel) {
     const repoPath = activeConvRepoPath() || popoutRepoPath();
     if (repoPath) return repoPath;
-    showOpToast((actionLabel || 'This action') + ' needs a repo — open a conversation in that repo first.', 'error');
+    showOpToast((actionLabel || 'This action') + ' needs a repo - open a conversation in that repo first.', 'error');
     return '';
   }
 
@@ -3764,7 +3764,7 @@
       .catch(function () {
         _relayedQuestionState.submitting = false;
         sendBtn.textContent = 'Send answer';
-        errEl.textContent = 'Network error — could not send answer.';
+        errEl.textContent = 'Network error - could not send answer.';
         errEl.classList.add('visible');
         if (typeof refreshSendEnabled === 'function') refreshSendEnabled();
       });
@@ -4030,7 +4030,7 @@
       // visibly alive, not stuck.
       if (el.classList.contains('is-thinking')) {
         const secs = Math.round(ms / 1000);
-        const hint = secs >= 120 ? 'still working — long reasoning step'
+        const hint = secs >= 120 ? 'still working - long reasoning step'
           : (secs >= 30 ? 'still working…' : '');
         let hintEl = el.querySelector('.cl-hint');
         if (hint) {
@@ -4706,11 +4706,11 @@
     const last = _uxNudgeLast[sid] || 0;
     if (now - last < _UX_NUDGE_THROTTLE_MS) {
       const ago = Math.round((now - last) / 1000);
-      if (typeof showOpToast === 'function') showOpToast('Already nudged ' + ago + 's ago — skipping.', 'info');
+      if (typeof showOpToast === 'function') showOpToast('Already nudged ' + ago + 's ago - skipping.', 'info');
       return;
     }
     _uxNudgeLast[sid] = now;
-    const WAKE = 'Queue nudge: re-check your UX-fixes queue now — claim the next ticket, '
+    const WAKE = 'Queue nudge: re-check your UX-fixes queue now - claim the next ticket, '
       + 'fix + lean-commit + close via /api/ux-fixes/next, then keep draining. '
       + 'If it is empty, schedule an idle wakeup. Never busy-loop.';
     try {
@@ -4723,7 +4723,7 @@
       if (!data.ok) throw new Error(data.error || 'nudge failed');
       if (typeof showOpToast === 'function') showOpToast('Nudged worker to re-check the queue.', 'success');
     } catch (err) {
-      delete _uxNudgeLast[sid];  // failed — allow an immediate retry
+      delete _uxNudgeLast[sid];  // failed - allow an immediate retry
       if (typeof showOpToast === 'function') showOpToast('Nudge failed: ' + (err && err.message || 'unknown'), 'error');
     }
   }
@@ -4732,7 +4732,7 @@
     const sid = item ? item.getAttribute('data-session-id') : '';
     if (!sid) return;
     if (el.dataset.uxNudge === 'working') {
-      if (typeof showOpToast === 'function') showOpToast('Worker is mid-fix — no nudge needed.', 'info');
+      if (typeof showOpToast === 'function') showOpToast('Worker is mid-fix - no nudge needed.', 'info');
       return;
     }
     _nudgeFixerBySid(sid);
@@ -4905,7 +4905,7 @@
           // answer. Without a control here the thread is a true dead end, so
           // offer Grab back — reclaim into CCC and deny the pending approval.
           : '<span class="cl-approval-actions">'
-            + '<button type="button" class="ccs-grab-back" title="This approval is owned by another Codex writer and can\'t be answered from CCC — reclaim the thread and deny the pending approval">Grab back</button>'
+            + '<button type="button" class="ccs-grab-back" title="This approval is owned by another Codex writer and can\'t be answered from CCC - reclaim the thread and deny the pending approval">Grab back</button>'
             + '</span>');
       inline.title = msg;
       if (canApprove) {
@@ -4963,8 +4963,8 @@
         + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
         + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '');
       inline.title = _activeItem.label
-        ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' — ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
-        : ('Session is live — model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : ''));
+        ? ('Codex is running: ' + _activeItem.label + (_activeItem.detail ? ' - ' + _activeItem.detail : '') + (_tokTxt ? ' (' + _tokTxt + ')' : ''))
+        : ('Session is live - model is generating' + (_tokTxt ? ' (' + _tokTxt + ')' : ''));
       if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
         $view.appendChild(inline);
       }
@@ -5020,7 +5020,7 @@
       + (isQuestion ? '' : expandedDetailHtml)
       + '<span class="cl-age">' + ageLbl + '</span>'
       + (isQuestion ? detailHtml : '')
-      + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck — push a wake message to Antigravity">Push input</button>' : '');
+      + (showWakeBtn ? '<button type="button" class="cl-agy-wake-btn" title="Session looks stuck - push a wake message to Antigravity">Push input</button>' : '');
     inline.innerHTML = expandHtml;
     if (inline.parentElement !== $view || inline !== $view.lastElementChild) {
       $view.appendChild(inline);
@@ -5039,9 +5039,9 @@
     const LABELS = { working: 'Working', idle: 'Idle', stuck: 'Stuck', offline: 'Offline' };
     const TITLES = {
       working: 'Codex is working',
-      idle: 'Idle — last turn complete',
-      stuck: 'Stalled — no rollout activity past the stale threshold',
-      offline: 'Codex engine offline — sessions paused',
+      idle: 'Idle - last turn complete',
+      stuck: 'Stalled - no rollout activity past the stale threshold',
+      offline: 'Codex engine offline - sessions paused',
     };
     const steady = (st === 'working' && !liveStatus.codexFresh) ? ' steady' : '';
     if (!badge) {
@@ -5088,11 +5088,11 @@
     const writer = (st === 'working') ? (liveStatus.codexWriter || null) : null;
     const writerCls = writer === 'desktop' ? ' writer-desktop' : ((writer === 'external' || writer === 'unknown') ? ' writer-external' : '');
     const writerTitle = writer === 'desktop'
-      ? 'Codex desktop is running a turn — messages sent from CCC will queue until it finishes'
+      ? 'Codex desktop is running a turn - messages sent from CCC will queue until it finishes'
       : (writer === 'external'
-          ? 'Another Codex process is running a turn — messages sent from CCC will queue until it finishes'
+          ? 'Another Codex process is running a turn - messages sent from CCC will queue until it finishes'
           : (writer === 'unknown'
-              ? 'An active Codex turn is running — messages sent from CCC will queue until it finishes'
+              ? 'An active Codex turn is running - messages sent from CCC will queue until it finishes'
               : ''));
     let label = LABELS[st] || st;
     if (writer === 'desktop') label = 'Desktop writing';
@@ -5114,20 +5114,20 @@
     const externalWriter = liveStatus.codexWriter === 'external' || liveStatus.codexWriter === 'desktop';
     const canGrabBack = externalWriter || !!liveStatus.codexDesktopAttached || !!liveStatus.needsApproval;
     const grabBackHtml = canGrabBack
-      ? '<button type="button" class="ccs-grab-back" title="Reclaim this thread into CCC control — reapply approvalPolicy:never, deny any pending approval, and interrupt the external turn">Grab back</button>'
+      ? '<button type="button" class="ccs-grab-back" title="Reclaim this thread into CCC control - reapply approvalPolicy:never, deny any pending approval, and interrupt the external turn">Grab back</button>'
       : '';
     badge.className = 'conv-codex-state state-' + st + steady + writerCls + (wakeable ? ' is-wakeable' : '');
     if (wakeable) {
       badge.setAttribute('role', 'button');
       badge.setAttribute('tabindex', '0');
-      badge.setAttribute('aria-label', 'Wake GPT — ' + (LABELS[st] || st));
+      badge.setAttribute('aria-label', 'Wake GPT - ' + (LABELS[st] || st));
     } else {
       badge.removeAttribute('role');
       badge.removeAttribute('tabindex');
       badge.removeAttribute('aria-label');
     }
     badge.title = wakeable
-      ? ((reason || TITLES[st] || '') + ' — click to wake GPT')
+      ? ((reason || TITLES[st] || '') + ' - click to wake GPT')
       : (writerTitle || reason || TITLES[st] || '');
     badge.innerHTML = '<span class="ccs-dot"></span><span class="ccs-label">' + escapeHtml(label) + '</span>'
       + (reason ? '<span class="ccs-reason">' + escapeHtml(reason) + '</span>' : '')
@@ -5212,7 +5212,7 @@
         '<code class="sid-short">' + shortId + '</code>' +
         '<span class="sid-copy" aria-hidden="true">&#128203;</span>';
       el.dataset.copySessionId = value;
-      el.title = value + ' — click to copy full ID';
+      el.title = value + ' - click to copy full ID';
     } else {
       el.textContent = '';
       delete el.dataset.copySessionId;
@@ -5243,7 +5243,7 @@
     const shortId = btn.dataset.sessionIdShort || sid.slice(0, 8);
     const ok = await copyTextValue(sid);
     if (!ok) {
-      showOpToast('Copy failed — select and copy manually', 'error');
+      showOpToast('Copy failed - select and copy manually', 'error');
       return;
     }
     const label = btn.querySelector('code') || btn;
@@ -5268,7 +5268,7 @@
     const sid = el.dataset.copySessionId || el.textContent || '';
     const ok = await copyTextValue(sid);
     if (!ok) {
-      showOpToast('Copy failed — select and copy manually', 'error');
+      showOpToast('Copy failed - select and copy manually', 'error');
       return;
     }
     el.textContent = 'copied!';
@@ -5292,7 +5292,7 @@
     }
     const ok = await copyTextValue(text);
     if (!ok) {
-      showOpToast('Copy failed — select and copy manually', 'error');
+      showOpToast('Copy failed - select and copy manually', 'error');
       return;
     }
     btn.classList.add('copied');
@@ -5332,7 +5332,7 @@
     }
     const ok = await copyTextValue(text);
     if (!ok) {
-      showOpToast('Copy failed — select and copy manually', 'error');
+      showOpToast('Copy failed - select and copy manually', 'error');
       return;
     }
     btn.classList.add('copied');
@@ -6220,7 +6220,7 @@
         activeInputControls.ttyLabel.textContent = liveStatus.live ? (liveStatus.tty || 'antigravity') : 'antigravity';
         if (activeInput) activeInput.placeholder = antigravityCanSendNow
             ? antigravityInputPlaceholder(currentSession)
-            : 'Type a follow-up — Antigravity will resume headless…';
+            : 'Type a follow-up - Antigravity will resume headless…';
       } else if (isHermes) {
         activeInputControls.ttyLabel.textContent = 'hermes';
         if (activeInput) activeInput.placeholder = 'Resume Hermes and send...';
@@ -6231,7 +6231,7 @@
         // Live in a Claude-app-managed terminal (no system tty): not dormant
         // — the process is up, CCC just has no input channel to it (CCC-115).
         activeInputControls.ttyLabel.textContent = 'Claude app';
-        if (activeInput) activeInput.placeholder = 'Session is open in the Claude app — messages park until it closes…';
+        if (activeInput) activeInput.placeholder = 'Session is open in the Claude app - messages park until it closes…';
       } else if (liveStatus.live && liveStatus.pid) {
         // Live process without a tty (e.g. CCC headless): also not dormant.
         activeInputControls.ttyLabel.textContent = 'headless';
@@ -6258,7 +6258,7 @@
         activeSendBtn.title = blockSend
           ? 'Open Antigravity to continue this app session'
           : (isAntigravity && !antigravityCanSendNow
-              ? 'Send — runs AGY headless on this session'
+              ? 'Send - runs AGY headless on this session'
               : 'Send');
       }
       // CCC-46: when a relayed AskUserQuestion card is showing for this
@@ -6573,7 +6573,7 @@
       } else if (nameNoSlash === q) {
         score = 0;                                 // exact name (sans slash)
       } else if (nameNoSlash.startsWith(q)) {
-        score = 1;                                 // name prefix — strongest fuzzy
+        score = 1;                                 // name prefix - strongest fuzzy
       } else if (name.includes(q)) {
         score = 2;                                 // name substring
       } else if (desc.includes(q)) {
@@ -6763,7 +6763,7 @@
             const noteEl = document.createElement('div');
             noteEl.className = 'not-ack-note';
             noteEl.innerHTML =
-                '<span class="not-ack-label">⚠ Not acknowledged by the agent — your message may not have been delivered.</span>'
+                '<span class="not-ack-label">⚠ Not acknowledged by the agent - your message may not have been delivered.</span>'
               + '<button type="button" class="not-ack-retry">Re-send</button>'
               + '<button type="button" class="not-ack-dismiss" title="Dismiss this notice">×</button>';
             div.appendChild(noteEl);
@@ -6840,7 +6840,7 @@
       + ' title="Steer the active Codex turn with this queued message">Steer</button>'
       + '<button type="button" class="send-queued-cancel" data-cancel-queued-message'
       + ' data-session-id="' + escapeAttr(pending.sid || '') + '"'
-      + ' title="Cancel — discard this queued message">✕ Cancel</button>';
+      + ' title="Cancel - discard this queued message">✕ Cancel</button>';
   }
 
   // State 2 of the echo lifecycle: the server confirmed the inject reached the
@@ -6880,8 +6880,8 @@
     note.textContent = steered
       ? '✓ Steered into the running Codex turn.'
       : waking
-      ? '✓ Delivered — reloading the conversation before the reply.'
-      : '✓ Delivered — waiting for ' + engineLabel + ' to pick it up.';
+      ? '✓ Delivered - reloading the conversation before the reply.'
+      : '✓ Delivered - waiting for ' + engineLabel + ' to pick it up.';
     // Tier 2: once a normal send is delivered, advance it from Sending to
     // Thinking. Headless wakes use their compact checkmark progress instead.
     if (!waking) setOptimisticAgentThinking(div.parentNode);
@@ -6907,12 +6907,12 @@
   // never silently dropped. Auto only — no manual refresh affordance.
   const _wtReceiptPolls = {};   // receipt_id -> true while a poll loop is live
   function wtTransportStageLabel(transport) {
-    if (transport === 'tty') return 'Accepted — typing into the live terminal…';
-    if (transport === 'fifo') return "Accepted — queued to the worker's stdin…";
-    if (transport === 'resume') return 'Accepted — waking a headless resume…';
-    if (transport === 'codex') return 'Accepted — delivering to the Codex thread…';
-    if (transport === 'delegate') return 'Accepted — handed to the delegate…';
-    return 'Accepted by WatchTower — delivering…';
+    if (transport === 'tty') return 'Accepted - typing into the live terminal…';
+    if (transport === 'fifo') return "Accepted - queued to the worker's stdin…";
+    if (transport === 'resume') return 'Accepted - waking a headless resume…';
+    if (transport === 'codex') return 'Accepted - delivering to the Codex thread…';
+    if (transport === 'delegate') return 'Accepted - handed to the delegate…';
+    return 'Accepted by WatchTower - delivering…';
   }
   function _wtFindLivePendingEcho(sid, displayText) {
     // Resolve the CURRENT entry/element for this send. A re-render replaces
@@ -6974,14 +6974,14 @@
         return;
       }
       if (status === 'lost') {
-        _wtSetEchoNote(entry, '⚠ WatchTower lost the message — retrying with a native resume…');
+        _wtSetEchoNote(entry, '⚠ WatchTower lost the message - retrying with a native resume…');
         stop();
         _wtNativeFallbackResend(entry, ctx);
         return;
       }
       // pending / advanced: keep the stage note current and keep verifying.
       _wtSetEchoNote(entry, status === 'advanced'
-        ? stageLabel + ' Transcript is moving — verifying…'
+        ? stageLabel + ' Transcript is moving - verifying…'
         : stageLabel);
       setTimeout(tick, 3000);
     };
@@ -7007,12 +7007,12 @@
     }
     const live = _wtFindLivePendingEcho(ctx.sid, entry.text) || entry;
     if (data && data.ok) {
-      _wtSetEchoNote(live, '⏻ Native fallback accepted — waking the headless agent…');
+      _wtSetEchoNote(live, '⏻ Native fallback accepted - waking the headless agent…');
       scheduleFireAndWatchRefresh(ctx.paneId);
     } else {
       const reason = (data && data.error) || ('HTTP ' + httpStatus);
-      _wtSetEchoNote(live, '⚠ Not delivered — WatchTower lost it and the native fallback failed: ' + reason);
-      showOpToast('Send lost — native fallback failed: ' + reason, 'error');
+      _wtSetEchoNote(live, '⚠ Not delivered - WatchTower lost it and the native fallback failed: ' + reason);
+      showOpToast('Send lost - native fallback failed: ' + reason, 'error');
     }
   }
 
@@ -7112,7 +7112,7 @@
   // text (see buildTtsDataFromElements) so the user hears the answer, not the
   // dashboard's machine-readable footer.
   const PHONE_MODE_SUFFIX =
-    "\n\nReply as if you're in a phone conversation with the user — response needs to be conversational and short. "
+    "\n\nReply as if you're in a phone conversation with the user - response needs to be conversational and short. "
     + "Break a complex message into multiple turns of conversation. "
     + "Do not include the session-state summary block at the end of this reply.";
   let _phoneModePending = null;   // { paneId, convId } while awaiting a reply
@@ -7434,7 +7434,7 @@
           const d = await r.json().catch(() => ({}));
           if (r.ok && d.ok) {
             markPendingSendQueued(pendingSend, 'Opened a terminal to run /clear (a headless session has no REPL to clear).');
-            showOpToast('Opened a terminal — /clear runs there. Headless sessions have no REPL to clear in place.', 'info');
+            showOpToast('Opened a terminal - /clear runs there. Headless sessions have no REPL to clear in place.', 'info');
           } else {
             markPendingSendQueued(pendingSend, '/clear could not be routed to a terminal.');
             showOpToast('Could not open a terminal for /clear: ' + (d.error || ('HTTP ' + r.status)), 'error');
@@ -7487,7 +7487,7 @@
           refreshConversationList();
           showOpToast('Goal updated.', 'success');
         } else if (data.via === 'codex-app-queued') {
-          markPendingSendQueued(pendingSend, 'Queued for Codex — will send when the running turn is ready.');
+          markPendingSendQueued(pendingSend, 'Queued for Codex - will send when the running turn is ready.');
           showOpToast('Queued for Codex.');
           setTimeout(refreshConversationList, 1500);
           setTimeout(refreshConversationList, 3500);
@@ -7497,8 +7497,8 @@
           // is preserved AND offer to locate the new directory so the
           // queue can drain.
           const missing = data.missing_path || '(unknown path)';
-          markPendingSendQueued(pendingSend, 'Queued — session folder is missing. Restore or relocate it to deliver.');
-          showOpToast('Queued — session folder is missing (' + missing + '). Restore it or relocate to resume.', 'info');
+          markPendingSendQueued(pendingSend, 'Queued - session folder is missing. Restore or relocate it to deliver.');
+          showOpToast('Queued - session folder is missing (' + missing + '). Restore it or relocate to resume.', 'info');
         } else if (data.queued) {
           // The session is busy (or headless mid-tool). Keep the echo visible
           // as "queued" — NOT "terminal idle" (a headless session has no
@@ -7507,10 +7507,10 @@
           // server's explicit reason (e.g. Antigravity can't take input
           // mid-turn) so "Queued" is never unexplained (CCC-42/43).
           const queuedMsg = data.queued_reason
-            ? 'Queued — ' + data.queued_reason
+            ? 'Queued - ' + data.queued_reason
             : (compactCommand
-                ? 'Queued /compact — will run when the session finishes its current step.'
-                : 'Queued — will send when the session finishes its current step.');
+                ? 'Queued /compact - will run when the session finishes its current step.'
+                : 'Queued - will send when the session finishes its current step.');
           markPendingSendQueued(pendingSend, queuedMsg);
           showOpToast(queuedMsg);
         } else if (data.via === 'codex-steer') {
@@ -7551,7 +7551,7 @@
             mode: injectMode || 'send',
             paneId: paneId || activePaneId(),
           });
-          showOpToast('Accepted by WatchTower' + (data.transport ? ' — ' + data.transport + ' transport.' : '.'));
+          showOpToast('Accepted by WatchTower' + (data.transport ? ' - ' + data.transport + ' transport.' : '.'));
         } else if (compactCommand) {
           showOpToast(compactRequestSuccessMessage(data, currentSession.source));
           if (currentSession.source === 'codex' || (data && data.via === 'live-spawn-stdin')) {
@@ -7691,8 +7691,8 @@
       // Point the user at the actual fix instead of a dead "not supported".
       const insecure = (typeof window.isSecureContext === 'boolean') && !window.isSecureContext;
       const msg = insecure
-        ? 'Voice input needs a secure connection — open CCC over https or on localhost (plain http over Tailscale/LAN blocks the mic).'
-        : 'Voice input isn’t available in this browser. On iPhone/iPad it only works in Safari — open CCC in Safari to dictate.';
+        ? 'Voice input needs a secure connection - open CCC over https or on localhost (plain http over Tailscale/LAN blocks the mic).'
+        : 'Voice input isn’t available in this browser. On iPhone/iPad it only works in Safari - open CCC in Safari to dictate.';
       showOpToast(msg, 'error');
       return;
     }
@@ -7908,7 +7908,7 @@
   // engines (incl. macOS) pause longer at "<punct>\n\n" than at a bare break.
   function _ttsParagraphBreak(text) {
     const tail = text.replace(/\s+$/, '');
-    const needsStop = tail && !/[.!?:;,–—-]$/.test(tail);
+    const needsStop = tail && !/[.!?:;,---]$/.test(tail);
     return (needsStop ? '.' : '') + '\n\n';
   }
   function buildTtsDataFromElements(elements) {
@@ -8464,7 +8464,7 @@
       // duration via the `_persist` hint on the returned reason object.
       const missing = data.path || '(unknown path)';
       return '⚠ Session cwd is gone: ' + missing
-        + ' — every send will fail until this directory is restored or the session is replaced.';
+        + ' - every send will fail until this directory is restored or the session is replaced.';
     }
     if (data && (data.error || data.message)) return data.error || data.message;
     return 'HTTP ' + status;
@@ -9079,9 +9079,9 @@
       +   ' Claude is summarizing the prior turns. This usually takes 1-3 minutes.'
       +   ' <span class="compact-banner-heartbeat">CCC is polling for the new boundary'
       +     ' · <span class="compact-banner-elapsed">0:00</span> elapsed</span>'
-      +   ' <span class="compact-banner-slow-note">Longer than usual — still polling. If the engine'
+      +   ' <span class="compact-banner-slow-note">Longer than usual - still polling. If the engine'
       +     ' went idle, re-running <code>/compact</code> is safe.</span>'
-      +   ' <em>The on-disk transcript will be rewritten — a snapshot of the pre-compact JSONL was saved to'
+      +   ' <em>The on-disk transcript will be rewritten - a snapshot of the pre-compact JSONL was saved to'
       +   ' <code>~/.claude/command-center/compact-backups/</code>.</em>'
       + '</span>';
     $view.appendChild(banner);
@@ -10079,7 +10079,7 @@
           if (v !== null) localStorage.setItem(newKey, v);
         }
       }
-    } catch (_) { /* localStorage may be disabled — fail silently */ }
+    } catch (_) { /* localStorage may be disabled - fail silently */ }
   })();
 
   function normalizeSidebarViewMode(value) {
@@ -10706,7 +10706,7 @@
   function restoreLastViewOrConversation() {
     if (CONV_POPOUT_MODE) { return; }
     if (_suppressRestoreLastView) return;  // mid-transition, not a real boot/refresh (CCC-508)
-    if (_gcReaderPath || _gcReaderId) return;  // a reader is open — leave it
+    if (_gcReaderPath || _gcReaderId) return;  // a reader is open - leave it
     try {
       const raw = localStorage.getItem('ccc-last-view');
       const view = raw ? JSON.parse(raw) : null;
@@ -10796,7 +10796,7 @@
         el.classList.toggle('active', el.dataset.id === convId);
       });
     }
-    try { updateSubagentsPanel(convId); } catch (_) { /* defensive — panel is non-critical */ }
+    try { updateSubagentsPanel(convId); } catch (_) { /* defensive - panel is non-critical */ }
   }
 
   // Populate the status-rail Subagents panel from the active conversation's
@@ -11370,7 +11370,7 @@
     try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
     renderSidebar(filterConversations($convSearch.value));
     if (currentConversation === id) renderPendingSpawnConversation(card, activePaneId());
-    if (typeof showOpToast === 'function') showOpToast('Session did not register within 30s — placeholder kept. Dismiss if the session opened.', 'warn');
+    if (typeof showOpToast === 'function') showOpToast('Session did not register within 30s - placeholder kept. Dismiss if the session opened.', 'warn');
   }
 
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {
@@ -11631,7 +11631,7 @@
       }
       if (archiveLoaded) renderArchiveList($convSearch.value);
       loadAttentionList();  // piggy-back on the same refresh cycle
-      hideLoadingOverlay();  // first render has happened — reveal the UI
+      hideLoadingOverlay();  // first render has happened - reveal the UI
       _markFirstSessionsLoaded();  // unblock archive boot kick (see wireArchiveMode)
       // Auto-restore the last-opened card on first load. Only fires when
       // the user hasn't already clicked something — refresh-after-refresh
@@ -11644,8 +11644,8 @@
     } catch (err) {
       _convListRenderSig = null;
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
-      hideLoadingOverlay();  // even on error — don't leave the user stuck on a spinner
-      _markFirstSessionsLoaded();  // even on error — don't pin the archive load
+      hideLoadingOverlay();  // even on error - don't leave the user stuck on a spinner
+      _markFirstSessionsLoaded();  // even on error - don't pin the archive load
     }
   }
 
@@ -13667,7 +13667,7 @@
       + '<div class="flow-toolbar-group" role="group" aria-label="Add">'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="add-draft-session">+ Session</button>'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="add-object">+ Object</button>'
-      +   '<button type="button" class="flow-toolbar-btn" data-flow-action="add-group-chat" title="Create a new group chat — appears on the board so you can drag sessions onto it.">+ Group chat</button>'
+      +   '<button type="button" class="flow-toolbar-btn" data-flow-action="add-group-chat" title="Create a new group chat - appears on the board so you can drag sessions onto it.">+ Group chat</button>'
       + '</div>'
       + '<div class="flow-toolbar-divider"></div>'
       + '<div class="flow-toolbar-group" role="group" aria-label="Filter">'
@@ -13680,7 +13680,7 @@
       + '<div class="flow-toolbar-group" role="group" aria-label="Layout">'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="collapse-all">Collapse all</button>'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="expand-all">Expand all</button>'
-      +   '<button type="button" class="flow-toolbar-btn" data-flow-action="organize" title="Keep all objects in place, line up session children below each parent — most recent leftmost.">Organize</button>'
+      +   '<button type="button" class="flow-toolbar-btn" data-flow-action="organize" title="Keep all objects in place, line up session children below each parent - most recent leftmost.">Organize</button>'
       +   '<button type="button" class="flow-toolbar-btn" data-flow-action="organize-plus" title="Run Organize, then apply your recorded Flow layout preferences.">Organize+</button>'
       +   (_flowOrganizeUndoSnapshot
             ? '<button type="button" class="flow-toolbar-btn" data-flow-action="undo-organize" title="Restore every node to where it was before the last Organize.">Undo organize</button>'
@@ -14332,19 +14332,19 @@
       if (st === 'working') {
         const label = liveTool ? String(liveTool).slice(0, 16) : 'Working';
         const steady = c.codex_fresh ? '' : ' steady';
-        chips.push('<span class="flow-chip working' + steady + '" title="Codex is working' + (liveTool ? ' — ' + escapeAttr(String(liveTool)) : '') + '">' + escapeHtml(label) + '</span>');
+        chips.push('<span class="flow-chip working' + steady + '" title="Codex is working' + (liveTool ? ' - ' + escapeAttr(String(liveTool)) : '') + '">' + escapeHtml(label) + '</span>');
       } else if (st === 'stuck') {
-        chips.push('<span class="flow-chip stuck" title="Stalled — no rollout activity past the stale threshold">Stuck</span>');
+        chips.push('<span class="flow-chip stuck" title="Stalled - no rollout activity past the stale threshold">Stuck</span>');
       } else if (st === 'offline') {
-        chips.push('<span class="flow-chip offline" title="Codex engine offline — sessions paused">Offline</span>');
+        chips.push('<span class="flow-chip offline" title="Codex engine offline - sessions paused">Offline</span>');
       } else if (st === 'idle') {
-        chips.push('<span class="flow-chip idle" title="Idle — last turn complete">Idle</span>');
+        chips.push('<span class="flow-chip idle" title="Idle - last turn complete">Idle</span>');
       }
     } else if (c.needs_approval || c.question_waiting) {
       chips.push('<span class="flow-chip waiting" title="Paused waiting for your input">WAITING</span>');
     } else if (wipActive) {
       const label = liveTool ? String(liveTool).slice(0, 16) : 'WIP';
-      chips.push('<span class="flow-chip working" title="Agent is working' + (liveTool ? ' — ' + escapeAttr(String(liveTool)) : '') + '">' + escapeHtml(label) + '</span>');
+      chips.push('<span class="flow-chip working" title="Agent is working' + (liveTool ? ' - ' + escapeAttr(String(liveTool)) : '') + '">' + escapeHtml(label) + '</span>');
     }
     // Single lifecycle chip — priority matches conv-list _renderRow.
     if (isWorktree && c.worktree_dirty) {
@@ -14602,7 +14602,7 @@
         : (conversationsData || []);
       if (typeof renderSidebar === 'function') renderSidebar(convs);
     } catch (_) {}
-    if (typeof showOpToast === 'function') showOpToast('Organize undone — previous layout restored.', 'info');
+    if (typeof showOpToast === 'function') showOpToast('Organize undone - previous layout restored.', 'info');
   }
 
   function organizeFlowSessions(targetEl, opts) {
@@ -14919,7 +14919,7 @@
       if (typeof renderSidebar === 'function') renderSidebar(convs);
     } catch (_) { /* fall back to in-place redraw below */ }
     redrawFlowLinks(board);
-    if (!(opts && opts.silent) && typeof showOpToast === 'function') showOpToast('Organized — tight pack.', 'info');
+    if (!(opts && opts.silent) && typeof showOpToast === 'function') showOpToast('Organized - tight pack.', 'info');
   }
 
   function flowDraftPositionForParent(parentNodeId, repoPath) {
@@ -15027,7 +15027,7 @@
           +   '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtml(meta) + '</div>'
           + '</div>';
       }).join('') + (rows.length > 200
-        ? '<div style="padding:8px 12px;color:var(--text-muted);font-size:11px;text-align:center;">Showing 200 of ' + rows.length + ' — refine search.</div>'
+        ? '<div style="padding:8px 12px;color:var(--text-muted);font-size:11px;text-align:center;">Showing 200 of ' + rows.length + ' - refine search.</div>'
         : '');
       $list.querySelectorAll('.flow-attach-row').forEach(row => {
         row.addEventListener('click', () => {
@@ -15503,7 +15503,7 @@
   async function setFlowObjectObjective(id) {
     const obj = flowCustomObjects.find(o => o && o.id === id);
     if (!obj) return;
-    const next = (await promptModal('Immediate objective — what are we trying to achieve right now?', obj.objective || '') || '').trim();
+    const next = (await promptModal('Immediate objective - what are we trying to achieve right now?', obj.objective || '') || '').trim();
     if (!next || next === (obj.objective || '')) return;
     obj.objective = next;
     obj.updated_at = Date.now();
@@ -16387,7 +16387,7 @@
             const pinned = isFlowPinned(rec.rowId);
             const title = pinned
               ? 'Unpin from flow board'
-              : 'Pin to flow board — stays visible even when archived & hidden from list';
+              : 'Pin to flow board - stays visible even when archived & hidden from list';
             const glyph = pinned ? '📍' : '📌';
             return '<button type="button" class="flow-node-flowpin' + (pinned ? ' is-pinned' : '')
               + '" data-flow-action="toggle-flow-pin" title="' + title + '" aria-label="' + title + '" aria-pressed="' + (pinned ? 'true' : 'false') + '">' + glyph + '</button>';
@@ -16413,7 +16413,7 @@
       // own tooltip). Explain it on the node so hovering answers "what are
       // these checkmarks?" (CCC-75).
       const nodeTitle = (rec.className || '').indexOf('is-archived') !== -1
-        ? ' title="Archived (done) session — the ✓ marks it complete. Shown because ‘Include archived’ is on or it’s pinned to the board."'
+        ? ' title="Archived (done) session - the ✓ marks it complete. Shown because ‘Include archived’ is on or it’s pinned to the board."'
         : '';
       return '<div class="flow-node ' + escapeAttr(rec.className) + selectedClass + '" data-flow-kind="' + escapeAttr(rec.kind) + '"'
         + ' data-flow-node-id="' + escapeAttr(rec.id) + '"' + dataParent + dataRow + dataSession + dataObject + dataDraft + dataRepoPath + dataGcPath + dataGcId + dataGcMode + nodeTitle
@@ -17281,7 +17281,7 @@
   //     NOT used as a sort/group key anywhere, so a checked row stays put.
   const COO_TRACKED_KEY = 'ccc-coo-tracked';
   const COO_MODE_KEY = 'ccc-coo-mode';
-  let _cooTrackedSet = null;       // in-memory cache — O(1) per-row reads
+  let _cooTrackedSet = null;       // in-memory cache - O(1) per-row reads
   function isCooModeOn() {
     try { return localStorage.getItem(COO_MODE_KEY) === '1'; }
     catch (_) { return false; }
@@ -18074,7 +18074,7 @@
         return;
       }
       (result.results || []).forEach(r => {
-        if (!r.ok) showOpToast('Could not reach session — check its terminal (' + (r.error || 'tty not found') + ')', 'error');
+        if (!r.ok) showOpToast('Could not reach session - check its terminal (' + (r.error || 'tty not found') + ')', 'error');
       });
       if (backdrop) backdrop.classList.remove('visible');
       clearSelectedConversationRows();
@@ -18696,7 +18696,7 @@
   function _gcReplayHumanStep(msg) {
     const plainText = (msg.rawBody || '').trim();
     const inputEl = document.getElementById('gcHumanInput');
-    if (!inputEl || !plainText) return true;  // nothing to animate — just show the bubble
+    if (!inputEl || !plainText) return true;  // nothing to animate - just show the bubble
 
     if (_gcReplayHumanSent) {
       // Already typed + sent this message on a prior tick — reset for the
@@ -18968,7 +18968,7 @@
 
       const initials = gcInitials(pName);
       const color = getParticipantColor(null, pName);
-      return `<span class="gc-receipt-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(pName)} — replied after">${escapeHtml(initials)}</span>`;
+      return `<span class="gc-receipt-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(pName)} - replied after">${escapeHtml(initials)}</span>`;
     }).filter(Boolean).join('');
 
     let seenHtml = '';
@@ -18982,7 +18982,7 @@
         if (msgDate && !isNaN(readDate.getTime()) && readDate >= msgDate) {
           const initials = gcInitials(name);
           const color = getParticipantColor(sid, name);
-          return `<span class="gc-seen-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(name)} — seen message">${escapeHtml(initials)}</span>`;
+          return `<span class="gc-seen-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(name)} - seen message">${escapeHtml(initials)}</span>`;
         }
         return '';
       }).filter(Boolean).join('');
@@ -19052,13 +19052,13 @@
 
   let _convReplayActive = false;
   let _convReplayPaneId = null;
-  let _convReplayPaneIds = []; // all panes participating — 2 in a synced split
+  let _convReplayPaneIds = []; // all panes participating - 2 in a synced split
                                 // replay (CCC-488), 1 otherwise.
   let _convReplayPaused = false;
   let _convReplaySpeed = 1;
   let _convReplayMsgIndex = 0;
   let _convReplayEvents = []; // [{el, meaningful, paneId, ts}]
-  let _convReplaySeenEls = null; // WeakSet — tracks every el already queued, so live-streamed
+  let _convReplaySeenEls = null; // WeakSet - tracks every el already queued, so live-streamed
                                   // nodes appended mid-replay get caught by the JSONL-line sweep
                                   // instead of appearing unhidden ahead of the reveal cursor.
   let _convReplayTimeout = null;
@@ -19559,7 +19559,7 @@
     const textEl = _convReplayTextContainer(item.el);
     const plainText = (textEl ? textEl.textContent : item.el.textContent || '').trim();
     const inputEl = composerInputForPane(item.paneId);
-    if (!inputEl || !plainText) return true;  // nothing to animate — just show the bubble
+    if (!inputEl || !plainText) return true;  // nothing to animate - just show the bubble
 
     if (_convReplayHumanSent) {
       _convReplayHumanSent = false;
@@ -19933,7 +19933,7 @@
 
         const initials = gcInitials(pName);
         const color = getParticipantColor(null, pName);
-        return `<span class="gc-receipt-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(pName)} — replied after">${escapeHtml(initials)}</span>`;
+        return `<span class="gc-receipt-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(pName)} - replied after">${escapeHtml(initials)}</span>`;
       }).filter(Boolean).join('');
 
       let seenHtml = '';
@@ -19947,7 +19947,7 @@
           if (msgDate && !isNaN(readDate.getTime()) && readDate >= msgDate) {
             const initials = gcInitials(name);
             const color = getParticipantColor(sid, name);
-            return `<span class="gc-seen-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(name)} — seen message">${escapeHtml(initials)}</span>`;
+            return `<span class="gc-seen-avatar" style="background-color: var(--${color}); color: var(--bg);" title="${escapeAttr(name)} - seen message">${escapeHtml(initials)}</span>`;
           }
           return '';
         }).filter(Boolean).join('');
@@ -20225,10 +20225,10 @@
         + '<span class="gc-topic" title="' + topicSafe + '">' + topicSafe + '</span>'
         + '<span class="gc-mode-badge" style="display:none;">' + modeSafe + '</span>'
         + '<button type="button" class="gc-join-link-btn" id="gcAddPartBtn"'
-        + ' title="Add a participant — search recent sessions, Enter to add">'
+        + ' title="Add a participant - search recent sessions, Enter to add">'
         + '＋ Add participant</button>'
         + '<button type="button" class="gc-join-link-btn" id="gcJoinLinkBtn"'
-        + ' title="Copy a join link — paste it into any session\'s composer in CCC and that session joins this chat">'
+        + ' title="Copy a join link - paste it into any session\'s composer in CCC and that session joins this chat">'
         + '🔗 Join link</button>'
         + '<button type="button" class="gc-join-link-btn" id="gcReplayBtn" title="Replay conversation">▶ Replay</button>'
         + (GROUPCHAT_POPOUT_MODE ? ''
@@ -20312,7 +20312,7 @@
         const token = 'ccc:join-gc:' + (_gcReaderId || _gcReaderPath || '');
         try {
           await navigator.clipboard.writeText(token);
-          showOpToast('Join link copied — paste it into any session’s composer and send', 'success');
+          showOpToast('Join link copied - paste it into any session’s composer and send', 'success');
         } catch (_) {
           prompt('Copy this join link, then paste it into any session’s composer:', token);
         }
@@ -20648,7 +20648,7 @@
       html += `      <span class="gco-part-divider">·</span>`;
       html += `      ${mentionText}`;
       html += `    </div>`;
-      html += `    <button type="button" class="gco-nudge-btn" data-gc-nudge="${escapeAttr(sid)}" data-gc-nudge-name="${escapeAttr(name)}" title="Re-inject the /group-chat prompt into ${escapeAttr(name)}'s session — wakes this agent specifically.">Nudge</button>`;
+      html += `    <button type="button" class="gco-nudge-btn" data-gc-nudge="${escapeAttr(sid)}" data-gc-nudge-name="${escapeAttr(name)}" title="Re-inject the /group-chat prompt into ${escapeAttr(name)}'s session - wakes this agent specifically.">Nudge</button>`;
       html += `  </div>`;
       html += `</div>`;
     }
@@ -20695,7 +20695,7 @@
       html += `  <summary class="gco-details-summary">Details</summary>`;
       html += `  <div class="gco-details-content">`;
       if (chatId) {
-        html += `    <div class="gco-row"><span class="gco-label">ID:</span> <span class="gco-val gco-copy" title="Click to select — Cmd+C to copy">${escapeHtml(chatId)}</span></div>`;
+        html += `    <div class="gco-row"><span class="gco-label">ID:</span> <span class="gco-val gco-copy" title="Click to select - Cmd+C to copy">${escapeHtml(chatId)}</span></div>`;
       }
       if (chatPath) {
         html += `    <div class="gco-row"><span class="gco-label">File:</span> <span class="gco-val gco-copy" title="${escapeAttr(chatPath)}">${escapeHtml(chatPath)}</span></div>`;
@@ -20953,7 +20953,7 @@
           errBanner.className = 'gc-poll-error';
           body.prepend(errBanner);
         }
-        errBanner.textContent = '⚠ Lost connection to chat file — retrying…';
+        errBanner.textContent = '⚠ Lost connection to chat file - retrying…';
       }
     }
   }
@@ -21088,7 +21088,7 @@
         setOptimisticOverride(sid, { verified: true });
         delete columnOverrides[sid];
       } catch (err) {
-        showOpToast('Verify failed — card stays put (' + err.message + ')', 'error');
+        showOpToast('Verify failed - card stays put (' + err.message + ')', 'error');
         renderSidebar(filterConversations($convSearch.value));
         return;
       }
@@ -21103,7 +21103,7 @@
           c.verified = false;
           setOptimisticOverride(sid, { verified: false });
         } catch (err) {
-          showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
+          showOpToast('Un-verify failed - card stays in Verified (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -21115,7 +21115,7 @@
           c.archived = false;
           setOptimisticOverride(sid, { archived: false });
         } catch (err) {
-          showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
+          showOpToast('Un-archive failed - card stays in Archived (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -21152,7 +21152,7 @@
           setOptimisticOverride(sid, { archived: true });
           delete columnOverrides[sid];
         } catch (err) {
-          showOpToast('Archive failed — card stays put (' + err.message + ')', 'error');
+          showOpToast('Archive failed - card stays put (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -21168,7 +21168,7 @@
           c.verified = false;
           setOptimisticOverride(sid, { verified: false });
         } catch (err) {
-          showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
+          showOpToast('Un-verify failed - card stays in Verified (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -21180,7 +21180,7 @@
           c.archived = false;
           setOptimisticOverride(sid, { archived: false });
         } catch (err) {
-          showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
+          showOpToast('Un-archive failed - card stays in Archived (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -21373,17 +21373,17 @@
       { key: 'icebox',          label: 'Icebox',          defaultExpanded: true,
         hint: 'Parked. The `icebox` GitHub label is set, or you dragged it here. Active intent: don\'t work on this right now.' },
       { key: 'working',         label: 'In progress',     defaultExpanded: true,
-        hint: 'Live or resumable sessions. Idle ones (no commits / no live process) get a blue Idle pill — pick one back up by jumping in.' },
+        hint: 'Live or resumable sessions. Idle ones (no commits / no live process) get a blue Idle pill - pick one back up by jumping in.' },
       { key: 'waiting',         label: 'Waiting',         defaultExpanded: true,
         hint: 'Claude is asking a question or requesting permission. Answer in the terminal.' },
       { key: 'review',          label: 'Review',          defaultExpanded: true,
         hint: 'Committed or pushed work waiting for you to read and verify.' },
       { key: 'testing',         label: 'In Testing',      defaultExpanded: true,
-        hint: 'Manually moved here — work is under human validation.' },
+        hint: 'Manually moved here - work is under human validation.' },
       { key: 'verified',        label: 'Verified',        defaultExpanded: false,
         hint: 'Marked done by you, or GitHub issue closed as completed.' },
       { key: 'archived',        label: 'Archived',        defaultExpanded: false,
-        hint: 'Dismissed / not planned — kept for context, not actionable.' },
+        hint: 'Dismissed / not planned - kept for context, not actionable.' },
     ];
     if (getViewGhPref() === 'hide') {
       defaultColumns = defaultColumns.filter(c => c.key !== 'backlog');
@@ -21427,7 +21427,7 @@
       const hasMore = !showAll && items.length > maxVisible;
 
       html += '<div class="kanban-column ' + col.key + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
-      const colTitle = col.hint ? (col.label + ' — ' + col.hint) : col.label;
+      const colTitle = col.hint ? (col.label + ' - ' + col.hint) : col.label;
       html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '" draggable="true" title="' + escapeHtml(colTitle) + '">';
       html += '<span class="arrow">' + (isCollapsed ? '&#9656;' : '&#9662;') + '</span>';
       html += '<span>' + escapeHtml(col.label) + '</span>';
@@ -21533,7 +21533,7 @@
             const label = isClosed ? ('closed' + (reason ? ' · ' + reason : '')) : 'open';
             const color = isClosed ? 'var(--red)' : 'var(--green)';
             const bg = isClosed ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.12)';
-            stateBadge = '<span title="GitHub state — if CLOSED appears in GH Issues, the cache is stale" style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;text-transform:uppercase;">' + escapeHtml(label) + '</span>';
+            stateBadge = '<span title="GitHub state - if CLOSED appears in GH Issues, the cache is stale" style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;text-transform:uppercase;">' + escapeHtml(label) + '</span>';
           }
           const labels = (c.issue_labels || []).filter(function(l) { return l !== 'bug'; }).map(function(l) {
             const isAttn = l === 'needs-attention';
@@ -21675,7 +21675,7 @@
         let summarizeBtn = '';
         if (c.first_message) {
           if (c.name_overridden) {
-            summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title — replaces your manual rename" style="opacity:0.5;">&#10024;</button>';
+            summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title - replaces your manual rename" style="opacity:0.5;">&#10024;</button>';
           } else {
             summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Generate AI title for this card">&#10024;</button>';
           }
@@ -21784,7 +21784,7 @@
               : 'This tool call has been running for too long and may be stuck: ' + staleTool)
             + (staleAge ? ' for ' + staleAge : '')
             + (staleDetail ? ': ' + staleDetail : '')
-            + (c.stale_tool_queued_input ? ' — queued input cannot be delivered until it finishes' : '');
+            + (c.stale_tool_queued_input ? ' - queued input cannot be delivered until it finishes' : '');
           html += '<div class="kanban-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
             + '<span class="kanban-live-name">Stuck</span>'
             + ' <span class="kanban-live-file">' + escapeHtml(liveActivityToolLabel(staleTool)) + '</span>'
@@ -22468,7 +22468,7 @@
         const card = btn.closest('.kanban-card');
         const conv = card ? conversationsData.find(x => x.id === card.dataset.id) : null;
         const body = issueNum
-          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          ? 'Fix issue #' + issueNum + ' - ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
         if (typeof enterNewSessionMode === 'function') enterNewSessionMode();
         const $convInput = document.getElementById('convInput');
@@ -22551,10 +22551,10 @@
         // ~94 chars get truncated by GitHub, so always direct Claude to read
         // the full body via `gh issue view N`.
         const prompt = issueNum
-          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          ? 'Fix issue #' + issueNum + ' - ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
         const spawnKey = issueNum ? (_issueStartKey(issueNum, repoPath) || ('issue-' + issueNum)) : sessionName;
-        if (_spawningKeys.has(spawnKey)) return;  // already spawning — ignore duplicate tap
+        if (_spawningKeys.has(spawnKey)) return;  // already spawning - ignore duplicate tap
         _spawningKeys.add(spawnKey);
         btn.disabled = true;
         btn.textContent = 'Spawning…';
@@ -22759,8 +22759,8 @@
       const agLive = !!ls.live;
       el.innerHTML = pill0(agLive, false, agLive ? 'headless · running' : 'headless',
         agLive
-          ? 'Antigravity is running headlessly (CCC resumes it per turn — there is no live terminal)'
-          : 'Antigravity is idle — CCC resumes it headlessly when you send (there is no live terminal)');
+          ? 'Antigravity is running headlessly (CCC resumes it per turn - there is no live terminal)'
+          : 'Antigravity is idle - CCC resumes it headlessly when you send (there is no live terminal)');
       return;
     }
     const headOn = !!ls.headlessPresent;
@@ -22772,12 +22772,12 @@
     const termOn = !!ls.terminalPresent || bgOn;
     const headTitle = headOn
       ? (stale
-          ? 'A CCC-spawned headless agent is running but STALE — another writer advanced the transcript; it will be auto-retired'
+          ? 'A CCC-spawned headless agent is running but STALE - another writer advanced the transcript; it will be auto-retired'
           : 'A CCC-spawned headless agent is running (pid ' + (ls.headlessPid || '?') + ')')
       : 'No CCC-spawned headless agent for this session';
     const termTitle = bgOn
       ? 'This session runs in a terminal managed by the Claude Code app (pid ' + (ls.bgPid || '?') + '). '
-        + 'It has no system tty, so CCC cannot type into it — interact in the Claude Code window.'
+        + 'It has no system tty, so CCC cannot type into it - interact in the Claude Code window.'
       : (termOn
           ? 'A live terminal (TTY) is attached to this session'
           : 'No live terminal attached to this session');
@@ -22794,8 +22794,8 @@
     const headActive = headOn || streaming;
     const headLabel = streaming ? (stale ? 'stream-json ⚠' : 'stream-json') : (stale ? 'headless ⚠' : 'headless');
     const headPillTitle = streaming
-      ? headTitle + ' — CCC is live-tailing its stdout as stream-json (block-level)'
-      : headTitle + (headOn ? ' — reading the JSONL transcript, not stream-tailing' : '');
+      ? headTitle + ' - CCC is live-tailing its stdout as stream-json (block-level)'
+      : headTitle + (headOn ? ' - reading the JSONL transcript, not stream-tailing' : '');
     // CCC-156: one merged pill listing only the ACTIVE run modes (headless /
     // stream-json / terminal) instead of two separate pills with greyed-out
     // off-states — saves horizontal space. And the clock alone conveys
@@ -22816,7 +22816,7 @@
     const procTitle = [headActive ? headPillTitle : '', termOn ? termTitle : '']
       .filter(Boolean).join('  •  ')
       || (waking
-          ? 'Resuming this session — the process is starting up (waiting for the next liveness poll)'
+          ? 'Resuming this session - the process is starting up (waiting for the next liveness poll)'
           : 'No headless agent or terminal is currently attached. You can still send a message; CCC will resume the session.');
     const mergedPill = '<span class="ccc-proc-pill ' + procCls + (streaming ? ' is-streaming' : '') + '"'
       + ' title="' + escapeHtml(procTitle) + '">'
@@ -22861,9 +22861,9 @@
   async function offerManualCompact(sid) {
     if (!sid) return;
     const open = window.confirm(
-      "Couldn't compact automatically — there's no live terminal to run it in.\n\n"
+      "Couldn't compact automatically - there's no live terminal to run it in.\n\n"
       + "To compact: open this session's terminal and type /compact yourself.\n\n"
-      + "Open a terminal for this session now? Nothing will be typed into it — "
+      + "Open a terminal for this session now? Nothing will be typed into it - "
       + "you run /compact when you're ready.");
     if (!open) return;
     try {
@@ -22872,7 +22872,7 @@
         body: JSON.stringify({ session_id: sid }),
       });
       const d = await r.json().catch(() => ({}));
-      if (d && d.ok) showOpToast('Opened a terminal — type /compact there when ready.', 'info');
+      if (d && d.ok) showOpToast('Opened a terminal - type /compact there when ready.', 'info');
       else showOpToast('Could not open terminal: ' + ((d && d.error) || 'unknown'), 'error');
     } catch (e) {
       showOpToast('Could not open terminal: ' + ((e && e.message) || 'network'), 'error');
@@ -23129,7 +23129,7 @@
       if (data.approval_denied) bits.push('pending approval denied');
       if (data.interrupted) bits.push('external turn interrupted');
       if (data.queued) bits.push('your message queued');
-      showOpToast(data.message || ('Grabbed back into CCC' + (bits.length ? ' — ' + bits.join(', ') : '')) + '.');
+      showOpToast(data.message || ('Grabbed back into CCC' + (bits.length ? ' - ' + bits.join(', ') : '')) + '.');
       touchSessionOptimistically(sessionId);
       setTimeout(refreshConversationList, 1200);
       setTimeout(refreshConversationList, 3000);
@@ -23156,7 +23156,7 @@
   function showInjectError(inp, btn, msg) {
     if (inp) {
       const orig = inp.placeholder;
-      inp.placeholder = 'failed — ' + msg;
+      inp.placeholder = 'failed - ' + msg;
       inp.title = msg;
       inp.style.color = 'var(--text-muted)';
       setTimeout(() => { inp.placeholder = orig; inp.style.color = ''; inp.title = ''; }, 2500);
@@ -23258,7 +23258,7 @@
       $convList.innerHTML =
         '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
         + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
-        + '<div style="line-height:1.5;">Open a terminal and run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> to start one — it\'ll show up here automatically.</div>'
+        + '<div style="line-height:1.5;">Open a terminal and run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> to start one - it\'ll show up here automatically.</div>'
         + '<div style="line-height:1.5;">Or type a prompt in the <strong style="color:var(--text);">New session prompt</strong> field above and click <strong style="color:var(--text);">Run</strong>.</div>'
         + '</div>';
       return;
@@ -23726,7 +23726,7 @@
       let liveToolHtml = '';
       const sidVal = c.session_id || c.id;
       if (sidVal && sessionIsOptimisticallySending(sidVal)) {
-        liveToolHtml = '<span class="conv-live-tool sending" title="Sending — waiting for the first response from the agent">'
+        liveToolHtml = '<span class="conv-live-tool sending" title="Sending - waiting for the first response from the agent">'
           + '<span class="conv-live-name">● Sending&hellip;</span>'
           + '</span>';
       } else if (c.stale_tool_call) {
@@ -23742,7 +23742,7 @@
             : 'This tool call has been running for too long and may be stuck: ' + staleTool)
           + (staleAge ? ' for ' + staleAge : '')
           + (staleDetail ? ': ' + staleDetail : '')
-          + (c.stale_tool_queued_input ? ' — queued input cannot be delivered until it finishes' : '');
+          + (c.stale_tool_queued_input ? ' - queued input cannot be delivered until it finishes' : '');
         liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
           + '<span class="conv-live-name">Stuck</span>'
           + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(staleTool)) + '</span>'
@@ -23788,7 +23788,7 @@
           // is actually stuck. Surface the same Stuck badge so it's visible.
           const mins = Math.floor(sidecarAge / 60);
           const stuckTitle = 'This session has shown no progress for ' + mins
-            + 'm while "' + (c.sidecar_tool || 'working') + '" — it may be stuck. Open it to wake or stop it.';
+            + 'm while "' + (c.sidecar_tool || 'working') + '" - it may be stuck. Open it to wake or stop it.';
           liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(stuckTitle) + '">'
             + '<span class="conv-live-name">Stuck</span>'
             + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(c.sidecar_tool)) + '</span>'
@@ -23900,7 +23900,7 @@
         // row isn't a plain gateway conversation.
         const hermesProfile = String(c.hermes_profile || '').trim();
         if (hermesProfile) {
-          signals += '<span class="conv-signal hermes-profile" title="Hermes profile worker (' + escapeAttr(hermesProfile) + ') — its own state.db">⌥ ' + escapeHtml(hermesProfile) + '</span>';
+          signals += '<span class="conv-signal hermes-profile" title="Hermes profile worker (' + escapeAttr(hermesProfile) + ') - its own state.db">⌥ ' + escapeHtml(hermesProfile) + '</span>';
         }
         // Agentic vs plain-chat chip. tool_call_count distinguishes
         // LLM-with-tools sessions (the interesting ones) from messaging
@@ -23909,9 +23909,9 @@
         // plain conversations are easy to skip at a glance.
         const hermesToolCalls = Number(c.hermes_tool_calls || 0);
         if (hermesToolCalls > 0) {
-          signals += '<span class="conv-signal hermes-agent" title="LLM-with-tools session — ' + hermesToolCalls + ' tool call' + (hermesToolCalls === 1 ? '' : 's') + '">⚒ ' + escapeHtml(String(hermesToolCalls)) + '</span>';
+          signals += '<span class="conv-signal hermes-agent" title="LLM-with-tools session - ' + hermesToolCalls + ' tool call' + (hermesToolCalls === 1 ? '' : 's') + '">⚒ ' + escapeHtml(String(hermesToolCalls)) + '</span>';
         } else {
-          signals += '<span class="conv-signal hermes-chat" title="Plain conversation — no tool calls">chat</span>';
+          signals += '<span class="conv-signal hermes-chat" title="Plain conversation - no tool calls">chat</span>';
         }
         if (c.model) {
           const hermesModel = String(c.model).replace(/^hermes[-_]?/i, '').slice(0, 36);
@@ -24238,7 +24238,7 @@
       let pctBadgeHtml = '';
       let pctBadgeRowActionHtml = '';
       if (ctxPct) {
-        const tip = ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens — click to run /compact';
+        const tip = ctxPct.source + ' ' + ctxPct.displayTokens.toLocaleString() + ' / ' + ctxPct.limit.toLocaleString() + ' tokens - click to run /compact';
         const pctLevel = ctxPct.pct > 60 ? ' is-danger' : (ctxPct.pct > 30 ? ' is-warn' : '');
         // Tagged as an action target so the delegated click handler can
         // offer /compact without scooping the surrounding row click.
@@ -24369,7 +24369,7 @@
       const _cooEsc = getCooEscalated(_cooSid);
       const cooTrackHtml = isCooModeOn()
         ? '<label class="coo-track" title="'
-          + (_cooTracked ? 'COO is tracking this session — click to stop' : 'Track with COO')
+          + (_cooTracked ? 'COO is tracking this session - click to stop' : 'Track with COO')
           + '" data-role="coo-track-wrap">'
           + '<input type="checkbox" class="coo-track-cb" data-role="coo-track"'
           + (_cooTracked ? ' checked' : '') + ' aria-label="COO tracking"></label>'
@@ -24379,7 +24379,7 @@
         const _escReason = (_cooEsc && _cooEsc.reason) ? String(_cooEsc.reason) : '';
         const _escTip = _escReason
           ? 'COO escalated to you: ' + _escReason
-          : 'COO couldn’t clear this — escalated to you';
+          : 'COO couldn’t clear this - escalated to you';
         cooEscalatedHtml = '<span class="coo-escalated" title="'
           + escapeAttr(_escTip) + '">↑ escalated</span>';
       }
@@ -24423,7 +24423,7 @@
       // a UI lie, so suppress it there too.
       const _needsYouRow = (c.state === 'waiting') && !c.archived && !c.verified;
       const needsYouHtml = _needsYouRow
-        ? '<span class="conv-needs-you" title="Needs you — the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
+        ? '<span class="conv-needs-you" title="Needs you - the agent is blocked on your input" aria-label="Needs you">&#9679;</span>'
         : '';
       const needsYouRowClass = _needsYouRow ? ' is-needs-you' : '';
       // Shared badge block — same markup whether it sits on its own meta line
@@ -25091,7 +25091,7 @@
       ? '<div class="conv-repo-search-section conv-id-search-section" data-role="id-search-section">'
         + '<div class="conv-repo-search-header">'
         +   '<span class="conv-repo-search-label">ID match</span>'
-        +   '<span class="conv-repo-search-hint">' + _idSearchConvs.length + ' — click to open</span>'
+        +   '<span class="conv-repo-search-hint">' + _idSearchConvs.length + ' - click to open</span>'
         + '</div>'
         + '<div class="conv-repo-search-list">'
         + _idSearchConvs.map(c => _renderRow(c, { elevateToObject: true })).join('')
@@ -25145,7 +25145,7 @@
           ? '<span class="conv-ingroupchat-status-pill" title="Coordination ended">closed</span>'
           : '';
         const pausedPill = isPaused
-          ? '<span class="conv-ingroupchat-status-pill is-paused" title="Orchestration disabled — no nudges, no token use">disabled</span>'
+          ? '<span class="conv-ingroupchat-status-pill is-paused" title="Orchestration disabled - no nudges, no token use">disabled</span>'
           : '';
         // Indented participant list under the chat row. Click to jump
         // to that session in the conv pane (selectConversation handles
@@ -25186,7 +25186,7 @@
             : '';
           return '<div class="conv-ingroupchat-participant" data-role="ingroupchat-participant"'
             + ' data-session-id="' + escapeHtml(sid) + '"'
-            + ' title="' + escapeHtml(display) + ' — click to open this session">'
+            + ' title="' + escapeHtml(display) + ' - click to open this session">'
             +   '<span class="conv-ingroupchat-participant-bullet">↳</span>'
             +   '<span class="conv-ingroupchat-participant-name">' + escapeHtml(trimmed) + '</span>'
             +   wipChip
@@ -25274,14 +25274,14 @@
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' data-gc-paused="' + (isPaused ? '1' : '0') + '"'
           +     ' title="' + (isPaused
-                  ? 'Enable orchestration — resume nudging participants'
-                  : 'Disable orchestration — stop nudges and token use for this chat') + '">'
+                  ? 'Enable orchestration - resume nudging participants'
+                  : 'Disable orchestration - stop nudges and token use for this chat') + '">'
           +     (isPaused ? '▶' : '⏸') + '</button>'
           +   '<button type="button" class="conv-ingroupchat-addpart-btn"'
           +     ' data-role="ingroupchat-add-participant"'
           +     ' data-gc-id="' + escapeHtml(chatId) + '"'
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
-          +     ' title="Add a participant — search sessions and press Enter">＋</button>'
+          +     ' title="Add a participant - search sessions and press Enter">＋</button>'
           +   '<button type="button" class="conv-ingroupchat-rename-btn"'
           +     ' data-role="ingroupchat-rename"'
           +     ' data-gc-id="' + escapeHtml(chatId) + '"'
@@ -25441,7 +25441,7 @@
             + '<span class="conv-draft-dot" aria-hidden="true">&#9675;</span>'
             + '<input type="text" class="conv-draft-input" data-draft-id="' + did + '"' + _tipAttr
             + ' style="--draft-title-ch:' + _draftTitleCh + 'ch"'
-            +   ' value="' + escapeAttr(d.title || '') + '" placeholder="Task — what needs doing?" />'
+            +   ' value="' + escapeAttr(d.title || '') + '" placeholder="Task - what needs doing?" />'
             + '<button type="button" class="conv-draft-play" data-flow-action="play-draft-session"'
             +   ' data-draft-id="' + did + '" title="Start a session for this task" aria-label="Start session">&#9654;</button>'
             + '<button type="button" class="conv-draft-delete" data-flow-action="delete-draft-session"'
@@ -25453,12 +25453,12 @@
           const rowsHtml = _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup });
           const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);
           const emptyHint = (!cards.length && !_objDrafts.length && !hasChildObjects)
-            ? '<div class="conv-object-empty-hint">Empty — drag a session here, or use +.</div>' : '';
+            ? '<div class="conv-object-empty-hint">Empty - drag a session here, or use +.</div>' : '';
           body = rowsHtml + _draftsHtml + emptyHint;
         } else {
           body = cards.length
             ? _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: _isEvergreenAgentGroup })
-            : '<div class="conv-object-empty-hint">Empty — drag sessions here.</div>';
+            : '<div class="conv-object-empty-hint">Empty - drag sessions here.</div>';
         }
         // GOAL-1 status + immediate-objective — real custom objects only (not
         // repo-derived groups or Unclassified). Rendered INLINE in the header
@@ -25681,7 +25681,7 @@
         const tip = label + ': ' + progress + ' done · ' + depth + ' open · '
           + workers + ' worker' + (workers === 1 ? '' : 's')
           + ' · drain ' + (drainOn ? 'on' : 'off') + ' · ' + stateLabel
-          + ' — ' + stateTip;
+          + ' - ' + stateTip;
         const meta = '<span class="ceq-meta">'
           + '<span class="ceq-depth">' + escapeHtml(progress) + '</span>'
           + '<span class="ceq-sep">·</span>'
@@ -25692,7 +25692,7 @@
           + '<span class="ceq-state ' + stateCls + '" title="' + escapeAttr(stateTip) + '" aria-label="' + escapeAttr(stateTip) + '">' + escapeHtml(stateLabel) + '</span>';
         return '<div class="conv-evergreen-queue-header" role="button" tabindex="0"'
           + ' data-queue-name="' + escapeAttr(label) + '"'
-          + ' title="' + escapeAttr(tip + ' — click to open queue') + '">'
+          + ' title="' + escapeAttr(tip + ' - click to open queue') + '">'
           + '<span class="ceq-name">' + escapeHtml(label) + '</span>'
           + meta
           + '<button class="ceq-add-btn" type="button" data-ceq-add-queue="' + escapeAttr(label) + '" title="Add a ticket to ' + escapeAttr(label) + '" aria-label="Add ticket to ' + escapeAttr(label) + '">+</button>'
@@ -26089,7 +26089,7 @@
         : '';
       const _addObjectBtnHtml = _hasFolderChips
         ? '<span class="conv-grouping-toggle conv-add-object" data-role="ip-add-object"'
-          + ' title="Create a new Flow object — appears as an empty group you can drag sessions into">'
+          + ' title="Create a new Flow object - appears as an empty group you can drag sessions into">'
           + '<span class="grouping-opt">+ object</span>'
           + '</span>'
         : '';
@@ -26172,7 +26172,7 @@
       let _prevFolderOrder = {};
       try {
         _prevFolderOrder = JSON.parse(localStorage.getItem(_FOLDER_ORDER_KEY) || '{}');
-      } catch (_) { /* corrupt or missing — start fresh */ }
+      } catch (_) { /* corrupt or missing - start fresh */ }
       const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
         const aPinned = _minPinnedRank(a[1]);
         const bPinned = _minPinnedRank(b[1]);
@@ -26195,7 +26195,7 @@
         const _newOrder = {};
         _folderEntries.forEach(([k], i) => { _newOrder[k] = i; });
         localStorage.setItem(_FOLDER_ORDER_KEY, JSON.stringify(_newOrder));
-      } catch (_) { /* localStorage quota / disabled — degrade silently */ }
+      } catch (_) { /* localStorage quota / disabled - degrade silently */ }
       const _renderFolderEntry = ([folder, cards]) => {
         const hue = (cards[0].folder_chip_hue | 0);
         const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
@@ -26229,7 +26229,7 @@
     } else {
       _activeRowsHtml = _flatItemsWithSeparators(_visibleSessionConvs, _gcItems, { lifecycleContext: 'active', suppressFolderChip: _isSpecificFolderFilter });
     }
-    _nyaDetailsForRows = false;  // In-progress rows done — no inline NYA elsewhere
+    _nyaDetailsForRows = false;  // In-progress rows done - no inline NYA elsewhere
     if (!_visibleSessionConvs.length) {
       // Group chats are already in _activeRowsHtml (interleaved by
       // _flatItemsWithSeparators / the by-folder merge), so when chats
@@ -26257,7 +26257,7 @@
         + ' role="button" tabindex="0"'
         + ' title="' + _ipHiddenCount + ' ' + _hiddenUnit + (_ipHiddenCount === 1 ? '' : 's') + ' older than ' + _winLabel + ' are hidden by the window filter. Click to show All.">'
         + '+ ' + _ipHiddenCount + ' older ' + _hiddenUnit + (_ipHiddenCount === 1 ? '' : 's') + ' hidden by ' + _winLabel
-        + ' — <span class="conv-inprogress-window-footer-cta">show All</span>'
+        + ' - <span class="conv-inprogress-window-footer-cta">show All</span>'
         + '</div>';
     }
     // In progress section: every row that's not a backlog card or archived.
@@ -26462,7 +26462,7 @@
         let _prevGhOrder = {};
         try {
           _prevGhOrder = JSON.parse(localStorage.getItem(_GH_ORDER_KEY) || '{}');
-        } catch (_) { /* corrupt — start fresh */ }
+        } catch (_) { /* corrupt - start fresh */ }
         const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
           const aPinned = _minPinnedRank(a[1]);
           const bPinned = _minPinnedRank(b[1]);
@@ -26755,7 +26755,7 @@
         + ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
         + ' data-gc-topic="' + escapeHtml(gc.topic || '') + '"'
         + ' data-gc-mode="' + escapeHtml(gc.mode || 'topic') + '"'
-        + ' title="Archived group chat — click to open reader">'
+        + ' title="Archived group chat - click to open reader">'
         +   '<span class="archive-row-gc-icon" title="Group chat">💬</span>'
         +   '<span class="archive-row-gc-topic">' + topic + '</span>'
         +   partLabel
@@ -27380,7 +27380,7 @@
             })
           ));
         } catch (err) {
-          showOpToast('Lane move failed — row stays put (' + err.message + ')', 'error');
+          showOpToast('Lane move failed - row stays put (' + err.message + ')', 'error');
           return;
         }
         rows.forEach(({ row, sid }) => {
@@ -28040,7 +28040,7 @@
         // Refuse if target is a descendant of dragged (would loop).
         let n = parent;
         for (let hop = 0; hop < 16 && n; hop++) {
-          if (n === dragged) { showOpToast('That would make a loop — not nesting.', 'error'); return false; }
+          if (n === dragged) { showOpToast('That would make a loop - not nesting.', 'error'); return false; }
           n = flowNodeParents[n];
         }
         if (flowNodeParents[dragged] === parent) return false; // already there
@@ -28653,7 +28653,7 @@
         if (item) {
           item.classList.toggle('is-coo-tracked', on);
           const wrap = cb.closest('.coo-track');
-          if (wrap) wrap.title = on ? 'COO is tracking this session — click to stop' : 'Track with COO';
+          if (wrap) wrap.title = on ? 'COO is tracking this session - click to stop' : 'Track with COO';
         }
       });
     });
@@ -28671,7 +28671,7 @@
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ session_id: sid, path: '' }),
           });
-        } catch (_) { /* swallow — UI refresh below will surface failure */ }
+        } catch (_) { /* swallow - UI refresh below will surface failure */ }
         await refreshArchiveData();
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
@@ -28957,7 +28957,7 @@
           ? ('issue-' + issueNum)
           : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
         const prompt = issueNum
-          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          ? 'Fix issue #' + issueNum + ' - ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
         const spawnRepoPath = spawnCwd || repoPathForIssueNumber(issueNum);
         const spawnKey = issueNum ? (_issueStartKey(issueNum, spawnRepoPath) || ('issue-' + issueNum)) : sessionName;
@@ -29035,7 +29035,7 @@
             { session_id: sessionId, branch: branchName, pr_number: prNumber, pr_url: prUrl, repo_path: rowRepoPath(c) || '' });
           if (data.ok) {
             if (data.via === 'session') {
-              showOpToast('Asked session to merge ' + target + ' — see chat');
+              showOpToast('Asked session to merge ' + target + ' - see chat');
               selectConversation(convId);
             } else {
               if (data.archived && c) {
@@ -29836,7 +29836,7 @@
           const next = {};
           sorted.forEach((c, i) => { const k = idOf(c); if (k) next[k] = i; });
           localStorage.setItem(_ROW_ORDER_KEY, JSON.stringify(next));
-        } catch (_) { /* quota/disabled — degrade to no hysteresis */ }
+        } catch (_) { /* quota/disabled - degrade to no hysteresis */ }
       }
       return sorted;
     }
@@ -30333,7 +30333,7 @@
             ? _uxFixesQueueProgressForRow(row) : null;
           if (prog) {
             const lbl = (prog.kind === 'done' ? '✓ ' : '') + '(' + prog.current + '/' + prog.total + ')';
-            uxBadge = '<span class="ccc-breadcrumb-ux" title="UX-fixes queue worker — '
+            uxBadge = '<span class="ccc-breadcrumb-ux" title="UX-fixes queue worker - '
               + (prog.kind === 'done' ? 'last fixed' : 'working') + ' ' + escapeAttr(prog.ref || '') + '">'
               + '✍️ UX ' + escapeHtml(lbl) + '</span>';
           }
@@ -30414,7 +30414,7 @@
           titlebar.appendChild(sizeEl);
         }
         sizeEl.textContent = formatSize(rawSize);
-        sizeEl.title = rawSize.toLocaleString() + ' bytes — JSONL transcript size';
+        sizeEl.title = rawSize.toLocaleString() + ' bytes - JSONL transcript size';
       } else if (sizeEl) {
         sizeEl.remove();
       }
@@ -30424,7 +30424,7 @@
       if (railSizeEl) {
         if (rawSize > 0) {
           railSizeEl.textContent = 'Transcript: ' + formatSize(rawSize);
-          railSizeEl.title = rawSize.toLocaleString() + ' bytes — JSONL transcript size';
+          railSizeEl.title = rawSize.toLocaleString() + ' bytes - JSONL transcript size';
           railSizeEl.hidden = false;
         } else {
           railSizeEl.textContent = '';
@@ -30663,7 +30663,7 @@
       // which reads as vague/alarming.
       if (/no answer was provided in claude command center within the wait window/i.test(rawErr)) {
         title = 'A question went unanswered';
-        detail = 'The agent asked you a question, but no answer arrived before its wait window closed — so it continued with a sensible default. Reply below to steer it if that default was wrong.';
+        detail = 'The agent asked you a question, but no answer arrived before its wait window closed - so it continued with a sensible default. Reply below to steer it if that default was wrong.';
       } else {
         title = 'This session hit an error';
         detail = rawErr.slice(0, 220);
@@ -30681,7 +30681,7 @@
       const lbl = lastNode.querySelector('.tcg-label');
       const action = lbl ? (lbl.textContent || '').trim() : '';
       detail = (action ? 'Last action: ' + action + '. ' : '')
-        + 'No final response was produced — type below to resume it.';
+        + 'No final response was produced - type below to resume it.';
     }
     if (!kind) return;
 
@@ -31597,7 +31597,7 @@
             renderSidebar(conversationsData);
           }
         }
-      } catch (_) { /* render is a courtesy — never block detail render on failure */ }
+      } catch (_) { /* render is a courtesy - never block detail render on failure */ }
       const labels = (issue.labels || []).map(l => '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(139,148,158,0.2);color:var(--text-muted);margin-right:6px;">' + escapeHtml(l.name || '') + '</span>').join('');
       const created = issue.createdAt ? new Date(issue.createdAt).toLocaleString() : '';
       const url = issue.url || '';
@@ -31896,7 +31896,7 @@
       _selClearView.classList.remove('is-video-cleared');
     }
     _firstUserMsgRendered = false;
-    _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
+    _dynamicAskState = null;  // sticky-header scroll tracker - repopulated when the new sticky is built
     _currentToolGroup = null;
     _currentToolCount = 0;
     // Reset replay state and hide the button while the new conv loads. Only
@@ -32964,7 +32964,7 @@
           + ' role="button" tabindex="0"'
           + ' data-drain-queue="' + escapeAttr(project) + '"'
           + ' data-drain-on="' + (autoDrain ? '1' : '0') + '"'
-          + ' title="' + (autoDrain ? 'Auto-drain is on — click to disable' : 'Auto-drain is off — click to enable') + '">'
+          + ' title="' + (autoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable') + '">'
           + 'drain&nbsp;<span class="fq-health-drain-val">' + (autoDrain ? 'on' : 'off') + '</span>'
           + '</span>';
         // Claim-types restriction control: click-cycles all → bug → feature.
@@ -32977,10 +32977,10 @@
           + ' role="button" tabindex="0"'
           + ' data-claim-queue="' + escapeAttr(project) + '"'
           + ' data-claim-types="' + escapeAttr(JSON.stringify(claimTypes || [])) + '"'
-          + ' title="Claim filter — click to cycle all / bug / feature">'
+          + ' title="Claim filter - click to cycle all / bug / feature">'
           + '<span class="fq-health-type-val">' + escapeHtml(_claimLabel(claimTypes)) + '</span>'
           + '</span>';
-        const delTitle = depth > 0 ? ('Delete queue — drain ' + depth + ' open item(s) first') : ('Delete queue ' + project);
+        const delTitle = depth > 0 ? ('Delete queue - drain ' + depth + ' open item(s) first') : ('Delete queue ' + project);
         const delBtn = '<button class="fq-health-del' + (depth > 0 ? ' is-disabled' : '') + '"'
           + ' data-del-queue="' + escapeAttr(project) + '" data-depth="' + depth + '"'
           + ' title="' + escapeAttr(delTitle) + '" aria-label="' + escapeAttr(delTitle) + '">×</button>';
@@ -32995,7 +32995,7 @@
         return '<div class="fq-health-group">'
           + '<div class="fq-health-row" data-fq-project="' + escapeAttr(project) + '"'
           + ' role="button" tabindex="0"'
-          + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' — click to scope queue') + '">'
+          + ' title="' + escapeAttr(project + ': ' + depth + ' open, oldest ' + age + ' - click to scope queue') + '">'
           + delBtn
           + configBtn
           + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
@@ -33218,7 +33218,7 @@
     $sel.innerHTML = opts.join('');
     $sel.value = override || 'AUTO';
     $sel.title = override
-      ? ('Queue pinned to ' + override + ' for this session — pick Auto to follow the repo')
+      ? ('Queue pinned to ' + override + ' for this session - pick Auto to follow the repo')
       : ('Showing ' + (currentScope || 'all') + ' (from this session’s repo)');
   }
   function _uxqEmptyHtml(project, totalCount) {
@@ -33499,11 +33499,11 @@
     const sideHtml =
       '<div class="uxq-td-pg">'
       + '<div class="uxq-td-pg-label">Properties</div>'
-      + _propSel('Priority', 'priority',   [['','—'],['p0','p0 — urgent'],['p1','p1'],['p2','p2'],['p3','p3']], item.priority || '')
-      + _propSel('Type', 'type',           [['','—'],['feature','feature'],['bug','bug']], item.type || '')
-      + _propSel('Readiness', 'readiness', [['','—'],['shovel-ready','shovel-ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping']], item.readiness || '')
-      + _propSel('Value', 'value',         [['','—'],['H','H — High'],['M','M — Med'],['L','L — Low']], item.value || '')
-      + _propSel('Confidence', 'confidence',[['','—'],['H','H — High'],['M','M — Med'],['L','L — Low']], item.confidence || '')
+      + _propSel('Priority', 'priority',   [['','-'],['p0','p0 - urgent'],['p1','p1'],['p2','p2'],['p3','p3']], item.priority || '')
+      + _propSel('Type', 'type',           [['','-'],['feature','feature'],['bug','bug']], item.type || '')
+      + _propSel('Readiness', 'readiness', [['','-'],['shovel-ready','shovel-ready'],['needs-spec','needs-spec'],['needs-shaping','needs-shaping']], item.readiness || '')
+      + _propSel('Value', 'value',         [['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.value || '')
+      + _propSel('Confidence', 'confidence',[['','-'],['H','H - High'],['M','M - Med'],['L','L - Low']], item.confidence || '')
       + '</div>'
       + '<div class="uxq-td-pg">'
       + '<div class="uxq-td-pg-label">Assignment</div>'
@@ -33558,7 +33558,7 @@
     const commentSectionHtml =
       '<div class="uxq-td-sec uxq-td-comment-sec">'
       + '<div class="uxq-td-sec-label">Add comment</div>'
-      + '<textarea class="uxq-td-comment-input" rows="2" placeholder="Log an update — not a resolution" aria-label="Add a comment"></textarea>'
+      + '<textarea class="uxq-td-comment-input" rows="2" placeholder="Log an update - not a resolution" aria-label="Add a comment"></textarea>'
       + '<div class="uxq-reopen-row">'
       + '<button type="button" class="ann-btn uxq-td-comment-confirm">Add comment</button>'
       + '</div>'
@@ -33797,7 +33797,7 @@
           });
           const d = await res.json().catch(() => ({}));
           if (res.ok && d.ok) {
-            showOpToast('Answered — block cleared', 'success');
+            showOpToast('Answered - block cleared', 'success');
             _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
             _renderQueuePanel(); close();
           } else {
@@ -33920,7 +33920,7 @@
         if (it.type) c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '" title="' + escapeAttr(it.type) + '">' + escapeHtml(_typeShort[it.type] || it.type) + '</span>');
         if (it.priority) c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
         if (it.readiness) c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
-        if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '–') + '/' + escapeHtml(it.confidence || '–') + '</span>');
+        if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '-') + '/' + escapeHtml(it.confidence || '-') + '</span>');
         return c.length ? '<div class="fq-chips">' + c.join('') + '</div>' : '';
       };
       // Per-row "drain once" button (CCC-437): only on non-auto-drain queues
@@ -33956,7 +33956,7 @@
           : '';
         const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
         const runOnceBtn = (!autoDrainQueue && status === 'open')
-          ? '<button class="fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once — spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
+          ? '<button class="fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once - spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
           : '';
         const ageSrc = status === 'closed'
           ? (it.closed_at || it.updated_at || it.created_at)
@@ -33972,13 +33972,13 @@
           + runOnceBtn
           + '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>'
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
-          + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed — unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
+          + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
       const historyPagerHtml = historyOrder && rows.length > _UXQ_HISTORY_PAGE_SIZE
         ? '<div class="fq-history-pager">'
           + '<button type="button" data-uxq-history-page="-1"' + (_uxqHistoryPage === 0 ? ' disabled' : '') + '>Newer</button>'
-          + '<span>' + (historyStart + 1) + '–' + Math.min(historyEnd, rows.length) + ' of ' + rows.length + '</span>'
+          + '<span>' + (historyStart + 1) + '-' + Math.min(historyEnd, rows.length) + ' of ' + rows.length + '</span>'
           + '<button type="button" data-uxq-history-page="1"' + (_uxqHistoryPage >= historyPageCount - 1 ? ' disabled' : '') + '>Older</button>'
           + '</div>'
         : '';
@@ -34218,7 +34218,7 @@
         const queue = btn.getAttribute('data-del-queue');
         const depth = Number(btn.getAttribute('data-depth')) || 0;
         if (depth > 0) {
-          showOpToast('Cannot delete ' + queue + ' — ' + depth + ' open item(s), drain it first', 'error');
+          showOpToast('Cannot delete ' + queue + ' - ' + depth + ' open item(s), drain it first', 'error');
           return;
         }
         if (!confirm('Delete queue ' + queue + '? This removes it from the queue panel.')) return;
@@ -34891,7 +34891,7 @@
 
     if (data && data.truncated) {
       footer.hidden = false;
-      footer.textContent = 'Showing first 500 — conversation contains more.';
+      footer.textContent = 'Showing first 500 - conversation contains more.';
     } else {
       footer.hidden = true;
       footer.textContent = '';
@@ -35455,7 +35455,7 @@
           const div = document.createElement('div');
           div.className = 'stream-block-tool';
           div.dataset.renderTs = nowStamp();
-          const summary = b.summary ? ' — ' + b.summary : '';
+          const summary = b.summary ? ' - ' + b.summary : '';
           const toolName = b.name === 'AskUserQuestion' ? 'Question' : (b.name || 'tool');
           div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
             + escapeHtml(toolName) + '</span>'
@@ -36398,7 +36398,7 @@
     // paths were swapped for <img> tags); fall back to textContent for
     // bubbles that pre-date the data-raw-text attr.
     const text = msgEl ? ((msgEl.dataset && msgEl.dataset.rawText) || msgEl.textContent || '').trim() : '';
-    if (!text) {  // image-only message — fall back rather than going blank
+    if (!text) {  // image-only message - fall back rather than going blank
       _dynAskApply(0, items);
       return;
     }
@@ -36552,7 +36552,7 @@
     if (body) {
       html += '<div class="assistant-text" dir="auto" style="font-size:14px;line-height:1.55;white-space:pre-wrap;">' + escapeHtml(body) + '</div>';
     }
-    html += '<div style="margin-top:20px;color:var(--text-muted);font-size:13px;">No conversation yet — tap <strong>Start session</strong> on the card to spawn one.</div>';
+    html += '<div style="margin-top:20px;color:var(--text-muted);font-size:13px;">No conversation yet - tap <strong>Start session</strong> on the card to spawn one.</div>';
     html += '</div>';
     $view.innerHTML = html;
     $view.scrollTop = 0;
@@ -36694,20 +36694,20 @@
         kindTitle = 'git worktree' + inferTitle;
       } else {
         kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
-        kindTitle = 'shared clone — main repo working tree' + inferTitle;
+        kindTitle = 'shared clone - main repo working tree' + inferTitle;
       }
     } else if (w.is_worktree) {
       kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
       kindTitle = 'worktree (not the shared clone)';
     } else if (w.is_repo) {
       kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
-      kindTitle = 'shared clone — main repo working tree';
+      kindTitle = 'shared clone - main repo working tree';
     } else if (w.exists) {
       kindCls = 'wp-kind-other'; kindLabel = 'not a git repo';
-      kindTitle = "cwd exists but is not a git repo — Claude's git commands will fail unless it shells into a repo";
+      kindTitle = "cwd exists but is not a git repo - Claude's git commands will fail unless it shells into a repo";
     } else {
-      kindCls = 'wp-kind-other'; kindLabel = '📁 cwd missing — set folder';
-      kindTitle = "cwd does not exist on disk — click to point this session at the right folder";
+      kindCls = 'wp-kind-other'; kindLabel = '📁 cwd missing - set folder';
+      kindTitle = "cwd does not exist on disk - click to point this session at the right folder";
       setCwdSid = _workspaceSessionIdByPane[paneId] || '';
     }
     if (setCwdSid) {
@@ -36781,14 +36781,14 @@
           const draftCls = wt.pr.isDraft ? ' wt-tag-pr-draft' : '';
           const prTitle = (wt.pr.title || '').trim();
           const tipBase = (wt.pr.isDraft ? 'Draft PR' : 'Open PR') + ' #' + wt.pr.number;
-          const tip = prTitle ? tipBase + ' — ' + prTitle : tipBase;
+          const tip = prTitle ? tipBase + ' - ' + prTitle : tipBase;
           tags.push('<a class="wt-tag wt-tag-pr' + draftCls + '" href="' + escapeHtml(prUrl)
             + '" target="_blank" rel="noopener" title="' + escapeHtml(tip) + '">'
             + (wt.pr.isDraft ? 'draft ' : '') + 'PR #' + wt.pr.number + '</a>');
         }
         const branchHtml = branch
           ? '<span class="wt-row-branch"><span class="wt-icon">⎇</span>' + escapeHtml(branch) + '</span>'
-          : '<span class="wt-row-branch" style="opacity:0.5;">—</span>';
+          : '<span class="wt-row-branch" style="opacity:0.5;">-</span>';
         const reason = (wt.lock_reason || '').trim();
         const reasonHtml = (reason && !wt.is_agent)
           ? '<div class="wt-lock-reason">' + escapeHtml(reason) + '</div>'
@@ -36937,7 +36937,7 @@
       $btn.title = agentN > 0
         ? baseTitle + ' (' + agentN + ' subagent worktree' + (agentN === 1 ? '' : 's') + ' currently active)'
         : baseTitle;
-    } catch (_) { /* network blip — leave the badge state alone */ }
+    } catch (_) { /* network blip - leave the badge state alone */ }
   }
   if (!READER_ONLY_POPOUT) {
     refreshWorktreesBadge();
@@ -36958,7 +36958,7 @@
     const cache = {};  // range -> stats payload
 
     function compactNum(n) {
-      if (n == null) return '—';
+      if (n == null) return '-';
       n = Number(n) || 0;
       if (n < 1000) return String(n);
       if (n < 10_000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
@@ -36982,8 +36982,8 @@
         ['Active days',    compactNum(s.active_days)],
         ['Current streak', (s.current_streak || 0) + 'd'],
         ['Longest streak', (s.longest_streak || 0) + 'd'],
-        ['Peak hour',      s.peak_hour || '—'],
-        ['Favorite model', s.favorite_model || '—', true],
+        ['Peak hour',      s.peak_hour || '-'],
+        ['Favorite model', s.favorite_model || '-', true],
       ];
       return '<div class="stats-cards">' + cards.map(c => {
         const valClass = c[2] ? 'value muted' : 'value';
@@ -37377,11 +37377,11 @@
       );
       const shortModel = displayModel.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
       const modelTip = (isSyntheticModel
-          ? engine + ' (model unknown — latest event was synthesized by the client; the next real turn will populate this)'
+          ? engine + ' (model unknown - latest event was synthesized by the client; the next real turn will populate this)'
           : displayModel)
-        + (isOneM ? '\n(1M context window — anthropic-beta: context-1m)' : '')
+        + (isOneM ? '\n(1M context window - anthropic-beta: context-1m)' : '')
         + (currentReasoningEffort ? '\nReasoning effort: ' + currentReasoningEffort : '')
-        + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued — applies on the session\'s next CCC-resumed ask)' : '')
+        + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
         + (engine === 'antigravity' ? '' : '\n\nClick to change model');
       const effortInner = currentReasoningEffort
         ? ' <span class="wp-model-effort">' + escapeHtml(currentReasoningEffort) + '</span>'
@@ -37473,7 +37473,7 @@
         + '  Cache write:  ' + fmt(breakdown.cache_creation || 0) + '  (' + (u.total_cache_creation_tokens || 0).toLocaleString() + ' tok)\n'
         + '  Cache read:   ' + fmt(breakdown.cache_read || 0) + '  (' + (u.total_cache_read_tokens || 0).toLocaleString() + ' tok)\n'
         + '  Output:       ' + fmt(breakdown.output || 0) + '  (' + (u.total_output_tokens || 0).toLocaleString() + ' tok)\n\n'
-        + 'Subscription users (Claude Pro/Max) pay flat — this is the\n'
+        + 'Subscription users (Claude Pro/Max) pay flat - this is the\n'
         + 'list-price equivalent if metered against the API directly.';
       costPill = ' <span class="wp-cost-pill" title="' + escapeHtml(costTip) + '">' + fmt(cost) + '</span>';
     }
@@ -38039,7 +38039,7 @@
     if (engine === 'claude') {
       html = _buildClaudeModelMenuHtml(currentNorm, currentIs1M);
     } else {
-      html = '<div class="mp-header">Switch model — ' + escapeHtml(engine) + '</div>';
+      html = '<div class="mp-header">Switch model - ' + escapeHtml(engine) + '</div>';
       options.forEach((opt) => {
         const isActive = _normalizeModelId(opt.id) === currentNorm;
         const oneM = !!opt.oneM;
@@ -39198,7 +39198,7 @@
       if (ev.turn_failed_error) {
         return {
           kind: 'error',
-          label: 'Stopped — turn failed',
+          label: 'Stopped - turn failed',
           detail: String(ev.turn_failed_error).trim()
             + ' The turn did not complete; use the wake/follow-up box below to retry.',
         };
@@ -39218,7 +39218,7 @@
     if (exhausted) {
       return {
         kind: 'exhausted',
-        label: 'Stopped — no tokens remaining',
+        label: 'Stopped - no tokens remaining',
         detail: (errText ? errText.slice(0, 200) : 'Token / subscription limit reached.')
           + ' Top up or wait for the limit to reset, then resume.',
       };
@@ -39226,7 +39226,7 @@
     if (isError) {
       return {
         kind: 'error',
-        label: 'Stopped — error',
+        label: 'Stopped - error',
         detail: errText.slice(0, 240) || (sub ? sub.replace(/_/g, ' ') : ''),
       };
     }
@@ -41038,7 +41038,7 @@
           // the transcript.
           const _spText = String(ev.text || '');
           const _spChars = Number(ev.char_count || _spText.length) || 0;
-          const _spTip = 'The system prompt Hermes injected into this session — '
+          const _spTip = 'The system prompt Hermes injected into this session - '
             + 'persona, skills, memory and per-conversation context. Read-only.';
           div.classList.add('system-hermes', 'system-hermes-prompt');
           div.innerHTML = '<details class="hermes-sysprompt-details">'
@@ -41104,8 +41104,8 @@
           }
           compactText += ' (' + triggerLabel + (duration ? ', ' + duration : '') + ')';
           const compactTip = trigger === 'auto'
-            ? 'The conversation neared its context-window limit, so Claude automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk — only the model’s working memory was condensed.'
-            : 'The conversation history was summarized into a short recap to free up context-window space (/compact). The full transcript on disk is untouched — only the model’s working memory was condensed.';
+            ? 'The conversation neared its context-window limit, so Claude automatically summarized the older history into a short recap and continued from there. Nothing is lost from the transcript on disk - only the model’s working memory was condensed.'
+            : 'The conversation history was summarized into a short recap to free up context-window space (/compact). The full transcript on disk is untouched - only the model’s working memory was condensed.';
           div.classList.add('system-compact');
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
@@ -41132,7 +41132,7 @@
             + tsSpan(ev.ts)
             + (_ftMeta ? '<span class="hermes-failed-meta">' + _ftMeta + '</span>' : '')
             + (_ftMsg ? '<div class="hermes-failed-detail">' + escapeHtml(_ftMsg) + '</div>' : '')
-            + (_ftReq ? '<div class="hermes-failed-reqid" title="Anthropic request id — quote this to support">'
+            + (_ftReq ? '<div class="hermes-failed-reqid" title="Anthropic request id - quote this to support">'
                 + escapeHtml(_ftReq) + '</div>' : '');
         } else if (ev.subtype === 'codex_coordination') {
           // Durable desktop↔CCC coordination note (external turn started/ended,
@@ -41378,7 +41378,7 @@
                       const lbl = (o && typeof o === 'object') ? (o.label || '') : String(o || '');
                       const desc = (o && typeof o === 'object') ? (o.description || '') : '';
                       const inner = '<span class="ask-user-option-label">' + escapeHtml(lbl) + '</span>'
-                        + (desc ? '<span class="ask-user-option-desc"> — ' + escapeHtml(desc) + '</span>' : '');
+                        + (desc ? '<span class="ask-user-option-desc"> - ' + escapeHtml(desc) + '</span>' : '');
                       if (_askPickable) {
                         return '<li><button type="button" class="ask-user-option-pick"'
                           + ' data-ask-q="' + qIdx + '" data-ask-opt="' + oIdx + '"'
@@ -41434,7 +41434,7 @@
               // non-expandable marker so the turn stays visible as a record that
               // thinking occurred — with a hint explaining why there's no body
               // (CCC-454: a bare "thought" read as a rendering bug).
-              blockParts.push('<div class="thinking-block thinking-block-silent" title="The model thought here, but the reasoning text was not saved to the transcript (only an encrypted signature) — there are no details to show."><span class="thinking-toggle">💭 thought</span> <span class="thinking-silent-note">(reasoning not saved to transcript)</span></div>');
+              blockParts.push('<div class="thinking-block thinking-block-silent" title="The model thought here, but the reasoning text was not saved to the transcript (only an encrypted signature) - there are no details to show."><span class="thinking-toggle">💭 thought</span> <span class="thinking-silent-note">(reasoning not saved to transcript)</span></div>');
               // Deliberately NOT hasNonTool = true here: a silent-thought
               // marker carries zero real information (no reasoning text, no
               // tool, no answer) — it should NOT block a turn that also has
@@ -42317,7 +42317,7 @@
     let title = '';
     if (!st.exists) {
       label = 'No index';
-      title = 'No history index yet. Click to build one — runs in the background.';
+      title = 'No history index yet. Click to build one - runs in the background.';
     } else if (st.indexing) {
       label = 'Indexing…';
       title = 'Indexing in progress: scanning JSONL transcripts for new messages.';
@@ -42416,7 +42416,7 @@
           + '<div>This may take a few minutes for the first run. Watch the topbar pill for progress.</div>';
         setTimeout(() => $oobe.remove(), 6000);
       } else {
-        $oobe.querySelector('[data-role="hi-enable"]').textContent = 'Failed — retry';
+        $oobe.querySelector('[data-role="hi-enable"]').textContent = 'Failed - retry';
       }
     });
     $oobe.querySelector('[data-role="hi-dismiss"]').addEventListener('click', () => {
@@ -43103,7 +43103,7 @@
         if (caretStart != null && caretEnd != null) {
           $convSearch.setSelectionRange(caretStart, caretEnd);
         }
-      } catch (_) { /* defensive — focus rarely throws but unsafe to swallow */ }
+      } catch (_) { /* defensive - focus rarely throws but unsafe to swallow */ }
     }
   }
   function _scheduleConvSearchRender() {
@@ -43177,7 +43177,7 @@
     if (!issues.length) {
       $issuesView.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;line-height:1.6;">'
         + 'No GitHub issues found.<br><br>'
-        + 'If this repo just has no open issues, that\'s fine — they\'ll show up here when you create one.<br><br>'
+        + 'If this repo just has no open issues, that\'s fine - they\'ll show up here when you create one.<br><br>'
         + 'If you expected to see issues, install <a href="https://cli.github.com/" target="_blank" rel="noopener" style="color:var(--accent);">gh</a> and run <code style="background:#1a1d23;padding:2px 6px;border-radius:3px;">gh auth login</code> from this repo, then refresh.'
         + '</div>';
       return;
@@ -43549,7 +43549,7 @@
       + actionsHtml
       + waitingHtml
       + (isStalled
-          ? '<div class="ship-log-line warn"><span class="ship-log-txt">⚠ No progress for a while — the run looks interrupted (the CCC server may have restarted). Close this and run Push all again.</span></div>'
+          ? '<div class="ship-log-line warn"><span class="ship-log-txt">⚠ No progress for a while - the run looks interrupted (the CCC server may have restarted). Close this and run Push all again.</span></div>'
           : '')
       + '<div class="ship-log-body" id="shipLogBody">' + (lines || '<div class="ship-log-line info"><span class="ship-log-txt">…</span></div>') + '</div>'
       + '</div>';
@@ -43640,7 +43640,7 @@
         : phase === 'deploy_error' ? 'Deploy failed'
         : phase === 'diverged' ? 'Diverged'
         : 'Failed';
-      title = ((job && job.message) || '') + ' — click to view log';
+      title = ((job && job.message) || '') + ' - click to view log';
     } else if (data && data.dirty === true) {
       cls += ' is-dirty';
       txt = 'dirty';
@@ -43894,7 +43894,7 @@
       setLocalhostPill({
         dotClass: '',
         label: 'localhost',
-        title: 'Pick a repo first — the localhost pill needs to know which directory to look in.',
+        title: 'Pick a repo first - the localhost pill needs to know which directory to look in.',
         href: '',
       });
       return;
@@ -43949,7 +43949,7 @@
       setLocalhostPill({
         dotClass: 'error',
         label: 'localhost: bad response',
-        title: 'CCC server returned non-JSON for /api/nextjs/status — likely an old build. Restart it.',
+        title: 'CCC server returned non-JSON for /api/nextjs/status - likely an old build. Restart it.',
         href: '',
       });
       return;
@@ -43962,7 +43962,7 @@
         dotClass: '',
         label: 'No dev server',
         title: 'No dev server in ' + (_localhostTargetPath || 'this folder') +
-               ' — needs a `dev` script in package.json (Vite/Next/CRA/Astro/…) ' +
+               ' - needs a `dev` script in package.json (Vite/Next/CRA/Astro/…) ' +
                'or a next.config.*. Click for details.',
         href: '',
       });
@@ -44126,7 +44126,7 @@
         try {
           d = await res.json();
         } catch (_e) {
-          d = { ok: false, error: 'HTTP ' + res.status + ' — non-JSON reply (restart CCC?)' };
+          d = { ok: false, error: 'HTTP ' + res.status + ' - non-JSON reply (restart CCC?)' };
         }
       } catch (e) {
         _localhostState = 'failed';
@@ -44200,7 +44200,7 @@
         hideLocalhostMenu();
         const ctx = localhostContext();
         if (!ctx.repoPath && !ctx.cwd && !ctx.sessionId) {
-          showOpToast('Pick a repo first — no dev-server context.', 'info');
+          showOpToast('Pick a repo first - no dev-server context.', 'info');
           return;
         }
         await restartLocalhostDevServer(ctx);
@@ -44640,7 +44640,7 @@
     // "N chats — <topic> · <reason> · <age>" (multiple). Reason/age
     // get filtered out cleanly if either is missing.
     const segments = [];
-    if (activeCount > 1) segments.push(activeCount + ' chats — ' + topic);
+    if (activeCount > 1) segments.push(activeCount + ' chats - ' + topic);
     else segments.push(topic);
     if (_reason) segments.push(_reason);
     if (_ageHint) segments.push(_ageHint);
@@ -44822,7 +44822,7 @@
       if ((_gcReaderPath && (_gcReaderPath === chatPath)) || (_gcReaderId && chatId && _gcReaderId === chatId)) {
         try { pollGroupChatReader(); } catch (_) {}
       }
-      showOpToast?.(paused ? 'Orchestration disabled — no more nudges' : 'Orchestration enabled');
+      showOpToast?.(paused ? 'Orchestration disabled - no more nudges' : 'Orchestration enabled');
     } catch (err) {
       showOpToast?.('Could not update group chat: ' + ((err && err.message) || 'network error'), 'error');
     }
@@ -44996,7 +44996,7 @@
         return;
       }
       try { await pollGcActive(); } catch (_) {}
-      showOpToast?.('Created "' + topic + '" — drag sessions in to add them');
+      showOpToast?.('Created "' + topic + '" - drag sessions in to add them');
       if (data.chat_path) {
         try { openGroupChatReader(data.chat_path, topic, 'topic', true, data.uuid || data.id || null); } catch (_) {}
       }
@@ -45022,7 +45022,7 @@
       }
       try { await pollGcActive(); } catch (_) {}
       const wiped = data.wiped ?? 0;
-      showOpToast?.(`Cleared ${wiped} message${wiped === 1 ? '' : 's'} — participants re-pinged`);
+      showOpToast?.(`Cleared ${wiped} message${wiped === 1 ? '' : 's'} - participants re-pinged`);
     } catch (err) {
       showOpToast?.('Could not clear: ' + ((err && err.message) || 'network error'), 'error');
     }
@@ -45646,7 +45646,7 @@
       if (state === 'done')    return '<span class="als-glyph als-done">✓</span>';
       if (state === 'running') return '<span class="als-glyph als-running">●</span>';
       if (state === 'error')   return '<span class="als-glyph als-error">!</span>';
-      if (state === 'skipped') return '<span class="als-glyph als-skipped">–</span>';
+      if (state === 'skipped') return '<span class="als-glyph als-skipped">-</span>';
       return '<span class="als-glyph als-pending">○</span>';
     };
     const escAls = (s) => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -46518,7 +46518,7 @@
         return;
       }
       const rows = visibleChecks.map(c => {
-        const tt = (c.hint && c.status !== 'ok') ? `${c.message} — ${c.hint}` : c.message;
+        const tt = (c.hint && c.status !== 'ok') ? `${c.message} - ${c.hint}` : c.message;
         return `<span class="ccc-setup-row ${c.status}" title="${escapeHtml(tt)}">
           <span class="icon">${iconFor(c.status)}</span>
           <span>${escapeHtml(c.label === 'Watched repo' ? c.message : c.label)}</span>
@@ -47390,7 +47390,7 @@
           },
         });
       }
-    } catch (_) { /* defensive — keep paste working even if the hook fails */ }
+    } catch (_) { /* defensive - keep paste working even if the hook fails */ }
   }
   [document.getElementById('nsmBody'),
    document.getElementById('kptNewSession'), document.getElementById('cpInput'),
@@ -47483,13 +47483,13 @@
           showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
         } else if (res.ok && data.ok) {
           if (data.via === 'codex-app-queued') {
-            markPendingSendQueued(pendingSend, 'Queued for Codex — will send when the running turn is ready.');
+            markPendingSendQueued(pendingSend, 'Queued for Codex - will send when the running turn is ready.');
             showOpToast('Queued for Codex.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
           } else if (data.queued) {
-            markPendingSendQueued(pendingSend, 'Queued — will send when the session finishes its current step.');
-            showOpToast('Queued — will send when the session finishes its current step.');
+            markPendingSendQueued(pendingSend, 'Queued - will send when the session finishes its current step.');
+            showOpToast('Queued - will send when the session finishes its current step.');
           } else if (data.via === 'codex-steer') {
             showOpToast('Sent to running Codex turn.');
             setTimeout(refreshConversationList, 1500);
@@ -47526,7 +47526,7 @@
               mode: 'send',
               paneId: activePaneId(),
             });
-            showOpToast('Accepted by WatchTower' + (data.transport ? ' — ' + data.transport + ' transport.' : '.'));
+            showOpToast('Accepted by WatchTower' + (data.transport ? ' - ' + data.transport + ' transport.' : '.'));
           }
         } else {
           const reason = formatInjectFailure(data, res.status);
@@ -47565,7 +47565,7 @@
       const agyCanSendNow = !isAGY || antigravityCanSend(currentSession);
       $cpSendBtn.disabled = !hasText || !currentSession.id;
       $cpSendBtn.title = isAGY && !agyCanSendNow
-        ? 'Send — runs AGY headless on this session'
+        ? 'Send - runs AGY headless on this session'
         : 'Send';
     };
     $cpSendBtn.addEventListener('click', sendToSplitTerminal);
@@ -47773,7 +47773,7 @@
     } else {
       try { sessionStorage.removeItem('ccc-updating'); } catch (_) {}
       if ($overlay) $overlay.classList.add('fade-out', 'gone');
-      showOpToast("Server didn't come back within 30s — try reloading manually", 'error');
+      showOpToast("Server didn't come back within 30s - try reloading manually", 'error');
       $updNowBtn.disabled = false;
       if ($updLaterBtn) $updLaterBtn.disabled = false;
     }
@@ -47792,7 +47792,7 @@
           }
           if ($updPill) $updPill.classList.add('visible');
         }
-      } catch (_) { /* silent — the pill just stays hidden */ }
+      } catch (_) { /* silent - the pill just stays hidden */ }
     })();
   }
 
@@ -47833,10 +47833,10 @@
       }
       if ($cccLastUpdated) {
         const formatted = formatCccUpdatedAt(d && d.last_updated);
-        $cccLastUpdated.textContent = formatted || '—';
+        $cccLastUpdated.textContent = formatted || '-';
       }
     } catch (_) {
-      if ($cccLastUpdated) $cccLastUpdated.textContent = '—';
+      if ($cccLastUpdated) $cccLastUpdated.textContent = '-';
     }
   })();
 
@@ -47857,7 +47857,7 @@
           if ($updPill) $updPill.classList.add('visible');
           updOpenModal();
         } else if (d && d.ok) {
-          showOpToast('Up to date — v' + (d.current || '?'));
+          showOpToast('Up to date - v' + (d.current || '?'));
         } else {
           showOpToast('Update check failed: ' + ((d && d.error) || 'unknown'), 'error');
         }
@@ -47915,7 +47915,7 @@
         ? `${openSum} open · ${total} queue${total === 1 ? '' : 's'}` + (stuck.length ? ` · ${stuck.length} stuck` : ' · all clear')
         : 'no queues yet';
       if (!total) {
-        $popList.innerHTML = '<div class="wt-pop-empty">WatchTower is idle — nothing queued.</div>';
+        $popList.innerHTML = '<div class="wt-pop-empty">WatchTower is idle - nothing queued.</div>';
         return;
       }
       const sorted = lastQueues.slice().sort((a, b) => {
@@ -47946,8 +47946,8 @@
           $count.hidden = true;
         }
         $badge.title = lastQueues.length
-          ? `WatchTower — ${openSum} open across ${lastQueues.length} queues` + (stuck.length ? `, ${stuck.length} stuck` : '')
-          : 'WatchTower — no queues yet';
+          ? `WatchTower - ${openSum} open across ${lastQueues.length} queues` + (stuck.length ? `, ${stuck.length} stuck` : '')
+          : 'WatchTower - no queues yet';
         if (!$pop.hidden) renderPop();
         // One brief tick per poll (not an idling loop) — see the CSS comment
         // above .is-ticking for why this replaced an `infinite` animation.
@@ -47992,7 +47992,7 @@
       title: 'Claude Fable 5 Support',
       date: 'Jun 9, 2026',
       tag: 'Models',
-      desc: '<p>CCC now supports <strong>Claude Fable 5</strong> — Anthropic\'s new top-tier model above Opus — everywhere a Claude model can be picked.</p><p>Fable 5 is the new <strong>default for spawned sessions</strong>, sits at the top of the redesigned model picker (a faithful replica of Claude Code\'s native <code>/model</code> menu, with number-key shortcuts and 1M-context variants), and live sessions can switch to it mid-conversation with one click.</p>',
+      desc: '<p>CCC now supports <strong>Claude Fable 5</strong> - Anthropic\'s new top-tier model above Opus - everywhere a Claude model can be picked.</p><p>Fable 5 is the new <strong>default for spawned sessions</strong>, sits at the top of the redesigned model picker (a faithful replica of Claude Code\'s native <code>/model</code> menu, with number-key shortcuts and 1M-context variants), and live sessions can switch to it mid-conversation with one click.</p>',
       mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--bg,#0d1117);font-size:12px;max-width:280px;"><div style="display:flex;justify-content:space-between;color:var(--text-muted);padding:2px 8px 8px;">Models <span style="font-size:10px;">⇧ ⌘ I</span></div><div style="padding:6px 8px;border-radius:5px;color:var(--text);">Fable 5 <span style="color:var(--text-muted);">· Default</span> <span style="float:right;">✓</span></div><div style="height:1px;background:var(--border);margin:5px 4px;"></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text);"><span>Fable 5</span><span style="color:var(--text-muted);">1</span></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text);"><span>Opus 4.8</span><span style="color:var(--text-muted);">2</span></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text);"><span>Opus 4.8 (1M context)</span><span style="color:var(--text-muted);">3</span></div><div style="display:flex;justify-content:space-between;padding:5px 8px;color:var(--text-muted);"><span>Opus 4.7 <span style="opacity:0.7;">Legacy</span></span><span>6</span></div></div>'
     },
     {
@@ -48000,23 +48000,23 @@
       title: 'Subagent Tabs',
       date: 'Jun 3, 2026',
       tag: 'Visualization',
-      desc: '<p>When the parent agent dispatches a <strong>Task</strong> tool, the subagent\'s streaming work now lives in its own dedicated tab inside the conversation pane — labeled with the Task description, color-coded purple, and isolated from the master\'s flow.</p><p>One tab per subagent. Auto-closes 30s after the Task completes if you\'ve moved on. Multiple parallel Tasks no longer flood the master view; you read each agent\'s work in its own lane.</p>',
-      mockup: '<div style="display:flex;flex-direction:column;gap:0;border-radius:6px;overflow:hidden;border:1px solid var(--border);"><div style="display:flex;gap:4px;padding:6px 12px 0;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border);font-size:11px;"><div style="padding:4px 10px;border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;color:var(--text-muted);background:rgba(255,255,255,0.03);">Master</div><div style="padding:4px 10px;border:1px solid #a57fee;border-bottom:none;border-radius:6px 6px 0 0;color:#a57fee;background:var(--bg,#0d1117);margin-bottom:-1px;">explore repo <span style="opacity:0.4;margin-left:4px;">×</span></div><div style="padding:4px 10px;border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;color:var(--text-muted);background:rgba(255,255,255,0.03);">find tests ✓</div></div><div style="padding:12px;background:var(--bg,#0d1117);"><div style="border:1px dashed rgba(165,127,238,0.35);border-left:3px solid rgba(165,127,238,0.5);background:rgba(165,127,238,0.05);border-radius:6px;padding:8px 10px;margin-left:16px;"><div style="font-size:9px;letter-spacing:0.05em;text-transform:uppercase;color:#a57fee;font-weight:600;margin-bottom:4px;">● SUBAGENT</div><div style="font-size:11px;color:var(--text);">Scanning src/services/ — found 14 modules with cic-4 references…</div></div></div></div>'
+      desc: '<p>When the parent agent dispatches a <strong>Task</strong> tool, the subagent\'s streaming work now lives in its own dedicated tab inside the conversation pane - labeled with the Task description, color-coded purple, and isolated from the master\'s flow.</p><p>One tab per subagent. Auto-closes 30s after the Task completes if you\'ve moved on. Multiple parallel Tasks no longer flood the master view; you read each agent\'s work in its own lane.</p>',
+      mockup: '<div style="display:flex;flex-direction:column;gap:0;border-radius:6px;overflow:hidden;border:1px solid var(--border);"><div style="display:flex;gap:4px;padding:6px 12px 0;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border);font-size:11px;"><div style="padding:4px 10px;border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;color:var(--text-muted);background:rgba(255,255,255,0.03);">Master</div><div style="padding:4px 10px;border:1px solid #a57fee;border-bottom:none;border-radius:6px 6px 0 0;color:#a57fee;background:var(--bg,#0d1117);margin-bottom:-1px;">explore repo <span style="opacity:0.4;margin-left:4px;">×</span></div><div style="padding:4px 10px;border:1px solid var(--border);border-bottom:none;border-radius:6px 6px 0 0;color:var(--text-muted);background:rgba(255,255,255,0.03);">find tests ✓</div></div><div style="padding:12px;background:var(--bg,#0d1117);"><div style="border:1px dashed rgba(165,127,238,0.35);border-left:3px solid rgba(165,127,238,0.5);background:rgba(165,127,238,0.05);border-radius:6px;padding:8px 10px;margin-left:16px;"><div style="font-size:9px;letter-spacing:0.05em;text-transform:uppercase;color:#a57fee;font-weight:600;margin-bottom:4px;">● SUBAGENT</div><div style="font-size:11px;color:var(--text);">Scanning src/services/ - found 14 modules with cic-4 references…</div></div></div></div>'
     },
     {
       id: 'question-relay',
       title: 'Headless Question Relay',
       date: 'Jun 3, 2026',
       tag: 'Orchestration',
-      desc: '<p>When a headless Claude session calls <code>AskUserQuestion</code>, the question now <strong>pauses the agent and surfaces in the dashboard</strong> — no more silent auto-continuation of agent questions you never saw.</p><p>The session waits for your click on one of its options; your answer is injected back as the user response and the agent resumes. Solves the recurring "questions are being continued silently" pain point.</p>',
-      mockup: '<div style="border:1px solid var(--accent,#58a6ff);border-radius:8px;padding:14px;background:rgba(88,166,255,0.06);"><div style="font-size:10px;color:var(--accent,#58a6ff);font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Agent question — strategy-session</div><div style="font-size:12px;color:var(--text);margin-bottom:10px;line-height:1.4;">Should I split the auth refactor into multiple PRs, or land it as one bundled change?</div><div style="display:flex;flex-direction:column;gap:4px;"><div style="padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;color:var(--text);background:rgba(255,255,255,0.04);">One bundled PR <span style="color:var(--text-muted);margin-left:4px;">— smaller cognitive load for reviewer</span></div><div style="padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;color:var(--text-muted);">Split by module <span style="margin-left:4px;">— easier to revert individual pieces</span></div></div></div>'
+      desc: '<p>When a headless Claude session calls <code>AskUserQuestion</code>, the question now <strong>pauses the agent and surfaces in the dashboard</strong> - no more silent auto-continuation of agent questions you never saw.</p><p>The session waits for your click on one of its options; your answer is injected back as the user response and the agent resumes. Solves the recurring "questions are being continued silently" pain point.</p>',
+      mockup: '<div style="border:1px solid var(--accent,#58a6ff);border-radius:8px;padding:14px;background:rgba(88,166,255,0.06);"><div style="font-size:10px;color:var(--accent,#58a6ff);font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Agent question - strategy-session</div><div style="font-size:12px;color:var(--text);margin-bottom:10px;line-height:1.4;">Should I split the auth refactor into multiple PRs, or land it as one bundled change?</div><div style="display:flex;flex-direction:column;gap:4px;"><div style="padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;color:var(--text);background:rgba(255,255,255,0.04);">One bundled PR <span style="color:var(--text-muted);margin-left:4px;">- smaller cognitive load for reviewer</span></div><div style="padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:11px;color:var(--text-muted);">Split by module <span style="margin-left:4px;">- easier to revert individual pieces</span></div></div></div>'
     },
     {
       id: 'antigravity-orphan-resume',
       title: 'Antigravity Orphan Resume',
       date: 'Jun 3, 2026',
       tag: 'Engine',
-      desc: '<p>AGY sessions whose conversation state file went missing (no <code>.pb</code> in CLI conversations, no app conversation file) are no longer dead-on-arrival.</p><p>CCC now runs <code>agy --conversation &lt;sid&gt; -p</code> headless against the brain transcript on disk — AGY rehydrates the conversation from the transcript and appends your new turn. Sessions that were read-only forever are talkable again.</p>',
+      desc: '<p>AGY sessions whose conversation state file went missing (no <code>.pb</code> in CLI conversations, no app conversation file) are no longer dead-on-arrival.</p><p>CCC now runs <code>agy --conversation &lt;sid&gt; -p</code> headless against the brain transcript on disk - AGY rehydrates the conversation from the transcript and appends your new turn. Sessions that were read-only forever are talkable again.</p>',
       mockup: '<div class="mockup-agy-container"><div class="mockup-agy-header"><span class="mockup-agy-badge"><span class="mockup-agy-logo"></span><span>orphan-session (no .pb)</span></span><span class="mockup-agy-status"><span class="mockup-agy-pulse"></span><span>Resumed</span></span></div><div class="mockup-agy-code">$ agy --conversation e1253fe9-… -p "ping"\n→ rehydrate from brain transcript ✓\n→ new turn appended ✓\n→ .db state rebuilt ✓</div></div>'
     },
     {
@@ -48040,7 +48040,7 @@
       title: 'Cursor Agent Support',
       date: 'Jun 1, 2026',
       tag: 'Engine',
-      desc: '<p><strong>Cursor joins Claude, Codex, and Antigravity as a first-class engine.</strong> CCC discovers <code>cursor-agent</code> transcripts, spawns headless Cursor runs, resumes existing chats, and shows Cursor rows + logs in the dashboard with live indicators.</p><p>The integration is two-way: sessions CCC spawns also <strong>show up in the Cursor IDE\'s own agent view</strong> — CCC writes the workspace metadata under <code>~/.cursor/chats/</code> and backfills recent sessions on startup.</p>',
+      desc: '<p><strong>Cursor joins Claude, Codex, and Antigravity as a first-class engine.</strong> CCC discovers <code>cursor-agent</code> transcripts, spawns headless Cursor runs, resumes existing chats, and shows Cursor rows + logs in the dashboard with live indicators.</p><p>The integration is two-way: sessions CCC spawns also <strong>show up in the Cursor IDE\'s own agent view</strong> - CCC writes the workspace metadata under <code>~/.cursor/chats/</code> and backfills recent sessions on startup.</p>',
       mockup: '<div style="font-family:var(--mono,monospace);font-size:11px;line-height:1.6;color:#a6accd;padding:12px 14px;background:rgba(0,0,0,0.25);border-radius:6px;border-left:3px solid var(--accent,#58a6ff);"><div style="color:var(--text);margin-bottom:6px;">▸ cursor-agent · <span style="color:var(--accent,#58a6ff);">refactor-auth</span> &nbsp;<span style="color:#3dd68c;">● live</span></div><div>$ cursor-agent -p "extract the token service"</div><div>&nbsp;&nbsp;↳ transcript discovered <span style="color:#3dd68c;">✓</span></div><div>&nbsp;&nbsp;↳ row + logs in dashboard <span style="color:#3dd68c;">✓</span></div><div>&nbsp;&nbsp;↳ visible in Cursor IDE agent view <span style="color:#3dd68c;">✓</span></div></div>'
     },
     {
@@ -48923,7 +48923,7 @@
         (trunc.length
           ? '<div class="ann-ux-warn">⚠ Stored truncated: ' + escapeHtml(trunc.join(', ')) + '</div>'
           : '') +
-        '<div class="ann-ux-preview-label">Exactly what the worker receives — edit before submitting if needed:</div>' +
+        '<div class="ann-ux-preview-label">Exactly what the worker receives - edit before submitting if needed:</div>' +
         '<textarea class="ann-ux-preview-text" rows="14" spellcheck="false"></textarea>' +
         '<div class="ann-ux-preview-actions">' +
           '<button type="button" class="ann-btn" data-ux-copy>Copy</button>' +
@@ -49146,7 +49146,7 @@
           // whenever Screen Recording is granted to Claude Command
           // Center in System Settings → Privacy → Screen Recording.
           errEl.innerHTML = 'In-page tab capture is not available in this app shell. '
-            + 'Use the <strong>Screen</strong> button at the top right instead — '
+            + 'Use the <strong>Screen</strong> button at the top right instead - '
             + 'it triggers the macOS area screenshot picker (granted via '
             + '<em>System Settings → Privacy → Screen Recording → Claude Command Center</em>).';
           errEl.hidden = false;
@@ -49160,8 +49160,8 @@
           } else {
             const denied = annTabCaptureLastError && annTabCaptureLastError.name === 'NotAllowedError';
             errEl.textContent = denied
-              ? 'Tab capture was blocked — allow it in the browser prompt and choose this tab.'
-              : 'Tab capture failed — try again.';
+              ? 'Tab capture was blocked - allow it in the browser prompt and choose this tab.'
+              : 'Tab capture failed - try again.';
             errEl.hidden = false;
           }
         });
@@ -49771,9 +49771,9 @@
     const sid = (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '';
     if (!$bugMeta) return;
     $bugMeta.innerHTML =
-      '<div><strong>CCC version:</strong> <code>' + bugEscape(version || '—') + '</code></div>' +
-      '<div><strong>Session:</strong> <code>' + bugEscape(sid || '—') + '</code></div>' +
-      '<div><strong>User agent:</strong> <code>' + bugEscape(ua || '—') + '</code></div>';
+      '<div><strong>CCC version:</strong> <code>' + bugEscape(version || '-') + '</code></div>' +
+      '<div><strong>Session:</strong> <code>' + bugEscape(sid || '-') + '</code></div>' +
+      '<div><strong>User agent:</strong> <code>' + bugEscape(ua || '-') + '</code></div>';
   }
 
   function bugClearShot() {
@@ -49926,7 +49926,7 @@
     }
     if (data && data.ok && data.url) {
       const safeUrl = bugEscape(data.url);
-      let html = 'Thanks — issue filed: <a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeUrl + '</a>';
+      let html = 'Thanks - issue filed: <a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeUrl + '</a>';
       if (data.screenshot_needs_manual && data.screenshot_path) {
         // Push to bug-screenshots branch failed (typical for OSS users
         // without write access). Show the local path with a clear
@@ -49934,7 +49934,7 @@
         // pops to the file. The user finishes the attachment manually.
         const safePath = bugEscape(data.screenshot_path);
         html += '<div style="margin-top:8px;line-height:1.5;">'
-              + 'Screenshot upload failed — saved locally at '
+              + 'Screenshot upload failed - saved locally at '
               + '<code style="font-family:\'SF Mono\',monospace;font-size:11px;">' + safePath + '</code>. '
               + 'Drag this file into a comment on the issue to attach it. '
               + 'Finder should be opening to it now.'
@@ -49989,7 +49989,7 @@
       await navigator.clipboard.writeText(md);
       if ($bugCopyBtn) { $bugCopyBtn.textContent = 'Copied'; setTimeout(() => { if ($bugCopyBtn) $bugCopyBtn.textContent = 'Copy markdown'; }, 1500); }
     } catch (_) {
-      try { showOpToast('Copy failed — select the text and copy manually', 'error'); } catch (__) {}
+      try { showOpToast('Copy failed - select the text and copy manually', 'error'); } catch (__) {}
     }
   });
 
@@ -50190,8 +50190,8 @@
       $carModeStartBtn.disabled = d.mode !== 'voice';
     }
     if ($carModeStopBtn) $carModeStopBtn.style.display = d.running ? '' : 'none';
-    if ($carModeAnthropicKey) $carModeAnthropicKey.placeholder = d.anthropic_key_set ? 'stored ✓ — leave blank to keep it' : 'sk-ant-… (required)';
-    if ($carModeDeepgramKey) $carModeDeepgramKey.placeholder = d.deepgram_key_set ? 'stored ✓ — leave blank to keep it' : 'optional — enables hands-free voice';
+    if ($carModeAnthropicKey) $carModeAnthropicKey.placeholder = d.anthropic_key_set ? 'stored ✓ - leave blank to keep it' : 'sk-ant-… (required)';
+    if ($carModeDeepgramKey) $carModeDeepgramKey.placeholder = d.deepgram_key_set ? 'stored ✓ - leave blank to keep it' : 'optional - enables hands-free voice';
   }
   async function fetchCarModeStatus() {
     try {
@@ -50244,7 +50244,7 @@
       const d = await res.json().catch(() => ({}));
       if (d && d.ok === false) { carModeError(d.error || 'Could not start Car Mode.'); renderCarModeStatus(d); return; }
       renderCarModeStatus(d);
-      showOpToast('Car Mode starting — the voice window will open', 'ok');
+      showOpToast('Car Mode starting - the voice window will open', 'ok');
     } catch (err) {
       carModeError((err && err.message) || 'Start failed.');
     } finally {
@@ -50326,7 +50326,7 @@
   function networkRenderTailnet(tn) {
     if (!$networkTailnetSummary) return;
     if (!tn || !tn.available) {
-      $networkTailnetSummary.innerHTML = 'Tailscale CLI not found on PATH — install <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale</a> to enable.';
+      $networkTailnetSummary.innerHTML = 'Tailscale CLI not found on PATH - install <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale</a> to enable.';
       if ($networkTrustTailnet) $networkTrustTailnet.disabled = true;
       return;
     }
@@ -50355,7 +50355,7 @@
     $networkEnvNotice.innerHTML =
       'Some values are pinned by environment variables for this run: <code>' +
       pinned.map(networkEsc).join('</code>, <code>') +
-      '</code>. Saving here will not change them — clear the env to take control from the UI.';
+      '</code>. Saving here will not change them - clear the env to take control from the UI.';
   }
 
   async function networkOpen() {
@@ -50406,7 +50406,7 @@
     const bad = extra.find(o => !/^https?:\/\/[^\s]+$/.test(o));
     if (bad) {
       if ($networkError) {
-        $networkError.textContent = 'Origin must look like http://host:port — got: ' + bad;
+        $networkError.textContent = 'Origin must look like http://host:port - got: ' + bad;
         $networkError.classList.add('visible');
       }
       return;
@@ -50535,13 +50535,13 @@
   function fedRenderPeers(peers) {
     if (!$fedPeersList) return;
     if (!peers || !peers.length) {
-      $fedPeersList.innerHTML = '<div class="fed-empty">No paired peers yet — add one below.</div>';
+      $fedPeersList.innerHTML = '<div class="fed-empty">No paired peers yet - add one below.</div>';
       return;
     }
     $fedPeersList.innerHTML = peers.map((p) => {
       const t = p.transport || {};
       const chip = (!t.type || t.type === 'unconfigured')
-        ? ' <span class="fed-chip-warn" title="This peer has no transport configured back to this node — it can be called but cannot call back.">no route back</span>'
+        ? ' <span class="fed-chip-warn" title="This peer has no transport configured back to this node - it can be called but cannot call back.">no route back</span>'
         : '';
       return '<div class="fed-row" data-fed-node="' + fedEsc(p.node_id) + '">' +
         '<div class="fed-row-main">' +
@@ -50859,8 +50859,8 @@
 
     // Git facts row.
     html += '<div class="handoff-git">'
-      + 'branch <strong>' + fedEsc(git.branch || '—') + '</strong>'
-      + ' · <span class="handoff-commit">' + fedEsc((git.commit || '').slice(0, 8) || '—') + '</span>'
+      + 'branch <strong>' + fedEsc(git.branch || '-') + '</strong>'
+      + ' · <span class="handoff-commit">' + fedEsc((git.commit || '').slice(0, 8) || '-') + '</span>'
       + ' · ' + fedEsc(git.dirty_count != null ? git.dirty_count : 0) + ' uncommitted'
       + ' · ' + fedEsc(git.unpublished_commits != null ? git.unpublished_commits : 0) + ' unpushed'
       + (git.has_upstream === false ? ' · <span class="handoff-warn-text">no upstream</span>' : '')
@@ -50914,7 +50914,7 @@
     html += '<div class="handoff-success-title">✓ Handed off to <strong>'
       + fedEsc(handoffDestName()) + '</strong></div>';
     html += '<div class="handoff-kv"><span>Destination path</span><code>'
-      + fedEsc(data.dest_cwd || '—') + '</code></div>';
+      + fedEsc(data.dest_cwd || '-') + '</code></div>';
     html += '<div class="handoff-kv"><span>Path rewrites</span><span>'
       + fedEsc(handoffRewriteCount(rw)) + '</span></div>';
     if (warnings.length) {
@@ -50986,7 +50986,7 @@
             steps: data.steps || [],
             git: data.git || {},
           });
-          handoffSetError('Preflight blocked — resolve the blockers, then re-check.');
+          handoffSetError('Preflight blocked - resolve the blockers, then re-check.');
         } else {
           handoffRenderHardError(data);
         }
@@ -51011,8 +51011,8 @@
     handoffSetError('');
     if ($handoffSubtitle) {
       $handoffSubtitle.textContent = displayName
-        ? 'Move "' + displayName + '" to a paired node — its git state and working copy travel with it.'
-        : 'Move this session to a paired node — its git state and working copy travel with it.';
+        ? 'Move "' + displayName + '" to a paired node - its git state and working copy travel with it.'
+        : 'Move this session to a paired node - its git state and working copy travel with it.';
     }
     if ($handoffPlan) { $handoffPlan.hidden = true; $handoffPlan.innerHTML = ''; }
     if ($handoffConfirmBtn) { $handoffConfirmBtn.hidden = true; $handoffConfirmBtn.disabled = true; $handoffConfirmBtn.textContent = 'Hand off'; }
@@ -51138,7 +51138,7 @@
     return (isFinite(n) && n > 0) ? relativeTime(n) : 'unknown';
   }
   function fleetObsTitle(label, ts) {
-    return (label ? label + ' — ' : '') + 'observed ' + fleetRel(ts);
+    return (label ? label + ' - ' : '') + 'observed ' + fleetRel(ts);
   }
   function fleetBase(p) {
     const parts = String(p || '').split('/');
@@ -51184,7 +51184,7 @@
   function renderFleetMatrix(repos, nodes) {
     if (!$fleetMatrix) return;
     if (!repos || !repos.length) {
-      $fleetMatrix.innerHTML = '<div class="fed-empty">No repositories mapped yet — open a repo to auto-map it, or add a mapping under Nodes &amp; peers.</div>';
+      $fleetMatrix.innerHTML = '<div class="fed-empty">No repositories mapped yet - open a repo to auto-map it, or add a mapping under Nodes &amp; peers.</div>';
       return;
     }
     const nodesById = {};
@@ -51268,8 +51268,8 @@
   function renderFleetBranchDim(entry) {
     const db = entry.default_branch || {};
     const obs = fleetObsTitle('default branch', entry.observed_at);
-    const sha = db.sha ? String(db.sha).slice(0, 8) : '—';
-    let chips = '<span class="fleet-chip" title="' + fedEsc(obs) + '">' + fedEsc(db.branch || '—') + ' @ <span class="fleet-sha">' + fedEsc(sha) + '</span></span>';
+    const sha = db.sha ? String(db.sha).slice(0, 8) : '-';
+    let chips = '<span class="fleet-chip" title="' + fedEsc(obs) + '">' + fedEsc(db.branch || '-') + ' @ <span class="fleet-sha">' + fedEsc(sha) + '</span></span>';
     const primary = (entry.worktrees || []).find((wt) => wt.is_primary_clone);
     if (primary && db.sha && primary.head_sha && primary.head_sha !== db.sha
         && primary.branch === db.branch && !primary.unpublished_commits) {
@@ -51444,7 +51444,7 @@
     const cands = Array.isArray(data.candidates) ? data.candidates : [];
     let html = '<div class="fleet-attr-head" title="' + fedEsc(path) + '">Who touched ' + fedEsc(fleetBase(path)) + '?</div>';
     if (!cands.length) {
-      html += '<div class="fleet-attr-empty">unknown — no evidence</div>';
+      html += '<div class="fleet-attr-empty">unknown - no evidence</div>';
     } else {
       html += cands.map((c) => {
         const evk = Array.isArray(c.evidence) ? c.evidence.map((e) => e.kind).filter(Boolean) : [];
@@ -51561,7 +51561,7 @@
         + fedEsc(b.code || 'blocked') + '</span>' + (b.detail ? ' ' + fedEsc(b.detail) : '') + '</span>'
       ).join('') + '</div>';
     } else if (status === 'manual') {
-      html += '<div class="fleet-action-blockers"><span class="fleet-blocker"><span class="fleet-blocker-code">manual</span> needs a human — not auto-executable</span></div>';
+      html += '<div class="fleet-action-blockers"><span class="fleet-blocker"><span class="fleet-blocker-code">manual</span> needs a human - not auto-executable</span></div>';
     }
     html += '</div></label>';
     return html;
@@ -51571,7 +51571,7 @@
     if (!$fleetPlanBody) return;
     const actions = Array.isArray(plan.actions) ? plan.actions : [];
     if (!actions.length) {
-      $fleetPlanBody.innerHTML = '<div class="fed-empty">Nothing to resolve — every repo is clean and published.</div>';
+      $fleetPlanBody.innerHTML = '<div class="fed-empty">Nothing to resolve - every repo is clean and published.</div>';
       if ($fleetPlanConfirm) $fleetPlanConfirm.hidden = true;
       return;
     }
@@ -51701,7 +51701,7 @@
         renderFleetJob(data.job);
         done = data.job.status === 'finished';
       }
-    } catch (_) { /* transient — keep polling */ }
+    } catch (_) { /* transient - keep polling */ }
     if (done) {
       fleetPlanStopPolling();
       if (!$fleetModal || $fleetModal.classList.contains('open')) loadFleetInventory(false);
@@ -51857,7 +51857,7 @@
       const statusColor = closed ? 'var(--text-muted)'
         : paused ? 'var(--orange)'
         : 'var(--green)';
-      const btnLabel = closed ? '—'
+      const btnLabel = closed ? '-'
         : paused ? 'Resume'
         : 'Pause';
       const btnDisabled = closed ? ' disabled' : '';
@@ -52732,7 +52732,7 @@
     const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
     const title = conv.display_name || conv.first_message || '';
     const cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
-    const preamble = 'Fix issue #' + issueNum + ' — ' + cleanTitle
+    const preamble = 'Fix issue #' + issueNum + ' - ' + cleanTitle
       + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).';
     const body = preamble + '\n\n' + userText;
     const subject = 'issue-' + issueNum;
@@ -54654,7 +54654,7 @@
   }
   function setStat(root, key, value) {
     var el = root.querySelector('[data-hero-stat="' + key + '"] .ccc-hero-stat-value');
-    if (el) el.textContent = value || '—';
+    if (el) el.textContent = value || '-';
   }
   function removeStat(root, key) {
     var el = root.querySelector('[data-hero-stat="' + key + '"]');
@@ -54828,15 +54828,15 @@
       '<div class="ccc-hero-glow"></div>' +
       '<div class="ccc-hero-stage">' +
         '<div class="ccc-hero-eyebrow"><span>CLAUDE COMMAND CENTER</span><span class="ccc-hero-date"></span></div>' +
-        '<div class="ccc-hero-odometer">—</div>' +
+        '<div class="ccc-hero-odometer">-</div>' +
         '<div class="ccc-hero-odo-label">tokens processed by your agents · last 24 hours</div>' +
         '<div class="ccc-hero-skyline"><div class="ccc-hero-bars"></div><div class="ccc-hero-axis"></div></div>' +
         '<div class="ccc-hero-live"><div class="ccc-hero-live-line"><span class="ccc-hero-dot"></span><span class="ccc-hero-live-status">fleet loading</span></div><div class="ccc-hero-ticker"></div></div>' +
         '<div class="ccc-hero-stats">' +
-          '<div class="ccc-hero-stat" data-hero-stat="sessions"><span>sessions · 24h</span><strong class="ccc-hero-stat-value">—</strong></div>' +
-          '<div class="ccc-hero-stat" data-hero-stat="repos"><span>repos touched</span><strong class="ccc-hero-stat-value">—</strong></div>' +
-          '<div class="ccc-hero-stat" data-hero-stat="queue"><span>queue depth</span><strong class="ccc-hero-stat-value">—</strong></div>' +
-          '<div class="ccc-hero-stat" data-hero-stat="cost"><span>est. cost</span><strong class="ccc-hero-stat-value">—</strong></div>' +
+          '<div class="ccc-hero-stat" data-hero-stat="sessions"><span>sessions · 24h</span><strong class="ccc-hero-stat-value">-</strong></div>' +
+          '<div class="ccc-hero-stat" data-hero-stat="repos"><span>repos touched</span><strong class="ccc-hero-stat-value">-</strong></div>' +
+          '<div class="ccc-hero-stat" data-hero-stat="queue"><span>queue depth</span><strong class="ccc-hero-stat-value">-</strong></div>' +
+          '<div class="ccc-hero-stat" data-hero-stat="cost"><span>est. cost</span><strong class="ccc-hero-stat-value">-</strong></div>' +
         '</div>' +
       '</div>' +
       (variant === 'B' ?

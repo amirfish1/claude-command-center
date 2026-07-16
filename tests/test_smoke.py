@@ -1315,7 +1315,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);", app_js)
         self.assertIn("!hasChildObjects", app_js)
-        self.assertIn("Empty — drag a session here, or use +.", app_js)
+        self.assertIn("Empty - drag a session here, or use +.", app_js)
 
     def test_assign_object_picker_renders_object_hierarchy(self):
         """The object assignment dialog should show nested objects as a tree."""

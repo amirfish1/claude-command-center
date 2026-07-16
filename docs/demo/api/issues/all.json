@@ -96,7 +96,7 @@
     {
       "number": 14,
       "title": "Replace stock photo on /about with team photo",
-      "body": "Awkward stock shot on /about. We have a real team photo from the offsite — use that.",
+      "body": "Awkward stock shot on /about. We have a real team photo from the offsite - use that.",
       "url": "https://github.com/demo/marketing-site/issues/14",
       "state": "OPEN",
       "stateReason": null,

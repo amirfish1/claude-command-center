@@ -195,7 +195,7 @@ def _write_question_answer(session_id, answers):
         return {
             "ok": False,
             "dead": True,
-            "error": "this session's process is no longer running — "
+            "error": "this session's process is no longer running - "
                      "the answer can't reach it. Resume the session to continue.",
         }
     norm = []
@@ -328,7 +328,7 @@ def _queue_config_from_payload(payload):
         raise ValueError("expected JSON object")
     queue = str(payload.get("queue") or "").strip().upper()
     if not _QUEUE_CONFIG_NAME_RE.fullmatch(queue):
-        raise ValueError("queue must use 1–64 letters, numbers, _ or -")
+        raise ValueError("queue must use 1-64 letters, numbers, _ or -")
     backend = str(payload.get("backend") or "file").strip().lower()
     if backend not in ("file", "github"):
         raise ValueError("backend must be file or github")
@@ -7510,9 +7510,9 @@ def _build_bug_report_body(description, ccc_version, user_agent, session_id,
         "",
         "| Field | Value |",
         "|---|---|",
-        f"| **CCC version** | `{ccc_version or '—'}` |",
-        f"| **Session** | `{session_id or '—'}` |",
-        f"| **User agent** | `{user_agent or '—'}` |",
+        f"| **CCC version** | `{ccc_version or '-'}` |",
+        f"| **Session** | `{session_id or '-'}` |",
+        f"| **User agent** | `{user_agent or '-'}` |",
         "",
         "_Reported via the in-app Report a bug feature._",
     ]
@@ -7557,7 +7557,7 @@ def _capture_screenshot_native(timeout=120):
         # Should be unreachable on a real Mac (`/usr/sbin/screencapture` is
         # shipped with the OS), but surface a friendly error if a stripped
         # install or a hardened sandbox really is missing it.
-        return {"ok": False, "error": "`screencapture` not found — is this a full macOS install?"}
+        return {"ok": False, "error": "`screencapture` not found - is this a full macOS install?"}
     # NamedTemporaryFile(delete=False) so screencapture (a separate process)
     # can write to the path; we reap it ourselves once we've base64-encoded.
     tmp = tempfile.NamedTemporaryFile(prefix="ccc-bug-", suffix=".png", delete=False)
@@ -7913,7 +7913,7 @@ def _create_bug_report_issue(payload):
     if not _which("gh"):
         return {
             "ok": False,
-            "error": "gh CLI not found on PATH — copy the markdown and file the issue manually.",
+            "error": "gh CLI not found on PATH - copy the markdown and file the issue manually.",
             "markdown": fallback_md,
             "repo_url": f"https://github.com/{_BUG_REPORT_REPO}/issues/new",
             "screenshot_path": screenshot_local_path,
@@ -8208,8 +8208,8 @@ def _capture_annotation_window_crop(screen, viewport_crop, annotation_id):
             # lacks Screen Recording permission — both yield a non-actionable
             # macOS stderr. Surface the fix so the agent (or its user) can act.
             hint += (
-                " (bring the CCC browser window fully on-screen — not minimized "
-                "or on another Space — and grant Screen Recording permission to "
+                " (bring the CCC browser window fully on-screen - not minimized "
+                "or on another Space - and grant Screen Recording permission to "
                 "your terminal/Claude Code in System Settings → Privacy & Security)"
             )
         return None, hint
@@ -12786,7 +12786,7 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
                     "bg_live": True,
                     "error": (
                         "This session is open in a Claude Code background "
-                        "terminal (pid %d). Use that window — resuming from "
+                        "terminal (pid %d). Use that window - resuming from "
                         "CCC would fork the conversation." % hpid
                     ),
                 }
@@ -12819,7 +12819,7 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
                     "ok": False,
                     "headless_live": True,
                     "headless_pid": hpid,
-                    "error": "Headless process (pid %d) did not exit within 5s — not launching." % hpid,
+                    "error": "Headless process (pid %d) did not exit within 5s - not launching." % hpid,
                 }
         if existing.get("live") and existing.get("tty"):
             tty = existing.get("tty")
@@ -12834,7 +12834,7 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
                 "terminal_app": term_app,
                 "existing": True,
                 "tty": tty,
-                "note": "Live terminal already attached — focused it instead of opening a new one.",
+                "note": "Live terminal already attached - focused it instead of opening a new one.",
                 "post_results": post_results,
             }
     except Exception:
@@ -13485,7 +13485,7 @@ def interrupt_input_via_keystroke(tty, terminal_app):
     if out.returncode != 0:
         return {"ok": False, "error": (out.stderr or "").strip() or "AppleScript failed"}
     if result_str == "notfound":
-        return {"ok": False, "error": f"No {terminal_app} tab found for {tty_short} — tab may be hidden, on another Space, or behind a fullscreen app"}
+        return {"ok": False, "error": f"No {terminal_app} tab found for {tty_short} - tab may be hidden, on another Space, or behind a fullscreen app"}
     return {"ok": True, "tty": tty}
 
 
@@ -22092,7 +22092,7 @@ def _codex_note_external_writer_transition(session_id, snap):
 
 _CODEX_COORD_EVENT_TEXT = {
     "external_turn_started": "Active Codex turn detected",
-    "external_turn_ended": "Active Codex turn finished — thread is free",
+    "external_turn_ended": "Active Codex turn finished - thread is free",
     "input_queued": "Message queued behind the active turn",
     "ccc_turn_started": "CCC started a turn via the app-server",
     "ccc_turn_completed": "CCC turn completed",
@@ -22270,13 +22270,13 @@ def _codex_writer_gate_response(session_id, snap, *, stage="writer-gate",
     writer = snap.get("writer")
     if writer == "desktop":
         reason = (
-            "Codex desktop is running a turn on this thread — the message is "
+            "Codex desktop is running a turn on this thread - the message is "
             "queued and CCC will send it when the desktop turn finishes"
         )
     elif writer == "ccc":
-        reason = "Another CCC send is already running a turn on this thread — queued"
+        reason = "Another CCC send is already running a turn on this thread - queued"
     else:
-        reason = "An active Codex turn is writing this thread — queued until it finishes"
+        reason = "An active Codex turn is writing this thread - queued until it finishes"
     _resume_ledger_append(
         "codex_wake_queued", sid=session_id, stage=stage, reason=reason,
     )
@@ -26278,8 +26278,8 @@ def _codex_stuck_reason(tail, mtime, now):
     if pending:
         target = (tail or {}).get("pending_file") or ""
         label = (f"{pending} {target}".strip())
-        return f"No output for {ago} while running {label} — the tool call looks hung."
-    return f"No output for {ago} after the last message — the turn stalled with no tool running."
+        return f"No output for {ago} while running {label} - the tool call looks hung."
+    return f"No output for {ago} after the last message - the turn stalled with no tool running."
 
 
 _codex_stuck_summary_cache = {"ts": 0.0, "value": None}
@@ -45813,11 +45813,11 @@ def _ship_review_verdict(repo_path, path, _attr_cache=None):
     rc, sha, _ = _git(["log", "-1", "--all", "--format=%H", "--", path], repo_path, timeout=8)
     sha = (sha or "").strip()
     if rc != 0 or not sha:
-        return _with_owner({"verdict": "commit", "why": "new file — not on any branch"})
+        return _with_owner({"verdict": "commit", "why": "new file - not on any branch"})
     rc2, diff, _ = _git(["diff", sha, "--", path], repo_path, timeout=8)
     if rc2 == 0 and not diff.strip():
         ref = _ship_safe_restore_ref(repo_path, path) or sha[:8]
-        return {"verdict": "restore", "why": f"identical to committed {ref} — safe to discard"}
+        return {"verdict": "restore", "why": f"identical to committed {ref} - safe to discard"}
     in_main = _git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_path, timeout=8)[0] == 0
     if not in_main:
         ref = None
@@ -45827,7 +45827,7 @@ def _ship_review_verdict(repo_path, path, _attr_cache=None):
             if b and "HEAD" not in b and "main" not in b:
                 ref = b
                 break
-        why = f"base on unmerged {ref or sha[:8]} — let that branch/PR land it"
+        why = f"base on unmerged {ref or sha[:8]} - let that branch/PR land it"
         # Liveness caveat: git proves the base is on an unmerged branch, but it
         # CANNOT see whether that branch is still alive or quietly abandoned.
         # If the index shows its author hasn't touched the file recently, flag
@@ -45933,7 +45933,7 @@ def _ship_reconcile_diverged(repo_path, branch, ahead, behind):
     rc, head_sha, _ = _git(["rev-parse", "HEAD"], repo_path)
     head_sha = (head_sha or "").strip()
     if rc != 0 or not head_sha:
-        _ship_log(repo_path, "could not read HEAD — handing off", "warn")
+        _ship_log(repo_path, "could not read HEAD - handing off", "warn")
         _ship_diverged_handoff(repo_path, branch, ahead, behind)
         return
 
@@ -45943,7 +45943,7 @@ def _ship_reconcile_diverged(repo_path, branch, ahead, behind):
     if rc != 0 or not commits:
         # Nothing local to replay (or we couldn't compute it) — not a case we can
         # safely auto-reconcile; hand off.
-        _ship_log(repo_path, "could not compute local commits to replay — handing off", "warn")
+        _ship_log(repo_path, "could not compute local commits to replay - handing off", "warn")
         _ship_diverged_handoff(repo_path, branch, ahead, behind)
         return
 
@@ -46021,7 +46021,7 @@ def _ship_reconcile_diverged(repo_path, branch, ahead, behind):
         # Same deploy-poll tail as a normal push.
         _ship_post_push_deploy(repo_path, branch, new_sha or head_sha)
     except Exception as e:
-        _ship_log(repo_path, f"reconcile crashed: {e} — handing off", "warn")
+        _ship_log(repo_path, f"reconcile crashed: {e} - handing off", "warn")
         _ship_diverged_handoff(repo_path, branch, ahead, behind)
     finally:
         # Always tear down the disposable worktree so it's never leaked, then
@@ -46081,7 +46081,7 @@ def _ship_integrate(repo_path, branch):
                 return
             _ship_log(repo_path, f"fast-forwarded {behind} commit(s) from origin", "ok")
         if not ahead:
-            _ship_update(repo_path, "pushed", "Up to date — nothing to push.", running=False)
+            _ship_update(repo_path, "pushed", "Up to date - nothing to push.", running=False)
             return
 
         _ship_update(repo_path, "pushing", f"$ git push origin {branch} ({ahead} commit(s))")
@@ -46335,7 +46335,7 @@ def _run_ship_flow(repo_path, branch):
                     ship_actions.append({
                         "id": "commit-infra", "kind": "commit",
                         "label": f"Commit {len(infra)} infra file(s)",
-                        "detail": "docs / config / scripts — low blast radius",
+                        "detail": "docs / config / scripts - low blast radius",
                         "paths": infra,
                         "message": "chore: commit infra (docs/config/scripts)",
                     })
@@ -46350,7 +46350,7 @@ def _run_ship_flow(repo_path, branch):
                 acked_n = sum(1 for a in acks if a["acked"])
                 _ship_update(repo_path, "needs_you",
                              f"Needs you: {len(infra)} infra (safe to commit), "
-                             f"{len(review)} app/deploy (review — ships to prod), "
+                             f"{len(review)} app/deploy (review - ships to prod), "
                              f"{len(junk)} junk"
                              + (f"; branch diverged (ahead {ahead}/behind {behind})" if ahead and behind else "")
                              + ". Won't auto-commit behind a push.",
@@ -46425,7 +46425,7 @@ def continue_repo_ship(repo_path):
         job["updated_at"] = time.time()
         _append_ship_log(
             job,
-            "Continue requested — no longer waiting for remaining commit replies.",
+            "Continue requested - no longer waiting for remaining commit replies.",
             "warn",
         )
         snapshot = dict(job)
@@ -46517,7 +46517,7 @@ def apply_ship_action(repo_path, action_id, decision):
         if will_continue:
             job["running"] = True
             job["phase"] = "pulling"
-            _append_ship_log(job, "all actions resolved — integrating (pull + push)…", "info")
+            _append_ship_log(job, "all actions resolved - integrating (pull + push)…", "info")
         _ship_jobs[repo_path] = job
         snapshot = dict(job)
     _persist_ship_job(repo_path, snapshot)
@@ -54302,7 +54302,7 @@ def _promote_task_to_strategy(task_id, launch=False):
         return {"ok": False, "error": f"unknown task: {task_id}"}
     goal_slug = task.get("goal_slug")
     if not goal_slug:
-        return {"ok": False, "error": "task has no goal — set one before promoting"}
+        return {"ok": False, "error": "task has no goal - set one before promoting"}
     text = task.get("text") or ""
     result = _store.append_strategy(goal_slug, text, status="active")
     if not result.get("ok"):
@@ -58520,7 +58520,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if open_count > 0:
                 self.send_json({
                     "ok": False,
-                    "error": f"{open_count} open item(s) in {queue_name} — drain it before deleting",
+                    "error": f"{open_count} open item(s) in {queue_name} - drain it before deleting",
                 }, 400)
                 return
             cfg_path = _wt_config_path()
@@ -62512,7 +62512,7 @@ def _classify_attention(c):
             if _stale_is_codex:
                 _stale_where = "Needs attention · Codex tool stopped reporting"
                 _stale_next = state.get("next_step_user") or (
-                    f"Wake Codex — {pending_tool or 'a tool call'} has been open{age_text}" +
+                    f"Wake Codex - {pending_tool or 'a tool call'} has been open{age_text}" +
                     (f" on {pending_file}" if pending_file else ""))
             else:
                 # Claude headless: a tool child has been alive past the
@@ -62521,7 +62521,7 @@ def _classify_attention(c):
                 # auto-interrupting; point the user at the terminal.
                 _stale_where = "Needs attention · tool call may be stuck"
                 _stale_next = state.get("next_step_user") or (
-                    f"Check the terminal — {pending_tool or 'a tool call'} has been running{age_text}" +
+                    f"Check the terminal - {pending_tool or 'a tool call'} has been running{age_text}" +
                     (f" on {pending_file}" if pending_file else "") +
                     "; queued input won't deliver until it finishes")
             return {
@@ -62542,7 +62542,7 @@ def _classify_attention(c):
                 "did": state.get("did"),
                 "insight": state.get("insight"),
                 "next_step": state.get("next_step_user") or
-                    (f"Jump to terminal — Claude paused on {pending_tool}" +
+                    (f"Jump to terminal - Claude paused on {pending_tool}" +
                      (f" on {pending_file}" if pending_file else "")),
                 "has_structured": has_structured,
             }
@@ -64849,7 +64849,7 @@ def _fleet_recommendations(inventory):
             if entry.get("stale"):
                 actions.append(_fleet_action(
                     "investigate_source", ident, node, target="stale",
-                    reason="data for this node is stale (peer unreachable) — "
+                    reason="data for this node is stale (peer unreachable) - "
                            "conclusions below may be outdated",
                     command_intent="restore connectivity, then refresh"))
             default_branch = (entry.get("default_branch") or {}).get("branch")
@@ -64941,7 +64941,7 @@ def _fleet_worktree_actions(ident, node, entry, wt, default_branch,
                              "detail": "clean the tree before pulling"})
         out.append(_fleet_action(
             "pull_ff", ident, node, target=branch,
-            reason=f"origin/{default_branch} moved (another node pushed) — "
+            reason=f"origin/{default_branch} moved (another node pushed) - "
                    "this clone is behind",
             evidence={"local_head": wt.get("head_sha"),
                       "origin_head": default_sha},
@@ -64974,7 +64974,7 @@ def _fleet_worktree_actions(ident, node, entry, wt, default_branch,
                 why.append("head not reachable from the default branch")
             out.append(_fleet_action(
                 "finish_worktree", ident, node, target=wt_path,
-                reason="worktree must be preserved (" + ", ".join(why) + ") — "
+                reason="worktree must be preserved (" + ", ".join(why) + ") - "
                        "offer a finish path instead of deletion",
                 evidence={
                     "candidate_sessions": wt_sessions[:5],
@@ -65030,7 +65030,7 @@ def _fleet_pr_actions(ident, node, entry, pr):
     if pr.get("checks_failing"):
         out.append(_fleet_action(
             "investigate_checks", ident, node, target=f"#{pr.get('number')}",
-            reason=f"PR #{pr.get('number')} has failing checks — investigate "
+            reason=f"PR #{pr.get('number')} has failing checks - investigate "
                    "independently of Git state",
             evidence={"failing": pr.get("checks_failing")},
             command_intent="open the failing check logs"))
@@ -65143,7 +65143,7 @@ def _fleet_execute_local_step(action):
                     "detail": "tree became dirty since the plan was built"}
         if not state.get("unpublished_commits"):
             return {"ok": True, "already": True,
-                    "detail": "nothing left to push — end state already holds"}
+                    "detail": "nothing left to push - end state already holds"}
         args = (["push", "origin", f"HEAD:{branch}"] if state["has_upstream"]
                 else ["push", "-u", "origin", branch])
         rc, out, err = _git(args, wt_path, timeout=120)
@@ -65156,7 +65156,7 @@ def _fleet_execute_local_step(action):
         state = _handoff_git_state(repo_path)
         if state["dirty_count"]:
             return {"ok": False, "error": "revalidation_failed",
-                    "detail": "tree became dirty — refusing to pull"}
+                    "detail": "tree became dirty - refusing to pull"}
         if state["branch"] != branch:
             return {"ok": False, "error": "revalidation_failed",
                     "detail": f"clone moved to branch {state['branch']!r}"}
@@ -65178,13 +65178,13 @@ def _fleet_execute_local_step(action):
         state = _handoff_git_state(wt_path)
         if state["dirty_count"]:
             return {"ok": False, "error": "revalidation_failed",
-                    "detail": "worktree is dirty — never deleted"}
+                    "detail": "worktree is dirty - never deleted"}
         _git(["fetch", "--quiet", "origin"], repo_path, timeout=90)
         rc, out, _e = _git(["rev-list", "--count", "HEAD", "--not",
                             "--remotes=origin"], wt_path)
         if not (rc == 0 and out.strip() == "0"):
             return {"ok": False, "error": "revalidation_failed",
-                    "detail": "worktree has unpublished commits — never deleted"}
+                    "detail": "worktree has unpublished commits - never deleted"}
         default = _federation_default_branch_view(repo_path)
         head = state.get("commit")
         if not (default.get("branch") and head):
@@ -65238,7 +65238,7 @@ def _fleet_execute_local_step(action):
         # merge_pr — every objective gate re-checked at mutation time
         if failing:
             return {"ok": False, "error": "revalidation_failed",
-                    "detail": f"required checks failing: {failing[:3]} — "
+                    "detail": f"required checks failing: {failing[:3]} - "
                               "never merged red"}
         if (pr.get("mergeable") or "").upper() == "CONFLICTING":
             return {"ok": False, "error": "revalidation_failed",
@@ -65257,7 +65257,7 @@ def _fleet_execute_local_step(action):
         candidates = (action.get("evidence") or {}).get("candidate_sessions") or []
         if not candidates:
             return {"ok": False, "error": "no_owner",
-                    "detail": "no session evidence — flagged for human review"}
+                    "detail": "no session evidence - flagged for human review"}
         target = candidates[0]
         ref = target.get("ref") or target.get("session_id")
         if kind == "ask_commit":
@@ -65602,7 +65602,7 @@ def _handoff_locate(session_id):
     cwd = find_session_cwd(session_id)
     if not cwd or not os.path.isdir(cwd):
         return None, ({"ok": False, "error": "unknown_session",
-                       "detail": "session cwd no longer exists — cannot map paths"}, 409)
+                       "detail": "session cwd no longer exists - cannot map paths"}, 409)
     repo_top = _git_toplevel_for_existing_dir(cwd)
     if not repo_top:
         return None, ({"ok": False, "error": "bad_request",
@@ -65682,7 +65682,7 @@ def _handoff_preflight_payload(session_id, dest_node_id):
             dirty_owner_candidates = []
         blockers.append({
             "code": "dirty_worktree",
-            "detail": f"{git_state['dirty_count']} dirty file(s) in {info['repo_top']} — "
+            "detail": f"{git_state['dirty_count']} dirty file(s) in {info['repo_top']} - "
                       "commit (or ask the owning session to commit) first; "
                       "CCC never copies dirty files between machines",
             "files": git_state["dirty_files"][:10],
@@ -65691,7 +65691,7 @@ def _handoff_preflight_payload(session_id, dest_node_id):
     if is_live:
         blockers.append({
             "code": "source_process_running",
-            "detail": "the session process is still running on this machine — "
+            "detail": "the session process is still running on this machine - "
                       "stop it before handing off so the transcript stops moving",
         })
     if git_state["detached"] and not git_state["commit"]:
@@ -65712,7 +65712,7 @@ def _handoff_preflight_payload(session_id, dest_node_id):
             f"{info['repo_top']} → destination path, verify hashes, "
             "import atomically"), "needed": True},
         {"step": "flip_ownership", "detail": (
-            f"lease the conversation to {peer.get('name')} — this node stops "
+            f"lease the conversation to {peer.get('name')} - this node stops "
             "resuming it"), "needed": True},
     ]
     return {
@@ -65765,7 +65765,7 @@ def _handoff_start_payload(session_id, dest_node_id, allow_overwrite=False):
     if git_state.get("unpublished_commits") or not git_state["has_upstream"]:
         if not branch:
             return {"ok": False, "error": "preflight_blocked",
-                    "detail": "detached HEAD with unpublished commits — "
+                    "detail": "detached HEAD with unpublished commits - "
                               "create a branch first"}, 409
         push_args = ["push", "origin", f"HEAD:{branch}"]
         if not git_state["has_upstream"]:
@@ -65780,7 +65780,7 @@ def _handoff_start_payload(session_id, dest_node_id, allow_overwrite=False):
     recheck = _handoff_git_state(info["repo_top"])
     if recheck["dirty_count"] or (recheck.get("unpublished_commits") or 0) > 0:
         return {"ok": False, "error": "preflight_blocked",
-                "detail": "repository state changed during handoff — re-run preflight"}, 409
+                "detail": "repository state changed during handoff - re-run preflight"}, 409
 
     # 2. Destination prepares a checkout and tells us the mapped path.
     try:
@@ -65901,14 +65901,14 @@ def _handoff_prepare_payload(data, peer):
                 break
     if not local or not os.path.isdir(local):
         return {"ok": False, "error": "stale_mapping",
-                "detail": f"no local clone mapped for {ident} on this node — "
+                "detail": f"no local clone mapped for {ident} on this node - "
                           "map it in peer settings"}, 404
     rc, out, errout = _git(["fetch", "--quiet", "origin"], local, timeout=120)
     fetched = rc == 0
     rc, _out, _err = _git(["cat-file", "-e", f"{commit}^{{commit}}"], local)
     if rc != 0:
         return {"ok": False, "error": "commit_not_found",
-                "detail": f"commit {commit[:12]} not present after fetch — "
+                "detail": f"commit {commit[:12]} not present after fetch - "
                           "was it pushed on the source?"}, 409
     state = _handoff_git_state(local)
     if branch and state["branch"] == branch and not state["dirty_count"]:
@@ -65977,7 +65977,7 @@ def _handoff_import_payload(data, peer):
     if not dest_top:
         return {"ok": False, "error": "bad_request",
                 "detail": f"dest_cwd {dest_cwd!r} is not an existing git checkout "
-                          "on this node — run handoff/prepare first"}, 409
+                          "on this node - run handoff/prepare first"}, 409
     local_ident = federation.repo_identity(dest_top)
     if not local_ident or local_ident["identity"] != manifest.get("repo_identity"):
         return {"ok": False, "error": "stale_mapping",
@@ -66045,7 +66045,7 @@ def _handoff_lease_guard(session_id):
             "error": "not_owner",
             "owner_node": owner,
             "owner_name": (peer or {}).get("name"),
-            "detail": "this conversation was handed to another node — "
+            "detail": "this conversation was handed to another node - "
                       "address it there (or force-takeover to reclaim)",
         }
     return None

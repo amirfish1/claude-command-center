@@ -52,7 +52,7 @@
         // Defer the show class to next frame so the transition runs.
         requestAnimationFrame(() => el.classList.add('show'));
         el._hideTimer = setTimeout(() => el.classList.remove('show'), 4200);
-      } catch (_) { /* banner is decorative — never block on it */ }
+      } catch (_) { /* banner is decorative - never block on it */ }
     }
     // Normalize a URL like "/api/conversations/all?include_prs=1" to the
     // fixture path "./api/conversations/all.json". Query strings are dropped
@@ -255,7 +255,7 @@
   // Legacy client-side trailer that older CCC builds appended to spawn
   // prompts. Kept so the UI can scrub existing transcripts; current Claude
   // spawns receive the reminder as a hidden backend system prompt instead.
-  const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the Command Center dashboard parses it):\n<session-state>\nDID: <one sentence — what you actually changed/learned>\nINSIGHT: <one sentence — the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence — the exact next thing the user should do>\n</session-state>";
+  const SESSION_STATE_INSTRUCTION = "\n\nBefore your final reply, end with a block formatted EXACTLY like this (the Command Center dashboard parses it):\n<session-state>\nDID: <one sentence - what you actually changed/learned>\nINSIGHT: <one sentence - the main finding, root cause, or surprise>\nNEXT_STEP_USER: <one sentence - the exact next thing the user should do>\n</session-state>";
 
   // When a prompt starts with the sibling-orchestrator preamble ("You are
   // a sibling Claude Code session…"), the boilerplate that follows (your
@@ -300,7 +300,7 @@
       .replace(/^\s*Fix GitHub issue #\d+:\s*/i, '')
       .replace(/\.?\s*Read the issue first with[^.]*?,\s*then implement the fix\.?\s*$/i, '')
       // Current template: "Fix issue #N — {title}\n\nRun `gh issue view N` …"
-      .replace(/^\s*Fix issue #\d+\s*(?:—|-)\s*/i, '')
+      .replace(/^\s*Fix issue #\d+\s*(?:-|-)\s*/i, '')
       .replace(/\n+Run `gh issue view \d+`[^\n]*(title may be truncated\)\.?)?\s*$/i, '')
       // Slash-command markup Claude Code injects into user messages
       // (`<command-name>/foo</command-name> <command-message>foo</command-message>
@@ -1616,7 +1616,7 @@
         '<code class="sid-short">' + shortId + '</code>' +
         '<span class="sid-copy" aria-hidden="true">&#128203;</span>';
       el.dataset.copySessionId = value;
-      el.title = value + ' — click to copy full ID';
+      el.title = value + ' - click to copy full ID';
     } else {
       el.textContent = '';
       delete el.dataset.copySessionId;
@@ -1631,7 +1631,7 @@
     const sid = el.dataset.copySessionId || el.textContent || '';
     const ok = await copyTextValue(sid);
     if (!ok) {
-      showOpToast('Copy failed — select and copy manually', 'error');
+      showOpToast('Copy failed - select and copy manually', 'error');
       return;
     }
     el.textContent = 'copied!';
@@ -3664,7 +3664,7 @@
           if (v !== null) localStorage.setItem(newKey, v);
         }
       }
-    } catch (_) { /* localStorage may be disabled — fail silently */ }
+    } catch (_) { /* localStorage may be disabled - fail silently */ }
   })();
 
   function normalizeSidebarViewMode(value) {
@@ -4625,7 +4625,7 @@
       }
       if (archiveLoaded) renderArchiveList($convSearch.value);
       loadAttentionList();  // piggy-back on the same refresh cycle
-      hideLoadingOverlay();  // first render has happened — reveal the UI
+      hideLoadingOverlay();  // first render has happened - reveal the UI
       _markFirstSessionsLoaded();  // unblock archive boot kick (see wireArchiveMode)
       // Auto-restore the last-opened card on first load. Only fires when
       // the user hasn't already clicked something — refresh-after-refresh
@@ -4638,8 +4638,8 @@
     } catch (err) {
       _convListRenderSig = null;
       $convList.innerHTML = '<div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Failed to load sessions: ' + escapeHtml(err.message) + '</div>';
-      hideLoadingOverlay();  // even on error — don't leave the user stuck on a spinner
-      _markFirstSessionsLoaded();  // even on error — don't pin the archive load
+      hideLoadingOverlay();  // even on error - don't leave the user stuck on a spinner
+      _markFirstSessionsLoaded();  // even on error - don't pin the archive load
     }
   }
 
@@ -4682,7 +4682,7 @@
         $seeAll.textContent = _nyaShowAll ? 'See fewer' : ('See all' + (grand > total ? ' (' + grand + ')' : ''));
       }
       if (!items.length) {
-        $list.innerHTML = '<div class="attention-empty">All clear — nothing needs you right now.</div>';
+        $list.innerHTML = '<div class="attention-empty">All clear - nothing needs you right now.</div>';
         return;
       }
       $list.innerHTML = items.map(it => {
@@ -4708,13 +4708,13 @@
           ? '#' + sid.replace('backlog-issue-', '')
           : sid.slice(0, 8);
         const sidChip = sid
-          ? '<span class="att-sid" data-full="' + escapeHtml(sid) + '" title="' + escapeHtml(sid) + ' — click to copy">' + escapeHtml(shortSid) + '</span>'
+          ? '<span class="att-sid" data-full="' + escapeHtml(sid) + '" title="' + escapeHtml(sid) + ' - click to copy">' + escapeHtml(shortSid) + '</span>'
           : '';
         // Verify button only makes sense for session rows. Backlog items
         // (needs_attention_label, open_backlog) don't have a session to verify.
         const isSessionRow = !sid.startsWith('backlog-issue-');
         const verifyBtn = isSessionRow
-          ? '<button class="att-verify-btn" data-verify-sid="' + escapeHtml(sid) + '" title="Mark this session verified — moves card to Verified column and drops it from this list">&#10003; Verify</button>'
+          ? '<button class="att-verify-btn" data-verify-sid="' + escapeHtml(sid) + '" title="Mark this session verified - moves card to Verified column and drops it from this list">&#10003; Verify</button>'
           : '';
         return '<div class="attention-row" data-sid="' + escapeHtml(sid) + '" data-kind="' + escapeHtml(kind) + '">'
           + '<div class="att-name">' + sidChip + escapeHtml(it.name || '(untitled)') + '</div>'
@@ -4785,7 +4785,7 @@
             chip.classList.add('copied');
             setTimeout(() => chip.classList.remove('copied'), 900);
           } catch (_) {
-            showOpToast('Copy failed — select and copy manually', 'error');
+            showOpToast('Copy failed - select and copy manually', 'error');
           }
         });
       });
@@ -7088,7 +7088,7 @@
         return;
       }
       (result.results || []).forEach(r => {
-        if (!r.ok) showOpToast('Could not reach session — check its terminal (' + (r.error || 'tty not found') + ')', 'error');
+        if (!r.ok) showOpToast('Could not reach session - check its terminal (' + (r.error || 'tty not found') + ')', 'error');
       });
       if (backdrop) backdrop.classList.remove('visible');
       selectedListIds.clear();
@@ -7287,11 +7287,11 @@
       + '<div class="gc-reader-sticky-meta" id="gcReaderStickyMeta" style="display:none;">'
         + '<div class="csh-col">'
           + '<div class="label original-label">Original Poster</div>'
-          + '<div class="speaker-name" id="gcOriginalSpeaker">—</div>'
+          + '<div class="speaker-name" id="gcOriginalSpeaker">-</div>'
         + '</div>'
         + '<div class="csh-col">'
           + '<div class="label last-label">Viewing Poster</div>'
-          + '<div class="speaker-name" id="gcViewingSpeaker">—</div>'
+          + '<div class="speaker-name" id="gcViewingSpeaker">-</div>'
         + '</div>'
       + '</div>'
       + '<div class="gc-reader-body" id="gcReaderBody" tabindex="0">Loading…</div>'
@@ -7506,7 +7506,7 @@
     // already followed by a colon (which would indicate the new
     // "hash: name" format that should pass through unchanged).
     return text.replace(
-      /(\s—\s)([0-9a-fA-F]{8})(?!:)\b/g,
+      /(\s-\s)([0-9a-fA-F]{8})(?!:)\b/g,
       (m, dash, hash) => {
         const name = byShort[hash.toLowerCase()];
         return name ? `${dash}${hash}: ${name}` : m;
@@ -7664,7 +7664,7 @@
     if (chatId || chatPath) {
       html += '<div class="gco-section"><div class="gco-title">Chat</div>';
       if (chatId) {
-        html += `<div class="gco-row"><span class="gco-label">ID:</span> <span class="gco-val gco-copy" title="Click to select — Cmd+C to copy">${escapeHtml(chatId)}</span></div>`;
+        html += `<div class="gco-row"><span class="gco-label">ID:</span> <span class="gco-val gco-copy" title="Click to select - Cmd+C to copy">${escapeHtml(chatId)}</span></div>`;
       }
       if (chatPath) {
         const file = chatPath.split('/').pop() || chatPath;
@@ -7684,10 +7684,10 @@
     const _gcNudge = data.orchestrator_nudge_interval || 60;
     html += '<div class="gco-section gco-active-section"><div class="gco-title">Active work</div>';
     if (_gcPaused) {
-      html += '<div class="gco-active-status is-paused">⏸ Disabled — no nudges, no token use.</div>';
+      html += '<div class="gco-active-status is-paused">⏸ Disabled - no nudges, no token use.</div>';
       html += `<button type="button" class="gco-power-btn gco-enable" data-gc-enable data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}">▶ Enable orchestration</button>`;
     } else if (_gcActiveNow) {
-      html += '<div class="gco-active-status is-active"><span class="gco-active-dot"></span> Running — waking participants on a timer.</div>';
+      html += '<div class="gco-active-status is-active"><span class="gco-active-dot"></span> Running - waking participants on a timer.</div>';
       html += `<div class="gco-row"><span class="gco-label">Auto-nudge:</span> <span class="gco-val">checks every ${_gcPoll}s, nudges ≤ every ${_gcNudge}s</span></div>`;
       const _gcLastNudge = data.orchestrator_last_nudge_at ? timeAgo(data.orchestrator_last_nudge_at * 1000) : 'not yet';
       html += `<div class="gco-row"><span class="gco-label">Last nudge:</span> <span class="gco-val">${escapeHtml(_gcLastNudge)}</span></div>`;
@@ -7695,10 +7695,10 @@
       if (_gcTargets.length) {
         html += `<div class="gco-row"><span class="gco-label">Last targets:</span> <span class="gco-val">${_gcTargets.join(', ')}</span></div>`;
       }
-      html += `<div class="gco-row"><span class="gco-label">Live sessions:</span> <span class="gco-val">${_gcLive} of ${_gcParts} — these run on each nudge</span></div>`;
+      html += `<div class="gco-row"><span class="gco-label">Live sessions:</span> <span class="gco-val">${_gcLive} of ${_gcParts} - these run on each nudge</span></div>`;
       html += `<button type="button" class="gco-power-btn gco-stop" data-gc-stop data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}">■ Stop orchestration</button>`;
     } else {
-      html += '<div class="gco-active-status is-idle">Idle — no active orchestration.</div>';
+      html += '<div class="gco-active-status is-idle">Idle - no active orchestration.</div>';
     }
     html += '</div>';
 
@@ -7850,7 +7850,7 @@
           errBanner.className = 'gc-poll-error';
           body.prepend(errBanner);
         }
-        errBanner.textContent = '⚠ Lost connection to chat file — retrying…';
+        errBanner.textContent = '⚠ Lost connection to chat file - retrying…';
       }
     }
   }
@@ -7941,7 +7941,7 @@
         setOptimisticOverride(sid, { verified: true });
         delete columnOverrides[sid];
       } catch (err) {
-        showOpToast('Verify failed — card stays put (' + err.message + ')', 'error');
+        showOpToast('Verify failed - card stays put (' + err.message + ')', 'error');
         renderSidebar(filterConversations($convSearch.value));
         return;
       }
@@ -7956,7 +7956,7 @@
           c.verified = false;
           setOptimisticOverride(sid, { verified: false });
         } catch (err) {
-          showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
+          showOpToast('Un-verify failed - card stays in Verified (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -7968,7 +7968,7 @@
           c.archived = false;
           setOptimisticOverride(sid, { archived: false });
         } catch (err) {
-          showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
+          showOpToast('Un-archive failed - card stays in Archived (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -8005,7 +8005,7 @@
           setOptimisticOverride(sid, { archived: true });
           delete columnOverrides[sid];
         } catch (err) {
-          showOpToast('Archive failed — card stays put (' + err.message + ')', 'error');
+          showOpToast('Archive failed - card stays put (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -8021,7 +8021,7 @@
           c.verified = false;
           setOptimisticOverride(sid, { verified: false });
         } catch (err) {
-          showOpToast('Un-verify failed — card stays in Verified (' + err.message + ')', 'error');
+          showOpToast('Un-verify failed - card stays in Verified (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -8033,7 +8033,7 @@
           c.archived = false;
           setOptimisticOverride(sid, { archived: false });
         } catch (err) {
-          showOpToast('Un-archive failed — card stays in Archived (' + err.message + ')', 'error');
+          showOpToast('Un-archive failed - card stays in Archived (' + err.message + ')', 'error');
           renderSidebar(filterConversations($convSearch.value));
           return;
         }
@@ -8210,21 +8210,21 @@
       { key: 'backlog',         label: 'GH Issues',       defaultExpanded: true,
         hint: 'Open GitHub issues and TODO.md / PARKING_LOT items with no session yet.' },
       { key: 'needs-attention', label: 'Needs attention', defaultExpanded: true,
-        hint: 'Issues labeled `needs-attention` on GitHub — you flagged them for triage.' },
+        hint: 'Issues labeled `needs-attention` on GitHub - you flagged them for triage.' },
       { key: 'icebox',          label: 'Icebox',          defaultExpanded: true,
         hint: 'Parked. The `icebox` GitHub label is set, or you dragged it here. Active intent: don\'t work on this right now.' },
       { key: 'working',         label: 'In progress',     defaultExpanded: true,
-        hint: 'Live or resumable sessions. Idle ones (no commits / no live process) get a blue Idle pill — pick one back up by jumping in.' },
+        hint: 'Live or resumable sessions. Idle ones (no commits / no live process) get a blue Idle pill - pick one back up by jumping in.' },
       { key: 'waiting',         label: 'Waiting',         defaultExpanded: true,
         hint: 'Claude is asking a question or requesting permission. Answer in the terminal.' },
       { key: 'review',          label: 'Review',          defaultExpanded: true,
         hint: 'Committed or pushed work waiting for you to read and verify.' },
       { key: 'testing',         label: 'In Testing',      defaultExpanded: true,
-        hint: 'Manually moved here — work is under human validation.' },
+        hint: 'Manually moved here - work is under human validation.' },
       { key: 'verified',        label: 'Verified',        defaultExpanded: false,
         hint: 'Marked done by you, or GitHub issue closed as completed.' },
       { key: 'archived',        label: 'Archived',        defaultExpanded: false,
-        hint: 'Dismissed / not planned — kept for context, not actionable.' },
+        hint: 'Dismissed / not planned - kept for context, not actionable.' },
     ];
     if (getViewGhPref() === 'hide') {
       defaultColumns = defaultColumns.filter(c => c.key !== 'backlog');
@@ -8268,7 +8268,7 @@
       const hasMore = !showAll && items.length > maxVisible;
 
       html += '<div class="kanban-column ' + col.key + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
-      const colTitle = col.hint ? (col.label + ' — ' + col.hint) : col.label;
+      const colTitle = col.hint ? (col.label + ' - ' + col.hint) : col.label;
       html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '" draggable="true" title="' + escapeHtml(colTitle) + '">';
       html += '<span class="arrow">' + (isCollapsed ? '&#9656;' : '&#9662;') + '</span>';
       html += '<span>' + escapeHtml(col.label) + '</span>';
@@ -8351,7 +8351,7 @@
           let plain = '';
           if (titleNorm && fmNorm === titleNorm) {
             const cleanTitleLen = stripEllipsis(title).length;
-            const rest = fm.slice(cleanTitleLen).replace(/^[\s\-–—:,.]+/, '');
+            const rest = fm.slice(cleanTitleLen).replace(/^[\s\---:,.]+/, '');
             if (rest.length > 10) plain = rest.slice(0, 320);
           } else {
             plain = fm.slice(0, 320);
@@ -8368,7 +8368,7 @@
             const label = isClosed ? ('closed' + (reason ? ' · ' + reason : '')) : 'open';
             const color = isClosed ? 'var(--red)' : 'var(--green)';
             const bg = isClosed ? 'rgba(248,81,73,0.12)' : 'rgba(63,185,80,0.12)';
-            stateBadge = '<span title="GitHub state — if CLOSED appears in GH Issues, the cache is stale" style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;text-transform:uppercase;">' + escapeHtml(label) + '</span>';
+            stateBadge = '<span title="GitHub state - if CLOSED appears in GH Issues, the cache is stale" style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + bg + ';color:' + color + ';font-weight:600;margin-right:3px;text-transform:uppercase;">' + escapeHtml(label) + '</span>';
           }
           const labels = (c.issue_labels || []).filter(function(l) { return l !== 'bug'; }).map(function(l) {
             const isAttn = l === 'needs-attention';
@@ -8503,7 +8503,7 @@
         let summarizeBtn = '';
         if (c.first_message) {
           if (c.name_overridden) {
-            summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title — replaces your manual rename" style="opacity:0.5;">&#10024;</button>';
+            summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Regenerate title - replaces your manual rename" style="opacity:0.5;">&#10024;</button>';
           } else {
             summarizeBtn = '<button class="kanban-action-btn" data-action="summarize" title="Generate AI title for this card">&#10024;</button>';
           }
@@ -9255,7 +9255,7 @@
         const card = btn.closest('.kanban-card');
         const conv = card ? conversationsData.find(x => x.id === card.dataset.id) : null;
         const body = issueNum
-          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          ? 'Fix issue #' + issueNum + ' - ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
         if (typeof enterNewSessionMode === 'function') enterNewSessionMode();
         const $convInput = document.getElementById('convInput');
@@ -9339,10 +9339,10 @@
         // ~94 chars get truncated by GitHub, so always direct Claude to read
         // the full body via `gh issue view N`.
         const prompt = issueNum
-          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          ? 'Fix issue #' + issueNum + ' - ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
         const spawnKey = issueNum ? (_issueStartKey(issueNum, repoPath) || ('issue-' + issueNum)) : sessionName;
-        if (_spawningKeys.has(spawnKey)) return;  // already spawning — ignore duplicate tap
+        if (_spawningKeys.has(spawnKey)) return;  // already spawning - ignore duplicate tap
         _spawningKeys.add(spawnKey);
         btn.disabled = true;
         btn.textContent = 'Spawning…';
@@ -9444,7 +9444,7 @@
   function showInjectError(inp, btn, msg) {
     if (inp) {
       const orig = inp.placeholder;
-      inp.placeholder = 'failed — ' + msg;
+      inp.placeholder = 'failed - ' + msg;
       inp.title = msg;
       inp.style.color = 'var(--text-muted)';
       setTimeout(() => { inp.placeholder = orig; inp.style.color = ''; inp.title = ''; }, 2500);
@@ -9498,7 +9498,7 @@
       $convList.innerHTML =
         '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
         + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
-        + '<div style="line-height:1.5;">Open a terminal and run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> to start one — it\'ll show up here automatically.</div>'
+        + '<div style="line-height:1.5;">Open a terminal and run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> to start one - it\'ll show up here automatically.</div>'
         + '<div style="line-height:1.5;">Or type a prompt in the <strong style="color:var(--text);">New session prompt</strong> field above and click <strong style="color:var(--text);">Run</strong>.</div>'
         + '</div>';
       return;
@@ -9667,7 +9667,7 @@
       let liveToolHtml = '';
       const sidVal = c.session_id || c.id;
       if (sidVal && _sendingSessions.has(sidVal)) {
-        liveToolHtml = '<span class="conv-live-tool sending" title="Sending — waiting for the first response from the agent">'
+        liveToolHtml = '<span class="conv-live-tool sending" title="Sending - waiting for the first response from the agent">'
           + '<span class="conv-live-name">● Sending&hellip;</span>'
           + '</span>';
       } else if (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'))) {
@@ -9756,7 +9756,7 @@
 
       const isLive = !!c.is_live;
       const stateClass = isLive ? 'is-live' : 'is-dead';
-      const liveTitle = isLive ? 'live — actively polled' : 'offline';
+      const liveTitle = isLive ? 'live - actively polled' : 'offline';
       const iconTitle = iconTitleType + ' session (' + liveTitle + ')';
       const sessionIconHtml = '<span class="conv-session-icon ' + iconType + ' ' + stateClass + '" title="' + escapeAttr(iconTitle) + '" aria-hidden="true">'
           + svgMarkup
@@ -10203,7 +10203,7 @@
           ? '<span class="conv-ingroupchat-status-pill" title="Coordination ended">closed</span>'
           : '';
         const pausedPill = isPaused
-          ? '<span class="conv-ingroupchat-status-pill is-paused" title="Orchestration disabled — no nudges, no token use">disabled</span>'
+          ? '<span class="conv-ingroupchat-status-pill is-paused" title="Orchestration disabled - no nudges, no token use">disabled</span>'
           : '';
         // Indented participant list under the chat row. Click to jump
         // to that session in the conv pane (selectConversation handles
@@ -10244,7 +10244,7 @@
             : '';
           return '<div class="conv-ingroupchat-participant" data-role="ingroupchat-participant"'
             + ' data-session-id="' + escapeHtml(sid) + '"'
-            + ' title="' + escapeHtml(display) + ' — click to open this session">'
+            + ' title="' + escapeHtml(display) + ' - click to open this session">'
             +   '<span class="conv-ingroupchat-participant-bullet">↳</span>'
             +   '<span class="conv-ingroupchat-participant-name">' + escapeHtml(trimmed) + '</span>'
             +   wipChip
@@ -10319,8 +10319,8 @@
           +     ' data-gc-path="' + escapeHtml(chat.path_tilde) + '"'
           +     ' data-gc-paused="' + (isPaused ? '1' : '0') + '"'
           +     ' title="' + (isPaused
-                  ? 'Enable orchestration — resume nudging participants'
-                  : 'Disable orchestration — stop nudges and token use for this chat') + '">'
+                  ? 'Enable orchestration - resume nudging participants'
+                  : 'Disable orchestration - stop nudges and token use for this chat') + '">'
           +     (isPaused ? '▶' : '⏸') + '</button>'
           +   '<button type="button" class="conv-ingroupchat-rename-btn"'
           +     ' data-role="ingroupchat-rename"'
@@ -10367,7 +10367,7 @@
       let _prevFolderOrder = {};
       try {
         _prevFolderOrder = JSON.parse(localStorage.getItem(_FOLDER_ORDER_KEY) || '{}');
-      } catch (_) { /* corrupt or missing — start fresh */ }
+      } catch (_) { /* corrupt or missing - start fresh */ }
       const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
         const aPinned = _minPinnedRank(a[1]);
         const bPinned = _minPinnedRank(b[1]);
@@ -10390,7 +10390,7 @@
         const _newOrder = {};
         _folderEntries.forEach(([k], i) => { _newOrder[k] = i; });
         localStorage.setItem(_FOLDER_ORDER_KEY, JSON.stringify(_newOrder));
-      } catch (_) { /* localStorage quota / disabled — degrade silently */ }
+      } catch (_) { /* localStorage quota / disabled - degrade silently */ }
       const _renderFolderEntry = ([folder, cards]) => {
         const hue = (cards[0].folder_chip_hue | 0);
         const orphan = cards[0].folder_chip_orphan ? ' is-orphan' : '';
@@ -10534,7 +10534,7 @@
         let _prevGhOrder = {};
         try {
           _prevGhOrder = JSON.parse(localStorage.getItem(_GH_ORDER_KEY) || '{}');
-        } catch (_) { /* corrupt — start fresh */ }
+        } catch (_) { /* corrupt - start fresh */ }
         const _folderEntries = Array.from(_byFolder.entries()).sort((a, b) => {
           const aPinned = _minPinnedRank(a[1]);
           const bPinned = _minPinnedRank(b[1]);
@@ -10636,7 +10636,7 @@
         + ' data-gc-path="' + escapeHtml(gc.path_tilde) + '"'
         + ' data-gc-topic="' + escapeHtml(gc.topic || '') + '"'
         + ' data-gc-mode="' + escapeHtml(gc.mode || 'topic') + '"'
-        + ' title="Archived group chat — click to open reader">'
+        + ' title="Archived group chat - click to open reader">'
         +   '<span class="archive-row-gc-icon" title="Group chat">💬</span>'
         +   '<span class="archive-row-gc-topic">' + topic + '</span>'
         +   partLabel
@@ -11211,7 +11211,7 @@
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ session_id: sid, path: '' }),
           });
-        } catch (_) { /* swallow — UI refresh below will surface failure */ }
+        } catch (_) { /* swallow - UI refresh below will surface failure */ }
         await refreshArchiveData();
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
@@ -11392,7 +11392,7 @@
           ? ('issue-' + issueNum)
           : cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
         const prompt = issueNum
-          ? 'Fix issue #' + issueNum + ' — ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
+          ? 'Fix issue #' + issueNum + ' - ' + cleanTitle + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).'
           : cleanTitle;
         const spawnRepoPath = spawnCwd || repoPathForIssueNumber(issueNum);
         const spawnKey = issueNum ? (_issueStartKey(issueNum, spawnRepoPath) || ('issue-' + issueNum)) : sessionName;
@@ -11469,7 +11469,7 @@
             { session_id: sessionId, branch: branchName, pr_number: prNumber, pr_url: prUrl, repo_path: rowRepoPath(c) || '' });
           if (data.ok) {
             if (data.via === 'session') {
-              showOpToast('Asked session to merge ' + target + ' — see chat');
+              showOpToast('Asked session to merge ' + target + ' - see chat');
               selectConversation(convId);
             } else {
               if (data.archived && c) {
@@ -11971,7 +11971,7 @@
           const next = {};
           sorted.forEach((c, i) => { const k = idOf(c); if (k) next[k] = i; });
           localStorage.setItem(_ROW_ORDER_KEY, JSON.stringify(next));
-        } catch (_) { /* quota/disabled — degrade to no hysteresis */ }
+        } catch (_) { /* quota/disabled - degrade to no hysteresis */ }
       }
       return sorted;
     }
@@ -12932,7 +12932,7 @@
             renderSidebar(conversationsData);
           }
         }
-      } catch (_) { /* render is a courtesy — never block detail render on failure */ }
+      } catch (_) { /* render is a courtesy - never block detail render on failure */ }
       const labels = (issue.labels || []).map(l => '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(139,148,158,0.2);color:var(--text-muted);margin-right:6px;">' + escapeHtml(l.name || '') + '</span>').join('');
       const created = issue.createdAt ? new Date(issue.createdAt).toLocaleString() : '';
       const url = issue.url || '';
@@ -13167,7 +13167,7 @@
     saveSplitState();
     convLastLine = 0;
     _firstUserMsgRendered = false;
-    _dynamicAskState = null;  // sticky-header scroll tracker — repopulated when the new sticky is built
+    _dynamicAskState = null;  // sticky-header scroll tracker - repopulated when the new sticky is built
     _currentToolGroup = null;
     _currentToolCount = 0;
     _pendingSends = [];  // drop any optimistic sends from the previous conv
@@ -13874,7 +13874,7 @@
 
     if (data && data.truncated) {
       footer.hidden = false;
-      footer.textContent = 'Showing first 500 — conversation contains more.';
+      footer.textContent = 'Showing first 500 - conversation contains more.';
     } else {
       footer.hidden = true;
       footer.textContent = '';
@@ -14083,7 +14083,7 @@
           const div = document.createElement('div');
           div.className = 'stream-block-tool';
           div.dataset.renderTs = nowStamp();
-          const summary = b.summary ? ' — ' + b.summary : '';
+          const summary = b.summary ? ' - ' + b.summary : '';
           const toolName = b.name === 'AskUserQuestion' ? 'Question' : (b.name || 'tool');
           div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
             + escapeHtml(toolName) + '</span>'
@@ -14574,7 +14574,7 @@
     // paths were swapped for <img> tags); fall back to textContent for
     // bubbles that pre-date the data-raw-text attr.
     const text = msgEl ? ((msgEl.dataset && msgEl.dataset.rawText) || msgEl.textContent || '').trim() : '';
-    if (!text) {  // image-only message — fall back rather than going blank
+    if (!text) {  // image-only message - fall back rather than going blank
       _dynAskApply(0, items);
       return;
     }
@@ -14722,7 +14722,7 @@
     if (body) {
       html += '<div class="assistant-text" style="font-size:14px;line-height:1.55;white-space:pre-wrap;">' + escapeHtml(body) + '</div>';
     }
-    html += '<div style="margin-top:20px;color:var(--text-muted);font-size:13px;">No conversation yet — tap <strong>Start session</strong> on the card to spawn one.</div>';
+    html += '<div style="margin-top:20px;color:var(--text-muted);font-size:13px;">No conversation yet - tap <strong>Start session</strong> on the card to spawn one.</div>';
     html += '</div>';
     $view.innerHTML = html;
     $view.scrollTop = 0;
@@ -14836,17 +14836,17 @@
         kindTitle = 'git worktree' + inferTitle;
       } else {
         kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
-        kindTitle = 'shared clone — main repo working tree' + inferTitle;
+        kindTitle = 'shared clone - main repo working tree' + inferTitle;
       }
     } else if (w.is_worktree) {
       kindCls = 'wp-kind-worktree'; kindLabel = 'worktree';
       kindTitle = 'worktree (not the shared clone)';
     } else if (w.is_repo) {
       kindCls = 'wp-kind-clone'; kindLabel = 'shared clone';
-      kindTitle = 'shared clone — main repo working tree';
+      kindTitle = 'shared clone - main repo working tree';
     } else if (w.exists) {
       kindCls = 'wp-kind-other'; kindLabel = 'not a git repo';
-      kindTitle = "cwd exists but is not a git repo — Claude's git commands will fail unless it shells into a repo";
+      kindTitle = "cwd exists but is not a git repo - Claude's git commands will fail unless it shells into a repo";
     } else {
       kindCls = 'wp-kind-other'; kindLabel = 'cwd missing';
       kindTitle = 'cwd does not exist on disk';
@@ -14918,14 +14918,14 @@
           const draftCls = wt.pr.isDraft ? ' wt-tag-pr-draft' : '';
           const prTitle = (wt.pr.title || '').trim();
           const tipBase = (wt.pr.isDraft ? 'Draft PR' : 'Open PR') + ' #' + wt.pr.number;
-          const tip = prTitle ? tipBase + ' — ' + prTitle : tipBase;
+          const tip = prTitle ? tipBase + ' - ' + prTitle : tipBase;
           tags.push('<a class="wt-tag wt-tag-pr' + draftCls + '" href="' + escapeHtml(prUrl)
             + '" target="_blank" rel="noopener" title="' + escapeHtml(tip) + '">'
             + (wt.pr.isDraft ? 'draft ' : '') + 'PR #' + wt.pr.number + '</a>');
         }
         const branchHtml = branch
           ? '<span class="wt-row-branch"><span class="wt-icon">⎇</span>' + escapeHtml(branch) + '</span>'
-          : '<span class="wt-row-branch" style="opacity:0.5;">—</span>';
+          : '<span class="wt-row-branch" style="opacity:0.5;">-</span>';
         const reason = (wt.lock_reason || '').trim();
         const reasonHtml = (reason && !wt.is_agent)
           ? '<div class="wt-lock-reason">' + escapeHtml(reason) + '</div>'
@@ -15077,7 +15077,7 @@
       $btn.title = agentN > 0
         ? baseTitle + ' (' + agentN + ' subagent worktree' + (agentN === 1 ? '' : 's') + ' currently active)'
         : baseTitle;
-    } catch (_) { /* network blip — leave the badge state alone */ }
+    } catch (_) { /* network blip - leave the badge state alone */ }
   }
   if (!CONV_POPOUT_MODE) {
     refreshWorktreesBadge();
@@ -15098,7 +15098,7 @@
     const cache = {};  // range -> stats payload
 
     function compactNum(n) {
-      if (n == null) return '—';
+      if (n == null) return '-';
       n = Number(n) || 0;
       if (n < 1000) return String(n);
       if (n < 10_000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
@@ -15122,8 +15122,8 @@
         ['Active days',    compactNum(s.active_days)],
         ['Current streak', (s.current_streak || 0) + 'd'],
         ['Longest streak', (s.longest_streak || 0) + 'd'],
-        ['Peak hour',      s.peak_hour || '—'],
-        ['Favorite model', s.favorite_model || '—', true],
+        ['Peak hour',      s.peak_hour || '-'],
+        ['Favorite model', s.favorite_model || '-', true],
       ];
       return '<div class="stats-cards">' + cards.map(c => {
         const valClass = c[2] ? 'value muted' : 'value';
@@ -15379,8 +15379,8 @@
       );
       const shortModel = displayModel.replace(/^claude-/, '').replace(/\[1m\]/i, '').trim();
       const modelTip = displayModel
-        + (isOneM ? '\n(1M context window — anthropic-beta: context-1m)' : '')
-        + (queued ? '\n(Applied on next ask — change is queued)' : '')
+        + (isOneM ? '\n(1M context window - anthropic-beta: context-1m)' : '')
+        + (queued ? '\n(Applied on next ask - change is queued)' : '')
         + (engine === 'antigravity' ? '' : '\n\nClick to change model');
       const modelInner = escapeHtml(shortModel)
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
@@ -15465,7 +15465,7 @@
         + '  Cache write:  ' + fmt(breakdown.cache_creation || 0) + '  (' + (u.total_cache_creation_tokens || 0).toLocaleString() + ' tok)\n'
         + '  Cache read:   ' + fmt(breakdown.cache_read || 0) + '  (' + (u.total_cache_read_tokens || 0).toLocaleString() + ' tok)\n'
         + '  Output:       ' + fmt(breakdown.output || 0) + '  (' + (u.total_output_tokens || 0).toLocaleString() + ' tok)\n\n'
-        + 'Subscription users (Claude Pro/Max) pay flat — this is the\n'
+        + 'Subscription users (Claude Pro/Max) pay flat - this is the\n'
         + 'list-price equivalent if metered against the API directly.';
       costPill = ' <span class="wp-cost-pill" title="' + escapeHtml(costTip) + '">' + fmt(cost) + '</span>';
     }
@@ -15582,7 +15582,7 @@
 
     const pop = document.createElement('div');
     pop.className = 'model-picker-pop open';
-    let html = '<div class="mp-header">Switch model — ' + escapeHtml(engine) + '</div>';
+    let html = '<div class="mp-header">Switch model - ' + escapeHtml(engine) + '</div>';
     options.forEach((opt) => {
       const isActive = _normalizeModelId(opt.id) === currentNorm;
       const oneM = !!opt.oneM;
@@ -16689,7 +16689,7 @@
                       const desc = (o && typeof o === 'object') ? (o.description || '') : '';
                       return '<li>'
                         + '<span class="ask-user-option-label">' + escapeHtml(lbl) + '</span>'
-                        + (desc ? '<span class="ask-user-option-desc"> — ' + escapeHtml(desc) + '</span>' : '')
+                        + (desc ? '<span class="ask-user-option-desc"> - ' + escapeHtml(desc) + '</span>' : '')
                         + '</li>';
                     }).join('') + '</ul>'
                   : '';
@@ -17120,7 +17120,7 @@
     let title = '';
     if (!st.exists) {
       label = 'No index';
-      title = 'No history index yet. Click to build one — runs in the background.';
+      title = 'No history index yet. Click to build one - runs in the background.';
     } else if (st.indexing) {
       label = 'Indexing…';
       title = 'Indexing in progress: scanning JSONL transcripts for new messages.';
@@ -17219,7 +17219,7 @@
           + '<div>This may take a few minutes for the first run. Watch the topbar pill for progress.</div>';
         setTimeout(() => $oobe.remove(), 6000);
       } else {
-        $oobe.querySelector('[data-role="hi-enable"]').textContent = 'Failed — retry';
+        $oobe.querySelector('[data-role="hi-enable"]').textContent = 'Failed - retry';
       }
     });
     $oobe.querySelector('[data-role="hi-dismiss"]').addEventListener('click', () => {
@@ -17776,7 +17776,7 @@
     if (!issues.length) {
       $issuesView.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;line-height:1.6;">'
         + 'No GitHub issues found.<br><br>'
-        + 'If this repo just has no open issues, that\'s fine — they\'ll show up here when you create one.<br><br>'
+        + 'If this repo just has no open issues, that\'s fine - they\'ll show up here when you create one.<br><br>'
         + 'If you expected to see issues, install <a href="https://cli.github.com/" target="_blank" rel="noopener" style="color:var(--accent);">gh</a> and run <code style="background:#1a1d23;padding:2px 6px;border-radius:3px;">gh auth login</code> from this repo, then refresh.'
         + '</div>';
       return;
@@ -18120,7 +18120,7 @@
       setLocalhostPill({
         dotClass: '',
         label: 'localhost',
-        title: 'Pick a repo first — the localhost pill needs to know which directory to look in.',
+        title: 'Pick a repo first - the localhost pill needs to know which directory to look in.',
         href: '',
       });
       return;
@@ -18157,7 +18157,7 @@
       setLocalhostPill({
         dotClass: 'error',
         label: 'localhost: bad response',
-        title: 'CCC server returned non-JSON for /api/nextjs/status — likely an old build. Restart it.',
+        title: 'CCC server returned non-JSON for /api/nextjs/status - likely an old build. Restart it.',
         href: '',
       });
       return;
@@ -18331,7 +18331,7 @@
         try {
           d = await res.json();
         } catch (_e) {
-          d = { ok: false, error: 'HTTP ' + res.status + ' — non-JSON reply (restart CCC?)' };
+          d = { ok: false, error: 'HTTP ' + res.status + ' - non-JSON reply (restart CCC?)' };
         }
       } catch (e) {
         _localhostState = 'failed';
@@ -18909,7 +18909,7 @@
       if ((_gcReaderPath && (_gcReaderPath === chatPath)) || (_gcReaderId && chatId && _gcReaderId === chatId)) {
         try { pollGroupChatReader(); } catch (_) {}
       }
-      showOpToast?.(paused ? 'Orchestration disabled — no more nudges' : 'Orchestration enabled');
+      showOpToast?.(paused ? 'Orchestration disabled - no more nudges' : 'Orchestration enabled');
     } catch (err) {
       showOpToast?.('Could not update group chat: ' + ((err && err.message) || 'network error'), 'error');
     }
@@ -19008,7 +19008,7 @@
         return;
       }
       try { await pollGcActive(); } catch (_) {}
-      showOpToast?.('Empty chat created — click ✏️ to rename, drag sessions in to add them');
+      showOpToast?.('Empty chat created - click ✏️ to rename, drag sessions in to add them');
       if (data.chat_path) {
         try { openGroupChatReader(data.chat_path, topic, 'topic', true, data.uuid || data.id || null); } catch (_) {}
       }
@@ -19034,7 +19034,7 @@
       }
       try { await pollGcActive(); } catch (_) {}
       const wiped = data.wiped ?? 0;
-      showOpToast?.(`Cleared ${wiped} message${wiped === 1 ? '' : 's'} — participants re-pinged`);
+      showOpToast?.(`Cleared ${wiped} message${wiped === 1 ? '' : 's'} - participants re-pinged`);
     } catch (err) {
       showOpToast?.('Could not clear: ' + ((err && err.message) || 'network error'), 'error');
     }
@@ -19111,7 +19111,7 @@
         peers = Array.isArray(d1.peers) ? d1.peers : [];
       }
       if (r2.ok) identity = await r2.json();
-    } catch (_) { /* best-effort — picker is decorative on failure */ }
+    } catch (_) { /* best-effort - picker is decorative on failure */ }
     peerState = { peers, identity };
     return peerState;
   }
@@ -19391,7 +19391,7 @@
       if (state === 'done')    return '<span class="als-glyph als-done">✓</span>';
       if (state === 'running') return '<span class="als-glyph als-running">●</span>';
       if (state === 'error')   return '<span class="als-glyph als-error">!</span>';
-      if (state === 'skipped') return '<span class="als-glyph als-skipped">–</span>';
+      if (state === 'skipped') return '<span class="als-glyph als-skipped">-</span>';
       return '<span class="als-glyph als-pending">○</span>';
     };
     const escAls = (s) => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -20027,7 +20027,7 @@
       try {
         await Promise.all([loadPeerRegistry(), loadRepoList()]);
         renderPeerPickerSelect();
-      } catch (e) { /* picker is best-effort — failure shouldn't break the page */ }
+      } catch (e) { /* picker is best-effort - failure shouldn't break the page */ }
     })();
 
     // Poll the registry every 10s so a sibling server starting after page
@@ -20199,7 +20199,7 @@
         // is threaded.
         const r = await fetch('/api/fs/pick-folder', { method: 'POST' });
         const d = await r.json();
-        if (d.cancelled) return;  // user clicked Cancel — no-op
+        if (d.cancelled) return;  // user clicked Cancel - no-op
         if (!d.ok) { rpmShowError(d.error || 'Could not open folder picker.'); return; }
         // Persist the new path so it appears in the picker, then filter to it.
         const addRes = await fetch('/api/repo/add', {
@@ -20273,7 +20273,7 @@
         return;
       }
       const rows = visibleChecks.map(c => {
-        const tt = (c.hint && c.status !== 'ok') ? `${c.message} — ${c.hint}` : c.message;
+        const tt = (c.hint && c.status !== 'ok') ? `${c.message} - ${c.hint}` : c.message;
         return `<span class="ccc-setup-row ${c.status}" title="${escapeHtml(tt)}">
           <span class="icon">${iconFor(c.status)}</span>
           <span>${escapeHtml(c.label === 'Watched repo' ? c.message : c.label)}</span>
@@ -21116,7 +21116,7 @@
     } else {
       try { sessionStorage.removeItem('ccc-updating'); } catch (_) {}
       if ($overlay) $overlay.classList.add('fade-out', 'gone');
-      showOpToast("Server didn't come back within 30s — try reloading manually", 'error');
+      showOpToast("Server didn't come back within 30s - try reloading manually", 'error');
       $updNowBtn.disabled = false;
       if ($updLaterBtn) $updLaterBtn.disabled = false;
     }
@@ -21135,7 +21135,7 @@
           }
           if ($updPill) $updPill.classList.add('visible');
         }
-      } catch (_) { /* silent — the pill just stays hidden */ }
+      } catch (_) { /* silent - the pill just stays hidden */ }
     })();
   }
 
@@ -21175,10 +21175,10 @@
       }
       if ($cccLastUpdated) {
         const formatted = formatCccUpdatedAt(d && d.last_updated);
-        $cccLastUpdated.textContent = formatted || '—';
+        $cccLastUpdated.textContent = formatted || '-';
       }
     } catch (_) {
-      if ($cccLastUpdated) $cccLastUpdated.textContent = '—';
+      if ($cccLastUpdated) $cccLastUpdated.textContent = '-';
     }
   })();
 
@@ -21199,7 +21199,7 @@
           if ($updPill) $updPill.classList.add('visible');
           updOpenModal();
         } else if (d && d.ok) {
-          showOpToast('Up to date — v' + (d.current || '?'));
+          showOpToast('Up to date - v' + (d.current || '?'));
         } else {
           showOpToast('Update check failed: ' + ((d && d.error) || 'unknown'), 'error');
         }
@@ -22315,9 +22315,9 @@
     const sid = (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '';
     if (!$bugMeta) return;
     $bugMeta.innerHTML =
-      '<div><strong>CCC version:</strong> <code>' + bugEscape(version || '—') + '</code></div>' +
-      '<div><strong>Session:</strong> <code>' + bugEscape(sid || '—') + '</code></div>' +
-      '<div><strong>User agent:</strong> <code>' + bugEscape(ua || '—') + '</code></div>';
+      '<div><strong>CCC version:</strong> <code>' + bugEscape(version || '-') + '</code></div>' +
+      '<div><strong>Session:</strong> <code>' + bugEscape(sid || '-') + '</code></div>' +
+      '<div><strong>User agent:</strong> <code>' + bugEscape(ua || '-') + '</code></div>';
   }
 
   function bugClearShot() {
@@ -22470,7 +22470,7 @@
     }
     if (data && data.ok && data.url) {
       const safeUrl = bugEscape(data.url);
-      let html = 'Thanks — issue filed: <a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeUrl + '</a>';
+      let html = 'Thanks - issue filed: <a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeUrl + '</a>';
       if (data.screenshot_needs_manual && data.screenshot_path) {
         // Push to bug-screenshots branch failed (typical for OSS users
         // without write access). Show the local path with a clear
@@ -22478,7 +22478,7 @@
         // pops to the file. The user finishes the attachment manually.
         const safePath = bugEscape(data.screenshot_path);
         html += '<div style="margin-top:8px;line-height:1.5;">'
-              + 'Screenshot upload failed — saved locally at '
+              + 'Screenshot upload failed - saved locally at '
               + '<code style="font-family:\'SF Mono\',monospace;font-size:11px;">' + safePath + '</code>. '
               + 'Drag this file into a comment on the issue to attach it. '
               + 'Finder should be opening to it now.'
@@ -22533,7 +22533,7 @@
       await navigator.clipboard.writeText(md);
       if ($bugCopyBtn) { $bugCopyBtn.textContent = 'Copied'; setTimeout(() => { if ($bugCopyBtn) $bugCopyBtn.textContent = 'Copy markdown'; }, 1500); }
     } catch (_) {
-      try { showOpToast('Copy failed — select the text and copy manually', 'error'); } catch (__) {}
+      try { showOpToast('Copy failed - select the text and copy manually', 'error'); } catch (__) {}
     }
   });
 
@@ -22565,7 +22565,7 @@
   function networkRenderTailnet(tn) {
     if (!$networkTailnetSummary) return;
     if (!tn || !tn.available) {
-      $networkTailnetSummary.innerHTML = 'Tailscale CLI not found on PATH — install <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale</a> to enable.';
+      $networkTailnetSummary.innerHTML = 'Tailscale CLI not found on PATH - install <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale</a> to enable.';
       if ($networkTrustTailnet) $networkTrustTailnet.disabled = true;
       return;
     }
@@ -22594,7 +22594,7 @@
     $networkEnvNotice.innerHTML =
       'Some values are pinned by environment variables for this run: <code>' +
       pinned.map(networkEsc).join('</code>, <code>') +
-      '</code>. Saving here will not change them — clear the env to take control from the UI.';
+      '</code>. Saving here will not change them - clear the env to take control from the UI.';
   }
 
   async function networkOpen() {
@@ -22645,7 +22645,7 @@
     const bad = extra.find(o => !/^https?:\/\/[^\s]+$/.test(o));
     if (bad) {
       if ($networkError) {
-        $networkError.textContent = 'Origin must look like http://host:port — got: ' + bad;
+        $networkError.textContent = 'Origin must look like http://host:port - got: ' + bad;
         $networkError.classList.add('visible');
       }
       return;
@@ -23153,7 +23153,7 @@
     const repoPath = rowRepoPath(conv) || repoPathForIssueNumber(issueNum);
     const title = conv.display_name || conv.first_message || '';
     const cleanTitle = (title || '').replace(/^#\d+:\s*/, '').replace(/\[[^\]]*\]\s*/g, '').trim();
-    const preamble = 'Fix issue #' + issueNum + ' — ' + cleanTitle
+    const preamble = 'Fix issue #' + issueNum + ' - ' + cleanTitle
       + '\n\nRun `gh issue view ' + issueNum + '` for the full body (title may be truncated).';
     const body = preamble + '\n\n' + userText;
     const subject = 'issue-' + issueNum;

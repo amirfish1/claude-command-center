@@ -4,14 +4,14 @@
       "type": "user_text",
       "line": 1,
       "ts": "2026-05-19T08:01:00Z",
-      "text": "This is a demo session. In the real dashboard, this pane shows the live JSONL transcript of the selected Claude / Codex / Gemini session as it happens — every user turn, every tool call, every assistant reply, streamed block by block."
+      "text": "This is a demo session. In the real dashboard, this pane shows the live JSONL transcript of the selected Claude / Codex / Gemini session as it happens - every user turn, every tool call, every assistant reply, streamed block by block."
     },
     {
       "type": "assistant",
       "line": 2,
       "ts": "2026-05-19T08:01:18Z",
       "blocks": [
-        { "kind": "text", "text": "Right — I'll walk through the plan first, then implement. The demo doesn't actually run anything; it's a static snapshot of the dashboard's chrome plus a hand-written transcript fixture so you can see the layout." }
+        { "kind": "text", "text": "Right - I'll walk through the plan first, then implement. The demo doesn't actually run anything; it's a static snapshot of the dashboard's chrome plus a hand-written transcript fixture so you can see the layout." }
       ]
     },
     {

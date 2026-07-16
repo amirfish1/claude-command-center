@@ -72,7 +72,7 @@ class CodexStuckMonitorUiTests(unittest.TestCase):
         self.assertIn("cccStuckPill", app_js)
         self.assertIn("/api/codex/stuck-summary", app_js)
         self.assertIn("sessions currently labeled Stuck", app_js)
-        self.assertIn("stuck —", app_js)
+        self.assertIn("stuck -", app_js)
 
 
 if __name__ == "__main__":
