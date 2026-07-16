@@ -27201,6 +27201,20 @@ def _finalize_queued_steer_result(session_id, text, result):
         if consumed:
             result["queued_consumed"] = consumed
         return result
+    if result.get("code") == "codex_no_active_turn":
+        # Steer is meaningful only while a turn is running. If the turn ended
+        # between rendering the queued row and the click, leave every durable
+        # item in place and wake the normal pump. The pump owns FIFO selection,
+        # delivery confirmation, and removal, so clicking a later row can never
+        # jump it ahead of an older message.
+        _schedule_codex_queue_pump(session_id)
+        result.update({
+            "ok": True,
+            "queued": True,
+            "queued_preserved": True,
+            "queue_pump_started": True,
+        })
+        return result
     result["queued"] = True
     result["queued_preserved"] = True
     return result

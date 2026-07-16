@@ -5449,6 +5449,11 @@
     btn.textContent = 'Steering…';
     try {
       const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true });
+      if (data && data.queue_pump_started) {
+        showOpToast('Turn ended; sending the oldest queued message now.');
+        setTimeout(refreshConversationList, 500);
+        return;
+      }
       if (data && data.queued_preserved) {
         const reason = formatInjectFailure(data, 0) || data.error || 'the active turn cannot be steered from CCC';
         showOpToast('Still queued: ' + reason, 'error');

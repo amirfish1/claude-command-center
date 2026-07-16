@@ -5334,7 +5334,12 @@ class TestServerImports(unittest.TestCase):
         ]
         self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true })", queued_handler)
         self.assertNotIn("postInjectInput(sid, text, 'send')", queued_handler)
+        self.assertIn("if (data && data.queue_pump_started)", queued_handler)
         self.assertIn("if (data && data.queued_preserved)", queued_handler)
+        self.assertLess(
+            queued_handler.index("if (data && data.queue_pump_started)"),
+            queued_handler.index("if (data && data.queued_preserved)"),
+        )
         self.assertIn("if (!data.queued_consumed)", queued_handler)
         self.assertGreater(
             queued_handler.index("if (row && row._pendingRef) removePendingSendEcho(row._pendingRef)"),
@@ -14755,6 +14760,32 @@ class TestPendingInputs(unittest.TestCase):
 
         self.assertTrue(result["queued"])
         self.assertTrue(result["queued_preserved"])
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue[sid],
+                ["first", "target", "last"],
+            )
+
+    def test_finalize_queued_steer_without_active_turn_pumps_fifo(self):
+        sid = "queued-steer-idle"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["first", "target", "last"]
+
+        with mock.patch.object(self.server, "_schedule_codex_queue_pump") as schedule:
+            result = self.server._finalize_queued_steer_result(
+                sid,
+                "target",
+                {
+                    "ok": False,
+                    "code": "codex_no_active_turn",
+                    "error": "No running Codex turn to steer",
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queue_pump_started"])
+        self.assertTrue(result["queued_preserved"])
+        schedule.assert_called_once_with(sid)
         with self.server._pending_resume_lock:
             self.assertEqual(
                 self.server._pending_resume_queue[sid],
