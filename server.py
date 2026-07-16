@@ -21705,9 +21705,19 @@ def _codex_reconcile_thread_idle(session_id):
     with _CODEX_APP_SERVER_LOCK:
         state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(str(session_id), {})
         previous_status = str(state.get("status") or "").lower()
+        previous_turn_id = str(state.get("active_turn_id") or "").strip()
+        previous_writer = str(state.get("active_writer") or "").strip()
+        previous_item = (
+            state.get("active_item")
+            if isinstance(state.get("active_item"), dict)
+            else {}
+        )
+        previous_tool = str(
+            previous_item.get("tool") or previous_item.get("type") or ""
+        ).strip()
         cleared_phantom = bool(
-            state.get("active_turn_id")
-            or state.get("active_writer")
+            previous_turn_id
+            or previous_writer
             or previous_status == "active"
         )
         changed = bool(
@@ -21722,10 +21732,21 @@ def _codex_reconcile_thread_idle(session_id):
         state.pop("active_item", None)
         state.pop("active_items", None)
         if cleared_phantom:
+            evidence = []
+            if previous_writer:
+                evidence.append(f"writer={previous_writer}")
+            if previous_turn_id:
+                evidence.append(f"turn={previous_turn_id}")
+            if previous_tool:
+                evidence.append(f"stale item={previous_tool}")
+            evidence_text = f"; cleared {', '.join(evidence)}" if evidence else ""
             _codex_coordination_event_unlocked(
                 state,
                 "external_turn_ended",
-                detail="Codex re-read found no live turn; queued input may proceed",
+                detail=(
+                    "Codex re-read found no live turn"
+                    f"{evidence_text}; queued input may proceed"
+                ),
             )
         if changed:
             _save_codex_app_server_state_unlocked()

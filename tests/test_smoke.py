@@ -15305,7 +15305,15 @@ class TestCodexEsc(unittest.TestCase):
                 "status": "active",
                 "active_turn_id": "ended-turn",
                 "active_writer": "unknown",
+                "active_item": {
+                    "id": "stale-bash-call",
+                    "tool": "Bash",
+                    "type": "commandExecution",
+                    "in_flight": True,
+                },
             }
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["wake and continue"]
         resumed = {
             "result": {
                 "thread": {"id": sid, "status": {"type": "idle"}, "turns": []}
@@ -15314,7 +15322,19 @@ class TestCodexEsc(unittest.TestCase):
 
         with mock.patch.object(self.server, "_codex_app_server_is_live", return_value=True), \
              mock.patch.object(self.server, "_codex_app_server_request", return_value=resumed), \
-             mock.patch.object(self.server, "_schedule_codex_queue_pump") as schedule:
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "accepted": True, "confirmed": True},
+             ) as resume, \
+             mock.patch.object(self.server, "_save_pending_inputs"), \
+             mock.patch.object(
+                 self.server,
+                 "_schedule_codex_queue_pump",
+                 side_effect=self.server._pump_codex_resume_queue,
+             ) as schedule:
             result = self.server._codex_interrupt_via_app_server(sid)
 
         self.assertEqual(result["code"], "codex_no_active_turn")
@@ -15322,7 +15342,19 @@ class TestCodexEsc(unittest.TestCase):
         self.assertEqual(state["status"], "idle")
         self.assertNotIn("active_turn_id", state)
         self.assertNotIn("active_writer", state)
+        self.assertNotIn("active_item", state)
+        ended = [
+            event for event in state.get("coordination_events", [])
+            if event.get("kind") == "external_turn_ended"
+        ]
+        self.assertEqual(len(ended), 1)
+        self.assertIn("writer=unknown", ended[0]["detail"])
+        self.assertIn("turn=ended-turn", ended[0]["detail"])
+        self.assertIn("stale item=Bash", ended[0]["detail"])
         schedule.assert_called_once_with(sid)
+        resume.assert_called_once_with(sid, "wake and continue", _from_queue=True)
+        with self.server._pending_resume_lock:
+            self.assertNotIn(sid, self.server._pending_resume_queue)
 
     def test_interrupt_codex_app_server_turn(self):
         calls = []
