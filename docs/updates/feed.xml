@@ -1,13 +1,13 @@
 <?xml version="1.0" ?>
 <feed xmlns="http://www.w3.org/2005/Atom">
-  <title>Claude Command Center · Updates</title>
+  <title>CCC Updates</title>
   <subtitle>Each release, told as the pain it removed.</subtitle>
   <id>https://ccc.amirfish.ai/updates/</id>
   <link href="https://ccc.amirfish.ai/updates/feed.xml" rel="self"/>
   <link href="https://ccc.amirfish.ai/updates/" rel="alternate"/>
   <updated>2026-07-10T00:00:00Z</updated>
   <author>
-    <name>Claude Command Center</name>
+    <name>CCC</name>
   </author>
   <entry>
     <id>https://ccc.amirfish.ai/updates/one-board-every-session.html</id>
@@ -18,7 +18,7 @@
     <summary>Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.</summary>
     <category term="see-everything" label="See everything"/>
     <author>
-      <name>Claude Command Center</name>
+      <name>CCC</name>
     </author>
     <content type="html">&lt;h2&gt;The pain&lt;/h2&gt;
 &lt;p&gt;You know the mid-afternoon moment: nine terminal tabs open, several coding agents running, and no quick way to tell which tab is which session. One finished an hour ago. One is waiting on you. You cannot see the fleet, so you cycle through tabs hoping to land on the one that matters.&lt;/p&gt;
@@ -45,7 +45,7 @@
     <summary>A flat list of sessions stops meaning anything past a dozen. The project tree groups them under nestable objects, so strategy stays above the churn.</summary>
     <category term="organize" label="Organize"/>
     <author>
-      <name>Claude Command Center</name>
+      <name>CCC</name>
     </author>
     <content type="html">&lt;h2&gt;The pain&lt;/h2&gt;
 &lt;p&gt;You started with three sessions and a flat list was fine. Now there are thirty. Two of them are the strategy sessions that decide everything, and they have sunk to the bottom under a pile of one-off execution runs you will archive by tonight. The list is technically complete and completely unreadable.&lt;/p&gt;

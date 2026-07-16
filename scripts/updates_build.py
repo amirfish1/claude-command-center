@@ -56,6 +56,7 @@ from xml.etree import ElementTree as ET
 
 # ── Constants ────────────────────────────────────────────────────────────────
 SITE = "https://ccc.amirfish.ai"
+SITE_NAME = "CCC Updates"
 REPO = "https://github.com/amirfish1/claude-command-center"
 BUTTONDOWN_USER = "USERNAME-TODO-PENDING-APPROVAL"  # set on Buttondown signup
 
@@ -482,7 +483,7 @@ def render_page(u: dict) -> str:
 <body>
 <header class="u-top">
   <a class="u-back" href="index.html">← All updates</a>
-  <a class="u-brand" href="{SITE}">Claude Command Center</a>
+  <a class="u-brand" href="{SITE}">CCC</a>
 </header>
 <main class="u-wrap">
   <article class="u-article">
@@ -545,12 +546,12 @@ def render_index(updates: list) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Updates · Claude Command Center</title>
+<title>Updates · {SITE_NAME}</title>
 <meta name="description" content="Product updates for CCC: each release told as the pain it removed, with proof and how to try it.">
 <link rel="canonical" href="{canonical}">
 
 <meta property="og:type" content="website">
-<meta property="og:title" content="Claude Command Center · Updates">
+<meta property="og:title" content="{SITE_NAME}">
 <meta property="og:description" content="Each CCC release, told as the pain it removed, with proof and how to try it.">
 <meta property="og:url" content="{canonical}">
 <meta property="og:image" content="{attr(og_image)}">
@@ -562,7 +563,7 @@ def render_index(updates: list) -> str:
 </head>
 <body>
 <header class="u-top">
-  <a class="u-brand" href="{SITE}">Claude Command Center</a>
+  <a class="u-brand" href="{SITE}">CCC</a>
   <a class="u-back" href="{SITE}">Home →</a>
 </header>
 <main class="u-wrap">
@@ -652,7 +653,7 @@ def _el(parent, tag, text=None, **attrs):
 def render_feed(updates: list) -> str:
     ET.register_namespace("", ATOM)
     feed = ET.Element("{%s}feed" % ATOM)
-    _el(feed, "title", "Claude Command Center · Updates")
+    _el(feed, "title", SITE_NAME)
     _el(feed, "subtitle", "Each release, told as the pain it removed.")
     _el(feed, "id", f"{SITE}/updates/")
     _el(feed, "link", href=f"{SITE}/updates/feed.xml", rel="self")
@@ -660,7 +661,7 @@ def render_feed(updates: list) -> str:
     latest = max((u["_date"] for u in updates), default=datetime.now(timezone.utc))
     _el(feed, "updated", rfc3339(latest))
     author = _el(feed, "author")
-    _el(author, "name", "Claude Command Center")
+    _el(author, "name", "CCC")
 
     for u in updates:
         slug = u["slug"]
@@ -675,7 +676,7 @@ def render_feed(updates: list) -> str:
         _el(entry, "category", term=u["problem_family"],
             label=FAMILY_LABELS.get(u["problem_family"], u["problem_family"]))
         ea = _el(entry, "author")
-        _el(ea, "name", "Claude Command Center")
+        _el(ea, "name", "CCC")
         # Content: rendered body sections + media, all URLs absolutized.
         chunks = []
         for key in RENDER_ORDER:
