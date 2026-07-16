@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CCC vs heavyweight agent IDEs</title>
+<meta name="description" content="Some tools give you a full visual IDE for AI coding: an Electron desktop app, native mobile, cloud sync, a suite of editors. CCC makes the opposite bet: local, open source, no account, attaches to every session however you launched it. Here is the honest trade, including where CCC loses.">
+<link rel="canonical" href="https://ccc.amirfish.ai/vs-heavyweight-ides.html">
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+
+<meta property="og:title" content="CCC vs heavyweight agent IDEs">
+<meta property="og:description" content="Local, open source, no account, attaches to every coding-agent session however you launched it. The honest trade against a heavyweight visual IDE, including where CCC loses.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ccc.amirfish.ai/vs-heavyweight-ides.html">
+
+<style>
+  :root {
+    --bg: #0a0d11;
+    --bg-2: #11151b;
+    --bg-3: #161b22;
+    --bg-4: #1c232b;
+    --fg: #e6ebf2;
+    --fg-dim: #9aa3ad;
+    --fg-mute: #7f8791;
+    --line: #232830;
+    --line-strong: #2e343d;
+    --orange: #f5a623;
+    --orange-soft: rgba(245, 166, 35, 0.12);
+    --green: #6ee7b7;
+    --green-bright: #4dd599;
+    --blue: #8fb3ff;
+    --purple: #bd9bff;
+    --red: #ff7a66;
+    --code-bg: #0a0c0f;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  body { line-height: 1.5; }
+  a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--orange); }
+  code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  .wrap-narrow { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  header.nav {
+    border-bottom: 1px solid var(--line);
+    background: rgba(10, 13, 17, 0.85);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
+  .brand { font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 10px; flex-shrink: 0; white-space: nowrap; text-decoration: none; color: var(--fg); }
+  .brand .dot { display: inline-block; width: 8px; height: 8px; background: var(--orange); border-radius: 50%; box-shadow: 0 0 12px var(--orange); }
+  .nav-links { display: flex; gap: 22px; font-size: 14px; align-items: center; }
+  .nav-links a { text-decoration: none; color: var(--fg-dim); }
+  .nav-links a:hover { color: var(--fg); }
+  .nav-links a.here { color: var(--fg); }
+  @media (max-width: 640px) { .nav-links a:not(.gh) { display: none; } }
+
+  /* Hero */
+  .hero { padding: 64px 0 20px; position: relative; }
+  .hero::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 800px 400px at 15% 10%, rgba(245, 166, 35, 0.10), transparent 60%),
+      radial-gradient(ellipse 600px 300px at 85% 30%, rgba(110, 231, 183, 0.06), transparent 60%);
+    pointer-events: none;
+  }
+  .hero-inner { position: relative; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; color: var(--orange);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 18px;
+  }
+  h1.hero-title {
+    font-size: clamp(34px, 5.2vw, 58px);
+    line-height: 1.04; letter-spacing: -0.025em;
+    margin: 0 0 22px; font-weight: 700; max-width: 20ch;
+  }
+  h1.hero-title .orange { color: var(--orange); }
+  .lede { font-size: 19px; color: var(--fg-dim); max-width: 64ch; margin: 0 0 12px; }
+  .lede .tag { color: var(--fg); }
+  .crumb { font-family: var(--mono); font-size: 12px; color: var(--fg-mute); margin-bottom: 24px; }
+  .crumb a { color: var(--fg-dim); }
+
+  /* Two-bets */
+  .bets { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 8px; }
+  @media (max-width: 780px) { .bets { grid-template-columns: 1fr; } }
+  .bet {
+    padding: 26px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+  }
+  .bet.ours { border-color: rgba(245, 166, 35, 0.4); background: linear-gradient(180deg, var(--orange-soft), var(--bg-2) 60%); }
+  .bet h3 { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
+  .bet .kind { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); margin-bottom: 14px; }
+  .bet.ours .kind { color: var(--orange); }
+  .bet p { margin: 0; color: var(--fg-dim); font-size: 15px; }
+
+  /* Sections */
+  section { padding: 72px 0; border-top: 1px solid var(--line); }
+  section h2 {
+    font-size: clamp(28px, 4.2vw, 40px); margin: 0 0 14px;
+    letter-spacing: -0.015em; font-weight: 700;
+  }
+  section h2 .orange { color: var(--orange); }
+  section .section-lede { color: var(--fg-dim); max-width: 64ch; margin: 0 0 40px; font-size: 17px; }
+  .section-eyebrow {
+    font-family: var(--mono); font-size: 12px; color: var(--orange);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 18px;
+  }
+
+  /* Chapters (framed media + copy) */
+  .chapter { padding: 52px 0; border-top: 1px solid var(--line); }
+  .chapter:first-of-type { border-top: 0; padding-top: 8px; }
+  .chapter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+  @media (max-width: 860px) { .chapter-grid { grid-template-columns: 1fr; gap: 26px; } }
+  @media (min-width: 861px) { .chapter--media-left .chapter-media { order: -1; } }
+  .chapter-eyebrow {
+    font-family: var(--mono); font-size: 12px; color: var(--orange);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 14px;
+  }
+  .chapter-title { font-size: clamp(23px, 3vw, 31px); margin: 0 0 12px; letter-spacing: -0.015em; font-weight: 700; }
+  .chapter-promise { color: var(--fg-dim); font-size: 16px; margin: 0; max-width: 50ch; }
+  .chapter-highlights { list-style: none; margin: 20px 0 0; padding: 0; }
+  .chapter-highlights li { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.5; }
+  .chapter-highlights li:last-child { border-bottom: 0; }
+  .hl-pain { color: var(--fg); font-weight: 600; }
+  .hl-out { color: var(--fg-dim); }
+
+  .chapter-frame {
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    background: var(--bg-2); box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.7);
+  }
+  .frame-bar { display: flex; align-items: center; gap: 8px; padding: 9px 14px; background: var(--bg-3); border-bottom: 1px solid var(--line); }
+  .frame-bar .lights { display: flex; gap: 6px; }
+  .frame-bar .light { width: 10px; height: 10px; border-radius: 50%; }
+  .light.red { background: #ff5f57; }
+  .light.yel { background: #febc2e; }
+  .light.grn { background: #28c840; }
+  .frame-bar .url { margin-left: 12px; font-family: var(--mono); font-size: 11px; color: var(--fg-mute); }
+  .frame-body { position: relative; aspect-ratio: 16 / 9; background: #0a0c0f; }
+  .frame-body img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+  .media-cap { margin-top: 12px; font-family: var(--mono); font-size: 12px; color: var(--fg-mute); }
+
+  /* Phone frame */
+  .f6-media { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .phone-frame {
+    width: 210px; max-width: 60%; flex: 0 0 auto;
+    border: 8px solid var(--bg-4); border-radius: 30px; overflow: hidden;
+    background: #0a0c0f; box-shadow: 0 30px 60px -28px rgba(0, 0, 0, 0.85);
+  }
+  .phone-frame img { display: block; width: 100%; height: auto; }
+
+  /* Comparison table */
+  .compare-wrap { overflow-x: auto; }
+  table.compare {
+    width: 100%; border-collapse: collapse; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+  }
+  table.compare th, table.compare td {
+    padding: 14px 16px; text-align: left;
+    border-bottom: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.compare th:last-child, table.compare td:last-child { border-right: 0; }
+  table.compare tr:last-child td { border-bottom: 0; }
+  table.compare thead th {
+    background: var(--bg-3); color: var(--fg);
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+  }
+  table.compare thead th.us { color: var(--orange); }
+  table.compare tbody td:first-child { color: var(--fg); font-weight: 500; background: var(--bg-2); width: 30%; }
+  table.compare tbody td { color: var(--fg-dim); }
+  table.compare .yes { color: var(--green-bright); font-weight: 600; }
+  table.compare .no { color: var(--fg-mute); }
+  table.compare .partial { color: var(--orange); font-weight: 500; }
+  .table-note { margin-top: 14px; color: var(--fg-mute); font-size: 13px; }
+
+  /* Tradeoffs */
+  .trade-list { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 780px) { .trade-list { grid-template-columns: 1fr; } }
+  .trade-list li {
+    padding: 22px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+    color: var(--fg-dim); font-size: 15px; line-height: 1.5;
+  }
+  .trade-list li strong { color: var(--fg); display: block; margin-bottom: 6px; font-weight: 600; font-size: 15px; }
+  .trade-note { margin-top: 26px; color: var(--fg-dim); font-size: 16px; max-width: 62ch; }
+  .trade-note strong { color: var(--fg); }
+
+  /* Who is it for */
+  .who { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 780px) { .who { grid-template-columns: 1fr; } }
+  .who-card { padding: 26px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; }
+  .who-card.ours { border-color: rgba(245, 166, 35, 0.4); }
+  .who-card h3 { margin: 0 0 12px; font-size: 17px; font-weight: 700; }
+  .who-card.ours h3 { color: var(--orange); }
+  .who-card p { margin: 0; color: var(--fg-dim); font-size: 15px; }
+
+  /* CTA banner */
+  .cta-banner {
+    text-align: center; padding: 62px 28px;
+    background: linear-gradient(180deg, var(--orange-soft), transparent);
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .cta-banner h2 { margin: 0 0 12px; font-size: clamp(26px, 4vw, 34px); }
+  .cta-banner p { color: var(--fg-dim); margin: 0 auto 26px; max-width: 56ch; }
+  .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 22px; border-radius: 8px;
+    font-family: var(--mono); font-size: 14px;
+    text-decoration: none; border: 1px solid var(--line-strong);
+    background: var(--bg-2); color: var(--fg);
+    transition: border-color 120ms, transform 120ms, background 120ms;
+  }
+  .btn:hover { border-color: var(--orange); }
+  .btn-primary { background: var(--orange); color: #0a0d11; border-color: var(--orange); font-weight: 600; }
+  .btn-primary:hover { transform: translateY(-1px); background: #ffb930; }
+  .btn-soft { background: transparent; border-color: var(--line-strong); color: var(--fg-dim); }
+  .btn-soft:hover { color: var(--fg); border-color: var(--orange); }
+
+  /* Footer */
+  footer { padding: 52px 0 76px; color: var(--fg-mute); font-size: 14px; }
+  footer .foot-row { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  footer .links { display: flex; gap: 22px; flex-wrap: wrap; }
+  footer a { color: var(--fg-mute); text-decoration: none; }
+  footer a:hover { color: var(--fg); }
+
+  /* Scroll reveal */
+  @keyframes fade-up { from { opacity: 0; transform: translateY(36px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  .fade-target { opacity: 0; transform: translateY(36px) scale(0.98); }
+  .fade-target.is-visible { animation: fade-up 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  @media (prefers-reduced-motion: reduce) {
+    .fade-target { opacity: 1 !important; transform: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">
+      <span class="dot"></span>
+      <span>claude command center</span>
+    </a>
+    <nav class="nav-links">
+      <a href="/#moment">The problem</a>
+      <a href="/#families">What it solves</a>
+      <a href="/#compare">Compare</a>
+      <a class="here" href="/vs-heavyweight-ides.html">vs IDEs</a>
+      <a href="/#install">Install</a>
+      <a class="gh" href="https://github.com/amirfish1/claude-command-center" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top: 0;">
+    <div class="wrap hero-inner">
+      <div class="crumb fade-target"><a href="/">Home</a> / Compare / vs heavyweight agent IDEs</div>
+      <div class="eyebrow fade-target">Honest comparison</div>
+      <h1 class="hero-title fade-target">CCC vs heavyweight agent <span class="orange">IDEs</span>.</h1>
+      <p class="lede fade-target">
+        A growing category gives you a full visual IDE for AI coding: an Electron desktop app, native mobile, cloud sync, a suite of visual editors, a subscription. CCC makes the opposite bet. <span class="tag">This page is the honest trade, including where CCC loses.</span>
+      </p>
+
+      <div class="bets fade-target">
+        <div class="bet">
+          <div class="kind">The heavyweight bet</div>
+          <h3>Own execution, add a rich workspace.</h3>
+          <p>You launch agents through the app, and it wraps them in a visual IDE: WYSIWYG diff review, editor suite, native mobile, cloud sync, teams. Broader surface, heavier footprint, an account for the cloud parts.</p>
+        </div>
+        <div class="bet ours">
+          <div class="kind">The CCC bet</div>
+          <h3>Attach to what is already running.</h3>
+          <p>CCC reads each engine's on-disk state as the source of truth, so it sees every session however you launched it. A stdlib Python server and one HTML file. Local, open source, no account. Small on purpose.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="differentiators">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">Where CCC wins</div>
+      <h2 class="fade-target">What CCC gives you that a heavyweight IDE <span class="orange">doesn't</span>.</h2>
+      <p class="section-lede fade-target">
+        Every claim below is a shipped feature, shown as a real capture from seeded demo data. The screenshots are the current list view. The kanban board still exists in CCC; it is no longer the primary surface.
+      </p>
+    </div>
+
+    <!-- D1: attach -->
+    <div class="chapter chapter--media-left wrap">
+      <div class="chapter-grid">
+        <div class="chapter-copy fade-target">
+          <div class="chapter-eyebrow">01 &middot; Attach, don't own</div>
+          <h2 class="chapter-title">It sees sessions it never spawned.</h2>
+          <p class="chapter-promise">A tool that owns execution goes blind the moment you touch a terminal. CCC reads on-disk state, so a session you resume by hand still shows up.</p>
+          <ul class="chapter-highlights">
+            <li><span class="hl-pain">Resume a session in a terminal</span> <span class="hl-out">and it appears on the board automatically. No relaunch through an app.</span></li>
+            <li><span class="hl-pain">Five engines, one board.</span> <span class="hl-out">Claude Code first-class; Codex, Cursor, Antigravity, and Kilo Code spawn and ingest with documented gaps.</span></li>
+            <li><span class="hl-pain">Close the dashboard</span> <span class="hl-out">and sessions keep running. Reopen tomorrow and everything reattaches.</span></li>
+          </ul>
+        </div>
+        <div class="chapter-media fade-target">
+          <div class="chapter-frame">
+            <div class="frame-bar">
+              <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+              <span class="url">localhost:8090</span>
+            </div>
+            <div class="frame-body">
+              <img src="./product-story/assets/shots/S-OVR.png" alt="CCC list view: coding-agent sessions across engines with status badges, beside an open transcript" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+            </div>
+          </div>
+          <div class="media-cap">List view: the whole fleet, engine badges, one board</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- D2: trust by inspection -->
+    <div class="chapter wrap">
+      <div class="chapter-grid">
+        <div class="chapter-copy fade-target">
+          <div class="chapter-eyebrow">02 &middot; Local, open, no account</div>
+          <h2 class="chapter-title">Trust by inspection, not by login.</h2>
+          <p class="chapter-promise">A stdlib-only Python server and a no-build vanilla-JS UI. No pip installs, no bundler, no Electron, no cloud database, no account. MIT.</p>
+          <ul class="chapter-highlights">
+            <li><span class="hl-pain">Nothing hidden to audit.</span> <span class="hl-out">The whole server is stdlib Python; the UI is one HTML file. Read what runs on your machine without a build system.</span></li>
+            <li><span class="hl-pain">State you can edit by hand.</span> <span class="hl-out">Human-readable JSON sidecars under <code>~/.claude/command-center/</code>. No opaque local database.</span></li>
+            <li><span class="hl-pain">Binds to 127.0.0.1 by default.</span> <span class="hl-out">Single-user local tool. Exposing it wider is explicit opt-in with a printed warning.</span></li>
+          </ul>
+        </div>
+        <div class="chapter-media fade-target">
+          <div class="chapter-frame">
+            <div class="frame-bar">
+              <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+              <span class="url">localhost:8090 &middot; needs attention</span>
+            </div>
+            <div class="frame-body">
+              <img src="./product-story/assets/shots/S-F2a.png" alt="CCC list view with one session flagged as waiting on a question, next to an open transcript ready to answer" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+            </div>
+          </div>
+          <div class="media-cap">Needs-attention lane, read from the real transcript</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- D3: queues -->
+    <div class="chapter chapter--media-left wrap">
+      <div class="chapter-grid">
+        <div class="chapter-copy fade-target">
+          <div class="chapter-eyebrow">03 &middot; Let work run unattended</div>
+          <h2 class="chapter-title">Queues that drain from ground truth.</h2>
+          <p class="chapter-promise">Drop tickets in a queue and a bound worker claims, fixes, verifies, and closes them. Queue health is judged from ticket and worker state, not an agent saying "done."</p>
+          <ul class="chapter-highlights">
+            <li><span class="hl-pain">A worker gets stuck and nothing notices.</span> <span class="hl-out">A health watcher flags stuck queues from ground truth and nudges workers automatically.</span></li>
+            <li><span class="hl-pain">A GitHub issue should become a session in one click.</span> <span class="hl-out">It does, and verify closes the issue with a commit-SHA comment. Requires the gh CLI.</span></li>
+            <li><span class="hl-pain">Parallel agents clobber one working tree.</span> <span class="hl-out">One-click fresh git worktrees per task, with optional repo init scripts.</span></li>
+          </ul>
+        </div>
+        <div class="chapter-media fade-target">
+          <div class="chapter-frame">
+            <div class="frame-bar">
+              <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+              <span class="url">localhost:8090 &middot; work queue</span>
+            </div>
+            <div class="frame-body">
+              <img src="./product-story/assets/shots/S-F5a.png" alt="CCC work queue: three named queues with health badges above a list of open tickets with priorities and ages" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+            </div>
+          </div>
+          <div class="media-cap">Work queue with health states judged from ground truth</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- D4: mobile PWA -->
+    <div class="chapter wrap">
+      <div class="chapter-grid">
+        <div class="chapter-copy fade-target">
+          <div class="chapter-eyebrow">04 &middot; Work from anywhere</div>
+          <h2 class="chapter-title">Your phone, no app store.</h2>
+          <p class="chapter-promise">A responsive, installable web UI shows the whole fleet and lets you steer any session from your network. No native app to download, no login.</p>
+          <ul class="chapter-highlights">
+            <li><span class="hl-pain">Phone in hand on the couch.</span> <span class="hl-out">Monitor and steer sessions from a phone-width PWA over your own network.</span></li>
+            <li><span class="hl-pain">A different machine entirely.</span> <span class="hl-out">Continue-on-another-machine hands a session off atomically, repo state and transcript included, to a paired peer.</span></li>
+            <li><span class="hl-pain">No cloud in the loop.</span> <span class="hl-out">The fleet stays on your machine. You reach it directly, not through someone else's server.</span></li>
+          </ul>
+        </div>
+        <div class="chapter-media fade-target">
+          <div class="f6-media">
+            <div class="phone-frame">
+              <img src="./product-story/assets/mobile/M-01.png" alt="CCC session list on a phone-width screen, showing live and waiting sessions" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+            </div>
+          </div>
+          <div class="media-cap" style="text-align:center;">Installable PWA, not a native app</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="table">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">Side by side</div>
+      <h2 class="fade-target">The honest table.</h2>
+      <p class="section-lede fade-target">
+        Two different products for two different jobs. This is the category comparison, not a single named rival. Rows where CCC loses are marked plainly.
+      </p>
+
+      <div class="compare-wrap fade-target">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th></th>
+              <th class="us">CCC v5.8</th>
+              <th>Heavyweight agent IDE</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Sees terminal sessions you didn't spawn</td>
+              <td class="yes">&#10003; attach, don't own</td>
+              <td class="no">no, wrap and own</td>
+            </tr>
+            <tr>
+              <td>Install footprint</td>
+              <td class="yes">stdlib Python server + one HTML file, curl one-liner</td>
+              <td class="no">Electron desktop app, plus native mobile and cloud backend</td>
+            </tr>
+            <tr>
+              <td>Account required</td>
+              <td class="yes">&#10003; never</td>
+              <td class="partial">for sync and teams</td>
+            </tr>
+            <tr>
+              <td>Data location</td>
+              <td class="yes">100% local, human-readable JSON</td>
+              <td class="partial">local database plus cloud sync</td>
+            </tr>
+            <tr>
+              <td>Multi-engine board</td>
+              <td class="yes">&#10003; 5 engines, Claude Code first-class</td>
+              <td class="partial">several engines, all wrapped</td>
+            </tr>
+            <tr>
+              <td>Readable source, no build step</td>
+              <td class="yes">&#10003; stdlib Python, no-build UI, MIT</td>
+              <td class="no">large TypeScript + native codebase</td>
+            </tr>
+            <tr>
+              <td>Spatial canvas over repos and sessions</td>
+              <td class="yes">&#10003; Flow canvas</td>
+              <td class="no">no</td>
+            </tr>
+            <tr>
+              <td>Visual WYSIWYG diff review + editor suite</td>
+              <td class="no">no, review via transcripts and sessions</td>
+              <td class="yes">&#10003; their core bet</td>
+            </tr>
+            <tr>
+              <td>Native iOS / Android app, push, voice reply</td>
+              <td class="no">no, responsive PWA only</td>
+              <td class="yes">&#10003;</td>
+            </tr>
+            <tr>
+              <td>Cloud sync and team collaboration</td>
+              <td class="no">no, single-user local by design</td>
+              <td class="yes">&#10003;</td>
+            </tr>
+            <tr>
+              <td>Platforms</td>
+              <td class="partial">macOS first-class, Linux headless, native Windows install</td>
+              <td class="yes">macOS, Windows, Linux, iOS, Android</td>
+            </tr>
+            <tr>
+              <td>Money model</td>
+              <td class="yes">free OSS, MIT</td>
+              <td class="partial">subscription for cloud and teams</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note fade-target">As of July 2026. "Heavyweight agent IDE" describes the category of Electron desktop plus native mobile plus cloud-sync tools, not one product. Engine and platform specifics for CCC follow the README support matrix.</p>
+    </div>
+  </section>
+
+  <section id="tradeoffs">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">Where CCC loses</div>
+      <h2 class="fade-target">What a heavyweight IDE gives that CCC <span class="orange">doesn't</span>.</h2>
+      <p class="section-lede fade-target">
+        This is not a footnote. If you want any of these, a heavyweight IDE is the better tool, and that is an honest answer.
+      </p>
+
+      <ul class="trade-list fade-target">
+        <li>
+          <strong>A visual editing and diff-review suite.</strong>
+          WYSIWYG red/green review of code, mockups, spreadsheets, and diagrams, plus rich editors. CCC reviews through transcripts and spawned sessions, not a visual canvas.
+        </li>
+        <li>
+          <strong>Native mobile apps.</strong>
+          iOS and Android with swipe-to-approve, voice reply, and push notifications to your phone. CCC gives a responsive PWA on your network, with no push and no voice.
+        </li>
+        <li>
+          <strong>Cloud sync and team collaboration.</strong>
+          Shared, synced, sometimes encrypted team workspaces. CCC is single-user and local by design, with no hosted control plane.
+        </li>
+        <li>
+          <strong>Deep in-app git and terminal.</strong>
+          Inline commit, merge, and conflict-resolution UI, an embedded terminal, and branch or fork of a session. CCC jumps to your native terminal and spawns worktrees instead.
+        </li>
+        <li>
+          <strong>Full cross-platform parity.</strong>
+          First-class desktop on macOS, Windows, and Linux, plus mobile. CCC is macOS-first; Linux runs headless and native Windows install shipped in v5.6.
+        </li>
+        <li>
+          <strong>An extension marketplace and broader surface.</strong>
+          Plugin SDKs, web clippers, and a wide feature catalog. CCC stays deliberately small so you can read the whole thing.
+        </li>
+      </ul>
+
+      <p class="trade-note fade-target">
+        <strong>The short version.</strong> If you want a rich visual IDE with cloud sync, teams, and mobile apps, that is a different product, and a good one. If you want to see and steer every AI coding session on your machine with zero install, zero login, and source you can read, that is CCC.
+      </p>
+    </div>
+  </section>
+
+  <section id="who">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">Pick the right one</div>
+      <h2 class="fade-target">Who each is for.</h2>
+      <div class="who fade-target">
+        <div class="who-card">
+          <h3>Reach for a heavyweight IDE if</h3>
+          <p>You want a polished visual workspace as your primary editor, you review changes on a WYSIWYG canvas, you need native mobile with push, or your team collaborates through synced cloud workspaces and a subscription is fine.</p>
+        </div>
+        <div class="who-card ours">
+          <h3>Reach for CCC if</h3>
+          <p>You already run several coding agents in terminals, you want one local board that sees them however you launched them, you care that the source is readable and nothing phones home, and you want it running in about a minute with no account.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<section class="cta-banner">
+  <div class="wrap-narrow">
+    <h2 class="fade-target">See it on your own machine.</h2>
+    <p class="fade-target">Every session on one local board, and the one that needs you surfaced. Local, open source, no account. Try the read-only demo first, or install in about a minute.</p>
+    <div class="cta-row fade-target">
+      <a class="btn btn-primary" href="/#install">Install <span>&rarr;</span></a>
+      <a class="btn btn-soft" href="/demo">Tour the demo</a>
+      <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; Star on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-row">
+      <div>
+        Claude Command Center. MIT &copy; 2026 Amir Fish.<br>
+        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, Cursor, <a href="https://antigravity.google">Antigravity</a>, and Kilo Code.
+      </div>
+      <div class="links">
+        <a href="/">Home</a>
+        <a href="/#compare">Compare</a>
+        <a href="https://github.com/amirfish1/claude-command-center">GitHub</a>
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="/demo">Demo</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const targets = document.querySelectorAll('.fade-target');
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      targets.forEach(el => el.classList.add('is-visible'));
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    targets.forEach(el => observer.observe(el));
+  });
+</script>
+</body>
+</html>
