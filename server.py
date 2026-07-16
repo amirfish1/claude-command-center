@@ -28466,6 +28466,131 @@ def _uxq_parse_ts(value):
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Queue / ticket-appearance events for replay (W22 / B4)
+#
+# CCC replays group chats on a message-ordered timeline; this derives queue
+# events (a ticket appearing, being claimed, being resolved) from the SAME
+# durable ticket store the health strip reads — no parallel event store. The
+# item's created_at/claimed_at/closed_at timestamps ARE the event log; we fold
+# them in time order so each event carries the queue's depth right after it, and
+# the replay UI interleaves them without rescanning tickets per frame.
+#
+# See docs/superpowers/specs/2026-07-16-queue-replay-design.md.
+# ---------------------------------------------------------------------------
+_QUEUE_REPLAY_MAX_EVENTS = 300           # newest-wins cap on returned events
+_QUEUE_REPLAY_MAX_LOOKBACK_S = 14 * 24 * 3600  # ignore events older than this
+_queue_replay_cache = {}  # (mtime_ns, size) -> {"events": [...], "truncated": bool}
+_queue_replay_cache_lock = threading.Lock()
+
+
+def _queue_store_path_for_cache():
+    """Resolve the durable queue-store file so we can cache by (mtime, size).
+
+    The active engine (`_q`) owns disk layout: WatchTower exposes
+    `_resolve_store_path()`; the stdlib fallback uses `ux_fixes_queue.QUEUE_FILE`
+    (the same file). Returns a Path or None."""
+    resolve = getattr(_q, "_resolve_store_path", None)
+    if callable(resolve):
+        try:
+            return Path(resolve())
+        except Exception:
+            pass
+    try:
+        return Path(ux_fixes_queue.QUEUE_FILE)
+    except Exception:
+        return None
+
+
+def _queue_replay_events_uncached():
+    """Derive + fold queue events from one _q.list_items() read.
+
+    Depth semantics ("queue filling/draining over time"): a queue's depth is its
+    set of ACTIVE tickets — created but not yet resolved. So `created` bumps
+    depth +1, `resolved` drops it -1, and `claimed` annotates state without
+    moving depth (the ticket is still in the queue, now being worked). Folding
+    runs over the FULL history so `depth_after` stays absolute even after the
+    lookback trim below drops old events from what we render."""
+    try:
+        items = _q.list_items()
+    except Exception:
+        items = []
+    raw = []  # (ts, kind, base)
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        base = {
+            "ref": str(it.get("ref") or "").strip(),
+            "queue": (str(it.get("queue") or "").strip()
+                      or str(it.get("project") or "").strip() or "?"),
+            "project": str(it.get("project") or ""),
+            "note": str(it.get("note") or "")[:200],
+            "claimed_by": str(it.get("claimed_by") or ""),
+        }
+        created = _uxq_parse_ts(it.get("created_at"))
+        claimed = _uxq_parse_ts(it.get("claimed_at"))
+        closed = _uxq_parse_ts(it.get("closed_at"))
+        if created:
+            raw.append((created, "created", base))
+        if claimed:
+            raw.append((claimed, "claimed", base))
+        if closed:
+            raw.append((closed, "resolved", base))
+    # Stable time order; created-before-resolved on identical stamps.
+    _kind_rank = {"created": 0, "claimed": 1, "resolved": 2}
+    raw.sort(key=lambda r: (r[0], _kind_rank.get(r[1], 1)))
+    depth_by_queue = {}
+    events = []
+    for ts, kind, base in raw:
+        q = base["queue"]
+        depth = depth_by_queue.get(q, 0)
+        if kind == "created":
+            depth += 1
+        elif kind == "resolved":
+            depth = max(0, depth - 1)
+        depth_by_queue[q] = depth
+        ev = dict(base)
+        ev["kind"] = kind
+        ev["ts"] = ts
+        ev["iso"] = datetime.fromtimestamp(
+            ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ev["depth_after"] = depth
+        events.append(ev)
+    cutoff = time.time() - _QUEUE_REPLAY_MAX_LOOKBACK_S
+    events = [e for e in events if e["ts"] >= cutoff]
+    truncated = False
+    if len(events) > _QUEUE_REPLAY_MAX_EVENTS:
+        events = events[-_QUEUE_REPLAY_MAX_EVENTS:]
+        truncated = True
+    return {"events": events, "truncated": truncated}
+
+
+def _queue_replay_events():
+    """Queue events for replay, memoised by the store file's (mtime, size).
+
+    An unchanged store returns the cached, pre-folded list with zero JSON parse
+    — the replay timeline is built once per group-chat read (already coalesced),
+    never per frame (CLAUDE.md § Performance gates)."""
+    store = _queue_store_path_for_cache()
+    key = None
+    if store is not None:
+        try:
+            st = store.stat()
+            key = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = None
+    if key is not None:
+        cached = _queue_replay_cache.get(key)
+        if cached is not None:
+            return cached
+    result = _queue_replay_events_uncached()
+    if key is not None:
+        with _queue_replay_cache_lock:
+            _queue_replay_cache.clear()  # only the current store snapshot matters
+            _queue_replay_cache[key] = result
+    return result
+
+
 
 # Minutes a fixer can make no closing progress before its project's queue is
 # judged STUCK (used by compute_ux_fixes_health). Mirrors the nudge watcher's
@@ -40738,6 +40863,10 @@ def _group_chat_read_uncached(real_path):
         # ones a nudge would wake (the actual token cost).
         live_count = sum(1 for m in participant_meta.values() if m and m.get("is_live"))
 
+        _qr = _queue_replay_events()
+        _queue_replay = _qr.get("events", [])
+        _queue_replay_truncated = _qr.get("truncated", False)
+
         return {
             "ok": True,
             "content": content,
@@ -40747,6 +40876,11 @@ def _group_chat_read_uncached(real_path):
             "session_ids": sids,
             "name_map": nm,
             "nudge_log": _group_chat_nudge_log_by_message(meta),
+            # Queue/ticket-appearance events for the replay timeline (W22/B4).
+            # Derived from the durable ticket store, cached by (mtime,size);
+            # the client interleaves them into the message-ordered replay.
+            "queue_events": _queue_replay,
+            "queue_events_truncated": _queue_replay_truncated,
             "read_state": meta.get("read_state") or {},
             "status": status,
             "paused": is_paused,
