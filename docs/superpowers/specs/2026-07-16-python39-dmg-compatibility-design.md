@@ -57,12 +57,22 @@ incompatibility.
 Set `requires-python = ">=3.9"` in `pyproject.toml`. Update the public README to
 state Python 3.9+.
 
+Lower the duplicate interpreter selection gate in `run.sh` to Python 3.9 as
+well. Installation and launch must agree on the supported floor; accepting 3.9
+in `install.sh` while rejecting it in `run.sh` would only move the same failure
+one process later.
+
 ### Installer behavior
 
 Change `scripts/install.sh` to accept Python 3.9 or newer and report the same
 clear version error only for 3.8 and older. The native app continues to use its
 augmented `PATH`, so Homebrew/python.org Python remains preferred when present;
 otherwise Apple's executable can satisfy the installer.
+
+Honor the existing `CCC_PYTHON` override in `install.sh`, matching `run.sh`, so
+the same interpreter is validated and launched. This also makes the packaged
+integration test able to prove the exact `/usr/bin/python3` 3.9.6 path rather
+than accidentally succeeding with a Homebrew interpreter earlier on `PATH`.
 
 Do not add automatic downloads, privileged installation, or package-manager
 mutations in v5.8.1.
@@ -87,7 +97,7 @@ Use test-driven development:
 
 Cut v5.8.1 as a patch release because this is a compatibility bug fix. Publish
 both `ccc-v5.8.1.dmg` and stable `ccc.dmg`, update the Sparkle appcast and
-Homebrew formula, then verify:
+Homebrew formula, update the landing-page version label to v5.8.1, then verify:
 
 - Gatekeeper acceptance, Developer ID signature, notarization, and staple.
 - Stable and versioned assets are byte-identical with the published digest.
