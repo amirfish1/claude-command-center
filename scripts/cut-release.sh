@@ -59,6 +59,26 @@ step "Preflight checks"
 git rev-parse "v${VERSION}" >/dev/null 2>&1 && { echo "${RED}tag v${VERSION} already exists${NC}" >&2; exit 1; } || true
 command -v gh >/dev/null || { echo "${RED}gh not found${NC}" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "${RED}gh not authenticated${NC}" >&2; exit 1; }
+if [ "$SKIP_DMG" = 0 ] && [ "$DRY_RUN" = 0 ]; then
+  command -v xcrun >/dev/null || {
+    echo "${RED}xcrun not found; Xcode command-line tools are required for a DMG release${NC}" >&2
+    exit 1
+  }
+  security find-identity -v -p codesigning 2>/dev/null \
+    | grep -q "Developer ID Application" || {
+      echo "${RED}no Developer ID Application signing identity is available${NC}" >&2
+      exit 1
+    }
+  [ -x "scripts/macapp/vendor/Sparkle.framework/Versions/B/Resources/sign_update" ] || {
+    echo "${RED}Sparkle sign_update is missing; restore the vendored Sparkle framework${NC}" >&2
+    exit 1
+  }
+  xcrun notarytool history --keychain-profile ccc-notary \
+    --output-format json >/dev/null 2>&1 || {
+      echo "${RED}notarization profile 'ccc-notary' is unavailable; restore it before cutting the release${NC}" >&2
+      exit 1
+    }
+fi
 
 # ── 1. Changelog rollup ─────────────────────────────────────────────────────
 step "1/9  Roll up changelog.d → CHANGELOG.md [${VERSION}]"

@@ -1,0 +1,1 @@
+- Fixed the full-release command to validate the Apple notarization profile before changing the changelog, version, tag, or remote release state.
