@@ -34426,6 +34426,24 @@
         await _addQueueTicket();
       });
     }
+    // Plan-to-fleet (W51): the "Import doc" affordance is shown only when the
+    // installed `wt` supports `wt import`. CCC never hard-depends on
+    // Watchtower, so a missing/older `wt` leaves this button hidden. One
+    // O(1) probe per load.
+    const $queueImport = document.getElementById('queueImportDoc');
+    if ($queueImport) {
+      $queueImport.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        await _openImportDocDialog();
+      });
+      (async () => {
+        try {
+          const res = await fetch('/api/queue/import-doc', { cache: 'no-store' });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.ok && data.available) $queueImport.hidden = false;
+        } catch (_) { /* leave hidden on probe failure */ }
+      })();
+    }
     // Status filter toggle (All | Open). 'open' hides closed tickets.
     const $filter = document.getElementById('queueFilterToggle');
     if ($filter) {
@@ -34648,6 +34666,187 @@
     } catch (e) {
       showOpToast('Add failed: ' + e);
     }
+  }
+
+  // Plan-to-fleet (W51): drop a plan/spec/mission-brief document, preview the
+  // tickets `wt import` extracts, file them, and optionally drain with workers.
+  // A flat preview list (never a Kanban), in the shared upd-* modal chrome.
+  async function _openImportDocDialog() {
+    document.querySelectorAll('.fq-import-composer').forEach(n => n.remove());
+    const scopeProj = _uxqLastResolvedProject || _uxqWorkerProject() || '';
+    const modal = document.createElement('div');
+    modal.className = 'upd-overlay fq-import-composer open';
+    modal.innerHTML =
+        '<div class="upd-backdrop" data-fq-import-cancel></div>'
+      + '<div class="upd-dialog fq-import-dialog" role="dialog" aria-modal="true" aria-labelledby="fqImportTitle">'
+      +   '<div class="fq-ticket-header">'
+      +     '<h2 class="upd-title" id="fqImportTitle">Import document into a queue</h2>'
+      +     '<button type="button" class="fq-ticket-close" data-fq-import-cancel aria-label="Close">&times;</button>'
+      +   '</div>'
+      +   '<div class="fq-ticket-body fq-import-body">'
+      +     '<div class="fq-config-help">Point at a plan, spec, or mission-brief markdown file. Watchtower reads the whole document once and proposes high-confidence tickets. Nothing is filed until you confirm.</div>'
+      +     '<div class="fq-config-field wide"><label for="fqImportPath">Document path</label><input id="fqImportPath" placeholder="/path/to/plan.md" autocomplete="off" spellcheck="false"></div>'
+      +     '<div class="fq-config-field"><label for="fqImportQueue">Queue name</label><input id="fqImportQueue" maxlength="64" placeholder="e.g. PRODUCT" autocomplete="off" value="' + escapeAttr(scopeProj) + '"><span class="fq-config-help">Letters, numbers, _ and - only.</span></div>'
+      +     '<div class="fq-import-preview" id="fqImportPreview" hidden></div>'
+      +     '<div class="fq-import-fleet" id="fqImportFleet" hidden></div>'
+      +   '</div>'
+      +   '<div class="upd-actions fq-import-actions">'
+      +     '<button type="button" class="upd-btn" data-fq-import-cancel>Close</button>'
+      +     '<button type="button" class="upd-btn" data-fq-import-preview>Preview tickets</button>'
+      +     '<button type="button" class="upd-btn upd-primary" data-fq-import-file hidden disabled>File tickets</button>'
+      +   '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    const $ = (sel) => modal.querySelector(sel);
+    const pathEl = $('#fqImportPath');
+    const queueEl = $('#fqImportQueue');
+    const previewEl = $('#fqImportPreview');
+    const fleetEl = $('#fqImportFleet');
+    const previewBtn = $('[data-fq-import-preview]');
+    const fileBtn = $('[data-fq-import-file]');
+    let lastPreview = null;   // {tickets, counts, queue}
+    const close = () => { document.removeEventListener('keydown', onKey); modal.remove(); };
+    function onKey(ev) { if (ev.key === 'Escape') close(); }
+    const _statusLabel = { new: 'New', exists: 'Exists', filed: 'Filed' };
+
+    function renderTickets(tickets, counts, applied) {
+      const rows = (tickets || []).map((t) => {
+        const status = String(t.status || 'new');
+        const kind = String(t.type || '').trim();
+        const ref = String(t.ref || '').trim();
+        const src = String(t.source_ref || '').trim();
+        return '<div class="fq-import-row is-' + escapeAttr(status) + '">'
+          + '<span class="fq-import-status">' + escapeHtml(_statusLabel[status] || status) + '</span>'
+          + (kind ? '<span class="fq-import-kind fq-import-kind-' + escapeAttr(kind) + '">' + escapeHtml(kind) + '</span>' : '')
+          + '<span class="fq-import-ttl">' + escapeHtml(t.title || '(untitled)') + '</span>'
+          + (ref ? '<span class="fq-import-ref">' + escapeHtml(ref) + '</span>' : '')
+          + (src ? '<span class="fq-import-src">' + escapeHtml(src) + '</span>' : '')
+          + '</div>';
+      }).join('');
+      const c = counts || {};
+      const summary = applied
+        ? ('Filed ' + (c.created != null ? c.created : 0) + ' new · ' + (c.existing != null ? c.existing : 0) + ' already existed')
+        : ((c.new != null ? c.new : 0) + ' new · ' + (c.existing != null ? c.existing : 0) + ' already exist · ' + (c.candidates != null ? c.candidates : (tickets || []).length) + ' total');
+      previewEl.innerHTML = '<div class="fq-import-summary">' + escapeHtml(summary) + '</div>'
+        + (rows || '<div class="fq-empty">No tickets extracted.</div>');
+      previewEl.hidden = false;
+    }
+
+    async function doImport(apply) {
+      const path = (pathEl.value || '').trim();
+      const queue = (queueEl.value || '').trim();
+      if (!path) { showOpToast('Enter a document path', 'error'); pathEl.focus(); return null; }
+      if (!queue) { showOpToast('Enter a queue name', 'error'); queueEl.focus(); return null; }
+      previewBtn.disabled = true; fileBtn.disabled = true;
+      const busy = apply ? 'Filing tickets…' : 'Reading document…';
+      previewEl.hidden = false; previewEl.innerHTML = '<div class="fq-import-summary">' + busy + '</div>';
+      try {
+        const res = await fetch('/api/queue/import-doc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, queue, apply }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data || !data.ok) {
+          const msg = (data && data.error) || ('HTTP ' + res.status);
+          previewEl.innerHTML = '<div class="fq-import-summary fq-import-error">' + escapeHtml('Import failed: ' + msg) + '</div>';
+          if (data && data.available === false) $queueImportHide();
+          return null;
+        }
+        return data;
+      } catch (e) {
+        previewEl.innerHTML = '<div class="fq-import-summary fq-import-error">' + escapeHtml('Import failed: ' + e) + '</div>';
+        return null;
+      } finally {
+        previewBtn.disabled = false;
+      }
+    }
+    function $queueImportHide() {
+      const btn = document.getElementById('queueImportDoc');
+      if (btn) btn.hidden = true;
+    }
+
+    previewBtn.addEventListener('click', async () => {
+      fleetEl.hidden = true; fleetEl.innerHTML = '';
+      const data = await doImport(false);
+      if (!data) return;
+      lastPreview = { tickets: data.tickets || [], counts: data.counts || {}, queue: (queueEl.value || '').trim() };
+      renderTickets(lastPreview.tickets, lastPreview.counts, false);
+      const newCount = (data.counts && data.counts.new) != null ? data.counts.new : (data.tickets || []).filter(t => t.status === 'new').length;
+      fileBtn.hidden = false;
+      fileBtn.disabled = !(newCount > 0);
+      fileBtn.textContent = newCount > 0 ? ('File ' + newCount + ' ticket' + (newCount === 1 ? '' : 's')) : 'Nothing new to file';
+    });
+
+    fileBtn.addEventListener('click', async () => {
+      const data = await doImport(true);
+      if (!data) return;
+      renderTickets(data.tickets || [], data.counts || {}, true);
+      const created = (data.counts && data.counts.created) || 0;
+      showOpToast(created ? ('Filed ' + created + ' ticket' + (created === 1 ? '' : 's') + ' to ' + (lastPreview && lastPreview.queue || 'queue')) : 'No new tickets filed', created ? 'success' : undefined);
+      fileBtn.hidden = true;
+      // Bust caches so the queue panel shows the new rows.
+      try { _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0; _renderQueuePanel(); } catch (_) {}
+      // Optional fleet step: gated behind an explicit click, never auto-spawn.
+      if (created > 0) renderFleetOption(lastPreview && lastPreview.queue);
+    });
+
+    function renderFleetOption(queue) {
+      fleetEl.hidden = false;
+      fleetEl.innerHTML = '<div class="fq-import-fleet-head">Optional: put workers on <strong>' + escapeHtml(queue || 'this queue') + '</strong></div>'
+        + '<div class="fq-import-fleet-row"><label for="fqImportWorkers">Workers</label>'
+        + '<input id="fqImportWorkers" type="number" min="1" max="8" value="1">'
+        + '<button type="button" class="upd-btn upd-primary" data-fq-import-drain>Drain with workers</button></div>'
+        + '<div class="fq-config-help">Spawns repo-scoped worker sessions that drain this queue. Nothing spawns until you click.</div>';
+      const drainBtn = fleetEl.querySelector('[data-fq-import-drain]');
+      drainBtn.addEventListener('click', async () => {
+        const n = Math.max(1, Math.min(8, Number(fleetEl.querySelector('#fqImportWorkers').value) || 1));
+        drainBtn.disabled = true;
+        // Workers need the queue's configured working repo. Resolve it from the
+        // durable queue config; if none is set, fall back to `wt drain on`
+        // (auto-drain) so the reconciler staffs the queue itself.
+        let repoPath = '';
+        try {
+          const optRes = await fetch('/api/queue/config-options', { method: 'POST' });
+          const opts = await optRes.json().catch(() => ({}));
+          const match = (opts.queues || []).find(q => String(q.queue).toUpperCase() === String(queue).toUpperCase());
+          repoPath = (match && match.config && match.config.repo_path) || '';
+        } catch (_) {}
+        if (!repoPath) {
+          try {
+            const res = await fetch('/api/queue/drain', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ queue, auto_drain: true }),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (res.ok && d.ok) { showOpToast('Auto-drain enabled for ' + queue, 'success'); close(); return; }
+          } catch (_) {}
+          showOpToast('Set a working repo for ' + queue + ' in Queue config to drain', 'error');
+          drainBtn.disabled = false;
+          return;
+        }
+        let spawned = 0;
+        for (let i = 0; i < n; i++) {
+          try {
+            const res = await fetch('/api/ux-fixes/spawn-worker', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ project: queue, repo_path: repoPath }),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (res.ok && (d.ok || d.session_id || d.id)) spawned++;
+          } catch (_) {}
+        }
+        showOpToast(spawned ? ('Spawned ' + spawned + ' worker' + (spawned === 1 ? '' : 's') + ' on ' + queue) : 'Could not spawn workers', spawned ? 'success' : 'error');
+        if (spawned) close();
+        else drainBtn.disabled = false;
+      });
+    }
+
+    modal.querySelectorAll('[data-fq-import-cancel]').forEach(el => el.addEventListener('click', close));
+    queueEl.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); previewBtn.click(); } });
+    document.addEventListener('keydown', onKey);
+    requestAnimationFrame(() => pathEl.focus());
   }
 
   function ffcUpdateSidebar(data) {

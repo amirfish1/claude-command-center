@@ -11591,6 +11591,16 @@
   }
   .files-queue-add:hover { color: var(--accent); }
 
+  /* Import-doc button (W51 plan-to-fleet). Reads as a small secondary action
+     next to the queue add glyph; hidden until the wt-import probe reports it. */
+  .files-queue-import {
+    background: transparent; border: 1px solid var(--border); color: var(--text-muted);
+    font-size: 11px; line-height: 1; cursor: pointer; padding: 3px 7px;
+    border-radius: 5px; font-weight: 600; white-space: nowrap;
+  }
+  .files-queue-import:hover { color: var(--accent); border-color: var(--accent); }
+  .files-queue-import[hidden] { display: none; }
+
   .files-list {
     display: flex; flex-direction: column; gap: 6px;
     flex: 1 1 auto; min-height: 0; overflow-y: auto;
@@ -17357,6 +17367,41 @@ body:has(.gc-reader) .pwa-install-banner {
   box-shadow: 0 0 0 3px rgba(88,166,255,0.14);
 }
 .files-queue-configure { font-size: 14px; }
+
+/* Plan-to-fleet import dialog (W51). Flat preview list, never a Kanban. */
+.fq-import-dialog { width: min(680px, 94vw); max-height: min(800px, 90vh); overflow: auto; }
+.fq-import-body { gap: 12px; display: flex; flex-direction: column; }
+.fq-import-preview {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+}
+.fq-import-summary { font-size: 12px; font-weight: 650; color: var(--text-muted); padding: 2px 4px 6px; }
+.fq-import-summary.fq-import-error { color: var(--danger, #f85149); }
+.fq-import-row {
+  display: flex; align-items: center; gap: 8px; padding: 5px 6px;
+  border-radius: 6px; font-size: 12px; min-width: 0;
+}
+.fq-import-row:hover { background: var(--surface-hover); }
+.fq-import-row.is-exists { opacity: 0.62; }
+.fq-import-status {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--text-muted); flex: 0 0 auto; min-width: 42px;
+}
+.fq-import-row.is-new .fq-import-status { color: var(--accent); }
+.fq-import-row.is-filed .fq-import-status { color: var(--success, #3fb950); }
+.fq-import-kind {
+  font-size: 10px; font-weight: 650; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-muted); flex: 0 0 auto;
+}
+.fq-import-kind-feature { color: var(--accent); border-color: var(--accent); }
+.fq-import-ttl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.fq-import-ref { font-size: 11px; font-weight: 650; color: var(--success, #3fb950); flex: 0 0 auto; }
+.fq-import-src { font-size: 10px; color: var(--faint, var(--text-muted)); flex: 0 0 auto; }
+.fq-import-fleet { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.fq-import-fleet-head { font-size: 12px; color: var(--text-muted); }
+.fq-import-fleet-row { display: flex; align-items: center; gap: 8px; }
+.fq-import-fleet-row input[type="number"] { width: 64px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); padding: 6px 8px; font: inherit; }
+
 .fq-config-dialog { width: min(700px, 94vw); max-height: min(780px, 88vh); overflow: auto; }
 .fq-config-body { gap: 13px; }
 .fq-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }

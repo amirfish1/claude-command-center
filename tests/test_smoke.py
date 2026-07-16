@@ -84,6 +84,37 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_import_doc_parser_and_path_clamp(self):
+        """Plan-to-fleet (W51): the `wt import` stdout parser and the doc-path
+        clamp behave, and neither hard-depends on Watchtower being installed."""
+        server = importlib.import_module("server")
+        tickets, counts = server._parse_wt_import_output(
+            "WOULD FILE: [feature] Add a queue import (L12-L24)\n"
+            "EXISTS: [bug] Old ticket (L5)\n"
+            "IMPORT dry-run: candidates=2 new=1 existing=1; pass --apply to file\n"
+        )
+        self.assertEqual(counts, {"candidates": 2, "new": 1, "existing": 1})
+        self.assertEqual(tickets[0]["status"], "new")
+        self.assertEqual(tickets[0]["type"], "feature")
+        self.assertEqual(tickets[0]["title"], "Add a queue import")
+        self.assertEqual(tickets[0]["source_ref"], "L12-L24")
+        self.assertEqual(tickets[1]["status"], "exists")
+        # apply-mode FILED lines carry the assigned ref.
+        filed, _ = server._parse_wt_import_output("FILED: WT-42  Ship the thing\n")
+        self.assertEqual(filed[0]["ref"], "WT-42")
+        self.assertEqual(filed[0]["status"], "filed")
+
+        with tempfile.TemporaryDirectory() as d:
+            good = pathlib.Path(d) / "plan.md"
+            good.write_text("# plan\n")
+            self.assertEqual(server._resolve_import_doc_path(str(good)), good.resolve())
+            # A non-text extension and a missing file are both rejected.
+            binp = pathlib.Path(d) / "bin.sh"
+            binp.write_text("echo hi\n")
+            self.assertIsNone(server._resolve_import_doc_path(str(binp)))
+            self.assertIsNone(server._resolve_import_doc_path(str(pathlib.Path(d) / "nope.md")))
+            self.assertIsNone(server._resolve_import_doc_path(""))
+
     def test_inject_routes_claude_subagent_reference_to_parent_session(self):
         """Recall can surface bare Claude ``agent-*`` child session IDs."""
         for mod in ("server", "morning", "morning_store"):

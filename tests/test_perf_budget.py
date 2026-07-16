@@ -1398,6 +1398,41 @@ def test_archive_rows_carry_state_stamp_cache_safe(big_projects, isolated_archiv
         assert "ended_blocked" in r, "warm-served row missing ended_blocked (stamp not cache-safe)"
 
 
+def test_import_doc_does_no_all_sessions_work(monkeypatch, tmp_path):
+    """The plan-to-fleet import shell-out (W51) touches one file and one `wt`
+    subprocess — never a scan of every conversation/session. Guard the call
+    counts so a future edit can't quietly add an O(all sessions) lookup."""
+    conv_calls = _count_calls(monkeypatch, "find_all_conversations", passthrough_return=[])
+
+    # _q is a module, not a plain function, so spy on its list_items directly.
+    list_calls = []
+    orig_list = server._q.list_items
+    def list_spy(*a, **k):
+        list_calls.append((a, k))
+        return orig_list(*a, **k)
+    monkeypatch.setattr(server._q, "list_items", list_spy)
+
+    class _FakeProc:
+        returncode = 0
+        stdout = (
+            "WOULD FILE: [feature] Add a thing (L1-L4)\n"
+            "EXISTS: [bug] Old thing (L9)\n"
+            "IMPORT dry-run: candidates=2 new=1 existing=1; pass --apply to file\n"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: _FakeProc())
+
+    doc = tmp_path / "plan.md"
+    doc.write_text("# Plan\n- do a thing\n")
+    result = server._run_wt_import(doc, "PRODUCT", apply=False)
+
+    assert result["ok"] is True
+    assert result["counts"] == {"candidates": 2, "new": 1, "existing": 1}
+    assert conv_calls == [], "import-doc must not scan all conversations"
+    assert list_calls == [], "import-doc dry-run must not list queue items"
+
+
 # ── Latency budget (lenient smoke on the scale fixture) ───────────────────────
 
 def test_stats_build_under_budget(big_projects):

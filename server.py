@@ -43280,6 +43280,158 @@ def _wt_cli_available():
     return bool(_WT_CLI_PATH_CACHE)
 
 
+# --- Plan-to-fleet: document -> Watchtower queue (W51) ------------------------
+# CCC never hard-depends on Watchtower. The doc-import affordance shells to
+# `wt import` (W43 `feat/doc-to-queue`) and is feature-flagged off whenever the
+# installed `wt` predates the `import` subcommand or is absent entirely.
+_WT_IMPORT_AVAILABLE_CACHE = None  # None = not probed yet; bool once probed
+_IMPORT_DOC_EXTENSIONS = {".md", ".markdown", ".mdx", ".txt", ".text"}
+_IMPORT_QUEUE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_WT_IMPORT_TIMEOUT = 180  # one reasoning-model call; preview and apply each run once
+
+
+def _wt_import_available():
+    """True when the installed `wt` supports `wt import` (the W43 doc-to-queue
+    engine). Cached: exactly one `wt import --help` subprocess per process.
+
+    When False, the UI hides the import-doc affordance and the POST route
+    refuses cleanly — CCC treats Watchtower as an optional tool, so a missing
+    or older `wt` must degrade, never error the dashboard."""
+    global _WT_IMPORT_AVAILABLE_CACHE
+    if _WT_IMPORT_AVAILABLE_CACHE is None:
+        _WT_IMPORT_AVAILABLE_CACHE = False
+        if _wt_cli_available():
+            try:
+                proc = subprocess.run(
+                    ["wt", "import", "--help"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                _WT_IMPORT_AVAILABLE_CACHE = proc.returncode == 0
+            except (OSError, subprocess.TimeoutExpired, ValueError):
+                _WT_IMPORT_AVAILABLE_CACHE = False
+    return _WT_IMPORT_AVAILABLE_CACHE
+
+
+def _resolve_import_doc_path(raw):
+    """Clamp an import-doc request to a real, user-reachable text/markdown file.
+
+    Mirrors `_safe_local_file_open_path` (the Files-panel clamp): resolve
+    symlinks strictly, require an existing regular file, and require a plain
+    text/markdown extension. Never a script or binary. Repo-containment is not
+    required because plan docs commonly live outside any repo (a Desktop brief).
+    Returns the resolved `Path`, or None if the input is not an acceptable file.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        target = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not target.is_file():
+        return None
+    if target.suffix.lower() not in _IMPORT_DOC_EXTENSIONS:
+        return None
+    return target
+
+
+def _parse_wt_import_output(text):
+    """Parse `wt import` line-oriented stdout into (tickets, counts).
+
+    Recognised lines (W43 contract):
+      WOULD FILE: [feature] Short title (L12-L24)   -> status=new
+      FILE: [feature] Short title (L12-L24)         -> status=new (during apply)
+      EXISTS: [bug] Short title (L5)                -> status=exists
+      FILED: WT-123  Short title                    -> status=filed (apply)
+      IMPORT dry-run: candidates=N new=N existing=N; ...
+      IMPORT applied: candidates=N created=N existing=N
+    Bodies are intentionally not in the dry-run output, so a preview ticket
+    carries only status, type, title, and source anchor."""
+    tickets = []
+    counts = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"^(WOULD FILE|FILE|EXISTS|FILED):\s*(.*)$", line)
+        if m:
+            verb, rest = m.group(1), m.group(2)
+            if verb == "FILED":
+                parts = rest.split(None, 1)
+                tickets.append({
+                    "status": "filed",
+                    "ref": parts[0] if parts else "",
+                    "type": "",
+                    "title": parts[1].strip() if len(parts) > 1 else "",
+                    "source_ref": "",
+                })
+                continue
+            status = "new" if verb in ("WOULD FILE", "FILE") else "exists"
+            kind = ""
+            title = rest
+            km = re.match(r"^\[([^\]]*)\]\s*(.*)$", rest)
+            if km:
+                kind = km.group(1).strip()
+                title = km.group(2)
+            source_ref = ""
+            sm = re.search(r"\s*\(([^()]*)\)\s*$", title)
+            if sm:
+                source_ref = sm.group(1).strip()
+                title = title[:sm.start()].rstrip()
+            tickets.append({
+                "status": status,
+                "type": kind,
+                "title": title.strip(),
+                "source_ref": source_ref,
+            })
+            continue
+        cm = re.match(r"^IMPORT (?:dry-run|applied):\s*(.*)$", line)
+        if cm:
+            for key, val in re.findall(r"(\w+)=(\d+)", cm.group(1)):
+                counts[key] = int(val)
+    return tickets, counts
+
+
+def _run_wt_import(doc_path, queue, *, apply=False, item_type=None):
+    """Shell to `wt import` (dry-run by default) and return a CCC-shaped result.
+
+    argv list only (never a shell string), so path/queue can't inject shell.
+    Mirrors `_try_wt_send_for_headless_delivery`'s subprocess posture: bounded
+    timeout, catch the OS/timeout family, degrade to a clear error dict."""
+    cmd = ["wt", "import", str(doc_path), "-q", queue]
+    if apply:
+        cmd.append("--apply")
+    if item_type in ("bug", "feature"):
+        cmd += ["--type", item_type]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_WT_IMPORT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "available": True,
+                "error": f"wt import timed out after {_WT_IMPORT_TIMEOUT}s"}
+    except (OSError, ValueError) as e:
+        return {"ok": False, "available": True, "error": f"wt import failed: {e}"}
+    stdout = proc.stdout or ""
+    if proc.returncode != 0:
+        detail = (proc.stderr or stdout or "").strip().splitlines()
+        return {
+            "ok": False,
+            "available": True,
+            "error": detail[-1] if detail else f"wt import exited {proc.returncode}",
+            "stdout_tail": "\n".join(stdout.strip().splitlines()[-20:]),
+        }
+    tickets, counts = _parse_wt_import_output(stdout)
+    return {
+        "ok": True,
+        "available": True,
+        "applied": bool(apply),
+        "queue": queue,
+        "tickets": tickets,
+        "counts": counts,
+        "stdout_tail": "\n".join(stdout.strip().splitlines()[-40:]),
+    }
+
+
 def _try_wt_send_for_headless_delivery(session_id, text):
     """Stage-2 hook for `_inject_text_into_session`'s dormant-claude branch.
 
@@ -56860,6 +57012,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "version": __version__,
                 "last_updated": _ccc_last_updated_iso(),
             })
+        elif path == "/api/queue/import-doc":
+            # Availability probe for the plan-to-fleet UI (W51). O(1): one
+            # cached `wt import --help` per process. The dashboard shows the
+            # Import-doc affordance only when available is true.
+            self.send_json({"ok": True, "available": _wt_import_available()})
         elif path == "/api/engines/models":
             # Server-owned model catalog. `engines` preserves the original
             # id-only shape for scripts; `catalog` is the richer UI contract
@@ -58455,6 +58612,69 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "item": item})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/queue/import-doc":
+            # Plan-to-fleet (W51): turn a plan/spec/mission-brief document into
+            # Watchtower tickets via `wt import`. Preview (dry-run) by default;
+            # apply files them. Same-origin enforced at the top of do_POST.
+            # CCC never hard-depends on Watchtower: when `wt import` is missing
+            # this route refuses cleanly with available=false so scripted
+            # callers and the UI both degrade instead of erroring.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            if not _wt_import_available():
+                self.send_json({
+                    "ok": False,
+                    "available": False,
+                    "error": "wt import is not available (Watchtower doc-to-queue not installed)",
+                }, 200)
+                return
+            doc_path = _resolve_import_doc_path(payload.get("path"))
+            if doc_path is None:
+                self.send_json({
+                    "ok": False, "available": True,
+                    "error": "path must be an existing markdown or text file",
+                }, 400)
+                return
+            queue = str(payload.get("queue") or "").strip()
+            if not _IMPORT_QUEUE_RE.match(queue):
+                self.send_json({
+                    "ok": False, "available": True,
+                    "error": "queue must be 1-64 chars of letters, numbers, _ or -",
+                }, 400)
+                return
+            item_type = str(payload.get("type") or "").strip().lower() or None
+            if item_type not in (None, "bug", "feature"):
+                self.send_json({
+                    "ok": False, "available": True,
+                    "error": "type must be 'bug', 'feature', or omitted",
+                }, 400)
+                return
+            apply = bool(payload.get("apply", False))
+            result = _run_wt_import(
+                doc_path, queue, apply=apply, item_type=item_type)
+            if result.get("ok") and apply:
+                # New tickets are live — bust nothing server-side (the UI owns
+                # its caches), but nudge dispatch so a filed ticket is handled
+                # promptly if the queue auto-drains. Best-effort.
+                if _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+                    for ticket in result.get("tickets", []):
+                        ref = str(ticket.get("ref") or "").strip()
+                        if not ref:
+                            continue
+                        try:
+                            _wt_workers.dispatch_after_enqueue(queue, ref)
+                        except Exception:
+                            pass
+            status = 200 if result.get("ok") else 502
+            self.send_json(result, status)
             return
         if path == "/api/ux-fixes/spawn-worker":
             # Spawn a repo-scoped UX-fixes worker session that drains only this
