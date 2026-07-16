@@ -18499,6 +18499,14 @@
       return after;
     });
 
+    // Interleave queue/ticket-appearance events (W22/B4) onto the timeline.
+    // Done AFTER the speaker look-ahead sets are built (those index real
+    // messages by originalIndex, so splicing pseudo-messages in is safe).
+    try {
+      _gcReplayMessages = _mergeReplayQueueEvents(
+        _gcReplayMessages, data.queue_events);
+    } catch (_) { /* queue events are best-effort; never block the replay */ }
+
     _onReplayKeyDownRef = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -18751,6 +18759,108 @@
     return true;
   }
 
+  // Parse a group-chat message heading timestamp ("2026-07-05 Sunday 06:12:35
+  // PDT") into an epoch (ms). The weekday word and the tz abbreviation are
+  // tolerated — the date + wall-clock time are read and interpreted in the
+  // viewer's local zone (same machine that wrote the chat), which is all the
+  // replay interleave needs. Returns NaN when no date is present.
+  function _gcReplayParseWhen(when) {
+    if (!when) return NaN;
+    const s = String(when);
+    const dm = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (!dm) return NaN;
+    const tm = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    const y = +dm[1], mo = +dm[2], d = +dm[3];
+    const h = tm ? +tm[1] : 0, mi = tm ? +tm[2] : 0, sec = tm && tm[3] ? +tm[3] : 0;
+    const t = new Date(y, mo - 1, d, h, mi, sec).getTime();
+    return Number.isFinite(t) ? t : NaN;
+  }
+
+  const _GC_QUEUE_EVENT_META = {
+    created:  { icon: '▲', verb: 'appeared in queue' },
+    claimed:  { icon: '◆', verb: 'claimed' },
+    resolved: { icon: '✓', verb: 'resolved' },
+  };
+
+  // Merge server-provided queue events into the (already-built) replay message
+  // array, positioned by timestamp. Bounded to the chat's own time span so old
+  // queue history never dumps at the start. Returns the merged array.
+  function _mergeReplayQueueEvents(messages, queueEvents) {
+    if (!Array.isArray(queueEvents) || !queueEvents.length) return messages;
+    // Forward-filled per-message epoch so a message with an unparseable heading
+    // inherits the previous message's time and ordering stays monotonic.
+    const epochs = [];
+    let last = NaN;
+    for (const m of messages) {
+      const e = _gcReplayParseWhen(m.when);
+      if (Number.isFinite(e)) last = e;
+      epochs.push(last);
+    }
+    const finite = epochs.filter(Number.isFinite);
+    if (!finite.length) return messages;  // can't interleave without a clock
+    const firstEpoch = finite[0];
+    const lastEpoch = finite[finite.length - 1];
+    const pseudo = queueEvents
+      .map(ev => ({
+        isQueueEvent: true,
+        kind: ev.kind,
+        ref: ev.ref || '',
+        note: ev.note || '',
+        queue: ev.queue || '',
+        depthAfter: ev.depth_after,
+        when: ev.iso || '',
+        _epoch: (typeof ev.ts === 'number' ? ev.ts * 1000 : NaN),
+      }))
+      .filter(p => Number.isFinite(p._epoch)
+        && p._epoch >= firstEpoch && p._epoch <= lastEpoch)
+      .sort((a, b) => a._epoch - b._epoch);
+    if (!pseudo.length) return messages;
+    const merged = [];
+    let qi = 0;
+    for (let i = 0; i < messages.length; i++) {
+      const mEpoch = epochs[i];
+      while (qi < pseudo.length && Number.isFinite(mEpoch)
+             && pseudo[qi]._epoch <= mEpoch) {
+        merged.push(pseudo[qi]); qi++;
+      }
+      merged.push(messages[i]);
+    }
+    while (qi < pseudo.length) { merged.push(pseudo[qi]); qi++; }
+    return merged;
+  }
+
+  // Render one queue-event pseudo-message, then advance after a fixed dwell.
+  function _renderReplayQueueEvent(msg, body) {
+    const meta = _GC_QUEUE_EVENT_META[msg.kind] || { icon: '•', verb: msg.kind || 'event' };
+    let el = document.querySelector(`.gc-replay-queue-event[data-replay-idx="${_gcReplayMsgIndex}"]`);
+    if (!el) {
+      el = document.createElement('article');
+      el.className = 'gc-message gc-replay-queue-event gc-queue-ev-' + escapeAttr(msg.kind || 'event');
+      el.setAttribute('data-replay-idx', _gcReplayMsgIndex);
+      const depthChip = (typeof msg.depthAfter === 'number')
+        ? '<span class="gc-queue-ev-depth" title="Open tickets in this queue after the event">queue ' + escapeHtml(String(msg.depthAfter)) + '</span>'
+        : '';
+      const noteHtml = msg.note
+        ? '<span class="gc-queue-ev-note" title="' + escapeAttr(msg.note) + '">' + escapeHtml(msg.note) + '</span>'
+        : '';
+      el.innerHTML = '<div class="gc-queue-ev-inner">'
+          + '<span class="gc-queue-ev-icon" aria-hidden="true">' + meta.icon + '</span>'
+          + (msg.ref ? '<span class="gc-queue-ev-ref">' + escapeHtml(msg.ref) + '</span>' : '')
+          + '<span class="gc-queue-ev-verb">' + escapeHtml(meta.verb) + '</span>'
+          + (msg.queue ? '<span class="gc-queue-ev-queue">' + escapeHtml(msg.queue) + '</span>' : '')
+          + depthChip
+        + '</div>'
+        + (noteHtml ? '<div class="gc-queue-ev-body">' + noteHtml + '</div>' : '');
+      body.appendChild(el);
+      // Fade/slide in on the next frame.
+      requestAnimationFrame(() => el.classList.add('is-shown'));
+      body.scrollTop = body.scrollHeight;
+    }
+    const delay = Math.max(150, 950 / _gcReplaySpeed);
+    _gcReplayMsgIndex++;
+    _gcReplayTimeout = setTimeout(() => { playNextReplayStep(); }, delay);
+  }
+
   function playNextReplayStep() {
     if (!_gcReplayActive || _gcReplayPaused) return;
 
@@ -18763,6 +18873,14 @@
     }
 
     const msg = _gcReplayMessages[_gcReplayMsgIndex];
+
+    // Queue/ticket-appearance events (W22/B4) interleave on the same timeline
+    // as conversation messages, but render as a compact queue chip card with a
+    // fixed dwell — no hero clone, no word-by-word reveal.
+    if (msg && msg.isQueueEvent) {
+      _renderReplayQueueEvent(msg, body);
+      return;
+    }
 
     let msgEl = document.querySelector(`.gc-message[data-replay-idx="${_gcReplayMsgIndex}"]`);
     if (!msgEl) {

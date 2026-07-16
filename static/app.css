@@ -18578,6 +18578,78 @@ body:has(.gc-reader) .pwa-install-banner {
 .gc-in-replay .gc-message-nudged-row {
   margin-top: 4px;
 }
+/* Queue / ticket-appearance events on the replay timeline (W22/B4). A compact
+   full-width chip card that slides in at the moment a ticket was created,
+   claimed, or resolved — distinct from conversation bubbles. */
+.gc-message.gc-replay-queue-event {
+  max-width: none;
+  align-self: center;
+  width: min(560px, 92%);
+  margin: 8px auto;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+.gc-message.gc-replay-queue-event.is-shown {
+  opacity: 1;
+  transform: none;
+}
+.gc-queue-ev-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface, #161b22);
+  color: var(--text-muted);
+}
+.gc-queue-ev-icon { font-size: 13px; line-height: 1; }
+.gc-queue-ev-ref {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.gc-queue-ev-verb { font-weight: 500; }
+.gc-queue-ev-queue {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  font-size: 11px;
+}
+.gc-queue-ev-depth {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.gc-queue-ev-body {
+  margin-top: 3px;
+  padding: 0 14px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Kind accents: created (appeared) green, claimed amber, resolved accent. */
+.gc-queue-ev-created  .gc-queue-ev-icon { color: var(--green, #3fb950); }
+.gc-queue-ev-created  .gc-queue-ev-inner { border-color: color-mix(in srgb, var(--green, #3fb950) 45%, var(--border)); }
+.gc-queue-ev-claimed  .gc-queue-ev-icon { color: var(--orange, #d29922); }
+.gc-queue-ev-claimed  .gc-queue-ev-inner { border-color: color-mix(in srgb, var(--orange, #d29922) 45%, var(--border)); }
+.gc-queue-ev-resolved .gc-queue-ev-icon { color: var(--accent, #58a6ff); }
+.gc-queue-ev-resolved .gc-queue-ev-inner { border-color: color-mix(in srgb, var(--accent, #58a6ff) 45%, var(--border)); }
 /* Conversation replay */
 .conv-replay-launch-btn {
   background: var(--surface, #161b22);
