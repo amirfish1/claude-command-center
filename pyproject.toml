@@ -56,3 +56,14 @@ claude-command-center = "server:main"
 # Setuptools-style hint:
 [tool.setuptools.package-data]
 "*" = ["skills/*.md", "static/**/*", "hooks/*.py"]
+
+# `cloud_relay_e2e` tests boot the real ccc-cloud service in-process, which
+# pins sys.modules['server'] to the ccc-cloud package for the rest of the
+# process (see tests/cloud_relay_harness.py) — shadowing this repo's own
+# server.py. Deselected by default so `pytest tests/` stays a single clean
+# process; opt in with `pytest -o addopts="" tests/test_cloud_relay_e2e.py`.
+[tool.pytest.ini_options]
+markers = [
+    "cloud_relay_e2e: cloud-relay e2e test that boots the real ccc-cloud service in-process (requires CCC_CLOUD_REPO; excluded from the default run, see tests/cloud_relay_harness.py)",
+]
+addopts = "-m 'not cloud_relay_e2e'"

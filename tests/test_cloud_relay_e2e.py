@@ -11,6 +11,13 @@ invocation (see the harness module docstring re: the `server` name-collision).
     python3 -m pytest tests/test_cloud_relay_e2e.py -p no:cacheprovider
 
 Scenario -> Acceptance item is noted per-test.
+
+Marked ``cloud_relay_e2e`` and deselected from the default ``pytest tests/``
+run (see ``pyproject.toml``) because booting the real ccc-cloud service pins
+``sys.modules['server']`` to the ccc-cloud package for the rest of the
+process, shadowing this repo's own ``server.py``. Opt in explicitly:
+
+    python3 -m pytest -o addopts="" tests/test_cloud_relay_e2e.py -p no:cacheprovider
 """
 
 from __future__ import annotations
@@ -27,7 +34,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cloud_relay_harness import (
     CloudFixture, LocalCCCFixture, FakeLocalAPI, DeviceFixture, TogglableProxy,
     sign_in_browser, wait_until, make_envelope, import_cloud_relay, free_port,
+    require_cloud_repo,
 )
+
+pytestmark = pytest.mark.cloud_relay_e2e
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +46,7 @@ from cloud_relay_harness import (
 
 @pytest.fixture(autouse=True)
 def _restore_tunables():
+    require_cloud_repo()
     from cloud_relay_harness import _import_cloud
     cloud = _import_cloud()
     cr = import_cloud_relay()

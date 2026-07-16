@@ -33,9 +33,19 @@ Import note: the ``ccc-cloud`` service is a package named ``server`` which would
 collide with this repo's top-level ``server.py`` module. We never import this
 repo's ``server`` in-process (the local CCC always runs as a subprocess), and
 ``_import_cloud()`` pins ``server`` to the ccc-cloud package for the lifetime of
-the process. Run the e2e + tailscale files as their own pytest invocation (they
-do not share a process with the local-server unit tests) so the in-process
-``server`` name is unambiguous.
+the process. Because of that pinning, ``test_cloud_relay_e2e.py`` is marked
+``cloud_relay_e2e`` and excluded from the default ``pytest tests/`` run (see
+``[tool.pytest.ini_options]`` in ``pyproject.toml``) so it never shares a
+process with tests that expect the real ``server.py``. Run it explicitly to
+opt in:
+
+    python3 -m pytest -o addopts="" tests/test_cloud_relay.py \\
+        tests/test_cloud_relay_e2e.py tests/test_tailscale_coexistence.py \\
+        -p no:cacheprovider
+
+Tests that use ``CloudFixture``/``_import_cloud()`` must call
+``require_cloud_repo()`` first so a missing ``ccc-cloud`` checkout produces a
+clean ``pytest.skip`` instead of a setup error.
 """
 
 from __future__ import annotations
@@ -56,6 +66,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 WORKTREE_ROOT = Path(__file__).resolve().parents[1]
 CCC_CLOUD_ROOT = Path(
     os.environ.get("CCC_CLOUD_REPO", str(Path.home() / "Apps" / "ccc-cloud"))
@@ -73,6 +85,16 @@ if str(WORKTREE_ROOT) not in sys.path:
 _CLOUD = None
 
 
+def require_cloud_repo():
+    """Skip the calling test cleanly if the ccc-cloud repo isn't available,
+    instead of letting `_import_cloud()` raise mid-fixture (a pytest ERROR,
+    not a skip). Call this before any `_import_cloud()`/`CloudFixture` use."""
+    if not CCC_CLOUD_ROOT.is_dir():
+        pytest.skip(
+            f"ccc-cloud repo not found at {CCC_CLOUD_ROOT}; set CCC_CLOUD_REPO "
+            "to run the cloud-relay e2e suite")
+
+
 def _import_cloud():
     """Import the ccc-cloud server package + test harness, resolving the
     `server` name-collision with this repo's server.py deterministically."""
@@ -81,7 +103,8 @@ def _import_cloud():
         return _CLOUD
     if not CCC_CLOUD_ROOT.is_dir():
         raise RuntimeError(
-            f"ccc-cloud repo not found at {CCC_CLOUD_ROOT}; set CCC_CLOUD_REPO")
+            f"ccc-cloud repo not found at {CCC_CLOUD_ROOT}; set CCC_CLOUD_REPO"
+            " (tests should call require_cloud_repo() first for a clean skip)")
     root = str(CCC_CLOUD_ROOT)
     tdir = str(CCC_CLOUD_ROOT / "tests")
     for p in (tdir, root):
