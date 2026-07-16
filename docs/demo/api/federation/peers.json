@@ -1,0 +1,4 @@
+{ "peers": [
+  { "node_id": "node-studio-01", "name": "Studio iMac" },
+  { "node_id": "node-mbp-02", "name": "MacBook Pro" }
+] }

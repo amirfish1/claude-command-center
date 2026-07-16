@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "topic": "Ship the v5.7 release notes",
+  "mode": "topic",
+  "mtime": 1779206100,
+  "session_ids": [
+    "1a2b3c4d-0000-4000-8000-000000000001",
+    "2b3c4d5e-0000-4000-8000-000000000002",
+    "3c4d5e6f-0000-4000-8000-000000000003"
+  ],
+  "name_map": {
+    "1a2b3c4d-0000-4000-8000-000000000001": "Planner",
+    "2b3c4d5e-0000-4000-8000-000000000002": "Builder",
+    "3c4d5e6f-0000-4000-8000-000000000003": "Reviewer"
+  },
+  "content": "## 14:00 — Human\nLet's draft the v5.7 release notes together. Keep it to Added / Changed / Fixed.\n\n## 14:01 — Planner (1a2b3c4d)\nOn it. I'll frame three sections. Builder, list what actually shipped this cycle?\n\n## 14:02 — Builder (2b3c4d5e)\nAdded: cross-machine handoff and group chats. Changed: list view is now the default surface. Fixed: dashboard CPU on large session sets.\n\n## 14:03 — Reviewer (3c4d5e6f)\nGood. Move the CPU work under a 'Performance' callout, and say 'continue a session on another machine' instead of 'handoff' in user copy.\n\n## 14:04 — Planner (1a2b3c4d)\nDone — draft is ready for a final pass. Posting it to the changelog now.\n"
+}

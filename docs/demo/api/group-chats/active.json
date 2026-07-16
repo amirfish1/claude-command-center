@@ -1,1 +1,21 @@
-{ "chats": [] }
+{ "chats": [ {
+  "uuid": "gc-demo-0001",
+  "id": "gc-demo-0001",
+  "topic": "Ship the v5.7 release notes",
+  "mode": "topic",
+  "path_tilde": "~/.claude/group-chats/gc-demo-0001.md",
+  "path": "~/.claude/group-chats/gc-demo-0001.md",
+  "status": "active",
+  "session_ids": [
+    "1a2b3c4d-0000-4000-8000-000000000001",
+    "2b3c4d5e-0000-4000-8000-000000000002",
+    "3c4d5e6f-0000-4000-8000-000000000003"
+  ],
+  "name_map": {
+    "1a2b3c4d-0000-4000-8000-000000000001": "Planner",
+    "2b3c4d5e-0000-4000-8000-000000000002": "Builder",
+    "3c4d5e6f-0000-4000-8000-000000000003": "Reviewer"
+  },
+  "last_message_at": 1779206100,
+  "last_mtime": 1779206100
+} ] }
