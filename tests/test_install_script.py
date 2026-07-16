@@ -102,6 +102,13 @@ class TestInstallScript(unittest.TestCase):
             f"unexpected shebang: {first_line!r}",
         )
 
+    def test_python_gate_accepts_39_and_honors_override(self):
+        script = Path(INSTALL_SCRIPT).read_text(encoding="utf-8")
+
+        self.assertIn('PYTHON3="${CCC_PYTHON:-python3}"', script)
+        self.assertIn("sys.version_info >= (3, 9)", script)
+        self.assertIn("requires Python 3.9+", script)
+
     def test_install_script_passes_shellcheck_when_available(self):
         if shutil.which("shellcheck") is None:
             self.skipTest("shellcheck not installed; skipping lint check")

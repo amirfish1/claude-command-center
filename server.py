@@ -11,6 +11,8 @@ Usage:
     PORT=9000 ./run.sh       # custom port
 """
 
+from __future__ import annotations
+
 __version__ = "5.8.0"
 
 import ast

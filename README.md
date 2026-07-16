@@ -80,7 +80,7 @@ that already exists.
 
 **Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) — read-only kanban with seeded fake data, no install required.
 
-Requirements: Git and Python 3.10+. Install at least one supported agent CLI to
+Requirements: Git and Python 3.9+. Install at least one supported agent CLI to
 launch sessions: [Claude Code](https://docs.claude.com/en/docs/claude-code),
 Codex, Gemini, or Antigravity. The dashboard itself starts without an agent CLI.
 Optional: [`gh`](https://cli.github.com/) for GitHub integration, `vercel` for deploy status.

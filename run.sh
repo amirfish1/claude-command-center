@@ -415,20 +415,19 @@ echo "  port     : $PORT"
 echo "  bind     : ${CCC_BIND_HOST:-(default 127.0.0.1, or from network.json)}"
 echo "  url      : http://localhost:$PORT"
 
-# A launchd service has a minimal PATH and macOS commonly resolves python3 to
-# the Xcode-provided 3.9 there.  server.py requires Python 3.10+ for its
-# union-type annotations, so select a known-compatible interpreter explicitly.
+# A launchd service has a minimal PATH, so select a known-compatible Python
+# 3.9+ interpreter explicitly instead of relying on its inherited environment.
 PYTHON="$HERE/.venv/bin/python3"
 for candidate in "$PYTHON" "${CCC_PYTHON:-}" /opt/homebrew/bin/python3 /usr/local/bin/python3 "$(command -v python3 || true)"; do
   if [ -n "$candidate" ] && [ -x "$candidate" ] \
-    && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
     PYTHON="$candidate"
     break
   fi
 done
 
-if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
-  echo "Error: CCC requires Python 3.10+. Set CCC_PYTHON to a compatible interpreter." >&2
+if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+  echo "Error: CCC requires Python 3.9+. Set CCC_PYTHON to a compatible interpreter." >&2
   exit 1
 fi
 

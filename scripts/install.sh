@@ -23,6 +23,7 @@ PORT="${PORT:-8090}"
 DASHBOARD_URL="http://localhost:${PORT}"
 SOURCE_FILE="$HOME/.claude/command-center/install-source"
 INSTALL_STAGING=""
+PYTHON3="${CCC_PYTHON:-python3}"
 
 VALID_CHANNELS="readme landing-hero hn ph devto yt gh-trending dmg unknown"
 
@@ -102,18 +103,13 @@ require_supported_platform() {
 # Prereq checks
 # ---------------------------------------------------------------------------
 require_python3() {
-  if ! command -v python3 >/dev/null 2>&1; then
+  if ! command -v "$PYTHON3" >/dev/null 2>&1; then
     err "python3 not found on PATH. Install Python 3, then re-run this installer."
     exit 1
   fi
-  # server.py uses 3.10+ union-type syntax (e.g. `float | None`) without a
-  # `from __future__ import annotations` guard, so it fails to import on
-  # 3.9. Presence alone isn't enough — check the version so a stale
-  # system python3 (still common on e.g. Debian bullseye) fails here with
-  # a clear message instead of a cryptic TypeError from server.py.
-  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
-    got="$(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
-    err "python3 ${got} found, but CCC requires Python 3.10+. Install a newer python3, then re-run this installer."
+  if ! "$PYTHON3" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'; then
+    got="$("$PYTHON3" -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
+    err "python3 ${got} found, but CCC requires Python 3.9+. Install a newer python3, then re-run this installer."
     exit 1
   fi
 }
@@ -280,7 +276,7 @@ install_watchtower() {
   fi
 
   printf 'install: installing WatchTower from %s\n' "$wt_dir"
-  if python3 -m pip install -e "$wt_dir" --quiet; then
+  if "$PYTHON3" -m pip install -e "$wt_dir" --quiet; then
     printf 'install: WatchTower installed — watchtower.queue is now available.\n'
   else
     printf 'install: WARNING: pip install of WatchTower failed. CCC will fall back to its built-in queue engine.\n'

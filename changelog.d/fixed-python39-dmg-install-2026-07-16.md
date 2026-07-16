@@ -1,0 +1,1 @@
+- Fixed macOS DMG first launch on Macs whose available Apple Python is 3.9.6 by making the stdlib server and both installer/launcher gates support Python 3.9+.
