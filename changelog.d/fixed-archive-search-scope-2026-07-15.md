@@ -1,1 +1,0 @@
-- Fixed the conversation archive remaining on its loading screen when search-state rendering crossed sidebar grouping modes.

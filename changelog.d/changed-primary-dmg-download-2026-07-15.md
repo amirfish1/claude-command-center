@@ -1,1 +1,0 @@
-- Make the notarized macOS DMG the landing page's single, above-the-fold primary action and publish a privacy-bounded count of site download clicks.

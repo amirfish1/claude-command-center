@@ -13,7 +13,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.8.0"
+__version__ = "5.8.1"
 
 import ast
 import base64

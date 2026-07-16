@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.8.1] - 2026-07-16
+
+### Added
+- Show the current Codex `Stuck` session count in the lower-left health bar, backed by a cached fleet summary and an explicit stale-transcript heuristic tooltip.
+- Subagent-heavy sessions now start collapsed, keep active children as compact rows, and collect completed children into clickable chips.
+- Added a non-root `SIGUSR2` diagnostic that appends every CCC Python thread's stack to `~/.claude/command-center/logs/python-stacks.log`.
+
+### Changed
+- Make the notarized macOS DMG the landing page's single, above-the-fold primary action and publish a privacy-bounded count of site download clicks.
+- Replaced em/en dashes with plain hyphens in dashboard chrome (tooltips, toasts, health strip, version line) so screenshots and marketing captures no longer show the AI-generated-looking em-dash tell.
+
+### Fixed
+- Fixed the conversation archive remaining on its loading screen when search-state rendering crossed sidebar grouping modes.
+- Reduced dashboard CPU usage by sharing the cached conversation archive with the attention feed instead of rescanning every transcript.
+- Fixed macOS DMG first launch on Macs whose available Apple Python is 3.9.6 by making the stdlib server and both installer/launcher gates support Python 3.9+.
+- Fixed the full-release command to validate the Apple notarization profile before changing the changelog, version, tag, or remote release state.
+- Reconcile ended Codex turns before draining queued messages, and keep accepted input queued until its exact user message is visible in the conversation.
+
 ## [5.8.0] - 2026-07-15
 
 ### Added
@@ -2030,7 +2048,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.8.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.8.1...HEAD
+[5.8.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.1
 [5.8.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.0
 [5.6.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.6.0
 [5.5.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.5.0
