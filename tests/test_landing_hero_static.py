@@ -49,6 +49,13 @@ def test_landing_hero_has_one_direct_download_cta():
     assert re.sub(r"<[^>]+>", "", ctas[0]).strip() == "DOWNLOAD CCC"
 
 
+def test_landing_page_names_current_release():
+    page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+
+    assert "v5.8.1" in page
+    assert "v5.8.0" not in page
+
+
 def test_download_is_the_only_emphasized_action_above_fold():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
     above_fold = page.split('<div class="demo boot-target"', 1)[0]
