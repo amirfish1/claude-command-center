@@ -35,9 +35,11 @@ module.exports = {
     });
     await ctx.pause(500);
     // The Organize op-toast is a class-less fixed div — match it by text.
+    // (Copy is its action button; text reads e.g. "Organize: moved 249px total".)
     await ctx.eval(() => {
       document.querySelectorAll('body > div').forEach(el => {
-        if (/Organized\s*—\s*tight/i.test(el.textContent || '')) el.remove();
+        const t = el.textContent || '';
+        if (/Organize[d]?[:\s].*(moved|tight)/i.test(t) || /moved\s+\d+px/i.test(t)) el.remove();
       });
     });
     await ctx.pause(300);
