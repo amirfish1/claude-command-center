@@ -69,7 +69,7 @@ if [ "$SKIP_DMG" = 0 ] && [ "$DRY_RUN" = 0 ]; then
       echo "${RED}no Developer ID Application signing identity is available${NC}" >&2
       exit 1
     }
-  [ -x "scripts/macapp/vendor/Sparkle.framework/Versions/B/Resources/sign_update" ] || {
+  [ -x "scripts/macapp/vendor/bin/sign_update" ] || {
     echo "${RED}Sparkle sign_update is missing; restore the vendored Sparkle framework${NC}" >&2
     exit 1
   }

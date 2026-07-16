@@ -12,4 +12,5 @@ def test_full_release_validates_notary_profile_before_mutating_release_state():
 
     assert profile_check in script
     assert script.index(profile_check) < script.index(first_mutation)
+    assert 'scripts/macapp/vendor/bin/sign_update' in script
     assert "notarization profile 'ccc-notary' is unavailable" in script
