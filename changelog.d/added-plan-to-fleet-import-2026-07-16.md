@@ -1,0 +1,1 @@
+Plan-to-fleet: import a plan or mission-brief document into a Watchtower queue from the dashboard. The queue panel's "Import doc" button previews the tickets `wt import` extracts, files them on confirm, and offers an optional worker drain. Hidden automatically when `wt import` is not installed.
