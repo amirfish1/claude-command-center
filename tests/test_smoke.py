@@ -5772,6 +5772,94 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("custom-codex-model", options["models_by_engine"]["codex"])
         self.assertIn("gpt-5.5", options["models_by_engine"]["codex"])
 
+    def test_wt_live_worker_guard_reads_workers_file(self):
+        """Live WT-tracked workers (pid + session_id) are off-limits to CCC's
+        reapers; dead rows in workers.json don't guard anything."""
+        proc = subprocess.Popen(["/bin/sleep", "0"])
+        proc.wait()
+        dead_pid = proc.pid
+        workers_path = self.server._wt_workers_path()
+        workers_path.parent.mkdir(parents=True, exist_ok=True)
+        workers_path.write_text(json.dumps({"workers": [
+            {"worker_id": "demo-live", "pid": os.getpid(), "queue": "DEMO",
+             "session_id": "11111111-1111-1111-1111-111111111111"},
+            {"worker_id": "demo-dead", "pid": dead_pid, "queue": "DEMO",
+             "session_id": "22222222-2222-2222-2222-222222222222"},
+        ]}), encoding="utf-8")
+        pids, sids = self.server._wt_live_worker_guard()
+        self.assertIn(os.getpid(), pids)
+        self.assertIn("11111111-1111-1111-1111-111111111111", sids)
+        self.assertNotIn(dead_pid, pids)
+        self.assertNotIn("22222222-2222-2222-2222-222222222222", sids)
+
+    def test_queue_drain_api_writes_via_watchtower_config(self):
+        """/api/queue/drain delegates to watchtower.config.set_auto_drain when
+        the package is importable. The desired_workers >= 1 restore on opt-in
+        is the discriminator: only the wt setter does that."""
+        if not self.server._WT_CONFIG_AVAILABLE:
+            self.skipTest("watchtower package not importable")
+        config_path = self.server._wt_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps({"DEMO": {"desired_workers": 0}}), encoding="utf-8"
+        )
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            request = urllib.request.Request(
+                base + "/api/queue/drain",
+                data=json.dumps({"queue": "DEMO", "auto_drain": True}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(result["ok"])
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertTrue(saved["DEMO"]["auto_drain"])
+            self.assertGreaterEqual(saved["DEMO"]["desired_workers"], 1)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_spawn_worker_api_delegates_to_watchtower(self):
+        """/api/ux-fixes/spawn-worker spawns a WT-tracked drain worker (not a
+        CCC shadow session) when watchtower is importable. dry_run builds the
+        worker record without launching a process."""
+        if not self.server._WT_WORKERS_AVAILABLE:
+            self.skipTest("watchtower package not importable")
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            request = urllib.request.Request(
+                base + "/api/ux-fixes/spawn-worker",
+                data=json.dumps({
+                    "project": "DEMO",
+                    "repo_path": str(self.repo),
+                    "dry_run": True,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["spawned_by"], "watchtower")
+            self.assertEqual(result["project"], "DEMO")
+            self.assertTrue(result["worker_id"])
+            self.assertFalse(result["pid"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_ux_fixes_queue_file_is_isolated_to_test_home(self):
         self.assertEqual(
             self.server.ux_fixes_queue.QUEUE_FILE,

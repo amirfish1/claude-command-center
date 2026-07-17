@@ -478,6 +478,27 @@ def _wt_read_workers():
     return out
 
 
+def _wt_live_worker_guard():
+    """(pids, session_ids) of live WT-tracked workers, from workers.json.
+
+    WatchTower owns its workers' lifecycle — release/reap decisions live in
+    watchtower.workers, not here. CCC's reapers (idle sweep, System Health)
+    must treat these as off-limits rather than applying CCC's own idle
+    heuristics to them."""
+    pids, sids = set(), set()
+    for w in _wt_read_workers():
+        try:
+            pid = int(w.get("pid", 0) or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid:
+            pids.add(pid)
+        sid = w.get("session_id")
+        if sid:
+            sids.add(str(sid))
+    return pids, sids
+
+
 def _wt_worker_sessions_path():
     return Path(os.environ.get("WATCHTOWER_WORKER_SESSIONS_FILE")
                 or (_WT_HOME / "worker-sessions.json"))
@@ -5156,6 +5177,10 @@ def _sys_sessions(rows, now):
         nm = overrides.get(sid) or (meta_by_sid.get(sid) or {}).get("name") or spawn_name_by_sid.get(sid)
         return _truncate_session_name(nm) if nm else None
 
+    # Live WT-tracked workers are WatchTower's to release/reap, not ours —
+    # surface them (wt_worker flag) but never offer them as reap targets.
+    wt_pids, wt_sids = _wt_live_worker_guard()
+
     sessions = []
     for r in rows:
         if _sys_label(r["cmd"]) != "claude CLI":
@@ -5172,6 +5197,7 @@ def _sys_sessions(rows, now):
             (m.group(1) if (m := _SYS_SESSION_UUID_RE.search(r["cmd"])) else None)
         idle_known = _sys_last_activity_min(sid, now, proj_dirs)
         idle_min = idle_known if idle_known is not None else r["etime_min"]
+        wt_worker = r["pid"] in wt_pids or bool(sid and sid in wt_sids)
         sessions.append({
             "pid": r["pid"],
             "session_id": sid,
@@ -5187,7 +5213,9 @@ def _sys_sessions(rows, now):
             "interactive": interactive,
             "busy": busy,
             "worker": _sys_label(worker["cmd"]) if worker else None,
-            "reapable": (not interactive) and (not busy) and idle_min >= _SYS_STALE_MIN,
+            "wt_worker": wt_worker,
+            "reapable": (not interactive) and (not busy) and (not wt_worker)
+                        and idle_min >= _SYS_STALE_MIN,
         })
 
     cwds = _sys_cwds([s["pid"] for s in sessions])
@@ -50487,25 +50515,39 @@ def _get_claude_credentials():
     return None
 
 
-def _fetch_plan_usage():
-    creds = _get_claude_credentials()
-    if not creds:
-        return {"ok": False, "error": "No credentials found. Please run `claude auth login` in your terminal."}
+def _get_claude_org_id():
+    # 1. ~/.claude.json carries the org UUID directly — instant, no subprocess.
+    #    (`claude auth status` cold-starts node and can exceed any sane timeout.)
+    try:
+        with open(Path.home() / ".claude.json", "r") as f:
+            data = json.load(f)
+        org_id = (data.get("oauthAccount") or {}).get("organizationUuid")
+        if org_id:
+            return org_id
+    except Exception:
+        pass
 
-    org_id = None
+    # 2. Fallback: ask the claude CLI (slow — node cold start is regularly >5s)
     try:
         claude_info = _resolve_claude_bin()
         cmd = claude_info.get("bin") if claude_info.get("available") else "claude"
         res = subprocess.run(
             [cmd, "auth", "status"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=15
         )
         if res.returncode == 0:
-            data = json.loads(res.stdout.strip())
-            org_id = data.get("orgId")
+            return json.loads(res.stdout.strip()).get("orgId")
     except Exception:
         pass
+    return None
 
+
+def _fetch_plan_usage():
+    creds = _get_claude_credentials()
+    if not creds:
+        return {"ok": False, "error": "No credentials found. Please run `claude auth login` in your terminal."}
+
+    org_id = _get_claude_org_id()
     if not org_id:
         return {"ok": False, "error": "Could not determine organization ID. Ensure `claude` is logged in."}
 
@@ -54771,6 +54813,9 @@ def _reap_idle_sessions(now=None):
     if now is None:
         now = time.time()
     cutoff = now - _IDLE_REAPER_AGE_HOURS * 3600
+    # A WatchTower queue worker is itself a `claude` process, but WT owns its
+    # lifecycle (watchtower.workers release/reap) — never SIGTERM one here.
+    wt_pids, wt_sids = _wt_live_worker_guard()
     reaped = []
     for f in sessions_dir.glob("*.json"):
         try:
@@ -54781,6 +54826,11 @@ def _reap_idle_sessions(now=None):
         pid = data.get("pid")
         if not sid or not pid:
             continue
+        try:
+            if str(sid) in wt_sids or int(pid) in wt_pids:
+                continue
+        except (TypeError, ValueError):
+            pass
         if not _pid_is_engine_process(pid, "claude"):
             continue
         jsonl = _find_session_jsonl(sid)
@@ -58761,6 +58811,45 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             extra_message = str(
                 payload.get("message") or payload.get("note") or payload.get("extra") or ""
             ).strip()
+            # WT owns worker lifecycle. When watchtower is importable and the
+            # caller didn't ask for a CCC-specific session (custom name/model/
+            # extra instructions), spawn a WT-tracked drain worker: it lands in
+            # workers.json + ~/.watchtower/logs and the reconciler owns its
+            # release/reap, instead of an untracked CCC shadow worker.
+            wants_ccc_session = bool(
+                model or extra_message or (payload.get("name") or "").strip()
+            )
+            if _WT_WORKERS_AVAILABLE and _wt_workers is not None and not wants_ccc_session:
+                try:
+                    ctx = _spawn_repo_context(repo_path=repo_path)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                    return
+                engine = "claude"
+                if _WT_CONFIG_AVAILABLE and _wt_config is not None:
+                    try:
+                        engine = _wt_config.engine(project) or "claude"
+                    except Exception:
+                        engine = "claude"
+                try:
+                    recs = _wt_workers.spawn_workers(
+                        project, 1, engine,
+                        repo_path=str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
+                        dry_run=bool(payload.get("dry_run")),
+                    )
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+                    return
+                rec = recs[0] if recs else {}
+                self.send_json({
+                    "ok": bool(rec),
+                    "project": project,
+                    "engine": rec.get("engine", engine),
+                    "worker_id": rec.get("worker_id"),
+                    "pid": rec.get("pid"),
+                    "spawned_by": "watchtower",
+                })
+                return
             ccc_url = "http://127.0.0.1:8090"
             prompt = _ux_fixes_worker_prompt(project, repo_path, ccc_url, extra_message)
             try:
@@ -58803,19 +58892,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 400)
                 return
             try:
-                cfg_path = _wt_config_path()
-                cfg_path.parent.mkdir(parents=True, exist_ok=True)
-                cfg = _wt_read_config() or {}
                 queue_name = normalized["queue"]
+                cfg = _wt_read_config() or {}
                 matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
-                if matched and matched != queue_name:
-                    del cfg[matched]
-                cfg[queue_name] = normalized["config"]
-                tmp = cfg_path.with_suffix(".json.tmp")
-                with open(tmp, "w") as f:
-                    json.dump(cfg, f, indent=2)
-                tmp.replace(cfg_path)
+                case_mismatch = bool(matched and matched != queue_name)
+                if _WT_CONFIG_AVAILABLE and _wt_config is not None and not case_mismatch:
+                    # WT owns queue-config.json — write through the same setters
+                    # `wt config -q ...` uses. Direct write remains below for
+                    # installs without the watchtower package, and for renaming
+                    # a legacy case-mismatched key (wt has no delete/rename).
+                    conf = normalized["config"]
+                    _wt_config.ensure_entry(queue_name)
+                    _wt_config.set_backend(queue_name, conf.get("backend", "file"))
+                    _wt_config.set_github_repo(queue_name, conf.get("github_repo", ""))
+                    _wt_config.set_github_assignee(queue_name, conf.get("github_assignee", ""))
+                    _wt_config.set_repo_path(queue_name, conf.get("repo_path", ""))
+                    _wt_config.set_engine(queue_name, conf.get("engine", "claude"))
+                    _wt_config.set_model(queue_name, conf.get("model", ""))
+                    _wt_config.set_effort(queue_name, conf.get("effort", ""))
+                    _wt_config.set_desired_workers(queue_name, conf.get("desired_workers", 1))
+                    _wt_config.set_auto_drain(queue_name, conf.get("auto_drain", False))
+                    _wt_config.set_claim_types(queue_name, conf.get("claim_types", []))
+                else:
+                    cfg_path = _wt_config_path()
+                    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                    if matched and matched != queue_name:
+                        del cfg[matched]
+                    cfg[queue_name] = normalized["config"]
+                    tmp = cfg_path.with_suffix(".json.tmp")
+                    with open(tmp, "w") as f:
+                        json.dump(cfg, f, indent=2)
+                    tmp.replace(cfg_path)
                 self.send_json({"ok": True, **normalized})
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
@@ -58841,13 +58951,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cfg = _wt_read_config() or {}
                 matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
                 key = matched if matched else queue_name
-                if key not in cfg or not isinstance(cfg[key], dict):
-                    cfg[key] = {}
-                cfg[key]["auto_drain"] = auto_drain
-                tmp = cfg_path.with_suffix(".json.tmp")
-                with open(tmp, "w") as f:
-                    json.dump(cfg, f, indent=2)
-                tmp.replace(cfg_path)
+                if _WT_CONFIG_AVAILABLE and _wt_config is not None:
+                    # WT owns auto_drain policy — same setter `wt drain on/off`
+                    # uses (opting in also restores desired_workers >= 1, so the
+                    # promise "the reconciler will staff this queue" holds).
+                    _wt_config.set_auto_drain(key, auto_drain)
+                else:
+                    if key not in cfg or not isinstance(cfg[key], dict):
+                        cfg[key] = {}
+                    cfg[key]["auto_drain"] = auto_drain
+                    tmp = cfg_path.with_suffix(".json.tmp")
+                    with open(tmp, "w") as f:
+                        json.dump(cfg, f, indent=2)
+                    tmp.replace(cfg_path)
                 self.send_json({"ok": True, "queue": key, "auto_drain": auto_drain})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
