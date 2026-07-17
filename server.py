@@ -54049,6 +54049,401 @@ def _throughput_history_payload(cache_only=False):
 
 
 # ---------------------------------------------------------------------------
+# Throughput drill-down — bounded time-window per-session breakdown plus a
+# persisted daily digest. Both gate discovery by the window start (a
+# transcript untouched since then cannot contain turns inside the window) and
+# extract through the (mtime,size) per-transcript turn cache, so a zoom or a
+# digest never does O(all-transcripts) parse work.
+# ---------------------------------------------------------------------------
+
+_THROUGHPUT_WINDOW_CACHE = {}      # (start,end,engine,limit) -> {"ts","payload","status"}
+_THROUGHPUT_WINDOW_CACHE_TTL = 60
+_THROUGHPUT_WINDOW_CACHE_MAX = 64
+_THROUGHPUT_WINDOW_MAX_SPAN_SEC = 26 * 3600
+_THROUGHPUT_WINDOW_MAX_AGE_SEC = 56 * 86400
+_THROUGHPUT_DAILY_SCHEMA = 1
+_THROUGHPUT_DAILY_CACHE = {}       # (iso_date,engine) -> {"ts","payload","status"}
+_THROUGHPUT_DAILY_CACHE_TTL = 180
+_THROUGHPUT_DAILY_LOCK = threading.Lock()
+
+
+def _throughput_daily_snapshot_path(date_str, engine_filter=None):
+    engine = _throughput_engine_filter(engine_filter)
+    suffix = "" if engine == "claude" else f"-{engine}"
+    safe = "".join(ch for ch in str(date_str or "") if ch.isdigit() or ch == "-")
+    return _THROUGHPUT_DISK_CACHE_DIR / f"daily-{safe or 'unknown'}{suffix}.json"
+
+
+def _throughput_window_turns(start_epoch, end_epoch, engine_filter):
+    """Deduped turns whose t_end falls inside [start_epoch, end_epoch)."""
+    engine = _throughput_engine_filter(engine_filter)
+    recent = _throughput_recent_conversations(engine, start_epoch)
+    turns = []
+    for conv_row in recent:
+        sid = conv_row.get("session_id")
+        name = conv_row.get("display_name") or conv_row.get("name") or "Untitled"
+        row_engine = conv_row.get("engine") or conv_row.get("source") or ""
+        model_hint = conv_row.get("model") or ""
+        is_codex = row_engine == "codex"
+        if (engine == "codex") != is_codex:
+            continue
+
+        if is_codex:
+            def _extract():
+                return _throughput_codex_turns_from_file(
+                    sid, session_name=name, model_hint=model_hint, cutoff_epoch=None
+                )
+        else:
+            def _extract():
+                parsed = parse_conversation(sid)
+                return _throughput_turns_from_events(
+                    parsed.get("events") or [],
+                    session_id=sid,
+                    session_name=name,
+                    engine=row_engine,
+                    model_hint=model_hint,
+                    cutoff_epoch=None,
+                )
+
+        cache_path = conv_row.get("jsonl_path")
+        try:
+            full_turns = (
+                _throughput_file_turns(cache_path, _extract)
+                if cache_path else _extract()
+            )
+        except Exception:
+            continue
+        if full_turns is None:
+            try:
+                full_turns = _extract()
+            except Exception:
+                continue
+
+        folder = conv_row.get("folder_path") or ""
+        for t in full_turns:
+            t_end = _stats_parse_ts(t.get("t_end"))
+            if not t_end:
+                continue
+            ts = t_end.timestamp()
+            if ts < start_epoch or ts >= end_epoch:
+                continue
+            copied = dict(t)
+            copied["folder_path"] = folder
+            turns.append(copied)
+    turns.sort(key=lambda t: t.get("t_start") or "")
+    return _throughput_dedupe_turns(turns)
+
+
+def _throughput_sessions_from_turns(turns, limit=50):
+    """Per-session aggregates for a turn set, sorted by cache-adjusted burn.
+
+    Returns (rows, total_session_count) with rows capped at ``limit``.
+    """
+    by_session = {}
+    for t in turns:
+        sid = t.get("session_id") or ""
+        entry = by_session.get(sid)
+        if entry is None:
+            entry = by_session[sid] = {
+                "session_id": sid,
+                "session_name": t.get("session_name") or "",
+                "engine": t.get("engine") or "",
+                "folder_path": t.get("folder_path") or "",
+                "first_turn_at": t.get("t_start") or "",
+                "last_turn_at": t.get("t_end") or "",
+                "_models": {},
+                "_bucket": _throughput_empty_bucket(),
+            }
+        _throughput_add_bucket(entry["_bucket"], t)
+        model = t.get("model") or ""
+        if model:
+            entry["_models"][model] = entry["_models"].get(model, 0) + 1
+        if (t.get("t_end") or "") > (entry["last_turn_at"] or ""):
+            entry["last_turn_at"] = t.get("t_end") or ""
+        t_start = t.get("t_start") or ""
+        if t_start and (not entry["first_turn_at"] or t_start < entry["first_turn_at"]):
+            entry["first_turn_at"] = t_start
+    rows = []
+    for entry in by_session.values():
+        bucket = _throughput_finalize_bucket(entry.pop("_bucket"))
+        models = entry.pop("_models")
+        row = dict(entry)
+        row.update(bucket)
+        row["cache_adjusted_tokens"] = round(
+            (bucket.get("effective_input_tokens") or 0.0)
+            + (bucket.get("output_tokens") or 0),
+            2,
+        )
+        row["models"] = sorted(models, key=models.get, reverse=True)
+        rows.append(row)
+    rows.sort(key=lambda r: r.get("cache_adjusted_tokens") or 0, reverse=True)
+    return rows[:limit], len(rows)
+
+
+def _throughput_window_payload(start, end, engine_filter=None, limit=50):
+    """Per-session breakdown of a bounded time window (the zoom drill)."""
+    engine = _throughput_engine_filter(engine_filter)
+    try:
+        start_epoch = float(start)
+        end_epoch = float(end)
+    except (TypeError, ValueError):
+        return {"error": "start and end must be epoch seconds"}, 400
+    try:
+        limit = max(1, min(int(limit or 50), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    if end_epoch <= start_epoch:
+        return {"error": "end must be after start"}, 400
+    now = time.time()
+    if end_epoch - start_epoch > _THROUGHPUT_WINDOW_MAX_SPAN_SEC:
+        return {"error": "window too wide (max 26 hours)"}, 400
+    if start_epoch < now - _THROUGHPUT_WINDOW_MAX_AGE_SEC:
+        return {"error": "window too old (max 56 days)"}, 400
+
+    key = (int(start_epoch), int(end_epoch), engine, limit)
+    cached = _THROUGHPUT_WINDOW_CACHE.get(key)
+    if cached and now - cached["ts"] < _THROUGHPUT_WINDOW_CACHE_TTL:
+        return cached["payload"], cached["status"]
+
+    turns = _throughput_window_turns(start_epoch, end_epoch, engine)
+    sessions, session_count = _throughput_sessions_from_turns(turns, limit=limit)
+    total_bucket = _throughput_empty_bucket()
+    for t in turns:
+        _throughput_add_bucket(total_bucket, t)
+    totals = _throughput_finalize_bucket(total_bucket)
+    totals["cache_adjusted_tokens"] = round(
+        (totals.get("effective_input_tokens") or 0.0)
+        + (totals.get("output_tokens") or 0),
+        2,
+    )
+    payload = {
+        "ok": True,
+        "scope": {
+            "start_epoch": start_epoch,
+            "end_epoch": end_epoch,
+            "engine": engine,
+        },
+        "totals": totals,
+        "session_count": session_count,
+        "sessions": sessions,
+        "sessions_truncated": max(0, session_count - len(sessions)),
+    }
+    if len(_THROUGHPUT_WINDOW_CACHE) >= _THROUGHPUT_WINDOW_CACHE_MAX:
+        oldest = min(_THROUGHPUT_WINDOW_CACHE, key=lambda k: _THROUGHPUT_WINDOW_CACHE[k]["ts"])
+        _THROUGHPUT_WINDOW_CACHE.pop(oldest, None)
+    _THROUGHPUT_WINDOW_CACHE[key] = {"ts": now, "payload": payload, "status": 200}
+    return payload, 200
+
+
+def _throughput_local_day_bounds(date_str=None):
+    """(start_epoch, end_epoch, iso_date) for a local calendar day."""
+    local_midnight = datetime.now().astimezone().replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    key = str(date_str or "").strip().lower()
+    if key in ("", "today"):
+        day = local_midnight
+    elif key == "yesterday":
+        day = local_midnight - timedelta(days=1)
+    else:
+        parsed = datetime.strptime(key, "%Y-%m-%d")
+        day = parsed.replace(tzinfo=local_midnight.tzinfo)
+    return day.timestamp(), (day + timedelta(days=1)).timestamp(), day.strftime("%Y-%m-%d")
+
+
+def _throughput_daily_ticket_counts(start_epoch, end_epoch):
+    """WatchTower queue activity for the day: one queue read, no per-row work.
+
+    The queue has no explicit "failed" state (open/in_progress/closed), so the
+    digest reports opened/closed plus what was still open at day end.
+    """
+    try:
+        items = _q.list_items()
+    except Exception:
+        return {"available": False, "opened": 0, "closed": 0, "still_open": 0}
+
+    def _epoch(ts_str):
+        dt = _stats_parse_ts(ts_str) if ts_str else None
+        return dt.timestamp() if dt else None
+
+    opened = closed = still_open = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        created = _epoch(item.get("created_at"))
+        done = _epoch(item.get("closed_at"))
+        if created is not None and start_epoch <= created < end_epoch:
+            opened += 1
+        if done is not None and start_epoch <= done < end_epoch:
+            closed += 1
+        if (
+            created is not None
+            and created < end_epoch
+            and (done is None or done >= end_epoch)
+        ):
+            still_open += 1
+    return {
+        "available": True,
+        "opened": opened,
+        "closed": closed,
+        "still_open": still_open,
+    }
+
+
+def _throughput_read_daily_snapshot(iso_date, engine_filter=None):
+    try:
+        raw = _throughput_daily_snapshot_path(iso_date, engine_filter).read_text(
+            encoding="utf-8"
+        )
+        model = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(model, dict) or model.get("schema") != _THROUGHPUT_DAILY_SCHEMA:
+        return None
+    if model.get("date") != iso_date or not model.get("ok"):
+        return None
+    if _throughput_engine_filter(model.get("engine")) != _throughput_engine_filter(engine_filter):
+        return None
+    return model
+
+
+def _throughput_persist_daily_snapshot(payload):
+    """Persist a finished day's digest (same pattern as aggregate snapshots)."""
+    if not isinstance(payload, dict) or not payload.get("ok") or not payload.get("final"):
+        return
+    try:
+        _THROUGHPUT_DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = _throughput_daily_snapshot_path(payload.get("date"), payload.get("engine"))
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _throughput_daily_compare_block(iso_date, engine, now):
+    """Yesterday-at-the-same-time token totals for the pace readout."""
+    try:
+        y_start, y_end, y_iso = _throughput_local_day_bounds(
+            (datetime.strptime(iso_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        )
+    except ValueError:
+        return None
+    y_payload, y_status = _throughput_daily_payload(y_iso, engine_filter=engine)
+    if y_status != 200 or not isinstance(y_payload, dict):
+        return None
+    elapsed = max(0.0, now - _throughput_local_day_bounds(iso_date)[0])
+    same_time_tokens = 0.0
+    total_tokens = 0.0
+    for row in y_payload.get("hourly") or []:
+        dt = _stats_parse_ts(str(row.get("hour") or "") + ":00")
+        tokens = (row.get("effective_input_tokens") or 0.0) + (row.get("output_tokens") or 0)
+        total_tokens += tokens
+        if dt is None:
+            continue
+        offset = dt.timestamp() - y_start
+        if offset + 3600 <= elapsed:
+            same_time_tokens += tokens
+        elif offset < elapsed:
+            same_time_tokens += tokens * ((elapsed - offset) / 3600.0)
+    return {
+        "date": y_iso,
+        "cache_adjusted_tokens_to_same_time": round(same_time_tokens, 2),
+        "cache_adjusted_tokens_total": round(total_tokens, 2),
+    }
+
+
+def _throughput_daily_payload(date_str=None, engine_filter=None, force_refresh=False):
+    """Daily throughput digest: sessions, tokens by model, top lanes, tickets.
+
+    Finished days persist to a disk snapshot (write-once) and never recompute;
+    today recomputes at most every _THROUGHPUT_DAILY_CACHE_TTL seconds behind a
+    single-flight lock, so strip/report polls coalesce.
+    """
+    engine = _throughput_engine_filter(engine_filter)
+    try:
+        start_epoch, end_epoch, iso_date = _throughput_local_day_bounds(date_str)
+    except ValueError:
+        return {"error": "date must be YYYY-MM-DD, 'today', or 'yesterday'"}, 400
+    now = time.time()
+    if start_epoch > now:
+        return {"error": "date is in the future"}, 400
+    if start_epoch < now - _THROUGHPUT_WINDOW_MAX_AGE_SEC:
+        return {"error": "date too old (max 56 days)"}, 400
+    is_final = end_epoch <= now
+    key = (iso_date, engine)
+
+    cached = _THROUGHPUT_DAILY_CACHE.get(key)
+    if not force_refresh and cached and (
+        is_final or now - cached["ts"] < _THROUGHPUT_DAILY_CACHE_TTL
+    ):
+        return cached["payload"], cached["status"]
+    if is_final and not force_refresh:
+        snapshot = _throughput_read_daily_snapshot(iso_date, engine)
+        if snapshot:
+            _THROUGHPUT_DAILY_CACHE[key] = {"ts": now, "payload": snapshot, "status": 200}
+            return snapshot, 200
+
+    with _THROUGHPUT_DAILY_LOCK:
+        cached = _THROUGHPUT_DAILY_CACHE.get(key)
+        if not force_refresh and cached and (
+            is_final or time.time() - cached["ts"] < _THROUGHPUT_DAILY_CACHE_TTL
+        ):
+            return cached["payload"], cached["status"]
+
+        turns = _throughput_window_turns(start_epoch, end_epoch, engine)
+        summary = _throughput_summary(turns)
+        top_sessions, session_count = _throughput_sessions_from_turns(turns, limit=20)
+        active_cutoff = time.time() - 3600
+        active_last_hour = set()
+        if not is_final:
+            for t in turns:
+                t_end = _stats_parse_ts(t.get("t_end"))
+                if t_end and t_end.timestamp() >= active_cutoff:
+                    active_last_hour.add(t.get("session_id") or "")
+        payload = {
+            "ok": True,
+            "schema": _THROUGHPUT_DAILY_SCHEMA,
+            "date": iso_date,
+            "engine": engine,
+            "generated_at": time.time(),
+            "final": is_final,
+            "day_start_epoch": start_epoch,
+            "day_end_epoch": end_epoch,
+            "totals": {
+                "turns": summary.get("total_turns") or 0,
+                "sessions": session_count,
+                "cache_adjusted_tokens": round(
+                    (summary.get("total_effective_input_tokens") or 0.0)
+                    + (summary.get("total_output_tokens") or 0),
+                    2,
+                ),
+                "raw_context_tokens": summary.get("total_raw_context_tokens") or 0,
+                "output_tokens": summary.get("total_output_tokens") or 0,
+                "cost_usd": summary.get("cost_usd") or 0.0,
+                "active_duration_sec": summary.get("total_active_duration_sec") or 0.0,
+                "cache_hit_ratio": summary.get("cache_hit_ratio") or 0.0,
+            },
+            "per_model": summary.get("per_model") or [],
+            "hourly": summary.get("hourly") or [],
+            "top_sessions": top_sessions,
+            "sessions_truncated": max(0, session_count - len(top_sessions)),
+            "active_sessions_last_hour": len(active_last_hour),
+            "tickets": _throughput_daily_ticket_counts(start_epoch, end_epoch),
+        }
+        _THROUGHPUT_DAILY_CACHE[key] = {
+            "ts": time.time(), "payload": payload, "status": 200,
+        }
+        _throughput_persist_daily_snapshot(payload)
+
+    if not is_final:
+        compare = _throughput_daily_compare_block(iso_date, engine, now)
+        if compare:
+            payload["yesterday"] = compare
+    return payload, 200
+
+
+# ---------------------------------------------------------------------------
 # Productivity dashboard — outcome, project, activity, and time evidence.
 #
 # Unlike Throughput, this is a 16-week cross-source view.  Its expensive build
@@ -56093,6 +56488,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             self.send_json({"rankings": rankings}, 200)
             return
+        elif path == "/api/throughput/window":
+            # Per-session breakdown of a bounded time window (zoom drill).
+            qs = urllib.parse.parse_qs(parsed.query)
+            start = (qs.get("start", [""])[0] or "").strip()
+            end = (qs.get("end", [""])[0] or "").strip()
+            engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
+            limit = (qs.get("limit", [""])[0] or "").strip() or "50"
+            payload, status = _throughput_window_payload(
+                start, end, engine_filter=engine_filter, limit=limit
+            )
+            self.send_json(payload, status)
+            return
+        elif path == "/api/throughput/daily":
+            # Daily throughput digest (sessions, tokens by model, top lanes,
+            # queue-ticket counts). ?date=YYYY-MM-DD | today | yesterday.
+            qs = urllib.parse.parse_qs(parsed.query)
+            date_str = (qs.get("date", [""])[0] or "").strip() or None
+            engine_filter = (qs.get("engine", [""])[0] or "").strip() or None
+            force = (qs.get("refresh", ["0"])[0] or "0").lower() in (
+                "1", "true", "yes"
+            )
+            payload, status = _throughput_daily_payload(
+                date_str, engine_filter=engine_filter, force_refresh=force
+            )
+            self.send_json(payload, status)
+            return
         elif path == "/api/weekly_usage":
             # Claude-only weekly burn since reset, in the same %-of-weekly unit
             # the macOS menu bar shows. Independent of the throughput range so
@@ -57001,6 +57422,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "throughput.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "throughput.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/throughput-daily.html" or path == "/throughput-daily":
+            # Daily throughput report page (narrow route — the generic static
+            # handler refuses arbitrary *.html), mirroring /throughput.
+            try:
+                body = (STATIC_DIR / "throughput-daily.html").read_bytes()
+            except OSError as e:
+                self.send_json(
+                    {"error": "throughput-daily.html missing", "detail": str(e)}, 500
+                )
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
