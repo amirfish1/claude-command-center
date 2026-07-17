@@ -39992,17 +39992,44 @@ def _persist_codex_parent_link(thread_id, parent_session_id):
             pass
 
 
-def _pid_process_state(pid):
+@_ttl_memo(3.0)
+def _scan_process_states():
+    """Return one shared pid -> process-state snapshot.
+
+    Reattached children have no useful ``Popen`` handle after a CCC restart,
+    so every hot-path poll must still distinguish a live process from a
+    zombie.  A per-PID ``ps`` call made that poll O(number of reattached
+    children), which could hold inject-input requests for minutes on a busy
+    host.  One short-TTL bulk snapshot keeps the zombie guard without the
+    subprocess fan-out.
+    """
     try:
         out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "stat="],
+            ["ps", "-A", "-o", "pid=,stat="],
             capture_output=True, text=True, timeout=2,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return ""
+        return {}
     if out.returncode != 0:
+        return {}
+    states = {}
+    for line in (out.stdout or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            states[int(parts[0])] = parts[1]
+        except ValueError:
+            continue
+    return states
+
+
+def _pid_process_state(pid):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
         return ""
-    return (out.stdout or "").strip().split(None, 1)[0]
+    return _scan_process_states().get(pid, "")
 
 
 def _pid_is_zombie(pid):
