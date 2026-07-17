@@ -23345,6 +23345,7 @@
   }
 
   function renderConversationList(convs) {
+    if (window.__cccTourActive) return; // FIRST FLIGHT tour owns the list DOM
     convs = filterGhIssues(convs);
     convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c)).map(_applyLiveOverlayToRow);
     // Keep a matching session name ahead of a UUID hit in the final visible
@@ -54805,6 +54806,36 @@
         arrow.setAttribute('hidden', '');
       };
     }
+  }
+
+  // ── FIRST FLIGHT tour (lazy-loaded onboarding spotlight tour) ─────────
+  const FFT_DONE_KEY = 'ccc-tour-done';
+  function loadFirstFlightTour(force) {
+    if (window.cccTour) { try { window.cccTour.start({ force: !!force }); } catch (_) {} return; }
+    const s = document.createElement('script');
+    s.src = '/static/tour.js';
+    s.onload = () => { try { window.cccTour.start({ force: !!force }); } catch (_) {} };
+    document.head.appendChild(s);
+  }
+  function maybeStartFirstFlight(attempt) {
+    let done = null;
+    try { done = localStorage.getItem(FFT_DONE_KEY); } catch (_) { return; }
+    if (done) return;
+    // Defer while any modal (e.g. the login onboarding wizard) is open.
+    if (document.querySelector('.upd-overlay.open')) {
+      if ((attempt || 0) < 50) setTimeout(() => maybeStartFirstFlight((attempt || 0) + 1), 4000);
+      return;
+    }
+    loadFirstFlightTour(false);
+  }
+  const $takeTourBtn = document.getElementById('takeTourBtn');
+  if ($takeTourBtn) $takeTourBtn.addEventListener('click', () => {
+    const $sp = document.getElementById('settingsPopover');
+    if ($sp) $sp.classList.remove('open');
+    loadFirstFlightTour(true);
+  });
+  if (!CONV_POPOUT_MODE) {
+    setTimeout(() => maybeStartFirstFlight(0), 2500);
   }
 
   // Trigger check on load

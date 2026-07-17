@@ -403,7 +403,7 @@
           <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
         </div>
-        <button type="button" class="sh-wt-badge" id="cccWtBadge" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
+        <button type="button" class="sh-wt-badge" id="cccWtBadge" data-tour="watchtower" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
           <span class="wt-beacon" aria-hidden="true">
             <svg viewBox="0 0 32 32" width="14" height="14">
               <circle class="wt-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="1.5"/>
@@ -462,16 +462,16 @@
 
     <div class="new-session-panel">
       <div class="new-session-primary-row">
-        <button class="new-session-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
+        <button class="new-session-btn" id="sidebarNewBtn" data-tour="new-session" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
         <div class="search-wrap">
-          <input type="text" id="convSearch" class="conv-search-input" placeholder="Search..." autocomplete="off" list="convSearchHistoryList">
+          <input type="text" id="convSearch" class="conv-search-input" data-tour="search" placeholder="Search..." autocomplete="off" list="convSearchHistoryList">
           <datalist id="convSearchHistoryList"></datalist>
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
         <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
       </div>
       <div class="new-session-secondary-row">
-        <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" title="Create a new empty group chat - drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
+        <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" data-tour="group-chat" title="Create a new empty group chat - drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view"><span aria-hidden="true">&#9654;</span></button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarManageGroupChatsBtn" title="Manage existing group chats - pause / unpause orchestration" aria-label="Manage group chats">&#8801;</button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarCarModeBtn" title="Car Mode - drive your agents hands-free by voice" aria-label="Car Mode"><span aria-hidden="true">🚗</span></button>
@@ -499,7 +499,7 @@
         </div>
         <div class="today-tray-body" id="todayTrayBody"></div>
       </div>
-      <div class="log-list" id="convList" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
+      <div class="log-list" id="convList" data-tour="session-list" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
         <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
       </div>
       <div class="coord-toolbar" id="coordToolbar">
@@ -534,7 +534,7 @@
       <button id="gcActiveBtn" class="sidebar-footer-pill" style="display:none;" title="Active group-chat coordinations - click to open the most recent one" aria-label="Active group chats"></button>
       <div class="sidebar-footer-spacer"></div>
       <div style="position:relative;">
-        <button type="button" class="sidebar-footer-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
+        <button type="button" class="sidebar-footer-btn" id="settingsBtn" data-tour="settings" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -588,6 +588,7 @@
             <summary class="pop-item"><span class="pop-icon">&#9881;</span><span>Advanced</span><span class="pop-chevron">&#8250;</span></summary>
             <div class="pop-submenu-panel">
               <button class="pop-item" type="button" id="runOnboardingBtn"><span class="pop-icon">🚀</span><span>Run onboarding</span></button>
+              <button class="pop-item" type="button" id="takeTourBtn"><span class="pop-icon">🛫</span><span>Take the tour</span></button>
               <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
               <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
               <button class="pop-item" type="button" id="federationPeersBtn"><span class="pop-icon">&#128279;</span><span>Nodes &amp; peers…</span></button>
@@ -951,7 +952,7 @@
           </svg>
         </button>
         <div class="conv-goal-strip" data-role="conv-goal-strip" hidden></div>
-        <div class="conv-input-bar" id="convInputBar">
+        <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
           <div class="conv-input-row-top">
             <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true" enterkeyhint="send" inputmode="text"></textarea>
           </div>
