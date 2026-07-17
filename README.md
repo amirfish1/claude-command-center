@@ -360,6 +360,33 @@ pace projections, calibration metadata, recent reset events, and `fetched_at`.
 Fields are nullable so external tools can gracefully degrade when a provider
 has not emitted usage yet.
 
+## Works with your skills
+
+CCC does not replace the Claude Code skill packs you already run. It gives them
+a fleet. Full write-up: [docs/skills-ecosystem.html](https://ccc.amirfish.ai/skills-ecosystem.html)
+and the honest [inventory](docs/skills-ecosystem-inventory.md).
+
+- **Superpowers subagents surface on your board.** When a superpowers skill fans
+  out `Task` subagents (dispatching-parallel-agents, subagent-driven-development),
+  CCC counts them from the transcript and shows a subagent chip plus a live status
+  rail on the parent session row. No change to the pack.
+- **`superpowers-to-watchtower`** (bundled skill) lifts a superpowers plan out of
+  its in-session scratch ledger: `wt import` turns it into durable, board-visible
+  Watchtower tickets, then optionally dispatches one CCC lane per ticket that
+  closes with a summary.
+- **`fleet-verify`** (bundled skill) spawns one CCC lane that drives gstack browse
+  (puppeteer fallback) against the running app and reports a visual verdict with a
+  screenshot. The check `/code-review` and a unit test cannot make.
+- **`GET /api/skills`** inventories CCC's own bundled skills plus every installed
+  third-party pack, each annotated with honest fleet-synergy flags
+  (`spawns_subagents`, `fleet_aware`, `drives_browser`, `ccc_synergy`). stdlib-only
+  and mtime-cached, so a dashboard can poll it for free.
+
+The `superpowers-to-watchtower` and `fleet-verify` skills install on startup
+alongside `ccc-orchestration` (opt out with `CCC_SKIP_SKILL_INSTALL=1`). What is
+wired today is kept plainly separate from what is roadmap, in both the docs page
+and the matrix populated by `/api/skills`.
+
 ## Cookbook
 
 Recipes for wiring **your own app** into CCC — each with a copy-paste prompt
