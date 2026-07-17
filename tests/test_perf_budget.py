@@ -149,6 +149,27 @@ def _count_calls(monkeypatch, attr, passthrough_return=None):
 # Old, untouched sessions must NOT get the per-row liveness probe (which scans
 # every Gemini/Codex file). These guard the cold-build and warm-serve gates.
 
+def test_reattached_zombie_checks_share_one_process_state_scan(monkeypatch):
+    """N reattached children require one bulk `ps`, never one fork per PID."""
+    calls = []
+
+    class Result:
+        returncode = 0
+        stderr = ""
+        stdout = "11111 S\n22222 Z\n33333 S\n"
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return Result()
+
+    server._reset_ttl_memo_caches()
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+
+    assert server._pid_is_zombie(11111) is False
+    assert server._pid_is_zombie(22222) is True
+    assert server._pid_is_zombie(33333) is False
+    assert calls == [["ps", "-A", "-o", "pid=,stat="]]
+
 def test_archive_rehydrate_skips_liveness_for_old_rows(monkeypatch):
     """Warm cached-serve path: ungated probing here was the ~10s/load bug."""
     old_mtime = time.time() - 30 * 86400

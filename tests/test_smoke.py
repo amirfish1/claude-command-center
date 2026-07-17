@@ -8942,36 +8942,6 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.assertEqual(proc.poll(), -1)
             self.assertEqual(proc.poll(), -1)
 
-    def test_zombie_checks_share_one_bulk_process_state_scan(self):
-        """Polling many reattached children must not fork one `ps` per PID."""
-        for mod in ("server", "morning", "morning_store"):
-            sys.modules.pop(mod, None)
-        server = importlib.import_module("server")
-
-        def fake_run(args, **kwargs):
-            result = mock.Mock(returncode=0, stderr="")
-            if args[:3] == ["ps", "-p", "11111"]:
-                result.stdout = "S\n"
-            elif args[:3] == ["ps", "-p", "22222"]:
-                result.stdout = "Z\n"
-            elif args[:3] == ["ps", "-p", "33333"]:
-                result.stdout = "S\n"
-            else:
-                result.stdout = "11111 S\n22222 Z\n33333 S\n"
-            return result
-
-        server._reset_ttl_memo_caches()
-        with mock.patch.object(server.subprocess, "run", side_effect=fake_run) as run:
-            self.assertFalse(server._pid_is_zombie(11111))
-            self.assertTrue(server._pid_is_zombie(22222))
-            self.assertFalse(server._pid_is_zombie(33333))
-
-        self.assertEqual(run.call_count, 1)
-        self.assertEqual(
-            run.call_args.args[0],
-            ["ps", "-A", "-o", "pid=,stat="],
-        )
-
     def test_gemini_chat_parsing_usage_and_row_signals(self):
         """Gemini chat JSON should render as a first-class session row."""
         for mod in ("server",):
