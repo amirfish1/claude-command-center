@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CCC works with your skills</title>
+<meta name="description" content="CCC does not replace the Claude Code skill packs you already run. It gives them a fleet: superpowers subagents surface on your board, a superpowers plan imports into a durable Watchtower queue, and a spawned lane drives gstack browse to verify UI. Here is what works today, honestly separated from the roadmap.">
+<link rel="canonical" href="https://ccc.amirfish.ai/skills-ecosystem.html">
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+
+<meta property="og:title" content="CCC works with your skills">
+<meta property="og:description" content="Superpowers, gstack browse, Total Recall, Watchtower. CCC gives the skill packs you already run a persistent, visible, multi-session home. What works today, separated from the roadmap.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ccc.amirfish.ai/skills-ecosystem.html">
+
+<style>
+  :root {
+    --bg: #0a0d11;
+    --bg-2: #11151b;
+    --bg-3: #161b22;
+    --bg-4: #1c232b;
+    --fg: #e6ebf2;
+    --fg-dim: #9aa3ad;
+    --fg-mute: #7f8791;
+    --line: #232830;
+    --line-strong: #2e343d;
+    --orange: #f5a623;
+    --orange-soft: rgba(245, 166, 35, 0.12);
+    --green: #6ee7b7;
+    --green-bright: #4dd599;
+    --blue: #8fb3ff;
+    --purple: #bd9bff;
+    --red: #ff7a66;
+    --code-bg: #0a0c0f;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  body { line-height: 1.5; }
+  a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--orange); }
+  code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  .wrap-narrow { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  header.nav {
+    border-bottom: 1px solid var(--line);
+    background: rgba(10, 13, 17, 0.85);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
+  .brand { font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 10px; flex-shrink: 0; white-space: nowrap; text-decoration: none; color: var(--fg); }
+  .brand .dot { display: inline-block; width: 8px; height: 8px; background: var(--orange); border-radius: 50%; box-shadow: 0 0 12px var(--orange); }
+  .nav-links { display: flex; gap: 22px; font-size: 14px; align-items: center; }
+  .nav-links a { text-decoration: none; color: var(--fg-dim); }
+  .nav-links a:hover { color: var(--fg); }
+  .nav-links a.here { color: var(--fg); }
+  @media (max-width: 640px) { .nav-links a:not(.gh) { display: none; } }
+
+  /* Hero */
+  .hero { padding: 64px 0 20px; position: relative; }
+  .hero::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 800px 400px at 15% 10%, rgba(245, 166, 35, 0.10), transparent 60%),
+      radial-gradient(ellipse 600px 300px at 85% 30%, rgba(110, 231, 183, 0.06), transparent 60%);
+    pointer-events: none;
+  }
+  .hero-inner { position: relative; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; color: var(--orange);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 18px;
+  }
+  h1.hero-title {
+    font-size: clamp(34px, 5.2vw, 58px);
+    line-height: 1.04; letter-spacing: -0.025em;
+    margin: 0 0 22px; font-weight: 700; max-width: 22ch;
+  }
+  h1.hero-title .orange { color: var(--orange); }
+  .lede { font-size: 19px; color: var(--fg-dim); max-width: 64ch; margin: 0 0 12px; }
+  .lede .tag { color: var(--fg); }
+  .crumb { font-family: var(--mono); font-size: 12px; color: var(--fg-mute); margin-bottom: 24px; }
+  .crumb a { color: var(--fg-dim); }
+
+  /* Two-bets */
+  .bets { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 8px; }
+  @media (max-width: 780px) { .bets { grid-template-columns: 1fr; } }
+  .bet {
+    padding: 26px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+  }
+  .bet.ours { border-color: rgba(245, 166, 35, 0.4); background: linear-gradient(180deg, var(--orange-soft), var(--bg-2) 60%); }
+  .bet h3 { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
+  .bet .kind { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); margin-bottom: 14px; }
+  .bet.ours .kind { color: var(--orange); }
+  .bet p { margin: 0; color: var(--fg-dim); font-size: 15px; }
+
+  /* Sections */
+  section { padding: 72px 0; border-top: 1px solid var(--line); }
+  section h2 {
+    font-size: clamp(28px, 4.2vw, 40px); margin: 0 0 14px;
+    letter-spacing: -0.015em; font-weight: 700;
+  }
+  section h2 .orange { color: var(--orange); }
+  section .section-lede { color: var(--fg-dim); max-width: 66ch; margin: 0 0 40px; font-size: 17px; }
+  .section-eyebrow {
+    font-family: var(--mono); font-size: 12px; color: var(--orange);
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 18px;
+  }
+  .section-eyebrow.road { color: var(--blue); }
+
+  /* List-view cards (house convention) */
+  .card-list { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 780px) { .card-list { grid-template-columns: 1fr; } }
+  .card-list li {
+    padding: 22px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+    color: var(--fg-dim); font-size: 15px; line-height: 1.55;
+  }
+  .card-list li strong { color: var(--fg); display: block; margin-bottom: 6px; font-weight: 600; font-size: 15px; }
+  .card-list li .pack { font-family: var(--mono); font-size: 12px; color: var(--orange); display: block; margin-bottom: 10px; letter-spacing: 0.02em; }
+  .card-list.road li .pack { color: var(--blue); }
+  .card-list li code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--fg); }
+
+  /* Status pill */
+  .pill { display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 8px; border-radius: 20px; margin-bottom: 12px; }
+  .pill.works { color: var(--green-bright); background: rgba(77, 213, 153, 0.10); border: 1px solid rgba(77, 213, 153, 0.30); }
+  .pill.road { color: var(--blue); background: rgba(143, 179, 255, 0.10); border: 1px solid rgba(143, 179, 255, 0.30); }
+
+  /* Code block */
+  pre.code {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px 22px; overflow-x: auto; font-size: 13px; line-height: 1.7;
+    color: var(--fg-dim); margin: 0;
+  }
+  pre.code .c { color: var(--fg-mute); }
+  pre.code .k { color: var(--orange); }
+  pre.code b { color: var(--fg); font-weight: 600; }
+  .code-cap { margin-top: 12px; font-family: var(--mono); font-size: 12px; color: var(--fg-mute); }
+
+  /* Matrix table */
+  .compare-wrap { overflow-x: auto; }
+  table.compare {
+    width: 100%; border-collapse: collapse; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+  }
+  table.compare th, table.compare td {
+    padding: 13px 16px; text-align: left;
+    border-bottom: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.compare th:last-child, table.compare td:last-child { border-right: 0; }
+  table.compare tr:last-child td { border-bottom: 0; }
+  table.compare thead th {
+    background: var(--bg-3); color: var(--fg);
+    font-family: var(--mono); font-size: 13px; font-weight: 600;
+  }
+  table.compare tbody td:first-child { color: var(--fg); font-weight: 500; background: var(--bg-2); width: 22%; }
+  table.compare tbody td { color: var(--fg-dim); }
+  table.compare .yes { color: var(--green-bright); font-weight: 600; }
+  table.compare .road { color: var(--blue); font-weight: 500; }
+  .table-note { margin-top: 14px; color: var(--fg-mute); font-size: 13px; max-width: 70ch; }
+
+  /* CTA banner */
+  .cta-banner {
+    text-align: center; padding: 62px 28px;
+    background: linear-gradient(180deg, var(--orange-soft), transparent);
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .cta-banner h2 { margin: 0 0 12px; font-size: clamp(26px, 4vw, 34px); }
+  .cta-banner p { color: var(--fg-dim); margin: 0 auto 26px; max-width: 60ch; }
+  .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 13px 22px; border-radius: 8px;
+    font-family: var(--mono); font-size: 14px;
+    text-decoration: none; border: 1px solid var(--line-strong);
+    background: var(--bg-2); color: var(--fg);
+    transition: border-color 120ms, transform 120ms, background 120ms;
+  }
+  .btn:hover { border-color: var(--orange); }
+  .btn-primary { background: var(--orange); color: #0a0d11; border-color: var(--orange); font-weight: 600; }
+  .btn-primary:hover { transform: translateY(-1px); background: #ffb930; }
+  .btn-soft { background: transparent; border-color: var(--line-strong); color: var(--fg-dim); }
+  .btn-soft:hover { color: var(--fg); border-color: var(--orange); }
+
+  /* Footer */
+  footer { padding: 52px 0 76px; color: var(--fg-mute); font-size: 14px; }
+  footer .foot-row { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  footer .links { display: flex; gap: 22px; flex-wrap: wrap; }
+  footer a { color: var(--fg-mute); text-decoration: none; }
+  footer a:hover { color: var(--fg); }
+
+  /* Scroll reveal */
+  @keyframes fade-up { from { opacity: 0; transform: translateY(36px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  .fade-target { opacity: 0; transform: translateY(36px) scale(0.98); }
+  .fade-target.is-visible { animation: fade-up 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  @media (prefers-reduced-motion: reduce) {
+    .fade-target { opacity: 1 !important; transform: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/">
+      <span class="dot"></span>
+      <span>claude command center</span>
+    </a>
+    <nav class="nav-links">
+      <a href="/#moment">The problem</a>
+      <a href="/#families">What it solves</a>
+      <a class="here" href="/skills-ecosystem.html">Skills</a>
+      <a href="/#install">Install</a>
+      <a class="gh" href="https://github.com/amirfish1/claude-command-center" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" style="border-top: 0;">
+    <div class="wrap hero-inner">
+      <div class="crumb fade-target"><a href="/">Home</a> / Ecosystem / Works with your skills</div>
+      <div class="eyebrow fade-target">Ecosystem</div>
+      <h1 class="hero-title fade-target">CCC works with your <span class="orange">skills</span>.</h1>
+      <p class="lede fade-target">
+        Superpowers, gstack browse, Total Recall, Watchtower. Good skill packs already do the work inside one session. CCC does not replace them. <span class="tag">It gives them a fleet: a persistent, visible, multi-session home.</span> This page shows what works today, separated plainly from the roadmap.
+      </p>
+
+      <div class="bets fade-target">
+        <div class="bet">
+          <div class="kind">What a skill pack owns</div>
+          <h3>The work inside a session.</h3>
+          <p>Superpowers plans, runs TDD, fans out subagents, reviews a diff. gstack browse drives a browser. Total Recall remembers. Each is excellent at its job, and blind to every other session on your machine.</p>
+        </div>
+        <div class="bet ours">
+          <div class="kind">What CCC owns</div>
+          <h3>The fleet around them.</h3>
+          <p>Persistent sibling sessions you can spawn, inject into, and ask, rendered on one board. CCC reads each engine's on-disk state, so a pack's subagents and a plan's tickets become visible and durable without changing the pack.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="works">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">Works today</div>
+      <h2 class="fade-target">Shipped glue, with real <span class="orange">examples</span>.</h2>
+      <p class="section-lede fade-target">
+        Every card below is code that exists in this repo right now, not a promise. Each names the pack it bridges and how to see it work.
+      </p>
+
+      <ul class="card-list fade-target">
+        <li>
+          <span class="pill works">Works today</span>
+          <span class="pack">superpowers &rarr; CCC board</span>
+          <strong>Subagents surface on your board.</strong>
+          When a superpowers skill fans out <code>Task</code> subagents (dispatching-parallel-agents, subagent-driven-development), CCC counts them straight from the transcript and shows a subagent chip plus a live status rail on the parent session row. No change to superpowers. It just becomes visible.
+        </li>
+        <li>
+          <span class="pill works">Works today</span>
+          <span class="pack">superpowers &rarr; watchtower &rarr; CCC</span>
+          <strong>A plan becomes a durable queue.</strong>
+          The <code>superpowers-to-watchtower</code> skill lifts a superpowers plan out of its in-session scratch ledger: <code>wt import</code> turns it into board-visible Watchtower tickets, then optionally dispatches one CCC lane per ticket that closes with a summary. Session-local tracking becomes fleet-wide.
+        </li>
+        <li>
+          <span class="pill works">Works today</span>
+          <span class="pack">CCC + gstack browse</span>
+          <strong>A lane that actually looks.</strong>
+          The <code>fleet-verify</code> skill spawns one CCC lane that drives gstack browse (puppeteer as fallback) against the running app, verifies the exact change you describe, and reports a visual verdict with a screenshot. The check a diff read and a unit test cannot make.
+        </li>
+        <li>
+          <span class="pill works">Works today</span>
+          <span class="pack">GET /api/skills</span>
+          <strong>CCC knows your packs.</strong>
+          A read-only endpoint inventories CCC's own bundled skills plus every installed third-party pack, each annotated with honest flags: does it spawn subagents, is it fleet-aware, does it drive a browser. mtime-cached and stdlib-only, so a dashboard can poll it for free.
+        </li>
+        <li>
+          <span class="pill works">Works today</span>
+          <span class="pack">Total Recall</span>
+          <strong>Cross-session search, already wired.</strong>
+          CCC queries Total Recall for the sidebar session search and offers a launcher for its dashboard when the pack is installed. The memory a sibling session wrote is one search away.
+        </li>
+        <li>
+          <span class="pill works">Works today</span>
+          <span class="pack">Watchtower (wt)</span>
+          <strong>The queue engine underneath.</strong>
+          CCC imports <code>watchtower.queue</code> as its primary queue engine and can route inject and ask through <code>wt send</code> and <code>wt ask</code>. The board and the CLI read the same ground truth.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="example">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">One flow, end to end</div>
+      <h2 class="fade-target">Plan in superpowers, run it as a <span class="orange">fleet</span>.</h2>
+      <p class="section-lede fade-target">
+        The superpowers-to-watchtower bridge, start to finish. Preview first, apply, then dispatch. Nothing here is pseudocode.
+      </p>
+      <pre class="code fade-target"><span class="c"># 1. Superpowers wrote a plan (writing-plans / brainstorming output)</span>
+<span class="c">#    Preview the ticket split. `wt import` is preview by default: your dry run.</span>
+<span class="k">wt import</span> docs/superpowers/plans/2026-07-16-my-feature.md -q MYFEATURE
+
+<span class="c"># 2. Looks right? Apply it. The plan is now durable, board-visible tickets.</span>
+<span class="k">wt import</span> docs/superpowers/plans/2026-07-16-my-feature.md -q MYFEATURE <b>--apply</b> --type feature
+<span class="k">wt status</span> -q MYFEATURE --json     <span class="c"># depth + oldest-open age, not "stuck"</span>
+
+<span class="c"># 3. Optional: one CCC lane per ticket. Each claims, does, closes with a summary.</span>
+<span class="k">curl</span> -s -X POST "$CCC_URL/api/sessions/spawn" -d '{
+  "prompt": "Read ticket MYFEATURE-3, claim it, do only that work,
+             verify, then wt close it with a truthful summary.",
+  "repo_path": "/abs/repo", "report_to": "&lt;your-session-id&gt;" }'</pre>
+      <p class="code-cap fade-target">Falls back honestly: no <code>wt</code> means superpowers' own ledger; CCC down means in-process Task subagents. Never pretends a lane ran.</p>
+    </div>
+  </section>
+
+  <section id="matrix">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">At a glance</div>
+      <h2 class="fade-target">The pack matrix.</h2>
+      <p class="section-lede fade-target">
+        How each installed pack relates to a CCC fleet, and whether the integration is wired today. Populated live by <code>/api/skills</code>.
+      </p>
+      <div class="compare-wrap fade-target">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th>Pack</th>
+              <th>What it owns</th>
+              <th>Fleet seam</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Superpowers</td>
+              <td>Plan, TDD, subagent fan-out, review</td>
+              <td>Subagents surface on the board; plan imports to a queue</td>
+              <td class="yes">wired</td>
+            </tr>
+            <tr>
+              <td>gstack browse</td>
+              <td>Headless browser QA and screenshots</td>
+              <td>A spawned lane drives it for visual verification</td>
+              <td class="yes">wired</td>
+            </tr>
+            <tr>
+              <td>Watchtower</td>
+              <td>Durable ticket queues and workers</td>
+              <td>CCC's primary queue engine and message backend</td>
+              <td class="yes">wired</td>
+            </tr>
+            <tr>
+              <td>Total Recall</td>
+              <td>Cross-session persistent memory</td>
+              <td>Sidebar search today; systematized fleet memory next</td>
+              <td class="yes">partly wired</td>
+            </tr>
+            <tr>
+              <td>Token Optimizer</td>
+              <td>Context and token cost auditing</td>
+              <td>fleet-auditor into CCC's health strip</td>
+              <td class="road">roadmap</td>
+            </tr>
+            <tr>
+              <td>PostHog</td>
+              <td>Analytics, flags, error tracking</td>
+              <td>Not wired; listed for honesty</td>
+              <td class="road">roadmap</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note fade-target">As of 2026-07-17. Presence is detected live; the fleet-synergy flags are a curated, honest annotation. A pack being installed does not mean it is wired, and the matrix says which is which.</p>
+    </div>
+  </section>
+
+  <section id="roadmap">
+    <div class="wrap">
+      <div class="section-eyebrow road fade-target">Roadmap, not done</div>
+      <h2 class="fade-target">What we have <span class="orange">not</span> built yet.</h2>
+      <p class="section-lede fade-target">
+        Naming these plainly is the point. They are real gaps, not shipped features described in the future tense.
+      </p>
+      <ul class="card-list road fade-target">
+        <li>
+          <span class="pill road">Roadmap</span>
+          <span class="pack">Total Recall</span>
+          <strong>Systematized fleet memory.</strong>
+          Today CCC searches Total Recall. Not yet: every lane writing its outcome tagged by queue and ticket, so siblings recall what was already tried without being told. The plumbing exists; the convention does not.
+        </li>
+        <li>
+          <span class="pill road">Roadmap</span>
+          <span class="pack">Token Optimizer</span>
+          <strong>Cost in the health strip.</strong>
+          Token Optimizer's fleet-auditor already reads across agent systems. Surfacing its cross-session cost numbers inside CCC's own health strip is not built.
+        </li>
+        <li>
+          <span class="pill road">Roadmap</span>
+          <span class="pack">superpowers subagent-driven-development</span>
+          <strong>Plan progress on the board.</strong>
+          The chip shows how many subagents are running. It does not yet read the <code>.superpowers/sdd/progress.md</code> ledger to show which plan task is done and at which commit range.
+        </li>
+        <li>
+          <span class="pill road">Roadmap</span>
+          <span class="pack">PostHog and the long tail</span>
+          <strong>The rest of the 256 packs.</strong>
+          Most installed packs are detected and listed, nothing more. Wiring is deliberate and case by case, not a blanket claim of compatibility.
+        </li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<section class="cta-banner">
+  <div class="wrap-narrow">
+    <h2 class="fade-target">Bring the skills you already run.</h2>
+    <p class="fade-target">CCC is local, open source, and about a minute to install. Point it at your machine and your superpowers subagents, your Watchtower queues, and your Total Recall memory show up on one board.</p>
+    <div class="cta-row fade-target">
+      <a class="btn btn-primary" href="/#install">Install <span>&rarr;</span></a>
+      <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center/blob/main/docs/skills-ecosystem-inventory.md">Read the full inventory</a>
+      <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; Star on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-row">
+      <div>
+        Claude Command Center. MIT &copy; 2026 Amir Fish.<br>
+        Works alongside <a href="https://github.com/obra/superpowers">superpowers</a>, gstack browse, Total Recall, Token Optimizer, and <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/watchtower-migration-state.md">Watchtower</a>.
+      </div>
+      <div class="links">
+        <a href="/">Home</a>
+        <a href="/skills-ecosystem.html">Skills</a>
+        <a href="https://github.com/amirfish1/claude-command-center">GitHub</a>
+        <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Changelog</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const targets = document.querySelectorAll('.fade-target');
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      targets.forEach(el => el.classList.add('is-visible'));
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    targets.forEach(el => observer.observe(el));
+  });
+</script>
+</body>
+</html>
