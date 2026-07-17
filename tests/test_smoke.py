@@ -16416,5 +16416,25 @@ def test_throughput_refresh_routes_are_registered():
     assert "_throughput_refresh_status(" in server_py
 
 
+def test_skills_ecosystem_route_and_inventory():
+    """W86: /api/skills returns an honest skill-pack inventory with CCC's own
+    bundled skills plus a de-duplicated pack list, mtime-cached."""
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/api/skills":' in server_py
+    assert "_build_skills_ecosystem(" in server_py
+    import server as _server
+    data = _server._build_skills_ecosystem()
+    assert data["ok"] is True
+    assert isinstance(data["ccc_bundled"], list) and data["ccc_bundled"]
+    assert isinstance(data["packs"], list)
+    # ccc-orchestration is always a bundled skill.
+    assert any(s["name"] == "ccc-orchestration" for s in data["ccc_bundled"])
+    # Known packs carry honest fleet-synergy flags only when present.
+    for pack in data["packs"]:
+        assert set(("name", "present", "kind")).issubset(pack)
+    # Cache returns the identical object on the second call (no dir change).
+    assert _server._build_skills_ecosystem() is data
+
+
 if __name__ == "__main__":
     unittest.main()

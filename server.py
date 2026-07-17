@@ -2386,6 +2386,227 @@ def _slash_commands_from_plugin_cache():
     return commands
 
 
+# --- Skills ecosystem inventory (W86) -------------------------------------
+# Read-only "what skill packs are installed, and how do they relate to a CCC
+# fleet" endpoint. Backs the "CCC works with your skills" docs page and any
+# future dashboard surface. stdlib-only, no subprocess, mtime-cached so a
+# dashboard can poll it without paying a directory walk every call.
+#
+# The capability flags (spawns_subagents / fleet_aware / drives_browser) are a
+# curated, HONEST annotation for well-known packs — presence is detected, the
+# flags describe how that pack behaves in a multi-session fleet. Unknown packs
+# are still listed, just without opinionated flags.
+_SKILLS_KNOWN_PACKS = {
+    "superpowers": {
+        "label": "Superpowers",
+        "spawns_subagents": True, "fleet_aware": False, "drives_browser": False,
+        "ccc_synergy": "works",
+        "note": "Fans out ephemeral Task subagents (dispatching-parallel-agents, "
+                "subagent-driven-development). They already surface in CCC as a "
+                "↳ subagent chip and status rail on the parent session row.",
+    },
+    "browse": {
+        "label": "gstack browse",
+        "spawns_subagents": False, "fleet_aware": False, "drives_browser": True,
+        "ccc_synergy": "works",
+        "note": "Headless Chromium QA/screenshots. A spawned CCC verification "
+                "lane can drive it non-interactively (it honors an orchestrator "
+                "env marker) and report a visual verdict back.",
+    },
+    "open-gstack-browser": {
+        "label": "gstack browser (visible)",
+        "spawns_subagents": False, "fleet_aware": False, "drives_browser": True,
+        "ccc_synergy": "works",
+        "note": "Visible AI-driven Chromium window; the demo/screen-share variant "
+                "of gstack browse.",
+    },
+    "token-optimizer": {
+        "label": "Token Optimizer",
+        "spawns_subagents": False, "fleet_aware": True, "drives_browser": False,
+        "ccc_synergy": "works",
+        "note": "Its fleet-auditor reads across agent systems; a natural companion "
+                "to CCC's own health strip for cross-session cost.",
+    },
+    "total-recall": {
+        "label": "Total Recall",
+        "spawns_subagents": False, "fleet_aware": True, "drives_browser": False,
+        "ccc_synergy": "works",
+        "note": "Cross-session / cross-agent persistent memory. CCC already reads "
+                "it for sidebar search; fleet-wide `brain remember` is the shared "
+                "memory backbone for lanes.",
+    },
+    "watchtower": {
+        "label": "Watchtower (wt)",
+        "spawns_subagents": False, "fleet_aware": True, "drives_browser": False,
+        "ccc_synergy": "works",
+        "note": "Durable queues + tickets. CCC imports watchtower.queue as its "
+                "primary queue engine; `wt import plan.md` turns a superpowers "
+                "plan into dashboard-visible tickets.",
+    },
+    "posthog": {
+        "label": "PostHog",
+        "spawns_subagents": False, "fleet_aware": False, "drives_browser": False,
+        "ccc_synergy": "roadmap",
+        "note": "Large analytics skill pack (MCP-gated). Not wired into CCC today.",
+    },
+    "chrome-devtools-mcp": {
+        "label": "Chrome DevTools MCP",
+        "spawns_subagents": False, "fleet_aware": False, "drives_browser": True,
+        "ccc_synergy": "roadmap",
+        "note": "Drives real Chrome for interactive checks; an alternative "
+                "verification driver to gstack browse.",
+    },
+}
+
+# CCC bundled skills that build fleet workflows on the spawn/inject/ask API.
+_SKILLS_CCC_SYNERGY_NOTE = {
+    "ccc-orchestration": "The spawn / inject / ask API bible every other pack skill builds on.",
+    "superpowers-to-watchtower": "Bridge: turn a superpowers plan into wt tickets, then dispatch a CCC lane per ticket.",
+    "fleet-verify": "Spawn a verification lane that drives gstack browse (or puppeteer) and reports a visual verdict.",
+    "fleet-lane-dispatch": "Dispatch autonomous worker lanes with mission briefs; verify their reports before trusting them.",
+}
+
+_skills_ecosystem_cache = {"sig": None, "data": None}
+
+
+def _skills_dir_sig(paths):
+    """Cheap change signature over a set of dirs: (path, mtime_ns) tuples.
+    Only stats the top-level dirs, never walks — enough to know when a pack was
+    added/removed/updated so the cached inventory can be reused otherwise."""
+    sig = []
+    for p in paths:
+        try:
+            sig.append((str(p), p.stat().st_mtime_ns))
+        except OSError:
+            sig.append((str(p), 0))
+    return tuple(sig)
+
+
+def _build_skills_ecosystem():
+    """Inventory installed skill packs and CCC's own bundled skills, annotated
+    with honest fleet-synergy flags. mtime-cached; stdlib-only; no subprocess."""
+    skills_root = Path.home() / ".claude" / "skills"
+    plugins_cache = Path.home() / ".claude" / "plugins" / "cache"
+    bundled_root = CCC_ROOT / "skills"
+    sig = _skills_dir_sig([skills_root, plugins_cache, bundled_root])
+    if _skills_ecosystem_cache["sig"] == sig and _skills_ecosystem_cache["data"] is not None:
+        return _skills_ecosystem_cache["data"]
+
+    # 1) CCC's own bundled skills (source of truth = repo skills/*.md), with an
+    #    "installed" flag (present under ~/.claude/skills/<name>/SKILL.md).
+    ccc_bundled = []
+    try:
+        bundled = sorted(bundled_root.glob("*.md"), key=lambda p: p.name.lower())
+    except OSError:
+        bundled = []
+    for src in bundled:
+        name = src.stem
+        if name.lower() == "readme":
+            continue
+        installed = (skills_root / name / "SKILL.md").is_file()
+        ccc_bundled.append({
+            "name": name,
+            "installed": installed,
+            "description": _markdown_summary(src, ""),
+            "fleet_note": _SKILLS_CCC_SYNERGY_NOTE.get(name, ""),
+        })
+
+    # 2) Installed skill dirs under ~/.claude/skills (includes symlinked packs
+    #    like browse/watchtower and the recall family).
+    installed_names = set()
+    try:
+        for child in skills_root.iterdir():
+            if child.name.startswith("."):
+                continue
+            if (child / "SKILL.md").is_file() or (child / "skill.md").is_file():
+                installed_names.add(child.name)
+    except OSError:
+        pass
+
+    # 3) Plugin-cache packs: <publisher>/<plugin>/<version>. Count SKILL.md files
+    #    (capped) so the card can show "N skills" without a deep walk cost.
+    plugin_packs = {}
+    try:
+        publishers = sorted(plugins_cache.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        publishers = []
+    for publisher in publishers:
+        if not publisher.is_dir() or publisher.name.startswith("."):
+            continue
+        if publisher.name.startswith("temp_git") or publisher.name.startswith("temp"):
+            continue  # transient clone leftovers, not real marketplaces
+        try:
+            plugins = sorted(publisher.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for plugin in plugins:
+            if not plugin.is_dir() or plugin.name.startswith("."):
+                continue
+            count = 0
+            try:
+                for skill_md in plugin.rglob("SKILL.md"):
+                    count += 1
+                    if count >= 200:  # cap: don't pay an unbounded walk
+                        break
+            except OSError:
+                pass
+            # A real pack has skills, a plugin manifest, or a commands dir.
+            # Skip bare dirs (docs/tests/etc.) that are not actually packs.
+            is_pack = (
+                count > 0
+                or (plugin / ".claude-plugin").is_dir()
+                or (plugin / "commands").is_dir()
+                or any(plugin.glob("*/.claude-plugin"))
+            )
+            if not is_pack:
+                continue
+            prev = plugin_packs.get(plugin.name, {"skill_count": 0})
+            if count >= prev.get("skill_count", 0):
+                plugin_packs[plugin.name] = {
+                    "publisher": publisher.name,
+                    "skill_count": count,
+                }
+
+    # Assemble the pack list: union of known packs, installed skill dirs, and
+    # plugin-cache packs, de-duplicated by name.
+    names = set(_SKILLS_KNOWN_PACKS) | installed_names | set(plugin_packs)
+    packs = []
+    for name in sorted(names, key=str.lower):
+        known = _SKILLS_KNOWN_PACKS.get(name, {})
+        plug = plugin_packs.get(name, {})
+        present = (name in installed_names) or (name in plugin_packs)
+        kind = "plugin" if name in plugin_packs else (
+            "skills-dir" if name in installed_names else "known")
+        packs.append({
+            "name": name,
+            "label": known.get("label", name),
+            "kind": kind,
+            "present": present,
+            "publisher": plug.get("publisher"),
+            "skill_count": plug.get("skill_count"),
+            "spawns_subagents": known.get("spawns_subagents"),
+            "fleet_aware": known.get("fleet_aware"),
+            "drives_browser": known.get("drives_browser"),
+            "ccc_synergy": known.get("ccc_synergy") if present else None,
+            "note": known.get("note", ""),
+        })
+
+    data = {
+        "ok": True,
+        "version": __version__,
+        "ccc_bundled": ccc_bundled,
+        "packs": packs,
+        "counts": {
+            "ccc_bundled": len(ccc_bundled),
+            "ccc_installed": sum(1 for s in ccc_bundled if s["installed"]),
+            "packs_present": sum(1 for p in packs if p["present"]),
+        },
+    }
+    _skills_ecosystem_cache["sig"] = sig
+    _skills_ecosystem_cache["data"] = data
+    return data
+
+
 def _local_slash_commands_for_session(session_id):
     commands = []
     command_roots = [Path.home() / ".claude" / "commands"]
@@ -57120,6 +57341,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "version": __version__,
                 "last_updated": _ccc_last_updated_iso(),
             })
+        elif path == "/api/skills":
+            # Read-only skills-ecosystem inventory (W86): CCC's own bundled
+            # skills plus installed third-party packs, annotated with honest
+            # fleet-synergy flags. mtime-cached so polling is cheap; backs the
+            # "CCC works with your skills" docs page.
+            self.send_json(_build_skills_ecosystem())
         elif path == "/api/queue/import-doc":
             # Availability probe for the plan-to-fleet UI (W51). O(1): one
             # cached `wt import --help` per process. The dashboard shows the
