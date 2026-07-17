@@ -719,10 +719,25 @@ def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archiv
 
     builds = _count_calls(monkeypatch, "find_all_conversations")
     rows, from_cache = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)
-    assert from_cache is False, "a changed corpus must rebuild, not rehydrate the stale payload"
     assert len(builds) == 1, (
-        f"expected exactly one rebuild after a real change, got {len(builds)}"
+        f"expected exactly one scan after a real change, got {len(builds)}"
     )
+    # W84: a changed corpus must be RE-READ, never served stale — but the
+    # re-read should be the incremental delta path (one scan scoped to the
+    # touched transcript), not a full O(all-rows) rebuild. A full rebuild
+    # (from_cache=False, unscoped scan) is the acceptable fallback when the
+    # delta is unknowable (restart, engine-source change, bulk delta).
+    only = builds[0][1].get("only_jsonl_paths")
+    if from_cache:
+        assert only is not None and str(p) in {str(x) for x in only}, (
+            "incremental refresh did not re-parse the changed transcript"
+        )
+        assert len(only) == 1, (
+            f"1-file change re-parsed {len(only)} files — delta is not scoped"
+        )
+    else:
+        assert only is None, "full rebuild must scan the whole corpus"
+    assert any(r.get("session_id") == sids[0] for r in rows)
     assert len(rows) == len(cold_rows)
 
 
@@ -1468,3 +1483,77 @@ def test_archive_build_under_budget(big_projects):
     server._build_archive_conversations()
     dt = time.perf_counter() - t
     assert dt < 6.0, f"_build_archive_conversations took {dt:.1f}s on {big_projects[0]} files"
+
+
+# ── Archive incremental refresh (W84) ───────────────────────────────────────
+# "Every session on disk" is the product premise: a transcript that appears in
+# ~/.claude/projects must reach the ?all=1 snapshot (dashboard list + search)
+# on the next refresh, and that refresh must re-parse ONLY the touched files.
+# Before this gate, ANY corpus change re-ran the full O(all-rows) build
+# (~12s warm, 60-95s under live GIL contention), so list/search freshness
+# equaled the rebuild duration.
+
+def test_archive_incremental_refresh_reparses_only_changed_transcripts(
+    big_projects, monkeypatch, tmp_path
+):
+    n, _ = big_projects
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {})
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_LOADED", True)
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
+    monkeypatch.setattr(server, "_archive_sig_cache", {"ts": 0.0, "sig": None})
+    monkeypatch.setattr(server, "_ARCHIVE_SIG_TTL", 0.0)  # re-walk per call in test
+    monkeypatch.setattr(server, "_save_archive_response_cache", lambda: None)
+    monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
+
+    builds = []
+    real_build = server._build_archive_conversations
+
+    def counting_build(**kw):
+        builds.append(kw)
+        return real_build(**kw)
+
+    monkeypatch.setattr(server, "_build_archive_conversations", counting_build)
+
+    opts = {
+        "include_prs": False,
+        "resolve_pr_states": False,
+        "resolve_effective": False,
+        "resolve_worktree_dirty": False,
+    }
+    key = server._archive_response_cache_key(**opts)
+
+    _, from_cache = server._archive_compute_rows(key, opts)
+    assert len(builds) == 1 and from_cache is False  # cold: one full build
+
+    _, from_cache = server._archive_compute_rows(key, opts)
+    assert len(builds) == 1 and from_cache is True  # unchanged: rehydrate only
+
+    # A new transcript lands. It must appear in the rows WITHOUT a second
+    # full build, and per-row work must be O(delta), not O(all rows).
+    root = tmp_path / ".claude" / "projects" / "-tmp-perf-repo"
+    new_sid = str(uuid.uuid4())
+    _write_transcript(root / f"{new_sid}.jsonl", new_sid, old_ts=time.time())
+    quality_calls = _count_calls(
+        monkeypatch, "_token_optimizer_quality_for_session", passthrough_return={}
+    )
+
+    rows, from_cache = server._archive_compute_rows(key, opts)
+
+    assert new_sid in {r.get("session_id") for r in rows}, (
+        "new transcript missing from the refreshed archive snapshot"
+    )
+    assert len(builds) == 1, (
+        "a single new transcript triggered a full archive rebuild — "
+        "the W84 incremental delta path regressed"
+    )
+    assert len(quality_calls) <= 3, (
+        f"per-row quality lookup ran {len(quality_calls)}x for a 1-file delta "
+        f"over {n} rows — delta build is doing O(all-rows) work"
+    )
+
+    # Deleting the transcript must drop the row on the next refresh —
+    # still without a full rebuild.
+    (root / f"{new_sid}.jsonl").unlink()
+    rows, _ = server._archive_compute_rows(key, opts)
+    assert new_sid not in {r.get("session_id") for r in rows}
+    assert len(builds) == 1

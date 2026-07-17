@@ -5854,6 +5854,7 @@ def find_all_conversations(
     resolve_pr_states=True,
     resolve_effective=True,
     resolve_worktree_dirty=True,
+    only_jsonl_paths=None,
 ):
     """Walk ~/.claude/projects/ for every subdir and return a flat list of
     conversation metadata across every folder you've ever Claude-Code'd in.
@@ -5871,7 +5872,18 @@ def find_all_conversations(
     Folder resolution: known-repo paths from recent + custom files give a
     real label; unknown slugs fall back to a best-effort decode (replace
     `-` with `/` and verify) or just the raw slug.
+
+    only_jsonl_paths: incremental mode (W84). When set (absolute path
+    strings), build rows ONLY for those Claude transcripts — skip every
+    other file, the registry-only augmentation, and the non-Claude engine
+    finders. Callers merge the result into a cached full row set
+    (_archive_merge_incremental_rows); rows for sources skipped here are
+    carried over from that cache.
     """
+    _only_dirs = None
+    if only_jsonl_paths is not None:
+        only_jsonl_paths = {str(p) for p in only_jsonl_paths}
+        _only_dirs = {os.path.dirname(p) for p in only_jsonl_paths}
     projects_root = Path.home() / ".claude" / "projects"
     projects_root_exists = projects_root.is_dir()
 
@@ -5933,6 +5945,8 @@ def find_all_conversations(
             project_dirs = []
 
     for project_dir in project_dirs:
+        if _only_dirs is not None and str(project_dir) not in _only_dirs:
+            continue
         if not project_dir.is_dir():
             continue
         slug = project_dir.name
@@ -5962,6 +5976,8 @@ def find_all_conversations(
         try:
             jsonls = []
             for f in project_dir.iterdir():
+                if only_jsonl_paths is not None and str(f) not in only_jsonl_paths:
+                    continue
                 if f.is_file() and f.name.endswith(".jsonl"):
                     try:
                         jsonls.append((f, f.stat()))
@@ -6307,6 +6323,23 @@ def find_all_conversations(
                 **sidecar_fields,
             })
 
+    # Incremental mode: rows for everything below (registry-only sessions,
+    # non-Claude engines, remote) are carried over from the cached snapshot
+    # by the merging caller; regenerating them here would replace rich cached
+    # rows with partial ones. Overlays (pins, WT names, lanes) are reapplied
+    # at serve time by _rehydrate_archive_cached_rows.
+    if only_jsonl_paths is not None:
+        if resolve_pr_states:
+            _prime_pr_states(r.get("tail_pr_url") for r in out)
+            for r in out:
+                url = r.get("tail_pr_url")
+                if url:
+                    r["pr_state"] = _get_pr_state(url)
+        _apply_pinned_conversation_fields(out, pinned_list)
+        _apply_watchtower_worker_display_names(out)
+        _apply_session_lane_overrides(out)
+        return out
+
     # Claude can have a live process registry entry before it has written
     # a project JSONL. Surface those registry-only sessions so UUID search
     # and active-session discovery do not silently miss them.
@@ -6525,6 +6558,16 @@ def _archive_response_cache_get(key):
         }
 
 
+def _archive_response_cache_signature(key):
+    """Signature of the persisted entry for `key`, without copying its rows
+    (the full getter deep-copies every conversation dict — too heavy for a
+    per-poll predicate)."""
+    _load_archive_response_cache()
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        entry = _ARCHIVE_RESPONSE_CACHE.get(key)
+        return (entry or {}).get("signature") or None
+
+
 def _archive_response_cache_put(key, conversations, signature=None):
     rows = [dict(r) for r in (conversations or []) if isinstance(r, dict)]
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
@@ -6596,6 +6639,24 @@ except ValueError:
 _archive_sig_cache = {"ts": 0.0, "sig": None}
 _archive_sig_lock = threading.Lock()
 
+# Per-signature stat maps, retained from the signature walk (which already
+# stats every transcript — this just stops discarding the result). Keyed by
+# the signature hash, value is ({jsonl_path: (mtime_ns, size)}, {extra: mtime}).
+# Two remembered signatures ⇒ an exact file-level diff of what changed between
+# them, which is what lets _archive_compute_rows re-parse ONLY the touched
+# transcripts instead of rebuilding all ~1000+ rows on every corpus change.
+# Small LRU: entries are ~100KB each; live corpora produce a new signature
+# every few seconds and only the cached response entries' signatures matter.
+_ARCHIVE_STATMAP_BY_SIG = {}
+_ARCHIVE_STATMAP_MAX = 16
+# A delta larger than this falls back to the full rebuild — the incremental
+# path exists for the steady-state "a handful of sessions wrote" case, not to
+# re-implement the builder for bulk changes (restores, migrations, first run).
+try:
+    _ARCHIVE_INCR_MAX_FILES = max(0, int(os.environ.get("CCC_ARCHIVE_INCR_MAX_FILES", "200")))
+except ValueError:
+    _ARCHIVE_INCR_MAX_FILES = 200
+
 
 def _archive_corpus_signature():
     """Corpus fingerprint, memoized for _ARCHIVE_SIG_TTL so concurrent per-key
@@ -6606,15 +6667,84 @@ def _archive_corpus_signature():
             c = _archive_sig_cache
             if c["sig"] is not None and (now - c["ts"]) < _ARCHIVE_SIG_TTL:
                 return c["sig"]
-    sig = _archive_corpus_signature_uncached()
-    if _ARCHIVE_SIG_TTL > 0:
-        with _archive_sig_lock:
+    sig, files, extras = _archive_corpus_signature_parts()
+    with _archive_sig_lock:
+        if _ARCHIVE_SIG_TTL > 0:
             _archive_sig_cache["ts"] = time.time()
             _archive_sig_cache["sig"] = sig
+        _ARCHIVE_STATMAP_BY_SIG.pop(sig, None)
+        _ARCHIVE_STATMAP_BY_SIG[sig] = (files, extras)
+        while len(_ARCHIVE_STATMAP_BY_SIG) > _ARCHIVE_STATMAP_MAX:
+            _ARCHIVE_STATMAP_BY_SIG.pop(next(iter(_ARCHIVE_STATMAP_BY_SIG)))
     return sig
 
 
+def _archive_signature_delta(old_sig, new_sig):
+    """File-level diff between two remembered corpus signatures.
+
+    Returns (changed_paths, removed_paths) — changed covers added AND edited
+    Claude transcripts — or None when a full rebuild is required: unknown
+    signature (restart, LRU eviction), a non-Claude engine source changed
+    (those are dir-granularity in the signature, so no file diff exists), or
+    the delta is too large to be worth the incremental path.
+    """
+    if not old_sig or not new_sig or old_sig == new_sig:
+        return None
+    with _archive_sig_lock:
+        old = _ARCHIVE_STATMAP_BY_SIG.get(old_sig)
+        new = _ARCHIVE_STATMAP_BY_SIG.get(new_sig)
+    if not old or not new:
+        return None
+    old_files, old_extras = old
+    new_files, new_extras = new
+    if old_extras != new_extras:
+        return None
+    changed = [p for p, st in new_files.items() if old_files.get(p) != st]
+    removed = [p for p in old_files if p not in new_files]
+    if not changed and not removed:
+        return None
+    if _ARCHIVE_INCR_MAX_FILES <= 0 or len(changed) > _ARCHIVE_INCR_MAX_FILES:
+        return None
+    return changed, removed
+
+
+def _archive_merge_incremental_rows(cached_rows, fresh_rows, removed_paths):
+    """Merge freshly-built rows for changed transcripts into the cached row
+    set: replace by session id (falling back to jsonl path), drop rows whose
+    transcript was removed, append genuinely new sessions. Ordering is not
+    this function's job — _rehydrate_archive_cached_rows re-sorts by mtime
+    and re-applies pinned-first on every serve.
+    """
+    removed = set(removed_paths or [])
+    fresh_by_key = {}
+    for r in fresh_rows or []:
+        if not isinstance(r, dict):
+            continue
+        k = r.get("session_id") or r.get("id") or r.get("jsonl_path")
+        if k:
+            fresh_by_key[k] = r
+    out = []
+    for raw in cached_rows or []:
+        if not isinstance(raw, dict):
+            continue
+        jp = raw.get("jsonl_path")
+        if jp and jp in removed:
+            continue
+        k = raw.get("session_id") or raw.get("id") or jp
+        if k and k in fresh_by_key:
+            out.append(fresh_by_key.pop(k))
+            continue
+        out.append(raw)
+    out.extend(fresh_by_key.values())
+    return out
+
+
 def _archive_corpus_signature_uncached():
+    """Signature hash only — see _archive_corpus_signature_parts."""
+    return _archive_corpus_signature_parts()[0]
+
+
+def _archive_corpus_signature_parts():
     """Cheap stat-only fingerprint of the conversation corpus on disk.
 
     No JSON parse, no subprocess, no per-row liveness probe — just the
@@ -6638,6 +6768,8 @@ def _archive_corpus_signature_uncached():
     not need to gate the transcript-parse cache.
     """
     parts = []
+    files = {}
+    extras_map = {}
     projects_root = Path.home() / ".claude" / "projects"
     try:
         dir_paths = sorted(
@@ -6656,6 +6788,7 @@ def _archive_corpus_signature_uncached():
                     except OSError:
                         continue
                     parts.append(f"{e.path}|{st.st_mtime_ns}|{st.st_size}")
+                    files[e.path] = (st.st_mtime_ns, st.st_size)
         except OSError:
             continue
     # Fold in dir-level mtimes of sibling engine transcript stores so adds /
@@ -6668,16 +6801,18 @@ def _archive_corpus_signature_uncached():
         Path.home() / ".hermes" / "state.db",
     ):
         try:
-            parts.append(f"{extra}|{os.stat(extra).st_mtime_ns}")
+            mt = os.stat(extra).st_mtime_ns
         except OSError:
-            pass
+            continue
+        parts.append(f"{extra}|{mt}")
+        extras_map[str(extra)] = mt
     parts.sort()
     h = hashlib.sha1()
     for p in parts:
         h.update(p.encode("utf-8", "replace"))
         h.update(b"\n")
     h.update(str(len(parts)).encode())
-    return h.hexdigest()
+    return h.hexdigest(), files, extras_map
 
 
 # Short-TTL coalescing cache for the fully-rehydrated ?all=1 payload. The
@@ -6865,10 +7000,41 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
             rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
             from_cache = True
         else:
-            rows = _build_archive_conversations(**cache_options)
-            _archive_response_cache_put(key, rows, signature=sig)
-            _save_conv_meta_cache()
-            from_cache = False
+            rows = None
+            # Incremental tier: the corpus changed, but if we know exactly
+            # WHICH transcripts changed (both signatures' stat maps are still
+            # in memory) re-parse only those and merge into the cached rows.
+            # This is what keeps a brand-new session's list/search visibility
+            # at "one refresh" instead of "one full O(all-rows) rebuild"
+            # (~12s warm, 60-95s live under GIL contention — measured, W84).
+            # include_prs entries are excluded: their row set carries a
+            # list-level open-PR overlay the delta build can't reproduce.
+            if entry and not cache_options.get("include_prs"):
+                delta = _archive_signature_delta(entry.get("signature"), sig)
+                if delta is not None:
+                    changed, removed = delta
+                    try:
+                        fresh = find_all_conversations(
+                            resolve_pr_states=cache_options.get("resolve_pr_states", False),
+                            resolve_effective=cache_options.get("resolve_effective", False),
+                            resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+                            only_jsonl_paths=set(changed),
+                        ) if changed else []
+                        merged = _archive_merge_incremental_rows(
+                            entry.get("conversations") or [], fresh, removed,
+                        )
+                        _archive_response_cache_put(key, merged, signature=sig)
+                        _save_conv_meta_cache()
+                        rows = _rehydrate_archive_cached_rows(merged)
+                        from_cache = True
+                    except Exception as e:
+                        print(f"  [archive-cache] incremental refresh failed, rebuilding: {e}")
+                        rows = None
+            if rows is None:
+                rows = _build_archive_conversations(**cache_options)
+                _archive_response_cache_put(key, rows, signature=sig)
+                _save_conv_meta_cache()
+                from_cache = False
     _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
     _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
     _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
@@ -6886,6 +7052,28 @@ def _archive_serve_refresh(key, cache_options, serve_generation):
     finally:
         with _archive_serve_lock:
             _archive_serve_refreshing.discard(key)
+
+
+def _archive_refresh_is_cheap(key, cache_options):
+    """True when refreshing this key now would take the fast path in
+    _archive_compute_rows: corpus signature unchanged (rehydrate-only) or a
+    known-small transcript delta (incremental merge). Both are sub-second;
+    everything else means a full O(all-rows) rebuild that must stay off the
+    request path. Signature is memoized (TTL) and the cache probe is an
+    in-memory dict read, so this predicate is cheap enough per poll.
+    """
+    try:
+        entry_sig = _archive_response_cache_signature(key)
+        if not entry_sig:
+            return False
+        sig = _archive_corpus_signature()
+        if entry_sig == sig:
+            return True
+        if cache_options.get("include_prs"):
+            return False
+        return _archive_signature_delta(entry_sig, sig) is not None
+    except Exception:
+        return False
 
 
 def _archive_serve_rows(key, cache_options):
@@ -6930,6 +7118,23 @@ def _archive_serve_rows(key, cache_options):
             spawn = False
     if rows is not None:
         if spawn:
+            # W84: when the refresh is predictably cheap — corpus unchanged
+            # (rehydrate-only) or a known-small file delta (incremental tier)
+            # — run it synchronously so a transcript that landed since the
+            # last snapshot is IN this poll's response, not the next one's.
+            # A 60s-cadence dashboard poll otherwise always trails reality by
+            # a full poll cycle even after the rebuild itself got cheap. The
+            # slow cases (unknown signature, engine-source change, bulk delta
+            # → full rebuild) keep the stale-serve + background refresh.
+            if _archive_refresh_is_cheap(key, cache_options):
+                try:
+                    return _archive_compute_rows(key, cache_options, serve_generation)
+                except Exception as e:
+                    print(f"  [archive-serve] sync refresh failed, serving stale: {e}")
+                finally:
+                    with _archive_serve_lock:
+                        _archive_serve_refreshing.discard(key)
+                return rows, True
             threading.Thread(
                 target=_archive_serve_refresh,
                 args=(key, cache_options, serve_generation),
@@ -7180,8 +7385,13 @@ def _archive_refresh_response_cache_async(key, options):
 
     def refresh():
         try:
+            # Signature BEFORE the build: files that change mid-build make the
+            # entry conservatively stale (next refresh re-checks), never
+            # wrongly fresh. Persisting without a signature disabled the
+            # sig-match/incremental fast paths for this key entirely.
+            sig = _archive_corpus_signature()
             convs = _build_archive_conversations(**options)
-            _archive_response_cache_put(key, convs)
+            _archive_response_cache_put(key, convs, signature=sig)
             _save_conv_meta_cache()
         except Exception as e:
             print(f"  [archive-cache] background refresh failed: {e}")
@@ -57571,6 +57781,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if not background:
                     _archive_load_set_step(*args, **kwargs)
             try:
+                # Signature BEFORE the build (see _archive_refresh_response_
+                # cache_async): a sig-less put disables the fast refresh paths.
+                build_sig = _archive_corpus_signature()
                 convs = _build_archive_conversations(
                     include_prs=include_prs,
                     resolve_pr_states=resolve_pr_states,
@@ -57580,7 +57793,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 )
                 if not background:
                     _archive_load_complete(convs)
-                _archive_response_cache_put(cache_key, convs)
+                _archive_response_cache_put(cache_key, convs, signature=build_sig)
                 _save_conv_meta_cache()
                 _stamp_archive_goals(convs)  # serve-time codex goal (cache-safe)
                 self.send_json({"conversations": convs, "count": len(convs)}, etag=True)
