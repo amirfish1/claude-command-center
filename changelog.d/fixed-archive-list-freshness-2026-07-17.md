@@ -1,0 +1,1 @@
+New sessions now appear in the conversation list and search within seconds instead of minutes: the archive refresh re-parses only the transcripts that actually changed (incremental delta) instead of rebuilding every row, and a poll whose snapshot is cheaply refreshable gets the fresh data in the same response.
