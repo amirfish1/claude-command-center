@@ -1148,6 +1148,9 @@
       <span class="badge-engine" id="active-engine-badge">Engine: Auto</span>
     </div>
     <div class="topbar-actions">
+      <a class="btn" href="/throughput-daily.html?date=yesterday" title="Open yesterday's daily throughput report">
+        <span>📄</span> Yesterday's report
+      </a>
       <a class="btn" href="/productivity.html" title="Open the Productivity dashboard">
         <span>✓</span> Productivity
       </a>
@@ -3519,6 +3522,14 @@
             rect.setAttribute('opacity', '0.65');
             hideTooltip();
           });
+          // W87 zoom ladder: click a 3h bar to zoom into a 1h view around it
+          // (aggregate views only; the handler lives in the zoom script below).
+          if (isAggregate && row && row.hour) {
+            rect.setAttribute('data-tz', '1');
+            rect.addEventListener('click', () => {
+              if (window.enterTputZoom) { hideTooltip(); window.enterTputZoom(row); }
+            });
+          }
           svg.appendChild(rect);
         });
       } else {
@@ -4656,6 +4667,278 @@
     });
 
     bootThroughputPage();
+  </script>
+  <script>
+  // ── W87 zoom ladder: 3h → 1h → per-session drill ─────────────────────────
+  // Level 1 re-renders the already-loaded `lastRender.summary.hourly` rows at
+  // 1h granularity for a 12h window around the clicked 3h bar (zero fetches).
+  // Level 2 calls /api/throughput/window (bounded, server-cached) for the
+  // per-session breakdown of one clicked hour; each session row clicks
+  // through to its conversation. Escape (or ‹ back) pops one level.
+  // Renders into an HTML overlay covering .chart-container, so the existing
+  // drawChart pipeline is untouched.
+  (function () {
+    'use strict';
+    let zoom = null; // null | {level:1,startMs,endMs} | {level:2,hourMs,l1:{startMs,endMs}}
+
+    // Bucket keys are local wall-clock strings ("YYYY-MM-DD HH:00" or
+    // "YYYY-MM-DDTHH:00:00"); parsing them without a zone suffix yields real
+    // local epochs — correct inputs for /api/throughput/window.
+    function keyToMs(key) {
+      const t = Date.parse(String(key || '').trim().replace(' ', 'T'));
+      return Number.isFinite(t) ? t : null;
+    }
+    function fmtTok(n) {
+      n = Number(n) || 0;
+      if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+      return String(Math.round(n));
+    }
+    function fmtUsd(n) { return '$' + (Number(n) || 0).toFixed(2); }
+    function hm(ms) {
+      const d = new Date(ms);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    function dayLabel(ms) {
+      return new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    function overlayEl() {
+      let el = document.getElementById('tput-zoom-overlay');
+      if (el) return el;
+      const container = document.querySelector('.chart-container');
+      if (!container) return null;
+      el = document.createElement('div');
+      el.id = 'tput-zoom-overlay';
+      container.appendChild(el);
+      if (!document.getElementById('tput-zoom-style')) {
+        const st = document.createElement('style');
+        st.id = 'tput-zoom-style';
+        st.textContent =
+          // left:-16px: the chart svg has overflow:visible and its y-axis
+          // labels render slightly left of the container box — cover them too.
+          '#tput-zoom-overlay{position:absolute;top:0;bottom:0;right:0;left:-16px;z-index:6;background:#10141c;' +
+            'display:flex;flex-direction:column;border-radius:inherit;overflow:hidden;}' +
+          '#tput-zoom-overlay .tz-head{display:flex;align-items:center;gap:10px;padding:8px 12px;' +
+            'border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:11px;color:var(--text-muted);flex-wrap:wrap;}' +
+          '#tput-zoom-overlay .tz-back{cursor:pointer;border:1px solid var(--border-active);border-radius:6px;' +
+            'background:transparent;color:var(--accent);font-family:var(--font-mono);font-size:11px;padding:3px 9px;}' +
+          '#tput-zoom-overlay .tz-back:hover{background:rgba(57,210,192,.08);}' +
+          '#tput-zoom-overlay .tz-title{color:var(--text);font-weight:600;}' +
+          '#tput-zoom-overlay .tz-hint{margin-left:auto;opacity:.7;}' +
+          '#tput-zoom-overlay .tz-body{flex:1;min-height:0;position:relative;overflow:auto;padding:4px 8px 8px;}' +
+          '#tput-zoom-overlay svg text{font-family:var(--font-mono);fill:var(--text-muted);}' +
+          '#tput-zoom-overlay .tz-table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11.5px;}' +
+          '#tput-zoom-overlay .tz-table th{position:sticky;top:0;background:#10141c;text-align:right;' +
+            'color:var(--text-muted);font-weight:500;padding:5px 8px;border-bottom:1px solid var(--border);}' +
+          '#tput-zoom-overlay .tz-table th:first-child,#tput-zoom-overlay .tz-table td:first-child{text-align:left;}' +
+          '#tput-zoom-overlay .tz-table td{padding:5px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--text);white-space:nowrap;}' +
+          '#tput-zoom-overlay .tz-table tr.tz-row{cursor:pointer;}' +
+          '#tput-zoom-overlay .tz-table tr.tz-row:hover td{background:rgba(57,210,192,.06);}' +
+          '#tput-zoom-overlay .tz-name{color:var(--accent);max-width:260px;overflow:hidden;text-overflow:ellipsis;}' +
+          '#tput-zoom-overlay .tz-eng{opacity:.65;font-size:10px;margin-left:6px;}' +
+          '#tput-zoom-overlay .tz-note{padding:14px;color:var(--text-muted);font-family:var(--font-mono);font-size:12px;}';
+        document.head.appendChild(st);
+      }
+      return el;
+    }
+
+    function closeZoom() {
+      zoom = null;
+      const el = document.getElementById('tput-zoom-overlay');
+      if (el) el.remove();
+    }
+
+    function head(backLabel, title, hint) {
+      return '<div class="tz-head"><button type="button" class="tz-back">‹ ' + esc(backLabel) + '</button>' +
+        '<span class="tz-title">' + title + '</span>' +
+        '<span class="tz-hint">' + esc(hint) + ' · Esc backs out</span></div>';
+    }
+
+    // ── Level 1: 1h bars for a 12h window (client-side re-bucket) ──────────
+    function hourRowsInWindow(startMs, endMs) {
+      // `lastRender` is a top-level `let` in the main script — visible here
+      // through the global lexical scope, but NOT as a window property.
+      const lr = (typeof lastRender !== 'undefined') ? lastRender : null;
+      const hourly = (lr && lr.summary && lr.summary.hourly) || [];
+      const out = [];
+      hourly.forEach((row) => {
+        const ms = keyToMs(row.hour);
+        if (ms == null || ms < startMs || ms >= endMs) return;
+        out.push({
+          ms,
+          tokens: (Number(row.effective_input_tokens) || 0) + (Number(row.output_tokens) || 0),
+          turns: Number(row.turns) || 0,
+          cost: Number(row.cost_usd) || 0,
+          output: Number(row.output_tokens) || 0,
+        });
+      });
+      return out;
+    }
+
+    function renderL1() {
+      const el = overlayEl();
+      if (!el || !zoom) return;
+      const { startMs, endMs } = zoom;
+      const rows = hourRowsInWindow(startMs, endMs);
+      const byHour = {};
+      rows.forEach((r) => { byHour[r.ms] = r; });
+      const nHours = Math.round((endMs - startMs) / 3600e3);
+      const total = rows.reduce((a, r) => a + r.tokens, 0);
+      const title = dayLabel(startMs) + ' ' + hm(startMs) + '–' + hm(endMs - 1) +
+        ' · 1h buckets · ' + fmtTok(total) + ' cache-adj';
+      let html = head('3h view', esc(title), 'click an hour for its sessions');
+      const bodyW = Math.max(320, (el.clientWidth || 800) - 16);
+      const H = Math.max(160, (el.clientHeight || 300) - 70);
+      const padB = 22, padT = 12, padL = 8, padR = 8;
+      const slotW = (bodyW - padL - padR) / nHours;
+      const barW = Math.max(6, slotW * 0.66);
+      const max = Math.max(1, ...rows.map((r) => r.tokens));
+      let bars = '';
+      const nowMs = Date.now();
+      for (let i = 0; i < nHours; i++) {
+        const ms = startMs + i * 3600e3;
+        if (ms > nowMs) break;
+        const r = byHour[ms];
+        const v = r ? r.tokens : 0;
+        const bh = v > 0 ? Math.max(2, (v / max) * (H - padT - padB)) : 0;
+        const x = padL + i * slotW + (slotW - barW) / 2;
+        const label = hm(ms);
+        if (bh > 0) {
+          bars += '<rect class="tz-bar" data-ms="' + ms + '" x="' + x.toFixed(1) +
+            '" y="' + (H - padB - bh).toFixed(1) + '" width="' + barW.toFixed(1) +
+            '" height="' + bh.toFixed(1) + '" rx="2" fill="var(--accent)" opacity="0.5" style="cursor:pointer;">' +
+            '<title>' + label + ' — ' + fmtTok(v) + ' cache-adj tokens · ' + (r ? r.turns : 0) +
+            ' calls · ' + fmtUsd(r ? r.cost : 0) + '\nClick for per-session breakdown</title></rect>';
+        } else {
+          bars += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - 1) + '" width="' + barW.toFixed(1) +
+            '" height="1" fill="var(--border)" opacity="0.8"></rect>';
+        }
+        bars += '<text x="' + (padL + i * slotW + slotW / 2).toFixed(1) + '" y="' + (H - 6) +
+          '" text-anchor="middle" font-size="9">' + label.slice(0, 2) + '</text>';
+      }
+      html += '<div class="tz-body"><svg width="' + bodyW + '" height="' + H + '" viewBox="0 0 ' + bodyW + ' ' + H + '">' +
+        bars + '</svg></div>';
+      el.innerHTML = html;
+      el.querySelector('.tz-back').addEventListener('click', closeZoom);
+      el.querySelectorAll('.tz-bar').forEach((b) => {
+        b.addEventListener('click', () => enterDrill(Number(b.getAttribute('data-ms'))));
+      });
+    }
+
+    // ── Level 2: per-session drill for one hour (/api/throughput/window) ───
+    function enterDrill(hourMs) {
+      if (!zoom || !Number.isFinite(hourMs)) return;
+      zoom = { level: 2, hourMs, l1: { startMs: zoom.startMs, endMs: zoom.endMs } };
+      renderL2();
+    }
+
+    function renderL2() {
+      const el = overlayEl();
+      if (!el || !zoom || zoom.level !== 2) return;
+      const { hourMs } = zoom;
+      const title = dayLabel(hourMs) + ' ' + hm(hourMs) + '–' + hm(hourMs + 3600e3 - 1) + ' · sessions';
+      el.innerHTML = head('1h view', esc(title), 'click a session to open its conversation') +
+        '<div class="tz-body"><div class="tz-note">Loading sessions…</div></div>';
+      el.querySelector('.tz-back').addEventListener('click', () => {
+        zoom = { level: 1, startMs: zoom.l1.startMs, endMs: zoom.l1.endMs };
+        renderL1();
+      });
+      const engine = (typeof activeThroughputEngine === 'string' && activeThroughputEngine === 'codex') ? 'codex' : 'claude';
+      const url = '/api/throughput/window?start=' + (hourMs / 1000) + '&end=' + ((hourMs + 3600e3) / 1000) +
+        '&engine=' + engine + '&limit=30';
+      fetch(url, { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!zoom || zoom.level !== 2 || zoom.hourMs !== hourMs) return;
+          const body = el.querySelector('.tz-body');
+          if (!d || !d.ok) {
+            body.innerHTML = '<div class="tz-note">Drill failed: ' + esc((d && d.error) || 'unknown error') + '</div>';
+            return;
+          }
+          const sessions = d.sessions || [];
+          if (!sessions.length) {
+            body.innerHTML = '<div class="tz-note">No session activity in this hour' +
+              (engine === 'codex' ? ' (codex)' : '') + '.</div>';
+            return;
+          }
+          const tot = d.totals || {};
+          let rowsHtml = '';
+          sessions.forEach((s, i) => {
+            const name = s.session_name || (s.session_id || '').slice(0, 8) || '(unknown)';
+            const models = (s.models || []).map((m) => String(m).replace(/^claude-/, '')).join(', ');
+            rowsHtml += '<tr class="tz-row" data-sid="' + esc(s.session_id || '') + '" title="Open this conversation">' +
+              '<td><span class="tz-name">' + (i + 1) + '. ' + esc(name) + '</span>' +
+              '<span class="tz-eng">' + esc(s.engine || '') + (models ? ' · ' + esc(models) : '') + '</span></td>' +
+              '<td>' + (s.turns || 0) + '</td>' +
+              '<td><strong>' + fmtTok(s.cache_adjusted_tokens) + '</strong></td>' +
+              '<td>' + fmtTok(s.output_tokens) + '</td>' +
+              '<td>' + fmtUsd(s.cost_usd) + '</td></tr>';
+          });
+          body.innerHTML =
+            '<div class="tz-note" style="padding:6px 8px 8px;">' + sessions.length + ' session' +
+              (sessions.length === 1 ? '' : 's') +
+              (d.sessions_truncated ? ' (+' + d.sessions_truncated + ' more)' : '') +
+              ' · window total ' + fmtTok(tot.cache_adjusted_tokens) + ' cache-adj · ' + fmtUsd(tot.cost_usd) + '</div>' +
+            '<table class="tz-table"><thead><tr><th>session</th><th>calls</th><th>cache-adj</th><th>out</th><th>cost</th></tr></thead>' +
+            '<tbody>' + rowsHtml + '</tbody></table>';
+          body.querySelectorAll('.tz-row').forEach((tr) => {
+            tr.addEventListener('click', () => {
+              const sid = tr.getAttribute('data-sid');
+              if (sid) window.open('/?ccc_popout=conversation&conv=' + encodeURIComponent(sid), '_blank');
+            });
+          });
+        })
+        .catch((e) => {
+          const body = el.querySelector('.tz-body');
+          if (body) body.innerHTML = '<div class="tz-note">Drill failed: ' + esc(e && e.message) + '</div>';
+        });
+    }
+
+    // ── Entry, escape, and invalidation ────────────────────────────────────
+    window.enterTputZoom = function (row) {
+      const slotMs = keyToMs(row && row.hour);
+      if (slotMs == null) return;
+      // 12h window: 4h of context before the clicked 3h slot, 5h after.
+      let startMs = slotMs - 4 * 3600e3;
+      let endMs = startMs + 12 * 3600e3;
+      const nowCeil = (Math.floor(Date.now() / 3600e3) + 1) * 3600e3;
+      if (endMs > nowCeil) { endMs = nowCeil; startMs = endMs - 12 * 3600e3; }
+      zoom = { level: 1, startMs, endMs };
+      renderL1();
+    };
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !zoom) return;
+      e.stopImmediatePropagation();
+      if (zoom.level === 2) {
+        zoom = { level: 1, startMs: zoom.l1.startMs, endMs: zoom.l1.endMs };
+        renderL1();
+      } else {
+        closeZoom();
+      }
+    }, true);
+
+    // Session/engine switches repaint the chart beneath the overlay with new
+    // data — close the (now stale) zoom rather than showing the wrong window.
+    ['throughput-engine-tabs', 'session-list'].forEach((id) => {
+      const host = document.getElementById(id);
+      if (host) host.addEventListener('click', closeZoom, true);
+    });
+
+    let resizeT = null;
+    window.addEventListener('resize', () => {
+      if (!zoom || zoom.level !== 1) return;
+      clearTimeout(resizeT);
+      resizeT = setTimeout(renderL1, 220);
+    });
+  })();
   </script>
 </body>
 </html>
