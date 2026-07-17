@@ -83,6 +83,11 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 
 - `server.py` is stdlib-only on purpose — no pip dependencies at runtime. Don't import `requests`, `pydantic`, `fastapi`, etc. `urllib` + `http.server` + `json` cover it.
 - `static/index.html` is a single-file app by design (no bundler, no npm). Inline CSS/JS is expected. Don't split it into modules without a strong reason.
+- In zsh, lowercase `path` is a special array tied directly to `PATH`. Never use
+  `path` as a scratch, local, or loop variable in shell diagnostics; use a
+  descriptive name such as `target_path` or `candidate_path`. If commands seem
+  to disappear after a probe, check `typeset -p path PATH` before changing the
+  machine's global environment.
 - Flow workspace work (`#flowBoard`, `static/app.js`, `static/app.css`) has
   maintainer notes in `.claude/rules/flow-workspace.md`.
 - `hooks/` scripts run inside agent hook pipelines — they must exit fast and never prompt.
