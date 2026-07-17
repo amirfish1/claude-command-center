@@ -1600,6 +1600,7 @@
                 <div class="settings-row-desc">Default engine, model, and effort used when you spawn a new session.</div>
               </div>
               <div class="settings-row-control">
+                <span class="settings-row-value" id="settingsSpawnEngineValue">Not set</span>
                 <button type="button" class="settings-action-btn" id="spawnDefaultsBtn">Configure…</button>
               </div>
             </div>
@@ -1661,6 +1662,20 @@
                  launchers here, restyled as launcher rows via the
                  #settingsModalToolsSlot child-styling rules in app.css. -->
             <div id="settingsModalToolsSlot" class="settings-modal-tools-slot" data-role="settings-modal-tools-slot"></div>
+
+            <!-- Resurrected (W93): the ⌘K session-search handler has existed
+                 in app.js since before the modal rewrite, but no markup ever
+                 pointed at #settingsCmdkBtn — it was dead since a refactor.
+                 Slice B re-adds a launcher row so it's reachable again. -->
+            <div class="settings-row" data-keywords="session search find cmd k transcript sessions">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Session search</div>
+                <div class="settings-row-desc">Find any session or transcript (Cmd+K).</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="settingsCmdkBtn">Open</button>
+              </div>
+            </div>
 
             <a class="settings-row settings-row-link" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;" data-keywords="total recall dashboard memory sessions">
               <div class="settings-row-main">

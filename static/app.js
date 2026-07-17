@@ -34711,6 +34711,10 @@
     try { localStorage.setItem('ccc-q-first', on ? '1' : '0'); } catch (_) {}
     if (document.body) document.body.classList.toggle('qf-mode', !!on || QFIRST_URL_MODE);
   }
+  // Exposed so the W93 settings modal's Q-First toggle (module-scoped click
+  // delegation, defined much later in this file) can flip the same state
+  // without duplicating the two lines above.
+  window._cccQfSetEnabled = _qfSetEnabled;
 
   function _qfShow(nav) {
     const $view = _qfView();
@@ -43920,12 +43924,14 @@
     // status-pos toggle. Per user spec:
     //   • Top-left alerts (#sidebarTopAlerts): Update pill (notification,
     //     should always be visible until the user acts on it).
-    //   • Settings menu (#settingsMenuSlot): Terminal panel toggle, History
-    //     indexing status, Worktrees, Stats, Report a bug, Font A-/A+.
-    //     These are infrequent-use or "set and forget" — burying them
-    //     in the gear menu reclaims rail space.
+    //   • Settings menu (#settingsModalToolsSlot, W93 settings modal's
+    //     Tools section): Terminal panel toggle, History indexing status,
+    //     Worktrees, Stats, Report a bug, Font A-/A+. These are
+    //     infrequent-use or "set and forget" — burying them in the
+    //     settings modal reclaims rail space.
     const $topAlerts = document.getElementById('sidebarTopAlerts');
-    const $settingsSlot = document.getElementById('settingsMenuSlot');
+    const $settingsSlot = document.getElementById('settingsModalToolsSlot');
+    const $settingsFontSlot = document.getElementById('settingsModalFontSlot');
     const _moveToHome = (id, host) => {
       const el = document.getElementById(id);
       if (el && host && el.parentElement !== host) host.appendChild(el);
@@ -43941,15 +43947,23 @@
       _moveToHome('todayToggleBtn',    $settingsSlot);
       _moveToHome('annotationNotesBtn', $settingsSlot);
       _moveToHome('cooPopButton',      $settingsSlot);
-      if ($toolbar) {
-        const fontCtrls = $toolbar.querySelector('.font-size-controls');
-        if (fontCtrls) $settingsSlot.appendChild(fontCtrls);
-      }
       if (window.MutationObserver) {
         const cooMoveObserver = new MutationObserver(() => _moveToHome('cooPopButton', $settingsSlot));
         cooMoveObserver.observe(document.body, { childList: true, subtree: true });
         setTimeout(() => cooMoveObserver.disconnect(), 8000);
       }
+      // Clicking any launcher/action item in the Tools slot closes the
+      // settings modal — except the A-/A+ font stepper (not actually
+      // homed in this slot, but guarded defensively) which must stay
+      // open across repeated presses.
+      $settingsSlot.addEventListener('click', (e) => {
+        if (e.target.closest('.font-size-controls')) return;
+        if (typeof window._cccCloseSettingsModal === 'function') window._cccCloseSettingsModal();
+      });
+    }
+    if ($toolbar && $settingsFontSlot) {
+      const fontCtrls = $toolbar.querySelector('.font-size-controls');
+      if (fontCtrls) $settingsFontSlot.appendChild(fontCtrls);
     }
     // Report a bug sits at the very left of the sidebar header action
     // row — closer to where bugs are noticed (the conversation list)
@@ -49188,10 +49202,7 @@
 
   async function restartServerRun() {
     if (!$restartServerBtn) return;
-    if ($settingsPopover) {
-      $settingsPopover.classList.remove('open');
-      if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'false');
-    }
+    closeSettingsModal();
     $restartServerBtn.disabled = true;
     restartServerShowOverlay(
       'Restarting&hellip;',
@@ -51091,12 +51102,12 @@
   }
 
   if ($spawnDefaultsBtn) $spawnDefaultsBtn.addEventListener('click', () => {
-    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    closeSettingsModal();
     openSpawnDefaultsModal();
   });
   const $runOnboardingBtn = document.getElementById('runOnboardingBtn');
   if ($runOnboardingBtn) $runOnboardingBtn.addEventListener('click', async () => {
-    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    closeSettingsModal();
     try {
       await fetch('/api/onboarding/reset', { method: 'POST' });
       const res = await fetch('/api/onboarding/status');
@@ -51234,7 +51245,7 @@
   }
   if ($sidebarCarModeBtn) $sidebarCarModeBtn.addEventListener('click', openCarModeModal);
   if ($carModeMenuBtn) $carModeMenuBtn.addEventListener('click', () => {
-    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    closeSettingsModal();
     openCarModeModal();
   });
   if ($carModeBackdrop) $carModeBackdrop.addEventListener('click', closeCarModeModal);
@@ -51415,7 +51426,7 @@
   }
 
   if ($networkBtn) $networkBtn.addEventListener('click', () => {
-    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    closeSettingsModal();
     networkOpen();
   });
   if ($networkBackdrop) $networkBackdrop.addEventListener('click', networkClose);
@@ -51698,7 +51709,7 @@
   }
 
   if ($fedBtn) $fedBtn.addEventListener('click', () => {
-    if ($settingsPopover) $settingsPopover.classList.remove('open');
+    closeSettingsModal();
     openFederationPeersModal();
   });
   if ($fedBackdrop) $fedBackdrop.addEventListener('click', fedClose);
@@ -52681,7 +52692,7 @@
 
   // ── Fleet event wiring ──
   if ($fleetBtn) $fleetBtn.addEventListener('click', () => {
-    if (typeof $settingsPopover !== 'undefined' && $settingsPopover) $settingsPopover.classList.remove('open');
+    closeSettingsModal();
     openFleetView();
   });
   if ($fleetBackdrop) $fleetBackdrop.addEventListener('click', fleetClose);
@@ -53952,7 +53963,6 @@
   const $appearanceBtn = document.getElementById('appearanceBtn');
   const $appearancePopover = document.getElementById('appearancePopover');
   const $settingsBtn = document.getElementById('settingsBtn');
-  const $settingsPopover = document.getElementById('settingsPopover');
   const _systemThemeMQ = window.matchMedia('(prefers-color-scheme: light)');
 
   const CONV_BG_STORAGE_KEY = 'ccc-conv-bg-by-conversation';
@@ -54266,34 +54276,44 @@
       if (typeof renderSidebar === 'function') renderSidebar(conversationsData);
     }
   }
+  // Segmented-control + toggle state for the Appearance / Layout & View
+  // sections of the settings modal. Also drives the Sessions & Spawning
+  // "current engine" value span. Called on modal open and after every
+  // control mutation.
   function refreshAppearanceChecks() {
     const t = getThemePref();
     const f = getFontPref();
-    $appearancePopover.querySelectorAll('[data-check-theme]').forEach(el => {
-      el.textContent = el.getAttribute('data-check-theme') === t ? '✓' : '';
-    });
-    $appearancePopover.querySelectorAll('[data-check-font]').forEach(el => {
-      el.textContent = el.getAttribute('data-check-font') === f ? '✓' : '';
-    });
-    const v = getViewGhPref();
-    if ($settingsPopover) {
-      const btnShow = $settingsPopover.querySelector('#btnShowGhIssues');
-      const btnHide = $settingsPopover.querySelector('#btnHideGhIssues');
-      if (btnShow && btnHide) {
-        if (v === 'hide') {
-          btnShow.style.display = '';
-          btnHide.style.display = 'none';
-        } else {
-          btnShow.style.display = 'none';
-          btnHide.style.display = '';
-        }
-      }
-      const liveVariantCheck = $settingsPopover.querySelector('[data-check-live-variant]');
-      if (liveVariantCheck) {
-        let lv = 'A';
-        try { lv = localStorage.getItem('ccc-hero-live-variant') || 'A'; } catch (_) {}
-        liveVariantCheck.textContent = lv === 'B' ? '✓' : '';
-      }
+    if ($appearancePopover) {
+      $appearancePopover.querySelectorAll('[data-segmented-group="theme"] [data-theme]').forEach(btn => {
+        const active = btn.getAttribute('data-theme') === t;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-checked', String(active));
+      });
+      $appearancePopover.querySelectorAll('[data-segmented-group="font"] [data-font]').forEach(btn => {
+        const active = btn.getAttribute('data-font') === f;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-checked', String(active));
+      });
+    }
+    const ghOn = getViewGhPref() !== 'hide';
+    const $ghToggle = document.getElementById('settingsGhIssuesToggle');
+    if ($ghToggle) {
+      $ghToggle.classList.toggle('is-on', ghOn);
+      $ghToggle.setAttribute('aria-checked', String(ghOn));
+    }
+    let lv = 'A';
+    try { lv = localStorage.getItem('ccc-hero-live-variant') || 'A'; } catch (_) {}
+    const $liveToggle = document.getElementById('settingsLiveVariantToggle');
+    if ($liveToggle) {
+      $liveToggle.classList.toggle('is-on', lv === 'B');
+      $liveToggle.setAttribute('aria-checked', String(lv === 'B'));
+    }
+    let qf = false;
+    try { qf = localStorage.getItem('ccc-q-first') === '1'; } catch (_) {}
+    const $qfToggle = document.getElementById('settingsQfirstToggle');
+    if ($qfToggle) {
+      $qfToggle.classList.toggle('is-on', qf);
+      $qfToggle.setAttribute('aria-checked', String(qf));
     }
   }
   // Live-update when the user has 'system' selected and OS theme flips.
@@ -54301,87 +54321,420 @@
     if (getThemePref() === 'system') applyTheme('system');
   });
 
-  // Generic popover open/close helper. Closes other popovers first so
-  // only one is ever open at a time.
-  function openOnlyPopover(target) {
-    [$appearancePopover, $settingsPopover].forEach(p => {
-      if (p && p !== target) p.classList.remove('open');
-    });
-    if (target) target.classList.toggle('open');
-    if ($appearanceBtn) $appearanceBtn.setAttribute('aria-expanded', $appearancePopover && $appearancePopover.classList.contains('open') ? 'true' : 'false');
-    if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', $settingsPopover && $settingsPopover.classList.contains('open') ? 'true' : 'false');
-    if (target && target.classList.contains('open')) refreshAppearanceChecks();
+  function refreshSpawnEngineValue() {
+    const el = document.getElementById('settingsSpawnEngineValue');
+    if (!el) return;
+    let v = '';
+    try { v = localStorage.getItem('ccc.spawnEngine') || ''; } catch (_) {}
+    el.textContent = v ? v : 'Not set';
   }
 
-  if ($appearanceBtn) {
-    $appearanceBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openOnlyPopover($appearancePopover);
+  // ✓ Saved pulse — appended to a row's right edge (`.settings-row` is
+  // `position: relative` so the absolutely-positioned pulse anchors to
+  // it), removed after the CSS fade finishes. Fired on every setting
+  // mutation, never on action/launcher clicks.
+  function showSettingsSavedPulse(row) {
+    if (!row) return;
+    if (!row.style.position) row.style.position = 'relative';
+    const pulse = document.createElement('span');
+    pulse.className = 'settings-saved-pulse';
+    row.appendChild(pulse);
+    setTimeout(() => { if (pulse.parentNode) pulse.parentNode.removeChild(pulse); }, 1400);
+  }
+
+  // ── Settings modal (W93) ────────────────────────────────────────────
+  // Replaces the old gear-button popover (#settingsPopover, removed in
+  // Slice A) with a command-palette-style modal: search bar, a rail of
+  // sections, and a scrollable pane of rows. See out/W93-spec.md.
+  const $settingsModal = document.getElementById('settingsModal');
+  const $settingsModalInner = $settingsModal ? $settingsModal.querySelector('.settings-modal') : null;
+  const $settingsModalBackdrop = document.getElementById('settingsModalBackdrop');
+  const $settingsModalClose = document.getElementById('settingsModalClose');
+  const $settingsSearchInput = document.getElementById('settingsSearchInput');
+  const $settingsRail = document.getElementById('settingsRail');
+  const $settingsPane = document.getElementById('settingsPane');
+  const $settingsEmptyState = document.getElementById('settingsEmptyState');
+  const $settingsEmptyQuery = document.getElementById('settingsEmptyQuery');
+  let _settingsModalPrevFocus = null;
+  let _settingsSearchIndex = null;
+  let _settingsCurrentSection = 'appearance';
+
+  function settingsModalFocusables() {
+    if (!$settingsModal) return [];
+    return Array.from($settingsModal.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )).filter(el => !el.hidden && !el.disabled && el.offsetParent !== null);
+  }
+
+  function trapSettingsModalTab(e) {
+    const focusables = settingsModalFocusables();
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first || !$settingsModal.contains(document.activeElement)) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function isSettingsFormField(el) {
+    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
+      || el.tagName === 'SELECT' || el.isContentEditable);
+  }
+
+  function primaryControlForRow(row) {
+    if (row.tagName === 'A') return row;
+    return row.querySelector('.settings-row-control button, .settings-row-control input, .settings-row-control select, .settings-row-control a');
+  }
+
+  function settingsVisibleRowControls() {
+    if (!$settingsPane) return [];
+    return Array.from($settingsPane.querySelectorAll('.settings-row'))
+      .filter(row => !row.hidden && row.offsetParent !== null)
+      .map(primaryControlForRow)
+      .filter(Boolean);
+  }
+
+  function handleSettingsArrowNav(e) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const ae = document.activeElement;
+    if (!ae) return;
+    if ($settingsRail && $settingsRail.contains(ae)) {
+      e.preventDefault();
+      const items = Array.from($settingsRail.querySelectorAll('.settings-rail-item'));
+      const idx = items.indexOf(ae);
+      if (idx === -1) return;
+      const next = e.key === 'ArrowDown'
+        ? items[(idx + 1) % items.length]
+        : items[(idx - 1 + items.length) % items.length];
+      if (next) next.focus();
+      return;
+    }
+    if (ae === $settingsSearchInput || (($settingsPane && $settingsPane.contains(ae)))) {
+      e.preventDefault();
+      const controls = settingsVisibleRowControls();
+      if (!controls.length) return;
+      let idx = controls.indexOf(ae);
+      if (idx === -1) {
+        const next = e.key === 'ArrowDown' ? controls[0] : controls[controls.length - 1];
+        if (next) next.focus();
+        return;
+      }
+      const next = e.key === 'ArrowDown'
+        ? controls[Math.min(idx + 1, controls.length - 1)]
+        : controls[Math.max(idx - 1, 0)];
+      if (next) next.focus();
+    }
+  }
+
+  function setActiveSettingsRailSection(sectionId, opts) {
+    opts = opts || {};
+    if (!$settingsRail || !$settingsPane || !sectionId) return;
+    $settingsRail.querySelectorAll('.settings-rail-item').forEach(btn => {
+      const active = btn.getAttribute('data-section-target') === sectionId;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    _settingsCurrentSection = sectionId;
+    if (opts.scroll === false) return;
+    const target = $settingsPane.querySelector('.settings-section[data-section-id="' + sectionId + '"]');
+    if (!target) return;
+    let reduceMotion = false;
+    try { reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) {}
+    target.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' });
+  }
+
+  let _settingsScrollSpyTicking = false;
+  function settingsPaneScrollSpy() {
+    if (!$settingsPane || !$settingsModalInner) return;
+    if ($settingsModalInner.classList.contains('is-searching')) return;
+    const sections = Array.from($settingsPane.querySelectorAll('.settings-section'));
+    if (!sections.length) return;
+    const paneTop = $settingsPane.getBoundingClientRect().top;
+    let current = sections[0];
+    for (const s of sections) {
+      const r = s.getBoundingClientRect();
+      if (r.top - paneTop <= 24) current = s;
+    }
+    const sid = current.getAttribute('data-section-id');
+    if (sid && sid !== _settingsCurrentSection) setActiveSettingsRailSection(sid, { scroll: false });
+  }
+
+  function ensureSettingsRowCrumb(row, text) {
+    const main = row.querySelector('.settings-row-main');
+    if (!main) return;
+    let crumb = main.querySelector('.settings-row-crumb');
+    if (!crumb) {
+      crumb = document.createElement('div');
+      crumb.className = 'settings-row-crumb';
+      main.insertBefore(crumb, main.firstChild);
+    }
+    crumb.textContent = text;
+  }
+
+  function buildSettingsSearchIndex() {
+    if (!$settingsPane) { _settingsSearchIndex = []; return; }
+    _settingsSearchIndex = Array.from($settingsPane.querySelectorAll('.settings-row')).map(row => {
+      const section = row.closest('.settings-section');
+      const eyebrow = section ? section.querySelector('.settings-section-eyebrow') : null;
+      const label = row.querySelector('.settings-row-label');
+      const desc = row.querySelector('.settings-row-desc');
+      return {
+        el: row,
+        section,
+        sectionTitle: eyebrow ? eyebrow.textContent : '',
+        hay: [
+          label ? label.textContent : '',
+          desc ? desc.textContent : '',
+          row.getAttribute('data-keywords') || '',
+        ].join(' ').toLowerCase(),
+      };
     });
   }
+
+  function applySettingsSearch(query) {
+    if (!$settingsPane || !$settingsModalInner) return;
+    if (!_settingsSearchIndex) buildSettingsSearchIndex();
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) {
+      $settingsModalInner.classList.remove('is-searching');
+      _settingsSearchIndex.forEach(entry => { entry.el.hidden = false; });
+      $settingsPane.querySelectorAll('.settings-section-eyebrow, .settings-reset-row').forEach(el => { el.hidden = false; });
+      $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(el => { el.style.display = ''; });
+      if ($settingsEmptyState) $settingsEmptyState.hidden = true;
+      return;
+    }
+    $settingsModalInner.classList.add('is-searching');
+    // The Tools section's #settingsModalToolsSlot holds boot-time-moved
+    // elements (Terminal, History, Worktrees, Stats, Today, Notes, COO)
+    // that are not `.settings-row`s, carry no data-keywords, and so can
+    // never themselves match a query — always hide the slot while
+    // searching (regardless of whether a sibling Tools row, like "Session
+    // search", matched) so the flat results only ever show rows that
+    // actually matched. Uses an inline style rather than `hidden` because
+    // the slot's own CSS (`display: flex`) has equal specificity to the
+    // `[hidden]` UA rule and would otherwise win by source order.
+    $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(el => { el.style.display = 'none'; });
+    const sectionMatchCount = {};
+    let anyMatch = false;
+    _settingsSearchIndex.forEach(entry => {
+      const match = entry.hay.includes(q);
+      entry.el.hidden = !match;
+      if (match) {
+        anyMatch = true;
+        const sid = entry.section && entry.section.getAttribute('data-section-id');
+        if (sid) sectionMatchCount[sid] = (sectionMatchCount[sid] || 0) + 1;
+        ensureSettingsRowCrumb(entry.el, (entry.sectionTitle || '') + ' ›');
+      }
+    });
+    $settingsPane.querySelectorAll('.settings-section').forEach(section => {
+      const sid = section.getAttribute('data-section-id');
+      const has = !!sectionMatchCount[sid];
+      const eyebrow = section.querySelector('.settings-section-eyebrow');
+      if (eyebrow) eyebrow.hidden = !has;
+      const resetRow = section.querySelector('.settings-reset-row');
+      if (resetRow) resetRow.hidden = !has;
+    });
+    if ($settingsEmptyState) $settingsEmptyState.hidden = anyMatch;
+    if ($settingsEmptyQuery) $settingsEmptyQuery.textContent = query;
+  }
+
+  function clearSettingsSearch() {
+    if ($settingsSearchInput) $settingsSearchInput.value = '';
+    applySettingsSearch('');
+  }
+
+  function settingsResetAppearance() {
+    try {
+      localStorage.removeItem('ccc-theme');
+      localStorage.removeItem('ccc-font');
+      localStorage.removeItem('ccc-conv-font-scale');
+    } catch (_) {}
+    applyTheme(getThemePref());
+    applyFont(getFontPref());
+    convFontScale = 1;
+    if (typeof applyConvFontScale === 'function') applyConvFontScale();
+    refreshAppearanceChecks();
+  }
+
+  function settingsResetLayout() {
+    try {
+      localStorage.removeItem('ccc-view-gh');
+      localStorage.removeItem('ccc-hero-live-variant');
+      localStorage.removeItem('ccc-q-first');
+    } catch (_) {}
+    applyViewGh(getViewGhPref());
+    if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(false);
+    refreshAppearanceChecks();
+  }
+
+  function settingsResetSessions() {
+    try {
+      localStorage.removeItem('ccc.spawnEngine');
+      localStorage.removeItem('ccc-spawn-cwd');
+    } catch (_) {}
+    refreshSpawnEngineValue();
+  }
+
+  function openSettingsModal() {
+    if (!$settingsModal) return;
+    _settingsModalPrevFocus = document.activeElement;
+    $settingsModal.hidden = false;
+    $settingsModal.classList.add('open');
+    if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'true');
+    clearSettingsSearch();
+    buildSettingsSearchIndex();
+    refreshAppearanceChecks();
+    refreshSpawnEngineValue();
+    setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
+    setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);
+  }
+
+  function closeSettingsModal() {
+    if (!$settingsModal) return;
+    $settingsModal.classList.remove('open');
+    $settingsModal.hidden = true;
+    if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'false');
+    const restoreFocus = ($settingsBtn && typeof $settingsBtn.focus === 'function')
+      ? $settingsBtn
+      : _settingsModalPrevFocus;
+    if (restoreFocus && typeof restoreFocus.focus === 'function') restoreFocus.focus();
+    _settingsModalPrevFocus = null;
+  }
+  // Exposed for call sites defined earlier in this file / other scopes
+  // that need to close the modal after completing an action (Restart
+  // server, Spawn defaults, Car Mode, Network access, Nodes & peers,
+  // Fleet, the tools-slot delegate, the tour, etc).
+  window._cccCloseSettingsModal = closeSettingsModal;
+
   if ($settingsBtn) {
     $settingsBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      openOnlyPopover($settingsPopover);
+      if ($settingsModal && $settingsModal.classList.contains('open')) closeSettingsModal();
+      else openSettingsModal();
     });
   }
-  if ($appearancePopover) {
-    $appearancePopover.addEventListener('click', (e) => {
+  if ($settingsModalBackdrop) $settingsModalBackdrop.addEventListener('click', closeSettingsModal);
+  if ($settingsModalClose) $settingsModalClose.addEventListener('click', closeSettingsModal);
+
+  if ($settingsRail) {
+    $settingsRail.addEventListener('click', (e) => {
+      const item = e.target.closest('.settings-rail-item');
+      if (!item) return;
+      const sid = item.getAttribute('data-section-target');
+      if (sid) setActiveSettingsRailSection(sid);
+    });
+  }
+  if ($settingsPane) {
+    $settingsPane.addEventListener('scroll', () => {
+      if (_settingsScrollSpyTicking) return;
+      _settingsScrollSpyTicking = true;
+      requestAnimationFrame(() => {
+        _settingsScrollSpyTicking = false;
+        settingsPaneScrollSpy();
+      });
+    });
+  }
+  if ($settingsSearchInput) {
+    $settingsSearchInput.addEventListener('input', (e) => applySettingsSearch(e.target.value));
+  }
+
+  if ($settingsModal) {
+    // Delegated control handling: theme/font segments, the three
+    // Layout & View toggles, Fleet Pulse launcher, and the three
+    // per-section reset buttons. Every mutation fires the ✓ Saved pulse;
+    // the Fleet Pulse launcher (an action, not a setting) does not.
+    $settingsModal.addEventListener('click', (e) => {
       const themeBtn = e.target.closest('[data-theme]');
-      const fontBtn = e.target.closest('[data-font]');
       if (themeBtn) {
         const v = themeBtn.getAttribute('data-theme');
         localStorage.setItem('ccc-theme', v);
         applyTheme(v);
         refreshAppearanceChecks();
-      } else if (fontBtn) {
+        showSettingsSavedPulse(themeBtn.closest('.settings-row'));
+        return;
+      }
+      const fontBtn = e.target.closest('[data-font]');
+      if (fontBtn) {
         const v = fontBtn.getAttribute('data-font');
         localStorage.setItem('ccc-font', v);
         applyFont(v);
         refreshAppearanceChecks();
+        showSettingsSavedPulse(fontBtn.closest('.settings-row'));
+        return;
       }
-    });
-  }
-  if ($settingsPopover) {
-    $settingsPopover.addEventListener('click', (e) => {
-      const viewGhBtn = e.target.closest('[data-view-gh]');
-      if (viewGhBtn) {
-        const v = viewGhBtn.getAttribute('data-view-gh');
-        localStorage.setItem('ccc-view-gh', v);
-        applyViewGh(v);
+      const viewGhToggle = e.target.closest('[data-view-gh-toggle]');
+      if (viewGhToggle) {
+        const next = getViewGhPref() === 'hide' ? 'show' : 'hide';
+        localStorage.setItem('ccc-view-gh', next);
+        applyViewGh(next);
         refreshAppearanceChecks();
+        showSettingsSavedPulse(viewGhToggle.closest('.settings-row'));
         return;
       }
-      const heroOpenBtn = e.target.closest('[data-hero-open]');
-      if (heroOpenBtn) {
-        $settingsPopover.classList.remove('open');
-        if (typeof window._cccOpenFleetPulse === 'function') window._cccOpenFleetPulse();
-        return;
-      }
-      const liveVariantBtn = e.target.closest('[data-live-variant-toggle]');
-      if (liveVariantBtn) {
+      const liveVariantToggle = e.target.closest('[data-live-variant-toggle]');
+      if (liveVariantToggle) {
         let lv = 'A';
         try { lv = localStorage.getItem('ccc-hero-live-variant') || 'A'; } catch (_) {}
         try { localStorage.setItem('ccc-hero-live-variant', lv === 'B' ? 'A' : 'B'); } catch (_) {}
         refreshAppearanceChecks();
+        showSettingsSavedPulse(liveVariantToggle.closest('.settings-row'));
+        return;
+      }
+      const qfirstToggle = e.target.closest('[data-qfirst-toggle]');
+      if (qfirstToggle) {
+        let on = false;
+        try { on = localStorage.getItem('ccc-q-first') === '1'; } catch (_) {}
+        if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(!on);
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(qfirstToggle.closest('.settings-row'));
+        return;
+      }
+      const heroOpenBtn = e.target.closest('[data-hero-open]');
+      if (heroOpenBtn) {
+        closeSettingsModal();
+        if (typeof window._cccOpenFleetPulse === 'function') window._cccOpenFleetPulse();
+        return;
+      }
+      const resetBtn = e.target.closest('#settingsResetAppearance, #settingsResetLayout, #settingsResetSessions');
+      if (resetBtn) {
+        if (resetBtn.id === 'settingsResetAppearance') settingsResetAppearance();
+        else if (resetBtn.id === 'settingsResetLayout') settingsResetLayout();
+        else if (resetBtn.id === 'settingsResetSessions') settingsResetSessions();
+        showSettingsSavedPulse(resetBtn.closest('.settings-reset-row'));
+        return;
       }
     });
+
+    $settingsModal.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if ($settingsSearchInput && $settingsSearchInput.value) {
+          e.preventDefault();
+          clearSettingsSearch();
+          $settingsSearchInput.focus();
+        } else {
+          closeSettingsModal();
+        }
+        return;
+      }
+      if (e.key === '/' && e.target !== $settingsSearchInput && !isSettingsFormField(e.target)) {
+        e.preventDefault();
+        if ($settingsSearchInput) $settingsSearchInput.focus();
+        return;
+      }
+      if (e.key === 'Tab') {
+        trapSettingsModalTab(e);
+        return;
+      }
+      handleSettingsArrowNav(e);
+    });
   }
-  // Click-outside / Esc closes the popovers.
-  document.addEventListener('click', (e) => {
-    if ($appearancePopover && $appearancePopover.classList.contains('open')
-        && !$appearancePopover.contains(e.target) && e.target !== $appearanceBtn
-        && !$appearanceBtn.contains(e.target)) {
-      $appearancePopover.classList.remove('open');
-      if ($appearanceBtn) $appearanceBtn.setAttribute('aria-expanded', 'false');
-    }
-    if ($settingsPopover && $settingsPopover.classList.contains('open')
-        && !$settingsPopover.contains(e.target) && e.target !== $settingsBtn
-        && !$settingsBtn.contains(e.target)) {
-      $settingsPopover.classList.remove('open');
-      if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'false');
-    }
-  });
   // Initial state — already applied synchronously, but refresh checks
   // and re-apply (no-op) for clarity.
   applyTheme(getThemePref());
@@ -54508,6 +54861,15 @@
         input.select();
         requestAnimationFrame(() => refreshChatFind({ rebuild: true }));
       }
+      return;
+    }
+    if (meta && e.key === ',') {
+      // Cmd/Ctrl+, opens Settings — but not while the user is typing
+      // somewhere else (a text field, the conversation composer, etc).
+      const ae = document.activeElement;
+      if (isSettingsFormField(ae)) return;
+      e.preventDefault();
+      if (typeof openSettingsModal === 'function') openSettingsModal();
       return;
     }
   });
@@ -54718,11 +55080,12 @@
     if ($chatFindClose) $chatFindClose.addEventListener('click', () => closeChatFindModal());
   }
 
-  // Settings popover: clicking the ⌘K row also opens the search modal.
+  // Settings modal: clicking the "Session search" row also opens the ⌘K
+  // search modal (see #settingsCmdkBtn in the Tools section).
   const $settingsCmdkBtn = document.getElementById('settingsCmdkBtn');
   if ($settingsCmdkBtn) {
     $settingsCmdkBtn.addEventListener('click', () => {
-      if ($settingsPopover) $settingsPopover.classList.remove('open');
+      closeSettingsModal();
       openCmdk();
     });
   }
@@ -55476,8 +55839,7 @@
   }
   const $takeTourBtn = document.getElementById('takeTourBtn');
   if ($takeTourBtn) $takeTourBtn.addEventListener('click', () => {
-    const $sp = document.getElementById('settingsPopover');
-    if ($sp) $sp.classList.remove('open');
+    if (typeof window._cccCloseSettingsModal === 'function') window._cccCloseSettingsModal();
     loadFirstFlightTour(true);
   });
   if (!CONV_POPOUT_MODE) {
