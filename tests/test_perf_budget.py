@@ -193,6 +193,91 @@ def test_archive_build_skips_liveness_for_old_sessions(big_projects, monkeypatch
     )
 
 
+def test_repo_sessions_gate_liveness_by_candidates(monkeypatch, tmp_path):
+    """Repo-scoped /api/sessions must not probe liveness once per row."""
+    now = time.time()
+    candidate_sid = str(uuid.uuid4())
+    rows = [
+        {
+            "id": sid,
+            "session_id": sid,
+            "source": "interactive",
+            "modified": now - 3600,
+            "mtime": now - 3600,
+            "branch": "main",
+            "display_name": "session",
+            "first_message": "work",
+        }
+        for sid in [candidate_sid, *(str(uuid.uuid4()) for _ in range(199))]
+    ]
+
+    monkeypatch.setattr(server, "resolve_repo_path", lambda path: str(tmp_path))
+    monkeypatch.setattr(server, "_load_session_issues", lambda: {})
+    monkeypatch.setattr(server, "_load_session_registry", lambda: {})
+    monkeypatch.setattr(server, "find_conversations", lambda *a, **k: [dict(r) for r in rows])
+    monkeypatch.setattr(server, "_spawned_sessions", [])
+    for name in (
+        "find_codex_conversations",
+        "find_gemini_conversations",
+        "find_cursor_conversations",
+        "find_antigravity_conversations",
+        "find_kilo_conversations",
+        "find_hermes_conversations",
+    ):
+        monkeypatch.setattr(server, name, lambda *a, **k: [])
+    monkeypatch.setattr(server, "_find_remote_sessions", lambda *a, **k: [])
+    monkeypatch.setattr(server, "find_pkood_agents", lambda: [])
+    monkeypatch.setattr(server, "_apply_watchtower_worker_display_names", lambda rows: None)
+    monkeypatch.setattr(server, "find_backlog_items", lambda *a, **k: [])
+    monkeypatch.setattr(server, "_cleanup_stale_sidecars", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_fetch_issue_states", lambda *a, **k: {})
+    monkeypatch.setattr(server, "_load_desktop_app_metadata", lambda: {})
+    monkeypatch.setattr(server, "_add_sidecar_fields", lambda row: None)
+    monkeypatch.setattr(server, "_detect_issue_number_for_session", lambda row: None)
+    monkeypatch.setattr(server, "_load_conversation_order", lambda: [])
+    monkeypatch.setattr(server, "_load_pinned_conversations", lambda: [])
+    monkeypatch.setattr(server, "_apply_pinned_conversation_fields", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_sort_pinned_conversations_first", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_apply_session_lane_overrides", lambda rows: None)
+    monkeypatch.setattr(server, "auto_verify_closed_issues", lambda path: None)
+    monkeypatch.setattr(server, "_discover_live_session_ids", lambda: {candidate_sid})
+    calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=True)
+
+    result = server.find_all_sessions(str(tmp_path), include_old=False)
+
+    assert len(result) == len(rows)
+    assert [args[0][0] for args in calls] == [candidate_sid], (
+        f"repo session list made {len(calls)} precise liveness probes for "
+        f"{len(rows)} old rows instead of probing only live candidates"
+    )
+
+
+def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
+    """The non-Claude live-id scan must not poll unrelated Claude workers."""
+    claude_spawn = {"engine": "claude", "session_id": "claude-session"}
+    codex_spawn = {"engine": "codex", "session_id": "codex-session"}
+    monkeypatch.setattr(server, "_spawned_sessions", [claude_spawn, codex_spawn])
+    monkeypatch.setattr(server, "find_live_codex_processes", lambda: [])
+    monkeypatch.setattr(server, "find_live_gemini_processes", lambda: [])
+    monkeypatch.setattr(server, "find_live_cursor_processes", lambda: [])
+    monkeypatch.setattr(server, "_engine_live_sids_cache", {"ts": 0.0, "sids": frozenset()})
+    polled = []
+
+    def poll(entry):
+        polled.append(entry)
+        return None
+
+    monkeypatch.setattr(server, "_poll_spawn_entry", poll)
+
+    live = server._live_engine_session_ids()
+
+    assert live == frozenset({"codex-session"})
+    assert polled == [codex_spawn], (
+        "_live_engine_session_ids polled Claude spawns even though they cannot "
+        "contribute a non-Claude live session id"
+    )
+
+
 def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
     """Quality lookup indexes cache files once, never once per session row."""
     quality_dir = tmp_path / ".codex" / "token-optimizer"
@@ -227,6 +312,22 @@ def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
         f"quality lookup scanned cache directories {len(scans)}x for "
         f"{len(sids)} rows instead of sharing one directory index"
     )
+
+
+def test_auto_verify_reuses_supplied_session_rows(monkeypatch, tmp_path):
+    """find_all_sessions must not trigger a second conversation scan."""
+    monkeypatch.setattr(server, "resolve_repo_path", lambda path: str(tmp_path))
+    monkeypatch.setattr(server, "_load_verified_conversations", lambda: [])
+    monkeypatch.setattr(server, "_fetch_issue_states", lambda path: {})
+    monkeypatch.setattr(
+        server,
+        "find_conversations",
+        lambda *a, **k: pytest.fail("auto-verify rebuilt all conversations"),
+    )
+
+    result = server.auto_verify_closed_issues(str(tmp_path), conversations=[])
+
+    assert result == {"ok": True, "newly_verified": [], "count": 0}
 
 
 # ── Auto-unarchive sweep candidacy gate (CCC-435 follow-up) ──────────────────
@@ -637,6 +738,37 @@ _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,
 
 
 _ALL_KEY = server._archive_response_cache_key(**_ALL_OPTS)
+
+
+def test_archive_spawned_cold_cache_does_not_block_request(monkeypatch):
+    """A slow first spawned-session refresh must not hang ?all=1."""
+    release = threading.Event()
+    refreshed = threading.Event()
+
+    def slow_list():
+        release.wait(timeout=2)
+        refreshed.set()
+        return [{"spawn_id": "late"}]
+
+    monkeypatch.setattr(server, "list_spawned_sessions", slow_list)
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 2.0)
+    monkeypatch.setattr(server, "_archive_spawned_cache", {"ts": 0.0, "data": None})
+    monkeypatch.setattr(server, "_archive_spawned_refreshing", False)
+    timer = threading.Timer(0.5, release.set)
+    timer.start()
+    start = time.perf_counter()
+    try:
+        rows = server._archive_spawned_coalesced()
+        elapsed = time.perf_counter() - start
+        assert rows == [], "cold request should serve an empty stale snapshot"
+        assert elapsed < 0.2, (
+            f"cold spawned-session cache blocked for {elapsed:.3f}s instead of "
+            "refreshing off-thread"
+        )
+    finally:
+        release.set()
+        timer.cancel()
+        refreshed.wait(timeout=2)
 
 
 def test_conversations_all_stale_ok_uses_coalesced_serve_cache(monkeypatch):

@@ -4450,6 +4450,9 @@ def _live_engine_session_ids():
                     if len(tok) >= 16 and _command_targets_engine_session(cmd, tok, engine):
                         sids.add(tok)
         for s in _spawned_sessions:
+            engine = str(s.get("engine") or "claude").lower()
+            if engine in ("claude", "remote-claude"):
+                continue
             try:
                 if _poll_spawn_entry(s) is not None:
                     continue
@@ -4458,11 +4461,11 @@ def _live_engine_session_ids():
             sid = s.get("session_id")
             if not sid:
                 log = s.get("log")
-                if s.get("engine") == "codex":
+                if engine == "codex":
                     sid = _extract_codex_thread_id_from_log(log)
-                elif s.get("engine") == "gemini":
+                elif engine == "gemini":
                     sid = _extract_gemini_session_id_from_log(log)
-                elif s.get("engine") == "cursor":
+                elif engine == "cursor":
                     sid = _extract_cursor_chat_id_from_log(log) or _cursor_session_id_for_spawn_entry(s)
             if sid:
                 sids.add(sid)
@@ -7116,22 +7119,33 @@ def _archive_spawned_coalesced():
     global _archive_spawned_refreshing
     if _ARCHIVE_SERVE_TTL <= 0:
         return list_spawned_sessions()
+    start_refresh = False
     with _archive_spawned_lock:
         data = _archive_spawned_cache["data"]
         age = time.time() - _archive_spawned_cache["ts"]
         if data is None:
-            # Cold: must build once synchronously (nothing to serve yet).
-            pass
+            # A cold spawned-session scan can be the slowest part of all=1:
+            # each retained spawn may need process and transcript discovery.
+            # Serve an empty snapshot for this first poll and populate the
+            # cache off-thread; the next poll receives the full list.
+            if not _archive_spawned_refreshing:
+                _archive_spawned_refreshing = True
+                start_refresh = True
         else:
             if age >= _ARCHIVE_SERVE_TTL and not _archive_spawned_refreshing:
                 _archive_spawned_refreshing = True
                 threading.Thread(target=_archive_spawned_refresh, daemon=True).start()
             return [dict(r) for r in data]
-    data = list_spawned_sessions()
+    if not start_refresh:
+        return []
+    refresh_thread = threading.Thread(target=_archive_spawned_refresh, daemon=True)
+    refresh_thread.start()
+    # Preserve the prior first-response shape when discovery is genuinely
+    # cheap, without letting a slow registry/transcript walk own the request.
+    refresh_thread.join(timeout=0.05)
     with _archive_spawned_lock:
-        _archive_spawned_cache["ts"] = time.time()
-        _archive_spawned_cache["data"] = data
-    return [dict(r) for r in data]
+        data = _archive_spawned_cache["data"]
+    return [dict(r) for r in (data or [])]
 
 
 def _archive_all_rows_cached(cache_options):
@@ -17255,10 +17269,24 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
     live_spawns = [s for s in _spawned_sessions if _poll_spawn_entry(s) is None]
     spawned_pids = {s["pid"] for s in live_spawns}
     spawned_engine_by_pid = {s["pid"]: s.get("engine", "claude") for s in live_spawns}
+    try:
+        live_candidates = _discover_live_session_ids()
+    except Exception:
+        live_candidates = live_sids
+    liveness_now = time.time()
     for c in conversations:
         c["source"] = "interactive"
         sid = c.get("session_id")
-        c["is_live"] = _archive_session_is_live(sid) if sid else False
+        try:
+            row_ts = float(c.get("mtime") or c.get("modified") or 0)
+        except (TypeError, ValueError):
+            row_ts = 0
+        recently_written = bool(row_ts and (liveness_now - row_ts) < _LIVE_MTIME_WINDOW)
+        c["is_live"] = (
+            _archive_session_is_live(sid)
+            if sid and (sid in live_candidates or recently_written)
+            else False
+        )
         reg_pid = (registry.get(c["session_id"]) or {}).get("pid")
         c["spawn_pid"] = reg_pid if reg_pid in spawned_pids else None
         if c["spawn_pid"]:
@@ -17573,7 +17601,7 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
     # Auto-verify: sessions with has_push linked to closed GH issues get verified.
     # Runs inline (cheap — just reads cached issue states + verified list).
     try:
-        auto_verify_closed_issues(repo_path)
+        auto_verify_closed_issues(repo_path, conversations=conversations)
     except Exception:
         pass
 
@@ -48105,14 +48133,18 @@ _atexit.register(_codex_app_server_shutdown)
 _atexit.register(_nextjs_shutdown_all)
 
 
-def auto_verify_closed_issues(repo_path):
+def auto_verify_closed_issues(repo_path, conversations=None):
     """For any session with has_push + linked to a CLOSED GitHub issue,
     auto-set verified=True if not already. Returns what was changed."""
     repo_path = resolve_repo_path(repo_path)
     verified_list = _load_verified_conversations()
     verified_set = set(verified_list)
     issue_states = _fetch_issue_states(repo_path)
-    convs = find_conversations(repo_path) or []
+    convs = (
+        find_conversations(repo_path) or []
+        if conversations is None
+        else conversations
+    )
     newly_verified = []
 
     for c in convs:
