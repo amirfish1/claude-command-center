@@ -67138,6 +67138,11 @@ def install_orchestration_skill():
     for root in _skill_install_roots():
         _install_skill("ccc-orchestration", root)
         _install_skill("group-chat-checkin", root)
+        # W86 ecosystem glue: bridge superpowers plans to Watchtower queues,
+        # and spawn browser-driven verification lanes. Installed so the
+        # "CCC works with your skills" integrations are present out of the box.
+        _install_skill("superpowers-to-watchtower", root)
+        _install_skill("fleet-verify", root)
 
 
 def _raise_open_file_limit(min_soft=2048):

@@ -23,6 +23,17 @@ Ranking weighs how often you'll reach for it against what it costs per run.
 | 7 | [`press-room`](press-room.md) | 3-4 | marketing | One release in, N channel drafts out in parallel (changelog, LinkedIn, X, optional blog), each from its own session, all fed by one source pack. Drafts only. |
 | 8 | [`a-b-copy`](a-b-copy.md) | 3 | marketing | Two writers, same message architecture, different voice constraints; an independent judge scores both and picks a winner. Drafts only. |
 
+### Ecosystem bridges
+
+Skills that connect CCC's fleet primitives to other skill packs you already use
+(superpowers, gstack browse, Watchtower). These are installed on startup
+alongside `ccc-orchestration`, so the integrations work out of the box.
+
+| Skill | Spawns/run | Bridges | One-liner |
+|-------|-----------|---------|-----------|
+| [`superpowers-to-watchtower`](superpowers-to-watchtower.md) | 0-N | superpowers → Watchtower → CCC | Lift a superpowers plan out of its in-session scratch ledger: `wt import` it into a durable, board-visible queue, then optionally dispatch one lane per ticket that closes with a summary. |
+| [`fleet-verify`](fleet-verify.md) | 1 | CCC + gstack browse | Spawn a lane that drives a real headless browser against the running app, verifies the exact change you describe, and reports a visual verdict with a screenshot. The piece `/code-review` and `pair-verify` miss. |
+
 ### Choosing between the look-alikes
 
 - Reviewing **a thing you made** (plan, diff, doc)? → `wt critique` (external
