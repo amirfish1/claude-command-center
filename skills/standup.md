@@ -63,9 +63,12 @@ curl -s -X POST "$CCC_URL/api/ask" -H "Content-Type: application/json" -d @- <<'
 JSON
 ```
 
-Timeouts are answers too: mark a session that doesn't reply within the timeout as
-`(no answer — busy)`. Some engines do not reply to asks at all, so treat a
-timeout as **busy, never dead**.
+Check the whole envelope before calling it a miss: a response of
+`{"ok": false, "error": "timeout", "partial": "..."}` often carries the full
+one-liner in `partial` — the target answered but ended its turn without a
+formal reply. **A non-empty `partial` IS the answer.** Only a timeout with no
+`partial` counts as `(no answer — busy)`. Some engines do not reply to asks at
+all, so treat a timeout as **busy, never dead**.
 
 ## Step 4: collate the digest
 
