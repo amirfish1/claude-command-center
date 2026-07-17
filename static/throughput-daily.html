@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
+<meta name="theme-color" content="#0d1117">
+<title>Daily Throughput — CCC</title>
+<style>
+  /* Palette lifted from throughput.html so the daily report reads as one
+     product with the main analyzer (GitHub-dark-ish, teal accent). */
+  :root {
+    --bg: #0b0d11;
+    --surface: #12161f;
+    --surface-card: rgba(22, 28, 41, 0.65);
+    --surface-hover: rgba(30, 38, 56, 0.8);
+    --border: rgba(48, 54, 61, 0.6);
+    --border-active: rgba(57, 210, 192, 0.4);
+
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+
+    --accent: #39d2c0;
+    --accent-glow: rgba(57, 210, 192, 0.15);
+    --blue: #47a6ff;
+    --purple: #ab7dff;
+    --green: #3fb950;
+    --orange: #e3b341;
+    --red: #f85149;
+
+    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font-ui);
+    background: radial-gradient(circle at top right, rgba(57, 210, 192, 0.04), transparent 42%), var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  a { color: inherit; }
+
+  .page {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 20px 24px 48px;
+  }
+
+  /* ── Header ── */
+  .topbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .back-link {
+    display: inline-block;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-decoration: none;
+    margin-bottom: 8px;
+  }
+  .back-link:hover { color: var(--accent); }
+  .title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .topbar h1 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 600;
+    background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .date-line {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .status-badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 3px 9px;
+    border-radius: 20px;
+  }
+  .status-badge.final {
+    background: rgba(63, 185, 80, 0.12);
+    color: var(--green);
+    border: 1px solid rgba(63, 185, 80, 0.25);
+  }
+  .status-badge.progress {
+    background: rgba(227, 179, 65, 0.12);
+    color: var(--orange);
+    border: 1px solid rgba(227, 179, 65, 0.25);
+  }
+
+  .topbar-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+  .nav-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .nav-btn {
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .nav-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); border-color: var(--text-muted); }
+  .nav-btn:disabled { opacity: 0.32; cursor: default; }
+  .nav-btn.ghost { background: transparent; color: var(--text-muted); }
+
+  .engine-tabs {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    gap: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .engine-tab {
+    border: 0;
+    border-radius: 6px;
+    padding: 6px 12px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .engine-tab.active { background: var(--accent); color: #0d1117; }
+
+  /* ── KPI tiles ── */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .kpi {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    backdrop-filter: blur(8px);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .kpi-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 7px;
+  }
+  .kpi-value {
+    font-family: var(--font-display);
+    font-size: 23px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi-value.accent { color: var(--accent); }
+  .kpi-sub { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+
+  .pace-line {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0 0 22px;
+    padding: 9px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(57,210,192,0.07), rgba(71,166,255,0.04));
+    font-variant-numeric: tabular-nums;
+  }
+  .pace-line strong { color: var(--text); font-weight: 600; }
+  .pace-delta.up { color: var(--green); font-weight: 600; }
+  .pace-delta.down { color: var(--orange); font-weight: 600; }
+
+  /* ── Cards / sections ── */
+  .card {
+    background: var(--surface-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+    backdrop-filter: blur(8px);
+  }
+  .card-title {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title .muted { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+
+  /* ── Hourly bars ── */
+  .hours {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 160px;
+  }
+  .hour-slot {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: stretch;
+    height: 100%;
+    min-width: 0;
+  }
+  .hour-bar {
+    width: 100%;
+    min-height: 2px;
+    border-radius: 3px 3px 0 0;
+    background: linear-gradient(180deg, var(--accent), rgba(57,210,192,0.35));
+    transition: background 0.15s;
+  }
+  .hour-slot:hover .hour-bar { background: var(--blue); }
+  .hour-bar.empty { background: rgba(255,255,255,0.05); }
+  .hour-axis {
+    display: flex;
+    gap: 3px;
+    margin-top: 6px;
+  }
+  .hour-tick {
+    flex: 1 1 0;
+    font-size: 9px;
+    color: var(--text-muted);
+    text-align: center;
+    font-family: var(--font-mono);
+    min-width: 0;
+  }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; margin: 0 -2px; }
+  table.data {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    min-width: 620px;
+  }
+  table.data th {
+    text-align: right;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.data th.left, table.data td.left { text-align: left; }
+  table.data td {
+    text-align: right;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  table.data tr:last-child td { border-bottom: none; }
+  table.data td.name {
+    font-family: var(--font-ui);
+    color: var(--text);
+    font-weight: 600;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  table.data td.name a { color: var(--text); text-decoration: none; }
+  table.data td.name a:hover { color: var(--accent); text-decoration: underline; }
+  table.data td.strong { color: var(--text); font-weight: 600; }
+  .rank { color: var(--text-muted); font-family: var(--font-mono); }
+  .eng-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(57, 210, 192, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(57, 210, 192, 0.2);
+  }
+  .eng-badge.codex { background: rgba(171,125,255,0.1); color: var(--purple); border-color: rgba(171,125,255,0.22); }
+  .models-cell { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); white-space: normal; max-width: 200px; }
+  .trunc-note { font-size: 11px; color: var(--text-muted); margin-top: 10px; }
+
+  /* ── Tickets strip ── */
+  .tickets-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.02);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .tickets-strip .tk-label { font-weight: 600; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .tickets-strip .tk-item { font-variant-numeric: tabular-nums; }
+  .tickets-strip .tk-item strong { font-weight: 700; }
+  .tk-open strong { color: var(--blue); }
+  .tk-closed strong { color: var(--green); }
+  .tk-still strong { color: var(--orange); }
+  .tk-sep { color: var(--border); }
+
+  .footer { font-size: 11px; color: var(--text-muted); text-align: center; padding-top: 8px; }
+
+  /* ── Loading / error ── */
+  .state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 14px;
+    padding: 70px 20px;
+    color: var(--text-muted);
+  }
+  .spinner {
+    width: 38px; height: 38px;
+    border: 4px solid rgba(255,255,255,0.12);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .state.error .icon { font-size: 34px; }
+  .state.error h2 { font-family: var(--font-display); color: var(--text); font-size: 18px; }
+  .state .msg { font-size: 13px; max-width: 460px; line-height: 1.5; }
+  [hidden] { display: none !important; }
+
+  @media (max-width: 600px) {
+    .page { padding: 16px 14px 40px; }
+    .topbar-actions { align-items: flex-start; width: 100%; }
+    .nav-row { justify-content: flex-start; }
+    .kpi-value { font-size: 20px; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <!-- Header -->
+    <div class="topbar">
+      <div>
+        <a class="back-link" href="/throughput.html">← Throughput</a>
+        <div class="title-row">
+          <h1>Daily Throughput</h1>
+          <span class="status-badge" id="statusBadge" hidden></span>
+        </div>
+        <div class="date-line" id="dateLine">Loading…</div>
+      </div>
+      <div class="topbar-actions">
+        <div class="nav-row">
+          <a class="nav-btn" id="prevBtn" href="#">◀ prev day</a>
+          <a class="nav-btn" id="nextBtn" href="#">next day ▶</a>
+          <a class="nav-btn ghost" id="todayBtn" href="#">Today</a>
+          <a class="nav-btn ghost" id="yesterdayBtn" href="#">Yesterday</a>
+        </div>
+        <div class="engine-tabs" id="engineTabs">
+          <a class="engine-tab" data-engine="claude" href="#">Claude</a>
+          <a class="engine-tab" data-engine="codex" href="#">Codex</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading -->
+    <div class="state" id="loadingState">
+      <div class="spinner"></div>
+      <div class="msg">Crunching the day’s throughput…</div>
+    </div>
+
+    <!-- Error -->
+    <div class="state error" id="errorState" hidden>
+      <div class="icon">⚠️</div>
+      <h2>Couldn’t load the report</h2>
+      <div class="msg" id="errorMsg"></div>
+    </div>
+
+    <!-- Report body -->
+    <div id="report" hidden>
+      <div class="kpi-grid" id="kpiGrid"></div>
+      <div class="pace-line" id="paceLine" hidden></div>
+
+      <div class="card">
+        <div class="card-title">Cache-adjusted tokens by hour <span class="muted">(local time)</span></div>
+        <div class="hours" id="hours"></div>
+        <div class="hour-axis" id="hourAxis"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Tokens by model</div>
+        <div class="table-wrap">
+          <table class="data" id="modelTable"></table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Top lanes <span class="muted">by cache-adjusted tokens</span></div>
+        <div class="table-wrap">
+          <table class="data" id="sessTable"></table>
+        </div>
+        <div class="trunc-note" id="truncNote" hidden></div>
+      </div>
+
+      <div class="tickets-strip" id="ticketsStrip" hidden></div>
+
+      <div class="footer" id="footer"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── URL state ────────────────────────────────────────────────
+  var params = new URLSearchParams(location.search);
+  var dateParam = params.get("date") || "today";
+  var engineParam = (params.get("engine") || "claude").toLowerCase();
+  if (engineParam !== "claude" && engineParam !== "codex") engineParam = "claude";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ── Formatting helpers ───────────────────────────────────────
+  function fmtCompact(n) {
+    n = Number(n) || 0;
+    var abs = Math.abs(n);
+    if (abs >= 1e9) return (n / 1e9).toFixed(abs >= 1e10 ? 0 : 1) + "B";
+    if (abs >= 1e6) return (n / 1e6).toFixed(abs >= 1e7 ? 0 : 1) + "M";
+    if (abs >= 1e3) return (n / 1e3).toFixed(abs >= 1e4 ? 0 : 1) + "k";
+    return String(Math.round(n));
+  }
+  function fmtInt(n) { return (Number(n) || 0).toLocaleString("en-US"); }
+  function fmtCost(n) {
+    n = Number(n) || 0;
+    return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function fmtDuration(sec) {
+    sec = Math.max(0, Math.round(Number(sec) || 0));
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    if (h > 0) return h + "h " + String(m).padStart(2, "0") + "m";
+    var s = sec % 60;
+    return m + "m " + String(s).padStart(2, "0") + "s";
+  }
+  function fmtPct(ratio) {
+    if (ratio == null || isNaN(ratio)) return "—";
+    return (Number(ratio) * 100).toFixed(1) + "%";
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // Parse the local "hour" string ("2026-07-16 00:00" or "...T00") → 0-23.
+  function hourIndex(hourStr) {
+    if (!hourStr) return null;
+    var m = /[ T](\d{2})/.exec(hourStr);
+    return m ? parseInt(m[1], 10) : null;
+  }
+  // Extract HH:MM (local) from an ISO timestamp for span display.
+  function hhmm(iso) {
+    if (!iso) return "—";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+
+  var DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  var MON = ["January", "February", "March", "April", "May", "June", "July",
+             "August", "September", "October", "November", "December"];
+  function humanDate(ymd) {
+    // ymd is "YYYY-MM-DD" (server-local calendar day). Build a local Date.
+    var p = /(\d{4})-(\d{2})-(\d{2})/.exec(ymd || "");
+    if (!p) return ymd || "";
+    var d = new Date(Number(p[1]), Number(p[2]) - 1, Number(p[3]));
+    return DOW[d.getDay()] + ", " + MON[d.getMonth()] + " " + d.getDate() + " " + d.getFullYear();
+  }
+  function ymdToDate(ymd) {
+    var p = /(\d{4})-(\d{2})-(\d{2})/.exec(ymd || "");
+    if (!p) return null;
+    return new Date(Number(p[1]), Number(p[2]) - 1, Number(p[3]));
+  }
+  function dateToYmd(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function todayYmd() { return dateToYmd(new Date()); }
+
+  // ── Build shareable links ────────────────────────────────────
+  function linkFor(date, engine) {
+    return "?date=" + encodeURIComponent(date) + "&engine=" + encodeURIComponent(engine || engineParam);
+  }
+  function wireNav(resolvedDate) {
+    var cur = ymdToDate(resolvedDate);
+    var today = todayYmd();
+
+    var prev = $("prevBtn"), next = $("nextBtn");
+    if (cur) {
+      var pd = new Date(cur); pd.setDate(pd.getDate() - 1);
+      prev.href = linkFor(dateToYmd(pd));
+      var nd = new Date(cur); nd.setDate(nd.getDate() + 1);
+      var ndYmd = dateToYmd(nd);
+      next.href = linkFor(ndYmd);
+      // Disable "next" when already at (or past) today.
+      var atToday = resolvedDate >= today;
+      next.classList.toggle("disabled", atToday);
+      if (atToday) {
+        next.setAttribute("disabled", "");
+        next.addEventListener("click", function (e) { e.preventDefault(); });
+      }
+    }
+    $("todayBtn").href = linkFor("today");
+    $("yesterdayBtn").href = linkFor("yesterday");
+
+    // Engine tabs preserve the current date.
+    var tabs = $("engineTabs").querySelectorAll(".engine-tab");
+    tabs.forEach(function (t) {
+      var eng = t.getAttribute("data-engine");
+      t.href = linkFor(dateParam, eng);
+      t.classList.toggle("active", eng === engineParam);
+    });
+  }
+
+  // ── Renderers ────────────────────────────────────────────────
+  function renderHeader(d) {
+    $("dateLine").textContent = humanDate(d.date) + (d.engine ? "  ·  " + d.engine : "");
+    var badge = $("statusBadge");
+    badge.hidden = false;
+    if (d.final) {
+      badge.className = "status-badge final";
+      badge.textContent = "final";
+    } else {
+      badge.className = "status-badge progress";
+      badge.textContent = "in progress";
+    }
+    document.title = "Daily Throughput " + d.date + " — CCC";
+  }
+
+  function kpiTile(label, value, sub, accent) {
+    return '<div class="kpi"><div class="kpi-label">' + esc(label) + '</div>' +
+      '<div class="kpi-value' + (accent ? " accent" : "") + '">' + value + '</div>' +
+      (sub ? '<div class="kpi-sub">' + sub + '</div>' : "") + "</div>";
+  }
+
+  function renderKpis(d) {
+    var t = d.totals || {};
+    var tiles = [];
+    tiles.push(kpiTile("Cache-adj tokens", fmtCompact(t.cache_adjusted_tokens),
+      fmtInt(Math.round(t.cache_adjusted_tokens)) + " tok", true));
+    tiles.push(kpiTile("Cost", fmtCost(t.cost_usd), null));
+    tiles.push(kpiTile("Turns", fmtInt(t.turns), null));
+    tiles.push(kpiTile("Sessions", fmtInt(t.sessions), null));
+    tiles.push(kpiTile("Output tokens", fmtCompact(t.output_tokens),
+      fmtInt(t.output_tokens) + " tok"));
+    tiles.push(kpiTile("Active time", fmtDuration(t.active_duration_sec), null));
+    tiles.push(kpiTile("Cache hit", fmtPct(t.cache_hit_ratio), null));
+    if (d.final === false) {
+      tiles.push(kpiTile("Active lanes", fmtInt(d.active_sessions_last_hour || 0), "last hour"));
+    }
+    $("kpiGrid").innerHTML = tiles.join("");
+  }
+
+  function renderPace(d) {
+    var el = $("paceLine");
+    var y = d.yesterday;
+    if (d.final !== false || !y || !y.cache_adjusted_tokens_to_same_time) {
+      el.hidden = true;
+      return;
+    }
+    var now = (d.totals && d.totals.cache_adjusted_tokens) || 0;
+    var same = y.cache_adjusted_tokens_to_same_time || 0;
+    var deltaHtml = "";
+    if (same > 0) {
+      var pct = ((now - same) / same) * 100;
+      var cls = pct >= 0 ? "up" : "down";
+      var sign = pct >= 0 ? "+" : "";
+      deltaHtml = ' <span class="pace-delta ' + cls + '">(' + sign + pct.toFixed(0) + "%)</span>";
+    }
+    el.innerHTML = "vs yesterday same time: <strong>" + fmtCompact(now) + "</strong> / " +
+      fmtCompact(same) + deltaHtml +
+      '  ·  <span style="opacity:0.75">yesterday full day: ' + fmtCompact(y.cache_adjusted_tokens_total) + "</span>";
+    el.hidden = false;
+  }
+
+  function renderHours(d) {
+    var byHour = new Array(24).fill(0);
+    (d.hourly || []).forEach(function (h) {
+      var idx = hourIndex(h.hour);
+      if (idx == null || idx < 0 || idx > 23) return;
+      byHour[idx] += (Number(h.effective_input_tokens) || 0) + (Number(h.output_tokens) || 0);
+    });
+    var max = Math.max.apply(null, byHour.concat([1]));
+    var bars = [], ticks = [];
+    for (var i = 0; i < 24; i++) {
+      var v = byHour[i];
+      var pct = max > 0 ? (v / max) * 100 : 0;
+      var hh = String(i).padStart(2, "0");
+      var title = hh + ":00  ·  " + fmtCompact(v) + " cache-adj tok (" + fmtInt(Math.round(v)) + ")";
+      bars.push('<div class="hour-slot" title="' + esc(title) + '">' +
+        '<div class="hour-bar' + (v <= 0 ? " empty" : "") + '" style="height:' +
+        (v > 0 ? Math.max(pct, 1.5) : 0) + '%"></div></div>');
+      ticks.push('<div class="hour-tick">' + (i % 3 === 0 ? hh : "") + "</div>");
+    }
+    $("hours").innerHTML = bars.join("");
+    $("hourAxis").innerHTML = ticks.join("");
+  }
+
+  function renderModels(d) {
+    var rows = (d.per_model || []).map(function (m) {
+      var cacheAdj = (Number(m.effective_input_tokens) || 0) + (Number(m.output_tokens) || 0);
+      return { m: m, cacheAdj: cacheAdj };
+    }).filter(function (r) {
+      // Drop empty synthetic/blank model rows with no tokens and no cost.
+      return r.cacheAdj > 0 || (Number(r.m.cost_usd) || 0) > 0;
+    });
+    rows.sort(function (a, b) { return b.cacheAdj - a.cacheAdj; });
+
+    var html = "<thead><tr>" +
+      '<th class="left">Model</th><th>Turns</th><th>Cache-adj</th>' +
+      "<th>Output</th><th>Cost</th><th>Cache hit</th></tr></thead><tbody>";
+    if (!rows.length) {
+      html += '<tr><td class="left" colspan="6" style="color:var(--text-muted)">No model activity.</td></tr>';
+    }
+    rows.forEach(function (r) {
+      var m = r.m;
+      html += "<tr>" +
+        '<td class="left name">' + esc(m.model || "—") + "</td>" +
+        "<td>" + fmtInt(m.turns) + "</td>" +
+        '<td class="strong">' + fmtCompact(r.cacheAdj) + "</td>" +
+        "<td>" + fmtCompact(m.output_tokens) + "</td>" +
+        "<td>" + fmtCost(m.cost_usd) + "</td>" +
+        "<td>" + fmtPct(m.cache_hit_ratio) + "</td>" +
+        "</tr>";
+    });
+    html += "</tbody>";
+    $("modelTable").innerHTML = html;
+  }
+
+  function renderSessions(d) {
+    var sessions = d.top_sessions || [];
+    var html = "<thead><tr>" +
+      '<th class="left">#</th><th class="left">Lane</th><th class="left">Engine</th>' +
+      "<th>Turns</th><th>Cache-adj</th><th>Output</th><th>Cost</th>" +
+      '<th>Active</th><th class="left">Span</th><th class="left">Models</th>' +
+      "</tr></thead><tbody>";
+    if (!sessions.length) {
+      html += '<tr><td class="left" colspan="10" style="color:var(--text-muted)">No sessions for this day.</td></tr>';
+    }
+    sessions.forEach(function (s, i) {
+      var name = s.session_name || (s.session_id ? String(s.session_id).slice(0, 8) : "—");
+      var engCls = (s.engine === "codex") ? " codex" : "";
+      var models = (s.models || []).join(", ");
+      var span = hhmm(s.first_turn_at) + "→" + hhmm(s.last_turn_at);
+      var href = "/?ccc_popout=conversation&conv=" + encodeURIComponent(s.session_id || "");
+      html += "<tr>" +
+        '<td class="left rank">' + (i + 1) + "</td>" +
+        '<td class="left name"><a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(name) + "</a></td>" +
+        '<td class="left"><span class="eng-badge' + engCls + '">' + esc(s.engine || "?") + "</span></td>" +
+        "<td>" + fmtInt(s.turns) + "</td>" +
+        '<td class="strong">' + fmtCompact(s.cache_adjusted_tokens) + "</td>" +
+        "<td>" + fmtCompact(s.output_tokens) + "</td>" +
+        "<td>" + fmtCost(s.cost_usd) + "</td>" +
+        "<td>" + fmtDuration(s.active_duration_sec) + "</td>" +
+        '<td class="left">' + esc(span) + "</td>" +
+        '<td class="left models-cell">' + esc(models) + "</td>" +
+        "</tr>";
+    });
+    html += "</tbody>";
+    $("sessTable").innerHTML = html;
+
+    var note = $("truncNote");
+    var n = Number(d.sessions_truncated) || 0;
+    if (n > 0) {
+      note.hidden = false;
+      note.textContent = "+" + n + " more session" + (n === 1 ? "" : "s") + " not shown (top " + sessions.length + " by cache-adjusted tokens).";
+    } else {
+      note.hidden = true;
+    }
+  }
+
+  function renderTickets(d) {
+    var strip = $("ticketsStrip");
+    var t = d.tickets;
+    if (!t || !t.available) { strip.hidden = true; return; }
+    strip.hidden = false;
+    strip.innerHTML =
+      '<span class="tk-label">WatchTower</span>' +
+      '<span class="tk-item tk-open"><strong>' + fmtInt(t.opened) + "</strong> opened</span>" +
+      '<span class="tk-sep">·</span>' +
+      '<span class="tk-item tk-closed"><strong>' + fmtInt(t.closed) + "</strong> closed</span>" +
+      '<span class="tk-sep">·</span>' +
+      '<span class="tk-item tk-still"><strong>' + fmtInt(t.still_open) + "</strong> still open</span>";
+  }
+
+  function renderFooter(d) {
+    var el = $("footer");
+    if (d.generated_at) {
+      var dt = new Date(Number(d.generated_at) * 1000);
+      el.textContent = "generated at " + dt.toLocaleString();
+    } else {
+      el.textContent = "";
+    }
+  }
+
+  function showError(msg) {
+    $("loadingState").hidden = true;
+    $("report").hidden = true;
+    $("errorMsg").textContent = msg || "Unknown error.";
+    $("errorState").hidden = false;
+  }
+
+  function render(d) {
+    renderHeader(d);
+    renderKpis(d);
+    renderPace(d);
+    renderHours(d);
+    renderModels(d);
+    renderSessions(d);
+    renderTickets(d);
+    renderFooter(d);
+    wireNav(d.date || dateParam);
+    $("loadingState").hidden = true;
+    $("errorState").hidden = true;
+    $("report").hidden = false;
+  }
+
+  // ── Fetch once (report page — no polling) ────────────────────
+  // Wire nav up-front so links work even if the fetch fails.
+  wireNav(/^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : todayYmd());
+
+  var url = "/api/throughput/daily?date=" + encodeURIComponent(dateParam) +
+            "&engine=" + encodeURIComponent(engineParam);
+  fetch(url, { headers: { Accept: "application/json" } })
+    .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+    .then(function (res) {
+      var d = res.body || {};
+      if (d.error) { showError(d.error); return; }
+      if (!d.ok && res.status >= 400) { showError("Server returned status " + res.status + "."); return; }
+      render(d);
+    })
+    .catch(function (e) {
+      showError("Could not reach the throughput API. " + (e && e.message ? e.message : ""));
+    });
+})();
+</script>
+</body>
+</html>

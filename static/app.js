@@ -55280,3 +55280,146 @@
     try { ensurePulsePill(); } catch (_) {}
   });
 })();
+
+// ── Throughput strip (W87) ──────────────────────────────────────────────────
+// Compact "today's burn" strip pinned above the conversation list: sparkline
+// of today's hourly cache-adjusted tokens, total burn, active lanes in the
+// last hour, and pace vs yesterday at the same time. Click-through to the
+// full throughput dashboard; small link to yesterday's daily report.
+// Data: /api/throughput/daily?date=today — the server coalesces recomputes
+// behind a 180s TTL + single-flight lock, so the 120s hidden-guarded poll
+// here never stacks work (and multiple tabs share one compute).
+(function () {
+  'use strict';
+  if (window.__cccTputStripBooted) return;
+  window.__cccTputStripBooted = true;
+
+  function fmtTok(n) {
+    n = Number(n) || 0;
+    if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k';
+    return String(Math.round(n));
+  }
+
+  function sparkSvg(hourly) {
+    // 24 local-hour slots; bars of cache-adjusted tokens (effective input +
+    // output). Inline SVG so no canvas/layout work on the hot list path.
+    var slots = new Array(24).fill(0);
+    (hourly || []).forEach(function (row) {
+      var m = /T(\d{2})$/.exec(String(row.hour || ''));
+      if (!m) return;
+      var h = parseInt(m[1], 10);
+      if (h >= 0 && h < 24) {
+        slots[h] += (Number(row.effective_input_tokens) || 0) + (Number(row.output_tokens) || 0);
+      }
+    });
+    var max = Math.max.apply(null, slots.concat([1]));
+    var W = 96, H = 18, bw = W / 24;
+    var parts = [];
+    var nowH = new Date().getHours();
+    for (var h = 0; h < 24; h++) {
+      var v = slots[h] / max;
+      var bh = v > 0 ? Math.max(1.5, v * H) : 0;
+      if (!bh && h > nowH) continue; // future hours stay blank
+      var fill = h === nowH ? '#58a6ff' : (bh ? '#3d647f' : '#21262d');
+      if (!bh) { bh = 1; }
+      parts.push('<rect x="' + (h * bw + 0.5).toFixed(1) + '" y="' + (H - bh).toFixed(1) +
+        '" width="' + (bw - 1).toFixed(1) + '" height="' + bh.toFixed(1) +
+        '" rx="0.5" fill="' + fill + '"></rect>');
+    }
+    return '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H +
+      '" aria-hidden="true" style="display:block;">' + parts.join('') + '</svg>';
+  }
+
+  function ensureStyle() {
+    if (document.getElementById('__cccTputStripStyle')) return;
+    var st = document.createElement('style');
+    st.id = '__cccTputStripStyle';
+    st.textContent =
+      '#cccThroughputStrip{display:flex;align-items:center;gap:8px;padding:5px 10px;margin:0 0 2px 0;' +
+        'border-bottom:1px solid var(--border-color,#30363d);cursor:pointer;user-select:none;' +
+        'font:600 11px/1.2 ui-monospace,Menlo,monospace;color:var(--text-secondary,#7d8590);min-height:28px;}' +
+      '#cccThroughputStrip:hover{background:rgba(88,166,255,.06);}' +
+      '#cccThroughputStrip .ts-burn{color:var(--text-primary,#e6edf3);font-size:12px;white-space:nowrap;}' +
+      '#cccThroughputStrip .ts-lanes{white-space:nowrap;}' +
+      '#cccThroughputStrip .ts-pace{white-space:nowrap;}' +
+      '#cccThroughputStrip .ts-pace.up{color:#3fb950;}' +
+      '#cccThroughputStrip .ts-pace.down{color:#f85149;}' +
+      '#cccThroughputStrip .ts-spark{flex:0 0 auto;opacity:.9;}' +
+      '#cccThroughputStrip .ts-yd{margin-left:auto;color:#58a6ff;opacity:.75;text-decoration:none;white-space:nowrap;}' +
+      '#cccThroughputStrip .ts-yd:hover{opacity:1;text-decoration:underline;}' +
+      'body.flow-popout #cccThroughputStrip{display:none;}' +
+      '@media (max-width:480px){#cccThroughputStrip .ts-spark{display:none;}}';
+    document.head.appendChild(st);
+  }
+
+  function mount() {
+    if (document.getElementById('cccThroughputStrip')) return true;
+    var panel = document.getElementById('convListPanel');
+    if (!panel) return false;
+    ensureStyle();
+    var strip = document.createElement('div');
+    strip.id = 'cccThroughputStrip';
+    strip.title = 'Today’s token throughput — cache-adjusted burn, active lanes (last hour), pace vs yesterday at this time. Click to open the throughput dashboard.';
+    strip.setAttribute('role', 'button');
+    strip.innerHTML =
+      '<span class="ts-spark"></span>' +
+      '<span class="ts-burn">…</span>' +
+      '<span class="ts-lanes"></span>' +
+      '<span class="ts-pace"></span>' +
+      '<a class="ts-yd" href="/throughput-daily.html?date=yesterday" target="_blank" rel="noopener" ' +
+        'title="Open yesterday’s daily throughput report">yd report ↗</a>';
+    strip.addEventListener('click', function (e) {
+      if (e.target && e.target.closest && e.target.closest('.ts-yd')) return;
+      window.open('/throughput.html', '_blank');
+    });
+    panel.insertBefore(strip, panel.firstChild);
+    return true;
+  }
+
+  function render(d) {
+    var strip = document.getElementById('cccThroughputStrip');
+    if (!strip || !d || !d.ok) return;
+    var tot = (d.totals && d.totals.cache_adjusted_tokens) || 0;
+    strip.querySelector('.ts-burn').textContent = 'Today ' + fmtTok(tot);
+    var lanes = Number(d.active_sessions_last_hour) || 0;
+    strip.querySelector('.ts-lanes').textContent = lanes ? (lanes + ' lane' + (lanes === 1 ? '' : 's')) : '';
+    var paceEl = strip.querySelector('.ts-pace');
+    var y = d.yesterday;
+    if (y && y.cache_adjusted_tokens_to_same_time > 0) {
+      var pct = Math.round((tot / y.cache_adjusted_tokens_to_same_time - 1) * 100);
+      paceEl.textContent = (pct >= 0 ? '▲+' : '▼') + pct + '% vs yd';
+      paceEl.className = 'ts-pace ' + (pct >= 0 ? 'up' : 'down');
+      paceEl.title = 'Yesterday by this time: ' + fmtTok(y.cache_adjusted_tokens_to_same_time) +
+        ' · yesterday total: ' + fmtTok(y.cache_adjusted_tokens_total);
+    } else {
+      paceEl.textContent = '';
+    }
+    strip.querySelector('.ts-spark').innerHTML = sparkSvg(d.hourly);
+  }
+
+  var busy = false;
+  function refresh() {
+    if (document.hidden || busy || !mount()) return;
+    busy = true;
+    fetch('/api/throughput/daily?date=today', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(render)
+      .catch(function () {})
+      .then(function () { busy = false; });
+  }
+
+  function boot() {
+    // The conv list panel exists in static markup, so mount is immediate;
+    // the retry covers popout/embedded pages where it never appears.
+    if (!mount()) { setTimeout(mount, 3000); }
+    refresh();
+    setInterval(refresh, 120000);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
