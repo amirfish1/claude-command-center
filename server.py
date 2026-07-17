@@ -828,6 +828,17 @@ _RECENT_REPOS_CAP = 10
 # agents nobody remembered to stop).
 _IDLE_REAPER_AGE_HOURS = 24
 _IDLE_REAPER_INTERVAL_S = 1800  # 30 min
+# Spawn idle-TTL reaper: CCC-spawned persistent headless Claude workers get
+# their stdin from a FIFO opened O_RDWR (see _make_stdin_fifo). The child's
+# own fd 0 inherits the RDWR mode, so the kernel counts the child as a writer
+# of its OWN stdin — the FIFO's writer count never drops to zero and the
+# child never sees EOF, even orphaned after a CCC restart. Finished workers
+# therefore idle forever (~80MB RSS + a spin-polling main thread each).
+# This TTL retires them: idle (no spawn-log/FIFO/transcript activity) longer
+# than the TTL AND not mid-turn -> graceful SIGTERM, registry entry marked
+# retired (the transcript survives, so the session stays resumable).
+# Tunable via CCC_SPAWN_IDLE_TTL_HOURS; <= 0 disables the sweep.
+_SPAWN_IDLE_TTL_HOURS_DEFAULT = 3.0
 # Stable scratch cwd for short-lived background `claude -p` calls (title
 # summarizers, morning braindump, etc.). Without this, those calls
 # could run in whichever directory launched the server and pollute an unrelated
@@ -54901,10 +54912,218 @@ def _reap_idle_sessions(now=None):
     return reaped
 
 
+def _spawn_idle_ttl_hours():
+    """TTL (hours) before an idle CCC-spawned headless is retired.
+
+    Read from CCC_SPAWN_IDLE_TTL_HOURS at sweep time so the knob works
+    without a restart in tests; <= 0 disables the sweep entirely."""
+    raw = (os.environ.get("CCC_SPAWN_IDLE_TTL_HOURS") or "").strip()
+    if not raw:
+        return _SPAWN_IDLE_TTL_HOURS_DEFAULT
+    try:
+        return float(raw)
+    except ValueError:
+        return _SPAWN_IDLE_TTL_HOURS_DEFAULT
+
+
+def _spawn_reaper_process_table():
+    """One batched `ps` sweep -> {pid: {ppid, pgid, stat, command}}.
+
+    The spawn reaper's only process probe. Everything the sweep needs —
+    liveness, zombie state, engine identity (argv[0]), and the mid-turn
+    tool-child guard — comes from this single snapshot, never a per-row
+    subprocess (see CLAUDE.md "Performance gates")."""
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,pgid=,stat=,command="],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return {}
+    if out.returncode != 0:
+        return {}
+    table = {}
+    for raw in (out.stdout or "").splitlines():
+        parts = raw.strip().split(None, 4)
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        table[pid] = {
+            "ppid": ppid,
+            "pgid": pgid,
+            "stat": parts[3],
+            "command": parts[4] if len(parts) > 4 else "",
+        }
+    return table
+
+
+def _spawn_table_row_is_claude(row):
+    """PID-reuse defence from a batched ps row: argv[0] must be Claude."""
+    cmd = (row or {}).get("command") or ""
+    parts = cmd.split()
+    if not parts:
+        return False
+    return _process_comm_is_claude(parts[0])
+
+
+def _spawn_table_has_active_tool_child(table, parent_pid):
+    """Mid-turn guard from the batched snapshot: a direct child in its own
+    process group (Bash/tool subprocess) means the worker is still busy.
+    Mirrors `_spawn_entry_active_tool_child` without the extra ps fork."""
+    for row in table.values():
+        if row.get("ppid") != parent_pid or row.get("pgid") == parent_pid:
+            continue
+        if _is_ccc_hook_command(row.get("command") or ""):
+            continue
+        return True
+    return False
+
+
+def _spawn_entry_spawned_at_epoch(value):
+    """Parse the registry's `spawned_at` stamp (20260717T080151) to epoch."""
+    try:
+        return time.mktime(time.strptime(str(value or ""), "%Y%m%dT%H%M%S"))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _reap_idle_spawned_headless(now=None):
+    """Sweep the spawn registry and retire idle persistent headless workers.
+
+    The FIFO-stdin design (see _make_stdin_fifo) means a finished worker
+    never exits on its own — its own fd 0 keeps the FIFO writer count alive,
+    so EOF never arrives. This sweep is the lifecycle backstop: any
+    CCC-spawned Claude headless with no activity for `CCC_SPAWN_IDLE_TTL_HOURS`
+    (spawn log, FIFO, transcript all quiet) and no active tool child gets a
+    graceful SIGTERM to its process group. The registry entry is kept and
+    marked `retired` (not deleted) — the transcript is intact, so the session
+    remains resumable; the boot reattach sweep prunes the entry once dead.
+
+    Guards, in order:
+      - engine must be "claude" (Codex/Gemini/Cursor headless runs are
+        one-shot and exit on their own; remote spawns are not local pids);
+      - pid must be alive, non-zombie, and still argv[0]-verified Claude
+        (PID reuse) — all from ONE batched ps snapshot;
+      - never a live WatchTower worker (_wt_live_worker_guard — WT owns its
+        workers' lifecycle);
+      - never mid-turn: recent spawn-log/FIFO mtime counts as activity, and
+        a live tool child (own pgid) defers the retire to a later sweep;
+      - the session transcript (any writer: this worker, a takeover terminal,
+        another resume) must also be idle past the TTL.
+
+    Returns a list of {pid, sid, name, idle_hours} for everything retired.
+    Deliberately print-free so tests can call it directly."""
+    ttl_hours = _spawn_idle_ttl_hours()
+    if ttl_hours <= 0:
+        return []
+    if now is None:
+        now = time.time()
+    cutoff = now - ttl_hours * 3600
+    entries = _load_spawn_registry()
+    candidates = [
+        e for e in entries
+        if isinstance(e, dict)
+        and (e.get("engine") or "claude") == "claude"
+        and not e.get("retired")
+    ]
+    if not candidates:
+        return []
+    table = _spawn_reaper_process_table()
+    if not table:
+        return []
+    wt_pids, wt_sids = _wt_live_worker_guard()
+    reaped = []
+    changed = False
+    for entry in candidates:
+        try:
+            pid = int(entry.get("pid"))
+        except (TypeError, ValueError):
+            continue
+        row = table.get(pid)
+        if row is None or row.get("stat", "").upper().startswith("Z"):
+            continue
+        if not _spawn_table_row_is_claude(row):
+            continue
+        sid = entry.get("session_id") or None
+        if pid in wt_pids or (sid and str(sid) in wt_sids):
+            continue
+        # Cheap activity signals first: spawn log + FIFO mtimes (every turn
+        # streams to the log; every inject writes the FIFO), fall back to
+        # the spawn stamp so a log-less entry can't dodge the TTL forever.
+        stamps = []
+        for key in ("log", "fifo"):
+            path = entry.get(key)
+            if path:
+                try:
+                    stamps.append(os.stat(path).st_mtime)
+                except OSError:
+                    pass
+        spawned_epoch = _spawn_entry_spawned_at_epoch(entry.get("spawned_at"))
+        if spawned_epoch:
+            stamps.append(spawned_epoch)
+        if not stamps or max(stamps) >= cutoff:
+            continue
+        if _spawn_table_has_active_tool_child(table, pid):
+            continue
+        # Only for otherwise-condemned candidates: the (pricier) transcript
+        # lookup. Any writer bumping the JSONL — this worker, a takeover
+        # terminal, another resume — counts as recent activity.
+        if sid:
+            jsonl = _find_session_jsonl(sid)
+            if jsonl:
+                try:
+                    if jsonl.stat().st_mtime >= cutoff:
+                        continue
+                except OSError:
+                    pass
+        idle_hours = round((now - max(stamps)) / 3600, 1)
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except (PermissionError, OSError, ValueError):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError, ValueError):
+                continue
+        entry["retired"] = True
+        entry["retired_at"] = time.strftime("%Y%m%dT%H%M%S")
+        entry["retire_reason"] = "idle-ttl"
+        changed = True
+        # Close our side of the FIFO and drop the node; the in-memory entry
+        # (if any) keeps rendering as a finished spawn via its normal poll.
+        cleaned = False
+        for s in _spawned_sessions:
+            if isinstance(s, dict) and s.get("pid") == pid:
+                _cleanup_finished_entry(s)
+                cleaned = True
+        if not cleaned:
+            _unlink_quiet(entry.get("fifo"))
+        # Attribution for the premature-death ledger: this exit was CCC's
+        # idle-TTL policy, not an external kill.
+        _resume_ledger_append(
+            "kill", sid=sid, pid=pid, source="spawn_idle_ttl",
+            idle_hours=idle_hours,
+        )
+        reaped.append({
+            "pid": pid,
+            "sid": sid,
+            "name": entry.get("name") or "",
+            "idle_hours": idle_hours,
+        })
+    if changed:
+        _save_spawn_registry(entries)
+    return reaped
+
+
 def _idle_reaper_loop():
-    """Background-thread driver for `_reap_idle_sessions`. Sleeps first so
-    server start isn't followed by an immediate kill spree before the user
-    has had a chance to look at the dashboard."""
+    """Background-thread driver for `_reap_idle_sessions` and the spawn
+    idle-TTL sweep. Sleeps first so server start isn't followed by an
+    immediate kill spree before the user has had a chance to look at the
+    dashboard."""
     while True:
         try:
             time.sleep(_IDLE_REAPER_INTERVAL_S)
@@ -54913,6 +55132,12 @@ def _idle_reaper_loop():
                 print(f"[idle-reaper] SIGTERM pid={r['pid']} sid={r['sid'][:8]} idle={r['age_hours']}h")
         except Exception as e:
             print(f"[idle-reaper] sweep failed: {e}")
+        try:
+            for r in _reap_idle_spawned_headless():
+                print(f"[idle-reaper] spawn-ttl SIGTERM pid={r['pid']} "
+                      f"sid={(r['sid'] or '')[:8]} idle={r['idle_hours']}h")
+        except Exception as e:
+            print(f"[idle-reaper] spawn-ttl sweep failed: {e}")
 
 
 def morning_move(payload):
