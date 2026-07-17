@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCC: archive cache architecture</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-hi: #1f262e;
+    --line: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #f0883e;
+    --warn: #d29922;
+    --danger: #f85149;
+    --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif; }
+  body { padding: 28px 36px 80px; max-width: 1280px; margin: 0 auto; }
+  @media (max-width: 640px) { body { padding: 18px 14px 60px; } }
+
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); margin-bottom: 8px; }
+  .stamp { color: var(--muted); font-size: 12.5px; margin-bottom: 28px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 40px 0 12px; font-weight: 600; }
+  p { margin: 0 0 12px; max-width: 900px; }
+  code { background: var(--panel); padding: 1px 5px; border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px;
+    word-break: break-word; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul { max-width: 900px; }
+  li { margin: 6px 0; }
+
+  .scroll-wrap { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 18px; overflow-x: auto; margin: 0 0 20px; }
+  svg.diagram { display: block; min-width: 1080px; width: 100%; height: auto; }
+  svg.timeline { display: block; min-width: 900px; width: 100%; height: auto; }
+  .svg-hint { color: var(--muted); font-size: 12px; margin: -12px 0 24px; }
+
+  .table-wrap { overflow-x: auto; margin: 0 0 24px; border: 1px solid var(--line);
+    border-radius: 6px; }
+  table { width: 100%; min-width: 920px; border-collapse: collapse;
+    background: var(--panel); }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line);
+    vertical-align: top; font-size: 13px; }
+  th { background: var(--panel-hi); color: var(--muted); font-weight: 600;
+    text-transform: uppercase; font-size: 11.5px; letter-spacing: 0.05em;
+    white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+
+  .callout { border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    background: var(--panel); border-radius: 6px; padding: 14px 18px;
+    margin: 0 0 20px; max-width: 900px; }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout .title { font-weight: 600; margin-bottom: 6px; }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+  .pill.env { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .pill.hard { background: rgba(139,148,158,0.18); color: var(--muted); }
+  .pill.inert { background: rgba(210,153,34,0.16); color: var(--warn); }
+
+  .setting { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 14px 18px; margin: 0 0 14px; max-width: 900px; }
+  .setting .name { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13.5px; font-weight: 600; color: var(--accent); }
+  .setting .meta { color: var(--muted); font-size: 12.5px; margin: 2px 0 8px; }
+  .setting p { margin-bottom: 6px; }
+  .setting p:last-child { margin-bottom: 0; }
+
+  footer { margin-top: 48px; color: var(--muted); font-size: 12.5px;
+    border-top: 1px solid var(--line); padding-top: 16px; max-width: 900px; }
+</style>
+</head>
+<body>
+
+<h1>CCC archive cache architecture</h1>
+<div class="sub">How the all-repos archive, dashboard, and attention feeds stay fast:
+five cache layers sit between the pollers and the expensive
+<code>O(all-sessions)</code> archive builder.</div>
+<div class="stamp">Documents <code>server.py</code> as of 2026-07-17
+(commit <code>aedd0e10</code>). Helper names are explanatory labels only, not a
+stable API. Every claim below was checked against the code, not the design notes.</div>
+
+<p>The problem this stack solves: <code>/api/sessions?all=1</code> and
+<code>/api/conversations?all=1</code> are polled continuously by the dashboard and
+the COO board. A naive implementation re-walks and re-parses every transcript on
+every poll, and on a machine with years of agent history that is a multi-megabyte
+payload rebuilt in a 1-2 second GIL-bound burn, per request, uncoalesced. Each
+layer below removes one class of that repeated work while keeping a strict bound
+on how stale the served data can be.</p>
+
+<h2>Request flow</h2>
+<div class="scroll-wrap">
+<svg class="diagram" viewBox="0 0 1180 660" role="img"
+     aria-label="Request flow from archive and dashboard callers through the serve cache, signature-gated persisted cache, and full builder">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f85149"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <style>
+    .box { fill: #1f262e; stroke: #30363d; rx: 8; }
+    .group { fill: #161b22; stroke: #30363d; stroke-dasharray: 4 3; rx: 10; }
+    .t { fill: #e6edf3; font: 600 13px -apple-system, "Segoe UI", sans-serif; }
+    .s { fill: #8b949e; font: 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .m { fill: #8b949e; font: 11px ui-monospace, Menlo, monospace; }
+    .lbl { fill: #8b949e; font: 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .lbl-g { fill: #3fb950; font: 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .lbl-r { fill: #f85149; font: 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .hdr { fill: #8b949e; font: 600 11px -apple-system, "Segoe UI", sans-serif;
+           letter-spacing: 0.06em; }
+    .edge { stroke: #8b949e; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+    .edge-g { stroke: #3fb950; stroke-width: 1.6; fill: none; marker-end: url(#arrow-green); }
+    .edge-r { stroke: #f85149; stroke-width: 1.6; stroke-dasharray: 6 4; fill: none;
+              marker-end: url(#arrow-red); }
+  </style>
+
+  <!-- Callers -->
+  <text class="hdr" x="14" y="46">CALLERS</text>
+  <rect class="box" x="14" y="60" width="168" height="48" rx="8"/>
+  <text class="t" x="30" y="82">Dashboard</text>
+  <text class="s" x="30" y="98">polls every few seconds</text>
+  <rect class="box" x="14" y="124" width="168" height="48" rx="8"/>
+  <text class="t" x="30" y="146">COO board</text>
+  <text class="s" x="30" y="162">polls in parallel</text>
+  <rect class="box" x="14" y="188" width="168" height="48" rx="8"/>
+  <text class="t" x="30" y="210">Archive tab</text>
+  <text class="s" x="30" y="226">All repos view</text>
+
+  <!-- Endpoints group -->
+  <text class="hdr" x="236" y="46">ENDPOINTS</text>
+  <rect class="group" x="228" y="56" width="256" height="196" rx="10"/>
+  <rect class="box" x="242" y="70" width="228" height="50" rx="6"/>
+  <text class="m" x="254" y="92">/api/sessions?all=1</text>
+  <text class="s" x="254" y="108">+ spawned list, engine filter</text>
+  <rect class="box" x="242" y="130" width="228" height="50" rx="6"/>
+  <text class="m" x="254" y="152">/api/conversations?all=1</text>
+  <text class="s" x="254" y="168">same rows, archive shape</text>
+  <rect class="box" x="242" y="190" width="228" height="50" rx="6"/>
+  <text class="m" x="254" y="212">/api/conversations/all</text>
+  <text class="s" x="254" y="228">?stale_ok=1 (dashboard tabs)</text>
+
+  <!-- Force endpoint -->
+  <rect class="box" x="228" y="330" width="256" height="66" rx="8"
+        style="stroke:#f85149"/>
+  <text class="m" x="242" y="352">/api/conversations/all</text>
+  <text class="s" x="242" y="368">no stale_ok: explicit archive load,</text>
+  <text class="s" x="242" y="382">progress overlay, always full build</text>
+
+  <!-- Tier 1 -->
+  <text class="hdr" x="540" y="46">TIER 1 (every request)</text>
+  <rect class="box" x="532" y="56" width="268" height="140" rx="8"/>
+  <text class="t" x="548" y="80">Serve cache</text>
+  <text class="m" x="548" y="98">_archive_serve_cache</text>
+  <text class="s" x="548" y="116">per option-flag key, snapshot of fully</text>
+  <text class="s" x="548" y="130">rehydrated rows, serve TTL 2s.</text>
+  <text class="s" x="548" y="148">Fresh: return a copy. Stale: return the</text>
+  <text class="s" x="548" y="162">copy AND spawn one background refresh.</text>
+  <text class="s" x="548" y="180">Request thread never pays the rebuild.</text>
+
+  <rect class="box" x="532" y="214" width="268" height="96" rx="8"/>
+  <text class="t" x="548" y="238">Spawned-session coalescing</text>
+  <text class="m" x="548" y="256">_archive_spawned_coalesced()</text>
+  <text class="s" x="548" y="274">single entry, same 2s window, stale-</text>
+  <text class="s" x="548" y="288">while-revalidate; saves the 1-2s</text>
+  <text class="s" x="548" y="302">list_spawned_sessions() per poll.</text>
+
+  <!-- Tier 2 -->
+  <text class="hdr" x="856" y="46">TIER 2 (background refresh)</text>
+  <rect class="group" x="848" y="56" width="318" height="330" rx="10"/>
+  <rect class="box" x="862" y="70" width="290" height="64" rx="6"/>
+  <text class="t" x="876" y="92">Single-flight build lock</text>
+  <text class="m" x="876" y="110">_ARCHIVE_BUILD_LOCKS (per key)</text>
+  <text class="s" x="876" y="126">concurrent refreshes never stampede</text>
+
+  <rect class="box" x="862" y="146" width="290" height="78" rx="6"/>
+  <text class="t" x="876" y="168">Corpus signature memo</text>
+  <text class="m" x="876" y="186">_archive_sig_cache, TTL 2s</text>
+  <text class="s" x="876" y="202">stat-only walk of every transcript;</text>
+  <text class="s" x="876" y="216">one walk per window, shared by all keys</text>
+
+  <rect class="box" x="862" y="236" width="290" height="136" rx="6"/>
+  <text class="t" x="876" y="258">Persisted response cache</text>
+  <text class="m" x="876" y="276">_ARCHIVE_RESPONSE_CACHE</text>
+  <text class="s" x="876" y="292">+ archive-conversations-cache.json;</text>
+  <text class="s" x="876" y="306">entry stores rows + corpus signature.</text>
+  <text class="s" x="876" y="324">Signature match: rehydrate rows (cheap,</text>
+  <text class="s" x="876" y="338">liveness memos 2s / engine scan 4s /</text>
+  <text class="s" x="876" y="352">engine detect 30s). Mismatch: rebuild.</text>
+  <text class="s" x="876" y="366">Also serves warm restarts from disk.</text>
+
+  <!-- Tier 3 -->
+  <text class="hdr" x="540" y="474">TIER 3 (only when the corpus changed)</text>
+  <rect class="box" x="532" y="486" width="634" height="130" rx="8"
+        style="stroke:#bc8cff"/>
+  <text class="t" x="548" y="510">Full builder</text>
+  <text class="m" x="548" y="528">_build_archive_conversations() -&gt; find_all_conversations()</text>
+  <text class="s" x="548" y="546">Walks every folder and transcript across every engine (claude, codex, cursor,</text>
+  <text class="s" x="548" y="560">antigravity, hermes). Per-file parse cache _conv_meta_cache keyed (mtime_ns, size),</text>
+  <text class="s" x="548" y="574">persisted to conv_meta_cache.json: only transcripts that actually changed re-parse.</text>
+  <text class="s" x="548" y="592">First-ever cold build is synchronous and can take 20-30s; after that, rebuilds run</text>
+  <text class="s" x="548" y="606">in the background and re-parse only the touched files.</text>
+
+  <!-- Edges: callers to endpoints -->
+  <path class="edge" d="M 182 84 L 224 96"/>
+  <path class="edge" d="M 182 148 L 224 150"/>
+  <path class="edge" d="M 182 212 L 224 208"/>
+
+  <!-- Endpoints to tier 1 -->
+  <path class="edge" d="M 484 126 L 528 126"/>
+  <text class="lbl" x="488" y="116">every poll</text>
+
+  <!-- Tier1 to tier2 -->
+  <path class="edge" d="M 800 110 L 844 110"/>
+  <text class="lbl" x="770" y="94" text-anchor="end"></text>
+  <text class="lbl" x="822" y="98" text-anchor="middle">stale or</text>
+  <text class="lbl" x="822" y="130" text-anchor="middle">cold</text>
+
+  <!-- Tier2 to tier3 -->
+  <path class="edge-g" d="M 1010 386 L 1010 482"/>
+  <text class="lbl-g" x="1022" y="424">signature changed:</text>
+  <text class="lbl-g" x="1022" y="440">rebuild once (single-flight),</text>
+  <text class="lbl-g" x="1022" y="456">persist with new signature</text>
+
+  <!-- Force path -->
+  <path class="edge-r" d="M 484 380 C 560 380 560 380 560 482"/>
+  <text class="lbl-r" x="498" y="416">force path: full build on every call,</text>
+  <text class="lbl-r" x="498" y="432">result persisted without a signature</text>
+</svg>
+</div>
+<div class="svg-hint">Scroll sideways on a narrow screen; the diagram keeps its
+desktop layout.</div>
+
+<p>Read the diagram left to right. A polling request never travels further right
+than Tier 1: it gets a copy of the current snapshot immediately, and at most one
+background thread per cache key walks Tiers 2 and 3 to bring the snapshot up to
+date. Tier 3 runs only when the corpus signature says something a build actually
+reads has changed on disk.</p>
+
+<h2>Cache layers at a glance</h2>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Cache</th><th>Key / scope</th><th>Lifetime</th><th>Invalidation</th><th>Cost avoided</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>Serve cache</b><br><code>_archive_serve_cache</code></td>
+      <td>Per option-flag key (<code>include_prs</code>, <code>resolve_prs</code>,
+          <code>resolve_effective</code>, <code>resolve_worktrees</code>)</td>
+      <td>2s (<code>CCC_ARCHIVE_SERVE_TTL_SEC</code>), stale-while-revalidate</td>
+      <td>Age triggers a background refresh; lifecycle mutations call
+          <code>_clear_archive_serve_cache()</code>, and a generation counter
+          discards builds that started before the mutation</td>
+      <td>A full row rehydrate (per-live-row liveness probes, ~25ms each,
+          GIL-bound) per concurrent poll</td>
+    </tr>
+    <tr>
+      <td><b>Spawned coalescing</b><br><code>_archive_spawned_cache</code></td>
+      <td>Single global entry</td>
+      <td>Same 2s window, stale-while-revalidate</td>
+      <td>Age only; refreshed off-thread</td>
+      <td><code>list_spawned_sessions()</code>, 1-2s per call on a box with a
+          dozen or more spawned agents, previously per request</td>
+    </tr>
+    <tr>
+      <td><b>Corpus signature memo</b><br><code>_archive_sig_cache</code></td>
+      <td>Single global entry (the signature is identical for every key)</td>
+      <td>2s (<code>CCC_ARCHIVE_SIG_TTL_SEC</code>)</td>
+      <td>Age only</td>
+      <td>One stat-only walk of the whole transcript corpus (thousands of files)
+          per concurrently-refreshing key, collapsed to one walk per window</td>
+    </tr>
+    <tr>
+      <td><b>Persisted response cache</b><br><code>_ARCHIVE_RESPONSE_CACHE</code><br>
+          <code>archive-conversations-cache.json</code></td>
+      <td>Per option-flag key; each entry stores rows plus the corpus signature
+          they were built from (schema v5)</td>
+      <td>Unbounded; valid while the signature matches</td>
+      <td>Corpus signature mismatch: any transcript added, edited, or removed
+          flips a file (mtime_ns, size) and busts it immediately. No TTL window
+          on the live path (see settings below)</td>
+      <td>The <code>O(all-sessions)</code> rebuild on unchanged corpora; also
+          seeds the first request after a server restart from disk</td>
+    </tr>
+    <tr>
+      <td><b>Session-liveness memo</b><br><code>_session_live_cache</code></td>
+      <td>Per session id, bounded at 4096 entries</td>
+      <td>2s (<code>CCC_SESSION_LIVE_TTL_SEC</code>)</td>
+      <td>Age only</td>
+      <td>Per-row sidecar <code>stat()</code>s and engine predicates on every
+          poll cycle, across every endpoint that probes the same ids</td>
+    </tr>
+    <tr>
+      <td><b>Engine live-scan memo</b><br><code>_engine_live_sids_cache</code></td>
+      <td>Single set of live non-Claude session ids</td>
+      <td>4s (hardcoded <code>_ENGINE_LIVE_TTL</code>)</td>
+      <td>Age only</td>
+      <td>One <code>ps</code>-backed scan per engine per row; now at most one
+          scan per 4s window</td>
+    </tr>
+    <tr>
+      <td><b>Engine detect memo</b><br><code>_ENGINE_DETECT_CACHE</code></td>
+      <td>Per session id</td>
+      <td>Non-Claude verdicts cached forever; "claude" re-checked after 30s
+          (<code>_ENGINE_DETECT_TTL</code>)</td>
+      <td>TTL on the "claude" verdict only, since a just-spawned non-Claude
+          session's store can appear a beat later</td>
+      <td>Per-row engine-store filesystem probes</td>
+    </tr>
+    <tr>
+      <td><b>Transcript parse cache</b><br><code>_conv_meta_cache</code><br>
+          <code>conv_meta_cache.json</code></td>
+      <td>Per transcript path, keyed (mtime_ns, size), schema v13</td>
+      <td>Unbounded, persisted across restarts</td>
+      <td>File mtime or size change; schema version bump drops old entries on
+          load</td>
+      <td>Re-parsing every JSONL head/tail on every rebuild; only touched files
+          re-parse, so a signature-busted rebuild is incremental in practice</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>The two-second serve window</h2>
+<div class="scroll-wrap">
+<svg class="timeline" viewBox="0 0 1100 260" role="img"
+     aria-label="Timeline of the two second serve window with stale-while-revalidate refresh">
+  <style>
+    .tl-axis { stroke: #30363d; stroke-width: 1.5; }
+    .tl-tick { stroke: #30363d; stroke-width: 1; }
+    .tl-t { fill: #8b949e; font: 11px ui-monospace, Menlo, monospace; }
+    .tl-lbl { fill: #8b949e; font: 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .tl-lbl-g { fill: #3fb950; font: 600 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .tl-lbl-b { fill: #58a6ff; font: 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .tl-lbl-o { fill: #f0883e; font: 600 11.5px -apple-system, "Segoe UI", sans-serif; }
+    .req { stroke: #58a6ff; stroke-width: 2; }
+    .req-o { stroke: #f0883e; stroke-width: 2; }
+  </style>
+
+  <!-- fresh band 0..2s -->
+  <rect x="80" y="60" width="300" height="120" fill="rgba(63,185,80,0.08)"
+        stroke="rgba(63,185,80,0.35)" stroke-dasharray="3 3"/>
+  <text class="tl-lbl-g" x="90" y="52">fresh window (serve TTL, 2s)</text>
+
+  <!-- refresh band 2.6..4.2 -->
+  <rect x="470" y="60" width="240" height="120" fill="rgba(240,136,62,0.07)"
+        stroke="rgba(240,136,62,0.35)" stroke-dasharray="3 3"/>
+  <text class="tl-lbl-o" x="480" y="52">background refresh in flight</text>
+
+  <!-- axis -->
+  <line class="tl-axis" x1="60" y1="180" x2="1050" y2="180"/>
+  <line class="tl-tick" x1="80"  y1="176" x2="80"  y2="184"/>
+  <line class="tl-tick" x1="230" y1="176" x2="230" y2="184"/>
+  <line class="tl-tick" x1="380" y1="176" x2="380" y2="184"/>
+  <line class="tl-tick" x1="530" y1="176" x2="530" y2="184"/>
+  <line class="tl-tick" x1="680" y1="176" x2="680" y2="184"/>
+  <line class="tl-tick" x1="830" y1="176" x2="830" y2="184"/>
+  <line class="tl-tick" x1="980" y1="176" x2="980" y2="184"/>
+  <text class="tl-t" x="80"  y="200" text-anchor="middle">t=0s</text>
+  <text class="tl-t" x="230" y="200" text-anchor="middle">1s</text>
+  <text class="tl-t" x="380" y="200" text-anchor="middle">2s</text>
+  <text class="tl-t" x="530" y="200" text-anchor="middle">3s</text>
+  <text class="tl-t" x="680" y="200" text-anchor="middle">4s</text>
+  <text class="tl-t" x="830" y="200" text-anchor="middle">5s</text>
+  <text class="tl-t" x="980" y="200" text-anchor="middle">6s</text>
+
+  <!-- snapshot stored markers -->
+  <circle cx="80" cy="180" r="5" fill="#3fb950"/>
+  <text class="tl-lbl-g" x="80" y="224" text-anchor="middle">snapshot stored</text>
+  <circle cx="710" cy="180" r="5" fill="#3fb950"/>
+  <text class="tl-lbl-g" x="710" y="224" text-anchor="middle">refresh completes: new snapshot, window resets</text>
+
+  <!-- fresh hits -->
+  <line class="req" x1="140" y1="110" x2="140" y2="176"/>
+  <line class="req" x1="250" y1="110" x2="250" y2="176"/>
+  <line class="req" x1="330" y1="110" x2="330" y2="176"/>
+  <text class="tl-lbl-b" x="140" y="100">polls inside the window get a copy of</text>
+  <text class="tl-lbl-b" x="140" y="116" >the snapshot; zero rebuild work</text>
+
+  <!-- stale hit -->
+  <line class="req-o" x1="470" y1="82" x2="470" y2="176"/>
+  <text class="tl-lbl-o" x="462" y="76">first stale poll: same copy returned instantly,</text>
+  <text class="tl-lbl-o" x="462" y="92" >ONE background refresh spawned for this key</text>
+
+  <!-- polls during refresh -->
+  <line class="req" x1="560" y1="130" x2="560" y2="176"/>
+  <line class="req" x1="640" y1="130" x2="640" y2="176"/>
+  <text class="tl-lbl" x="556" y="122">later polls still get the old copy;</text>
+  <text class="tl-lbl" x="556" y="138" >the in-flight guard blocks a second refresh</text>
+</svg>
+</div>
+<div class="svg-hint">Freshness bound for warm serves: transcript-derived fields
+(state, ended_blocked, waiting question) change as soon as a refresh sees the new
+signature; process-liveness and sidecar fields lag by at most the serve TTL plus
+one refresh, and the engine process scan adds up to 4s on top.</div>
+
+<h2>Tunable settings</h2>
+
+<div class="setting">
+  <div class="name">CCC_ARCHIVE_SERVE_TTL_SEC <span class="pill env">env</span></div>
+  <div class="meta">default 2, minimum 0; 0 disables the serve cache entirely</div>
+  <p>Width of the stale-while-revalidate window in Tier 1, and also the refresh
+  window of the spawned-session coalescing cache. Lowering it makes liveness
+  chips fresher but multiplies rehydrate work under parallel polling; setting it
+  to 0 makes every request compute rows synchronously, which restores the exact
+  CPU burn this cache was built to kill. Raising it saves CPU at the cost of
+  liveness lag; transcript-content freshness is unaffected because the signature
+  still gates rebuilds.</p>
+</div>
+
+<div class="setting">
+  <div class="name">CCC_ARCHIVE_SIG_TTL_SEC <span class="pill env">env</span></div>
+  <div class="meta">default 2, minimum 0; 0 disables the signature memo</div>
+  <p>How long one corpus fingerprint is shared by all cache keys. The fingerprint
+  is a stat-only walk of every transcript, so with N keys refreshing concurrently
+  an unmemoized signature means N full-corpus scandir passes per window; that
+  sustained burn is what this memo removed. Keep it at or below the serve TTL:
+  the serve path already tolerates that much staleness, so the memo adds no new
+  correctness window.</p>
+</div>
+
+<div class="setting">
+  <div class="name">CCC_ARCHIVE_CACHE_TTL_SEC <span class="pill env">env</span>
+    <span class="pill inert">currently inert on the serve path</span></div>
+  <div class="meta">default 300, floor 30 (values below 30 are clamped up)</div>
+  <p>Freshness label for the persisted response cache: an entry older than this
+  is considered stale by <code>_archive_response_cache_is_stale</code>.</p>
+  <p><b>Reality check (verified 2026-07-17):</b> the helpers that consume this
+  TTL (<code>_archive_cached_payload</code> and
+  <code>_archive_refresh_response_cache_async</code>) have no callers in
+  <code>server.py</code>. On the live serve path the persisted cache is
+  invalidated purely by corpus-signature mismatch, never by age. Changing this
+  variable today has no observable effect; it is documented because the env var
+  still parses at startup and the constant would gate any future re-adoption of
+  the TTL-based stale-serve path.</p>
+</div>
+
+<div class="setting">
+  <div class="name">CCC_SESSION_LIVE_TTL_SEC <span class="pill env">env</span></div>
+  <div class="meta">default 2, minimum 0; 0 disables the liveness memo</div>
+  <p>Not one of the three archive TTLs, but it shapes the same hot path: the
+  per-session liveness memo used during row rehydration. Liveness already lags
+  by the serve TTL (2s) and the engine scan TTL (4s), so the default introduces
+  no staleness the callers did not already have.</p>
+</div>
+
+<h2>Invalidation rules</h2>
+<ul>
+  <li><b>Transcript change:</b> any add, edit, or delete under
+    <code>~/.claude/projects</code> flips a file's (mtime_ns, size), the corpus
+    signature changes, and the next background refresh rebuilds. Sibling engine
+    stores (codex, cursor, antigravity, hermes) are covered at directory or
+    db-file granularity. The rebuild reuses the per-file parse cache, so only
+    touched transcripts re-parse.</li>
+  <li><b>Lifecycle mutation:</b> POST handlers that rename, pin, archive, or
+    otherwise mutate session state call <code>_clear_archive_serve_cache()</code>.
+    It empties the serve cache and bumps a generation counter, so a build that
+    started before the mutation cannot store its now-stale rows.</li>
+  <li><b>Deliberately excluded from the signature:</b> fast-changing live state
+    (sidecar markers, the spawned registry). Those mutate on every poll while a
+    session is live; folding them in would bust the build cache constantly and
+    pin the CPU. They are re-layered onto rows at rehydrate and serve time
+    instead (<code>_stamp_archive_state</code>, <code>_stamp_archive_goals</code>,
+    watchtower display names), so they stay fresh without gating the expensive
+    build.</li>
+</ul>
+
+<h2>What caching does not remove</h2>
+<div class="callout">
+  <div class="title">The first cold build still happens</div>
+  <p>A truly first-ever run (no persisted cache on disk) builds synchronously and
+  can take 20-30s on a large corpus. After a restart the persisted payload is
+  served from disk immediately, rehydrated for fresh live state, while the real
+  rebuild runs in the background.</p>
+</div>
+<div class="callout warn">
+  <div class="title">The force path always runs the full builder</div>
+  <p><code>/api/conversations/all</code> without <code>stale_ok=1</code> is the
+  explicit archive load (the one with the progress overlay). It bypasses every
+  tier and invokes <code>_build_archive_conversations</code> directly on the
+  request thread. It persists its result for cold-start serving, but without a
+  corpus signature, so the next signature-gated refresh treats that entry as
+  changed and rebuilds once in the background.</p>
+</div>
+
+<h2>CCC-415: per-file incremental cache (not merged, not production)</h2>
+<div class="callout danger">
+  <div class="title">Design alternative only. Nothing on this page describes it.</div>
+  <p>Branch <code>codex/ccc-415-incremental-archive-cache</code> (single commit
+  <code>1d86e49b</code>, "perf(archive): add per-file archive cache", roughly 540
+  changed lines in <code>server.py</code> plus perf-budget test edits) explores a
+  different shape: instead of one whole-response payload gated by one global
+  corpus signature, it caches archive rows per transcript file and invalidates
+  each file independently.</p>
+  <p>It is not merged and does not run in any CCC build. The production stack
+  documented above landed first and removed the measured hot-path cost with a
+  much smaller diff, so the per-file branch never had a remaining bottleneck to
+  justify its extra surface. Merging it now would mean reconciling two
+  overlapping invalidation models (per-file entries versus the corpus signature
+  plus per-file parse cache that ships today) and re-baselining the call-count
+  invariants in <code>tests/test_perf_budget.py</code>. Treat it as a design
+  note for a future rework, not as behavior.</p>
+</div>
+
+<footer>
+  Maintainer documentation for
+  <a href="https://github.com/amirfish1/claude-command-center">claude-command-center</a>.
+  Verified against <code>server.py</code> at commit <code>aedd0e10</code>
+  (2026-07-17). Self-contained: inline CSS and SVG, no JavaScript, no build step.
+</footer>
+
+</body>
+</html>
