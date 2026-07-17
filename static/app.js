@@ -54505,21 +54505,15 @@
       $settingsModalInner.classList.remove('is-searching');
       _settingsSearchIndex.forEach(entry => { entry.el.hidden = false; });
       $settingsPane.querySelectorAll('.settings-section-eyebrow, .settings-reset-row').forEach(el => { el.hidden = false; });
-      $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(el => { el.style.display = ''; });
+      $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(el => {
+        el.style.display = '';
+        Array.from(el.children).forEach(child => { child.style.display = ''; });
+      });
+      $settingsPane.querySelectorAll('.settings-row-crumb-slot').forEach(el => { el.hidden = true; });
       if ($settingsEmptyState) $settingsEmptyState.hidden = true;
       return;
     }
     $settingsModalInner.classList.add('is-searching');
-    // The Tools section's #settingsModalToolsSlot holds boot-time-moved
-    // elements (Terminal, History, Worktrees, Stats, Today, Notes, COO)
-    // that are not `.settings-row`s, carry no data-keywords, and so can
-    // never themselves match a query — always hide the slot while
-    // searching (regardless of whether a sibling Tools row, like "Session
-    // search", matched) so the flat results only ever show rows that
-    // actually matched. Uses an inline style rather than `hidden` because
-    // the slot's own CSS (`display: flex`) has equal specificity to the
-    // `[hidden]` UA rule and would otherwise win by source order.
-    $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(el => { el.style.display = 'none'; });
     const sectionMatchCount = {};
     let anyMatch = false;
     _settingsSearchIndex.forEach(entry => {
@@ -54530,6 +54524,50 @@
         const sid = entry.section && entry.section.getAttribute('data-section-id');
         if (sid) sectionMatchCount[sid] = (sectionMatchCount[sid] || 0) + 1;
         ensureSettingsRowCrumb(entry.el, (entry.sectionTitle || '') + ' ›');
+      }
+    });
+    // The Tools section's #settingsModalToolsSlot holds boot-time-moved
+    // elements (Terminal, History, Worktrees, Stats, Today, Notes, COO)
+    // that are not `.settings-row`s and carry no data-keywords, so the
+    // index above never matches them. Rather than force-hiding the whole
+    // slot (which made "terminal"/"worktrees" etc. unfindable while
+    // searching), match each direct child individually against its own
+    // textContent + title, show/hide the child inline, and only hide the
+    // slot container itself when none of its children match.
+    $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(slot => {
+      const section = slot.closest('.settings-section');
+      const sid = section && section.getAttribute('data-section-id');
+      let slotMatch = false;
+      Array.from(slot.children).forEach(child => {
+        const hay = ((child.textContent || '') + ' ' + (child.getAttribute('title') || '')).toLowerCase();
+        const match = hay.includes(q);
+        // The slot's own CSS forces `display: block !important` on every
+        // child (to make heterogeneous moved-in elements read as launcher
+        // rows) — a plain inline `style.display = 'none'` loses to that
+        // `!important` rule, so it must be set with matching priority.
+        if (match) child.style.removeProperty('display');
+        else child.style.setProperty('display', 'none', 'important');
+        if (match) slotMatch = true;
+      });
+      slot.style.display = slotMatch ? '' : 'none';
+      if (slotMatch) {
+        anyMatch = true;
+        if (sid) sectionMatchCount[sid] = (sectionMatchCount[sid] || 0) + 1;
+        // The slot's children aren't `.settings-row`s, so there's no
+        // per-row crumb host — add a single crumb above the slot instead.
+        let crumb = slot.previousElementSibling;
+        if (!crumb || !crumb.classList || !crumb.classList.contains('settings-row-crumb')) {
+          crumb = document.createElement('div');
+          crumb.className = 'settings-row-crumb settings-row-crumb-slot';
+          slot.parentNode.insertBefore(crumb, slot);
+        }
+        crumb.textContent = (section && section.querySelector('.settings-section-eyebrow')
+          ? section.querySelector('.settings-section-eyebrow').textContent
+          : '') + ' ›';
+        crumb.hidden = false;
+      } else {
+        const crumb = slot.previousElementSibling;
+        if (crumb && crumb.classList && crumb.classList.contains('settings-row-crumb-slot')) crumb.hidden = true;
       }
     });
     $settingsPane.querySelectorAll('.settings-section').forEach(section => {
