@@ -1,0 +1,1 @@
+- FIRST FLIGHT onboarding tour: a spotlight walkthrough of the dashboard on first run, with two paths (newcomer and multi-engine), sample cards on empty installs, and a "Take the tour" replay in Settings.
