@@ -50,7 +50,7 @@ spawning.
 ## Step 2: spawn writers A and B in parallel
 
 Both with `report_to` set to your own session id. Omit `"model"` so the server
-spawn default applies — the user can pass `"model"` explicitly to keep cost down.
+spawn default applies — the user can pass `"model"` explicitly to keep cost down — and pass `"engine"` alongside it, since model names are validated against the target engine (a bare `"model"` fails if the server default engine differs).
 
 ```bash
 curl -s -X POST "$CCC_URL/api/sessions/spawn" -H "Content-Type: application/json" -d @- <<'JSON'

@@ -48,7 +48,7 @@ JSON
 ```
 
 Omit `"model"` — the server spawn default (Settings → Spawn defaults) applies;
-the user can pass `"model"` explicitly to keep cost down. CCC appends the
+the user can pass `"model"` explicitly to keep cost down — and pass `"engine"` alongside it, since model names are validated against the target engine (a bare `"model"` fails if the server default engine differs). CCC appends the
 return-address footer (`report_to`), so the cold reader injects its stumble log
 back to you when it finishes.
 

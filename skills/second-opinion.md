@@ -65,7 +65,7 @@ JSON
 ```
 
 Omit `"model"` — the server spawn default (Settings → Spawn defaults) applies.
-The user can pass `"model"` explicitly to keep cost down. CCC appends the
+The user can pass `"model"` explicitly to keep cost down — and pass `"engine"` alongside it, since model names are validated against the target engine (a bare `"model"` fails if the server default engine differs). CCC appends the
 return-address footer for you (`report_to`), so the fresh session injects its
 report back to you automatically when it finishes.
 

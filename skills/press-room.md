@@ -49,7 +49,7 @@ Every writer reads this file; none of them re-derives the facts.
 
 All with `report_to` set to your own session id, each pointing at the source-pack
 file plus its channel constraints. Omit `"model"` so the server spawn default
-applies — the user can pass `"model"` explicitly to keep cost down.
+applies — the user can pass `"model"` explicitly to keep cost down — and pass `"engine"` alongside it, since model names are validated against the target engine (a bare `"model"` fails if the server default engine differs).
 
 ```bash
 curl -s -X POST "$CCC_URL/api/sessions/spawn" -H "Content-Type: application/json" -d @- <<'JSON'

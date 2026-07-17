@@ -46,7 +46,9 @@ If you can't name two genuinely distinct hypotheses, stop — this isn't a race.
 
 All with `report_to` set to your own session id. Omit `"model"` so the server
 spawn default (Settings → Spawn defaults) applies — the user can pass `"model"`
-explicitly to keep cost down.
+explicitly to keep cost down, with `"engine"` alongside it, since model names
+are validated against the target engine (a bare `"model"` fails if the server
+default engine differs).
 
 ```bash
 curl -s -X POST "$CCC_URL/api/sessions/spawn" -H "Content-Type: application/json" -d @- <<'JSON'
