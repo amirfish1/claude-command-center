@@ -31,9 +31,19 @@ sandbox blocks loopback and fails spuriously even when CCC is up. (b) URL-encode
 `repo_path` in query strings (`+` → `%2B`, space → `%20`). (c) Resolve your own
 session id from `$CLAUDE_SESSION_ID`, else the newest `*.jsonl` under
 `~/.claude/projects/<slugified-cwd>/` (see `ccc-orchestration`) — you need it to
-exclude yourself from the roll-call.
+exclude yourself from the roll-call. The newest-file fallback assumes you are
+the most recently active session in that repo; in a subagent or multi-session
+context that can pick the wrong file, so sanity-check the pick (its content
+should be *your* conversation) before trusting it.
+
+A green `/api/version` does not prove the session-list endpoint works — that's
+a much heavier code path. Treat Step 1's own timeout handling as the real
+health check for it.
 
 ## Step 1: list the sessions
+
+`repo_path` is the absolute path of the repo whose sessions you want — for
+"this repo" use `pwd -P` (URL-encoded).
 
 ```bash
 curl -s --max-time 30 "$CCC_URL/api/sessions?repo_path=<url-encoded-abs-path>"
@@ -41,6 +51,13 @@ curl -s --max-time 30 "$CCC_URL/api/sessions?repo_path=<url-encoded-abs-path>"
 
 For a cross-repo standup use `?all=1` instead — warn the user it can be slow and
 use `--max-time 30`.
+
+**If the list call times out (curl exit 28), that is not "CCC is down"** — the
+server is up but the list is hung or slow (large archives). Retry once with
+`--max-time 120`; if it still times out, report the hang honestly and stop —
+do not fabricate a roster. If you already know the target session ids another
+way (e.g. `GET /api/sessions/children?parent=<your-id>` for sessions you
+spawned), you can skip the list entirely and go straight to Step 3.
 
 ## Step 2: filter to live, exclude yourself
 
