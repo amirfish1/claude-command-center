@@ -728,6 +728,11 @@
     <div class="issues-view" id="issuesView" style="display:none;">
       <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
     </div>
+    <!-- Q-FIRST (W88): queue-first main-view surface. Hidden unless the
+         queue-first mode is active (body.qf-active). Rendered entirely by
+         the _qf* section in app.js: queue cards, then a full-room ticket
+         list per queue, then a full-room ticket detail panel. -->
+    <div class="qfirst-view" id="qfirstView" aria-label="Queue-first workspace" hidden></div>
     <div class="conv-split" id="convSplit" data-orientation="">
       <div class="conv-pane" data-pane-id="p1">
         <div class="conv-pane-header" data-role="pane-header">
