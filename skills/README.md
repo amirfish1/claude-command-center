@@ -18,10 +18,14 @@ Ranking weighs how often you'll reach for it against what it costs per run.
 | 2 | [`standup`](standup.md) | **0** | dev | Ask every live sibling session for a one-line status via `/api/ask`; collate a digest with blockers on top. The free one. |
 | 3 | [`second-opinion`](second-opinion.md) | 1 | dev | One fresh session, zero shared context, same task stated anchor-free — then diff the answers. Disagreement marks your blind spots. |
 | 4 | [`dogfood`](dogfood.md) | 1 | dev/docs | A session that has never seen the project follows your README cold and reports every stumble with severity + suggested doc patch. |
-| 5 | [`handoff`](handoff.md) | 1 | dev | Package this session's state (decisions with whys, verifiable STATE, gotchas) and spawn a successor that verifies the package against git before taking over. |
-| 6 | [`bug-race`](bug-race.md) | 2-3 | dev | For bugs that already beat you once: one racer per root-cause hypothesis, first confirmed mechanism wins, referee stands the rest down via inject. |
-| 7 | [`press-room`](press-room.md) | 3-4 | marketing | One release in, N channel drafts out in parallel (changelog, LinkedIn, X, optional blog), each from its own session, all fed by one source pack. Drafts only. |
-| 8 | [`a-b-copy`](a-b-copy.md) | 3 | marketing | Two writers, same message architecture, different voice constraints; an independent judge scores both and picks a winner. Drafts only. |
+| 5 | [`docs-drift`](docs-drift.md) | 1 | dev/docs | A fresh session extracts every checkable claim from a doc (fields, flags, endpoints, defaults, versions) and verifies each against the code, reporting each mismatch as a drift. Claim-by-claim, not a read-through. |
+| 6 | [`handoff`](handoff.md) | 1 | dev | Package this session's state (decisions with whys, verifiable STATE, gotchas) and spawn a successor that verifies the package against git before taking over. |
+| 7 | [`threat-model`](threat-model.md) | 1 | dev/security | Before shipping a trust-boundary change, a fresh session maps the abuse surface of that diff, ranks each abuse case by impact × likelihood, and hands back a ledger that feeds `/security-review`. Defensive map, no exploits. |
+| 8 | [`bug-race`](bug-race.md) | 2-3 | dev | For bugs that already beat you once: one racer per root-cause hypothesis, first confirmed mechanism wins, referee stands the rest down via inject. |
+| 9 | [`release-audit`](release-audit.md) | 1 | dev/release | Right before cutting `vX.Y.Z`, a fresh session audits only the JUDGMENT gates a release script can't check — changelog fidelity, semver correctness, docs caught up, nothing half-shipped — and returns GO / NO-GO. Advisory; never touches the release. |
+| 10 | [`press-room`](press-room.md) | 3-4 | marketing | One release in, N channel drafts out in parallel (changelog, LinkedIn, X, optional blog), each from its own session, all fed by one source pack. Drafts only. |
+| 11 | [`a-b-copy`](a-b-copy.md) | 3 | marketing | Two writers, same message architecture, different voice constraints; an independent judge scores both and picks a winner. Drafts only. |
+| 12 | [`voice-guard`](voice-guard.md) | 1 | marketing | Gate ONE finished draft against a voice guide: a fresh session checks it rule by rule and flags each violation with a minimal in-voice rewrite. For an artifact that already exists, not a copy competition. |
 
 ### Ecosystem bridges
 
@@ -41,7 +45,14 @@ alongside `ccc-orchestration`, so the integrations work out of the box.
 - Re-solving **the same task fresh** to compare conclusions? → `second-opinion`.
 - Proving **a fix actually fixes the bug**? → `pair-verify`.
 - Hunting **an unknown root cause** with competing theories? → `bug-race`.
-- One piece of copy, best voice? → `a-b-copy`. One release, many channels? →
+- Proving a **quickstart works** for a new user? → `dogfood`. Proving a
+  **reference doc still matches the code**, claim by claim? → `docs-drift`.
+- Mapping how a **change could be abused** before shipping? → `threat-model`
+  (feeds `/security-review`, which then checks each worry against the code).
+- Clearing the **human-judgment gates before cutting a release** (changelog,
+  semver, docs, tree state)? → `release-audit`, then run `cut-release.sh`.
+- One piece of copy, best voice? → `a-b-copy`. Enforcing a voice on **one draft
+  you already wrote**? → `voice-guard`. One release, many channels? →
   `press-room`.
 
 ## Other skills in this directory
@@ -56,23 +67,43 @@ alongside `ccc-orchestration`, so the integrations work out of the box.
 - [`spawn-ux-worker.md`](spawn-ux-worker.md) — spawn a repo-scoped worker that
   drains one repo's UX-fixes queue.
 
-## Ideas evaluated and cut
+## Wave 2 — four of the cut candidates, re-scoped and shipped
 
-Kept out on purpose — recorded so they don't get re-proposed cold:
+Wave 1 cut six ideas. On an honest second look, four had cut reasons that a
+sharper scope dissolves — those shipped as wave 2 (`docs-drift`, `voice-guard`,
+`threat-model`, `release-audit`, in the table above). The point of each was to
+make the overlap that got it cut go away:
 
-- **red-team** (2 attacker-persona sessions): overlaps `wt critique` with an
-  adversarial goal string plus the built-in security review; personas without
-  real attack tooling add cost, not findings.
+- **docs-drift** was cut as "subsumed by `dogfood`." It isn't: `dogfood` is
+  experiential (walk the quickstart, log where you stumble) and only sees drift
+  on the steps it walks; `docs-drift` is analytical (enumerate every claim a
+  reference doc makes and check each against the code), catching drift off the
+  happy path. Different failure mode, different trigger.
+- **voice-guard** was cut as "subsumed by the `a-b-copy` judge." That only holds
+  when you're generating two drafts to compare. The common case is one finished
+  draft and the question "does this match our voice?" — `voice-guard` gates that
+  one artifact rule by rule; it generates nothing.
+- **threat-model** is the re-scope of the cut **red-team** idea. Red-team was
+  cut because attacker personas without real tooling add cost, not findings —
+  true of that design. `threat-model` drops the personas and the (absent) attack
+  tooling and does the one thing that was actually valuable: a defensive
+  abuse-surface map of a bounded diff that feeds `/security-review`. No exploits,
+  no live attacks — just the map that tells the review where to aim.
+- **release-audit** is the re-scope of the cut **release-gate** idea.
+  Release-gate was cut because a checklist is better as a deterministic script —
+  correct, and `release-audit` refuses to re-run any of the script's mechanical
+  steps. It audits only the gates a script *can't*: does the changelog honestly
+  describe the diff, is the semver bump the right *kind* of bump, did the docs
+  catch up, is anything half-shipped. Advisory GO/NO-GO, then you run
+  `scripts/cut-release.sh`.
+
+## Ideas evaluated and still cut
+
+Kept out on purpose — the cut reason is a fundamental, not a matter of time:
+
 - **estimate** (3 sessions independently estimate a plan): the spread is
   rarely actionable; a single planning agent plus `wt critique` of the plan is
   cheaper and sharper.
-- **docs-drift** (diff docs against code behavior): subsumed by `dogfood`,
-  which catches drift the moment the docs stop matching reality.
-- **voice-guard** (check drafts against a voice guide): subsumed by the
-  `a-b-copy` judge, which scores voice consistency as part of its rubric.
-- **release-gate** (a session runs the release checklist cold): a checklist is
-  better as a deterministic script; spawning a session adds nondeterminism to
-  the one place you want none.
 - **migration-sweep** (fan out a mechanical migration): that's
   `fleet-lane-dispatch` with a per-file brief — already covered.
 
