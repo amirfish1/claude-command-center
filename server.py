@@ -17259,6 +17259,10 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
         include_old=include_old,
         live_sids=live_sids,
     )
+    # Auto-verification historically inspected Claude conversation rows only.
+    # Keep that membership stable before the unified list is extended with
+    # Codex/Gemini/Cursor/pkood/backlog rows and may be reordered or deduped.
+    interactive_conversations = list(conversations)
     if progress:
         progress(
             "sessions",
@@ -17601,7 +17605,7 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
     # Auto-verify: sessions with has_push linked to closed GH issues get verified.
     # Runs inline (cheap — just reads cached issue states + verified list).
     try:
-        auto_verify_closed_issues(repo_path, conversations=conversations)
+        auto_verify_closed_issues(repo_path, conversations=interactive_conversations)
     except Exception:
         pass
 

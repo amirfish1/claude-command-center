@@ -216,8 +216,14 @@ def test_repo_sessions_gate_liveness_by_candidates(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_load_session_registry", lambda: {})
     monkeypatch.setattr(server, "find_conversations", lambda *a, **k: [dict(r) for r in rows])
     monkeypatch.setattr(server, "_spawned_sessions", [])
+    codex_row = {
+        "id": "codex-row",
+        "session_id": "codex-row",
+        "source": "codex",
+        "modified": now - 1800,
+    }
+    monkeypatch.setattr(server, "find_codex_conversations", lambda *a, **k: [codex_row])
     for name in (
-        "find_codex_conversations",
         "find_gemini_conversations",
         "find_cursor_conversations",
         "find_antigravity_conversations",
@@ -239,17 +245,25 @@ def test_repo_sessions_gate_liveness_by_candidates(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_apply_pinned_conversation_fields", lambda *a, **k: None)
     monkeypatch.setattr(server, "_sort_pinned_conversations_first", lambda *a, **k: None)
     monkeypatch.setattr(server, "_apply_session_lane_overrides", lambda rows: None)
-    monkeypatch.setattr(server, "auto_verify_closed_issues", lambda path: None)
+    verified_rows = []
+
+    def capture_auto_verify(path, conversations=None):
+        verified_rows.extend(conversations or [])
+
+    monkeypatch.setattr(server, "auto_verify_closed_issues", capture_auto_verify)
     monkeypatch.setattr(server, "_discover_live_session_ids", lambda: {candidate_sid})
     calls = _count_calls(monkeypatch, "_archive_session_is_live", passthrough_return=True)
 
     result = server.find_all_sessions(str(tmp_path), include_old=False)
 
-    assert len(result) == len(rows)
+    assert len(result) == len(rows) + 1
     assert [args[0][0] for args in calls] == [candidate_sid], (
         f"repo session list made {len(calls)} precise liveness probes for "
         f"{len(rows)} old rows instead of probing only live candidates"
     )
+    assert [row["session_id"] for row in verified_rows] == [
+        row["session_id"] for row in rows
+    ], "auto-verification must inspect only the original Claude conversation rows"
 
 
 def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
@@ -290,26 +304,25 @@ def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_CACHE", {})
-    scans = []
-    original_glob = Path.glob
+    monkeypatch.setattr(
+        server,
+        "_TOKEN_OPTIMIZER_QUALITY_FILES",
+        {"ts": 0.0, "roots": (), "paths": ()},
+    )
+    iterdir_calls = []
     original_iterdir = Path.iterdir
 
-    def counting_glob(path, pattern):
-        scans.append(path)
-        return original_glob(path, pattern)
-
     def counting_iterdir(path):
-        scans.append(path)
+        iterdir_calls.append(path)
         return original_iterdir(path)
 
-    monkeypatch.setattr(Path, "glob", counting_glob)
     monkeypatch.setattr(Path, "iterdir", counting_iterdir)
 
     values = [server._token_optimizer_quality_for_session(sid) for sid in sids]
 
     assert all(value.get("quality_score") == 95 for value in values)
-    assert len(scans) <= 2, (
-        f"quality lookup scanned cache directories {len(scans)}x for "
+    assert len(iterdir_calls) <= 2, (
+        f"quality lookup scanned cache directories {len(iterdir_calls)}x for "
         f"{len(sids)} rows instead of sharing one directory index"
     )
 
@@ -769,6 +782,11 @@ def test_archive_spawned_cold_cache_does_not_block_request(monkeypatch):
         release.set()
         timer.cancel()
         refreshed.wait(timeout=2)
+        deadline = time.time() + 2
+        while server._archive_spawned_refreshing and time.time() < deadline:
+            time.sleep(0.01)
+        assert server._archive_spawned_refreshing is False
+        assert server._archive_spawned_cache["data"] == [{"spawn_id": "late"}]
 
 
 def test_conversations_all_stale_ok_uses_coalesced_serve_cache(monkeypatch):
