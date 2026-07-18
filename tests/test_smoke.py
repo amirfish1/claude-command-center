@@ -4422,6 +4422,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('name="fq-config-claim-type"', app_js)
         self.assertIn('id="fqConfigEffort"', app_js)
         self.assertIn("effort: fields.effort.value", app_js)
+        self.assertIn("CCC spawn default", app_js)
         self.assertIn("queue configuration", app_js)
         self.assertIn(".fq-config-dialog", app_css)
 
@@ -5718,6 +5719,16 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertNotIn("repo_path", config["config"])
         cleared = self.server._queue_config_from_payload({"queue": "DEMO_QUEUE", "effort": ""})
         self.assertNotIn("effort", cleared["config"])
+
+    def test_queue_config_can_defer_engine_and_model_to_ccc_spawn_defaults(self):
+        config = self.server._queue_config_from_payload({
+            "queue": "DEMO_QUEUE",
+            "engine": "",
+            "model": "",
+        })
+
+        self.assertNotIn("engine", config["config"])
+        self.assertNotIn("model", config["config"])
 
     def test_queue_config_payload_rejects_bad_queue_name_and_github_without_repo(self):
         with self.assertRaises(ValueError):

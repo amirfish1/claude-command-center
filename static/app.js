@@ -34595,9 +34595,9 @@
       +       '<div class="fq-config-field"><label for="fqConfigQueue">Queue name</label><input id="fqConfigQueue" list="fqConfigQueues" maxlength="64" placeholder="e.g. PRODUCT" autocomplete="off"><datalist id="fqConfigQueues">' + queueChoices + '</datalist><span class="fq-config-help">Letters, numbers, _ and - only.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigWorkers">Workers</label><input id="fqConfigWorkers" type="number" min="1" max="16"><span class="fq-config-help">Concurrent workers when auto-drain is on.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigBackend">Ticket backend</label><select id="fqConfigBackend" name="fq-config-backend"><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigEngine">Worker engine</label><select id="fqConfigEngine"><option value="claude">Claude</option><option value="codex">Codex</option></select><span class="fq-config-help">The agent runtime spawned for this queue.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigEngine">Worker engine</label><select id="fqConfigEngine"><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
       +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Choose a model for this engine, or use a custom model id. Leave blank for the engine default.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Choose a model for this engine, use a custom model id, or defer to CCC spawn defaults.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Use engine default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
       +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checks"><label><input id="fqConfigDrain" type="checkbox"> Auto-drain new work</label></div><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
       +       '<div class="fq-config-field wide"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
@@ -34614,7 +34614,7 @@
       const choices = Array.isArray(modelsByEngine[fields.engine.value]) ? modelsByEngine[fields.engine.value] : [];
       const selected = String(model || '');
       const known = !selected || choices.includes(selected);
-      fields.model.innerHTML = '<option value="">Use engine default</option>'
+      fields.model.innerHTML = '<option value="">CCC spawn default</option>'
         + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(choice) + '</option>').join('')
         + '<option value="__custom__">Custom model…</option>';
       fields.model.value = known ? selected : '__custom__';
@@ -34625,7 +34625,7 @@
       const c = (entry && entry.config) || defaults;
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
-      fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || 'claude';
+      fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || '';
       fields.path.value = c.repo_path || ''; setModel(c.model); fields.effort.value = c.effort || ''; fields.drain.checked = !!c.auto_drain;
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });

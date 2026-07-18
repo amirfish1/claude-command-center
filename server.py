@@ -334,9 +334,9 @@ def _queue_config_from_payload(payload):
     backend = str(payload.get("backend") or "file").strip().lower()
     if backend not in ("file", "github"):
         raise ValueError("backend must be file or github")
-    engine = str(payload.get("engine") or "claude").strip().lower()
-    if engine not in ("claude", "codex"):
-        raise ValueError("engine must be claude or codex")
+    engine = str(payload.get("engine", "claude") or "").strip().lower()
+    if engine not in ("", "claude", "codex"):
+        raise ValueError("engine must be claude, codex, or blank for CCC spawn default")
     try:
         workers = int(payload.get("workers", 1))
     except (TypeError, ValueError):
@@ -352,9 +352,12 @@ def _queue_config_from_payload(payload):
         "auto_drain": bool(payload.get("auto_drain", False)),
         "desired_workers": workers,
         "backend": backend,
-        "engine": engine,
         "claim_types": claim_types,
     })
+    if engine:
+        config["engine"] = engine
+    else:
+        config.pop("engine", None)
     effort = str(payload.get("effort") or "").strip().lower()
     if effort not in _QUEUE_CONFIG_EFFORTS:
         raise ValueError("effort must be low, medium, high, xhigh, max, or blank")
