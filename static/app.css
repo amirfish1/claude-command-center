@@ -1124,6 +1124,23 @@
     flex-wrap: wrap;
     padding: 4px 0; font-size: 14px;
   }
+  .tool-call.acp-needs-approval {
+    border-left: 2px solid var(--orange, #f08a6b);
+    padding-left: 8px;
+  }
+  .acp-perm-options {
+    display: inline-flex; gap: 6px; flex-wrap: wrap;
+    margin-left: 4px;
+  }
+  .acp-perm-opt {
+    font: inherit; font-size: 12px; font-weight: 600;
+    padding: 2px 10px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface-2, transparent); color: var(--text);
+  }
+  .acp-perm-opt:hover { border-color: var(--accent); color: var(--accent); }
+  .acp-perm-opt.is-submitting { opacity: 0.55; pointer-events: none; }
+  .acp-perm-options.is-answered { opacity: 0.45; pointer-events: none; }
   .tool-call .arrow { color: var(--orange); font-weight: bold; }
   .tool-call .tool-source {
     color: var(--text-muted);
@@ -6266,6 +6283,11 @@
     color: #2dd4bf;
     --icon-shadow-color: rgba(45, 212, 191, 0.42);
   }
+  .conv-session-icon.kimi,
+  .conv-pane-cat-icon.kimi {
+    color: #7dd3fc;
+    --icon-shadow-color: rgba(125, 211, 252, 0.42);
+  }
   /* Unified session cost palette */
   :is(.conv-session-icon, .conv-pane-cat-icon).cost-premium .session-tier-cost {
     color: #d6b94a;
@@ -6425,6 +6447,7 @@
   .conv-item .source-badge.cursor { background: rgba(226,104,64,0.16); color: #f08a6b; }
   .conv-item .source-badge.antigravity { background: rgba(242,204,96,0.14); color: #f2cc60; }
   .conv-item .source-badge.hermes { background: rgba(45,212,191,0.14); color: #5eead4; }
+  .conv-item .source-badge.kimi { background: rgba(125,211,252,0.14); color: #7dd3fc; }
   .pkood-tail-output {
     white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
     font-size: 13px; line-height: 1.5; padding: 16px 20px; color: var(--text);

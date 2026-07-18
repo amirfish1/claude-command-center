@@ -1701,6 +1701,7 @@ def _archive_load_begin():
         "antigravity": {"key": "antigravity", "label": "Antigravity conversations",        "state": "pending", "detail": "Scanning ~/.gemini/antigravity/brain/."},
         "kilo":        {"key": "kilo",        "label": "Kilo Code conversations",          "state": "pending", "detail": "Scanning ~/.local/share/kilo/kilo.db."},
         "hermes":      {"key": "hermes",      "label": "Hermes conversations",             "state": "pending", "detail": "Scanning ~/.hermes/state.db."},
+        "kimi":        {"key": "kimi",        "label": "Kimi conversations",               "state": "pending", "detail": "Scanning ~/.kimi-code/sessions/."},
         "pr_states":   {"key": "pr_states",   "label": "Refreshing pull-request status",   "state": "pending", "detail": "gh pr view per known PR."},
         "issues":      {"key": "issues",      "label": "Refreshing GitHub issues",         "state": "pending", "detail": "gh issue list per repo."},
         "group_chats": {"key": "group_chats", "label": "Cross-repo group chats",           "state": "pending", "detail": "Reading sidecars."},
@@ -2769,10 +2770,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes", "kimi"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes", "kimi"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -2786,6 +2787,8 @@ def _detect_session_engine_uncached(session_id):
         return "kilo"
     if _is_hermes_session(session_id):
         return "hermes"
+    if _is_kimi_session(session_id):
+        return "kimi"
     return "claude"
 
 
@@ -3508,7 +3511,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "hermes")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "hermes", "kimi")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -3526,6 +3529,9 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "kilo-code": "kilo",
     "kilo_code": "kilo",
     "hermes": "hermes",
+    "kimi": "kimi",
+    "kimi-code": "kimi",
+    "kimi_code": "kimi",
 }
 
 
@@ -3571,6 +3577,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
     if engine == "hermes":
         return os.environ.get("CCC_HERMES_MODEL", "auto")
+    if engine == "kimi":
+        return os.environ.get("CCC_KIMI_MODEL", "kimi-code/k3")
     return ""
 
 
@@ -3628,6 +3636,11 @@ _ENGINE_CURATED_MODELS = {
         {"id": "hermes-3-llama-3.1-70b", "label": "hermes-3-llama-3.1-70b"},
         {"id": "hermes-2-pro-llama-3-8b", "label": "hermes-2-pro-llama-3-8b"},
     ),
+    "kimi": (
+        {"id": "kimi-code/k3", "label": "K3"},
+        {"id": "kimi-code/kimi-for-coding", "label": "K2.7 Coding"},
+        {"id": "kimi-code/kimi-for-coding-highspeed", "label": "K2.7 Coding Highspeed"},
+    ),
 }
 
 # Backward-compatible ID-only view used by older scripts and error payloads.
@@ -3643,6 +3656,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "antigravity": True,
     "kilo": True,
     "hermes": True,
+    "kimi": True,
 }
 
 _CODEX_PICKER_MODEL_IDS = frozenset(
@@ -6663,6 +6677,16 @@ def find_all_conversations(
     except Exception:
         pass
     try:
+        out.extend(find_kimi_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
+    try:
         out.extend(_find_remote_sessions(limit=limit_per_folder))
     except Exception:
         pass
@@ -7026,6 +7050,8 @@ def _archive_corpus_signature_parts():
         Path.home() / ".cursor" / "projects",
         Path.home() / ".gemini" / "antigravity" / "brain",
         Path.home() / ".hermes" / "state.db",
+        _kimi_code_home() / "session_index.jsonl",
+        _ACP_TRANSCRIPT_DIR / "kimi",
     ):
         try:
             mt = os.stat(extra).st_mtime_ns
@@ -12868,6 +12894,21 @@ def session_live_status(session_id, session_cwd):
     if not session_id:
         return result
 
+    if _is_kimi_session(session_id):
+        # ACP sessions have no per-session process; "live" means the harness
+        # CLI is installed so the shared `kimi acp` subprocess can drive the
+        # session. Status mirrors the ACP turn state for busy indicators.
+        resolved = _acp_resolve_bin("kimi")
+        if resolved.get("available"):
+            snap = _acp_session_snapshot("kimi", session_id) or {}
+            result["live"] = True
+            result["status"] = "running" if snap.get("status") == "active" else "idle"
+            result["kind"] = "acp"
+            result["cwd"] = snap.get("cwd") or session_cwd
+            result["match_count"] = 1
+            result["model"] = snap.get("model")
+        return result
+
     if _is_codex_session(session_id):
         path = _resolve_codex_rollout_path(session_id)
         if path:
@@ -14535,6 +14576,13 @@ def find_session_cwd(session_id):
     hermes_row = _hermes_session_row(session_id)
     if hermes_row:
         cwd = hermes_row.get("cwd")
+        if cwd:
+            cwd = _resolve_session_cwd(session_id, cwd)
+            _session_cwd_cache[session_id] = cwd
+            return cwd
+    if _is_kimi_session(session_id):
+        snap = _acp_session_snapshot("kimi", session_id) or {}
+        cwd = snap.get("cwd")
         if cwd:
             cwd = _resolve_session_cwd(session_id, cwd)
             _session_cwd_cache[session_id] = cwd
@@ -17475,6 +17523,19 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             progress("hermes", state="error", detail=f"Hermes session scan failed: {exc}")
 
     if progress:
+        progress("kimi", state="running", detail="Reading Kimi sessions.")
+    try:
+        conversations.extend(find_kimi_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+    except Exception as exc:
+        if progress:
+            progress("kimi", state="error", detail=f"Kimi session scan failed: {exc}")
+
+    if progress:
         progress("remote", state="running", detail="Reading remote sessions via SSH.")
     try:
         conversations.extend(_find_remote_sessions(repo_path=repo_path, progress=progress))
@@ -18016,6 +18077,16 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         result = _parse_hermes_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         return {"events": list(result.get("events") or []), "last_line": result.get("last_line", 0)}
+    if engine == "kimi":
+        # ACP sessions read CCC's own finalized transcript (small; no cache).
+        events = _acp_transcript_events_after("kimi", conversation_id, after_line)
+        last_line = after_line
+        for ev in events:
+            try:
+                last_line = max(last_line, int(ev.get("line") or 0))
+            except (TypeError, ValueError):
+                continue
+        return {"events": events, "last_line": last_line}
     filepath, parser = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
     if parser is _parse_conversation_event and not Path(filepath).is_file():
         stub = _registry_only_conversation_stub(conversation_id, after_line=after_line)
@@ -27015,6 +27086,1159 @@ def build_codex_stuck_summary(now=None, force=False):
         _codex_stuck_summary_cache["ts"] = cache_now
         _codex_stuck_summary_cache["value"] = dict(value)
     return value
+
+
+# ===========================================================================
+# Generic ACP (Agent Client Protocol) engine bridge
+#
+# Drives ACP-speaking agent CLIs (``kimi acp`` first; new harnesses join by
+# adding one ``_ACP_HARNESSES`` entry) over newline-delimited JSON-RPC 2.0 on
+# stdio. One lazily-started subprocess per harness, multiplexed by sessionId.
+# Design mirrors the Codex app-server layer with two latency-driven
+# deviations:
+#   - prompt RPCs are async (per-id pending Events) and never serialize the
+#     connection: ACP's ``session/prompt`` response only lands at turn end.
+#   - SSE feeds are woken directly by notification folding (Condition), not
+#     by transcript mtime polling, so chunks reach the browser in ~ms.
+# CCC-owned persisted artifacts (harness-agnostic):
+#   - transcripts: COMMAND_CENTER_STATE_DIR/acp/<harness>/<sid>.jsonl — one
+#     finalized conversation event per line; CCC's replay source, NOT the
+#     harness's own session store.
+#   - state snapshot: acp-<harness>-state.json — last-known registry,
+#     ``"authoritative": False`` (same posture as the codex state file).
+# ===========================================================================
+
+_ACP_PROTOCOL_VERSION = 1
+_ACP_TRANSCRIPT_DIR = COMMAND_CENTER_STATE_DIR / "acp"
+_ACP_EVENT_MAX = 500          # finalized conv events kept in memory per session
+_ACP_DELTA_MAX = 400          # in-flight bubble deltas kept for late SSE attach
+_ACP_TEXT_MAX = 4000          # cap for one accumulated text/thought block
+
+_ACP_HARNESSES = {
+    "kimi": {
+        "label": "Kimi",
+        "bin_env": "CCC_KIMI_BIN",
+        "bin_names": ("kimi",),
+        "acp_args": ("acp",),
+        "kill_env": "CCC_KIMI_ACP",
+    },
+}
+
+_ACP_LOCK = threading.Condition()
+_ACP_CONNS = {}          # harness -> {"proc","reader","initialized","initializing","next_id","caps","send_lock"}
+_ACP_PENDING = {}        # harness -> {req_id: {"event","response","method","sid","is_active"}}
+_ACP_SESSION_STATE = {}  # harness -> {sid: session state dict}
+_ACP_STATE_LOADED = set()
+
+
+def _acp_harness_enabled(harness):
+    cfg = _ACP_HARNESSES.get(harness) or {}
+    kill = cfg.get("kill_env")
+    if kill and os.environ.get(kill, "1").lower() in ("0", "false", "no"):
+        return False
+    return True
+
+
+def _acp_resolve_bin(harness):
+    """Standard resolver shape used by every engine's availability endpoint."""
+    cfg = _ACP_HARNESSES.get(harness)
+    label = (cfg or {}).get("label") or harness
+    if not cfg or not _acp_harness_enabled(harness):
+        return {"available": False, "bin": None, "reason": "disabled", "code": "disabled"}
+    override = os.environ.get(cfg.get("bin_env") or "", "").strip()
+    if override:
+        candidate = Path(os.path.expanduser(override))
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return {"available": True, "bin": str(candidate), "source": "env"}
+        return {
+            "available": False, "bin": None,
+            "reason": f"{cfg['bin_env']} set but not executable: {override}",
+            "code": "env_invalid",
+        }
+    for name in cfg.get("bin_names") or ():
+        found = shutil.which(name)
+        if found:
+            return {"available": True, "bin": found, "source": "path"}
+    return {
+        "available": False, "bin": None,
+        "reason": f"{label} CLI not found on PATH",
+        "code": "not_installed",
+    }
+
+
+def _acp_state_file(harness):
+    return COMMAND_CENTER_STATE_DIR / f"acp-{harness}-state.json"
+
+
+def _acp_transcript_path(harness, sid):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid or ""))
+    return _ACP_TRANSCRIPT_DIR / harness / f"{safe}.jsonl"
+
+
+def _acp_transcript_events_after(harness, sid, after_line):
+    """Finalized conv events newer than `after_line`, read from the CCC-owned
+    transcript (the replay source for SSE reconnects and CCC restarts)."""
+    events = []
+    try:
+        with _acp_transcript_path(harness, sid).open() as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                try:
+                    line = int(ev.get("line") or 0)
+                except (TypeError, ValueError):
+                    line = 0
+                if line > after_line:
+                    events.append(ev)
+    except OSError:
+        return []
+    return events
+
+
+def _acp_ts():
+    return datetime.fromtimestamp(time.time(), timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _acp_new_session_state(harness, sid, cwd=""):
+    return {
+        "sid": sid,
+        "harness": harness,
+        "cwd": cwd or "",
+        "status": "idle",            # idle | active | closed
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "turn_seq": 0,
+        "next_line": 1,
+        "active_turn": None,         # {"req_id","msg_id","text","thought","tools","started_at"}
+        "replay": None,              # {"kind","text"} while session/load replays history
+        "events": collections.deque(maxlen=_ACP_EVENT_MAX),
+        "deltas": collections.deque(maxlen=_ACP_DELTA_MAX),
+        "delta_seq": 0,
+        "pending_permissions": {},   # req_id -> {sessionId, toolCall, options, requested_at}
+        "config_options": [],
+        "available_commands": [],
+        "model": None,
+        "stop_reason": None,
+        "attached": True,
+    }
+
+
+def _acp_session(harness, sid, create=False, cwd=""):
+    sessions = _ACP_SESSION_STATE.setdefault(harness, {})
+    state = sessions.get(sid)
+    if state is None and create:
+        state = _acp_new_session_state(harness, sid, cwd=cwd)
+        sessions[sid] = state
+    return state
+
+
+def _acp_save_state_unlocked(harness):
+    """Persist the last-known session registry; volatile fields excluded."""
+    try:
+        sessions = _ACP_SESSION_STATE.get(harness) or {}
+        payload = {
+            "schema": 1,
+            "authoritative": False,
+            "saved_at": _acp_ts(),
+            "sessions": {
+                sid: {
+                    "cwd": st.get("cwd") or "",
+                    "status": st.get("status") or "idle",
+                    "updated_at": st.get("updated_at") or 0,
+                    "turn_seq": st.get("turn_seq") or 0,
+                    "next_line": st.get("next_line") or 1,
+                    "model": st.get("model"),
+                }
+                for sid, st in sessions.items()
+                if st.get("attached")
+            },
+        }
+        path = _acp_state_file(harness)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        with tmp.open("w") as f:
+            json.dump(payload, f, indent=1, sort_keys=True)
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def _acp_load_state(harness):
+    """Rehydrate the session registry after a CCC restart (volatile fields
+    deliberately not restored — same phantom-turn guard as codex)."""
+    if harness in _ACP_STATE_LOADED:
+        return
+    _ACP_STATE_LOADED.add(harness)
+    try:
+        with _acp_state_file(harness).open() as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        payload = None
+    sessions = (payload or {}).get("sessions") or {}
+    for sid, meta in sessions.items():
+        if not isinstance(meta, dict):
+            continue
+        state = _acp_session(harness, sid, create=True, cwd=meta.get("cwd") or "")
+        state["status"] = "idle"
+        state["turn_seq"] = int(meta.get("turn_seq") or 0)
+        state["model"] = meta.get("model")
+        state["updated_at"] = float(meta.get("updated_at") or 0)
+        next_line = int(meta.get("next_line") or 1)
+        if next_line <= 1:
+            try:
+                with _acp_transcript_path(harness, sid).open() as f:
+                    next_line = sum(1 for _ in f) + 1
+            except OSError:
+                next_line = 1
+        state["next_line"] = max(1, next_line)
+
+
+def _acp_append_transcript_unlocked(harness, sid, event):
+    try:
+        path = _acp_transcript_path(harness, sid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(event) + "\n")
+    except OSError:
+        pass
+
+
+def _acp_emit_event_unlocked(harness, sid, event, save=False):
+    """Finalize one conversation event: in-memory deque + transcript file."""
+    state = _acp_session(harness, sid, create=True)
+    event = dict(event)
+    event.setdefault("line", state["next_line"])
+    event.setdefault("ts", _acp_ts())
+    state["next_line"] = int(event["line"]) + 1
+    state["events"].append(event)
+    state["updated_at"] = time.time()
+    _acp_append_transcript_unlocked(harness, sid, event)
+    if save:
+        _acp_save_state_unlocked(harness)
+    _ACP_LOCK.notify_all()
+    return event
+
+
+def _acp_emit_delta_unlocked(harness, sid, delta):
+    """In-flight bubble preview (never persisted; replayed for late attach)."""
+    state = _acp_session(harness, sid, create=True)
+    state["delta_seq"] += 1
+    state["deltas"].append({"seq": state["delta_seq"], "event": delta})
+    state["updated_at"] = time.time()
+    _ACP_LOCK.notify_all()
+
+
+class _AcpTransport:
+    """Newline-delimited JSON-RPC over a subprocess's stdio pipes."""
+
+    def __init__(self, proc):
+        self.proc = proc
+        self.send_lock = threading.Lock()
+
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def send_json(self, payload):
+        data = json.dumps(payload)
+        with self.send_lock:
+            self.proc.stdin.write(data + "\n")
+            self.proc.stdin.flush()
+
+    def close(self):
+        if self.proc is not None and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+
+
+def _acp_conn(harness):
+    return _ACP_CONNS.get(harness)
+
+
+def _acp_send(harness, payload):
+    conn = _ACP_CONNS.get(harness)
+    transport = (conn or {}).get("transport")
+    if transport is None or not transport.alive():
+        return False
+    try:
+        transport.send_json(payload)
+        return True
+    except (BrokenPipeError, OSError, ValueError):
+        return False
+
+
+def _acp_request_async(harness, method, params, sid=None):
+    """Register a pending id and send without waiting. Returns req_id|None."""
+    conn = _acp_conn(harness)
+    transport = (conn or {}).get("transport")
+    if transport is None or not transport.alive():
+        return None
+    with _ACP_LOCK:
+        req_id = conn["next_id"]
+        conn["next_id"] += 1
+        _ACP_PENDING.setdefault(harness, {})[req_id] = {
+            "event": threading.Event(),
+            "response": None,
+            "method": method,
+            "sid": sid,
+            "is_active": False,
+        }
+    if not _acp_send(harness, {
+        "jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {},
+    }):
+        with _ACP_LOCK:
+            _ACP_PENDING.get(harness, {}).pop(req_id, None)
+        return None
+    return req_id
+
+
+def _acp_wait_response(harness, req_id, timeout=20):
+    """Wait for a registered pending id; returns the response payload."""
+    with _ACP_LOCK:
+        entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
+    if entry is None:
+        return None
+    entry["event"].wait(timeout)
+    with _ACP_LOCK:
+        entry = (_ACP_PENDING.get(harness) or {}).pop(req_id, None)
+    if entry is None:
+        return None
+    return entry.get("response")
+
+
+def _acp_request(harness, method, params=None, timeout=20, sid=None):
+    """Synchronous RPC for control methods (short timeouts only — never
+    use for session/prompt, whose response lands at turn end)."""
+    req_id = _acp_request_async(harness, method, params or {}, sid=sid)
+    if req_id is None:
+        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+    response = _acp_wait_response(harness, req_id, timeout=timeout)
+    if response is None:
+        return {"ok": False, "error": f"ACP {harness} request timed out: {method}"}
+    error = response.get("error")
+    if isinstance(error, dict):
+        code = error.get("code")
+        out = {"ok": False, "error": error.get("message") or f"ACP error {code}", "code": code}
+        if code == -32000:
+            out["auth_required"] = True
+            out["error"] = f"{_ACP_HARNESSES[harness]['label']} login required — run `{_ACP_HARNESSES[harness]['bin_names'][0]} login`"
+        return out
+    return {"ok": True, "result": response.get("result")}
+
+
+def _acp_respond(harness, req_id, result=None, error=None):
+    """Answer an agent→client request (permission prompts, fs/*, etc.)."""
+    payload = {"jsonrpc": "2.0", "id": req_id}
+    if error is not None:
+        payload["error"] = error
+    else:
+        payload["result"] = result if result is not None else {}
+    return _acp_send(harness, payload)
+
+
+def _acp_handle_message(harness, payload):
+    if not isinstance(payload, dict):
+        return
+    method = payload.get("method")
+    if "id" in payload and method:
+        _acp_handle_agent_request(harness, payload.get("id"), str(method), payload.get("params") or {})
+        return
+    if "id" in payload:
+        req_id = payload.get("id")
+        with _ACP_LOCK:
+            entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
+            if entry is not None:
+                entry["response"] = payload
+                entry["event"].set()
+        if entry is not None and entry.get("method") == "session/prompt" and entry.get("sid"):
+            _acp_finalize_turn(harness, entry["sid"], payload, entry)
+        return
+    if method == "session/update":
+        params = payload.get("params") or {}
+        sid = params.get("sessionId")
+        update = params.get("update") or {}
+        if sid and isinstance(update, dict):
+            _acp_handle_session_update(harness, str(sid), update)
+
+
+def _acp_handle_agent_request(harness, req_id, method, params):
+    """Agent→client requests. Only permission prompts are serviced; anything
+    else gets methodNotFound so the agent never hangs waiting on us."""
+    if method == "session/request_permission":
+        sid = str(params.get("sessionId") or "")
+        with _ACP_LOCK:
+            state = _acp_session(harness, sid, create=True)
+            # Keyed by str(req_id) — UI round-trips ids as strings, while the
+            # original (int|str) id is preserved for the JSON-RPC response.
+            state["pending_permissions"][str(req_id)] = {
+                "req_id": req_id,
+                "session_id": sid,
+                "tool_call": params.get("toolCall") or {},
+                "options": params.get("options") or [],
+                "requested_at": time.time(),
+            }
+            tool = params.get("toolCall") or {}
+            _acp_emit_event_unlocked(harness, sid, {
+                "type": "assistant",
+                "message_id": f"acp-perm-{req_id}",
+                "blocks": [{
+                    "kind": "tool_use",
+                    "name": tool.get("title") or tool.get("kind") or "tool",
+                    "detail": tool.get("kind") or "",
+                    "id": tool.get("toolCallId") or "",
+                    "approval_required": True,
+                    "approval_message": f"{_ACP_HARNESSES[harness]['label']} requests approval",
+                    "acp_harness": harness,
+                    "acp_request_id": req_id,
+                    "acp_options": params.get("options") or [],
+                }],
+            }, save=True)
+        return
+    _acp_respond(harness, req_id, error={"code": -32601, "message": f"method not found: {method}"})
+
+
+def _acp_append_turn_text(turn, field, chunk):
+    text = (turn.get(field) or "") + chunk
+    if len(text) > _ACP_TEXT_MAX:
+        text = text[-_ACP_TEXT_MAX:]
+    turn[field] = text
+
+
+def _acp_handle_session_update(harness, sid, update):
+    kind = update.get("sessionUpdate")
+    content = update.get("content") or {}
+    chunk = content.get("text") if isinstance(content, dict) else None
+    if isinstance(chunk, str):
+        chunk = _strip_lone_surrogates(chunk)
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True)
+        state["updated_at"] = time.time()
+
+        # session/load history replay: accumulate per speaker and finalize on
+        # speaker switches; the load response flushes the tail (see
+        # _acp_load). Thought chunks are dropped during replay.
+        replay = state.get("replay")
+        if replay is not None and kind in ("user_message_chunk", "agent_message_chunk"):
+            speaker = "user" if kind == "user_message_chunk" else "assistant"
+            if replay.get("kind") and replay["kind"] != speaker and replay.get("text"):
+                _acp_emit_event_unlocked(harness, sid, _acp_message_event(state, replay["kind"], replay["text"]))
+                replay["text"] = ""
+            replay["kind"] = speaker
+            replay["text"] = (replay.get("text") or "") + (chunk or "")
+            return
+
+        if kind in ("agent_message_chunk", "agent_thought_chunk") and chunk:
+            turn = state.get("active_turn")
+            if turn is None:
+                # Unsolicited chunk (e.g. mid-replay thought) — ignore.
+                return
+            field = "text" if kind == "agent_message_chunk" else "thought"
+            _acp_append_turn_text(turn, field, chunk)
+            block_type = "text" if kind == "agent_message_chunk" else "thinking"
+            _acp_emit_delta_unlocked(harness, sid, {
+                "type": "assistant_block",
+                "message_id": turn["msg_id"],
+                "blocks": [{"type": block_type, "text": chunk}],
+            })
+            return
+
+        if kind == "user_message_chunk":
+            # Live user echo is skipped (we emit user_text at prompt time).
+            return
+
+        if kind == "tool_call":
+            tool_id = str(update.get("toolCallId") or "")
+            title = update.get("title") or update.get("kind") or "tool"
+            turn = state.get("active_turn")
+            if turn is not None:
+                turn.setdefault("tools", {})[tool_id] = {
+                    "title": title, "status": update.get("status") or "running",
+                }
+            _acp_emit_delta_unlocked(harness, sid, {
+                "type": "assistant_block",
+                "message_id": (turn or {}).get("msg_id") or f"acp-{harness}-tool",
+                "blocks": [{
+                    "type": "tool_use", "name": title, "id": tool_id,
+                    "summary": update.get("kind") or "",
+                }],
+            })
+            _acp_emit_event_unlocked(harness, sid, {
+                "type": "assistant",
+                "message_id": (turn or {}).get("msg_id") or f"acp-{harness}-tool-{tool_id}",
+                "blocks": [{
+                    "kind": "tool_use", "name": title,
+                    "detail": update.get("kind") or "", "id": tool_id,
+                }],
+            })
+            return
+
+        if kind == "tool_call_update":
+            tool_id = str(update.get("toolCallId") or "")
+            turn = state.get("active_turn")
+            if turn is not None and tool_id in (turn.get("tools") or {}):
+                if update.get("status"):
+                    turn["tools"][tool_id]["status"] = update["status"]
+            return
+
+        if kind == "available_commands_update":
+            state["available_commands"] = update.get("availableCommands") or []
+            return
+
+        if kind == "config_option_update":
+            options = update.get("configOptions")
+            if isinstance(options, list):
+                state["config_options"] = options
+            return
+
+        if kind == "current_mode_update":
+            state["mode"] = update.get("currentModeId")
+            return
+
+        if kind == "usage_update":
+            state["usage"] = update
+            return
+
+        # plan and unknown update kinds: recorded nowhere, never fatal.
+
+
+def _acp_message_event(state, speaker, text):
+    if speaker == "user":
+        return {"type": "user_text", "text": text}
+    return {
+        "type": "assistant",
+        "message_id": f"acp-replay-{state['sid']}-{state['next_line']}",
+        "blocks": [{"kind": "text", "text": text}],
+    }
+
+
+def _acp_finalize_turn(harness, sid, response, pending_entry):
+    """A session/prompt response arrived: the turn is over (end_turn,
+    cancelled, or error). Fold accumulated text into conv events."""
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True)
+        turn = state.get("active_turn")
+        if turn is None or (pending_entry.get("is_active") is False and turn.get("req_id") != pending_entry.get("req_id")):
+            turn = None
+        error = response.get("error")
+        stop_reason = ((response.get("result") or {}).get("stopReason")) if not error else None
+        if turn is not None:
+            blocks = []
+            if turn.get("thought"):
+                blocks.append({"kind": "thinking", "text": turn["thought"]})
+            if turn.get("text"):
+                blocks.append({"kind": "text", "text": turn["text"]})
+            if blocks:
+                _acp_emit_event_unlocked(harness, sid, {
+                    "type": "assistant", "message_id": turn["msg_id"], "blocks": blocks,
+                })
+            state["active_turn"] = None
+            state["status"] = "idle"
+            state["stop_reason"] = stop_reason or ("error" if error else None)
+        if error:
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            _acp_emit_event_unlocked(harness, sid, {
+                "type": "result", "subtype": "error",
+                "error": message or "ACP turn failed",
+            }, save=True)
+            _acp_emit_delta_unlocked(harness, sid, {"type": "result", "subtype": "error"})
+        else:
+            _acp_emit_event_unlocked(harness, sid, {
+                "type": "result", "subtype": stop_reason or "end_turn",
+            }, save=True)
+            _acp_emit_delta_unlocked(harness, sid, {
+                "type": "result", "subtype": stop_reason or "end_turn",
+            })
+        _ACP_LOCK.notify_all()
+
+
+def _acp_reader(harness, conn):
+    transport = conn.get("transport")
+    try:
+        for line in transport.proc.stdout:
+            line = (line or "").strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                _acp_handle_message(harness, payload)
+            except Exception:
+                # A folding bug must never kill the reader loop.
+                pass
+    finally:
+        with _ACP_LOCK:
+            current = _ACP_CONNS.get(harness)
+            if current is conn:
+                _ACP_CONNS.pop(harness, None)
+            pending = _ACP_PENDING.pop(harness, {})
+            for entry in pending.values():
+                entry["response"] = {"error": {"code": -32003, "message": f"ACP {harness} process exited"}}
+                entry["event"].set()
+            sessions = _ACP_SESSION_STATE.get(harness) or {}
+            for st in sessions.values():
+                if st.get("status") == "active":
+                    st["status"] = "idle"
+                    st["active_turn"] = None
+            _ACP_LOCK.notify_all()
+
+
+def _acp_ensure(harness):
+    """Lazily start + initialize the harness's ACP subprocess."""
+    cfg = _ACP_HARNESSES.get(harness)
+    if cfg is None or not _acp_harness_enabled(harness):
+        return None
+    with _ACP_LOCK:
+        _acp_load_state(harness)
+        while True:
+            conn = _ACP_CONNS.get(harness)
+            if conn and conn.get("initialized") and conn["transport"].alive():
+                return conn
+            if not (conn or {}).get("initializing"):
+                break
+            _ACP_LOCK.wait(0.5)
+        conn = {"initializing": True, "next_id": 1, "caps": {}}
+        _ACP_CONNS[harness] = conn
+
+    resolved = _acp_resolve_bin(harness)
+    proc = None
+    if resolved.get("available"):
+        try:
+            proc = subprocess.Popen(
+                [resolved["bin"], *cfg.get("acp_args", ())],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+        except (FileNotFoundError, OSError):
+            proc = None
+    if proc is None:
+        with _ACP_LOCK:
+            _ACP_CONNS.pop(harness, None)
+            _ACP_LOCK.notify_all()
+        return None
+
+    transport = _AcpTransport(proc)
+    conn["proc"] = proc
+    conn["transport"] = transport
+    reader = threading.Thread(
+        target=_acp_reader, args=(harness, conn),
+        daemon=True, name=f"acp-reader-{harness}",
+    )
+    conn["reader"] = reader
+    reader.start()
+
+    req_id = _acp_request_async(harness, "initialize", {
+        "protocolVersion": _ACP_PROTOCOL_VERSION,
+        "clientInfo": {
+            "name": "claude-command-center",
+            "title": "Claude Command Center",
+            "version": __version__,
+        },
+        # No fs capability: the agent executes file I/O locally. No terminal
+        # capability: shell runs in the harness's own environment.
+        "clientCapabilities": {},
+    })
+    response = _acp_wait_response(harness, req_id, timeout=10) if req_id is not None else None
+    result = (response or {}).get("result")
+    if isinstance(result, dict):
+        with _ACP_LOCK:
+            if _ACP_CONNS.get(harness) is conn and transport.alive():
+                conn["caps"] = result.get("agentCapabilities") or {}
+                conn["agent_info"] = result.get("agentInfo") or {}
+                conn["auth_methods"] = result.get("authMethods") or []
+                conn["initialized"] = True
+                conn["initializing"] = False
+                _ACP_LOCK.notify_all()
+                return conn
+    transport.close()
+    with _ACP_LOCK:
+        if _ACP_CONNS.get(harness) is conn:
+            _ACP_CONNS.pop(harness, None)
+        _ACP_LOCK.notify_all()
+    return None
+
+
+def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None):
+    """session/new (+ optional config + optional first prompt)."""
+    conn = _acp_ensure(harness)
+    if conn is None:
+        resolved = _acp_resolve_bin(harness)
+        return {"ok": False, "error": resolved.get("reason") or f"ACP {harness} unavailable"}
+    resp = _acp_request(harness, "session/new", {"cwd": cwd, "mcpServers": []}, timeout=25)
+    if not resp.get("ok"):
+        return resp
+    result = resp.get("result") or {}
+    sid = str(result.get("sessionId") or "")
+    if not sid:
+        return {"ok": False, "error": "ACP session/new returned no sessionId"}
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True, cwd=cwd)
+        state["loaded_conn"] = id(conn)
+        state["config_options"] = result.get("configOptions") or []
+        for opt in state["config_options"]:
+            if isinstance(opt, dict) and opt.get("id") == "model":
+                state["model"] = opt.get("currentValue")
+        _acp_save_state_unlocked(harness)
+    if mode:
+        _acp_set_config(harness, sid, "mode", mode)
+    if model:
+        _acp_set_config(harness, sid, "model", model)
+    if prompt:
+        sent = _acp_prompt(harness, sid, prompt)
+        if not sent.get("ok"):
+            return sent
+    return {
+        "ok": True,
+        "session_id": sid,
+        "via": "acp",
+        "harness": harness,
+        "config_options": result.get("configOptions") or [],
+    }
+
+
+def _acp_prompt(harness, sid, text, mode="send"):
+    """Async session/prompt: ACK returns immediately; the turn streams via
+    session/update notifications and finishes in _acp_finalize_turn."""
+    if not text:
+        return {"ok": False, "error": "empty prompt"}
+    conn = _acp_ensure(harness)
+    if conn is None:
+        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+    text = _strip_lone_surrogates(str(text))
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True)
+        if state.get("status") == "active" and mode != "steer":
+            return {"ok": False, "error": "turn already in progress", "code": "busy"}
+        loaded = state.get("loaded_conn") == id(conn)
+        cwd = state.get("cwd") or ""
+    if not loaded:
+        # Session exists on disk (TUI or pre-restart) but isn't attached to
+        # this ACP connection — attach first (resume keeps CCC's transcript).
+        if not cwd and harness == "kimi":
+            idx = _kimi_session_index().get(sid) or {}
+            cwd = idx.get("work_dir") or ""
+        if not cwd:
+            return {"ok": False, "error": "session cwd unknown — cannot attach", "code": "no_cwd"}
+        attached = _acp_load(harness, sid, cwd)
+        if not attached.get("ok"):
+            return attached
+    req_id = _acp_request_async(harness, "session/prompt", {
+        "sessionId": sid,
+        "prompt": [{"type": "text", "text": text}],
+    }, sid=sid)
+    if req_id is None:
+        return {"ok": False, "error": f"ACP {harness} send failed"}
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True)
+        entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
+        if state.get("status") != "active":
+            state["turn_seq"] += 1
+            state["active_turn"] = {
+                "req_id": req_id,
+                "msg_id": f"acp-{harness}-{state['turn_seq']}",
+                "text": "", "thought": "", "tools": {},
+                "started_at": time.time(),
+            }
+            state["status"] = "active"
+            # New turn: drop the previous turn's bubble deltas so a
+            # late-attaching stream replays only the in-flight turn.
+            state["deltas"].clear()
+            if entry is not None:
+                entry["is_active"] = True
+        _acp_emit_event_unlocked(harness, sid, {
+            "type": "user_text", "text": text,
+        }, save=True)
+    return {
+        "ok": True, "via": "acp-prompt", "harness": harness,
+        "session_id": sid, "turn": state.get("turn_seq"),
+    }
+
+
+def _acp_cancel(harness, sid):
+    if _acp_ensure(harness) is None:
+        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+    # ACP session/cancel is a notification (no id, no response).
+    sent = _acp_send(harness, {
+        "jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid},
+    })
+    return {"ok": sent, "via": "acp-cancel"}
+
+
+def _acp_load(harness, sid, cwd):
+    """Attach to an existing harness session in the current ACP connection.
+
+    Uses session/load (history replays as session/update chunks, folded by
+    the replay branch and flushed here) when CCC has no transcript yet;
+    session/resume (no replay) when the CCC transcript already holds the
+    history — e.g. re-attaching after a CCC restart.
+    """
+    conn = _acp_ensure(harness)
+    if conn is None:
+        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+    has_history = False
+    try:
+        has_history = _acp_transcript_path(harness, sid).stat().st_size > 0
+    except OSError:
+        pass
+    method = "session/resume" if has_history else "session/load"
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True, cwd=cwd)
+        if method == "session/load" and state.get("replay") is None:
+            state["replay"] = {"kind": None, "text": ""}
+    resp = _acp_request(harness, method, {
+        "sessionId": sid, "cwd": cwd, "mcpServers": [],
+    }, timeout=30, sid=sid)
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True, cwd=cwd)
+        replay = state.get("replay")
+        if replay and replay.get("text"):
+            _acp_emit_event_unlocked(harness, sid, _acp_message_event(state, replay["kind"], replay["text"]))
+        state["replay"] = None
+        if resp.get("ok"):
+            state["attached"] = True
+            state["loaded_conn"] = id(conn)
+            if cwd:
+                state["cwd"] = cwd
+        _acp_save_state_unlocked(harness)
+    if not resp.get("ok"):
+        return resp
+    return {"ok": True, "session_id": sid, "harness": harness, "via": f"acp-{method.split('/')[-1]}"}
+
+
+def _acp_list(harness, cwd=None):
+    if _acp_ensure(harness) is None:
+        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+    params = {"cwd": cwd} if cwd else {}
+    return _acp_request(harness, "session/list", params, timeout=15)
+
+
+def _acp_set_config(harness, sid, config_id, value):
+    return _acp_request(harness, "session/set_config_option", {
+        "sessionId": sid, "configId": config_id, "value": value,
+    }, timeout=10, sid=sid)
+
+
+def _acp_resolve_approval(harness, sid, request_id, option_id=None):
+    """Answer a pending session/request_permission. option_id None = cancel."""
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid)
+        pending = (state or {}).get("pending_permissions") or {}
+        entry = pending.pop(str(request_id), None)
+    if entry is None:
+        return {"ok": False, "error": "no pending permission request"}
+    if option_id:
+        outcome = {"outcome": "selected", "optionId": option_id}
+    else:
+        outcome = {"outcome": "cancelled"}
+    sent = _acp_respond(harness, entry.get("req_id", request_id), result={"outcome": outcome})
+    with _ACP_LOCK:
+        _acp_save_state_unlocked(harness)
+        _ACP_LOCK.notify_all()
+    return {"ok": sent, "via": "acp-approval"}
+
+
+def _acp_session_snapshot(harness, sid):
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid)
+        if state is None:
+            return None
+        return {
+            "sid": sid,
+            "harness": harness,
+            "cwd": state.get("cwd") or "",
+            "status": state.get("status") or "idle",
+            "model": state.get("model"),
+            "turn_seq": state.get("turn_seq") or 0,
+            "pending_permissions": len(state.get("pending_permissions") or {}),
+            "config_options": state.get("config_options") or [],
+            "updated_at": state.get("updated_at") or 0,
+        }
+
+
+def _acp_is_session(harness, sid):
+    """Does this sid belong to the harness? Cheap, no subprocess spawn.
+
+    True for CCC-attached sessions, sessions with a CCC transcript, and
+    (kimi) sessions present in the harness's own on-disk index so TUI
+    sessions route through the ACP attach flow too.
+    """
+    if not sid:
+        return False
+    with _ACP_LOCK:
+        _acp_load_state(harness)
+        if sid in (_ACP_SESSION_STATE.get(harness) or {}):
+            return True
+    if _acp_transcript_path(harness, sid).is_file():
+        return True
+    if harness == "kimi" and sid in _kimi_session_index():
+        return True
+    return False
+
+
+def _is_kimi_session(session_id):
+    return _acp_is_session("kimi", str(session_id or ""))
+
+
+def _resolve_kimi_bin():
+    return _acp_resolve_bin("kimi")
+
+
+def _acp_shutdown_all():
+    for harness in list(_ACP_HARNESSES):
+        conn = _ACP_CONNS.pop(harness, None)
+        if conn and conn.get("transport"):
+            conn["transport"].close()
+
+
+# ===========================================================================
+# Kimi on-disk session store (~/.kimi-code) — read-only discovery.
+#
+# Kimi keeps a global index at $KIMI_CODE_HOME/session_index.jsonl
+# ({sessionId, sessionDir, workDir} per line) and per-session metadata in
+# <sessionDir>/state.json (title, lastPrompt, createdAt/updatedAt). The
+# event-sourced transcript (agents/*/wire.jsonl) is undocumented; the head
+# parse below is defensive and treats unknown event shapes as skippable.
+# ===========================================================================
+
+_KIMI_INDEX_CACHE = {"key": None, "rows": {}}
+_KIMI_WIRE_HEAD_MAX_LINES = 40
+
+
+def _kimi_code_home():
+    raw = os.environ.get("KIMI_CODE_HOME", "").strip()
+    if raw:
+        return Path(os.path.expanduser(raw))
+    return Path.home() / ".kimi-code"
+
+
+def _kimi_session_index():
+    """sid -> {"session_dir", "work_dir"} from session_index.jsonl
+    (mtime-keyed cache; missing/unreadable file -> {})."""
+    path = _kimi_code_home() / "session_index.jsonl"
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    key = (st.st_mtime_ns, st.st_size)
+    if _KIMI_INDEX_CACHE["key"] == key:
+        return _KIMI_INDEX_CACHE["rows"]
+    rows = {}
+    try:
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                sid = rec.get("sessionId")
+                if sid:
+                    rows[str(sid)] = {
+                        "session_dir": str(rec.get("sessionDir") or ""),
+                        "work_dir": str(rec.get("workDir") or ""),
+                    }
+    except OSError:
+        return {}
+    _KIMI_INDEX_CACHE["key"] = key
+    _KIMI_INDEX_CACHE["rows"] = rows
+    return rows
+
+
+def _kimi_state_meta(session_dir):
+    """Read <sessionDir>/state.json. Defensive: any failure -> {}."""
+    if not session_dir:
+        return {}
+    try:
+        with (Path(session_dir) / "state.json").open() as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _kimi_wire_head(session_dir):
+    """First user prompt + main wire path from agents/main/wire.jsonl.
+
+    The wire format is undocumented (observed: turn.prompt carries
+    input=[{type:text,text}]); anything unexpected yields ("", path).
+    """
+    wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
+    if wire is None or not wire.is_file():
+        return "", str(wire) if wire else ""
+    first_prompt = ""
+    try:
+        with wire.open() as f:
+            for i, line in enumerate(f):
+                if i >= _KIMI_WIRE_HEAD_MAX_LINES:
+                    break
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "turn.prompt":
+                    continue
+                blocks = ev.get("input")
+                if isinstance(blocks, list):
+                    text = "".join(
+                        str(b.get("text") or "") for b in blocks
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    ).strip()
+                    if text:
+                        first_prompt = text
+                        break
+    except OSError:
+        pass
+    return first_prompt, str(wire)
+
+
+def find_kimi_conversations(
+    repo_path=None,
+    include_old=True,
+    repo_only=True,
+    progress=None,
+    limit=None,
+    resolve_pr_states=True,
+    resolve_worktree_dirty=True,
+):
+    """Session rows for the Kimi engine (source/engine "kimi").
+
+    Merges CCC-attached ACP sessions (live status, model) with Kimi's own
+    on-disk index (TUI sessions included), newest first.
+    """
+    if not _acp_harness_enabled("kimi"):
+        return []
+    rows = []
+    repo_path_obj = Path(repo_path).resolve() if repo_path else None
+    git_top_cache = {}
+    with _ACP_LOCK:
+        _acp_load_state("kimi")
+        attached = dict(_ACP_SESSION_STATE.get("kimi") or {})
+    index = _kimi_session_index()
+    try:
+        pins = _load_repo_pins()
+    except Exception:
+        pins = {}
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    now = time.time()
+    max_age_days = int(os.environ.get("CCC_MAX_CONV_AGE_DAYS", "30") or "30")
+    cutoff = 0 if include_old else now - (max_age_days * 86400)
+
+    sids = set(index) | set(attached)
+    for sid in sids:
+        idx = index.get(sid) or {}
+        acp = attached.get(sid) or {}
+        meta = _kimi_state_meta(idx.get("session_dir"))
+        cwd = (
+            (acp.get("cwd") or "").strip()
+            or (meta.get("workDir") or "").strip()
+            or (idx.get("work_dir") or "").strip()
+        )
+        pinned = pins.get(sid) or ""
+        if repo_only and repo_path_obj is not None:
+            if pinned and pinned != str(repo_path_obj):
+                continue
+            if not pinned:
+                if not cwd or not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                    continue
+        modified = 0.0
+        for cand in (
+            _iso_to_epoch(meta.get("updatedAt")),
+            _iso_to_epoch(meta.get("createdAt")),
+            acp.get("updated_at") or 0,
+        ):
+            if cand:
+                modified = max(modified, float(cand))
+        if not modified:
+            try:
+                modified = (Path(idx.get("session_dir") or "") / "state.json").stat().st_mtime
+            except OSError:
+                modified = 0.0
+        if cutoff and modified and modified < cutoff:
+            continue
+        title = _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
+        last_prompt = _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
+        first_message = last_prompt
+        wire_path = ""
+        if not first_message:
+            first_message, wire_path = _kimi_wire_head(idx.get("session_dir"))
+        else:
+            wire_dir = idx.get("session_dir") or ""
+            wire_path = str(Path(wire_dir) / "agents" / "main" / "wire.jsonl") if wire_dir else ""
+        display_name = (
+            name_overrides.get(sid)
+            or _truncate_session_name(title)
+            or (first_message[:80] if first_message else None)
+            or (title[:80] if title else "Kimi session")
+        )
+        effective_cwd = _first_existing_dir(cwd, pinned) or cwd
+        try:
+            cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        folder_path = pinned or cwd or effective_cwd or ""
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Kimi"
+        _wt_worktree_label = None
+        _wt_idx = folder_label.find("-wt-")
+        if _wt_idx > 0:
+            _wt_worktree_label = folder_label[_wt_idx + 4:]
+            folder_label = folder_label[:_wt_idx]
+        status = (acp.get("status") or "").strip()
+        row = {
+            "id": sid,
+            "session_id": sid,
+            "source": "kimi",
+            "engine": "kimi",
+            "timestamp": "",
+            "branch": "",
+            "git_branch": "",
+            "first_message": first_message[:200],
+            "display_name": display_name,
+            "ai_title": title or None,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": (last_prompt or first_message)[:200],
+            "size": 0,
+            "modified": modified,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+            "mtime": modified,
+            "jsonl_path": wire_path,
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "worktree_label": _wt_worktree_label,
+            "session_cwd": effective_cwd,
+            "session_cwd_exists": cwd_exists,
+            "acp": bool(acp),
+            "model": acp.get("model") or "",
+        }
+        if status:
+            row["status"] = "running" if status == "active" else "idle"
+        if acp:
+            # Lets the kanban swap a spawning-* placeholder for this card.
+            row["spawn_pid"] = sid
+        rows.append(row)
+    rows.sort(key=lambda r: r.get("modified") or 0, reverse=True)
+    if limit:
+        rows = rows[:limit]
+    return rows
 
 
 def find_codex_conversations(
@@ -39290,6 +40514,67 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     return _finalize_spawn_response(resp, entry, ctx)
 
 
+def spawn_session_kimi(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+    """Spawn a Kimi session via the ACP harness (session/new + first prompt).
+
+    Unlike the CLI-spawning engines there is no per-session process or log
+    file: the session lives inside CCC's shared ``kimi acp`` subprocess and
+    streams over ACP notifications. The registry entry carries the ACP
+    sessionId up front; pid stays None (nothing to reattach after a CCC
+    restart — the session is rediscovered from the ACP state file instead).
+    """
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    resolved = _resolve_kimi_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _create_worktree_for_spawn(spawn_cwd, session_name)
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+    model_to_use = _spawn_model_for_engine("kimi", model)
+    result = _acp_session_new("kimi", spawn_cwd, prompt=prompt or None, model=model_to_use or None)
+    if not result.get("ok"):
+        return {
+            "ok": False,
+            "error": result.get("error") or "kimi ACP session/new failed",
+            "code": result.get("code") or "kimi_spawn_failed",
+            "via": "kimi-acp",
+        }
+    sid = result["session_id"]
+    entry = {
+        "pid": None, "name": session_name, "log": None,
+        "prompt": prompt[:200], "started": timestamp, "proc": None,
+        "log_fh": None, "fifo": None, "stdin_fd": None,
+        "engine": "kimi", "session_id": sid, "cwd": spawn_cwd,
+        "repo_path": repo_for_logs, "model": model_to_use or "",
+        "parent_session_id": parent_session_id or "",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=None, name=session_name, log_path=_acp_transcript_path("kimi", sid),
+        cwd=spawn_cwd, spawned_at=timestamp, command_summary=prompt[:200],
+        fifo=None, engine="kimi", session_id=sid, model=model_to_use,
+        repo_path=repo_for_logs, parent_session_id=parent_session_id,
+    )
+    resp = {
+        "ok": True, "pid": None, "session_id": sid, "name": session_name,
+        "spawn_id": sid, "via": "kimi-acp",
+    }
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return resp
+
+
 def spawn_session_hermes(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
     """Spawn a headless Hermes CLI run and return tracking info."""
     if os.environ.get("CCC_SSH_HOST"):
@@ -42700,6 +43985,10 @@ def _group_chat_compute_waiting(real_path: str, session_ids: list, name_map: dic
 
 
 GROUP_CHAT_ACTIVE_WINDOW_S = 15 * 60
+# The Current sidebar's smallest window is one day. Keep lightweight summaries
+# for that period so an empty chat does not disappear as soon as its active
+# nudge window ends.
+GROUP_CHAT_SIDEBAR_WINDOW_S = 24 * 60 * 60
 
 
 def group_chat_activity_state(meta: dict, now: float | None = None) -> str:
@@ -42722,7 +44011,8 @@ def group_chat_activity_state(meta: dict, now: float | None = None) -> str:
 
 
 def _list_active_group_chat_summaries(now: float | None = None) -> list:
-    """Return active-chat rows without reading messages or probing participants."""
+    """Return recent sidebar chat rows without reading messages or participants."""
+    now = time.time() if now is None else now
     group_chats_dir = os.path.expanduser("~/.claude/group-chats")
     try:
         filenames = os.listdir(group_chats_dir)
@@ -42738,7 +44028,7 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
                 meta = json.load(handle)
         except (OSError, ValueError, TypeError):
             continue
-        if not isinstance(meta, dict) or group_chat_activity_state(meta, now) != "active":
+        if not isinstance(meta, dict):
             continue
         md_path = sidecar_path[:-5] + ".md"
         try:
@@ -42750,6 +44040,11 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             float(meta.get("last_message_at") or 0),
             float(meta.get("participant_changed_at") or 0),
         )
+        chat_state = group_chat_activity_state(meta, now)
+        if chat_state in {"archived", "paused"}:
+            continue
+        if chat_state != "active" and (not last_activity or now - last_activity >= GROUP_CHAT_SIDEBAR_WINDOW_S):
+            continue
         # CCC-508: id/uuid/path are cheap (already-loaded meta + a stable
         # sidecar field), unlike the participant-probing/message-reading this
         # summary deliberately skips. Omitting them left every sidebar
@@ -42763,12 +44058,12 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             "path": md_path,
             "path_tilde": "~/.claude/group-chats/" + os.path.basename(md_path),
             "topic": meta.get("topic", ""),
-            "state": "active",
+            "state": chat_state,
             # Sidebar consumers share the full-listing contract and use
             # `status` to count/render active chats. Keep `state` for
             # compatibility while exposing the same active state under the
             # established field name.
-            "status": "active",
+            "status": "active" if chat_state == "active" else "closed",
             "session_ids": meta.get("session_ids") or [],
             # Current-session filtering and ordering use these timestamps.
             # They are available from the sidecar/stat call, so including them
@@ -44489,6 +45784,8 @@ def _inject_text_into_session(
         return result
     if is_codex:
         return resume_session_codex(session_id, text)
+    if _is_kimi_session(session_id):
+        return _acp_prompt("kimi", session_id, text, mode=mode)
     if _is_gemini_session(session_id):
         return resume_session_gemini(session_id, text)
     if is_cursor:
@@ -44766,6 +46063,8 @@ def _interrupt_session(session_id):
                 "note": "Codex process interrupted",
             }
         return {"ok": False, "error": "Codex session is not live — nothing to interrupt"}
+    if _is_kimi_session(session_id):
+        return _acp_cancel("kimi", session_id)
     tty = status.get("tty")
     term_app = status.get("terminal_app")
     has_tty = _is_real_tty(tty)
@@ -48269,6 +49568,7 @@ def _nextjs_shutdown_all():
 
 import atexit as _atexit
 _atexit.register(_codex_app_server_shutdown)
+_atexit.register(_acp_shutdown_all)
 _atexit.register(_nextjs_shutdown_all)
 
 
@@ -57184,6 +58484,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info = _resolve_kilo_bin()
             info["model"] = os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
             self.send_json(info)
+        elif path == "/api/sessions/spawn-kimi/availability":
+            info = _resolve_kimi_bin()
+            info["model"] = _spawn_model_for_engine("kimi")
+            _conn = _acp_conn("kimi")
+            info["acp"] = bool(
+                _conn and _conn.get("initialized") and _conn["transport"].alive()
+            )
+            self.send_json(info)
         elif path == "/api/sessions/spawn-hermes/availability":
             info = _resolve_hermes_bin()
             info["model"] = "auto"
@@ -57908,8 +59216,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
             self._stream_conversation(conv_id, after_line)
-        elif re.match(r"^/api/session/[a-f0-9-]+/spawn-info$", path):
+        elif re.match(r"^/api/session/[^/]+/spawn-info$", path):
             sid = path.split("/")[-2]
+            if _is_kimi_session(sid):
+                # No spawn log — the ACP delta stream serves the live preview.
+                resolved = _acp_resolve_bin("kimi")
+                self.send_json({
+                    "has_log": True,
+                    "alive": bool(resolved.get("available")),
+                    "log": None,
+                    "acp": True,
+                })
+                return
             log_path, alive = _resolve_spawn_log_for_session(sid)
             self.send_json({
                 "has_log": bool(log_path),
@@ -57923,7 +59241,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(list_repo_worktrees(ctx["repo_path"]))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
-        elif re.match(r"^/api/session/[a-f0-9-]+/spawn-stream$", path):
+        elif re.match(r"^/api/session/[^/]+/spawn-stream$", path):
             sid = path.split("/")[-2]
             self._stream_spawn_deltas(sid)
         elif re.match(r"^/api/conversations/(?!all$|order$)[^/]+$", path):
@@ -61261,6 +62579,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                         )
+                    elif engine == "kimi":
+                        result = spawn_session_kimi(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                        )
                     elif engine == "antigravity":
                         result = spawn_session_antigravity(
                             prompt,
@@ -61660,6 +62988,36 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         model=model,
                     )
                     if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-kimi":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            else:
+                try:
+                    result = spawn_session_kimi(
+                        prompt,
+                        name=name,
+                        cwd=(payload.get("cwd") or "").strip() or None,
+                        repo_path=payload.get("repo_path"),
+                        worktree=bool(payload.get("worktree")),
+                        model=payload.get("model"),
+                        parent_session_id=payload.get("parent_session_id"),
+                    )
+                    if result.get("code") in ("kimi_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -63120,6 +64478,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             elif result.get("code") == "codex_app_server_unavailable":
                 status_code = 503
             self.send_json(result, status_code)
+        elif path == "/api/acp/approval":
+            # Answer a pending ACP session/request_permission (kimi and any
+            # future ACP harness). option_id omitted/null = cancel the prompt.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            harness = (payload.get("harness") or "kimi").strip() or "kimi"
+            sid = (payload.get("session_id") or "").strip()
+            request_id = payload.get("request_id")
+            option_id = payload.get("option_id")
+            if harness not in _ACP_HARNESSES:
+                self.send_json({"ok": False, "error": f"unknown ACP harness: {harness}"}, 400)
+                return
+            if not sid or request_id is None:
+                self.send_json({"ok": False, "error": "missing session_id or request_id"}, 400)
+                return
+            _record_interaction(sid)
+            result = _acp_resolve_approval(harness, sid, request_id, option_id)
+            self.send_json(result, 200 if result.get("ok") else 409)
         elif path == "/api/codex/grab-back":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -63477,6 +64860,58 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         an in-flight preview that the client clears once the matching
         finalized event lands via /api/conversations/<id>/stream.
         """
+        if _is_kimi_session(session_id):
+            self._stream_acp_deltas("kimi", session_id)
+            return
+        self._stream_spawn_deltas_log(session_id)
+
+    def _stream_acp_deltas(self, harness, session_id):
+        """SSE: live bubble deltas for an ACP session, fed straight from the
+        reader thread's fold of session/update notifications. No file tail,
+        no polling — chunk latency is the Condition wake (~ms). Deltas are
+        in-memory only; the finalized transcript stays authoritative.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        last_seq = 0
+        last_keepalive = time.time()
+        try:
+            while True:
+                with _ACP_LOCK:
+                    _ACP_LOCK.wait(5.0)
+                    state = (_ACP_SESSION_STATE.get(harness) or {}).get(session_id) or {}
+                    pending = [
+                        d for d in (state.get("deltas") or [])
+                        if d.get("seq", 0) > last_seq
+                    ]
+                if pending:
+                    last_seq = max(d["seq"] for d in pending)
+                    payload = {"events": [d["event"] for d in pending]}
+                    try:
+                        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    last_keepalive = time.time()
+                    continue
+                now = time.time()
+                if now - last_keepalive >= 5:
+                    try:
+                        self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                    last_keepalive = now
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _stream_spawn_deltas_log(self, session_id):
+        """The original spawn-log tail: block-level deltas parsed from the
+        spawned CLI's stream-json log file (0.25s size poll)."""
         log_path, _alive = _resolve_spawn_log_for_session(session_id)
         if not log_path:
             self.send_json({"error": "no spawn log for this session"}, 404)
@@ -63784,6 +65219,48 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self.wfile.write(b"event: keepalive\ndata: {}\n\n")
                 self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            return
+        if _is_kimi_session(conversation_id):
+            # ACP sessions: no mtime polling. The reader thread notifies
+            # _ACP_LOCK as notifications fold, so finalized events reach the
+            # browser within ~ms of the harness emitting them. Events are read
+            # from the CCC-owned transcript so reconnects and CCC restarts
+            # replay cleanly from `after`.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            last_keepalive = time.time()
+            last_size = -1
+            try:
+                while True:
+                    with _ACP_LOCK:
+                        _ACP_LOCK.wait(5.0)
+                    try:
+                        size = _acp_transcript_path("kimi", conversation_id).stat().st_size
+                    except OSError:
+                        size = -1
+                    events = []
+                    if size != last_size:
+                        last_size = size
+                        events = _acp_transcript_events_after("kimi", conversation_id, after_line)
+                    if events:
+                        after_line = max(
+                            [after_line] + [int(e.get("line") or 0) for e in events]
+                        )
+                        payload = {"events": events, "last_line": after_line}
+                        self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+                        self.wfile.flush()
+                        last_keepalive = time.time()
+                        continue
+                    now = time.time()
+                    if now - last_keepalive >= 5:
+                        self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                        self.wfile.flush()
+                        last_keepalive = now
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
             return

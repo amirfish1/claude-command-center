@@ -3928,6 +3928,7 @@
     if (values.includes('cursor')) return 'cursor';
     if (values.includes('antigravity')) return 'antigravity';
     if (values.includes('hermes')) return 'hermes';
+    if (values.includes('kimi')) return 'kimi';
     return 'claude';
   }
 
@@ -3969,7 +3970,7 @@
     const engine = sessionIconEngine(row);
     const engineLabels = {
       claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
-      antigravity: 'Antigravity', hermes: 'Hermes',
+      antigravity: 'Antigravity', hermes: 'Hermes', kimi: 'Kimi',
     };
     const tierLabels = {
       premium: 'Premium', high: 'High', medium: 'Medium', low: 'Low',
@@ -4669,6 +4670,43 @@
       }
     } catch (e) {
       showOpToast('Could not send answer: ' + ((e && e.message) || e), 'error');
+    } finally {
+      pick.classList.remove('is-submitting');
+    }
+  });
+
+  // ACP (kimi) permission options rendered inline in the transcript. Clicking
+  // an option POSTs /api/acp/approval, which answers the harness's pending
+  // session/request_permission JSON-RPC request.
+  document.addEventListener('click', async (ev) => {
+    const pick = ev.target && ev.target.closest && ev.target.closest('.acp-perm-opt');
+    if (!pick) return;
+    ev.preventDefault();
+    const sid = currentSession && currentSession.id;
+    if (!sid) return;
+    if (pick.classList.contains('is-submitting')) return;
+    pick.classList.add('is-submitting');
+    try {
+      const res = await fetch('/api/acp/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          harness: pick.getAttribute('data-acp-harness') || 'kimi',
+          session_id: sid,
+          request_id: pick.getAttribute('data-acp-req'),
+          option_id: pick.getAttribute('data-acp-opt'),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok) {
+        showOpToast('Response sent.');
+        const wrap = pick.closest('.acp-perm-options');
+        if (wrap) wrap.classList.add('is-answered');
+      } else {
+        showOpToast('Could not send response: ' + ((data && data.error) || 'unknown'), 'error');
+      }
+    } catch (e) {
+      showOpToast('Could not send response: ' + ((e && e.message) || e), 'error');
     } finally {
       pick.classList.remove('is-submitting');
     }
@@ -6173,6 +6211,7 @@
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
     const isHermes = currentSession.source === 'hermes';
+    const isKimi = currentSession.source === 'kimi';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll; until it matches
     // the open conversation, treat the session as not-live so we never show the
@@ -6241,6 +6280,9 @@
       } else if (isHermes) {
         activeInputControls.ttyLabel.textContent = 'hermes';
         if (activeInput) activeInput.placeholder = 'Resume Hermes and send...';
+      } else if (isKimi) {
+        activeInputControls.ttyLabel.textContent = 'kimi';
+        if (activeInput) activeInput.placeholder = liveStatus.live ? 'Send to Kimi session…' : 'Resume Kimi and send…';
       } else if (live) {
         activeInputControls.ttyLabel.textContent = liveStatus.tty;
         if (activeInput) activeInput.placeholder = 'Send to terminal...';
@@ -6294,15 +6336,17 @@
         }
       }
       if (activeSteerBtn) {
-        const canSteer = canSend && isCodex && hasSession && !isNewSession && !isBacklogIssue
-          && codexTurnSteerable();
+        const canSteer = canSend && (isCodex || isKimi) && hasSession && !isNewSession && !isBacklogIssue
+          && (isKimi || codexTurnSteerable());
         activeSteerBtn.classList.toggle('visible', canSteer);
         activeSteerBtn.disabled = !canSteer;
         activeSteerBtn.title = canSteer
-          ? 'Steer running Codex turn now'
+          ? (isKimi ? 'Steer running Kimi turn now' : 'Steer running Codex turn now')
           : (isCodex
               ? 'No running Codex turn can be steered from CCC; use Send to resume or follow up'
-              : 'Steer is only available for Codex sessions');
+              : (isKimi
+                  ? 'Steer is available while a Kimi turn is running'
+                  : 'Steer is only available for Codex and Kimi sessions'));
       }
       // Compact button — only for compaction-capable open sessions (Claude
       // AND Codex). cursor/gemini/antigravity return compact_unsupported_engine
@@ -25399,7 +25443,7 @@
             +     ' data-gc-id="' + escapeHtml(chatId) + '"'
             +     ' title="' + (isChatCollapsed ? 'Expand participant list' : 'Collapse participant list') + '">'
             +     (isChatCollapsed ? '&#9656;' : '&#9662;') + '</button>'
-          : '<span class="conv-ingroupchat-collapse-btn conv-ingroupchat-collapse-spacer" aria-hidden="true"></span>';
+          : '';
         const _renderChatHtml = (lifecycleActionHtml) => '<div class="conv-ingroupchat-chat' + (isClosed ? ' conv-ingroupchat-chat-closed' : '') + (isChatCollapsed ? ' is-collapsed' : '') + '">'
           + '<div class="conv-ingroupchat-row' + (isClosed ? ' conv-ingroupchat-row-closed' : '') + (isPaused ? ' conv-ingroupchat-row-paused' : '') + (isActiveChat || isActiveChatById ? ' active' : '') + '"'
           +   ' data-role="ingroupchat-row"'
@@ -30316,6 +30360,7 @@
     if (source === 'cursor') return 'cursor';
     if (source === 'antigravity') return 'antigravity';
     if (source === 'hermes') return 'hermes';
+    if (source === 'kimi') return 'kimi';
     if (source === 'pkood') return 'pkood';
     if (source === 'backlog') return row && row.issue_number ? 'issue' : 'backlog';
     if (source === 'github_pr') return 'pull request';
@@ -30341,6 +30386,7 @@
     const named = {
       claude: 'Claude', codex: 'Codex', gemini: 'Gemini',
       cursor: 'Cursor', antigravity: 'Antigravity', hermes: 'Hermes',
+      kimi: 'Kimi',
     };
     const key = sourceLabelForPane(row);
     const label = named[key];
@@ -32214,6 +32260,7 @@
     const isCursor = currentSession.source === 'cursor';
     const isAntigravity = currentSession.source === 'antigravity';
     const isHermes = currentSession.source === 'hermes';
+    const isKimi = currentSession.source === 'kimi';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll — ignore it until
     // it matches the open conversation so we never show the prior session's tty.
@@ -32222,7 +32269,7 @@
     const hasSession = !!currentSession.id;
     if (hasSession && kanbanView) {
       $convPanelInput.classList.add('visible');
-      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (ls.tty || 'codex') : (isGemini ? (ls.tty || 'gemini') : (isCursor ? (ls.tty || 'cursor') : (isAntigravity ? (ls.tty || 'antigravity') : (isHermes ? 'hermes' : (ls.tty || (live ? '' : 'offline')))))));
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (ls.tty || 'codex') : (isGemini ? (ls.tty || 'gemini') : (isCursor ? (ls.tty || 'cursor') : (isAntigravity ? (ls.tty || 'antigravity') : (isHermes ? 'hermes' : (isKimi ? 'kimi' : (ls.tty || (live ? '' : 'offline'))))))));
       if ($cpInput) {
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
         else if (isCodex) $cpInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
@@ -32230,6 +32277,7 @@
         else if (isCursor) $cpInput.placeholder = live ? 'Send to Cursor terminal...' : 'Resume Cursor and send...';
         else if (isAntigravity) $cpInput.placeholder = antigravityInputPlaceholder(currentSession);
         else if (isHermes) $cpInput.placeholder = 'Resume Hermes and send...';
+        else if (isKimi) $cpInput.placeholder = ls.live ? 'Send to Kimi session…' : 'Resume Kimi and send…';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
         else $cpInput.placeholder = 'Send to terminal (offline)...';
         const readOnly = isAntigravity && !antigravityCanSendNow;
@@ -36549,6 +36597,11 @@
         + '<path d="m12.5 13.5 4 4" />'
         + '</svg>';
     }
+    if (engine === 'kimi') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor">'
+        + '<path d="M20.4 13.1A8.9 8.9 0 1 1 10.9 3.6a.6.6 0 0 1 .8.8 7.1 7.1 0 0 0 8 8 .6.6 0 0 1 .7.7Z" />'
+        + '</svg>';
+    }
     return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
       + '<path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />'
       + '</svg>';
@@ -38601,6 +38654,11 @@
       { id: 'hermes-3-llama-3.1-70b',        label: 'hermes-3-llama-3.1-70b' },
       { id: 'hermes-2-pro-llama-3-8b',       label: 'hermes-2-pro-llama-3-8b' },
     ],
+    kimi: [
+      { id: 'kimi-code/k3',                          label: 'K3' },
+      { id: 'kimi-code/kimi-for-coding',             label: 'K2.7 Coding' },
+      { id: 'kimi-code/kimi-for-coding-highspeed',   label: 'K2.7 Coding Highspeed' },
+    ],
   };
 
   const ENGINE_SUPPORTS_CUSTOM_MODEL = {
@@ -38610,6 +38668,7 @@
     antigravity: true,
     kilo: true,
     hermes: true,
+    kimi: true,
   };
 
   // Codex's own switcher pairs a Model choice with a separate Reasoning
@@ -42522,7 +42581,22 @@
             const editDisclosure = renderEditDisclosure(b);
             const commandClass = (commandDisclosure || editDisclosure) ? ' has-command-disclosure' : '';
             const toolUseId = String(b.id || b.tool_use_id || '').trim();
-            blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
+            // ACP (kimi) permission requests carry their options on the block
+            // — render them as inline buttons; the delegated click handler
+            // POSTs /api/acp/approval with the chosen optionId.
+            const acpPermOpts = (b.approval_required && Array.isArray(b.acp_options) && b.acp_options.length)
+              ? '<span class="acp-perm-options">' + b.acp_options.map(function (o) {
+                  const oid = String((o && (o.optionId || o.id)) || '');
+                  const oname = String((o && (o.name || o.title || o.optionId || o.id)) || 'Choose');
+                  return '<button type="button" class="acp-perm-opt"'
+                    + ' data-acp-harness="' + escapeAttr(String(b.acp_harness || 'kimi')) + '"'
+                    + ' data-acp-req="' + escapeAttr(String(b.acp_request_id)) + '"'
+                    + ' data-acp-opt="' + escapeAttr(oid) + '"'
+                    + ' title="Respond to this permission request">' + escapeHtml(oname) + '</button>';
+                }).join('') + '</span>'
+              : '';
+            const acpPermClass = (b.approval_required && b.acp_request_id != null) ? ' acp-needs-approval' : '';
+            blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + acpPermClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
               + '<span class="arrow">-></span> '
               + sourceHtml
               + '<span class="tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
@@ -42532,6 +42606,7 @@
               + inputDisclosure
               + commandDisclosure
               + editDisclosure
+              + acpPermOpts
               + '</div>');
             lastToolPartIdx = blockParts.length - 1;
             // CCC-50: render the image inline under file tool-calls that point
@@ -47673,7 +47748,7 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
@@ -47683,7 +47758,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -47718,6 +47793,7 @@
     if (engine === 'antigravity') return 'Antigravity';
     if (engine === 'kilo') return 'Kilo';
     if (engine === 'hermes') return 'Hermes';
+    if (engine === 'kimi') return 'Kimi';
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
@@ -47728,6 +47804,7 @@
     if (engine === 'antigravity') return 'antigravity';
     if (engine === 'kilo') return 'kilo';
     if (engine === 'hermes') return 'hermes';
+    if (engine === 'kimi') return 'kimi';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
   }
@@ -47739,12 +47816,13 @@
     if (engine === 'antigravity') return '/api/sessions/spawn-antigravity';
     if (engine === 'kilo') return '/api/sessions/spawn-kilo';
     if (engine === 'hermes') return '/api/sessions/spawn-hermes';
+    if (engine === 'kimi') return '/api/sessions/spawn-kimi';
     return '/api/sessions/spawn';
   }
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
-    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo';
+    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'kimi';
   }
   function spawnUsesLogPlaceholder(engine) {
     return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes';
