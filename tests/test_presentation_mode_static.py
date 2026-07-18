@@ -495,6 +495,8 @@ class TestPresentationModeStatic(unittest.TestCase):
         request = _javascript_function_source("requestMode3Bootstrap")
         state = _javascript_function_source("renderMode3BootstrapState")
 
+        refresh = _javascript_function_source("refreshPresentationForPane")
+        setter = _javascript_function_source("setPresentationMode")
         self.assertIn("presentation_bootstrap: true", request)
         self.assertIn("/api/inject-input", request)
         self.assertIn("latestCompletedPresentationAnswer", request)
@@ -504,6 +506,15 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("Retry", state)
         self.assertIn("data-mode3-retry", app_js)
 
+        for source, call in (
+            (refresh, "renderMode3BootstrapState(targetPaneId, conversationId)"),
+            (setter, "requestMode3Bootstrap(targetPaneId, conversationId)"),
+        ):
+            self.assertIn(
+                "const conversationId = presentationConversationIdForPane(targetPaneId)",
+                source,
+            )
+            self.assertIn(call, source)
     def test_escape_exits_either_presentation_mode_even_from_the_composer(self):
         app_js = APP_JS.read_text(encoding="utf-8")
         scheduler = _javascript_function_source("schedulePresentationEscape")

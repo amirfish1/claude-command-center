@@ -41549,6 +41549,7 @@
     const view = getConvViewForPane(targetPaneId);
     if (!pane || !view) return;
     const sessionId = presentationSessionIdForPane(targetPaneId);
+    const conversationId = presentationConversationIdForPane(targetPaneId);
     if (pane.dataset.presentationSessionId !== sessionId) {
       pane.dataset.presentationSessionId = sessionId;
       pane.dataset.presentationMode = presentationModeForSession(sessionId);
@@ -41601,6 +41602,7 @@
     const view = getConvViewForPane(targetPaneId);
     if (!pane || !view) return;
     const normalized = normalizePresentationMode(mode);
+    const conversationId = presentationConversationIdForPane(targetPaneId);
     const oldMode = normalizePresentationMode(pane.dataset.presentationMode || 'off');
     const sessionId = presentationSessionIdForPane(targetPaneId);
     if (oldMode === 'off' && normalized !== 'off') {

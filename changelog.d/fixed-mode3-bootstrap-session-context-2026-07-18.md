@@ -1,0 +1,1 @@
+- Fixed Mode 3 presentation bootstrap errors after session-scoped mode persistence.
