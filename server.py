@@ -27131,6 +27131,7 @@ _ACP_CONNS = {}          # harness -> {"proc","reader","initialized","initializi
 _ACP_PENDING = {}        # harness -> {req_id: {"event","response","method","sid","is_active"}}
 _ACP_SESSION_STATE = {}  # harness -> {sid: session state dict}
 _ACP_STATE_LOADED = set()
+_ACP_ENSURE_ERROR = {}   # harness -> last ensure failure reason (diagnostics)
 
 
 def _acp_harness_enabled(harness):
@@ -27139,6 +27140,14 @@ def _acp_harness_enabled(harness):
     if kill and os.environ.get(kill, "1").lower() in ("0", "false", "no"):
         return False
     return True
+
+
+def _acp_conn_error(harness):
+    """Connection-unavailable message with the last ensure failure attached
+    (bin missing / launch failed / handshake timeout) when known."""
+    detail = _ACP_ENSURE_ERROR.get(harness)
+    base = f"ACP {harness} connection unavailable"
+    return f"{base}: {detail}" if detail else base
 
 
 def _acp_resolve_bin(harness):
@@ -27439,7 +27448,7 @@ def _acp_request(harness, method, params=None, timeout=20, sid=None):
     use for session/prompt, whose response lands at turn end)."""
     req_id = _acp_request_async(harness, method, params or {}, sid=sid)
     if req_id is None:
-        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+        return {"ok": False, "error": _acp_conn_error(harness)}
     response = _acp_wait_response(harness, req_id, timeout=timeout)
     if response is None:
         return {"ok": False, "error": f"ACP {harness} request timed out: {method}"}
@@ -27745,7 +27754,9 @@ def _acp_ensure(harness):
         except (FileNotFoundError, OSError):
             proc = None
     if proc is None:
+        reason = resolved.get("reason") or f"could not launch the {cfg.get('label', harness)} CLI"
         with _ACP_LOCK:
+            _ACP_ENSURE_ERROR[harness] = reason
             _ACP_CONNS.pop(harness, None)
             _ACP_LOCK.notify_all()
         return None
@@ -27781,10 +27792,15 @@ def _acp_ensure(harness):
                 conn["auth_methods"] = result.get("authMethods") or []
                 conn["initialized"] = True
                 conn["initializing"] = False
+                _ACP_ENSURE_ERROR.pop(harness, None)
                 _ACP_LOCK.notify_all()
                 return conn
     transport.close()
     with _ACP_LOCK:
+        _ACP_ENSURE_ERROR[harness] = (
+            f"{cfg.get('label', harness)} ACP handshake timed out or failed "
+            f"(process {'alive' if transport.alive() else 'exited'})"
+        )
         if _ACP_CONNS.get(harness) is conn:
             _ACP_CONNS.pop(harness, None)
         _ACP_LOCK.notify_all()
@@ -27836,7 +27852,7 @@ def _acp_prompt(harness, sid, text, mode="send"):
         return {"ok": False, "error": "empty prompt"}
     conn = _acp_ensure(harness)
     if conn is None:
-        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+        return {"ok": False, "error": _acp_conn_error(harness)}
     text = _strip_lone_surrogates(str(text))
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
@@ -27889,7 +27905,7 @@ def _acp_prompt(harness, sid, text, mode="send"):
 
 def _acp_cancel(harness, sid):
     if _acp_ensure(harness) is None:
-        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+        return {"ok": False, "error": _acp_conn_error(harness)}
     # ACP session/cancel is a notification (no id, no response).
     sent = _acp_send(harness, {
         "jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid},
@@ -27907,7 +27923,7 @@ def _acp_load(harness, sid, cwd):
     """
     conn = _acp_ensure(harness)
     if conn is None:
-        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+        return {"ok": False, "error": _acp_conn_error(harness)}
     has_history = False
     try:
         has_history = _acp_transcript_path(harness, sid).stat().st_size > 0
@@ -27940,7 +27956,7 @@ def _acp_load(harness, sid, cwd):
 
 def _acp_list(harness, cwd=None):
     if _acp_ensure(harness) is None:
-        return {"ok": False, "error": f"ACP {harness} connection unavailable"}
+        return {"ok": False, "error": _acp_conn_error(harness)}
     params = {"cwd": cwd} if cwd else {}
     return _acp_request(harness, "session/list", params, timeout=15)
 
