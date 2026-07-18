@@ -1,0 +1,1 @@
+- Remember each session's presentation mode independently instead of leaking the selection across restarted or switched sessions.

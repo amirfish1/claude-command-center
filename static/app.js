@@ -40318,10 +40318,10 @@
   // ── Conversation presentation modes ──────────────────────────────────
   // Present is a derived local view over transcript DOM. Mode 3 uses the same
   // stage/navigation but consumes a safe slide artifact authored by the
-  // working agent. The selected mode is stored per conversation so split
-  // panes and conversation switches cannot leak state into one another.
-  const PRESENTATION_MODE_KEY = 'ccc-conv-presentation-mode';
-  const PRESENTATION_MODE_BY_CONVERSATION_KEY = 'ccc-conv-presentation-mode-by-conversation';
+  // working agent. The selected mode is stored per session so split panes,
+  // conversation switches, and restarted sessions cannot leak state into one
+  // another.
+  const PRESENTATION_MODE_BY_SESSION_KEY = 'ccc-conv-presentation-mode-by-session';
   const _mode3BootstrapByAnswer = new Map();
 
   function normalizePresentationMode(mode) {
@@ -40330,24 +40330,19 @@
     return value === '1' || value === '2' || value === 'present' ? '2' : 'off';
   }
 
-  function defaultPresentationMode() {
-    try { return normalizePresentationMode(localStorage.getItem(PRESENTATION_MODE_KEY)); }
-    catch (_) { return 'off'; }
-  }
-
   function presentationModeState() {
     try {
-      const parsed = JSON.parse(localStorage.getItem(PRESENTATION_MODE_BY_CONVERSATION_KEY) || 'null');
+      const parsed = JSON.parse(localStorage.getItem(PRESENTATION_MODE_BY_SESSION_KEY) || 'null');
       if (!parsed || parsed.version !== 1 || !parsed.modes || typeof parsed.modes !== 'object') {
         return { version: 1, modes: {} };
       }
       const modes = {};
-      Object.keys(parsed.modes).forEach(conversationId => {
-        if (!conversationId) return;
-        const raw = String(parsed.modes[conversationId] == null ? '' : parsed.modes[conversationId]).toLowerCase();
+      Object.keys(parsed.modes).forEach(sessionId => {
+        if (!sessionId) return;
+        const raw = String(parsed.modes[sessionId] == null ? '' : parsed.modes[sessionId]).toLowerCase();
         if (raw === 'off' || raw === '1' || raw === '2' || raw === '3' || raw === 'present'
             || raw === 'mode3' || raw === 'mode-3') {
-          modes[conversationId] = normalizePresentationMode(raw);
+          modes[sessionId] = normalizePresentationMode(raw);
         }
       });
       return { version: 1, modes };
@@ -40356,23 +40351,23 @@
     }
   }
 
-  function presentationModeForConversation(conversationId) {
-    const id = String(conversationId || '');
-    if (!id) return defaultPresentationMode();
+  function presentationModeForSession(sessionId) {
+    const id = String(sessionId || '');
+    if (!id) return 'off';
     const state = presentationModeState();
     return Object.prototype.hasOwnProperty.call(state.modes, id)
       ? normalizePresentationMode(state.modes[id])
-      : defaultPresentationMode();
+      : 'off';
   }
 
-  function persistPresentationModeForConversation(conversationId, mode) {
-    const id = String(conversationId || '');
+  function persistPresentationModeForSession(sessionId, mode) {
+    const id = String(sessionId || '');
     const normalized = normalizePresentationMode(mode);
     if (!id) return normalized;
     const state = presentationModeState();
     state.modes[id] = normalized;
     try {
-      localStorage.setItem(PRESENTATION_MODE_BY_CONVERSATION_KEY, JSON.stringify(state));
+      localStorage.setItem(PRESENTATION_MODE_BY_SESSION_KEY, JSON.stringify(state));
     } catch (_) {}
     return normalized;
   }
@@ -40380,6 +40375,17 @@
   function presentationConversationIdForPane(paneId) {
     const paneState = paneByPaneId(paneId || activePaneId());
     return String((paneState && paneState.conversationId) || '');
+  }
+
+  function presentationSessionIdForPane(paneId) {
+    const paneState = paneByPaneId(paneId || activePaneId());
+    const conversationId = String((paneState && paneState.conversationId) || '');
+    return String(
+      (paneState && paneState.currentSession && paneState.currentSession.id)
+      || sessionIdByConv[conversationId]
+      || conversationId
+      || ''
+    );
   }
 
   // Pure grouping primitive, intentionally DOM-free so the semantic packing
@@ -41542,13 +41548,13 @@
     const pane = presentationPaneElement(targetPaneId);
     const view = getConvViewForPane(targetPaneId);
     if (!pane || !view) return;
-    const conversationId = presentationConversationIdForPane(targetPaneId);
-    if (pane.dataset.presentationConversationId !== conversationId) {
-      pane.dataset.presentationConversationId = conversationId;
-      pane.dataset.presentationMode = presentationModeForConversation(conversationId);
+    const sessionId = presentationSessionIdForPane(targetPaneId);
+    if (pane.dataset.presentationSessionId !== sessionId) {
+      pane.dataset.presentationSessionId = sessionId;
+      pane.dataset.presentationMode = presentationModeForSession(sessionId);
     }
     const mode = normalizePresentationMode(
-      pane.dataset.presentationMode || presentationModeForConversation(conversationId)
+      pane.dataset.presentationMode || presentationModeForSession(sessionId)
     );
     pane.dataset.presentationMode = mode;
     const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
@@ -41596,7 +41602,7 @@
     if (!pane || !view) return;
     const normalized = normalizePresentationMode(mode);
     const oldMode = normalizePresentationMode(pane.dataset.presentationMode || 'off');
-    const conversationId = presentationConversationIdForPane(targetPaneId);
+    const sessionId = presentationSessionIdForPane(targetPaneId);
     if (oldMode === 'off' && normalized !== 'off') {
       view.dataset.presentationRestoreScroll = String(view.scrollTop || 0);
       view.dataset.presentationRestorePinned = view._pinnedToBottom ? '1' : '0';
@@ -41605,8 +41611,8 @@
       && view.dataset.presentationRestorePinned === '1';
     if (normalized === 'off') view._pinnedToBottom = false;
     pane.dataset.presentationMode = normalized;
-    pane.dataset.presentationConversationId = conversationId;
-    persistPresentationModeForConversation(conversationId, normalized);
+    pane.dataset.presentationSessionId = sessionId;
+    persistPresentationModeForSession(sessionId, normalized);
     refreshPresentationForPane(targetPaneId, {
       followTail: normalized !== 'off' && !(opts && opts.preserveCursor),
       startAtLatestTurn: normalized !== 'off' && oldMode !== normalized && !(opts && opts.preserveCursor),
