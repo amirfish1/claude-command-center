@@ -56,6 +56,9 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
     summary = summaries[0]
     assert summary["topic"] == "Active"
     assert summary["state"] == "active"
+    # The active-sidebar consumer uses `status`, matching full group-chat
+    # listings. A freshly created chat must therefore expose that field too.
+    assert summary["status"] == "active"
     assert summary["session_ids"] == ["a"]
     assert summary["path"] == str(active_md)
     assert summary["path_tilde"] == "~/.claude/group-chats/active.md"

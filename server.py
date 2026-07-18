@@ -42755,6 +42755,11 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             "path_tilde": "~/.claude/group-chats/" + os.path.basename(md_path),
             "topic": meta.get("topic", ""),
             "state": "active",
+            # Sidebar consumers share the full-listing contract and use
+            # `status` to count/render active chats. Keep `state` for
+            # compatibility while exposing the same active state under the
+            # established field name.
+            "status": "active",
             "session_ids": meta.get("session_ids") or [],
         })
     return summaries
