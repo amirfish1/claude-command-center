@@ -30883,18 +30883,42 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
 _UX_FIXES_LIST_TTL = 10.0
 _ux_fixes_list_cache = {}
 _ux_fixes_list_cache_lock = threading.Lock()
+_ux_fixes_list_refreshing = set()
+
+
+def _ux_fixes_list_refresh(status_filter, lane_filter):
+    key = (status_filter or "", lane_filter or "")
+    try:
+        items = _q.list_items(status=status_filter, lane=lane_filter) or []
+        with _ux_fixes_list_cache_lock:
+            _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
+    except Exception:
+        pass
+    finally:
+        with _ux_fixes_list_cache_lock:
+            _ux_fixes_list_refreshing.discard(key)
 
 
 def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
-    """TTL memo for /api/ux-fixes/list. Same staleness posture the queue board
-    already accepts from its 15s client-side caches; mutations surface on the
-    next window."""
+    """TTL memo for /api/ux-fixes/list, stale-while-revalidate: past the TTL
+    the last copy is served immediately and one background thread rebuilds —
+    GitHub-backed queue merges (`gh issue list`) never block a request."""
     key = (status_filter or "", lane_filter or "")
     now = time.time()
     with _ux_fixes_list_cache_lock:
         ent = _ux_fixes_list_cache.get(key)
-        if ent and now - ent["ts"] < _UX_FIXES_LIST_TTL:
-            return ent["items"]
+    if ent and now - ent["ts"] < _UX_FIXES_LIST_TTL:
+        return ent["items"]
+    if ent is not None:
+        with _ux_fixes_list_cache_lock:
+            if key not in _ux_fixes_list_refreshing:
+                _ux_fixes_list_refreshing.add(key)
+                threading.Thread(
+                    target=_ux_fixes_list_refresh,
+                    args=(status_filter, lane_filter),
+                    daemon=True, name="uxq-list-refresh",
+                ).start()
+        return ent["items"]
     items = _q.list_items(status=status_filter, lane=lane_filter) or []
     with _ux_fixes_list_cache_lock:
         if len(_ux_fixes_list_cache) > 32:
@@ -30951,6 +30975,23 @@ def _build_ux_fixes_health_payload_uncached():
     }
 
 
+_ux_fixes_health_refreshing = False
+
+
+def _ux_fixes_health_refresh():
+    global _ux_fixes_health_refreshing
+    try:
+        data = _build_ux_fixes_health_payload_uncached()
+        with _ux_fixes_health_snapshot_lock:
+            _ux_fixes_health_snapshot["data"] = data
+            _ux_fixes_health_snapshot["ts"] = time.time()
+    except Exception:
+        pass
+    finally:
+        with _ux_fixes_health_snapshot_lock:
+            _ux_fixes_health_refreshing = False
+
+
 def build_ux_fixes_health_payload(force=False):
     """Coalesced payload for /api/ux-fixes/health.
 
@@ -30958,10 +30999,24 @@ def build_ux_fixes_health_payload(force=False):
     queue health at once. The uncached build touches WatchTower queue state and
     recent worker logs, so concurrent polls must share one fresh snapshot
     instead of each request rebuilding it in its own HTTP thread.
+
+    Stale-while-revalidate: past the TTL, callers get the last snapshot
+    immediately and ONE background thread rebuilds — no request thread ever
+    waits on a WatchTower/gh issue-list merge again.
     """
+    global _ux_fixes_health_refreshing
     snap = _ux_fixes_health_snapshot
     now = time.time()
-    if not force and snap["data"] is not None and now - snap["ts"] < _UX_FIXES_HEALTH_TTL:
+    if not force and snap["data"] is not None:
+        if now - snap["ts"] < _UX_FIXES_HEALTH_TTL:
+            return copy.deepcopy(snap["data"])
+        with _ux_fixes_health_snapshot_lock:
+            if not _ux_fixes_health_refreshing:
+                _ux_fixes_health_refreshing = True
+                threading.Thread(
+                    target=_ux_fixes_health_refresh,
+                    daemon=True, name="uxq-health-refresh",
+                ).start()
         return copy.deepcopy(snap["data"])
     with _ux_fixes_health_snapshot_lock:
         now = time.time()
@@ -58331,7 +58386,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 limit = 100
             self.send_json(list_annotations(limit=limit))
-        elif path == "/api/ux-fixes/list":
+        elif path == "/api/queue/list" or path == "/api/ux-fixes/list":
+            # /api/queue/list is the canonical name; /api/ux-fixes/list is the
+            # legacy alias kept for compatibility (both serve the same memo).
             qs = urllib.parse.parse_qs(parsed.query)
             status_filter = (qs.get("status", [""])[0] or "").strip() or None
             lane_filter = (qs.get("lane", [""])[0] or "").strip() or None
@@ -58354,7 +58411,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
-        elif path == "/api/ux-fixes/health":
+        elif path == "/api/queue/status" or path == "/api/ux-fixes/health":
+            # /api/queue/status is the canonical name; /api/ux-fixes/health is
+            # the legacy alias kept for compatibility.
             # Candidacy-gated per-project queue-health: depth, oldest-open age,
             # the fixer's liveness, and whether the project is STUCK. Reporting
             # only — WatchTower owns waking/spawning workers now (FIFO push +

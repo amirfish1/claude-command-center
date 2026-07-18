@@ -32625,7 +32625,7 @@
     if (_uxqItemsPromise) return _uxqItemsPromise;
     _uxqItemsPromise = (async () => {
     try {
-      const res = await fetch('/api/ux-fixes/list', { cache: 'no-store' });
+      const res = await fetch('/api/queue/list', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
       const now = Date.now();
@@ -32658,7 +32658,7 @@
     if (_uxqHealthPromise) return _uxqHealthPromise;
     _uxqHealthPromise = (async () => {
     try {
-      const res = await fetch('/api/ux-fixes/health', { cache: 'no-store' });
+      const res = await fetch('/api/queue/status', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data && data.projects) ? data.projects
         : (Array.isArray(data) ? data : []);
@@ -46609,7 +46609,7 @@
     if (!opts.force && fresh) return uxFixesQueueMeta;
     _uxFixesQueueMetaPromise = (async () => {
       try {
-        const res = await fetch('/api/ux-fixes/list', { cache: 'no-store' });
+        const res = await fetch('/api/queue/list', { cache: 'no-store' });
         if (!res.ok) return uxFixesQueueMeta;
         const data = await res.json().catch(() => ({}));
         const meta = _setUxFixesQueueMeta(Array.isArray(data.items) ? data.items : []);

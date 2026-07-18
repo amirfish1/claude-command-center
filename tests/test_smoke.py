@@ -3094,7 +3094,10 @@ class TestServerImports(unittest.TestCase):
     def test_ux_fixes_queue_progress_badge_is_rendered_from_queue_api(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        self.assertIn("/api/ux-fixes/list", app_js)
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("/api/queue/list", app_js)
+        # Legacy alias stays served for compatibility.
+        self.assertIn('"/api/ux-fixes/list"', server_py)
         self.assertIn("claimed_by", app_js)
         self.assertIn("conv-ux-fix-progress", app_js)
         self.assertIn("function _uxFixesWorkerProjectForRow(c)", app_js)
