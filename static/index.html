@@ -81,6 +81,16 @@
       };
       show('openTotalRecallBtn', f.total_recall);
       show('openTokenOptimizerBtn', f.token_optimizer);
+      // Preview flags: stash resolved state + registry so ff() and the
+      // Settings Experimental section can read them. `?ff=name` in the URL
+      // force-enables a flag for this page load without persisting.
+      window.__CCC_FLAGS__ = f.preview || {};
+      window.__CCC_FLAGS_META__ = f.preview_meta || [];
+      try {
+        const forced = new URLSearchParams(window.location.search || '').getAll('ff');
+        forced.forEach(n => { if (n) window.__CCC_FLAGS__[n] = true; });
+      } catch (_) {}
+      window.dispatchEvent(new CustomEvent('ccc:flags'));
     }).catch(() => {});
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
@@ -1479,6 +1489,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
             <span>Tools</span>
           </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-experimental" data-section-target="experimental" role="tab" aria-selected="false" aria-controls="settingsSection-experimental" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v5.5L5.5 17a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 8.5V3"/></svg>
+            <span>Experimental</span>
+          </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-maintenance" data-section-target="maintenance" role="tab" aria-selected="false" aria-controls="settingsSection-maintenance">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 7.5a4.5 4.5 0 0 1-6.2 4.16L7 19.5 4.5 17l7.84-7.8A4.5 4.5 0 0 1 18 3l-3 3 1 1 3-3a4.5 4.5 0 0 1 2 3.5z"/></svg>
             <span>Maintenance</span>
@@ -1696,6 +1710,15 @@
                 <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
               </div>
             </a>
+          </section>
+
+          <section class="settings-section" id="settingsSection-experimental" data-section-id="experimental" role="tabpanel" aria-labelledby="settingsRailTab-experimental" hidden>
+            <div class="settings-section-eyebrow">Experimental</div>
+            <div class="settings-section-note">Preview features shipped but off by default. Enabling one affects only this machine. Reload to apply.</div>
+            <!-- Rows rendered from /api/features preview_meta by
+                 renderExperimentalFlags() in app.js. Each row carries
+                 data-keywords for settings search. -->
+            <div id="settingsExperimentalSlot" class="settings-experimental-slot"></div>
           </section>
 
           <section class="settings-section" id="settingsSection-maintenance" data-section-id="maintenance" role="tabpanel" aria-labelledby="settingsRailTab-maintenance">

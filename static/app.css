@@ -20248,6 +20248,12 @@ body.qf-mode:not(.qf-active) #qfReturnPill { display: inline-flex; }
   margin-bottom: 10px;
 }
 
+/* Intro note under a section eyebrow (e.g. Experimental caveat). */
+.settings-section-note {
+  font-size: 12px; line-height: 1.5; color: var(--text-muted);
+  margin: -2px 0 12px;
+}
+
 /* Rows: label/desc on the left, control on the right. One of three
    affordances per row (setting / action / launcher) — never mixed. */
 .settings-row {

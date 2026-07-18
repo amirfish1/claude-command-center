@@ -54758,6 +54758,54 @@
     refreshSpawnEngineValue();
   }
 
+  // ── Preview feature flags ───────────────────────────────────────────
+  // ff(name) is the frontend gate. Reads resolved state stashed at boot by
+  // the /api/features fetch in index.html (default {} = all off until it
+  // lands). `?ff=name` force-on is already folded into __CCC_FLAGS__ there.
+  function ff(name) {
+    try { return !!(window.__CCC_FLAGS__ || {})[name]; } catch (_) { return false; }
+  }
+  window.cccFF = ff;
+
+  // Render the Experimental settings section from the server registry, so a
+  // new flag needs zero markup here — just an entry in _PREVIEW_FLAGS.
+  function renderExperimentalFlags() {
+    const slot = document.getElementById('settingsExperimentalSlot');
+    const railTab = document.getElementById('settingsRailTab-experimental');
+    const section = document.getElementById('settingsSection-experimental');
+    if (!slot) return;
+    const meta = window.__CCC_FLAGS_META__ || [];
+    const hasFlags = meta.length > 0;
+    // Hide the whole section when no preview features ship in this build.
+    if (railTab) railTab.hidden = !hasFlags;
+    if (section) section.hidden = !hasFlags;
+    if (!hasFlags) { slot.innerHTML = ''; return; }
+    const live = window.__CCC_FLAGS__ || {};
+    slot.innerHTML = meta.map(m => {
+      const on = (m.name in live) ? !!live[m.name] : !!m.on;
+      const kw = (m.name + ' ' + m.label + ' ' + (m.desc || '') + ' experimental preview beta flag').toLowerCase();
+      return (
+        '<div class="settings-row" data-keywords="' + kw.replace(/"/g, '') + '">' +
+          '<div class="settings-row-main">' +
+            '<div class="settings-row-label">' + escapeHtml(m.label) + '</div>' +
+            '<div class="settings-row-desc">' + escapeHtml(m.desc || '') + '</div>' +
+          '</div>' +
+          '<div class="settings-row-control">' +
+            '<button type="button" class="settings-toggle' + (on ? ' is-on' : '') + '" ' +
+              'data-ff-toggle="' + escapeHtml(m.name) + '" role="switch" ' +
+              'aria-checked="' + (on ? 'true' : 'false') + '" ' +
+              'aria-label="' + escapeHtml(m.label) + '">' +
+              '<span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>' +
+            '</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+  // Re-render when flags land after boot (async /api/features).
+  window.addEventListener('ccc:flags', renderExperimentalFlags);
+  renderExperimentalFlags();
+
   function openSettingsModal() {
     if (!$settingsModal) return;
     _settingsModalPrevFocus = document.activeElement;
@@ -54765,6 +54813,7 @@
     $settingsModal.classList.add('open');
     if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'true');
     clearSettingsSearch();
+    renderExperimentalFlags();
     buildSettingsSearchIndex();
     refreshAppearanceChecks();
     refreshSpawnEngineValue();
@@ -54870,6 +54919,28 @@
         if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(!on);
         refreshAppearanceChecks();
         showSettingsSavedPulse(qfirstToggle.closest('.settings-row'));
+        return;
+      }
+      const ffToggle = e.target.closest('[data-ff-toggle]');
+      if (ffToggle) {
+        const name = ffToggle.getAttribute('data-ff-toggle');
+        const next = ffToggle.getAttribute('aria-checked') !== 'true';
+        // Optimistic UI: flip immediately, persist to the daemon's override
+        // file, then reconcile from the server's resolved state.
+        ffToggle.classList.toggle('is-on', next);
+        ffToggle.setAttribute('aria-checked', String(next));
+        if (window.__CCC_FLAGS__) window.__CCC_FLAGS__[name] = next;
+        showSettingsSavedPulse(ffToggle.closest('.settings-row'));
+        fetch('/api/features/flag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, on: next }),
+        }).then(r => r.json()).then(res => {
+          if (res && res.ok && res.flags) {
+            window.__CCC_FLAGS__ = res.flags;
+            renderExperimentalFlags();
+          }
+        }).catch(() => {});
         return;
       }
       const heroOpenBtn = e.target.closest('[data-hero-open]');

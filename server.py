@@ -10256,6 +10256,88 @@ CAR_MODE_CONFIG_FILE = COMMAND_CENTER_STATE_DIR / "car-mode.json"
 # ccc-orchestration. Kept out of browser localStorage so scripted callers
 # inherit the same engine/model choices the UI shows.
 SPAWN_DEFAULTS_FILE = COMMAND_CENTER_STATE_DIR / "spawn-defaults.json"
+
+# ── Preview feature flags ────────────────────────────────────────────────
+# Developer construct for merging a feature to `main` while keeping its
+# surface hidden until it's ready. Two layers:
+#   1. `default` (below)  -> what the WHOLE WORLD sees. Flip False->True and
+#      push to ship a feature to everyone.
+#   2. per-machine override -> what THIS daemon shows. Toggled from Settings
+#      (writes FEATURE_FLAGS_FILE) or via env `CCC_FF_<NAME>=1`. Never
+#      committed, so dogfooding on your box doesn't leak to strangers.
+# Add a preview surface by (a) adding one entry here, (b) gating the UI on
+# `ff('name')` in app.js, and (c) gating any server behavior on
+# `_feature_flag('name')`. The Settings "Experimental" section renders itself
+# from this registry — no extra markup per flag.
+_PREVIEW_FLAGS = {
+    # "flow_v2": {
+    #     "default": False,
+    #     "label": "Flow v2 canvas",
+    #     "desc": "Rebuilt Flow workspace with the new edge engine.",
+    # },
+}
+FEATURE_FLAGS_FILE = COMMAND_CENTER_STATE_DIR / "feature-flags.json"
+
+
+def _load_feature_flag_overrides():
+    """Per-machine overrides as {name: bool}. Missing/corrupt file -> {}."""
+    try:
+        data = json.loads(FEATURE_FLAGS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: bool(v) for k, v in data.items() if k in _PREVIEW_FLAGS}
+
+
+def _resolved_feature_flags():
+    """{name: bool} after applying default -> env -> file override, in order."""
+    overrides = _load_feature_flag_overrides()
+    out = {}
+    for name, spec in _PREVIEW_FLAGS.items():
+        value = bool(spec.get("default"))
+        env = os.environ.get("CCC_FF_" + name.upper())
+        if env is not None:
+            value = env.strip().lower() in ("1", "true", "yes", "on")
+        if name in overrides:
+            value = overrides[name]
+        out[name] = value
+    return out
+
+
+def _feature_flag(name):
+    """Server-side gate for a single preview flag."""
+    return _resolved_feature_flags().get(name, False)
+
+
+def _feature_flags_meta():
+    """Registry + resolved state for the Settings UI to render toggles from."""
+    resolved = _resolved_feature_flags()
+    return [
+        {
+            "name": name,
+            "label": spec.get("label", name),
+            "desc": spec.get("desc", ""),
+            "default": bool(spec.get("default")),
+            "on": resolved.get(name, False),
+        }
+        for name, spec in _PREVIEW_FLAGS.items()
+    ]
+
+
+def _save_feature_flag(name, on):
+    """Persist a single per-machine override. Returns {ok, ...}."""
+    if name not in _PREVIEW_FLAGS:
+        return {"ok": False, "error": "unknown flag"}
+    overrides = _load_feature_flag_overrides()
+    overrides[name] = bool(on)
+    try:
+        COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(FEATURE_FLAGS_FILE, "w") as f:
+            json.dump(overrides, f, indent=2, sort_keys=True)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "flags": _resolved_feature_flags()}
 # Persistent registry of spawned headless `claude -p` PIDs, so a server restart
 # can re-discover orphans instead of leaving them unreachable. See
 # _reattach_spawned_orphans() for the boot-time sweep. Schema is a list of
@@ -58299,6 +58381,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # settings menu only offers a launcher when installed.
                 "total_recall": (Path.home() / ".claude" / "total-recall").is_dir(),
                 "token_optimizer": (Path.home() / ".claude" / "token-optimizer").is_dir(),
+                # Preview flags: {name: bool} resolved state for UI gating, plus
+                # `preview_meta` (label/desc/default) so Settings renders its
+                # Experimental toggles from the server registry.
+                "preview": _resolved_feature_flags(),
+                "preview_meta": _feature_flags_meta(),
             })
         elif path == "/api/healthcheck":
             # Surface the state of every external dependency CCC delegates to.
@@ -59430,6 +59517,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "stored": True,
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
             })
+            return
+        if path == "/api/features/flag":
+            # Toggle one preview flag for THIS machine (writes the override
+            # file the daemon reads on the next /api/features). Same-origin
+            # already enforced at the top of do_POST.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            saved = _save_feature_flag(payload.get("name"), payload.get("on"))
+            self.send_json(saved, 200 if saved.get("ok") else 400)
             return
         if path == "/api/telemetry/opt-in":
             # User clicked Enable / Skip / toggled from Settings. Persists
