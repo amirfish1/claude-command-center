@@ -13364,6 +13364,11 @@ class TestModelPicker(unittest.TestCase):
         self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabel + ' ' + _formatTokens(displayTokens)"))
         self.assertIn(".conv-input-context .wp-quality-pill", css)
 
+    def test_server_starts_token_optimizer_index_refresher_in_background(self):
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+        main_source = server_py[server_py.index("def main():"):]
+        self.assertIn("_start_token_optimizer_quality_index_refresher()", main_source)
+
     def test_extract_session_usage_includes_token_optimizer_quality_score(self):
         for mod in ("server",):
             sys.modules.pop(mod, None)
@@ -13391,14 +13396,18 @@ class TestModelPicker(unittest.TestCase):
             home = root / "home"
             quality_dir = home / ".claude" / "token-optimizer"
             quality_dir.mkdir(parents=True)
-            (quality_dir / f"quality-cache-{sid}.json").write_text(
+            (quality_dir / "quality-index.json").write_text(
                 json.dumps({
-                    "score": 79.2,
-                    "grade": "B",
-                    "timestamp": "2026-06-25T19:53:10.896627+00:00",
-                    "breakdown": {
-                        "context_fill_degradation": {"detail": "45% fill, peak zone"},
-                        "stale_reads": {"detail": "1 stale file read"},
+                    "version": 1,
+                    "records": {
+                        sid: {
+                            "score": 79.2,
+                            "grade": "B",
+                            "timestamp": "2026-06-25T19:53:10.896627+00:00",
+                            "summary": "45% fill, peak zone; 1 stale file read",
+                            "source_mtime": 10.0,
+                            "transcript_mtime": 9.0,
+                        },
                     },
                 }),
                 encoding="utf-8",
@@ -13410,13 +13419,15 @@ class TestModelPicker(unittest.TestCase):
             server.PROJECTS_ROOT = root / "projects"
             try:
                 with mock.patch.object(server.Path, "home", return_value=home), \
-                     mock.patch.object(server, "_TOKEN_OPTIMIZER_QUALITY_READS_ENABLED", True), \
+                     mock.patch.object(server, "_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE", {}), \
+                     mock.patch.object(server, "_TOKEN_OPTIMIZER_QUALITY_INDEX", {}), \
                      mock.patch.object(server, "_is_codex_session", return_value=False), \
                      mock.patch.object(server, "_is_gemini_session", return_value=False), \
                      mock.patch.object(server, "_is_cursor_session", return_value=False), \
                      mock.patch.object(server, "_is_antigravity_session", return_value=False), \
                      mock.patch.object(server, "_is_kilo_session", return_value=False), \
                      mock.patch.object(server, "_load_desktop_app_metadata", return_value={}):
+                    server._refresh_token_optimizer_quality_index()
                     usage = server.extract_session_usage(sid)
             finally:
                 server.PROJECTS_ROOT = orig_root

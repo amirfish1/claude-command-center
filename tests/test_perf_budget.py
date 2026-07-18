@@ -344,51 +344,142 @@ def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
     )
 
 
-def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
-    """The temporary reader can index cache files once when re-enabled."""
-    quality_dir = tmp_path / ".codex" / "token-optimizer"
-    quality_dir.mkdir(parents=True)
-    sids = [str(uuid.uuid4()) for _ in range(100)]
-    for sid in sids:
-        (quality_dir / f"quality-cache-{sid}.json").write_text(
-            json.dumps({"score": 95, "grade": "A", "timestamp": "now"})
-        )
+def _write_token_quality_index(root, records):
+    root.mkdir(parents=True, exist_ok=True)
+    index_path = root / "quality-index.json"
+    index_path.write_text(json.dumps({"version": 1, "records": records}), encoding="utf-8")
+    return index_path
 
+
+def test_token_quality_index_refresh_and_lookup_never_scans_cache_directories(monkeypatch, tmp_path):
+    sid = "11111111-2222-4333-8444-999999999999"
+    _write_token_quality_index(tmp_path / ".claude" / "token-optimizer", {
+        sid: {
+            "score": 95,
+            "grade": "A",
+            "summary": "compact result",
+            "timestamp": "now",
+            "source_mtime": 10.0,
+            "transcript_mtime": 9.0,
+        },
+    })
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_READS_ENABLED", True)
-    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_CACHE", {})
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE", {})
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_INDEX", {})
     monkeypatch.setattr(
-        server,
-        "_TOKEN_OPTIMIZER_QUALITY_FILES",
-        {"ts": 0.0, "roots": (), "paths": ()},
+        server.Path,
+        "iterdir",
+        lambda _path: pytest.fail("quality index refresh scanned a TO directory"),
     )
-    iterdir_calls = []
-    original_iterdir = Path.iterdir
-
-    def counting_iterdir(path):
-        iterdir_calls.append(path)
-        return original_iterdir(path)
-
-    monkeypatch.setattr(Path, "iterdir", counting_iterdir)
-
-    values = [server._token_optimizer_quality_for_session(sid) for sid in sids]
-
-    assert all(value.get("quality_score") == 95 for value in values)
-    assert len(iterdir_calls) <= 2, (
-        f"quality lookup scanned cache directories {len(iterdir_calls)}x for "
-        f"{len(sids)} rows instead of sharing one directory index"
+    monkeypatch.setattr(
+        server.Path,
+        "glob",
+        lambda _path, _pattern: pytest.fail("quality index refresh globbed TO files"),
     )
 
+    assert server._refresh_token_optimizer_quality_index() is True
 
-def test_token_quality_lookup_is_disabled_without_touching_to_paths(monkeypatch):
-    """Session retrieval must not inspect Token Optimizer state while disabled."""
     monkeypatch.setattr(
         server.Path,
         "home",
-        lambda: pytest.fail("disabled Token Optimizer lookup resolved a home path"),
+        lambda: pytest.fail("request-time quality lookup resolved a TO path"),
     )
+    assert server._token_optimizer_quality_for_session(sid) == {
+        "quality_score": 95,
+        "quality_grade": "A",
+        "quality_timestamp": "now",
+        "quality_summary": "compact result",
+        "quality_source": "token-optimizer-index",
+    }
 
-    assert server._token_optimizer_quality_for_session("quality-disabled") == {}
+
+def test_token_quality_index_malformed_update_preserves_last_known_good_map(monkeypatch, tmp_path):
+    sid = "11111111-2222-4333-8444-999999999999"
+    index_path = _write_token_quality_index(tmp_path / ".codex" / "token-optimizer", {
+        sid: {
+            "score": 79.2,
+            "grade": "B",
+            "summary": "first result",
+            "timestamp": "first",
+            "source_mtime": 10.0,
+            "transcript_mtime": 9.0,
+        },
+    })
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE", {})
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_INDEX", {})
+    assert server._refresh_token_optimizer_quality_index() is True
+
+    time.sleep(0.002)
+    index_path.write_text("{not json", encoding="utf-8")
+
+    assert server._refresh_token_optimizer_quality_index() is False
+    assert server._token_optimizer_quality_for_session(sid)["quality_summary"] == "first result"
+
+
+def test_token_quality_index_duplicate_session_uses_source_mtime_then_runtime(monkeypatch, tmp_path):
+    sid = "11111111-2222-4333-8444-999999999999"
+    record = {
+        "score": 80,
+        "grade": "A",
+        "summary": "claude result",
+        "timestamp": "now",
+        "source_mtime": 10.0,
+        "transcript_mtime": 9.0,
+    }
+    _write_token_quality_index(tmp_path / ".claude" / "token-optimizer", {sid: record})
+    _write_token_quality_index(tmp_path / ".codex" / "token-optimizer", {
+        sid: {**record, "score": 70, "grade": "B", "summary": "codex tie winner"},
+    })
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE", {})
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_INDEX", {})
+
+    assert server._refresh_token_optimizer_quality_index() is True
+    assert server._token_optimizer_quality_for_session(sid)["quality_summary"] == "codex tie winner"
+
+
+def test_token_quality_index_refresh_swaps_complete_map_for_concurrent_readers(monkeypatch, tmp_path):
+    sid = "11111111-2222-4333-8444-999999999999"
+    _write_token_quality_index(tmp_path / ".claude" / "token-optimizer", {
+        sid: {
+            "score": 90,
+            "grade": "A",
+            "summary": "new complete map",
+            "timestamp": "new",
+            "source_mtime": 20.0,
+            "transcript_mtime": 19.0,
+        },
+    })
+    old_value = {
+        "quality_score": 70,
+        "quality_grade": "B",
+        "quality_timestamp": "old",
+        "quality_summary": "old complete map",
+        "quality_source": "token-optimizer-index",
+    }
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE", {})
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_INDEX", {sid: old_value})
+    start = threading.Event()
+    stop = threading.Event()
+    seen = []
+
+    def reader():
+        start.wait(timeout=1)
+        while not stop.is_set():
+            seen.append(server._token_optimizer_quality_for_session(sid)["quality_summary"])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(reader) for _ in range(8)]
+        start.set()
+        assert server._refresh_token_optimizer_quality_index() is True
+        stop.set()
+        for future in futures:
+            future.result(timeout=1)
+
+    assert set(seen) <= {"old complete map", "new complete map"}
+    assert server._token_optimizer_quality_for_session(sid)["quality_summary"] == "new complete map"
 
 
 def test_auto_verify_reuses_supplied_session_rows(monkeypatch, tmp_path):
