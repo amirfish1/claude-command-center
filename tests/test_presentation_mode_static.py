@@ -304,6 +304,28 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("is-mode3-fallback", app_js)
         self.assertIn(".conv-mode3-comparison { grid-template-columns: 1fr; }", APP_CSS.read_text(encoding="utf-8"))
 
+    def test_mode_three_maps_every_schema_theme_to_visible_accents(self):
+        css = APP_CSS.read_text(encoding="utf-8")
+
+        for theme in ("cyan", "violet", "amber", "green", "neutral"):
+            self.assertIn('[data-mode3-theme="' + theme + '"]', css)
+        self.assertIn('font-family: "Avenir Next", Avenir, "Segoe UI Variable Display"', css)
+        self.assertIn(".conv-mode3-list li::marker", css)
+        self.assertIn("color: var(--mode3-accent)", css)
+
+    def test_mode_three_dense_bullets_start_at_top_with_compact_type(self):
+        css = APP_CSS.read_text(encoding="utf-8")
+
+        self.assertIn(
+            ".conv-mode3-slide.layout-bullets .conv-mode3-body { align-items: flex-start; }",
+            css,
+        )
+        self.assertIn(
+            "font-size: clamp(17px, min(2.2vw, 3.4vh), 28px)",
+            css,
+        )
+        self.assertIn(".conv-mode3-list li + li { margin-top: 0.32em; }", css)
+
     def test_tail_refresh_opens_first_slide_of_new_answer_only_at_tail(self):
         old = [
             {"dataset": {"answerKey": "a", "presentationKey": "a:0"}},
