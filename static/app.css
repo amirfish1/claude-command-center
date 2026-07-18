@@ -13015,8 +13015,11 @@
 /* In Group Chat rows — one row per chat (active or recently closed). */
 #convList .conv-ingroupchat-list { display: flex; flex-direction: column; }
 #convList .conv-ingroupchat-row {
+  position: relative;
   display: flex; align-items: center; gap: 8px;
-  padding: 5px 14px; cursor: pointer; font-size: 12px;
+  /* Match session title alignment while keeping the chat marker in the
+     same left rail as the session's engine/model icons. */
+  padding: 5px 14px 5px 63px; cursor: pointer; font-size: 12px;
   color: var(--text);
   border-left: 3px solid transparent;
   border-radius: 6px;
@@ -13026,9 +13029,13 @@
   border-left-color: var(--purple);
 }
 #convList .conv-ingroupchat-row:hover { background: var(--row-hover, rgba(255,255,255,0.04)); }
-#convList .conv-ingroupchat-row-icon { font-size: 12px; flex-shrink: 0; opacity: 0.85; }
+#convList .conv-ingroupchat-row-icon {
+  position: absolute; left: 12px;
+  font-size: 12px; flex-shrink: 0; opacity: 0.85;
+}
 /* Collapse chevron (CCC-489) — hides the participant list + waiting hint. */
 #convList .conv-ingroupchat-collapse-btn {
+  position: absolute; left: 36px;
   background: none; border: none; cursor: pointer;
   font-size: 10px; padding: 2px; opacity: 0.55;
   color: var(--text-muted); flex-shrink: 0;

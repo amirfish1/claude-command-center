@@ -80,6 +80,30 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn("session_ids: sessionIds, archived: true", app_js)
         self.assertIn("refreshArchiveData({ force: true })", app_js)
 
+    def test_group_chat_emoji_uses_the_session_icon_rail(self):
+        """A chat marker should align with model icons, not reserve a leading gutter."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        row_css = app_css[
+            app_css.index("#convList .conv-ingroupchat-row {"):
+            app_css.index("#convList .conv-ingroupchat-row.active", app_css.index("#convList .conv-ingroupchat-row {"))
+        ]
+        icon_css = app_css[
+            app_css.index("#convList .conv-ingroupchat-row-icon"):
+            app_css.index("/* Collapse chevron", app_css.index("#convList .conv-ingroupchat-row-icon"))
+        ]
+        collapse_css = app_css[
+            app_css.index("#convList .conv-ingroupchat-collapse-btn {"):
+            app_css.index("#convList .conv-ingroupchat-collapse-btn:hover", app_css.index("#convList .conv-ingroupchat-collapse-btn {"))
+        ]
+
+        self.assertIn("position: relative;", row_css)
+        self.assertIn("padding: 5px 14px 5px 63px;", row_css)
+        self.assertIn("position: absolute;", icon_css)
+        self.assertIn("left: 12px;", icon_css)
+        self.assertIn("position: absolute;", collapse_css)
+        self.assertIn("left: 36px;", collapse_css)
+
 
 if __name__ == "__main__":
     unittest.main()
