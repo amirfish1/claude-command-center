@@ -64879,10 +64879,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
 
         last_seq = 0
         last_keepalive = time.time()
+        first_pass = True
         try:
             while True:
+                if first_pass:
+                    # Replay buffered deltas immediately on connect (covers
+                    # attaching mid-turn) instead of waiting out the first
+                    # Condition timeout.
+                    first_pass = False
+                else:
+                    with _ACP_LOCK:
+                        _ACP_LOCK.wait(5.0)
                 with _ACP_LOCK:
-                    _ACP_LOCK.wait(5.0)
                     state = (_ACP_SESSION_STATE.get(harness) or {}).get(session_id) or {}
                     pending = [
                         d for d in (state.get("deltas") or [])
@@ -65235,10 +65243,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             last_keepalive = time.time()
             last_size = -1
+            first_pass = True
             try:
                 while True:
-                    with _ACP_LOCK:
-                        _ACP_LOCK.wait(5.0)
+                    if first_pass:
+                        # Replay immediately on connect instead of waiting out
+                        # the first Condition timeout.
+                        first_pass = False
+                    else:
+                        with _ACP_LOCK:
+                            _ACP_LOCK.wait(5.0)
                     try:
                         size = _acp_transcript_path("kimi", conversation_id).stat().st_size
                     except OSError:
