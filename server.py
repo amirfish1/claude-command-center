@@ -9437,6 +9437,7 @@ def _resolve_runtime_network(port):
 # critical path. TTL is short so a failing dep still recovers within ~30s.
 _HEALTHCHECK_CACHE = {"ts": 0.0, "data": None}
 _HEALTHCHECK_TTL_SEC = 30.0
+_HEALTHCHECK_CACHE_LOCK = threading.Lock()
 
 # Separate longer cache for the `gh auth status` subprocess. Even after the
 # outer healthcheck cache expires, this avoids re-shelling out for 5 minutes.
@@ -9500,10 +9501,18 @@ def _run_healthcheck():
     cached = _HEALTHCHECK_CACHE["data"]
     if cached is not None and now - _HEALTHCHECK_CACHE["ts"] < _HEALTHCHECK_TTL_SEC:
         return cached
-    out = _build_healthcheck()
-    _HEALTHCHECK_CACHE["ts"] = now
-    _HEALTHCHECK_CACHE["data"] = out
-    return out
+    # A cold dashboard boot can issue several healthcheck requests together.
+    # Serialize the expensive filesystem/subprocess probe and recheck after
+    # waiting so that only the first caller performs it.
+    with _HEALTHCHECK_CACHE_LOCK:
+        now = time.monotonic()
+        cached = _HEALTHCHECK_CACHE["data"]
+        if cached is not None and now - _HEALTHCHECK_CACHE["ts"] < _HEALTHCHECK_TTL_SEC:
+            return cached
+        out = _build_healthcheck()
+        _HEALTHCHECK_CACHE["ts"] = now
+        _HEALTHCHECK_CACHE["data"] = out
+        return out
 
 
 def _build_healthcheck():

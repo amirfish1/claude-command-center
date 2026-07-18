@@ -29,6 +29,33 @@ import pytest
 server = importlib.import_module("server")
 
 
+def test_healthcheck_cold_cache_build_is_singleflight(monkeypatch):
+    """Concurrent page loads share one expensive healthcheck rebuild."""
+    server._HEALTHCHECK_CACHE = {"ts": 0.0, "data": None}
+    calls = 0
+    calls_lock = threading.Lock()
+    start = threading.Barrier(8)
+
+    def build():
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.05)
+        return {"checks": [], "overall": "ok"}
+
+    monkeypatch.setattr(server, "_build_healthcheck", build)
+
+    def run():
+        start.wait(timeout=2)
+        return server._run_healthcheck()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: run(), range(8)))
+
+    assert calls == 1, f"cold healthcheck rebuilt {calls}x for one page-load burst"
+    assert results == [{"checks": [], "overall": "ok"}] * 8
+
+
 def test_productivity_refresh_reads_shared_sources_once(monkeypatch):
     """One refresh may scan globally, but never once per project/turn."""
     calls = {"conversations": 0, "tickets": 0}
