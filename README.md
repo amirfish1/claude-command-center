@@ -53,25 +53,6 @@ See the [engine support matrix](#engine-support) below for what each engine does
 
 **Work from anywhere.** Two sides of one opt-in: your phone as a client to the fleet, and CCC installed on any machine you can reach, a VM or a home server, open in any browser on your trusted network. Loopback by default, never the open internet.
 
-## Recent
-
-- **2026-06-25** — **v5.4.0** — **Project tree**: the "By objects" sidebar now splits a live "Current sessions" triage band over a hierarchical map of your day — sessions grouped under nestable, draggable Flow objects. Plus a new `/api/sessions/events` SSE stream (subscribe to session-state changes instead of polling) and a broad Codex, sidebar, and Total Recall search polish wave.
-- **2026-06-03** — **v4.6.0** — Major performance pass: the dashboard idles instead of pinning a CPU core, group-chat opens ~40× faster, long conversations open near-instantly (windowed load + scroll-up to load earlier), and Codex sessions with screenshots no longer stall on multi-MB images. New CCC self-health readout in the footer.
-- **2026-05-21** — **v4.0.0** — Antigravity (Google DeepMind) joins the dashboard as a first-class engine alongside Claude Code and Codex.
-- **2026-05-21** — Drag any conversation row outside the window to pop it into a focused side pane, with 24 per-conversation accent colors.
-- **2026-05-19** — Template gallery mechanism for reusable new-session prompts, driven by `static/templates.json`. ([#46](https://github.com/amirfish1/claude-command-center/issues/46))
-- **2026-05-19** — VS Code extension v0.1.0 published — spawn a session from the active workspace folder. ([#52](https://github.com/amirfish1/claude-command-center/issues/52))
-- **2026-05-19** — One-command `curl | bash` installer; `git clone` demoted to a "From source" section. ([#58](https://github.com/amirfish1/claude-command-center/pull/58))
-- **2026-05-19** — Static GitHub Pages demo with seeded mock data (no install required). ([#49](https://github.com/amirfish1/claude-command-center/issues/49))
-- **2026-05-18** — Local macOS `say` text-to-speech button on conversations.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=amirfish1/claude-command-center&type=Date)](https://star-history.com/#amirfish1/claude-command-center&Date)
-
-> **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
-> what worked or what broke, or just say hi. This is a one-person project
-> built around a specific workflow. Outside feedback is the only way I know
-> how widely it lands. [@amirfish1](https://github.com/amirfish1)
-
 ## Why this exists
 
 Most Claude Code orchestration tools are opinionated wrappers. They want to
@@ -94,9 +75,41 @@ The dashboard also knows how to *spawn* headless sessions (via
 but those are additive. The thing it's built around is attaching to work
 that already exists.
 
+## How it compares
+
+|  | Raw terminal + tmux | Wrapper that owns execution | CCC |
+|---|:---:|:---:|:---:|
+| Sees sessions you launched by hand | if you remember the tab | no, only what it spawned | yes, reads on-disk state |
+| Survives closing the dashboard | yes | varies | yes, the dashboard is a lens, not a runtime |
+| One board across engines | no | usually one engine | yes, five engines |
+| Tells you which session needs you | no | no | yes, read from the transcript |
+| Coordinates sessions without you as the relay | no | no | yes, group chats + sibling-ask |
+| Setup | none | proxy or routing config | one curl line, no accounts |
+
+The whole point is the first row: the moment you touch a terminal, a tool that owns execution goes blind. CCC reads the state the engines already write, so it never does.
+
+## Recent
+
+- **2026-06-25**: **v5.4.0**. **Project tree**: the "By objects" sidebar now splits a live "Current sessions" triage band over a hierarchical map of your day, sessions grouped under nestable, draggable Flow objects. Plus a new `/api/sessions/events` SSE stream (subscribe to session-state changes instead of polling) and a broad Codex, sidebar, and Total Recall search polish wave.
+- **2026-06-03**: **v4.6.0**. Major performance pass: the dashboard idles instead of pinning a CPU core, group-chat opens ~40x faster, long conversations open near-instantly (windowed load + scroll-up to load earlier), and Codex sessions with screenshots no longer stall on multi-MB images. New CCC self-health readout in the footer.
+- **2026-05-21**: **v4.0.0**. Antigravity (Google DeepMind) joins the dashboard as a first-class engine alongside Claude Code and Codex.
+- **2026-05-21**: Drag any conversation row outside the window to pop it into a focused side pane, with 24 per-conversation accent colors.
+- **2026-05-19**: Template gallery mechanism for reusable new-session prompts, driven by `static/templates.json`. ([#46](https://github.com/amirfish1/claude-command-center/issues/46))
+- **2026-05-19**: VS Code extension v0.1.0 published, spawn a session from the active workspace folder. ([#52](https://github.com/amirfish1/claude-command-center/issues/52))
+- **2026-05-19**: One-command `curl | bash` installer; `git clone` demoted to a "From source" section. ([#58](https://github.com/amirfish1/claude-command-center/pull/58))
+- **2026-05-19**: Static GitHub Pages demo with seeded mock data (no install required). ([#49](https://github.com/amirfish1/claude-command-center/issues/49))
+- **2026-05-18**: Local macOS `say` text-to-speech button on conversations.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=amirfish1/claude-command-center&type=Date)](https://star-history.com/#amirfish1/claude-command-center&Date)
+
+> **If you install it, I'd love to hear how.** Drop a ⭐, open an issue with
+> what worked or what broke, or just say hi. This is a one-person project
+> built around a specific workflow. Outside feedback is the only way I know
+> how widely it lands. [@amirfish1](https://github.com/amirfish1)
+
 ## Quickstart
 
-**Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) — read-only kanban with seeded fake data, no install required.
+**Try the demo:** [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/): read-only kanban with seeded fake data, no install required.
 
 Requirements: Git and Python 3.9+. Install at least one supported agent CLI to
 launch sessions: [Claude Code](https://docs.claude.com/en/docs/claude-code),
@@ -106,13 +119,13 @@ Linux is supported for headless / remote-box use (see [Running on Linux](#runnin
 Windows is supported for native foreground use with PowerShell, and WSL2 remains
 the best route if you want the Linux service path.
 
-**curl** — clones into `~/.ccc/claude-command-center` and runs in foreground. Re-running does a `git pull`.
+**curl**: clones into `~/.ccc/claude-command-center` and runs in foreground. Re-running does a `git pull`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
-**Windows PowerShell** — clones into `%USERPROFILE%\.ccc\claude-command-center`
+**Windows PowerShell**: clones into `%USERPROFILE%\.ccc\claude-command-center`
 and runs in foreground. Re-running does a `git pull`.
 
 ```powershell
