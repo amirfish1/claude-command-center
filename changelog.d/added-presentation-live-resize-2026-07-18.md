@@ -1,0 +1,1 @@
+- Made the presentation-mode Live Updates panel height adjustable with a persistent drag handle and keyboard controls.

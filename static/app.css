@@ -19435,9 +19435,10 @@ body:has(.gc-reader) .pwa-install-banner {
   contain: layout style paint;
 }
 .conv-presentation-live-region {
-  flex: 0 1 42%;
+  flex: 0 0 auto;
+  flex-basis: var(--presentation-live-height, 42%);
   min-height: 0;
-  max-height: 42%;
+  max-height: var(--presentation-live-height, 42%);
   overflow: hidden;
   border: 1px solid color-mix(in srgb, #58a6ff 42%, var(--border));
   border-radius: 10px;
@@ -19445,6 +19446,38 @@ body:has(.gc-reader) .pwa-install-banner {
   box-shadow: 0 8px 22px rgba(0,0,0,0.18);
 }
 .conv-presentation-live-region[hidden] { display: none; }
+.conv-presentation-live-resize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 10px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.conv-presentation-live-resize::before {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(139,148,158,0.45);
+  transition: width 120ms ease, background 120ms ease;
+}
+.conv-presentation-live-resize:hover,
+.conv-presentation-live-resize:focus-visible,
+.conv-presentation-live-resize.is-dragging {
+  outline: none;
+  background: rgba(88,166,255,0.08);
+}
+.conv-presentation-live-resize:hover::before,
+.conv-presentation-live-resize:focus-visible::before,
+.conv-presentation-live-resize.is-dragging::before {
+  width: 60px;
+  background: var(--accent);
+}
 .conv-presentation-live-region > header {
   display: flex;
   align-items: center;
@@ -19458,7 +19491,7 @@ body:has(.gc-reader) .pwa-install-banner {
   text-transform: uppercase;
 }
 .conv-presentation-live-list {
-  max-height: calc(100% - 30px);
+  max-height: calc(100% - 40px);
   overflow: auto;
   padding: 7px 9px;
   scrollbar-gutter: stable;

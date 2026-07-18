@@ -41167,14 +41167,144 @@
     return stage;
   }
 
+  function presentationLiveHeightPercent(stageHeight, requestedHeight) {
+    const total = Math.max(1, Number(stageHeight) || 1);
+    const requested = Number.isFinite(Number(requestedHeight))
+      ? Number(requestedHeight) : total * 0.42;
+    const minPercent = Math.min(35, Math.max(9, (72 / total) * 100));
+    const percent = Math.max(minPercent, Math.min(75, (requested / total) * 100));
+    return Math.round(percent * 10) / 10;
+  }
+
+  function presentationLiveMinimumPercent(stageHeight) {
+    const total = Math.max(1, Number(stageHeight) || 1);
+    return Math.round(Math.min(35, Math.max(9, (72 / total) * 100)) * 10) / 10;
+  }
+
+  function syncPresentationLiveResizeAria(region, stage, percent) {
+    if (!region || !stage) return;
+    const handle = region.querySelector('[data-presentation-live-resize]');
+    if (!handle) return;
+    const stageHeight = stage.getBoundingClientRect().height || stage.clientHeight || 1;
+    handle.setAttribute('aria-valuemin', String(Math.ceil(presentationLiveMinimumPercent(stageHeight))));
+    handle.setAttribute('aria-valuenow', String(Math.round(Number(percent) || 42)));
+  }
+
+  function applyPresentationLiveHeight(region, stage, requestedHeight) {
+    if (!region || !stage) return 42;
+    const stageHeight = stage.getBoundingClientRect().height || stage.clientHeight || 1;
+    const percent = presentationLiveHeightPercent(stageHeight, requestedHeight);
+    region.style.setProperty('--presentation-live-height', percent + '%');
+    syncPresentationLiveResizeAria(region, stage, percent);
+    return percent;
+  }
+
+  function attachPresentationLiveResize(region, stage) {
+    if (!region || !stage || region._presentationLiveResizeAttached) return;
+    const handle = region.querySelector('[data-presentation-live-resize]');
+    if (!handle) return;
+    region._presentationLiveResizeAttached = true;
+    const storageKey = 'ccc-presentation-live-height-percent';
+
+    const reset = () => {
+      region.style.removeProperty('--presentation-live-height');
+      syncPresentationLiveResizeAria(region, stage, 42);
+      try { localStorage.removeItem(storageKey); } catch (_) {}
+    };
+    const persist = () => {
+      const stageHeight = stage.getBoundingClientRect().height || stage.clientHeight || 1;
+      const percent = presentationLiveHeightPercent(
+        stageHeight, region.getBoundingClientRect().height,
+      );
+      try { localStorage.setItem(storageKey, String(percent)); } catch (_) {}
+      return percent;
+    };
+
+    try {
+      const storedPercent = Number(localStorage.getItem(storageKey));
+      requestAnimationFrame(() => {
+        syncPresentationLiveResizeAria(region, stage, 42);
+        if (Number.isFinite(storedPercent) && storedPercent > 0) {
+          const stageHeight = stage.getBoundingClientRect().height || stage.clientHeight || 1;
+          applyPresentationLiveHeight(region, stage, stageHeight * storedPercent / 100);
+        }
+      });
+    } catch (_) {}
+
+    let activePointerId = null;
+    let startY = 0;
+    let startHeight = 0;
+    handle.addEventListener('pointerdown', event => {
+      if (region.hidden || !event.isPrimary
+          || (event.pointerType !== 'touch' && event.button !== 0)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      activePointerId = event.pointerId;
+      startY = event.clientY;
+      startHeight = region.getBoundingClientRect().height;
+      handle.classList.add('is-dragging');
+      try { handle.setPointerCapture(event.pointerId); } catch (_) {}
+    });
+    handle.addEventListener('pointermove', event => {
+      if (activePointerId !== event.pointerId) return;
+      applyPresentationLiveHeight(region, stage, startHeight - (event.clientY - startY));
+    });
+    const endDrag = event => {
+      if (activePointerId !== event.pointerId) return;
+      handle.classList.remove('is-dragging');
+      try { handle.releasePointerCapture(event.pointerId); } catch (_) {}
+      activePointerId = null;
+      persist();
+    };
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+    handle.addEventListener('dblclick', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      reset();
+    });
+    handle.addEventListener('keydown', event => {
+      if (event.key === 'Home') {
+        event.preventDefault();
+        reset();
+        return;
+      }
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+      event.preventDefault();
+      const delta = event.key === 'ArrowUp' ? 24 : -24;
+      applyPresentationLiveHeight(
+        region, stage, region.getBoundingClientRect().height + delta,
+      );
+      persist();
+    });
+    handle.title = 'Drag to resize Live updates · double-click to reset';
+  }
+
   function ensurePresentationLiveRegion(stage) {
     let region = stage.querySelector(':scope > .conv-presentation-live-region');
-    if (region) return region;
+    if (region) {
+      attachPresentationLiveResize(region, stage);
+      const currentPercent = parseFloat(
+        region.style.getPropertyValue('--presentation-live-height') || '42',
+      );
+      syncPresentationLiveResizeAria(region, stage, currentPercent);
+      return region;
+    }
     region = document.createElement('section');
     region.className = 'conv-presentation-live-region';
     region.hidden = true;
     region.setAttribute('aria-label', 'Live conversation updates');
     region.setAttribute('aria-live', 'polite');
+    const resize = document.createElement('div');
+    resize.className = 'conv-presentation-live-resize';
+    resize.setAttribute('data-presentation-live-resize', '');
+    resize.setAttribute('role', 'separator');
+    resize.setAttribute('aria-orientation', 'horizontal');
+    resize.setAttribute('aria-label', 'Resize Live updates');
+    resize.setAttribute('aria-valuemin', '9');
+    resize.setAttribute('aria-valuemax', '75');
+    resize.setAttribute('aria-valuenow', '42');
+    resize.tabIndex = 0;
     const header = document.createElement('header');
     const label = document.createElement('span');
     label.textContent = 'Live updates';
@@ -41189,8 +41319,9 @@
         forwardPresentationProjectionEvent(view, event);
       }, true);
     });
-    region.append(header, list);
+    region.append(resize, header, list);
     stage.appendChild(region);
+    attachPresentationLiveResize(region, stage);
     return region;
   }
 

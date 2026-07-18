@@ -440,6 +440,38 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("ensurePresentationProjection(view, targetPaneId)", refresh)
         self.assertIn("disconnectPresentationProjection(view)", refresh)
 
+    def test_live_updates_region_has_persistent_drag_resize(self):
+        app_js = APP_JS.read_text(encoding="utf-8")
+        css = APP_CSS.read_text(encoding="utf-8")
+        live_region = _javascript_function_source("ensurePresentationLiveRegion")
+        resize = _javascript_function_source("attachPresentationLiveResize")
+
+        self.assertEqual(_run_javascript_function("presentationLiveHeightPercent", 800, 10), 9)
+        self.assertEqual(_run_javascript_function("presentationLiveHeightPercent", 800, 336), 42)
+        self.assertEqual(_run_javascript_function("presentationLiveHeightPercent", 800, 1000), 75)
+        self.assertEqual(_run_javascript_function("presentationLiveMinimumPercent", 100), 35)
+        self.assertIn("data-presentation-live-resize", live_region)
+        self.assertIn("attachPresentationLiveResize(region, stage)", live_region)
+        for token in (
+            "ccc-presentation-live-height-percent",
+            "pointerdown",
+            "pointermove",
+            "setPointerCapture",
+            "localStorage.setItem",
+            "double-click to reset",
+            "ArrowUp",
+            "ArrowDown",
+            "event.isPrimary",
+            "event.button !== 0",
+        ):
+            self.assertIn(token, resize)
+        self.assertIn(".conv-presentation-live-resize", css)
+        self.assertIn("cursor: ns-resize", css)
+        self.assertIn("touch-action: none", css)
+        self.assertIn("flex: 0 0 auto", css)
+        self.assertIn("flex-basis: var(--presentation-live-height, 42%)", css)
+        self.assertIn("max-height: var(--presentation-live-height, 42%)", css)
+
     def test_projection_forwards_controls_without_an_action_allowlist(self):
         forward = _javascript_function_source("forwardPresentationProjectionEvent")
         live_region = _javascript_function_source("ensurePresentationLiveRegion")

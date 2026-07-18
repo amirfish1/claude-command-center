@@ -14,6 +14,7 @@ const requiredLabels = [
   'legacy-mode-one', 'added', 'edited', 'tool-group', 'tool-complete',
   'approval-state', 'queue-reason', 'outcome-banner', 'dismissal', 'frame-bound',
   'completion-supersede', 'reactivation', 'refresh-stable', 'tail-auto-advance',
+  'live-resize',
 ];
 const passed = new Set();
 
@@ -81,6 +82,7 @@ function findChromePath() {
     await page.evaluateOnNewDocument(() => {
       localStorage.removeItem('ccc-last-conv');
       localStorage.removeItem('ccc-last-conv:all');
+      localStorage.setItem('ccc-tour-done', 'skipped');
       localStorage.setItem('ccc-conv-presentation-mode', 'off');
       localStorage.setItem('ccc-split-state:all', JSON.stringify({
         orientation: 'vertical',
@@ -518,7 +520,10 @@ function findChromePath() {
 
     await upsert('details', 'details', 'event details-event', '<details><summary>More detail</summary><p>Exact detail body</p></details>');
     await waitForParity('details');
-    await page.click('.conv-pane[data-pane-id="p1"] .conv-presentation-live-item [data-parity-label="details"] summary');
+    await page.$eval(
+      '.conv-pane[data-pane-id="p1"] .conv-presentation-live-item [data-parity-label="details"] summary',
+      summary => summary.click(),
+    );
     await page.waitForFunction(() => {
       const source = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view > [data-parity-label="details"] details');
       const mirror = document.querySelector('.conv-pane[data-pane-id="p1"] .conv-presentation-live-item [data-parity-label="details"] details');
@@ -539,6 +544,116 @@ function findChromePath() {
       const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
       return view._presentationIndex === window.__cccHistoricalCursor;
     }, { timeout });
+
+    await page.evaluate(() => {
+      // Startup/release-note overlays appear asynchronously and otherwise
+      // intercept the genuine pointer sequence below.
+      document.querySelectorAll('.upd-overlay').forEach(overlay => {
+        overlay.style.setProperty('display', 'none', 'important');
+      });
+    });
+    const liveResizeStart = await page.$eval(
+      '.conv-pane[data-pane-id="p1"] [data-presentation-live-resize]',
+      handle => {
+        const region = handle.closest('.conv-presentation-live-region');
+        const rect = handle.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        handle.addEventListener('pointerdown', event => {
+          window.__cccLiveResizePointer = {
+            button: event.button,
+            isPrimary: event.isPrimary,
+            pointerId: event.pointerId,
+            pointerType: event.pointerType,
+          };
+        }, { capture: true, once: true });
+        return {
+          x,
+          y,
+          initialHeight: region.getBoundingClientRect().height,
+          hitClass: String((document.elementFromPoint(x, y) || {}).className || ''),
+        };
+      },
+    );
+    await page.mouse.move(liveResizeStart.x, liveResizeStart.y);
+    await page.mouse.down({ button: 'left' });
+    await page.mouse.move(liveResizeStart.x, liveResizeStart.y - 80, { steps: 4 });
+    await page.mouse.up({ button: 'left' });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const liveResizeMetrics = await page.evaluate(start => {
+      const region = document.querySelector('.conv-pane[data-pane-id="p1"] .conv-presentation-live-region');
+      if (!region) throw new Error('Live updates resize region is missing');
+      return {
+        initialHeight: start.initialHeight,
+        finalHeight: region.getBoundingClientRect().height,
+        stageHeight: region.parentElement.getBoundingClientRect().height,
+        storedPercent: localStorage.getItem('ccc-presentation-live-height-percent'),
+        cssHeight: region.style.getPropertyValue('--presentation-live-height'),
+        hitClass: start.hitClass,
+        pointer: window.__cccLiveResizePointer || null,
+      };
+    }, liveResizeStart);
+    process.stdout.write(`INFO live-resize ${JSON.stringify(liveResizeMetrics)}\n`);
+    if (!(liveResizeMetrics.finalHeight > liveResizeMetrics.initialHeight + 50)
+        || !(Number(liveResizeMetrics.storedPercent) > 42)) {
+      throw new Error(`Live updates resize did not grow and persist: ${JSON.stringify(liveResizeMetrics)}`);
+    }
+    await page.screenshot({ path: '/tmp/ccc-593-presentation-live-resize.png' });
+    const beforeKeyboard = await page.$eval(
+      '.conv-pane[data-pane-id="p1"] .conv-presentation-live-region',
+      region => region.getBoundingClientRect().height,
+    );
+    await page.evaluate(() => {
+      const handle = document.querySelector(
+        '.conv-pane[data-pane-id="p1"] [data-presentation-live-resize]',
+      );
+      handle.dispatchEvent(new KeyboardEvent('keydown', {
+        bubbles: true, key: 'ArrowDown',
+      }));
+    });
+    await page.waitForFunction(before => {
+      const region = document.querySelector('.conv-pane[data-pane-id="p1"] .conv-presentation-live-region');
+      return region && region.getBoundingClientRect().height < before;
+    }, { timeout }, beforeKeyboard);
+    await page.evaluate(() => {
+      const pane = document.querySelector('.conv-pane[data-pane-id="p1"]');
+      window.__cccLiveResizeStored = Number(
+        localStorage.getItem('ccc-presentation-live-height-percent'),
+      );
+      pane.querySelector('[data-presentation-mode="off"]').click();
+      pane.querySelector('[data-presentation-mode="2"]').click();
+    });
+    await page.waitForFunction(() => {
+      const region = document.querySelector('.conv-pane[data-pane-id="p1"] .conv-presentation-live-region');
+      if (!region || region.hidden) return false;
+      const restored = parseFloat(
+        region.style.getPropertyValue('--presentation-live-height') || '0',
+      );
+      return Math.abs(restored - window.__cccLiveResizeStored) <= 0.2;
+    }, { timeout });
+    await page.evaluate(() => {
+      const handle = document.querySelector(
+        '.conv-pane[data-pane-id="p1"] [data-presentation-live-resize]',
+      );
+      handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    await page.evaluate(() => {
+      const view = document.querySelector('.conv-pane[data-pane-id="p1"] .conversations-view');
+      const region = document.querySelector('.conv-pane[data-pane-id="p1"] .conv-presentation-live-region');
+      if (region.style.getPropertyValue('--presentation-live-height')) {
+        throw new Error('Double-click did not reset the inline Live updates height');
+      }
+      if (localStorage.getItem('ccc-presentation-live-height-percent') !== null) {
+        throw new Error('Double-click did not clear the stored Live updates height');
+      }
+      // The persistence probe toggles presentation Off and back On. Restore
+      // the harness's original reader snapshot so the later off-restore check
+      // continues to test its own transition rather than this probe's.
+      view.dataset.presentationRestoreScroll = String(window.__cccPresentationRestoreScroll);
+      view.dataset.presentationRestorePinned = '0';
+      view.scrollTop = window.__cccPresentationRestoreScroll;
+    });
+    pass('live-resize');
 
     await page.evaluate(() => {
       document.querySelector('.conv-pane[data-pane-id="p2"] [data-presentation-mode="2"]').click();
