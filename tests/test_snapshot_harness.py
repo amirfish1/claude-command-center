@@ -23,6 +23,14 @@ class SnapshotHarnessTests(unittest.TestCase):
 
         self.assertIn("const DEFAULT_TIMEOUT_MS = 60_000;", source)
 
+    def test_puppeteer_launchers_share_cached_headless_shell_selection(self):
+        snapshot_source = (ROOT / "snapshot.js").read_text()
+        config_source = (ROOT / ".puppeteerrc.cjs").read_text()
+
+        helper_import = "require('./puppeteer-browser-config.js')"
+        self.assertIn(helper_import, snapshot_source)
+        self.assertIn(helper_import, config_source)
+
 
 if __name__ == "__main__":
     unittest.main()

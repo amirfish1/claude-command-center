@@ -20,22 +20,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const puppeteer = require('./require-puppeteer.js');
-
-// Chrome for Testing v149 on macOS ARM has a renderer crash during
-// Page.captureScreenshot ("Target closed"). Prefer the user's installed
-// Chrome Beta or Chrome, which don't have this bug. Falls back to puppeteer's
-// bundled Chrome for Testing when neither is present (OPS-4).
-function findChromePath() {
-  if (process.env.SNAPSHOT_CHROME) return process.env.SNAPSHOT_CHROME;
-  const macs = [
-    '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  ];
-  for (const p of macs) {
-    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) {}
-  }
-  return undefined; // puppeteer default (Chrome for Testing)
-}
+const { findChromePath } = require('./puppeteer-browser-config.js');
 
 const DEFAULT_URL = 'http://127.0.0.1:8090';
 // The dashboard can take longer than 20 seconds to settle while local workers
