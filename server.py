@@ -27954,6 +27954,43 @@ def _acp_load(harness, sid, cwd):
     return {"ok": True, "session_id": sid, "harness": harness, "via": f"acp-{method.split('/')[-1]}"}
 
 
+_ACP_ATTACH_VIEW_MIN_INTERVAL_S = 60.0
+
+
+def _acp_maybe_attach_on_view(harness, sid):
+    """Attach a viewed-but-empty session so its history backfills.
+
+    A TUI-launched session has no CCC transcript, so opening it in CCC used
+    to show an empty pane. On view (and throttled per sid), attach via
+    session/load — the replay folds into the CCC transcript and the pane
+    fills. Returns the _acp_load result, or None when no attach was needed.
+    """
+    if not _acp_harness_enabled(harness):
+        return None
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid)
+        conn = _ACP_CONNS.get(harness)
+        if state and conn and state.get("loaded_conn") == id(conn):
+            return None
+        attempted = (state or {}).get("attach_attempted_at") or 0
+        if time.time() - attempted < _ACP_ATTACH_VIEW_MIN_INTERVAL_S:
+            return None
+    try:
+        if _acp_transcript_path(harness, sid).stat().st_size > 0:
+            return None
+    except OSError:
+        pass
+    cwd = (state or {}).get("cwd") or ""
+    if not cwd and harness == "kimi":
+        cwd = (_kimi_session_index().get(sid) or {}).get("work_dir") or ""
+    if not cwd:
+        return None
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True, cwd=cwd)
+        state["attach_attempted_at"] = time.time()
+    return _acp_load(harness, sid, cwd)
+
+
 def _acp_list(harness, cwd=None):
     if _acp_ensure(harness) is None:
         return {"ok": False, "error": _acp_conn_error(harness)}
@@ -59295,11 +59332,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _before_raw = (qs.get("before", [""])[0] or "")
             before = int(_before_raw) if _before_raw.isdigit() else None
             windowed = bool(tail) or (before is not None)
+            is_kimi_conv = _is_kimi_session(conv_id)
+            if is_kimi_conv:
+                # A TUI-launched kimi session has no CCC transcript until it
+                # is attached — attach on view (throttled) so the pane
+                # backfills instead of showing empty.
+                try:
+                    _acp_maybe_attach_on_view("kimi", conv_id)
+                except Exception:
+                    pass
             # Look for a fully-baked response (JSON-encoded body + matching
             # gzip variant) in the conv-bytes cache. On a hit we skip
             # parse_conversation, json.dumps, AND gzip — the click→render
-            # path collapses to a hashmap lookup + socket write.
-            cached_bytes = None if windowed else _conv_response_bytes_get(conv_id, after_line)
+            # path collapses to a hashmap lookup + socket write. Kimi convs
+            # bypass: an attach can change the content at any time, with no
+            # file mtime to invalidate on.
+            cached_bytes = None if (windowed or is_kimi_conv) else _conv_response_bytes_get(conv_id, after_line)
             if cached_bytes is not None:
                 accept = self.headers.get("Accept-Encoding", "") or ""
                 want_gzip = "gzip" in accept.lower()
@@ -59325,7 +59373,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     gz = gzip.compress(raw, compresslevel=5)
                 except Exception:
                     gz = None
-            if not windowed:
+            if not windowed and not is_kimi_conv:
                 _conv_response_bytes_put(conv_id, after_line, raw, gz)
             accept = self.headers.get("Accept-Encoding", "") or ""
             want_gzip = "gzip" in accept.lower()
