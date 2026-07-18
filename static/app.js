@@ -35570,7 +35570,7 @@
         let spawned = 0;
         for (let i = 0; i < n; i++) {
           try {
-            const res = await fetch('/api/ux-fixes/spawn-worker', {
+            const res = await fetch('/api/queue/spawn-worker', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ project: queue, repo_path: repoPath }),

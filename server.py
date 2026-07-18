@@ -61743,7 +61743,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status = 200 if result.get("ok") else 502
             self.send_json(result, status)
             return
-        if path == "/api/ux-fixes/spawn-worker":
+        if path == "/api/queue/spawn-worker" or path == "/api/ux-fixes/spawn-worker":
+            # /api/queue/spawn-worker is the canonical name; the ux-fixes path
+            # is the legacy alias kept for compatibility.
             # Spawn a repo-scoped UX-fixes worker session that drains only this
             # repo's project queue. Same-origin is already enforced at the top
             # of do_POST; repo_path is validated by spawn_session ->
