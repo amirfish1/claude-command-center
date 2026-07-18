@@ -42741,6 +42741,15 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
         if not isinstance(meta, dict) or group_chat_activity_state(meta, now) != "active":
             continue
         md_path = sidecar_path[:-5] + ".md"
+        try:
+            last_mtime = os.stat(md_path).st_mtime
+        except OSError:
+            continue
+        last_activity = max(
+            float(meta.get("created_at") or meta.get("started_at") or 0),
+            float(meta.get("last_message_at") or 0),
+            float(meta.get("participant_changed_at") or 0),
+        )
         # CCC-508: id/uuid/path are cheap (already-loaded meta + a stable
         # sidecar field), unlike the participant-probing/message-reading this
         # summary deliberately skips. Omitting them left every sidebar
@@ -42761,6 +42770,12 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             # established field name.
             "status": "active",
             "session_ids": meta.get("session_ids") or [],
+            # Current-session filtering and ordering use these timestamps.
+            # They are available from the sidecar/stat call, so including them
+            # keeps an active empty chat visible without reading its messages.
+            "started_at": meta.get("started_at") or meta.get("created_at") or 0,
+            "last_mtime": last_mtime,
+            "last_activity": last_activity or last_mtime,
         })
     return summaries
 

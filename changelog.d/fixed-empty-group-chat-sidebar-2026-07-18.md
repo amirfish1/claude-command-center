@@ -1,0 +1,1 @@
+- Keep active empty group chats visible in the Current sessions sidebar.

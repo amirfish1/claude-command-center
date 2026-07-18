@@ -37,7 +37,7 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
     active_md.write_text("active", encoding="utf-8")
     inactive_md.write_text("inactive", encoding="utf-8")
     (chats / "active.json").write_text(
-        '{"topic":"Active", "created_at": 1900, "last_message_at": 1900, "session_ids":["a"]}',
+        '{"topic":"Active", "started_at": 1900, "last_message_at": 1900, "session_ids":["a"]}',
         encoding="utf-8",
     )
     (chats / "inactive.json").write_text(
@@ -59,6 +59,10 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
     # The active-sidebar consumer uses `status`, matching full group-chat
     # listings. A freshly created chat must therefore expose that field too.
     assert summary["status"] == "active"
+    # The Current/1d sidebar filter and sort require an activity timestamp.
+    # Active summaries must retain it even when a chat has no participants.
+    assert summary["started_at"] == 1900
+    assert summary["last_mtime"] > 0
     assert summary["session_ids"] == ["a"]
     assert summary["path"] == str(active_md)
     assert summary["path_tilde"] == "~/.claude/group-chats/active.md"
