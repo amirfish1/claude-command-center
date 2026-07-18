@@ -24955,15 +24955,26 @@ def _codex_custom_tool_arg(source, key):
     # Handles the current Codex custom-tool JS body:
     #   tools.exec_command({ cmd: "...", sandbox_permissions: "..." })
     # It is intentionally small and best-effort; rollout remains authoritative.
+    # Per-quote alternatives with disjoint branches (`\\.` vs `[^"\\]`) and
+    # possessive quantifiers: a backslash can only ever start an escape pair,
+    # so the engine never backtracks. The old tempered-dot form
+    # `(?:\\.|(?!(?P=quote)).)*` was ambiguous on backslashes and went
+    # exponential on escape-heavy unclosed strings (real Codex rollouts
+    # pinned a request thread at 100% CPU for minutes).
     pattern = (
         r"(?<![A-Za-z0-9_$])(?:" + re.escape(key)
         + r'|"' + re.escape(key) + r'"|\'' + re.escape(key) + r"')"
-        + r"\s*:\s*(?P<quote>[\"'])(?P<body>(?:\\.|(?!(?P=quote)).)*)(?P=quote)"
+        + r"\s*:\s*(?:\"(?P<dbody>(?:\\.|[^\"\\])*+)\""
+        + r"|'(?P<sbody>(?:\\.|[^'\\])*+)')"
     )
     match = re.search(pattern, source, re.DOTALL)
     if not match:
         return ""
-    return _codex_js_string_literal_value(match.group("quote") + match.group("body") + match.group("quote"))
+    if match.group("dbody") is not None:
+        quote, body = '"', match.group("dbody")
+    else:
+        quote, body = "'", match.group("sbody")
+    return _codex_js_string_literal_value(quote + body + quote)
 
 
 def _codex_custom_tool_kind(source, fallback_name=""):
@@ -50189,103 +50200,152 @@ def _token_optimizer_quality_summary(data):
     return "; ".join(details)
 
 
-_TOKEN_OPTIMIZER_QUALITY_CACHE = {}
-_TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S = 15.0
-_TOKEN_OPTIMIZER_QUALITY_FILES = {"ts": 0.0, "roots": (), "paths": ()}
-_TOKEN_OPTIMIZER_QUALITY_FILES_LOCK = threading.Lock()
-# Token Optimizer quality is advisory. Keep it off until the producer-owned
-# quality index lands; request handlers must not read Token Optimizer files.
-_TOKEN_OPTIMIZER_QUALITY_READS_ENABLED = False
+_TOKEN_OPTIMIZER_QUALITY_INDEX = {}
+_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE = {}
+_TOKEN_OPTIMIZER_QUALITY_INDEX_LOCK = threading.Lock()
+_TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_S = 60.0
+_TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_STARTED = False
 
 
-def _token_optimizer_quality_for_session(session_id):
-    if not _TOKEN_OPTIMIZER_QUALITY_READS_ENABLED:
-        return {}
+def _token_optimizer_quality_index_paths():
+    """The two producer-owned files; callers must not enumerate their dirs."""
+    home = Path.home()
+    return (
+        ("claude", home / ".claude" / "token-optimizer" / "quality-index.json"),
+        ("codex", home / ".codex" / "token-optimizer" / "quality-index.json"),
+    )
 
-    sid = str(session_id or "").strip()
-    if not sid:
-        return {}
-    safe_sid = re.sub(r"[^A-Za-z0-9_-]", "", sid)
-    if not safe_sid:
-        return {}
-    now = time.time()
-    cached = _TOKEN_OPTIMIZER_QUALITY_CACHE.get(safe_sid)
-    if cached and now - cached.get("ts", 0) < _TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S:
-        return dict(cached.get("value") or {})
 
-    def _cache_quality(value):
-        out = dict(value or {})
-        _TOKEN_OPTIMIZER_QUALITY_CACHE[safe_sid] = {"ts": now, "value": out}
-        return dict(out)
+def _token_optimizer_quality_safe_sid(value):
+    sid = str(value or "").strip()
+    if not sid or re.fullmatch(r"[A-Za-z0-9_-]+", sid) is None:
+        return ""
+    return sid
 
-    roots = [
-        Path.home() / ".claude" / "token-optimizer",
-        Path.home() / ".codex" / "token-optimizer",
-    ]
-    roots_key = tuple(str(root) for root in roots)
-    with _TOKEN_OPTIMIZER_QUALITY_FILES_LOCK:
-        index = _TOKEN_OPTIMIZER_QUALITY_FILES
-        if (
-            index.get("roots") == roots_key
-            and now - index.get("ts", 0) < _TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S
-        ):
-            indexed_paths = index.get("paths") or ()
-        else:
-            paths = []
-            for root in roots:
-                try:
-                    for path in root.iterdir():
-                        if (
-                            path.name.startswith("quality-cache-")
-                            and path.name.endswith(".json")
-                            and path.is_file()
-                        ):
-                            paths.append(path)
-                except OSError:
-                    continue
-            indexed_paths = tuple(paths)
-            index.update({"ts": now, "roots": roots_key, "paths": indexed_paths})
 
-    candidates = []
-    seen = set()
-    suffix = f"{safe_sid}.json"
-    for path in indexed_paths:
-        if not path.name.endswith(suffix):
-            continue
-        try:
-            resolved = path.resolve()
-        except OSError:
-            continue
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        candidates.append(path)
-    candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
-    for path in candidates:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(data, dict):
+def _token_optimizer_quality_index_records(raw):
+    """Validate a complete producer index and return its usable records."""
+    if not isinstance(raw, dict) or raw.get("version") != 1:
+        return None
+    source = raw.get("records")
+    if not isinstance(source, dict):
+        return None
+    records = {}
+    for session_id, data in source.items():
+        sid = _token_optimizer_quality_safe_sid(session_id)
+        if not sid or not isinstance(data, dict):
             continue
         try:
             score = float(data.get("score"))
+            source_mtime = float(data.get("source_mtime"))
+            transcript_mtime = float(data.get("transcript_mtime"))
         except (TypeError, ValueError):
             continue
-        if not (0 <= score <= 100):
+        if (
+            not math.isfinite(score)
+            or not math.isfinite(source_mtime)
+            or not math.isfinite(transcript_mtime)
+            or not 0 <= score <= 100
+            or source_mtime < 0
+            or transcript_mtime < 0
+        ):
             continue
         rounded = round(score, 1)
         if rounded.is_integer():
             rounded = int(rounded)
-        grade = str(data.get("grade") or _token_optimizer_quality_grade(score)).strip()
-        return _cache_quality({
-            "quality_score": rounded,
-            "quality_grade": grade,
-            "quality_timestamp": str(data.get("timestamp") or ""),
-            "quality_summary": _token_optimizer_quality_summary(data),
-            "quality_source": "token-optimizer-cache",
-        })
-    return _cache_quality({})
+        records[sid] = {
+            "source_mtime": source_mtime,
+            "value": {
+                "quality_score": rounded,
+                "quality_grade": str(
+                    data.get("grade") or _token_optimizer_quality_grade(score)
+                ).strip(),
+                "quality_timestamp": str(data.get("timestamp") or ""),
+                "quality_summary": str(data.get("summary") or ""),
+                "quality_source": "token-optimizer-index",
+            },
+        }
+    return records
+
+
+def _refresh_token_optimizer_quality_index():
+    """Refresh changed producer indexes; this is the only TO filesystem reader."""
+    global _TOKEN_OPTIMIZER_QUALITY_INDEX, _TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE
+    previous = _TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE
+    next_state = dict(previous)
+    changed = False
+    for runtime, index_path in _token_optimizer_quality_index_paths():
+        prior = previous.get(runtime) or {"stamp": None, "records": {}}
+        try:
+            stat = index_path.stat()
+        except FileNotFoundError:
+            if prior.get("stamp") is not None or prior.get("records"):
+                next_state[runtime] = {"stamp": None, "records": {}}
+                changed = True
+            continue
+        except OSError:
+            # A temporarily unreadable index is not a reason to drop pills.
+            continue
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        if prior.get("stamp") == stamp:
+            continue
+        try:
+            raw = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # Preserve the last good runtime map until the next interval.
+            continue
+        records = _token_optimizer_quality_index_records(raw)
+        if records is None:
+            continue
+        next_state[runtime] = {"stamp": stamp, "records": records}
+        changed = True
+
+    if not changed:
+        return False
+    merged = {}
+    # Equal source mtimes use runtime then path order so duplicate pills do not
+    # flicker. `codex` sorts after `claude`, therefore wins an exact tie.
+    for runtime, index_path in _token_optimizer_quality_index_paths():
+        records = (next_state.get(runtime) or {}).get("records") or {}
+        for sid, record in records.items():
+            candidate_key = (record["source_mtime"], runtime, str(index_path))
+            previous_record = merged.get(sid)
+            if previous_record is None or candidate_key > previous_record[0]:
+                merged[sid] = (candidate_key, record["value"])
+    complete_map = {sid: value for sid, (_key, value) in merged.items()}
+    with _TOKEN_OPTIMIZER_QUALITY_INDEX_LOCK:
+        _TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE = next_state
+        _TOKEN_OPTIMIZER_QUALITY_INDEX = complete_map
+    return True
+
+
+def _token_optimizer_quality_index_loop():
+    while True:
+        try:
+            _refresh_token_optimizer_quality_index()
+        except Exception:
+            # Advisory metadata must not destabilize CCC's background work.
+            pass
+        time.sleep(_TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_S)
+
+
+def _start_token_optimizer_quality_index_refresher():
+    global _TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_STARTED
+    with _TOKEN_OPTIMIZER_QUALITY_INDEX_LOCK:
+        if _TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_STARTED:
+            return
+        _TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_STARTED = True
+    threading.Thread(
+        target=_token_optimizer_quality_index_loop,
+        daemon=True,
+        name="ccc-token-optimizer-quality-index",
+    ).start()
+
+
+def _token_optimizer_quality_for_session(session_id):
+    """Pure request-time lookup of the most recently published quality map."""
+    sid = _token_optimizer_quality_safe_sid(session_id)
+    return dict(_TOKEN_OPTIMIZER_QUALITY_INDEX.get(sid) or {})
 
 
 def _with_token_optimizer_quality(payload, session_id):
@@ -68884,6 +68944,9 @@ def main():
         daemon=True,
         name="ccc-cursor-sidebar-backfill",
     ).start()
+    # Token Optimizer quality is advisory UI metadata. Hydrate it in the
+    # background; every request only reads the published in-memory map.
+    _start_token_optimizer_quality_index_refresher()
     _load_conv_meta_cache()
     _load_cwd_relocation_cache()
     _load_session_cwd_overrides()
