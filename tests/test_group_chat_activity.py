@@ -84,3 +84,14 @@ def test_browser_starts_group_chat_timer_only_after_an_active_chat_exists():
     assert "if (_gcActivePollPromise) return _gcActivePollPromise;" in poller
     assert "if (activeCount && !_gcActivePollTimer)" in poller
     assert "else if (!activeCount && _gcActivePollTimer)" in poller
+
+
+def test_opening_group_chat_replaces_stale_session_rail_context():
+    source = Path("static/app.js").read_text(encoding="utf-8")
+    start = source.index("function openGroupChatReader(")
+    end = source.index("const gcAddPartBtn", start)
+    reader = source[start:end]
+
+    assert "updatePaneHeader(activePaneId(), null" in reader
+    assert "category: 'Group chat'" in reader
+    assert "setStatusRailTab('metadata')" in reader

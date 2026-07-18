@@ -20339,6 +20339,17 @@
       } catch (_) {}
     }
     currentConversation = null;
+    // The status rail is global to the active pane. Leaving its title and
+    // selection intact makes a group chat look like it still belongs to the
+    // previously opened session, especially when that session had Queue open.
+    // Give the reader its own identity and expose its orchestration context.
+    if (typeof updatePaneHeader === 'function') {
+      updatePaneHeader(activePaneId(), null, {
+        category: 'Group chat',
+        title: topic || 'Group chat',
+      });
+    }
+    if (typeof setStatusRailTab === 'function') setStatusRailTab('metadata');
     if (typeof ffcUpdateSidebar === 'function') ffcUpdateSidebar(null);
     if (typeof syncActivePaneChrome === 'function') syncActivePaneChrome(null);
     if (typeof renderSidebar === 'function' && typeof filterConversations === 'function' && typeof $convSearch !== 'undefined' && $convSearch) {
