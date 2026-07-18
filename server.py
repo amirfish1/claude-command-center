@@ -27121,6 +27121,8 @@ _ACP_HARNESSES = {
         "bin_names": ("kimi",),
         "acp_args": ("acp",),
         "kill_env": "CCC_KIMI_ACP",
+        "home_env": "KIMI_CODE_HOME",
+        "home_default": "~/.kimi-code",
     },
 }
 
@@ -27159,6 +27161,26 @@ def _acp_resolve_bin(harness):
         found = shutil.which(name)
         if found:
             return {"available": True, "bin": found, "source": "path"}
+    # Server processes launched from a Finder app or a bare shell often have
+    # a PATH that misses user-install dirs (launchd) and the harness's own
+    # managed bin/ (e.g. ~/.kimi-code/bin/kimi). Probe both explicitly.
+    candidates = []
+    for name in cfg.get("bin_names") or ():
+        candidates.extend(_iter_common_cli_candidates(name))
+        home = os.environ.get(cfg.get("home_env") or "", "").strip()
+        roots = []
+        if home:
+            roots.append(Path(os.path.expanduser(home)))
+        if cfg.get("home_default"):
+            roots.append(Path(os.path.expanduser(cfg["home_default"])))
+        for root in roots:
+            candidates.append(root / "bin" / name)
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return {"available": True, "bin": str(candidate), "source": "managed"}
+        except OSError:
+            continue
     return {
         "available": False, "bin": None,
         "reason": f"{label} CLI not found on PATH",
