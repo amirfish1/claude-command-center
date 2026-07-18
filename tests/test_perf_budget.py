@@ -193,6 +193,42 @@ def test_archive_build_skips_liveness_for_old_sessions(big_projects, monkeypatch
     )
 
 
+def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
+    """Quality lookup indexes cache files once, never once per session row."""
+    quality_dir = tmp_path / ".codex" / "token-optimizer"
+    quality_dir.mkdir(parents=True)
+    sids = [str(uuid.uuid4()) for _ in range(100)]
+    for sid in sids:
+        (quality_dir / f"quality-cache-{sid}.json").write_text(
+            json.dumps({"score": 95, "grade": "A", "timestamp": "now"})
+        )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_CACHE", {})
+    scans = []
+    original_glob = Path.glob
+    original_iterdir = Path.iterdir
+
+    def counting_glob(path, pattern):
+        scans.append(path)
+        return original_glob(path, pattern)
+
+    def counting_iterdir(path):
+        scans.append(path)
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "glob", counting_glob)
+    monkeypatch.setattr(Path, "iterdir", counting_iterdir)
+
+    values = [server._token_optimizer_quality_for_session(sid) for sid in sids]
+
+    assert all(value.get("quality_score") == 95 for value in values)
+    assert len(scans) <= 2, (
+        f"quality lookup scanned cache directories {len(scans)}x for "
+        f"{len(sids)} rows instead of sharing one directory index"
+    )
+
+
 # ── Auto-unarchive sweep candidacy gate (CCC-435 follow-up) ──────────────────
 # _auto_unarchive_live_sessions used to gate the (heavy, engine-classifying)
 # _archive_session_is_live probe by `sid in _discover_live_session_ids()`.

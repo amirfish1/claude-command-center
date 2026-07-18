@@ -50057,6 +50057,8 @@ def _token_optimizer_quality_summary(data):
 
 _TOKEN_OPTIMIZER_QUALITY_CACHE = {}
 _TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S = 15.0
+_TOKEN_OPTIMIZER_QUALITY_FILES = {"ts": 0.0, "roots": (), "paths": ()}
+_TOKEN_OPTIMIZER_QUALITY_FILES_LOCK = threading.Lock()
 
 
 def _token_optimizer_quality_for_session(session_id):
@@ -50080,25 +50082,44 @@ def _token_optimizer_quality_for_session(session_id):
         Path.home() / ".claude" / "token-optimizer",
         Path.home() / ".codex" / "token-optimizer",
     ]
+    roots_key = tuple(str(root) for root in roots)
+    with _TOKEN_OPTIMIZER_QUALITY_FILES_LOCK:
+        index = _TOKEN_OPTIMIZER_QUALITY_FILES
+        if (
+            index.get("roots") == roots_key
+            and now - index.get("ts", 0) < _TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S
+        ):
+            indexed_paths = index.get("paths") or ()
+        else:
+            paths = []
+            for root in roots:
+                try:
+                    for path in root.iterdir():
+                        if (
+                            path.name.startswith("quality-cache-")
+                            and path.name.endswith(".json")
+                            and path.is_file()
+                        ):
+                            paths.append(path)
+                except OSError:
+                    continue
+            indexed_paths = tuple(paths)
+            index.update({"ts": now, "roots": roots_key, "paths": indexed_paths})
+
     candidates = []
     seen = set()
-    for root in roots:
-        exact = root / f"quality-cache-{safe_sid}.json"
+    suffix = f"{safe_sid}.json"
+    for path in indexed_paths:
+        if not path.name.endswith(suffix):
+            continue
         try:
-            paths = [exact, *root.glob(f"quality-cache-*{safe_sid}.json")]
+            resolved = path.resolve()
         except OSError:
             continue
-        for path in paths:
-            try:
-                if not path.is_file():
-                    continue
-                resolved = path.resolve()
-            except OSError:
-                continue
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            candidates.append(path)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append(path)
     candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
     for path in candidates:
         try:
