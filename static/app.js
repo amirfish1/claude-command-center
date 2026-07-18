@@ -34051,7 +34051,7 @@
       const historyEnd = historyOrder ? historyStart + _UXQ_HISTORY_PAGE_SIZE : rows.length;
       const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;
       const _readyShort = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
-      const _typeShort = { 'feature': 'feat', 'bug': 'bug' };
+      const _typeShort = { 'feature': 'FR', 'bug': 'BUG' };
       // A closed ticket can still carry resolution.unresolved (CCC-420): the
       // worker closed it but flagged something it couldn't finish. That read
       // identically to a clean close before — same grey dot — so give it its
@@ -34067,8 +34067,14 @@
         if (it.status === 'closed' && unresolvedNotes.length) {
           c.push('<span class="fq-chip fq-unresolved" title="' + escapeAttr(unresolvedNotes.join('\n\n')) + '">unresolved</span>');
         }
-        if (it.type) c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '" title="' + escapeAttr(it.type) + '">' + escapeHtml(_typeShort[it.type] || it.type) + '</span>');
-        if (it.priority) c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
+        if (it.type) {
+          const typeLabel = _typeShort[it.type] || it.type;
+          const typeAndPriority = it.priority ? typeLabel + '/' + it.priority : typeLabel;
+          const typeTitle = it.priority ? it.type + ' / ' + it.priority : it.type;
+          c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '" title="' + escapeAttr(typeTitle) + '">' + escapeHtml(typeAndPriority) + '</span>');
+        } else if (it.priority) {
+          c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
+        }
         if (it.readiness) c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
         if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '-') + '/' + escapeHtml(it.confidence || '-') + '</span>');
         return c.length ? '<div class="fq-chips">' + c.join('') + '</div>' : '';
@@ -34101,28 +34107,26 @@
         const atTop = curPrio === 'p0';
         const bumpTitle = atTop ? 'Already highest priority (p0)' : ('Bump to ' + np);
         const runnable = it.watchtower_runnable !== false;
-        const runBtn = (!runnable && status === 'open')
-          ? '<button class="fq-run" data-ref="' + escapeAttr(ref) + '" title="Run with WatchTower" aria-label="Run with WatchTower">▶</button>'
-          : '';
         const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
-        const runOnceBtn = (!autoDrainQueue && status === 'open')
-          ? '<button class="fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once - spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
-          : '';
+        const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up' : status;
+        const statusAction = (!runnable && status === 'open')
+          ? '<button class="fq-status fq-status-action fq-run" data-ref="' + escapeAttr(ref) + '" title="Run with WatchTower" aria-label="Run with WatchTower">▶</button>'
+          : (!autoDrainQueue && status === 'open')
+            ? '<button class="fq-status fq-status-action fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once - spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
+            : '<span class="fq-status" title="' + escapeAttr(statusTitle) + '">' + escapeHtml(status) + '</span>';
         const ageSrc = status === 'closed'
           ? (it.closed_at || it.updated_at || it.created_at)
           : (it.updated_at || it.created_at);
         const ageMs = ageSrc ? Date.parse(ageSrc) : NaN;
-        const ageStr = !isNaN(ageMs) ? timeAgo(ageMs) : '';
+        const ageStr = !isNaN(ageMs) ? timeAgo(ageMs).replace(/\s+ago$/, '') : '';
         return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
           + _uxqChips(it)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
-          + runBtn
-          + runOnceBtn
           + '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>'
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
-          + '<span class="fq-status" title="' + escapeAttr(blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up' : status) + '">' + escapeHtml(status) + '</span>'
+          + statusAction
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
       const historyPagerHtml = historyOrder && rows.length > _UXQ_HISTORY_PAGE_SIZE

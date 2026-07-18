@@ -16942,6 +16942,15 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 0; align-self: center;
   box-shadow: 0 0 0 2px rgba(139,148,158,0.14);
 }
+.fq-status.fq-status-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; cursor: pointer; color: transparent; line-height: 1;
+}
+.fq-status-action:hover,
+.fq-status-action:focus-visible {
+  color: var(--bg, #0d1117); font-size: 10px;
+  outline: 1px solid var(--accent, #58a6ff); outline-offset: 2px;
+}
 @keyframes fq-status-glow {
   0%, 100% {
     opacity: 0.82;

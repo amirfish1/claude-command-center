@@ -116,6 +116,23 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("text-overflow: ellipsis;", note_css)
         self.assertIn("white-space: nowrap;", note_css)
 
+    def test_queue_rows_compact_metadata_and_move_play_to_status_dot(self):
+        """Issue names keep room by compacting row-only metadata and actions."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        queue_js = app_js[
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
+        ]
+
+        self.assertIn("const _typeShort = { 'feature': 'FR', 'bug': 'BUG' };", queue_js)
+        self.assertIn("typeLabel + '/' + it.priority", queue_js)
+        self.assertIn("timeAgo(ageMs).replace(/\\s+ago$/, '')", queue_js)
+        self.assertIn('class="fq-status fq-status-action fq-run"', queue_js)
+        self.assertIn('class="fq-status fq-status-action fq-run-once"', queue_js)
+        self.assertIn(".fq-status-action:hover", app_css)
+
     def test_queue_panel_empty_state_explains_project_scope(self):
         """An empty scoped Queue tab should say why it is empty."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
