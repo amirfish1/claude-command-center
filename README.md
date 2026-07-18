@@ -1,8 +1,12 @@
 # CCC
 
-**Start the next while Claude builds the first.**
+**Your coding agents outgrew your terminal.**
 
-One local dashboard for every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** session on your machine. Spawn in parallel, ship in parallel.
+CCC puts every session on one local board and tells you which one needs you.
+
+_Start the next while Claude builds the first._
+
+One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** session on your machine, however you launched it. Spawn, monitor, and ingest all five; steer four of them with follow-up. Local, open source, MIT.
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
@@ -31,9 +35,23 @@ Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/dem
   Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v4.3.2.2/May-23-v4-CCC-v5.mp4">Download the demo</a> or watch the GIF above.
 </video>
 
-CCC latches onto every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on your machine — terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
+CCC latches onto every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on your machine: terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
-See the [engine support matrix](#engine-support) below for what's first-class vs. partial per engine — spawn works across all supported engines, transcript ingestion and UX parity vary.
+See the [engine support matrix](#engine-support) below for what each engine does. Spawn, monitor, and transcript ingestion work across all five; follow-up (steering a dormant session) works on four (Kilo Code is fire-and-forget), and Cursor IDE sync is metadata-only by design.
+
+## What you get
+
+**See your whole fleet, past one session.** The way you build faster is a session per workstream: one on the feature, one on its go-to-market, one on the next feature, one on research. CCC puts every model and engine on one board, every row enriched so you read status without clicking in: a needs-you signal, live context left, a cost tier, and, with the Token Optimizer plugin, a quality score. Pin strategy sessions, nest workers under them, group by project, or lay the whole fleet out on a canvas.
+
+**Stop wasting tokens, keep quality where it matters.** Your best model leads; execution fans out to cheaper models, or another platform entirely, through spawns, queues, and workers you point at any engine. CCC shows your pace against your plan's limits before you hit the wall, attributes a spend spike to the exact session or automation that caused it, and flags sessions running on a tier they don't need.
+
+**Sessions that exchange context on their own.** Two sessions on one goal stay in sync through group chats and a sibling-ask API, instead of you reading one agent's output off one screen and retyping it into the other. Post once and every participant is pinged; ask a sibling synchronously when you need an answer right now; hand a problem to a fresh spawned session that reports back when it finishes.
+
+**Workers that specialize over time.** Each worker reads its queue's shared learnings file before it starts and writes back to it when it ends, so a queue handling the same kind of ticket for months keeps getting faster and more accurate, not just busier. Ships via Watchtower, installed by default as CCC's queue engine.
+
+**Find anything, from any session.** The problem you solved two weeks ago in some other session, found in seconds instead of solved again: full-text search across your session history, built in, zero setup, with an optional deeper semantic mode for when you can't remember the words you used. Covers Claude Code and Codex today.
+
+**Work from anywhere.** Two sides of one opt-in: your phone as a client to the fleet, and CCC installed on any machine you can reach, a VM or a home server, open in any browser on your trusted network. Loopback by default, never the open internet.
 
 ## Recent
 
