@@ -1123,7 +1123,7 @@ def test_ux_fixes_health_payload_coalesces_concurrent_polls(monkeypatch):
     calls = []
     lock = threading.Lock()
 
-    def slow_health():
+    def slow_health(*args, **kwargs):
         with lock:
             calls.append(time.time())
         time.sleep(0.05)
@@ -1131,9 +1131,10 @@ def test_ux_fixes_health_payload_coalesces_concurrent_polls(monkeypatch):
 
     monkeypatch.setattr(server, "compute_ux_fixes_health", slow_health)
     monkeypatch.setattr(server, "_wt_read_workers", lambda: [])
-    monkeypatch.setattr(server, "compute_queues_health", lambda health, workers: [{"queue": "CCC"}])
+    monkeypatch.setattr(server, "compute_queues_health", lambda *args, **kwargs: [{"queue": "CCC"}])
     monkeypatch.setattr(server, "_wt_read_worker_session_ids", lambda: [])
     monkeypatch.setattr(server, "_wt_past_workers", lambda hours=24: [])
+    monkeypatch.setattr(server._q, "list_items", lambda *args, **kwargs: [])
 
     barrier = threading.Barrier(4)
 

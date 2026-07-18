@@ -752,21 +752,11 @@ def _wt_past_workers(hours=24, max_per_queue=3):
                 per_queue[queue] = per_queue.get(queue, 0) + 1
             ended_ago = int(now - st.st_mtime)
             ended_iso = datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            # Extract session_id from first matching line in log so chips can be clickable.
-            session_id = ""
-            try:
-                with open(p, "r", errors="replace") as lf:
-                    for raw in lf:
-                        try:
-                            obj = json.loads(raw)
-                            sid = obj.get("session_id", "")
-                            if sid:
-                                session_id = str(sid)
-                                break
-                        except (ValueError, AttributeError):
-                            continue
-            except OSError:
-                pass
+            # Extract session_id so chips can be clickable. Capped at the
+            # first ~60 lines (extract_session_id): worker logs that never
+            # record one (codex/antigravity/failed spawns) used to be parsed
+            # to EOF — 92k-line/6MB logs at ~260ms per health build.
+            session_id = extract_session_id(p) or ""
             out.append({
                 "worker_id": worker_id,
                 "queue": queue,
@@ -6534,7 +6524,7 @@ def find_all_conversations(
                 # Last assistant text — passed through so anyone re-enabling
                 # the subtitle in archive can see it. Currently hidden via
                 # _hideAskHtml flag in the UI shaper.
-                "last_assistant_text": tail_meta.get("last_assistant_text") or "",
+                "last_assistant_text": _archive_bound_assistant_text(tail_meta.get("last_assistant_text")),
                 # Attention API: the soft-block detector + ?state= filter read
                 # these terminal-vs-working signals. All already computed by
                 # _extract_tail_meta above, so surfacing them is free (no extra
@@ -6780,7 +6770,20 @@ def _load_archive_response_cache():
             _ARCHIVE_RESPONSE_CACHE.update(keep)
 
 
-def _save_archive_response_cache():
+_ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S = 30.0
+_ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = 0.0
+
+
+def _save_archive_response_cache(force=False):
+    """Persist the response cache, debounced: incremental archive merges call
+    this per merge and the snapshot is ~17MB, so every live session used to
+    cost a ~180ms disk write on the request thread. It's a rebuildable cache
+    — losing ≤30s of merges to a crash only costs one rebuild."""
+    global _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT
+    now = time.time()
+    if not force and now - _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT < _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S:
+        return
+    _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = now
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         snapshot = {
             "schema_version": _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
@@ -6907,6 +6910,18 @@ try:
     _ARCHIVE_INCR_MAX_FILES = max(0, int(os.environ.get("CCC_ARCHIVE_INCR_MAX_FILES", "200")))
 except ValueError:
     _ARCHIVE_INCR_MAX_FILES = 200
+
+
+def _archive_bound_assistant_text(text, head=700, tail=700):
+    """Bound last_assistant_text on archive rows. The UI never renders more
+    than the first 700 chars and the soft-block detector only scores the
+    last 700 — shipping the full multi-KB body was ~43% of the archive
+    payload and per-row regex/split CPU on every rehydrate. session_state
+    was already computed from the full text upstream."""
+    text = text or ""
+    if len(text) <= head + tail + 3:
+        return text
+    return text[:head] + "..." + text[-tail:]
 
 
 def _archive_corpus_signature():
@@ -7050,7 +7065,12 @@ def _archive_corpus_signature_parts():
         Path.home() / ".cursor" / "projects",
         Path.home() / ".gemini" / "antigravity" / "brain",
         Path.home() / ".hermes" / "state.db",
-        _kimi_code_home() / "session_index.jsonl",
+        # Kimi sessions dir — NOT session_index.jsonl: that file's mtime
+        # flips on per-turn updates, which forced a full O(all-rows) archive
+        # rebuild every poll while a kimi session ran. The dir mtime only
+        # changes when sessions are added/removed, which is exactly the
+        # granularity the archive needs.
+        _kimi_code_home() / "sessions",
         _ACP_TRANSCRIPT_DIR / "kimi",
     ):
         try:
@@ -7079,9 +7099,9 @@ def _archive_corpus_signature_parts():
 # (state / ended_blocked / question from JSONL) are signature-gated and stay
 # fresh on any real change; only process-liveness/sidecar lag, by ≤TTL.
 try:
-    _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "2")))
+    _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "10")))
 except ValueError:
-    _ARCHIVE_SERVE_TTL = 2.0
+    _ARCHIVE_SERVE_TTL = 10.0
 _archive_serve_cache = {}      # key -> {"ts", "rows"}
 _archive_serve_lock = threading.Lock()
 _archive_serve_refreshing = set()  # keys with a background refresh in flight
@@ -7299,9 +7319,13 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                 _archive_response_cache_put(key, rows, signature=sig)
                 _save_conv_meta_cache()
                 from_cache = False
-    _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
-    _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
-    _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
+    if not from_cache:
+        # The cache branches already ran all three stamps inside
+        # _rehydrate_archive_cached_rows; the full-build branch stamps state
+        # internally but not goals/WT badges. Stamping again here duplicated
+        # the work on every cache-hit refresh (~0.2-0.5s on big archives).
+        _stamp_archive_goals(rows)
+        _apply_watchtower_worker_display_names(rows)
     if _ARCHIVE_SERVE_TTL > 0:
         _archive_serve_cache_store(key, rows, serve_generation)
     return rows, from_cache
@@ -16801,7 +16825,8 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             #     `git -C <path>` AND its cwd already resolves to the
             #     requested repo, so there is nothing for inference to
             #     find. Set in _extract_tail_meta during its existing walk.
-            _eff_module_hit = any(k[0] == sid for k in _EFFECTIVE_REPO_CACHE)
+            _eff_cache_key = (sid, stat.st_mtime, cwd, cwd_top)
+            _eff_module_hit = _eff_cache_key in _EFFECTIVE_REPO_CACHE
             _no_drift_possible = (
                 not tail_meta.get("has_external_cd")
                 and cwd_top
@@ -16817,7 +16842,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
                 if _PROFILE:
                     _t0 = time.perf_counter()
                     _miss_eff = not _eff_module_hit
-                eff = _infer_effective_repo(sid, literal_cwd=cwd, exclude_top=cwd_top)
+                eff = _infer_effective_repo(sid, literal_cwd=cwd, exclude_top=cwd_top, jsonl_mtime=stat.st_mtime)
                 if _PROFILE:
                     _t_eff += time.perf_counter() - _t0
                     _n_eff += 1
@@ -30554,7 +30579,7 @@ def _queue_replay_events():
 _UXQ_STUCK_NO_PROGRESS_S = 10 * 60
 
 
-def compute_ux_fixes_health():
+def compute_ux_fixes_health(items=None):
     """Per-project queue-health snapshot used by /api/ux-fixes/health.
 
     Returns a list of dicts, one per project that has open tickets:
@@ -30575,7 +30600,7 @@ def compute_ux_fixes_health():
     fork per project/row.
     """
     try:
-        items = _q.list_items()
+        items = _q.list_items() if items is None else items
     except Exception:
         items = []
     now = time.time()
@@ -30669,7 +30694,7 @@ def compute_ux_fixes_health():
     return out
 
 
-def compute_queues_health(health=None, wt_workers=None):
+def compute_queues_health(health=None, wt_workers=None, items=None):
     """Per-QUEUE snapshot for the dashboard's "Evergreen" sidebar section.
 
     WatchTower workers are ephemeral (spawned/reaped on a short TTL, so they
@@ -30738,7 +30763,7 @@ def compute_queues_health(health=None, wt_workers=None):
     claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim (claim_types)
     last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
     try:
-        for it in (_q.list_items() or []):
+        for it in ((_q.list_items() if items is None else items) or []):
             qn = _norm(it.get("project"))
             if not qn or qn == "?":
                 continue
@@ -30855,13 +30880,43 @@ def compute_queues_health(health=None, wt_workers=None):
     return out
 
 
-_UX_FIXES_HEALTH_TTL = 5.0
+_UX_FIXES_LIST_TTL = 10.0
+_ux_fixes_list_cache = {}
+_ux_fixes_list_cache_lock = threading.Lock()
+
+
+def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
+    """TTL memo for /api/ux-fixes/list. Same staleness posture the queue board
+    already accepts from its 15s client-side caches; mutations surface on the
+    next window."""
+    key = (status_filter or "", lane_filter or "")
+    now = time.time()
+    with _ux_fixes_list_cache_lock:
+        ent = _ux_fixes_list_cache.get(key)
+        if ent and now - ent["ts"] < _UX_FIXES_LIST_TTL:
+            return ent["items"]
+    items = _q.list_items(status=status_filter, lane=lane_filter) or []
+    with _ux_fixes_list_cache_lock:
+        if len(_ux_fixes_list_cache) > 32:
+            _ux_fixes_list_cache.clear()
+        _ux_fixes_list_cache[key] = {"ts": time.time(), "items": items}
+    return items
+
+
+_UX_FIXES_HEALTH_TTL = 15.0
 _ux_fixes_health_snapshot = {"ts": 0.0, "data": None}
 _ux_fixes_health_snapshot_lock = threading.Lock()
 
 
 def _build_ux_fixes_health_payload_uncached():
-    health = compute_ux_fixes_health()
+    # One queue read for both builders — list_items() also merges GitHub-backed
+    # queues via `gh issue list` subprocesses on cold cache, so calling it twice
+    # per build doubled the dominant cost.
+    try:
+        items = _q.list_items() or []
+    except Exception:
+        items = []
+    health = compute_ux_fixes_health(items=items)
     # Live WT workers, read straight from workers.json (no watchtower import
     # dependency). Carries each worker's cloud session UUID so the dashboard can
     # link a worker row to its conversation.
@@ -30871,7 +30926,7 @@ def _build_ux_fixes_health_payload_uncached():
         wt_workers = []
     # Per-queue rollup (durable) for the dashboard's Evergreen section.
     try:
-        queues = compute_queues_health(health, wt_workers)
+        queues = compute_queues_health(health, wt_workers, items=items)
     except Exception:
         queues = []
     # Persistent ledger of every cloud session_id that was ever a WT worker
@@ -50357,15 +50412,25 @@ _TIMELINE_PR_NUMBER_FROM_URL_RE = re.compile(r"/pull/(\d+)")
 _TIMELINE_COMMIT_RESULT_RE = re.compile(r"\[[^\]]+\s+([0-9a-f]{7,40})\]\s*(.+)")
 
 
-def _git_toplevel_for_path(path, cache):
+# Process-wide path→toplevel memo for _git_toplevel_for_path. Toplevels are
+# stable for a process's lifetime; sharing one dict across callers kills the
+# repeat `git rev-parse` subprocess each per-call cache used to re-fire.
+_GIT_TOPLEVEL_CACHE = {}
+_GIT_TOPLEVEL_CACHE_MAX = 2000
+
+
+def _git_toplevel_for_path(path, cache=None):
     """Return the git toplevel for `path` (the dir if it exists, else its
     closest existing ancestor). Cached per-call so a session that touched
-    100 files in the same repo only shells out once.
+    100 files in the same repo only shells out once; callers that pass no
+    dict share the process-wide _GIT_TOPLEVEL_CACHE.
 
     Display-only: callers must NOT use this to dispatch git writes. The
     answer is inferred from what tool calls *referenced*, which can include
     files that don't exist yet (e.g. a new file path passed to Write).
     """
+    if cache is None:
+        cache = _GIT_TOPLEVEL_CACHE
     try:
         p = Path(path).expanduser()
     except (ValueError, OSError):
@@ -50407,6 +50472,9 @@ def _git_toplevel_for_path(path, cache):
         top = r.stdout.strip() if r.returncode == 0 else None
     except (subprocess.SubprocessError, OSError):
         top = None
+    if len(cache) > _GIT_TOPLEVEL_CACHE_MAX:
+        cache.clear()
+        tops = cache["\x00tops"] = []
     cache[key] = top
     if top and top not in tops:
         tops.append(top)
@@ -50623,6 +50691,19 @@ def _remap_stale_path(path, literal_cwd, cd_targets):
 # refresh, so a bare cache here knocks the hot-path latency down by an order
 # of magnitude. Invalidated naturally when the JSONL appends new events.
 _EFFECTIVE_REPO_CACHE = {}
+# Newest entry per session id, for the revalidation window below, plus a hard
+# cap so per-turn mtime keys can't grow the dict without bound.
+_EFFECTIVE_REPO_SID_LATEST = {}
+_EFFECTIVE_REPO_REVALIDATE_S = 30.0
+_EFFECTIVE_REPO_CACHE_MAX = 4000
+
+
+def _effective_repo_cache_put(cache_key, value):
+    if len(_EFFECTIVE_REPO_CACHE) > _EFFECTIVE_REPO_CACHE_MAX:
+        _EFFECTIVE_REPO_CACHE.clear()
+        _EFFECTIVE_REPO_SID_LATEST.clear()
+    _EFFECTIVE_REPO_CACHE[cache_key] = value
+    _EFFECTIVE_REPO_SID_LATEST[cache_key[0]] = (cache_key[1], time.time(), value)
 
 
 def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_mtime=None):
@@ -50662,10 +50743,20 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_
     cache_key = (session_id, jsonl_mtime, literal_cwd, exclude_top)
     if cache_key in _EFFECTIVE_REPO_CACHE:
         return _EFFECTIVE_REPO_CACHE[cache_key]
+    # Active sessions append to their JSONL every turn, so the exact-key
+    # entry above misses on every poll. Re-walking tool paths + re-spawning
+    # git on that cadence is the CPU spiral — the dominant repo changes on
+    # minute timescales at best. Serve the newest per-session entry for up
+    # to 30s instead of re-inferring on every poll.
+    recent = _EFFECTIVE_REPO_SID_LATEST.get(session_id)
+    if recent is not None:
+        r_mtime, r_at, r_value = recent
+        if r_mtime != jsonl_mtime and (time.time() - r_at) < _EFFECTIVE_REPO_REVALIDATE_S:
+            return r_value
 
     file_paths, cd_targets = _scan_session_tool_paths(session_id)
     if not file_paths and not cd_targets:
-        _EFFECTIVE_REPO_CACHE[cache_key] = None
+        _effective_repo_cache_put(cache_key, None)
         return None
 
     # When the literal cwd is itself a worktree, the row pill already
@@ -50674,12 +50765,12 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_
     if literal_cwd:
         try:
             if (Path(literal_cwd) / ".git").is_file():
-                _EFFECTIVE_REPO_CACHE[cache_key] = None
+                _effective_repo_cache_put(cache_key, None)
                 return None
         except OSError:
             pass
 
-    cache = {}
+    cache = _GIT_TOPLEVEL_CACHE
 
     def _build_result(top, count, total):
         def git(*args, timeout=2):
@@ -50754,7 +50845,7 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_
                     picked = t_top  # last match wins → most recent cd
             if picked:
                 result = _build_result(picked, matches, len(cd_targets))
-                _EFFECTIVE_REPO_CACHE[cache_key] = result
+                _effective_repo_cache_put(cache_key, result)
                 return result
 
     counts = {}
@@ -50777,21 +50868,21 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_
             counts[top] = counts.get(top, 0) + 1
 
     if not counts:
-        _EFFECTIVE_REPO_CACHE[cache_key] = None
+        _effective_repo_cache_put(cache_key, None)
         return None
     total = sum(counts.values())
     top, count = max(counts.items(), key=lambda kv: kv[1])
     # Need at least 2 evidence points so a single incidental match doesn't
     # win, AND >50% of resolved paths so a clear winner exists.
     if count < 2 or count * 2 <= total:
-        _EFFECTIVE_REPO_CACHE[cache_key] = None
+        _effective_repo_cache_put(cache_key, None)
         return None
     if exclude_top and top == exclude_top:
-        _EFFECTIVE_REPO_CACHE[cache_key] = None
+        _effective_repo_cache_put(cache_key, None)
         return None
 
     result = _build_result(top, count, total)
-    _EFFECTIVE_REPO_CACHE[cache_key] = result
+    _effective_repo_cache_put(cache_key, result)
     return result
 
 
@@ -58244,8 +58335,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             status_filter = (qs.get("status", [""])[0] or "").strip() or None
             lane_filter = (qs.get("lane", [""])[0] or "").strip() or None
+            # Memoized a few seconds per (status, lane): the queue board polls
+            # this per open tab, and list_items() can shell out to `gh issue
+            # list` for GitHub-backed queues on a cold cache.
             try:
-                items = _q.list_items(status=status_filter, lane=lane_filter)
+                items = _ux_fixes_list_items_cached(status_filter, lane_filter)
                 self.send_json({"ok": True, "items": items, "count": len(items)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)

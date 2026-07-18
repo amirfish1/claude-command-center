@@ -18157,6 +18157,8 @@
   let _gcReaderTopic = '';
   let _gcReaderMode = 'topic';
   let _gcLastMtime = null;
+  let _gcUnchangedPolls = 0;
+  let _gcReaderGeneration = 0;
   let _gcPollFailCount = 0;
   let _gcLastNudgeTime = 0;
   // CCC-508: stopGroupChatReader's cosmetic sidebar refresh (rerenderSidebar)
@@ -19991,6 +19993,7 @@
 
   function stopGroupChatReader(opts = {}) {
     if (_gcReaderInterval) { clearInterval(_gcReaderInterval); _gcReaderInterval = null; }
+    _gcReaderGeneration += 1;  // kill any mid-flight backoff chain
     _gcReaderPath = null;
     _gcReaderId = null;
     _gcReaderTopic = '';
@@ -20559,8 +20562,22 @@
     }
 
     if (_gcReaderInterval) clearInterval(_gcReaderInterval);
-    pollGroupChatReader();
-    _gcReaderInterval = setInterval(_gated('gcReader', pollGroupChatReader), 3000);
+    // Self-rescheduling poll with inactivity backoff: 3s while the transcript
+    // changes, stretching to 10s after 5 unchanged reads and 30s after 20 —
+    // a reader left open on a finished chat used to burn a full read (with
+    // per-participant liveness probes) every 3s forever. The generation guard
+    // kills a stale chain when the reader is closed or reopened mid-flight.
+    _gcUnchangedPolls = 0;
+    _gcReaderGeneration += 1;
+    const _gcTickGen = _gcReaderGeneration;
+    const _gcReaderTick = async () => {
+      if (_gcTickGen !== _gcReaderGeneration) return;
+      try { await pollGroupChatReader(); } catch (_) {}
+      if (!_gcReaderPath && !_gcReaderId) return;
+      const delay = _gcUnchangedPolls >= 20 ? 30000 : (_gcUnchangedPolls >= 5 ? 10000 : 3000);
+      _gcReaderInterval = setTimeout(_gated('gcReader', _gcReaderTick), delay);
+    };
+    _gcReaderTick();
 
     // Space → jump to the top of the next message in the gc reader.
     // Each message starts with `## ts — hash: name` which renders as
@@ -21083,6 +21100,12 @@
         if (modeEl) modeEl.textContent = data.mode;
       }
       const shouldRenderTranscript = data.mtime !== _gcLastMtime;
+      if (shouldRenderTranscript) {
+        _gcUnchangedPolls = 0;
+      } else {
+        // Drives the reader poll's inactivity backoff (3s → 10s → 30s).
+        _gcUnchangedPolls += 1;
+      }
       if (shouldRenderTranscript) {
         const isFirstLoad = _gcLastMtime === null;
         const atBottom = body.scrollHeight - body.scrollTop <= body.clientHeight + 40;
@@ -49148,8 +49171,9 @@
 
     async function refresh() {
       try {
-        const r = await fetch('/api/ux-fixes/health', { cache: 'no-store' });
-        const d = await r.json();
+        // Share the 15s client cache with the queue panel/sidebar pollers —
+        // the raw per-badge fetch bypassed it and doubled health builds.
+        const d = await _fetchUxqHealth();
         lastQueues = Array.isArray(d && d.queues) ? d.queues : [];
         const openSum = lastQueues.reduce((n, q) => n + (q.depth || 0), 0);
         const stuck = lastQueues.filter(q => q.stuck);
