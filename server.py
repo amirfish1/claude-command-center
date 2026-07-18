@@ -9515,6 +9515,14 @@ def _run_healthcheck():
         return out
 
 
+def _has_claude_session_file(projects_dir):
+    """Return whether Claude has session data without walking the archive."""
+    try:
+        return next(projects_dir.rglob("*.jsonl"), None) is not None
+    except OSError:
+        return False
+
+
 def _build_healthcheck():
     out = {"checks": []}
 
@@ -9538,16 +9546,15 @@ def _build_healthcheck():
             "hint": "Run `claude` once in any repo to generate session data, then refresh.",
         })
     else:
-        try:
-            session_files = [p for p in projects_dir.rglob("*.jsonl")]
-            n = len(session_files)
-        except OSError:
-            n = 0
         out["checks"].append({
             "id": "claude_cli",
             "label": "Claude Code CLI",
             "status": "ok",
-            "message": f"Found {n} session file{'s' if n != 1 else ''} on disk",
+            "message": (
+                "Found session data on disk"
+                if _has_claude_session_file(projects_dir)
+                else "No session files found yet"
+            ),
         })
 
     # ── gh CLI ────────────────────────────────────────────────────────

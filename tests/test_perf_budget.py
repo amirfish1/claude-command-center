@@ -56,6 +56,31 @@ def test_healthcheck_cold_cache_build_is_singleflight(monkeypatch):
     assert results == [{"checks": [], "overall": "ok"}] * 8
 
 
+def test_healthcheck_session_probe_stops_after_first_file(monkeypatch, tmp_path):
+    """The readiness check must not enumerate the whole transcript archive."""
+    projects = tmp_path / "projects"
+    project = projects / "repo"
+    project.mkdir(parents=True)
+    for i in range(20):
+        (project / f"{i}.jsonl").write_text("{}\n")
+
+    seen = 0
+    original_rglob = Path.rglob
+
+    def rglob_once(path, pattern):
+        nonlocal seen
+        for item in original_rglob(path, pattern):
+            seen += 1
+            if seen > 1:
+                raise AssertionError("healthcheck enumerated more than one session file")
+            yield item
+
+    monkeypatch.setattr(Path, "rglob", rglob_once)
+
+    assert server._has_claude_session_file(projects) is True
+    assert seen == 1
+
+
 def test_productivity_refresh_reads_shared_sources_once(monkeypatch):
     """One refresh may scan globally, but never once per project/turn."""
     calls = {"conversations": 0, "tickets": 0}
