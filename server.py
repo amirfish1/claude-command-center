@@ -25495,6 +25495,12 @@ def _codex_sidebar_backfill_window_days():
     return days if days > 0 else 7.0
 
 
+def _codex_sidebar_backfill_enabled():
+    """Whether the non-critical Codex sidebar migration may run at startup."""
+    raw = (os.environ.get("CCC_CODEX_SIDEBAR_BACKFILL") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _spawn_registry_entry_epoch(entry):
     raw = (entry or {}).get("spawned_at") or (entry or {}).get("started")
     if not raw:
@@ -68934,11 +68940,12 @@ def main():
         daemon=True,
         name="ccc-claude-desktop-backfill",
     ).start()
-    threading.Thread(
-        target=_codex_sidebar_visibility_backfill_once,
-        daemon=True,
-        name="ccc-codex-sidebar-backfill",
-    ).start()
+    if _codex_sidebar_backfill_enabled():
+        threading.Thread(
+            target=_codex_sidebar_visibility_backfill_once,
+            daemon=True,
+            name="ccc-codex-sidebar-backfill",
+        ).start()
     threading.Thread(
         target=_cursor_sidebar_visibility_backfill_once,
         daemon=True,

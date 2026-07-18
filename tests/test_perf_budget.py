@@ -482,6 +482,15 @@ def test_token_quality_index_refresh_swaps_complete_map_for_concurrent_readers(m
     assert server._token_optimizer_quality_for_session(sid)["quality_summary"] == "new complete map"
 
 
+def test_codex_sidebar_backfill_is_opt_in(monkeypatch):
+    """A non-critical sidebar helper must not delay CCC startup by default."""
+    monkeypatch.delenv("CCC_CODEX_SIDEBAR_BACKFILL", raising=False)
+    assert server._codex_sidebar_backfill_enabled() is False
+
+    monkeypatch.setenv("CCC_CODEX_SIDEBAR_BACKFILL", "1")
+    assert server._codex_sidebar_backfill_enabled() is True
+
+
 def test_auto_verify_reuses_supplied_session_rows(monkeypatch, tmp_path):
     """find_all_sessions must not trigger a second conversation scan."""
     monkeypatch.setattr(server, "resolve_repo_path", lambda path: str(tmp_path))
