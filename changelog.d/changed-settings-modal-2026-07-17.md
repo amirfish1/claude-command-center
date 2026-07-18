@@ -1,0 +1,1 @@
+The gear menu is now a full settings modal — sections for appearance, layout, sessions, fleet & network, tools, maintenance, and help, with instant search (Cmd/Ctrl+, to open), keyboard navigation, and per-section reset to defaults. Every old menu entry moved in; nothing was removed.

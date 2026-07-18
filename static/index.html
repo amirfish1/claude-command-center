@@ -540,70 +540,6 @@
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
         </button>
-        <div class="desktop-popover" id="settingsPopover" role="menu" aria-label="Settings menu" style="bottom:calc(100% + 6px);right:0;">
-          <div id="appearancePopover" role="group" aria-label="Appearance options">
-            <details class="pop-submenu">
-              <summary class="pop-item"><span class="pop-icon">&#9680;</span><span>Theme</span><span class="pop-chevron">&#8250;</span></summary>
-              <div class="pop-submenu-panel">
-                <button class="pop-item" type="button" data-theme="light" role="menuitemradio"><span class="pop-check" data-check-theme="light"></span><span>Light</span></button>
-                <button class="pop-item" type="button" data-theme="dark" role="menuitemradio"><span class="pop-check" data-check-theme="dark"></span><span>Dark</span></button>
-                <button class="pop-item" type="button" data-theme="system" role="menuitemradio"><span class="pop-check" data-check-theme="system"></span><span>Match system</span></button>
-              </div>
-            </details>
-            <details class="pop-submenu">
-              <summary class="pop-item"><span class="pop-icon">Aa</span><span>Font</span><span class="pop-chevron">&#8250;</span></summary>
-              <div class="pop-submenu-panel">
-                <button class="pop-item" type="button" data-font="system" role="menuitemradio"><span class="pop-check" data-check-font="system"></span><span>System</span></button>
-                <button class="pop-item" type="button" data-font="mono" role="menuitemradio"><span class="pop-check" data-check-font="mono"></span><span>Mono</span></button>
-              </div>
-            </details>
-            <details class="pop-submenu">
-              <summary class="pop-item"><span class="pop-icon">&#128065;</span><span>View</span><span class="pop-chevron">&#8250;</span></summary>
-              <div class="pop-submenu-panel">
-                <button class="pop-item" id="btnShowGhIssues" type="button" data-view-gh="show" role="menuitem"><span>Show GH issues</span></button>
-                <button class="pop-item" id="btnHideGhIssues" type="button" data-view-gh="hide" role="menuitem"><span>Hide GH issues</span></button>
-                <button class="pop-item" id="btnShowFleetPulse" type="button" data-hero-open role="menuitem"><span>Show Fleet Pulse</span></button>
-                <button class="pop-item" id="btnToggleLiveVariant" type="button" data-live-variant-toggle role="menuitemcheckbox"><span class="pop-check" data-check-live-variant></span><span>Show live updates on left (Variant B)</span></button>
-              </div>
-            </details>
-          </div>
-          <div class="pop-divider"></div>
-          <!-- CCC-511: these used to be ~15 flat first-level items (Terminal,
-               History, Worktrees, Stats, Today, Notes, COO, Font A/B, Run
-               onboarding, Spawn defaults, Network access, Restart server, two
-               dashboard launchers, Get help) dumped straight into the gear
-               menu. Grouped into two submenus, same pattern as Theme/Font/View
-               above, so the top level stays scannable. -->
-          <details class="pop-submenu">
-            <summary class="pop-item"><span class="pop-icon">&#129520;</span><span>Tools</span><span class="pop-chevron">&#8250;</span></summary>
-            <div class="pop-submenu-panel">
-              <!-- Slot for app-level actions moved out of the conv toolbar
-                   (Terminal panel toggle, History indexing status, Worktrees,
-                   Stats, Today, Notes, COO, Font A-/A+). Populated at boot by
-                   JS; the items get the .pop-item style via the menu wrapper. -->
-              <div class="settings-menu-slot" id="settingsMenuSlot" data-role="settings-menu-slot"></div>
-            </div>
-          </details>
-          <details class="pop-submenu">
-            <summary class="pop-item"><span class="pop-icon">&#9881;</span><span>Advanced</span><span class="pop-chevron">&#8250;</span></summary>
-            <div class="pop-submenu-panel">
-              <button class="pop-item" type="button" id="runOnboardingBtn"><span class="pop-icon">🚀</span><span>Run onboarding</span></button>
-              <button class="pop-item" type="button" id="takeTourBtn"><span class="pop-icon">🛫</span><span>Take the tour</span></button>
-              <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
-              <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
-              <button class="pop-item" type="button" id="federationPeersBtn"><span class="pop-icon">&#128279;</span><span>Nodes &amp; peers…</span></button>
-              <button class="pop-item" type="button" id="fleetViewBtn"><span class="pop-icon">&#128506;</span><span>Fleet…</span></button>
-              <button class="pop-item" type="button" id="carModeMenuBtn"><span class="pop-icon">🚗</span><span>Car Mode…</span></button>
-              <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
-              <!-- Launchers for third-party plugin dashboards. Hidden by
-                   default; shown only when /api/features confirms the plugin
-                   is installed (see the feature-flag fetch below). -->
-              <a class="pop-item" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#129504;</span><span>Total Recall dashboard</span></a>
-              <a class="pop-item" id="openTokenOptimizerBtn" href="http://localhost:24842/token-optimizer" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#128202;</span><span>Token Optimizer dashboard</span></a>
-            </div>
-          </details>
-          <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
-        </div>
       </div>
     </div>
   </div>
@@ -1486,6 +1422,339 @@
       </div>
     </div>
   </div>
+
+  <!-- Settings modal (W93). Replaces the old gear-button popover menu
+       (removed) with a command-palette-style modal: search bar up top,
+       a left rail of 7 sections, a scrollable content
+       pane of rows. Every row is one of three affordances - setting
+       (inline control), action (bordered button), or launcher (Open /
+       Configure button) - never mixed on one row. See
+       out/W93-spec.md for the full design spec.
+
+       Opened by #settingsBtn (gear, bottom of sidebar) and Cmd/Ctrl+,.
+       Closed by #settingsModalClose, Escape, or backdrop click. All of
+       this is Slice B (app.js) - this slice only ships markup + CSS, so
+       the modal has no open/close behavior yet; it stays `hidden`.
+
+       IDs load-bearing for existing JS (verbatim, moved from the old
+       popover, do not rename): runOnboardingBtn, takeTourBtn,
+       spawnDefaultsBtn, networkAccessBtn, federationPeersBtn,
+       fleetViewBtn, carModeMenuBtn, restartServerBtn/restartServerLabel,
+       openTotalRecallBtn, openTokenOptimizerBtn. `#appearancePopover` is
+       kept as the Appearance section's container id for the same reason
+       (existing `$appearancePopover.querySelectorAll(...)` lookups). -->
+  <div id="settingsModal" class="settings-modal-overlay" hidden role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="settings-modal-backdrop" id="settingsModalBackdrop"></div>
+    <div class="settings-modal">
+      <div class="settings-modal-header">
+        <div class="settings-search-wrap">
+          <svg class="settings-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"/>
+            <path d="M21 21l-4.3-4.3"/>
+          </svg>
+          <input type="text" id="settingsSearchInput" class="settings-search-input" placeholder="Search settings…" autocomplete="off" aria-label="Search settings">
+        </div>
+        <span class="settings-esc-hint">esc to close</span>
+        <button type="button" class="settings-modal-close" id="settingsModalClose" title="Close" aria-label="Close settings">&times;</button>
+      </div>
+      <div class="settings-modal-body">
+        <div class="settings-rail" id="settingsRail" role="tablist" aria-label="Settings sections">
+          <button type="button" class="settings-rail-item is-active" id="settingsRailTab-appearance" data-section-target="appearance" role="tab" aria-selected="true" aria-controls="appearancePopover">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+            <span>Appearance</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-layout" data-section-target="layout" role="tab" aria-selected="false" aria-controls="settingsSection-layout">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <span>Layout &amp; View</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-sessions" data-section-target="sessions" role="tab" aria-selected="false" aria-controls="settingsSection-sessions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+            <span>Sessions &amp; Spawning</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-network" data-section-target="network" role="tab" aria-selected="false" aria-controls="settingsSection-network">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
+            <span>Fleet &amp; Network</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-tools" data-section-target="tools" role="tab" aria-selected="false" aria-controls="settingsSection-tools">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
+            <span>Tools</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-maintenance" data-section-target="maintenance" role="tab" aria-selected="false" aria-controls="settingsSection-maintenance">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 7.5a4.5 4.5 0 0 1-6.2 4.16L7 19.5 4.5 17l7.84-7.8A4.5 4.5 0 0 1 18 3l-3 3 1 1 3-3a4.5 4.5 0 0 1 2 3.5z"/></svg>
+            <span>Maintenance</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-help" data-section-target="help" role="tab" aria-selected="false" aria-controls="settingsSection-help">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.5 2.5 0 1 1 3.7 2.2c-.8.45-1.2 1-1.2 1.9v.3"/><line x1="12" y1="16.7" x2="12" y2="16.71"/></svg>
+            <span>Help &amp; Onboarding</span>
+          </button>
+        </div>
+        <div class="settings-pane" id="settingsPane">
+
+          <section class="settings-section" id="appearancePopover" data-section-id="appearance" role="tabpanel" aria-labelledby="settingsRailTab-appearance">
+            <div class="settings-section-eyebrow">Appearance</div>
+
+            <div class="settings-row" data-keywords="theme color scheme dark light system mode appearance">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Theme</div>
+                <div class="settings-row-desc">Dashboard color scheme.</div>
+              </div>
+              <div class="settings-row-control">
+                <div class="settings-segmented" data-segmented-group="theme" role="group" aria-label="Theme">
+                  <button type="button" class="settings-segment" data-theme="light" role="radio" aria-checked="false">Light</button>
+                  <button type="button" class="settings-segment" data-theme="dark" role="radio" aria-checked="false">Dark</button>
+                  <button type="button" class="settings-segment" data-theme="system" role="radio" aria-checked="false">System</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="font typeface ui mono system monospace">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Font</div>
+                <div class="settings-row-desc">UI typeface used across the dashboard.</div>
+              </div>
+              <div class="settings-row-control">
+                <div class="settings-segmented" data-segmented-group="font" role="group" aria-label="Font">
+                  <button type="button" class="settings-segment" data-font="system" role="radio" aria-checked="false">System</button>
+                  <button type="button" class="settings-segment" data-font="mono" role="radio" aria-checked="false">Mono</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="conversation text size reader font scale zoom message a- a+">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Conversation text size</div>
+                <div class="settings-row-desc">Reader font scale for message text.</div>
+              </div>
+              <div class="settings-row-control">
+                <!-- Slice B moves the existing `.font-size-controls` (A-/A+
+                     stepper, id-less, drives ccc-conv-font-scale) here. -->
+                <div id="settingsModalFontSlot" class="settings-modal-font-slot"></div>
+              </div>
+            </div>
+
+            <div class="settings-reset-row">
+              <button type="button" class="settings-reset-btn" id="settingsResetAppearance">Reset Appearance to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-layout" data-section-id="layout" role="tabpanel" aria-labelledby="settingsRailTab-layout">
+            <div class="settings-section-eyebrow">Layout &amp; View</div>
+
+            <div class="settings-row" data-keywords="github issues show hide gh view conversation list">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Show GitHub issues</div>
+                <div class="settings-row-desc">Show GitHub issues alongside sessions in the conversation list.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsGhIssuesToggle" data-view-gh-toggle role="switch" aria-checked="false" aria-label="Show GitHub issues">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="live updates left variant hero position session list">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Live updates on left</div>
+                <div class="settings-row-desc">Move live session updates to the left side of the hero strip.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsLiveVariantToggle" data-live-variant-toggle role="switch" aria-checked="false" aria-label="Live updates on left">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="queue first mode q-first board main view">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Queue-first mode</div>
+                <div class="settings-row-desc">Open the main view straight into the queue board instead of the session list.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsQfirstToggle" data-qfirst-toggle role="switch" aria-checked="false" aria-label="Queue-first mode">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="fleet pulse hero health strip repos nodes show">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Fleet Pulse</div>
+                <div class="settings-row-desc">A live health strip summarizing every repo and node at a glance.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="settingsFleetPulseBtn" data-hero-open>Show</button>
+              </div>
+            </div>
+
+            <div class="settings-reset-row">
+              <button type="button" class="settings-reset-btn" id="settingsResetLayout">Reset Layout &amp; View to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-sessions" data-section-id="sessions" role="tabpanel" aria-labelledby="settingsRailTab-sessions">
+            <div class="settings-section-eyebrow">Sessions &amp; Spawning</div>
+
+            <div class="settings-row" data-keywords="spawn defaults engine model effort new session codex claude">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Spawn defaults</div>
+                <div class="settings-row-desc">Default engine, model, and effort used when you spawn a new session.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-row-value" id="settingsSpawnEngineValue">Not set</span>
+                <button type="button" class="settings-action-btn" id="spawnDefaultsBtn">Configure…</button>
+              </div>
+            </div>
+
+            <div class="settings-reset-row">
+              <button type="button" class="settings-reset-btn" id="settingsResetSessions">Reset Sessions &amp; Spawning to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-network" data-section-id="network" role="tabpanel" aria-labelledby="settingsRailTab-network">
+            <div class="settings-section-eyebrow">Fleet &amp; Network</div>
+
+            <div class="settings-row" data-keywords="network access tailnet remote phone device bind">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Network access</div>
+                <div class="settings-row-desc">Let another device on your trusted network reach this dashboard.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="networkAccessBtn">Configure…</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="nodes peers pair federation ssh loopback">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Nodes &amp; peers</div>
+                <div class="settings-row-desc">Pair this machine with another node to browse and route work across them.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="federationPeersBtn">Open…</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="fleet view matrix repos worktrees branches prs deployments">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Fleet</div>
+                <div class="settings-row-desc">See every repo across every paired node in one matrix.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="fleetViewBtn">Open…</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="car mode voice hands free drive agents">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Car Mode</div>
+                <div class="settings-row-desc">Drive your agents hands-free by voice.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="carModeMenuBtn">Open…</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-tools" data-section-id="tools" role="tabpanel" aria-labelledby="settingsRailTab-tools">
+            <div class="settings-section-eyebrow">Tools</div>
+
+            <!-- Slice B retargets the boot-time `_moveToHome` calls to drop
+                 Terminal, History, Worktrees, Stats, Today, Notes, and COO
+                 launchers here, restyled as launcher rows via the
+                 #settingsModalToolsSlot child-styling rules in app.css. -->
+            <div id="settingsModalToolsSlot" class="settings-modal-tools-slot" data-role="settings-modal-tools-slot"></div>
+
+            <!-- Resurrected (W93): the ⌘K session-search handler has existed
+                 in app.js since before the modal rewrite, but no markup ever
+                 pointed at #settingsCmdkBtn — it was dead since a refactor.
+                 Slice B re-adds a launcher row so it's reachable again. -->
+            <div class="settings-row" data-keywords="session search find cmd k transcript sessions">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Session search</div>
+                <div class="settings-row-desc">Find any session or transcript (Cmd+K).</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="settingsCmdkBtn">Open</button>
+              </div>
+            </div>
+
+            <a class="settings-row settings-row-link" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;" data-keywords="total recall dashboard memory sessions">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Total Recall dashboard</div>
+                <div class="settings-row-desc">Open the Total Recall memory dashboard in a new tab.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
+              </div>
+            </a>
+
+            <a class="settings-row settings-row-link" id="openTokenOptimizerBtn" href="http://localhost:24842/token-optimizer" target="_blank" rel="noopener" style="display:none;" data-keywords="token optimizer dashboard usage context">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Token Optimizer dashboard</div>
+                <div class="settings-row-desc">Open the Token Optimizer dashboard in a new tab.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
+              </div>
+            </a>
+          </section>
+
+          <section class="settings-section" id="settingsSection-maintenance" data-section-id="maintenance" role="tabpanel" aria-labelledby="settingsRailTab-maintenance">
+            <div class="settings-section-eyebrow">Maintenance</div>
+
+            <div class="settings-row" data-keywords="restart server 8090 reboot reload">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Restart server</div>
+                <div class="settings-row-desc">Restart the CCC server. Any open connections briefly drop.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn danger" id="restartServerBtn"><span id="restartServerLabel">Restart server</span></button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-help" data-section-id="help" role="tabpanel" aria-labelledby="settingsRailTab-help">
+            <div class="settings-section-eyebrow">Help &amp; Onboarding</div>
+
+            <div class="settings-row" data-keywords="run onboarding setup first run replay">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Run onboarding</div>
+                <div class="settings-row-desc">Replay the first-run setup flow.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="runOnboardingBtn">Run</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="take the tour guided tour spotlight">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Take the tour</div>
+                <div class="settings-row-desc">Replay the guided tour of the dashboard.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="takeTourBtn">Start</button>
+              </div>
+            </div>
+
+            <a class="settings-row settings-row-link" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener" data-keywords="get help readme docs documentation support">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Get help</div>
+                <div class="settings-row-desc">Open the README for setup help and documentation.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
+              </div>
+            </a>
+          </section>
+
+          <div class="settings-empty-state" id="settingsEmptyState" hidden>
+            <div class="settings-empty-state-text">No settings match "<span id="settingsEmptyQuery"></span>"</div>
+            <div class="settings-empty-state-hint">Press esc to clear the search</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 
   <!-- Network-access modal. Opened from the settings popover.
        Lets the user opt in to reachability over their tailnet without

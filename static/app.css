@@ -20127,3 +20127,321 @@ body.qf-mode:not(.qf-active) #qfReturnPill { display: inline-flex; }
   .qf-tage { min-width: 0; }
   .qf-topbar { flex-wrap: wrap; padding: 8px 12px; }
 }
+
+/* ── W93 settings modal ── */
+/* Command-palette-style replacement for the old gear-button popover menu
+   (#settingsPopover, removed — see static/index.html near #settingsModal).
+   Markup + styling only in this slice; open/close, search filtering, and
+   keyboard nav are wired in Slice B (app.js). Follows the same hidden-by-
+   default + .open-class-to-show convention as .upd-overlay/.upd-overlay.open
+   elsewhere in this file — Slice B toggles both the `hidden` attribute and
+   the `.open` class when it wires the modal up. */
+.settings-modal-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  display: none; align-items: center; justify-content: center;
+}
+.settings-modal-overlay.open { display: flex; }
+.settings-modal-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+.settings-modal {
+  position: relative;
+  width: min(920px, calc(100vw - 48px));
+  height: min(640px, calc(100vh - 64px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  font-family: var(--font-ui);
+}
+
+/* Header: search + esc hint + close */
+.settings-modal-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.settings-search-wrap {
+  position: relative; flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center;
+}
+.settings-search-icon {
+  position: absolute; left: 10px;
+  width: 15px; height: 15px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.settings-search-input {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 10px 8px 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit; font-size: 13px;
+  outline: none;
+}
+.settings-search-input:focus { border-color: var(--accent); }
+.settings-esc-hint {
+  flex: 0 0 auto;
+  font-size: 11px; color: var(--text-muted);
+  white-space: nowrap;
+}
+.settings-modal-close {
+  flex: 0 0 auto;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 18px; line-height: 1; cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.12s ease-out, color 0.12s ease-out;
+}
+.settings-modal-close:hover { background: var(--surface-2); color: var(--text); }
+
+/* Body: rail + pane */
+.settings-modal-body {
+  flex: 1 1 auto; min-height: 0;
+  display: flex;
+}
+.settings-rail {
+  flex: 0 0 200px;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  padding: 8px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.settings-rail-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px 8px 8px;
+  border: none; border-left: 2px solid transparent;
+  background: transparent; color: var(--text-muted);
+  font-family: inherit; font-size: 12.5px; font-weight: 500;
+  text-align: left; cursor: pointer;
+  border-radius: 0 6px 6px 0;
+  transition: background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out;
+}
+.settings-rail-item svg { flex: 0 0 auto; width: 16px; height: 16px; }
+.settings-rail-item span { flex: 1 1 auto; min-width: 0; }
+.settings-rail-item:hover { background: var(--surface-2); color: var(--text); }
+.settings-rail-item.is-active {
+  background: var(--surface-2);
+  color: var(--text);
+  border-left-color: var(--accent);
+}
+
+.settings-pane {
+  flex: 1 1 auto; min-width: 0;
+  overflow-y: auto;
+  padding: 18px 22px 24px;
+}
+.settings-section + .settings-section { margin-top: 8px; }
+.settings-section-eyebrow {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+/* Rows: label/desc on the left, control on the right. One of three
+   affordances per row (setting / action / launcher) — never mixed. */
+.settings-row {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+.settings-section .settings-row:last-of-type { border-bottom: none; }
+a.settings-row {
+  text-decoration: none; color: inherit;
+  cursor: pointer;
+}
+.settings-row-main { flex: 1 1 auto; min-width: 0; }
+.settings-row-label { font-size: 13px; font-weight: 500; color: var(--text); }
+.settings-row-desc { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+.settings-row-control { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.settings-row-value { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.settings-row-crumb {
+  font-size: 10.5px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+
+/* Segmented control (Theme / Font) */
+.settings-segmented {
+  display: inline-flex; padding: 2px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  gap: 2px;
+}
+.settings-segment {
+  border: none; background: transparent; color: var(--text-muted);
+  font-family: inherit; font-size: 12px; font-weight: 500;
+  padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  transition: background 0.12s ease-out, color 0.12s ease-out;
+}
+.settings-segment:hover { color: var(--text); }
+.settings-segment.is-active {
+  background: var(--accent); color: var(--accent-contrast); font-weight: 600;
+}
+
+/* Toggle switch (32x18) */
+.settings-toggle {
+  border: none; background: transparent; padding: 0; cursor: pointer;
+  line-height: 0;
+}
+.settings-toggle-track {
+  display: inline-block; width: 32px; height: 18px;
+  border-radius: 999px; background: var(--surface-2);
+  position: relative;
+  transition: background 0.12s ease-out;
+}
+.settings-toggle-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 0.12s ease-out, background 0.12s ease-out;
+}
+.settings-toggle.is-on .settings-toggle-track { background: var(--accent); }
+.settings-toggle.is-on .settings-toggle-thumb {
+  background: var(--accent-contrast);
+  transform: translateX(14px);
+}
+
+/* Action rows (bordered button naming the verb) */
+.settings-action-btn {
+  padding: 6px 14px; font-size: 12.5px; font-weight: 500;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+  font-family: inherit; cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease-out, border-color 0.12s ease-out;
+}
+.settings-action-btn:hover { background: var(--surface-2); }
+.settings-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.settings-action-btn.danger {
+  color: var(--red);
+  border-color: rgba(248,81,73,0.35);
+  background: rgba(248,81,73,0.08);
+}
+.settings-action-btn.danger:hover { background: rgba(248,81,73,0.16); }
+
+/* Launcher rows ("Open ↗") */
+.settings-launcher-btn {
+  display: inline-flex; align-items: center;
+  font-size: 12.5px; font-weight: 500; color: var(--accent);
+  white-space: nowrap;
+}
+.settings-launcher-arrow { font-size: 12px; }
+a.settings-row:hover .settings-launcher-btn,
+a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline; }
+
+/* Reset-to-defaults quiet text buttons */
+.settings-reset-row { padding: 12px 0 4px; }
+.settings-reset-btn {
+  border: none; background: transparent; padding: 0;
+  font-family: inherit; font-size: 12px; color: var(--text-muted);
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.settings-reset-btn:hover { color: var(--text); }
+
+/* ✓ Saved pulse — flashes at a row's right edge on any change, fades ~1.2s */
+.settings-saved-pulse {
+  position: absolute; right: 0; top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px; font-weight: 600; color: var(--green);
+  pointer-events: none;
+  animation: settings-saved-fade 1.2s ease-out forwards;
+}
+.settings-saved-pulse::before { content: "\2713 Saved"; }
+@keyframes settings-saved-fade {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-saved-pulse { animation: none; opacity: 0; }
+}
+
+/* Search / flat-results mode: rail dims, matched rows show a breadcrumb.
+   Slice B toggles `.is-searching` on `.settings-modal` while the search
+   input is non-empty and re-renders `.settings-pane` as a flat list. */
+.settings-modal.is-searching .settings-rail { opacity: 0.45; }
+.settings-modal.is-searching .settings-rail-item.is-active { opacity: 1; }
+.settings-modal.is-searching .settings-row-crumb { display: block; }
+.settings-row-crumb { display: none; }
+
+/* Empty state ("No settings match '...'") */
+.settings-empty-state {
+  padding: 40px 20px;
+  text-align: center;
+}
+.settings-empty-state-text {
+  font-size: 13px; color: var(--text); margin-bottom: 4px;
+}
+.settings-empty-state-hint {
+  font-size: 11.5px; color: var(--text-muted);
+}
+
+/* Tools-section slot: children arrive at boot as arbitrary buttons/pills
+   (Terminal, History, Worktrees, Stats, Today, Notes, COO) moved here by
+   Slice B's retargeted `_moveToHome`. Force them to read as launcher rows
+   regardless of their own class. */
+.settings-modal-tools-slot { display: flex; flex-direction: column; }
+.settings-modal-tools-slot > * {
+  display: block !important;
+  width: 100% !important;
+  box-sizing: border-box;
+  text-align: left !important;
+  font-size: 13px !important;
+  padding: 9px 4px !important;
+  margin: 0 !important;
+  border: none !important;
+  border-bottom: 1px solid var(--border) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--text) !important;
+}
+.settings-modal-tools-slot > *:last-child { border-bottom: none !important; }
+.settings-modal-tools-slot > *:hover { background: var(--surface-2) !important; }
+
+/* Appearance section's "Conversation text size" slot: Slice B moves the
+   existing `.font-size-controls` (A-/A+ stepper) in here. */
+.settings-modal-font-slot:empty { min-width: 0; }
+
+/* Mobile ≤700px: full-screen sheet, rail becomes horizontal scrollable chips */
+@media (max-width: 700px) {
+  .settings-modal {
+    width: 100vw; height: 100%;
+    max-width: 100vw; max-height: 100vh;
+    border-radius: 0; border: none;
+  }
+  .settings-modal-body { flex-direction: column; }
+  .settings-rail {
+    flex: 0 0 auto;
+    flex-direction: row;
+    overflow-x: auto; overflow-y: hidden;
+    border-right: none; border-bottom: 1px solid var(--border);
+    padding: 8px; gap: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .settings-rail-item {
+    flex: 0 0 auto;
+    border-left: none; border-bottom: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--surface-2);
+    white-space: nowrap;
+  }
+  .settings-rail-item.is-active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent);
+  }
+  .settings-pane { padding: 14px 16px 20px; }
+  .settings-row { flex-wrap: wrap; }
+  .settings-row-control { flex: 1 1 100%; justify-content: flex-start; margin-top: 6px; }
+}
