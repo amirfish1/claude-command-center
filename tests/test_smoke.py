@@ -16397,6 +16397,144 @@ class TestTerminalQueueDrainSafety(unittest.TestCase):
         self.assertIn("_verify_terminal_drain_receipts()", server_py)
 
 
+class TestAcpKimiEngine(unittest.TestCase):
+    """Kimi/ACP engine: registry shape, negative session probe, and a live
+    end-to-end pass over the generic ACP client using a fake stdio agent
+    (tests/fake_acp_agent.py) — no external systems involved."""
+
+    FAKE_HARNESS = "fake-acp-test"
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._cleanup_state()
+        self.addCleanup(self._cleanup_state)
+
+    def _cleanup_state(self):
+        server = self.server
+        conn = server._ACP_CONNS.pop(self.FAKE_HARNESS, None)
+        if conn and conn.get("transport"):
+            conn["transport"].close()
+        server._ACP_HARNESSES.pop(self.FAKE_HARNESS, None)
+        server._ACP_PENDING.pop(self.FAKE_HARNESS, None)
+        server._ACP_SESSION_STATE.pop(self.FAKE_HARNESS, None)
+        server._ACP_STATE_LOADED.discard(self.FAKE_HARNESS)
+        shutil.rmtree(
+            pathlib.Path(server._ACP_TRANSCRIPT_DIR, self.FAKE_HARNESS),
+            ignore_errors=True,
+        )
+        try:
+            pathlib.Path(server._acp_state_file(self.FAKE_HARNESS)).unlink()
+        except OSError:
+            pass
+
+    def _register_fake_harness(self):
+        agent = pathlib.Path(PROJECT_ROOT, "tests", "fake_acp_agent.py")
+        self.server._ACP_HARNESSES[self.FAKE_HARNESS] = {
+            "label": "Fake",
+            "bin_env": "",
+            "bin_names": (),
+            "acp_args": (str(agent),),
+            "kill_env": "",
+        }
+
+    def test_registry_shape(self):
+        kimi = self.server._ACP_HARNESSES.get("kimi") or {}
+        for key in ("label", "bin_env", "bin_names", "acp_args", "kill_env"):
+            self.assertIn(key, kimi)
+        self.assertEqual(kimi["acp_args"], ("acp",))
+        self.assertTrue(self.server._acp_harness_enabled("kimi"))
+        with mock.patch.dict(os.environ, {kimi["kill_env"]: "0"}):
+            self.assertFalse(self.server._acp_harness_enabled("kimi"))
+
+    def test_is_kimi_session_negative(self):
+        self.assertFalse(
+            self.server._is_kimi_session("00000000-0000-0000-0000-000000000000")
+        )
+        self.assertFalse(self.server._is_kimi_session(""))
+
+    def test_engine_registration_pins(self):
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('"/api/sessions/spawn-kimi"', server_py)
+        self.assertIn('"/api/acp/approval"', server_py)
+        self.assertIn('if _is_kimi_session(session_id):\n        return _acp_prompt', server_py)
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
+
+    def test_acp_client_end_to_end(self):
+        server = self.server
+        self._register_fake_harness()
+        resolved = {"available": True, "bin": sys.executable, "source": "test"}
+        with mock.patch.object(
+            server, "_acp_resolve_bin",
+            side_effect=lambda h: resolved if h == self.FAKE_HARNESS else {"available": False},
+        ):
+            conn = server._acp_ensure(self.FAKE_HARNESS)
+            self.assertIsNotNone(conn)
+            self.assertTrue(conn.get("initialized"))
+
+            created = server._acp_session_new(self.FAKE_HARNESS, "/tmp")
+            self.assertTrue(created.get("ok"), created)
+            sid = created["session_id"]
+
+            sent = server._acp_prompt(self.FAKE_HARNESS, sid, "hello")
+            self.assertTrue(sent.get("ok"), sent)
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                snap = server._acp_session_snapshot(self.FAKE_HARNESS, sid) or {}
+                if snap.get("status") == "idle" and snap.get("turn_seq") == 1:
+                    break
+                time.sleep(0.05)
+            snap = server._acp_session_snapshot(self.FAKE_HARNESS, sid) or {}
+            self.assertEqual(snap.get("status"), "idle")
+            self.assertEqual(snap.get("turn_seq"), 1)
+
+            events = server._acp_transcript_events_after(self.FAKE_HARNESS, sid, 0)
+            kinds = [e.get("type") for e in events]
+            self.assertEqual(kinds, ["user_text", "assistant", "result"])
+            texts = [
+                b.get("text")
+                for e in events if e.get("type") == "assistant"
+                for b in e.get("blocks", []) if b.get("kind") == "text"
+            ]
+            self.assertEqual(texts, ["Hello"])
+            # Delta cursor: replay from a line beyond the tail is empty.
+            last_line = events[-1]["line"]
+            self.assertEqual(
+                server._acp_transcript_events_after(self.FAKE_HARNESS, sid, last_line),
+                [],
+            )
+
+            # Permission roundtrip: fake agent asks, CCC answers via the
+            # str-keyed pending map (UI sends ids back as strings).
+            sent = server._acp_prompt(self.FAKE_HARNESS, sid, "perm", mode="steer")
+            self.assertTrue(sent.get("ok"), sent)
+            req_key = None
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                state = server._acp_session(self.FAKE_HARNESS, sid)
+                if state["pending_permissions"]:
+                    req_key = next(iter(state["pending_permissions"]))
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(req_key, "no pending permission request arrived")
+            resolved_perm = server._acp_resolve_approval(
+                self.FAKE_HARNESS, sid, req_key, "allow"
+            )
+            self.assertTrue(resolved_perm.get("ok"), resolved_perm)
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if not server._acp_session(self.FAKE_HARNESS, sid)["pending_permissions"]:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(
+                server._acp_session(self.FAKE_HARNESS, sid)["pending_permissions"],
+                {},
+            )
+
+            server._acp_shutdown_all()
+
+
 def test_inject_input_honors_wt_origin_marker():
     """WT-78: a delegate POST from wt carries origin=wt; the inject route must
     thread that into _inject_text_into_session and skip the wt-send hook there,
