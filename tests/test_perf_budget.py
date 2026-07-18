@@ -345,7 +345,7 @@ def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
 
 
 def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
-    """Quality lookup indexes cache files once, never once per session row."""
+    """The temporary reader can index cache files once when re-enabled."""
     quality_dir = tmp_path / ".codex" / "token-optimizer"
     quality_dir.mkdir(parents=True)
     sids = [str(uuid.uuid4()) for _ in range(100)]
@@ -355,6 +355,7 @@ def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
         )
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_READS_ENABLED", True)
     monkeypatch.setattr(server, "_TOKEN_OPTIMIZER_QUALITY_CACHE", {})
     monkeypatch.setattr(
         server,
@@ -377,6 +378,17 @@ def test_token_quality_cache_directory_is_scanned_once(monkeypatch, tmp_path):
         f"quality lookup scanned cache directories {len(iterdir_calls)}x for "
         f"{len(sids)} rows instead of sharing one directory index"
     )
+
+
+def test_token_quality_lookup_is_disabled_without_touching_to_paths(monkeypatch):
+    """Session retrieval must not inspect Token Optimizer state while disabled."""
+    monkeypatch.setattr(
+        server.Path,
+        "home",
+        lambda: pytest.fail("disabled Token Optimizer lookup resolved a home path"),
+    )
+
+    assert server._token_optimizer_quality_for_session("quality-disabled") == {}
 
 
 def test_auto_verify_reuses_supplied_session_rows(monkeypatch, tmp_path):

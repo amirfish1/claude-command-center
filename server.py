@@ -50193,9 +50193,15 @@ _TOKEN_OPTIMIZER_QUALITY_CACHE = {}
 _TOKEN_OPTIMIZER_QUALITY_CACHE_TTL_S = 15.0
 _TOKEN_OPTIMIZER_QUALITY_FILES = {"ts": 0.0, "roots": (), "paths": ()}
 _TOKEN_OPTIMIZER_QUALITY_FILES_LOCK = threading.Lock()
+# Token Optimizer quality is advisory. Keep it off until the producer-owned
+# quality index lands; request handlers must not read Token Optimizer files.
+_TOKEN_OPTIMIZER_QUALITY_READS_ENABLED = False
 
 
 def _token_optimizer_quality_for_session(session_id):
+    if not _TOKEN_OPTIMIZER_QUALITY_READS_ENABLED:
+        return {}
+
     sid = str(session_id or "").strip()
     if not sid:
         return {}

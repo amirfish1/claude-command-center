@@ -13410,6 +13410,7 @@ class TestModelPicker(unittest.TestCase):
             server.PROJECTS_ROOT = root / "projects"
             try:
                 with mock.patch.object(server.Path, "home", return_value=home), \
+                     mock.patch.object(server, "_TOKEN_OPTIMIZER_QUALITY_READS_ENABLED", True), \
                      mock.patch.object(server, "_is_codex_session", return_value=False), \
                      mock.patch.object(server, "_is_gemini_session", return_value=False), \
                      mock.patch.object(server, "_is_cursor_session", return_value=False), \
