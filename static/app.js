@@ -48293,6 +48293,10 @@
       $list.style.display = '';
       $list.innerHTML = _archiveLoadingPlaceholderHtml('Loading archive…');
     }
+    // The queue panel is independent of the cross-repo archive scan. Start
+    // its small metadata request first so its scope picker remains usable
+    // while a cold archive walk is still reading conversation history.
+    _renderQueuePanel();
     await refreshArchiveData();
     // Shape only the saved active row first. This uses the normal archive
     // pipeline to initialize session metadata/capabilities, but avoids making
