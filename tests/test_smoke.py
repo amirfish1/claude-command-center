@@ -4498,7 +4498,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
         self.assertGreater(
             app_js.index('class="fq-add-row" id="filesQueueAdd"'),
-            app_js.index("$queue.innerHTML = queueRowsHtml"),
+            app_js.index("$queue.innerHTML = pendingAddsHtml + queueRowsHtml"),
         )
         self.assertIn('class="fq-ticket-textarea"', app_js)
         self.assertIn('rows="7"', app_js)
@@ -4506,6 +4506,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".fq-ticket-textarea", app_css)
         self.assertIn("min-height: 150px;", app_css)
         self.assertIn("resize: vertical;", app_css)
+
+    def test_queue_add_renders_a_pending_row_until_watchtower_confirms_it(self):
+        """A submitted add stays visible as a spinner row until the canonical item arrives."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        add_start = app_js.index("async function _addQueueTicket()")
+        add_body = app_js[add_start:app_js.index("// ── Q-FIRST", add_start)]
+
+        self.assertIn("const _uxqPendingQueueAdds = new Map();", app_js)
+        self.assertIn("fq-pending-add", app_js)
+        self.assertIn("_uxqPendingQueueAdds.set(pendingId", add_body)
+        self.assertIn("_renderQueuePanel({ allowStale: true });", add_body)
+        self.assertIn("_uxqPendingQueueAdds.delete(pendingId);", add_body)
+        self.assertIn("await _renderQueuePanel();", add_body)
 
     def test_queue_manager_can_create_and_revise_full_watchtower_config(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")

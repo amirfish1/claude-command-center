@@ -33078,6 +33078,9 @@
   // cleared only when a refreshed ticket leaves `open`, so dispatch latency is
   // visible instead of looking like a click was ignored.
   const _uxqPendingRunRefs = new Set();
+  // Newly filed tickets appear immediately, then yield to their canonical
+  // WatchTower row only after the post-write refresh sees it.
+  const _uxqPendingQueueAdds = new Map();
   // True while the /api/queue/events SSE stream is connected — the board then
   // refreshes on server push instead of the 15s fallback timer.
   let _uxqStreamLive = false;
@@ -34708,6 +34711,14 @@
       (((_uxqHealthCache || {}).queues) || []).forEach(q => {
         if (q && q.queue != null) _drainByQueueRow.set(String(q.queue).toUpperCase(), !!q.auto_drain);
       });
+      const pendingAddsHtml = [..._uxqPendingQueueAdds.values()]
+        .filter(pending => !proj || _uxqInScope(pending.project, proj))
+        .map(pending => '<div class="fq-row fq-pending-add" aria-busy="true" title="Adding ticket…">'
+          + '<span class="fq-ref">new</span>'
+          + '<span class="fq-note">' + escapeHtml(pending.note) + '</span>'
+          + '<span class="fq-row-signals"><span class="fq-status fq-status-pending" role="status" aria-label="Adding ticket"></span></span>'
+          + '</div>')
+        .join('');
       const queueRowsHtml = visibleRows.map(it => {
         const noteFull = String(it.note || '');
         const rawStatus = it.status || 'open';
@@ -34763,7 +34774,7 @@
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
           + signalsHtml
           + '</div>';
-      }).join('') || _uxqEmptyHtml(proj, items.length);
+      }).join('') || (pendingAddsHtml ? '' : _uxqEmptyHtml(proj, items.length));
       const historyPagerHtml = historyOrder && rows.length > _UXQ_HISTORY_PAGE_SIZE
         ? '<div class="fq-history-pager">'
           + '<button type="button" data-uxq-history-page="-1"' + (_uxqHistoryPage === 0 ? ' disabled' : '') + '>Newer</button>'
@@ -34774,7 +34785,7 @@
       // Keep creation with the tickets it affects, instead of crowding the
       // queue header. This stays after the empty state too, so an empty queue
       // still offers its primary action.
-      $queue.innerHTML = queueRowsHtml
+      $queue.innerHTML = pendingAddsHtml + queueRowsHtml
         + historyPagerHtml
         + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>';
       const $count = document.getElementById('queueCount');
@@ -35392,6 +35403,9 @@
     // A family root ("WT") isn't a real sub-queue — route the add to its
     // fix-now child ("WT-BUGS") so it lands somewhere drainable.
     const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(proj)] || proj;
+    const pendingId = 'pending-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    _uxqPendingQueueAdds.set(pendingId, { note, project: targetProj });
+    _renderQueuePanel({ allowStale: true });
     try {
       const res = await fetch('/api/ux-fixes/enqueue', {
         method: 'POST',
@@ -35404,11 +35418,17 @@
         showOpToast('Added ' + ref + ' to queue');
         _uxqItemsCache.ts = 0;  // bust cache so the new row shows
         _uxqHealthCache.ts = 0;
-        _renderQueuePanel();
+        await _renderQueuePanel();
+        _uxqPendingQueueAdds.delete(pendingId);
+        _renderQueuePanel({ allowStale: true });
       } else {
+        _uxqPendingQueueAdds.delete(pendingId);
+        _renderQueuePanel({ allowStale: true });
         showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
       }
     } catch (e) {
+      _uxqPendingQueueAdds.delete(pendingId);
+      _renderQueuePanel({ allowStale: true });
       showOpToast('Add failed: ' + e);
     }
   }
