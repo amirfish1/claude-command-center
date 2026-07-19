@@ -16593,14 +16593,14 @@ class TestTerminalQueueDrainSafety(unittest.TestCase):
         self.assertIn("_verify_terminal_drain_receipts()", server_py)
 
 
-class TestAcpGeminiHarness(unittest.TestCase):
+class TestAcpGlmHarness(unittest.TestCase):
     """ACP harness #2 (KIMI-FIXES-7): the generic layer must drive a second
-    ACP-speaking CLI with a registry entry only — no harness-specific code.
-    Live test against the real gemini binary when installed; the handshake +
-    structured error surfacing are asserted, session/prompt needs account
-    auth and is out of scope here."""
+    ACP-speaking agent with a registry entry only — no harness-specific code.
+    Live test against glm-acp-agent (Z.AI/Zhipu GLM) when installed: the
+    handshake and the structured error/answer surfacing are asserted; turns
+    need ZAI_API_KEY and are out of scope here."""
 
-    HARNESS = "gemini-acp"
+    HARNESS = "glm"
 
     def setUp(self):
         for mod in ("server", "morning", "morning_store"):
@@ -16621,30 +16621,34 @@ class TestAcpGeminiHarness(unittest.TestCase):
     def test_registry_and_resolution(self):
         server = self.server
         cfg = server._ACP_HARNESSES[self.HARNESS]
-        self.assertEqual(cfg["acp_args"], ("--acp",))
-        self.assertEqual(cfg["bin_names"], ("gemini",))
+        self.assertEqual(cfg["acp_args"], ())
+        self.assertEqual(cfg["bin_names"], ("glm-acp-agent",))
         self.assertTrue(server._acp_harness_enabled(self.HARNESS))
         with mock.patch.dict(os.environ, {cfg["kill_env"]: "0"}):
             self.assertFalse(server._acp_harness_enabled(self.HARNESS))
-        if shutil.which("gemini"):
+        if shutil.which("glm-acp-agent"):
             resolved = server._acp_resolve_bin(self.HARNESS)
             self.assertTrue(resolved["available"], resolved)
 
-    def test_live_handshake_and_session_new_error_shape(self):
+    def test_live_handshake_and_session_new_shape(self):
         server = self.server
-        if not shutil.which("gemini"):
-            self.skipTest("gemini CLI not installed")
+        if not shutil.which("glm-acp-agent"):
+            self.skipTest("glm-acp-agent not installed")
         conn = server._acp_ensure(self.HARNESS)
         self.assertIsNotNone(conn, server._acp_conn_error(self.HARNESS))
         self.assertTrue(conn.get("initialized"))
-        self.assertEqual((conn.get("agent_info") or {}).get("name"), "gemini-cli")
-        # The generic layer must surface the harness's answer (or its auth
-        # failure) as a structured dict — never a crash, hang, or traceback.
+        self.assertEqual((conn.get("agent_info") or {}).get("name"), "glm-acp-agent")
+        # GLM speaks the newer ACP session-state shape: models.currentModelId
+        # + modes.currentModeId instead of kimi's configOptions select list.
+        # The generic layer must capture the model regardless of vocabulary.
         resp = server._acp_session_new(self.HARNESS, "/tmp")
         self.assertIsInstance(resp, dict)
         self.assertIn("ok", resp)
-        if not resp["ok"]:
-            self.assertTrue(resp.get("error"))
+        if resp["ok"]:
+            sid = resp["session_id"]
+            with server._ACP_LOCK:
+                state = server._acp_session(self.HARNESS, sid) or {}
+            self.assertTrue(state.get("model"), "models.currentModelId not captured")
 
 
 class TestAcpKimiEngine(unittest.TestCase):

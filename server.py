@@ -27299,16 +27299,16 @@ _ACP_HARNESSES = {
         "home_default": "~/.kimi-code",
     },
     # ACP harness #2 (KIMI-FIXES-7): validates the generic layer against a
-    # second ACP-speaking CLI. Distinct from the legacy "gemini" engine
-    # (transcript/app-server based); this drives the same `gemini` binary
-    # over ACP stdio. No discovery yet — sessions exist only when created
-    # through the generic _acp_* API.
-    "gemini-acp": {
-        "label": "Gemini (ACP)",
-        "bin_env": "CCC_GEMINI_ACP_BIN",
-        "bin_names": ("gemini",),
-        "acp_args": ("--acp",),
-        "kill_env": "CCC_GEMINI_ACP",
+    # second ACP-speaking agent. GLM (Z.AI/Zhipu) via the ACP-registry
+    # glm-acp-agent (npm i -g glm-acp-agent). Handshake works unauthenticated;
+    # turns need ZAI_API_KEY (or `glm-acp-agent --setup`). No discovery yet —
+    # sessions exist only when created through the generic _acp_* API.
+    "glm": {
+        "label": "GLM",
+        "bin_env": "CCC_GLM_BIN",
+        "bin_names": ("glm-acp-agent",),
+        "acp_args": (),
+        "kill_env": "CCC_GLM_ACP",
     },
 }
 
@@ -28138,6 +28138,15 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None):
         for opt in state["config_options"]:
             if isinstance(opt, dict) and opt.get("id") == "model":
                 state["model"] = opt.get("currentValue")
+        # Newer ACP session-state shape (GLM): model/mode ride as
+        # models.currentModelId / modes.currentModeId instead of the
+        # configOptions select list (kimi's vocabulary). Capture generically.
+        models_block = result.get("models")
+        if not state.get("model") and isinstance(models_block, dict):
+            state["model"] = models_block.get("currentModelId")
+        modes_block = result.get("modes")
+        if isinstance(modes_block, dict):
+            state["mode"] = modes_block.get("currentModeId")
         _acp_save_state_unlocked(harness)
     if mode:
         _acp_set_config(harness, sid, "mode", mode)
