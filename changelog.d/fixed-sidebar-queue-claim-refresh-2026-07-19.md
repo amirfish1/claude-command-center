@@ -1,0 +1,1 @@
+- Refresh sidebar-mounted Queue rows when a worker claims a ticket.

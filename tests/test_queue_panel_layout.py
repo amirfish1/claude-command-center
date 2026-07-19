@@ -175,6 +175,38 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("const rawStatus = it.status || 'open';", queue_js)
         self.assertNotIn("const status = it.status || 'open';", queue_js)
 
+    def test_live_queue_refreshes_when_mounted_in_sidebar_tab(self):
+        """A worker claim refreshes sidebar rows and ends the Play spinner."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        visible = app_js[
+            app_js.index("function _queuePanelIsVisible()"):
+            app_js.index("let _uxqItemsCache", app_js.index("function _queuePanelIsVisible()"))
+        ]
+        self.assertIn("panel.parentElement === sidebarHost", visible)
+        self.assertIn("queuePane.classList.contains('is-active')", visible)
+
+        refresh_block = app_js[
+            app_js.index("setInterval(_gated('uxFixesQueueMeta'"):
+            app_js.index("// Queue board push channel", app_js.index("setInterval(_gated('uxFixesQueueMeta'"))
+        ]
+        self.assertIn("_queuePanelIsVisible()", refresh_block)
+
+        stream_block = app_js[
+            app_js.index("const invalidateAndRender = () =>"):
+            app_js.index("const schedule = () =>", app_js.index("const invalidateAndRender = () =>"))
+        ]
+        self.assertIn("_queuePanelIsVisible()", stream_block)
+
+        self.assertIn("const _uxqPendingRunRefs = new Set();", app_js)
+        self.assertIn("if (_uxqPendingRunRefs.has(ref) && status !== 'open') _uxqPendingRunRefs.delete(ref);", app_js)
+        self.assertIn("fq-status-pending", app_js)
+        self.assertIn("_uxqPendingRunRefs.add(ref);", app_js)
+        self.assertIn("_uxqPendingRunRefs.delete(ref);", app_js)
+        self.assertIn(".fq-status.fq-status-pending", app_css)
+        self.assertIn("@keyframes fq-status-pending-spin", app_css)
+
     def test_queue_panel_can_filter_tickets_by_type(self):
         """Type controls keep bugs and features independently scannable."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")

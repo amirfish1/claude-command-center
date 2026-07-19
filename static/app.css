@@ -17059,6 +17059,16 @@ body:has(.gc-reader) .pwa-install-banner {
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; cursor: pointer; color: transparent; line-height: 1;
 }
+.fq-status.fq-status-pending {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; box-shadow: none;
+}
+.fq-status.fq-status-pending::after {
+  content: ''; width: 10px; height: 10px; box-sizing: border-box;
+  border: 2px solid var(--accent, #58a6ff); border-right-color: transparent;
+  border-radius: 50%; animation: fq-status-pending-spin 0.7s linear infinite;
+}
+@keyframes fq-status-pending-spin { to { transform: rotate(360deg); } }
 .fq-status-action:hover,
 .fq-status-action:focus-visible {
   color: var(--bg, #0d1117); font-size: 10px;
@@ -17095,6 +17105,9 @@ body:has(.gc-reader) .pwa-install-banner {
   min-width: 34px; text-align: right;
 }
 .fq-row.is-closed .fq-status { background: var(--green, #3fb950); }
+.fq-row .fq-status.fq-status-pending {
+  background: transparent; animation: none; box-shadow: none;
+}
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 .fq-row.is-closed .fq-chip { background: rgba(139,148,158,0.10) !important; color: var(--text-muted) !important; opacity: 0.6; }
 /* Closed-but-not-fully-resolved (CCC-420): resolution.unresolved means the
