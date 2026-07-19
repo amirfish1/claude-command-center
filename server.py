@@ -27298,6 +27298,18 @@ _ACP_HARNESSES = {
         "home_env": "KIMI_CODE_HOME",
         "home_default": "~/.kimi-code",
     },
+    # ACP harness #2 (KIMI-FIXES-7): validates the generic layer against a
+    # second ACP-speaking CLI. Distinct from the legacy "gemini" engine
+    # (transcript/app-server based); this drives the same `gemini` binary
+    # over ACP stdio. No discovery yet — sessions exist only when created
+    # through the generic _acp_* API.
+    "gemini-acp": {
+        "label": "Gemini (ACP)",
+        "bin_env": "CCC_GEMINI_ACP_BIN",
+        "bin_names": ("gemini",),
+        "acp_args": ("--acp",),
+        "kill_env": "CCC_GEMINI_ACP",
+    },
 }
 
 _ACP_LOCK = threading.Condition()
