@@ -33342,6 +33342,10 @@
   // derive from the session's repo (default). Persisted in localStorage so a
   // CCC session can be told "show WT here" without hunting for a WT session.
   const _UXQ_SCOPE_LS = 'ccc-uxq-scope';
+  // An explicit Queue selection is a view preference, not conversation state.
+  // Keep it separate from the legacy per-session map so automatic conversation
+  // restores cannot silently turn "All queues" back into Auto (repo).
+  const _UXQ_SELECTED_SCOPE_LS = 'ccc-uxq-selected-scope';
   function _uxqScopeKey() {
     try {
       const r = openConvRow();
@@ -33356,15 +33360,22 @@
   }
   function _uxqGetScopeOverride() {
     const k = _uxqScopeKey(); if (!k) return '';
-    const v = _uxqProjectKey(_uxqLoadScopeMap()[k] || '');
-    return v && v !== 'AUTO' ? v : '';
+    const sessionScope = _uxqProjectKey(_uxqLoadScopeMap()[k] || '');
+    try {
+      const selected = _uxqProjectKey(localStorage.getItem(_UXQ_SELECTED_SCOPE_LS) || '');
+      return selected || sessionScope;
+    } catch (_) { return sessionScope; }
   }
   function _uxqSetScopeOverride(val) {
     const k = _uxqScopeKey(); if (!k) return;
     const map = _uxqLoadScopeMap();
     const v = _uxqProjectKey(val);
     if (!v || v === 'AUTO') delete map[k]; else map[k] = v;
-    try { localStorage.setItem(_UXQ_SCOPE_LS, JSON.stringify(map)); } catch (_) {}
+    try {
+      localStorage.setItem(_UXQ_SCOPE_LS, JSON.stringify(map));
+      if (!v || v === 'AUTO') localStorage.removeItem(_UXQ_SELECTED_SCOPE_LS);
+      else localStorage.setItem(_UXQ_SELECTED_SCOPE_LS, v);
+    } catch (_) {}
     _uxqResetHistoryPage();
   }
   // Status filter for the Queue panel: 'all' or 'open' (open + in_progress,

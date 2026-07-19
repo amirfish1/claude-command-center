@@ -3224,6 +3224,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (typeof currentConversation !== 'undefined' && currentConversation) return currentConversation;", key_body)
         self.assertIn("return '__queue_global__';", key_body)
 
+    def test_explicit_queue_scope_survives_automatic_conversation_restore(self):
+        """A Queue scope picked by the user must not follow a restored session ID."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        get_start = app_js.index("function _uxqGetScopeOverride()")
+        get_body = app_js[get_start:app_js.index("function _uxqSetScopeOverride", get_start)]
+        set_body = app_js[app_js.index("function _uxqSetScopeOverride"):app_js.index("// Status filter", app_js.index("function _uxqSetScopeOverride"))]
+
+        self.assertIn("const _UXQ_SELECTED_SCOPE_LS = 'ccc-uxq-selected-scope';", app_js)
+        self.assertIn("const selected = _uxqProjectKey(localStorage.getItem(_UXQ_SELECTED_SCOPE_LS) || '');", get_body)
+        self.assertIn("return selected || sessionScope;", get_body)
+        self.assertIn("localStorage.setItem(_UXQ_SELECTED_SCOPE_LS, v);", set_body)
+        self.assertIn("localStorage.removeItem(_UXQ_SELECTED_SCOPE_LS);", set_body)
+
     def test_queue_scope_switch_repaints_from_completed_caches(self):
         """Changing a client-side scope must not wait for multi-MB refetches."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
