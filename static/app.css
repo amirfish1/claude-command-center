@@ -1555,6 +1555,22 @@
   .plan-row.is-done { color: var(--text-muted); text-decoration: line-through; }
   .plan-row.is-active .plan-glyph { color: var(--green); }
 
+  /* ── Kimi-web conversation parity (KIMI-FIXES-16), scoped to kimi panes ── */
+  /* Right-aligned user bubbles. */
+  .conv-pane.is-kimi-session .event.user_text .user-msg {
+    width: fit-content;
+    max-width: min(70%, 640px);
+    margin-left: auto;
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    border-radius: 12px;
+    padding: 8px 12px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  /* Tool-call group header: aggregate status color cue. */
+  .conv-pane.is-kimi-session .tool-call-group[data-kimi-group-state="error"] .tcg-label { color: var(--red, #f85149); }
+  .conv-pane.is-kimi-session .tool-call-group[data-kimi-group-state="running"] .tcg-label { color: var(--green); }
+
   /* Expanded composer (kimi-web maximize-input parity): Enter inserts
      newlines, Ctrl+Enter sends; collapses back after send/clear. */
   .conv-input-bar.is-composer-expanded .conv-input-row-top textarea {

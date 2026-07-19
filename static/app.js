@@ -32269,6 +32269,7 @@
       paneEl.classList.toggle('is-cursor-session', source === 'cursor');
       paneEl.classList.toggle('is-antigravity-session', source === 'antigravity');
       paneEl.classList.toggle('is-hermes-session', source === 'hermes');
+      paneEl.classList.toggle('is-kimi-session', source === 'kimi');
     }
     const isPendingSpawn = !!(selectedConv && selectedConv.pending_spawn);
     if (source === 'backlog') {
@@ -40280,6 +40281,18 @@
     const codeReads = Number(group.dataset.codeReadCount || 0);
     const calls = Array.from(group.querySelectorAll('.tool-call'));
     const resultEl = group.querySelector('.tcg-result');
+    // Kimi-web parity (KIMI-FIXES-16): kimi panes get the ToolGroup.vue
+    // header shape — "N tool calls · <aggregate status>" — instead of the
+    // command-summary sentence. Aggregate from per-row terminal classes.
+    if (count >= 1 && group.closest('.conv-pane.is-kimi-session')) {
+      let state = 'done';
+      if (calls.some(tc => tc.classList.contains('tool-call-fail'))) state = 'error';
+      else if (calls.some(tc => !tc.classList.contains('tool-call-ok'))) state = 'running';
+      label.textContent = count + ' tool call' + (count === 1 ? '' : 's') + ' · ' + state;
+      label.title = '';
+      group.dataset.kimiGroupState = state;
+      return;
+    }
     if (count === 1) {
       const only = group.querySelector('.tool-call-group-body > .event.tool-only');
       label.textContent = only ? summarizeToolCall(only) : 'Ran 1 command';
@@ -42818,10 +42831,14 @@
                 }).join('') + '</span>'
               : '';
             const acpPermClass = (b.approval_required && b.acp_request_id != null) ? ' acp-needs-approval' : '';
+            // ACP tool blocks carry a terminal tool_status (completed/failed)
+            // — map it to a class so group headers can aggregate run state.
+            const toolStatusClass = b.tool_status === 'completed' ? ' tool-call-ok'
+              : (b.tool_status === 'failed' ? ' tool-call-fail' : '');
             // A permission prompt must never collapse into the "Ran N commands"
             // group — the option buttons are the only way to answer it.
             if (b.approval_required) hasNonTool = true;
-            blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + acpPermClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
+            blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + acpPermClass + toolStatusClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
               + '<span class="arrow">-></span> '
               + sourceHtml
               + '<span class="tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
