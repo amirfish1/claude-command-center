@@ -29554,6 +29554,9 @@
         const nextSelectId = wantTrashed && currentConversation === convId
           ? _visibleConversationNeighborId(convId, item)
           : null;
+        btn.disabled = true;
+        btn.classList.add('is-pending');
+        btn.setAttribute('aria-busy', 'true');
         try {
           const c = conversationsData.find(x => x.id === convId || x.session_id === sessionId)
             || (Array.isArray(archiveData) ? archiveData.find(x => x.id === convId || x.session_id === sessionId) : null);
@@ -29584,6 +29587,9 @@
           }
           showOpToast(data.trashed ? 'Moved to Trash' : 'Untrashed to Archived');
         } catch (err) {
+          btn.disabled = false;
+          btn.classList.remove('is-pending');
+          btn.removeAttribute('aria-busy');
           showOpToast((wantTrashed ? 'Trash' : 'Untrash') + ' failed (' + err.message + ')', 'error');
         }
       });
