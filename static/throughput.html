@@ -1368,6 +1368,9 @@
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px solid #f59e0b;background:transparent;"></span>
                   <span style="color:#f59e0b;">Cumulative weekly %</span>
                 </div>
+                <div class="legend-item" id="quota-context-legend" style="display:none;">
+                  <span style="color:var(--text-muted);">Quota context unavailable</span>
+                </div>
                 <div class="legend-item" id="fable-contribution-legend" style="display:none;">
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #f5c842;background:transparent;"></span>
                   <span style="color:#f5c842;">Fable % of weekly</span>
@@ -3238,10 +3241,12 @@
       );
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
+      const quotaContextLegend = document.getElementById('quota-context-legend');
+      if (quotaContextLegend) quotaContextLegend.style.display = isAggregate && sixhourly && !showWeeklyOverlay ? 'flex' : 'none';
       const accountLegend = document.getElementById('account-usage-legend');
       if (accountLegend) accountLegend.style.display = showAccountUsage ? 'flex' : 'none';
       // Hide week nav when not in sixhourly aggregate mode
-      if (!sixhourly) {
+      if (!sixhourly || !showWeeklyOverlay) {
         const _nav = document.getElementById('chart-week-nav');
         if (_nav) _nav.style.display = 'none';
       }
@@ -3249,13 +3254,6 @@
       // Get container width
       const width = svg.clientWidth || 800;
       const height = svg.clientHeight || 300;
-      if (isAggregate && sixhourly && !weeklyChart) {
-        const nav = document.getElementById('chart-week-nav');
-        if (nav) nav.style.display = 'none';
-        updateChartZoomButton(false);
-        svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">Weekly quota context unavailable</text>`;
-        return;
-      }
       // Extra right padding when either secondary axis needs room.
       const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
       const padding = { top: showAccountUsage ? 44 : 20, right: rightPad, bottom: 54, left: 60 };
@@ -3351,6 +3349,10 @@
             return rowMs >= prevStart.getTime() && rowMs < prevEnd.getTime() &&
               ((row.turns || 0) > 0 || (row.raw_context_tokens || 0) > 0 || (row.output_tokens || 0) > 0);
           });
+        } else {
+          // Without quota context, preserve the local 3-hour history and omit
+          // only the quota overlay and its secondary axis.
+          buckets = [...allGroups.values()].sort((a, b) => new Date(a.hour) - new Date(b.hour));
         }
       } else if (isAggregate) {
         buckets = daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [];

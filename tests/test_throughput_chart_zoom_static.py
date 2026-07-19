@@ -16,11 +16,15 @@ def test_throughput_chart_has_hover_zoom_control():
     assert "chartZoomLastHours = !chartZoomLastHours" in throughput_html
 
 
-def test_aggregate_chart_uses_real_prior_cycle_context_without_misaligned_overlay():
+def test_aggregate_chart_keeps_local_bars_when_weekly_quota_context_is_unavailable():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
     assert "let weeklyDataLoaded = false" in throughput_html
-    assert "Weekly quota context unavailable" in throughput_html
+    assert 'id="quota-context-legend"' in throughput_html
+    assert "Quota context unavailable" in throughput_html
+    assert "if (quotaContextLegend) quotaContextLegend.style.display = isAggregate && sixhourly && !showWeeklyOverlay ? 'flex' : 'none';" in throughput_html
+    assert "if (isAggregate && sixhourly && !weeklyChart)" not in throughput_html
+    assert "buckets = [...allGroups.values()].sort((a, b) => new Date(a.hour) - new Date(b.hour));" in throughput_html
     assert "waiting for weekly context" not in throughput_html
     assert "shouldDeferAggregateChart(" not in throughput_html
     assert 'id="previous-week-legend"' not in throughput_html
