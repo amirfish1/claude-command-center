@@ -1,0 +1,1 @@
+- Bespoke queue worker spawns (custom model or extra instructions via `/api/queue/spawn-worker`) are now WatchTower-tracked like any drain worker — they land in workers.json with a `bespoke` kind and their instructions ride the drain goal, instead of running as untracked shadow sessions. Requires watchtower ≥ ee3f165.

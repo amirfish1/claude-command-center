@@ -61772,15 +61772,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             extra_message = str(
                 payload.get("message") or payload.get("note") or payload.get("extra") or ""
             ).strip()
-            # WT owns worker lifecycle. When watchtower is importable and the
-            # caller didn't ask for a CCC-specific session (custom name/model/
-            # extra instructions), spawn a WT-tracked drain worker: it lands in
-            # workers.json + ~/.watchtower/logs and the reconciler owns its
-            # release/reap, instead of an untracked CCC shadow worker.
+            # WT owns worker lifecycle — including the bespoke case (custom
+            # model / extra instructions): those now ride WT's extra-instruction
+            # goal channel and land in workers.json like any reconciler worker,
+            # instead of an untracked CCC shadow worker. The CCC spawn_session
+            # path below remains only as the fallback for installs without the
+            # watchtower package.
             wants_ccc_session = bool(
                 model or extra_message or (payload.get("name") or "").strip()
             )
-            if _WT_WORKERS_AVAILABLE and _wt_workers is not None and not wants_ccc_session:
+            if _WT_WORKERS_AVAILABLE and _wt_workers is not None:
                 try:
                     ctx = _spawn_repo_context(repo_path=repo_path)
                 except RepoContextError as e:
@@ -61796,6 +61797,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     recs = _wt_workers.spawn_workers(
                         project, 1, engine,
                         repo_path=str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
+                        model=model or "",
+                        extra_instructions=extra_message,
+                        kind="bespoke" if wants_ccc_session else "",
                         dry_run=bool(payload.get("dry_run")),
                     )
                 except Exception as e:
@@ -61808,6 +61812,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "engine": rec.get("engine", engine),
                     "worker_id": rec.get("worker_id"),
                     "pid": rec.get("pid"),
+                    "kind": rec.get("kind") or "",
                     "spawned_by": "watchtower",
                 })
                 return
