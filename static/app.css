@@ -17079,7 +17079,7 @@ body:has(.gc-reader) .pwa-install-banner {
   box-shadow: 0 0 0 3px rgba(139,148,158,0.16);
 }
 .fq-row.is-in_progress .fq-status {
-  background: #0b3d91;
+  background: var(--accent, #58a6ff);
   animation: fq-status-glow 1.5s ease-in-out infinite;
   will-change: opacity, box-shadow;
 }

@@ -50,7 +50,18 @@ class TestQueueWipOrder(unittest.TestCase):
         self.assertIn("if (rawStatus === 'in_progress' && _isStaleClaim(it)) return 'open';", queue_render)
         self.assertIn("is-stale-claim", queue_render)
         self.assertIn("stale claim - no current live worker", queue_render)
-        self.assertIn("const statusAction = staleClaim", queue_render)
+        self.assertIn(": staleClaim", queue_render)
+
+    def test_live_claim_status_uses_a_conspicuous_blue_marker(self):
+        """A live claim must remain visibly distinct from an unclaimed row."""
+        app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+        live_claim_css = app_css[
+            app_css.index(".fq-row.is-in_progress .fq-status {"):
+            app_css.index(".fq-row.is-in_progress.is-stale-claim", app_css.index(".fq-row.is-in_progress .fq-status {"))
+        ]
+
+        self.assertIn("background: var(--accent, #58a6ff);", live_claim_css)
 
     def test_newly_fetched_queue_items_get_a_temporary_highlight(self):
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
