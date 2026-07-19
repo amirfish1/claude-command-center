@@ -33491,7 +33491,7 @@
     // If the saved override isn't in the items-derived list (e.g. cache just
     // busted so items is empty), add it explicitly so $sel.value sticks.
     if (override && !scopes.includes(override)) scopes.push(override);
-    const opts = ['<option value="AUTO">Auto (repo)</option>',
+    const opts = ['<option value="AUTO">Auto: ' + escapeHtml(currentScope || 'all') + '</option>',
                   '<option value="ALL">All queues</option>']
       .concat(scopes.map(s => '<option value="' + escapeAttr(s) + '">' + escapeHtml(s) + '</option>'));
     $sel.innerHTML = opts.join('');

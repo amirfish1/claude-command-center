@@ -151,6 +151,16 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertNotIn("Queue is empty.</div>", queue_js)
         self.assertIn(".fq-empty-sub", app_css)
 
+    def test_auto_queue_scope_names_the_repo_selected_queue(self):
+        """Auto scope remains explicit about the queue it resolves to."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        scope_render = app_js[
+            app_js.index("function _uxqRenderScopeSelect(items, currentScope)"):
+            app_js.index("function _uxqEmptyHtml", app_js.index("function _uxqRenderScopeSelect(items, currentScope)"))
+        ]
+
+        self.assertIn("Auto: ' + escapeHtml(currentScope || 'all')", scope_render)
+
     def test_claimed_queue_items_do_not_render_as_open_green(self):
         """Claim metadata should force the row out of the open/green state."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
