@@ -27973,9 +27973,14 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
             }, save=True)
             _acp_emit_delta_unlocked(harness, sid, {"type": "result", "subtype": "error"})
         else:
-            _acp_emit_event_unlocked(harness, sid, {
-                "type": "result", "subtype": stop_reason or "end_turn",
-            }, save=True)
+            # The wire tail may have folded this turn's step.end already —
+            # don't emit a second identical result row.
+            recent = list(state.get("events") or [])[-1:]
+            if not (recent and recent[0].get("type") == "result"
+                    and recent[0].get("subtype") == (stop_reason or "end_turn")):
+                _acp_emit_event_unlocked(harness, sid, {
+                    "type": "result", "subtype": stop_reason or "end_turn",
+                }, save=True)
             _acp_emit_delta_unlocked(harness, sid, {
                 "type": "result", "subtype": stop_reason or "end_turn",
             })
@@ -52526,6 +52531,91 @@ def _with_token_optimizer_quality(payload, session_id):
     return payload
 
 
+def _extract_kimi_usage(session_id):
+    """Usage stats for a kimi session, read from its wire.jsonl.
+
+    The wire records `context.update_token_count {tokenCount}` (the live
+    context size after each context mutation — the number the TUI shows) and
+    `usage.record {usage: {inputOther, output, inputCacheRead,
+    inputCacheCreation}}` per LLM call. No usage data streams over ACP (see
+    docs/kimi-code-reference.md §1), so the file is the only source.
+    """
+    try:
+        limit = int(os.environ.get("CCC_KIMI_CONTEXT_LIMIT", "256000") or "256000")
+    except ValueError:
+        limit = 256000
+    result = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "model": "",
+        "context_limit": limit,
+        "compact_count": 0,
+        "live_context_tokens": 0,
+        "live_context_limit": 0,
+        "live_context_percent": 0,
+        "live_context_timestamp": "",
+        "live_context_source": "",
+        "engine": "kimi",
+        "override": _get_session_override(session_id),
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
+    }
+    try:
+        session_dir = (_kimi_session_index().get(session_id) or {}).get("session_dir") or ""
+        wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
+        if wire is None or not wire.is_file():
+            return result
+        last_step_usage = None
+        with wire.open() as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                etype = ev.get("type")
+                if etype == "config.update":
+                    alias = str(ev.get("modelAlias") or "").strip()
+                    if alias:
+                        result["model"] = alias
+                elif etype == "context.update_token_count":
+                    count = int(ev.get("tokenCount") or 0)
+                    result["latest_input_tokens"] = count
+                    result["peak_input_tokens"] = max(result["peak_input_tokens"], count)
+                elif etype == "usage.record":
+                    usage = ev.get("usage") or {}
+                    result["total_input_tokens"] += int(usage.get("inputOther") or 0)
+                    result["total_cache_read_tokens"] += int(usage.get("inputCacheRead") or 0)
+                    result["total_cache_creation_tokens"] += int(usage.get("inputCacheCreation") or 0)
+                    result["total_output_tokens"] += int(usage.get("output") or 0)
+                    if not result["model"]:
+                        result["model"] = str(ev.get("model") or "")
+                elif etype == "context.append_loop_event":
+                    loop = ev.get("event") or {}
+                    if loop.get("type") == "step.end" and isinstance(loop.get("usage"), dict):
+                        last_step_usage = loop["usage"]
+                elif etype == "full_compaction.complete":
+                    result["compact_count"] += 1
+        if not result["latest_input_tokens"] and last_step_usage:
+            # No token-count record yet: the last step's window total is the
+            # closest estimate of the live context size.
+            u = last_step_usage
+            result["latest_input_tokens"] = (
+                int(u.get("inputOther") or 0)
+                + int(u.get("inputCacheRead") or 0)
+                + int(u.get("inputCacheCreation") or 0)
+            )
+            result["peak_input_tokens"] = max(
+                result["peak_input_tokens"], result["latest_input_tokens"])
+    except OSError:
+        pass
+    return result
+
+
 def extract_session_usage(session_id):
     """Walk a session's JSONL transcript and return token-usage stats.
 
@@ -52579,6 +52669,8 @@ def extract_session_usage(session_id):
         return _with_token_optimizer_quality(result, session_id)
     if _is_hermes_session(session_id):
         return _with_token_optimizer_quality(_extract_hermes_usage(session_id), session_id)
+    if _is_kimi_session(session_id):
+        return _with_token_optimizer_quality(_extract_kimi_usage(session_id), session_id)
     desktop_meta = _load_desktop_app_metadata().get(session_id) or {}
     if not PROJECTS_ROOT.is_dir():
         return _with_token_optimizer_quality({**empty, "model": desktop_meta.get("model") or ""}, session_id)

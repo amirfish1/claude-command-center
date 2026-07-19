@@ -7445,8 +7445,8 @@
     }
     const sid = currentSession.id;
     if (!sid) return;
-    if (injectMode === 'steer' && currentSession.source !== 'codex') {
-      showOpToast('Steer is only available for Codex sessions.', 'error');
+    if (injectMode === 'steer' && currentSession.source !== 'codex' && currentSession.source !== 'kimi') {
+      showOpToast('Steer is only available for Codex and Kimi sessions.', 'error');
       return;
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);
@@ -8731,7 +8731,10 @@
     _autosizeRaf = requestAnimationFrame(() => {
       _autosizeRaf = 0;
       $convInput.style.height = 'auto';
-      const max = 240;  // ~10 rows at our current font/line-height
+      const expanded = $convInputBar && $convInputBar.classList.contains('is-composer-expanded');
+      const max = expanded
+        ? Math.round(window.innerHeight * 0.7)
+        : 240;  // ~10 rows at our current font/line-height
       $convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';
     });
   }
@@ -8783,11 +8786,21 @@
     $convInput.addEventListener('keydown', (e) => {
       if (handleSlashCommandKeydown($convInput, e)) return;
       if (recallLastComposerCommand($convInput, e)) return;
-      // Enter sends, Shift+Enter inserts a newline (desktop). On TOUCH, Enter
-      // must insert a newline instead — the on-screen keyboard's return key is
-      // for line breaks, and Enter-to-send fires constantly mid-typing (and
-      // when accepting autocorrect). Touch users submit with the Send button.
-      if (e.key === 'Enter' && !e.shiftKey && !isTouchPrimary()) {
+      // Ctrl/Cmd+S steers the running turn with the composer text (kimi-web
+      // parity) — same flow as the ⚡ steer button. Suppresses the browser's
+      // Save-page dialog whenever the composer has focus.
+      if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (($convInput.value || '').trim()) sendToTerminal('p1', 'steer');
+        return;
+      }
+      // In expanded-composer mode Enter inserts a newline (multi-line
+      // editing); Ctrl/Cmd+Enter sends. Collapsed: Enter sends, Shift+Enter
+      // newlines. On TOUCH, Enter must insert a newline instead — the
+      // on-screen keyboard's return key is for line breaks, and Enter-to-send
+      // fires constantly mid-typing (and when accepting autocorrect).
+      const _expanded = $convInputBar && $convInputBar.classList.contains('is-composer-expanded');
+      if (e.key === 'Enter' && !e.shiftKey && !isTouchPrimary() && !(_expanded && !(e.ctrlKey || e.metaKey))) {
         e.preventDefault();
         sendToTerminal();
       } else if (e.key === 'Escape') {
@@ -8802,18 +8815,42 @@
     });
     // Various callsites do `$convInput.value = ''` to clear after send;
     // hook the value setter so the textarea auto-shrinks back to 1 row
-    // on each clear without having to touch every callsite.
+    // on each clear without having to touch every callsite. Clearing to
+    // empty also collapses the expanded composer (kimi collapses after send).
     if ($convInput.tagName === 'TEXTAREA') {
       const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
       if (desc && desc.set && desc.get) {
         Object.defineProperty($convInput, 'value', {
           configurable: true,
           get() { return desc.get.call(this); },
-          set(v) { desc.set.call(this, v); _autosizeConvInput(); },
+          set(v) {
+            desc.set.call(this, v);
+            if (!v && $convInputBar) setComposerExpanded(false);
+            _autosizeConvInput();
+          },
         });
       }
     }
     _autosizeConvInput();
+  }
+
+  // Expanded composer (kimi-web maximize parity): 30-70vh multi-line mode.
+  function setComposerExpanded(on) {
+    const bar = $convInputBar;
+    if (!bar) return;
+    bar.classList.toggle('is-composer-expanded', !!on);
+    const btn = document.getElementById('convExpandBtn');
+    if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    _autosizeConvInput();
+  }
+  const $convExpandBtn = document.getElementById('convExpandBtn');
+  if ($convExpandBtn) {
+    $convExpandBtn.addEventListener('click', () => {
+      if (!$convInputBar) return;
+      const next = !$convInputBar.classList.contains('is-composer-expanded');
+      setComposerExpanded(next);
+      if (next && $convInput) { $convInput.focus(); }
+    });
   }
 
   for (const btn of allResumeButtons()) btn.addEventListener('click', copyResumeCommand);
@@ -38375,8 +38412,23 @@
   function _formatTokens(n) {
     if (!n) return '0';
     if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
-    if (n >= 1_000) return Math.round(n / 1000) + 'k';
+    if (n >= 1_000) return Math.round(n / 1_000) + 'k';
     return String(n);
+  }
+
+  // Circular context gauge (kimi-web ContextRing parity): an SVG ring whose
+  // arc fills with the context-% — sits inside the composer's usage pill.
+  function _contextRingSvg(pct) {
+    const p = Math.max(0, Math.min(100, Number(pct) || 0));
+    const r = 7, c = 2 * Math.PI * r;
+    const off = (c * (1 - p / 100)).toFixed(2);
+    const cls = p >= 85 ? ' is-hot' : (p >= 60 ? ' is-warm' : '');
+    return '<svg class="ctx-ring' + cls + '" viewBox="0 0 18 18" width="14" height="14" aria-hidden="true">'
+      + '<circle class="ctx-ring-bg" cx="9" cy="9" r="' + r + '"/>'
+      + '<circle class="ctx-ring-fg" cx="9" cy="9" r="' + r + '"'
+      + ' stroke-dasharray="' + c.toFixed(2) + '" stroke-dashoffset="' + off + '"'
+      + ' transform="rotate(-90 9 9)"/>'
+      + '</svg>';
   }
 
   function _formatCompactDuration(ms) {
@@ -38696,6 +38748,7 @@
     // padding rule in app.css; narrow-pane overflow clipping is the
     // remaining risk and only manifests in thin split panes.
     uSlot.innerHTML = qualityPill + '<span class="' + cls + '" title="' + escapeHtml(title) + '">'
+      + _contextRingSvg(calcPct)
       + sourceLabel + ' ' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
       + slashContextText

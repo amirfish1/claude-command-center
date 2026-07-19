@@ -15095,6 +15095,80 @@ class TestPendingInputs(unittest.TestCase):
             shutil.rmtree(tmp_projects, ignore_errors=True)
 
 
+class TestKimiUsageExtraction(unittest.TestCase):
+    """Kimi sessions report usage from wire.jsonl: context.update_token_count
+    drives latest/peak, usage.record drives totals, config.update the model.
+    (KIMI-FIXES-10 — the composer's context ring for kimi sessions.)"""
+
+    def setUp(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.tmp = tempfile.mkdtemp(prefix="ccc-kimi-usage-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_wire(self, events):
+        session_dir = pathlib.Path(self.tmp) / "session_kimi-test-1"
+        wire_dir = session_dir / "agents" / "main"
+        wire_dir.mkdir(parents=True, exist_ok=True)
+        with (wire_dir / "wire.jsonl").open("w", encoding="utf-8") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+        return str(session_dir)
+
+    def test_kimi_usage_from_wire_jsonl(self):
+        server = self.server
+        sid = "session_kimi-test-1"
+        session_dir = self._write_wire([
+            {"type": "config.update", "modelAlias": "kimi-code/k3"},
+            {"type": "context.update_token_count", "tokenCount": 50000},
+            {"type": "usage.record", "model": "kimi-code/k3",
+             "usage": {"inputOther": 1000, "output": 50,
+                       "inputCacheRead": 5000, "inputCacheCreation": 10}},
+            {"type": "context.update_token_count", "tokenCount": 80000},
+            {"type": "context.append_loop_event", "event": {
+                "type": "step.end",
+                "usage": {"inputOther": 300, "output": 12,
+                          "inputCacheRead": 7000, "inputCacheCreation": 0}}},
+            {"type": "usage.record", "model": "kimi-code/k3",
+             "usage": {"inputOther": 2000, "output": 80,
+                       "inputCacheRead": 9000, "inputCacheCreation": 0}},
+        ])
+        with mock.patch.object(
+            server, "_kimi_session_index",
+            return_value={sid: {"session_dir": session_dir}},
+        ):
+            usage = server.extract_session_usage(sid)
+        self.assertEqual(usage["engine"], "kimi")
+        self.assertEqual(usage["model"], "kimi-code/k3")
+        self.assertEqual(usage["latest_input_tokens"], 80000)
+        self.assertEqual(usage["peak_input_tokens"], 80000)
+        self.assertEqual(usage["total_input_tokens"], 3000)
+        self.assertEqual(usage["total_cache_read_tokens"], 14000)
+        self.assertEqual(usage["total_cache_creation_tokens"], 10)
+        self.assertEqual(usage["total_output_tokens"], 130)
+        self.assertEqual(usage["context_limit"], 256000)
+
+    def test_kimi_usage_falls_back_to_step_usage_without_token_count(self):
+        server = self.server
+        sid = "session_kimi-test-2"
+        session_dir = self._write_wire([
+            {"type": "context.append_loop_event", "event": {
+                "type": "step.end",
+                "usage": {"inputOther": 4000, "output": 20,
+                          "inputCacheRead": 6000, "inputCacheCreation": 100}}},
+        ])
+        with mock.patch.object(
+            server, "_kimi_session_index",
+            return_value={sid: {"session_dir": session_dir}},
+        ):
+            usage = server.extract_session_usage(sid)
+        self.assertEqual(usage["latest_input_tokens"], 10100)
+        self.assertEqual(usage["peak_input_tokens"], 10100)
+
+
 class TestSessionUsageDedup(unittest.TestCase):
     """Claude Code's JSONL re-records the same API response (same
     `message.id`) under fresh event UUIDs whenever a session is resumed

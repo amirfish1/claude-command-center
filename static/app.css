@@ -1555,6 +1555,24 @@
   .plan-row.is-done { color: var(--text-muted); text-decoration: line-through; }
   .plan-row.is-active .plan-glyph { color: var(--green); }
 
+  /* Expanded composer (kimi-web maximize-input parity): Enter inserts
+     newlines, Ctrl+Enter sends; collapses back after send/clear. */
+  .conv-input-bar.is-composer-expanded .conv-input-row-top textarea {
+    min-height: 30vh !important;
+    max-height: 70vh !important;
+  }
+  .expand-btn[aria-pressed="true"] { color: var(--green); }
+
+  /* Context ring (kimi-web ContextRing parity) inside the usage pill. */
+  .ctx-ring { vertical-align: -2.5px; margin-right: 4px; }
+  .ctx-ring .ctx-ring-bg { fill: none; stroke: var(--border); stroke-width: 2.4; }
+  .ctx-ring .ctx-ring-fg {
+    fill: none; stroke: var(--green); stroke-width: 2.4;
+    stroke-linecap: round; transition: stroke-dashoffset 0.4s ease;
+  }
+  .ctx-ring.is-warm .ctx-ring-fg { stroke: var(--yellow, #d29922); }
+  .ctx-ring.is-hot .ctx-ring-fg { stroke: var(--red, #f85149); }
+
   /* Per-turn token chips — rendered under an assistant event when the
    * source engine exposes per-turn token usage (currently only Antigravity,
    * via GetCascadeTrajectory). Mirrors the `11.2k in | 2.6k out | 1.0k
