@@ -17538,8 +17538,14 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-import-fleet-row { display: flex; align-items: center; gap: 8px; }
 .fq-import-fleet-row input[type="number"] { width: 64px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); padding: 6px 8px; font: inherit; }
 
-.fq-config-dialog { width: min(700px, 94vw); max-height: min(780px, 88vh); overflow: auto; }
-.fq-config-body { gap: 13px; }
+.fq-config-dialog { width: min(760px, 94vw); max-height: min(780px, 88vh); overflow: auto; }
+.fq-config-body { gap: 6px; }
+.fq-config-section { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.fq-config-section:last-of-type { border-bottom: none; }
+.fq-config-eyebrow {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 8px;
+}
 .fq-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
 .fq-config-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .fq-config-field.wide { grid-column: 1 / -1; }
@@ -17550,6 +17556,18 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-config-checks { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; }
 .fq-config-checks label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text); }
 .fq-config-github[hidden] { display: none; }
+/* Segmented pickers (engine / backend) — settings-modal visual language. */
+.fq-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; background: var(--surface-2); border-radius: 8px; width: fit-content; }
+.fq-seg button {
+  border: none; background: transparent; color: var(--text-muted);
+  font-family: inherit; font-size: 12px; font-weight: 500;
+  padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  transition: background 0.12s ease-out, color 0.12s ease-out;
+}
+.fq-seg button:hover { color: var(--text); }
+.fq-seg button.is-active { background: var(--accent); color: var(--accent-contrast); font-weight: 600; }
+.fq-config-checkrow { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.fq-config-checkrow-label { font-size: 12.5px; color: var(--text); }
 
 /* Queue-health strip: one glanceable line per project with open tickets,
    above the ticket list. Wraps gracefully at narrow widths. */

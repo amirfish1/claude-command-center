@@ -34824,31 +34824,48 @@
       +   '<div class="fq-ticket-header"><h2 class="upd-title" id="fqConfigTitle">Queue configuration</h2><button type="button" class="fq-ticket-close" data-fq-config-cancel aria-label="Close">&times;</button></div>'
       +   '<div class="fq-ticket-body fq-config-body">'
       +     '<div class="fq-config-help">Create a queue with safe local defaults, or select an existing queue to revise it. Changes are written to WatchTower’s queue config immediately.</div>'
-      +     '<div class="fq-config-grid">'
+      +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Queue</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field"><label for="fqConfigQueue">Queue name</label><input id="fqConfigQueue" list="fqConfigQueues" maxlength="64" placeholder="e.g. PRODUCT" autocomplete="off"><datalist id="fqConfigQueues">' + queueChoices + '</datalist><span class="fq-config-help">Letters, numbers, _ and - only.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigWorkers">Workers</label><input id="fqConfigWorkers" type="number" min="1" max="16"><span class="fq-config-help">Concurrent workers when auto-drain is on.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigBackend">Ticket backend</label><select id="fqConfigBackend" name="fq-config-backend"><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigEngine">Worker engine</label><select id="fqConfigEngine"><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="kimi">Kimi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
-      +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Choose a model for this engine, use a custom model id, or defer to CCC spawn defaults.</span></div>'
+      +       '<div class="fq-config-field wide"><label>Ticket backend</label><div class="fq-seg" id="fqBackendSeg" role="group" aria-label="Ticket backend"><button type="button" data-backend="file">Local WatchTower queue</button><button type="button" data-backend="github">GitHub issues</button></div><select id="fqConfigBackend" name="fq-config-backend" hidden><option value="file">Local WatchTower queue</option><option value="github">GitHub issues</option></select><span class="fq-config-help">GitHub queues require an owner/repository.</span></div>'
+      +     '</div></div>'
+      +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Worker</div><div class="fq-config-grid">'
+      +       '<div class="fq-config-field wide"><label>Engine</label><div class="fq-seg" id="fqEngineSeg" role="group" aria-label="Worker engine"><button type="button" data-engine="">CCC default</button><button type="button" data-engine="claude">Claude</button><button type="button" data-engine="codex">Codex</button><button type="button" data-engine="kimi">Kimi</button></div><select id="fqConfigEngine" hidden><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="kimi">Kimi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Cost tiers shown per model; Highspeed is the fast (2× price) tier.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Use engine default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
-      +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checks"><label><input id="fqConfigDrain" type="checkbox"> Auto-drain new work</label></div><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
-      +       '<div class="fq-config-field wide"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
-      +       '<div class="fq-config-field wide fq-config-github" hidden><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
-      +       '<div class="fq-config-field fq-config-github" hidden><label for="fqConfigGithubAssignee">GitHub assignee (optional)</label><input id="fqConfigGithubAssignee" placeholder="@me"><span class="fq-config-help">Used by GitHub-backed claims.</span></div>'
-      +     '</div>'
+      +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
+      +     '</div></div>'
+      +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Policy</div><div class="fq-config-grid">'
+      +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqDrainToggle" role="switch" aria-checked="false" aria-label="Auto-drain new work"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Auto-drain new work</span></div><input type="checkbox" id="fqConfigDrain" hidden><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
+      +       '<div class="fq-config-field"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
+      +     '</div></div>'
+      +     '<div class="fq-config-section fq-config-github" hidden><div class="fq-config-eyebrow">GitHub</div><div class="fq-config-grid">'
+      +       '<div class="fq-config-field wide"><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigGithubAssignee">GitHub assignee (optional)</label><input id="fqConfigGithubAssignee" placeholder="@me"><span class="fq-config-help">Used by GitHub-backed claims.</span></div>'
+      +     '</div></div>'
       +   '</div>'
       +   '<div class="upd-actions"><button type="button" class="upd-btn" data-fq-config-cancel>Cancel</button><button type="button" class="upd-btn upd-primary" data-fq-config-save>Save queue</button></div>'
       + '</div>';
     document.body.appendChild(modal);
     const $ = (sel) => modal.querySelector(sel);
     const fields = { queue: $('#fqConfigQueue'), workers: $('#fqConfigWorkers'), backend: $('#fqConfigBackend'), engine: $('#fqConfigEngine'), path: $('#fqConfigPath'), model: $('#fqConfigModel'), customModel: $('#fqConfigCustomModel'), effort: $('#fqConfigEffort'), drain: $('#fqConfigDrain'), repo: $('#fqConfigGithubRepo'), assignee: $('#fqConfigGithubAssignee') };
+    // Friendly model labels + cost tiers (the "which model should this queue
+    // run on" answer inline): curated labels from the picker registry, tier
+    // from the production cost classifier ($$$/$$/$/low cost).
+    const tierText = (engine, id) => {
+      const tier = sessionCostTier(engine, id);
+      return tier === 'premium' ? ' · $$$' : tier === 'high' ? ' · $$' : tier === 'medium' ? ' · $' : tier === 'low' ? ' · low cost' : '';
+    };
+    const modelLabel = (engine, id) => {
+      const curated = (MODEL_OPTIONS_BY_ENGINE[engine] || []).find(o => _normalizeModelId(o.id) === _normalizeModelId(id));
+      return (curated && curated.label) || id;
+    };
     const setModel = (model) => {
       const choices = Array.isArray(modelsByEngine[fields.engine.value]) ? modelsByEngine[fields.engine.value] : [];
       const selected = String(model || '');
       const known = !selected || choices.includes(selected);
       fields.model.innerHTML = '<option value="">CCC spawn default</option>'
-        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(choice) + '</option>').join('')
+        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice)) + '</option>').join('')
         + '<option value="__custom__">Custom model…</option>';
       fields.model.value = known ? selected : '__custom__';
       fields.customModel.hidden = known;
@@ -34863,7 +34880,38 @@
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
       modal.querySelectorAll('input[name="fq-config-claim-type"]').forEach(box => { box.checked = Array.isArray(c.claim_types) && c.claim_types.includes(box.value); });
       modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; });
+      syncSegmented();
+      syncDrainToggle();
     };
+    // Segmented engine/backend pickers drive the hidden selects (kept so the
+    // payload code below is untouched); the drain switch drives its checkbox.
+    const segBtns = (segId, attr, select) => {
+      const seg = $(segId);
+      if (!seg) return;
+      seg.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          select.value = btn.getAttribute('data-' + attr) || '';
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          syncSegmented();
+        });
+      });
+    };
+    function syncSegmented() {
+      const bseg = $('#fqBackendSeg'), eseg = $('#fqEngineSeg');
+      if (bseg) bseg.querySelectorAll('button').forEach(b => b.classList.toggle('is-active', (b.getAttribute('data-backend') || '') === fields.backend.value));
+      if (eseg) eseg.querySelectorAll('button').forEach(b => b.classList.toggle('is-active', (b.getAttribute('data-engine') || '') === fields.engine.value));
+    }
+    function syncDrainToggle() {
+      const t = $('#fqDrainToggle');
+      if (t) { t.classList.toggle('is-on', fields.drain.checked); t.setAttribute('aria-checked', fields.drain.checked ? 'true' : 'false'); }
+    }
+    segBtns('#fqBackendSeg', 'backend', fields.backend);
+    segBtns('#fqEngineSeg', 'engine', fields.engine);
+    const drainToggle = $('#fqDrainToggle');
+    if (drainToggle) drainToggle.addEventListener('click', () => {
+      fields.drain.checked = !fields.drain.checked;
+      syncDrainToggle();
+    });
     const close = () => modal.remove();
     apply(findQueue(initialQueue));
     fields.queue.addEventListener('change', () => { const found = findQueue(fields.queue.value); if (found) apply(found); });
