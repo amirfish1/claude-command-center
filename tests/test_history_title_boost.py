@@ -110,6 +110,25 @@ class TestTitleBoost(unittest.TestCase):
         fillers = [r for r in res if r["session_id"].startswith("sess-filler")]
         self.assertTrue(fillers, "incidental content hits should follow titles")
 
+    def test_server_lexical_path_also_boosts_titles(self):
+        """The /api/search-history default (lexical) path gets the same boost —
+        it has its own BM25 SQL, separate from the vendored search."""
+        import server
+        orig_path = server._HISTORY_INDEX_PATH
+        orig_conn = server._history_conn
+        try:
+            server._HISTORY_INDEX_PATH = Path(self.con.execute(
+                "PRAGMA database_list").fetchone()[2])
+            server._history_conn = None
+            out = server.search_conversation_history("zephyr", limit=5)
+            res = out.get("results") or []
+            titled = [r for r in res if r.get("session_id") == "sess-title"]
+            self.assertTrue(titled, "titled session missing via server lexical path")
+            self.assertLess(res.index(titled[0]), 5)
+        finally:
+            server._HISTORY_INDEX_PATH = orig_path
+            server._history_conn = orig_conn
+
 
 if __name__ == "__main__":
     unittest.main()

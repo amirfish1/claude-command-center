@@ -53218,6 +53218,35 @@ def search_conversation_history(query, limit=20, cwd_like=None, since=None, sema
         # fetching the handle and acquiring the query lock). Degrade, don't 500.
         return {"error": f"search failed: {e}", "results": []}
     results = [dict(r) for r in rows]
+    # Title boost (CCC-615): sessions whose first NON-synthetic user message
+    # (the display-title proxy) matches are ABOUT the topic — promote them
+    # above incidental content hits, same as the vendored semantic search.
+    if _hi_search is not None:
+        try:
+            title_where, title_params = [], []
+            if cwd_like:
+                title_where.append("m.cwd LIKE ?")
+                title_params.append(f"%{cwd_like}%")
+            if threshold is not None:
+                title_where.append("m.ts_unix >= ?")
+                title_params.append(threshold)
+            with _history_query_lock:
+                title_rows = _hi_search._title_row_hits(
+                    conn, fts_query, title_where, title_params)
+        except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+            title_rows = []
+        if title_rows:
+            title_by_uuid = {}
+            for r in title_rows:
+                d = dict(r)
+                sn = (d.get("snippet") or "").replace("«", "<mark>").replace("»", "</mark>")
+                if sn:
+                    sn = _clean_history_snippet(sn)
+                d["snippet"] = sn
+                d["_source"] = "bm25"
+                title_by_uuid[d["uuid"]] = d
+            results = [r for r in results if r.get("uuid") not in title_by_uuid]
+            results = (list(title_by_uuid.values()) + results)[:limit]
     for r in results:
         if r.get("snippet"):
             r["snippet"] = _clean_history_snippet(r["snippet"])
