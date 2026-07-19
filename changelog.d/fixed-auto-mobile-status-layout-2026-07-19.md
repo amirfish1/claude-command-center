@@ -1,0 +1,1 @@
+- Removed the manual status-layout switch and automatically use the top layout on mobile.

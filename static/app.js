@@ -10719,6 +10719,7 @@
     } else if (!isMobile()) {
       mobileShowMain(false);
     }
+    try { if (typeof _applyStatusRailLayout === 'function') _applyStatusRailLayout(); } catch (_) {}
   }
   try {
     if (_mobileMQ.addEventListener) _mobileMQ.addEventListener('change', handleMobileBreakpointChange);
@@ -44396,7 +44397,7 @@
     const sticky = document.querySelector('.conv-sticky-header');
     const rail = document.getElementById('statusRail');
     if (!rail) return;
-    const inRail = document.body.classList.contains('status-pos-right');
+    const inRail = document.body.classList.contains('status-pos-right') && !isMobile();
     const metadataPane = rail.querySelector('#statusRailMetadataPane') || rail;
 
     // Sticky-side fresh nodes (post-rebuild) always win as the source of
@@ -44518,13 +44519,8 @@
       });
     }
 
-    // Status-position toggle. Two states: top (default) and right (resizable
-    // rail beside the conversation pane). Body class is restored before
-    // paint by the inline script in index.html; here we only wire the
-    // click handler, keep the icon glyph in sync, and run the DOM mover
-    // so the layout reflects the persisted state on first load.
-    const $statusToggle = document.getElementById('statusPosToggle');
-    const $statusIcon = document.getElementById('statusPosIcon');
+    // The right rail is desktop-only. The responsive breakpoint moves its
+    // content back to the top layout automatically on mobile.
     const $statusRail = document.getElementById('statusRail');
     const $statusRailResizer = document.getElementById('statusRailResizer');
     const $statusRailRestore = document.getElementById('statusRailRestoreBtn');
@@ -44537,25 +44533,6 @@
     // ~260px of legible space.
     const STATUS_RAIL_MAX_WIDTH = 1600;
     const STATUS_RAIL_COLLAPSE_WIDTH = 130;
-    const _syncStatusIcon = () => {
-      if (!$statusIcon) return;
-      const isRight = document.body.classList.contains('status-pos-right');
-      const isCollapsed = document.body.classList.contains('status-rail-collapsed');
-      // Lucide-style "panel" icon — a small SVG that reads more clearly
-      // than the previous ▤/▥ unicode glyphs. Two variants: panel-right
-      // (active = right rail visible) and panel-top (active = top mode).
-      const svgPanelRight = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>';
-      const svgPanelTop = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>';
-      $statusIcon.innerHTML = isRight ? svgPanelRight : svgPanelTop;
-      if ($statusToggle) {
-        $statusToggle.setAttribute('aria-pressed', String(isRight));
-        $statusToggle.title = isRight
-          ? (isCollapsed
-              ? 'Status rail is hidden. Click to move Original ask + Session activity back above the conversation.'
-              : 'Original ask + Session activity are in the right rail. Click to move them back above the conversation.')
-          : 'Original ask + Session activity are above the conversation. Click to move them into a right rail.';
-      }
-    };
     const _statusRailMaxWidth = () => {
       const pane = document.querySelector('.conv-pane.is-active')
         || document.querySelector('.conv-pane[data-pane-id="' + activePaneId() + '"]')
@@ -44645,7 +44622,6 @@
           else localStorage.removeItem('ccc-status-rail-collapsed');
         } catch (_) {}
       }
-      _syncStatusIcon();
     };
     _setStatusRailWidth(_savedStatusRailWidth(), false);
     _setStatusRailCollapsed(document.body.classList.contains('status-rail-collapsed'), false);
@@ -44660,23 +44636,9 @@
         _setStatusRailCollapsed(true, true);
       });
     }
-    if ($statusToggle) {
-      $statusToggle.addEventListener('click', () => {
-        const next = !document.body.classList.contains('status-pos-right');
-        document.body.classList.toggle('status-pos-right', next);
-        _setStatusRailCollapsed(false, true);
-        try { localStorage.setItem('ccc-status-pos', next ? 'right' : 'top'); } catch (_) {}
-        _syncStatusIcon();
-        _applyStatusRailLayout();
-        if (typeof window._cccApplyToolbarRailLayout === 'function') {
-          window._cccApplyToolbarRailLayout();
-        }
-      });
-    }
     if ($statusRailRestore) {
       $statusRailRestore.addEventListener('click', () => {
         document.body.classList.add('status-pos-right');
-        try { localStorage.setItem('ccc-status-pos', 'right'); } catch (_) {}
         _setStatusRailCollapsed(false, true);
         _applyStatusRailLayout();
         if (typeof window._cccApplyToolbarRailLayout === 'function') {
@@ -44749,7 +44711,7 @@
         }
       });
       window.addEventListener('resize', () => {
-        if (document.body.classList.contains('status-pos-right')
+        if (document.body.classList.contains('status-pos-right') && !isMobile()
             && !document.body.classList.contains('status-rail-collapsed')) {
           _setStatusRailWidth($statusRail.getBoundingClientRect().width || _savedStatusRailWidth(), false);
         }
@@ -44807,7 +44769,6 @@
       });
     }
     _syncChipsIcon();
-    _syncStatusIcon();
     _applyStatusRailLayout();
 
     // #1 — Collapse the conv toolbar when it has no visible content.

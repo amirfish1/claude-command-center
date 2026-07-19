@@ -355,33 +355,18 @@
               '<div class="ccc-loading-detail">Scanning Claude Code transcripts across every folder. Faster on subsequent loads.</div>';
           }
         }
-        // Status-position class restore — has to run before first paint so
-        // the layout doesn't flash from "top strip" to "right rail".
-        // Persisted as `ccc-status-pos` ('top' | 'right'); default 'right'
-        // for fresh installs because the right rail (Original ask /
-        // Session activity / Files) reads better than a wide top strip.
-        // Users who explicitly chose 'top' via the toggle keep that
-        // preference — only an unset key promotes to the new default.
+        // Desktop uses the status rail; responsive CSS and JS automatically
+        // switch its content to the top layout on mobile before it can crowd
+        // the conversation pane.
         try {
-          const pos = localStorage.getItem('ccc-status-pos');
           const railWidth = parseInt(localStorage.getItem('ccc-status-rail-width') || '0', 10);
           if (railWidth >= 220 && railWidth <= 520) {
             document.documentElement.style.setProperty('--status-rail-width', railWidth + 'px');
           }
-          if (pos === 'right' || pos === null) {
-            document.body.classList.add('status-pos-right');
-            // Mobile default: the status rail (Original ask / Activity /
-            // Files) eats too much of a phone's viewport, so collapse it
-            // unless the user has explicitly opened it on this device.
-            // The 950px threshold mirrors the JS _mobileMQ + the mobile
-            // @media block in app.css. localStorage='0' means user
-            // explicitly opened it → respect that on mobile too.
-            const _isMobileViewport = (typeof window.matchMedia === 'function')
-              && window.matchMedia('(max-width: 950px)').matches;
-            const _railStored = localStorage.getItem('ccc-status-rail-collapsed');
-            if (_railStored === '1' || (_isMobileViewport && _railStored !== '0')) {
-              document.body.classList.add('status-rail-collapsed');
-            }
+          document.body.classList.add('status-pos-right');
+          const _railStored = localStorage.getItem('ccc-status-rail-collapsed');
+          if (_railStored === '1') {
+            document.body.classList.add('status-rail-collapsed');
           }
         } catch (_) {}
         // Chip color mode — same FOIT-guard reasoning. Persisted as
@@ -457,12 +442,6 @@
         </span>
         <button id="historyBtn" class="sh-btn" title="Search past Claude Code conversations across every project on this Mac (powered by the local claude-index). Shortcut: /" aria-label="Search past conversations"><span aria-hidden="true">&#128269;</span><span class="sh-action-label">History</span></button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Switch session view" aria-label="Switch session view"><span aria-hidden="true">&#9783;</span><span class="sh-action-label">Board</span></button>
-        <!-- Status position toggle. Two states: top (status strip above the
-             input — default) and right (status moved into a resizable right
-             rail beside the conversation pane). Persisted under
-             `ccc-status-pos`; the body class is restored on page load
-             before first paint to avoid a layout flash. -->
-        <button id="statusPosToggle" class="sh-btn" title="Move status (branch / context / cost / model) between the strip above the input and a right-side rail" aria-label="Toggle status position"><span aria-hidden="true" id="statusPosIcon">&#9707;</span></button>
         <!-- Folder chip color toggle. Three states: muted (uniform neutral —
              default), color (per-folder hue), and level (shared hierarchy colors),
              (uniform neutral). Persisted under `ccc-chips-mode`; body classes

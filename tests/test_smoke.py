@@ -4277,6 +4277,27 @@ class TestServerImports(unittest.TestCase):
             right_rail_css,
         )
 
+    def test_status_rail_automatically_uses_top_layout_on_mobile(self):
+        """The desktop rail is not manually toggled and yields to the top
+        layout whenever the responsive mobile breakpoint is active."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="statusPosToggle"', index_html)
+        self.assertNotIn("#statusPosToggle", app_css)
+        self.assertIn(
+            "const inRail = document.body.classList.contains('status-pos-right') && !isMobile();",
+            app_js,
+        )
+        self.assertIn("_applyStatusRailLayout();", app_js[app_js.index("function handleMobileBreakpointChange()"):app_js.index("const $cpMobileBackBtn")])
+        mobile_rail_css = app_css[app_css.rindex("/* The desktop status rail becomes the top status layout on mobile."):]
+        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail)", mobile_rail_css)
+        self.assertIn("body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail)", mobile_rail_css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", mobile_rail_css)
+        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail", mobile_rail_css)
+        self.assertIn("display: none;", mobile_rail_css)
+
     def test_queue_rows_open_item_detail_modal(self):
         """Queue row clicks should show the ticket payload/screenshot instead
         of trying to jump to a brittle transcript reference."""

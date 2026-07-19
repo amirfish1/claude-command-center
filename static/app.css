@@ -14907,12 +14907,6 @@ body.is-issue-view .conv-input-context { display: none !important; }
   margin-top: 4px;
 }
 
-/* Toggle button visual state — pressed when in right-rail mode. */
-.sidebar-header-actions #statusPosToggle[aria-pressed="true"] {
-  background: rgba(88,166,255,0.10);
-  color: var(--accent);
-}
-
 /* #6 — Cap the sticky-header height in right-rail mode. Was reaching
    ~96px; tighten to 60px max with internal scrolling, recovering vertical
    space for the conversation. The 5-line earlier-ask clamp still applies;
@@ -20716,3 +20710,36 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .f2cost-dismiss { font-size: 12px; color: var(--text-muted); background: none;
   border: none; cursor: pointer; font-family: inherit; padding: 4px; }
 .f2cost-dismiss:hover { color: var(--text); text-decoration: underline; }
+
+/* The desktop status rail becomes the top status layout on mobile. Its
+   content is re-parented by _applyStatusRailLayout when the breakpoint
+   changes, so the rail never consumes phone-width conversation space. */
+@media (max-width: 1200px) {
+  body.status-pos-right .conv-pane:has(> .status-rail),
+  body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "header"
+      "present-toolbar"
+      "conv"
+      "context"
+      "goal"
+      "input"
+      "hint";
+  }
+  body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail,
+  body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail {
+    display: none;
+  }
+  body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail-restore,
+  body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .status-rail-restore {
+    display: none;
+  }
+  body.status-pos-right .conv-sticky-header {
+    display: block !important;
+    max-height: none;
+  }
+  body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky {
+    display: none;
+  }
+}
