@@ -176,8 +176,9 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertNotIn("const status = it.status || 'open';", queue_js)
 
     def test_live_queue_refreshes_when_mounted_in_sidebar_tab(self):
-        """A worker claim must repaint the shared Queue panel outside the rail."""
+        """A worker claim refreshes sidebar rows and ends the Play spinner."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         visible = app_js[
             app_js.index("function _queuePanelIsVisible()"):
@@ -197,6 +198,14 @@ class TestQueuePanelLayout(unittest.TestCase):
             app_js.index("const schedule = () =>", app_js.index("const invalidateAndRender = () =>"))
         ]
         self.assertIn("_queuePanelIsVisible()", stream_block)
+
+        self.assertIn("const _uxqPendingRunRefs = new Set();", app_js)
+        self.assertIn("if (_uxqPendingRunRefs.has(ref) && status !== 'open') _uxqPendingRunRefs.delete(ref);", app_js)
+        self.assertIn("fq-status-pending", app_js)
+        self.assertIn("_uxqPendingRunRefs.add(ref);", app_js)
+        self.assertIn("_uxqPendingRunRefs.delete(ref);", app_js)
+        self.assertIn(".fq-status.fq-status-pending", app_css)
+        self.assertIn("@keyframes fq-status-pending-spin", app_css)
 
     def test_queue_panel_can_filter_tickets_by_type(self):
         """Type controls keep bugs and features independently scannable."""
