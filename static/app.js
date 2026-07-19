@@ -55304,8 +55304,7 @@
       $liveToggle.classList.toggle('is-on', lv === 'B');
       $liveToggle.setAttribute('aria-checked', String(lv === 'B'));
     }
-    let qf = false;
-    try { qf = localStorage.getItem('ccc-q-first') === '1'; } catch (_) {}
+    const qf = qFirstEnabled();
     const $qfToggle = document.getElementById('settingsQfirstToggle');
     if ($qfToggle) {
       $qfToggle.classList.toggle('is-on', qf);
@@ -55821,8 +55820,7 @@
       }
       const qfirstToggle = e.target.closest('[data-qfirst-toggle]');
       if (qfirstToggle) {
-        let on = false;
-        try { on = localStorage.getItem('ccc-q-first') === '1'; } catch (_) {}
+        const on = qFirstEnabled();
         if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(!on);
         refreshAppearanceChecks();
         showSettingsSavedPulse(qfirstToggle.closest('.settings-row'));

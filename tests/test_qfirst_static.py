@@ -41,6 +41,20 @@ def test_mode_boots_from_url_param_and_persisted_toggle():
     assert "localStorage.setItem('ccc-q-first', on ? '1' : '0')" in app_js
 
 
+def test_url_mode_is_used_by_settings_rerenders_and_toggle():
+    """A URL-only queue-first session must not fall back to localStorage."""
+    app_js = _app_js()
+    settings_start = app_js.index("function refreshAppearanceChecks()")
+    settings_end = app_js.index("function refreshSpawnEngineValue()", settings_start)
+    appearance = app_js[settings_start:settings_end]
+    assert "const qf = qFirstEnabled();" in appearance
+
+    handler_start = app_js.index("const qfirstToggle = e.target.closest('[data-qfirst-toggle]');")
+    handler_end = app_js.index("const ffToggle", handler_start)
+    qfirst_handler = app_js[handler_start:handler_end]
+    assert "const on = qFirstEnabled();" in qfirst_handler
+
+
 def test_qfirst_writes_go_through_wt_backed_endpoints_only():
     block = _qf_block(_app_js())
     # Every mutation is one of the existing wt-backed endpoints.
