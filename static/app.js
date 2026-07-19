@@ -34110,9 +34110,9 @@
             return hay.includes(qTerm);
           })
         : typeScoped;
-      // ALL is a history view: show the newest-filed tickets first regardless
-      // of their current state. OPEN remains the operational work view, where
-      // agent work, human answers, and claimable tickets stay prioritized.
+      // Both OPEN and ALL are operational views: the current work state must
+      // win over filing time so a live agent or human question is never buried
+      // under a newer, inert ticket in All queues.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
@@ -34122,33 +34122,39 @@
         }
         return rawStatus;
       };
-      const _statusRank = s => (s === 'in_progress' ? 0 : s === 'blocked' ? 1 : s === 'open' ? 2 : 3);
-      const _notClaimable = it => (it && it.claimable === false ? 1 : 0);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
-      const _uxqCreatedAtMs = it => {
-        const parsed = Date.parse((it && it.created_at) || '');
-        return Number.isFinite(parsed) ? parsed : 0;
+      // A close with unresolved work is not a clean green close. Put it with
+      // other attention-bearing rows, ahead of tickets merely waiting to run.
+      const _uxqUnresolvedNotes = it => (it && it.resolution && Array.isArray(it.resolution.unresolved))
+        ? it.resolution.unresolved.filter(Boolean) : [];
+      const _hasUnresolved = it => _uxqUnresolvedNotes(it).length > 0;
+      const _isWaitingToDrain = it => {
+        if (_effectiveStatus(it) !== 'open') return false;
+        return it.claimable !== false && it.watchtower_runnable !== false && !_unready(it);
+      };
+      // WIP → needs input → unresolved attention → claimable work → clean
+      // closes → non-claimable, unready, or otherwise inert open work.
+      const _operationalBucket = it => {
+        const status = _effectiveStatus(it);
+        if (status === 'in_progress') return 0;
+        if (status === 'blocked') return 1;
+        if (_hasUnresolved(it)) return 2;
+        if (_isWaitingToDrain(it)) return 3;
+        if (status === 'closed') return 4;
+        return 5;
       };
       const historyOrder = _uxqGetFilter() === 'all';
       const rows = scoped.slice().sort((a, b) => {
-        if (historyOrder) {
-          return _uxqCreatedAtMs(b) - _uxqCreatedAtMs(a)
-            || (b.number || 0) - (a.number || 0);
-        }
-        const aStatus = _effectiveStatus(a);
-        const bStatus = _effectiveStatus(b);
-        const st = _statusRank(aStatus) - _statusRank(bStatus); if (st) return st;
-        if (aStatus === 'open') {
-          const c = _notClaimable(a) - _notClaimable(b); if (c) return c;
-          const u = _unready(a) - _unready(b); if (u) return u;
+        const bucket = _operationalBucket(a) - _operationalBucket(b); if (bucket) return bucket;
+        if (_effectiveStatus(a) === 'open') {
           const p = _prioRank(a) - _prioRank(b); if (p) return p;
           return (a.number || 0) - (b.number || 0);   // oldest first = engine order
         }
         return (b.number || 0) - (a.number || 0);       // closed/in_progress: newest first
       });
       // All-history can contain thousands of closed tickets. Keep filtering
-      // and newest-first ordering global, but cap the DOM to one fixed page so
+      // and operational ordering global, but cap the DOM to one fixed page so
       // a refresh never rebuilds the full corpus on the browser main thread.
       // True pagination (rather than cumulative "show more") keeps the bound
       // intact even after someone browses all the way back through history.
@@ -34168,8 +34174,6 @@
       // own amber marker instead of a new backend status (closed/unresolved
       // is a property of the resolution, not a distinct queue state the
       // engine needs to reason about).
-      const _uxqUnresolvedNotes = it => (it && it.resolution && Array.isArray(it.resolution.unresolved))
-        ? it.resolution.unresolved.filter(Boolean) : [];
       const _uxqChips = (it, priorityBumpHtml = '') => {
         const c = [];
         if (it.needs_input) c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr(it.block_question || 'needs human input') + '">needs input</span>');

@@ -1,0 +1,1 @@
+- Keep actionable WatchTower tickets ahead of closed and inert work in every Queue scope.
