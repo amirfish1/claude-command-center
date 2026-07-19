@@ -25629,6 +25629,9 @@
         const sessionsCollapsed = _areObjectSessionsCollapsed(nodeId);
         const attrs = ' data-object-drop="' + escapeAttr(nodeId) + '"';
         const archiveObjectId = nodeId.indexOf('object:') === 0 ? nodeId.slice(7) : '';
+        // Repo-derived object groups retain their concrete path so the shared
+        // header can expose the existing repo-scoped shipping control.
+        const repoPath = nodeId.indexOf('repo:') === 0 ? nodeId.slice(5) : '';
         // GOAL-2 — sessionless tasks. Draft-sessions parented to this object
         // (reusing Flow's draft infra) render as editable task rows with a play
         // that spawns a real session. Gives billing/ads/admin a home instead of
@@ -25706,7 +25709,7 @@
         return '<div class="conv-folder-group' + _nestCls + (collapsed ? ' collapsed' : '') + (sessionsCollapsed ? ' sessions-collapsed' : '') + '"'
           + _nestStyle
           + ' data-object-drop-zone="' + escapeAttr(nodeId) + '" data-object-depth="' + depth + '">'
-          + _folderGroupHeaderHtml('inprogress', title, _count, hue, '', nodeId, attrs, '', archiveObjectId, inlineMetaHtml, ordinal)
+          + _folderGroupHeaderHtml('inprogress', title, _count, hue, '', nodeId, attrs, repoPath, archiveObjectId, inlineMetaHtml, ordinal)
           + body
           + '</div>';
       };

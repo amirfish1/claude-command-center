@@ -609,6 +609,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_startShipPushAll", app_js)
         self.assertIn("function _isShipRepoPath", app_js)
         self.assertIn("(section === 'inprogress' || section === 'archived') && _isShipRepoPath(repoPath)", app_js)
+        self.assertIn("const repoPath = nodeId.indexOf('repo:') === 0 ? nodeId.slice(5) : '';", app_js)
+        self.assertIn("_folderGroupHeaderHtml('inprogress', title, _count, hue, '', nodeId, attrs, repoPath, archiveObjectId, inlineMetaHtml, ordinal)", app_js)
         self.assertIn("const archivedRepoPath = root.folder_path || '';", app_js)
         self.assertIn("_folderGroupHeaderHtml('archived', folder, count, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
         self.assertIn("if (!_isShipRepoPath(repo)) return;", app_js)
