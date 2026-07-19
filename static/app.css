@@ -5837,6 +5837,24 @@
     opacity: 1;
   }
   .conv-item .conv-archive-btn:hover { opacity: 1; color: var(--orange); background: rgba(255,166,87,0.12); }
+  .conv-item .conv-archive-btn.is-pending {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    color: var(--orange);
+    cursor: progress;
+    font-size: 0;
+  }
+  .conv-item .conv-archive-btn.is-pending::after {
+    content: '';
+    width: 10px;
+    height: 10px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: ccc-spin 0.7s linear infinite;
+  }
   .conv-item .conv-trash-btn:hover { opacity: 1; color: var(--red); background: rgba(248,81,73,0.12); }
   .conv-item .conv-trash-btn.is-restore:hover { color: var(--accent); background: rgba(88,166,255,0.12); }
   .conv-item .conv-archive-btn.is-restore {
