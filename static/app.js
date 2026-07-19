@@ -3961,9 +3961,11 @@
     }
     if (engineKey === 'kimi') {
       if (hasFamily('k3')) return 'premium';
-      // highspeed before coding: the budget serving tier's id contains 'coding'.
-      if (hasFamily('highspeed')) return 'low';
-      if (hasFamily('coding')) return 'medium';
+      // highspeed before coding: the id contains 'coding'. Moonshot pricing
+      // (Jul 2026): k3 $3/$15, highspeed $1.90/$8, plain k2.7-code $0.95/$4
+      // per 1M tokens — highspeed is the FAST tier, plain coding the CHEAP one.
+      if (hasFamily('highspeed')) return 'high';
+      if (hasFamily('coding')) return 'low';
     }
     return '';
   }
