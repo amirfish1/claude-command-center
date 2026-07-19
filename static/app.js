@@ -5256,7 +5256,7 @@
       // anywhere on the row copies the full UUID. Easier to scan than
       // a 36-character hex string, and the copy icon gives an obvious
       // affordance hint.
-      const shortId = value.slice(0, 8);
+      const shortId = shortSessionId(value);
       el.innerHTML =
         '<span class="sid-label">Session</span>' +
         '<code class="sid-short">' + shortId + '</code>' +
@@ -5270,11 +5270,19 @@
     }
   }
 
+  function shortSessionId(sid) {
+    // Engine ids may carry a readable prefix (kimi's "session_<uuid>") —
+    // strip it so the visible 8 chars are the disambiguating digits, not
+    // a useless constant prefix.
+    const s = String(sid || '');
+    return (s.startsWith('session_') ? s.slice(8) : s).slice(0, 8);
+  }
+
   function sidebarSessionIdChipHtml(c) {
     if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
     const sid = String(c.session_id || c.id || '').trim();
     if (!sid) return '';
-    const shortId = sid.slice(0, 8);
+    const shortId = shortSessionId(sid);
     return '<button type="button" class="conv-sidebar-session-id-chip"'
       + ' data-copy-row-session-id="' + escapeAttr(sid) + '"'
       + ' data-session-id-short="' + escapeAttr(shortId) + '"'
@@ -30376,7 +30384,7 @@
     const first = row.first_message || row.prompt || row.last_prompt || '';
     if (first) return firstSentenceOf(cleanIssuePrompt(first), 96);
     const sid = row.session_id || row.id || '';
-    return sid ? sid.slice(0, 8) : '';
+    return sid ? shortSessionId(sid) : '';
   }
 
   function sourceLabelForPane(row) {
@@ -42622,6 +42630,9 @@
                 }).join('') + '</span>'
               : '';
             const acpPermClass = (b.approval_required && b.acp_request_id != null) ? ' acp-needs-approval' : '';
+            // A permission prompt must never collapse into the "Ran N commands"
+            // group — the option buttons are the only way to answer it.
+            if (b.approval_required) hasNonTool = true;
             blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + acpPermClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
               + '<span class="arrow">-></span> '
               + sourceHtml

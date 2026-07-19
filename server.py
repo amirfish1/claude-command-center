@@ -12931,6 +12931,9 @@ def session_live_status(session_id, session_cwd):
             result["cwd"] = snap.get("cwd") or session_cwd
             result["match_count"] = 1
             result["model"] = snap.get("model")
+            if snap.get("pending_permissions"):
+                result["needs_approval"] = True
+                result["needs_approval_message"] = "Kimi is waiting for a tool approval"
         return result
 
     if _is_codex_session(session_id):
@@ -28334,6 +28337,9 @@ def find_kimi_conversations(
         if acp:
             # Lets the kanban swap a spawning-* placeholder for this card.
             row["spawn_pid"] = sid
+            if acp.get("pending_permissions"):
+                row["needs_approval"] = True
+                row["needs_approval_message"] = "Kimi is waiting for a tool approval"
         rows.append(row)
     rows.sort(key=lambda r: r.get("modified") or 0, reverse=True)
     if limit:
@@ -40726,7 +40732,12 @@ def spawn_session_kimi(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
         except RuntimeError as e:
             return {"ok": False, "error": f"worktree creation failed: {e}"}
     model_to_use = _spawn_model_for_engine("kimi", model)
-    result = _acp_session_new("kimi", spawn_cwd, prompt=prompt or None, model=model_to_use or None)
+    # CCC-spawned sessions run unattended like every other engine's headless
+    # spawn — "default" (manual approvals) would park the session on the first
+    # tool call. "auto" auto-approves safe operations; CCC_KIMI_SPAWN_MODE=yolo
+    # for full bypass, "default" to opt back into manual approvals.
+    spawn_mode = (os.environ.get("CCC_KIMI_SPAWN_MODE") or "auto").strip() or "auto"
+    result = _acp_session_new("kimi", spawn_cwd, prompt=prompt or None, model=model_to_use or None, mode=spawn_mode)
     if not result.get("ok"):
         return {
             "ok": False,
