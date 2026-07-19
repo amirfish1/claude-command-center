@@ -5632,6 +5632,16 @@ class TestRunScript(unittest.TestCase):
         self.assertIn("run.ps1", text)
 
 
+class TestQFirstBootRestore(unittest.TestCase):
+    def test_qfirst_url_mode_survives_boot_restore(self):
+        """?ccc_mode=queues must win over the boot conversation restore — the
+        board vanished ~1s after load because restoreLastConversation opened a
+        conversation, which always closes the board."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("QFIRST_URL_MODE && _qfBootRestore", app_js)
+        self.assertIn("_qfBootRestore = true;", app_js)
+
+
 class TestPlatformDocs(unittest.TestCase):
     def test_readme_documents_native_windows_and_wsl2_routes(self):
         readme = pathlib.Path(PROJECT_ROOT, "README.md").read_text(encoding="utf-8")

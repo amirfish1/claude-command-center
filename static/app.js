@@ -11224,30 +11224,34 @@
   async function restoreLastConversation() {
     if (CONV_POPOUT_MODE) return;
     if (!conversationsLoaded) return;
+    _qfBootRestore = true;
+    try {
+      let anyRestored = false;
+      const savedActiveIndex = splitState.activeIndex;
 
-    let anyRestored = false;
-    const savedActiveIndex = splitState.activeIndex;
+      for (let i = 0; i < splitState.panes.length; i++) {
+        const pane = splitState.panes[i];
+        if (!pane.conversationId || pane.restored) continue;
 
-    for (let i = 0; i < splitState.panes.length; i++) {
-      const pane = splitState.panes[i];
-      if (!pane.conversationId || pane.restored) continue;
-
-      const exists = conversationRowsContainId(conversationsData, pane.conversationId)
-        || conversationRowsContainId(archiveData, pane.conversationId);
-      if (exists) {
-        pane.restored = true;
-        anyRestored = true;
-        await selectConversation(pane.conversationId, pane.id);
-      } else if (archiveLoaded) {
-        pane.restored = true;
+        const exists = conversationRowsContainId(conversationsData, pane.conversationId)
+          || conversationRowsContainId(archiveData, pane.conversationId);
+        if (exists) {
+          pane.restored = true;
+          anyRestored = true;
+          await selectConversation(pane.conversationId, pane.id);
+        } else if (archiveLoaded) {
+          pane.restored = true;
+        }
       }
-    }
 
-    if (anyRestored) {
-      const activePane = splitState.panes[savedActiveIndex];
-      if (activePane) {
-        setActivePaneById(activePane.id);
+      if (anyRestored) {
+        const activePane = splitState.panes[savedActiveIndex];
+        if (activePane) {
+          setActivePaneById(activePane.id);
+        }
       }
+    } finally {
+      _qfBootRestore = false;
     }
   }
   function activePaneId() { return splitState.panes[splitState.activeIndex].id; }
@@ -35465,6 +35469,11 @@
   let _qfTimer = null;
   let _qfTicketCache = { ref: '', item: null };
   const _QF_CLOSED_PAGE = 50;
+  // True while the boot-time conversation restore runs. An explicit
+  // ?ccc_mode=queues URL must win over that restore: without this guard the
+  // board showed for ~1s, then vanished as the restore selected a
+  // conversation (which always closes the board).
+  let _qfBootRestore = false;
 
   function _qfView() { return document.getElementById('qfirstView'); }
   function _qfActive() { return !!(document.body && document.body.classList.contains('qf-active')); }
@@ -35509,6 +35518,10 @@
 
   // Called from selectConversation: any conversation open leaves the board.
   function _qfOnConversationOpen() {
+    // An explicit ?ccc_mode=queues URL wins over the boot-time restore: the
+    // user asked to land on the board, so a programmatic restore must not
+    // yank them out of it. Real user clicks on a conversation still close it.
+    if (QFIRST_URL_MODE && _qfBootRestore) return;
     if (_qfActive()) _qfHide();
   }
 
