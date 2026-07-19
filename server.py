@@ -27549,7 +27549,7 @@ def _acp_handle_agent_request(harness, req_id, method, params):
                 "blocks": [{
                     "kind": "tool_use",
                     "name": tool.get("title") or tool.get("kind") or "tool",
-                    "detail": tool.get("kind") or "",
+                    "detail": _acp_permission_tool_detail(tool) or tool.get("kind") or "",
                     "id": tool.get("toolCallId") or "",
                     "approval_required": True,
                     "approval_message": f"{_ACP_HARNESSES[harness]['label']} requests approval",
@@ -27618,7 +27618,10 @@ def _acp_handle_session_update(harness, sid, update):
             if turn is not None:
                 turn.setdefault("tools", {})[tool_id] = {
                     "title": title, "status": update.get("status") or "running",
+                    "detail": update.get("kind") or "", "emitted": False,
                 }
+            # Live bubble shows the call immediately; the finalized conv row
+            # is deferred until rawInput arrives (rich detail) — see update.
             _acp_emit_delta_unlocked(harness, sid, {
                 "type": "assistant_block",
                 "message_id": (turn or {}).get("msg_id") or f"acp-{harness}-tool",
@@ -27627,22 +27630,38 @@ def _acp_handle_session_update(harness, sid, update):
                     "summary": update.get("kind") or "",
                 }],
             })
-            _acp_emit_event_unlocked(harness, sid, {
-                "type": "assistant",
-                "message_id": (turn or {}).get("msg_id") or f"acp-{harness}-tool-{tool_id}",
-                "blocks": [{
-                    "kind": "tool_use", "name": title,
-                    "detail": update.get("kind") or "", "id": tool_id,
-                }],
-            })
             return
 
         if kind == "tool_call_update":
             tool_id = str(update.get("toolCallId") or "")
             turn = state.get("active_turn")
-            if turn is not None and tool_id in (turn.get("tools") or {}):
-                if update.get("status"):
-                    turn["tools"][tool_id]["status"] = update["status"]
+            if turn is None:
+                return
+            tool = (turn.get("tools") or {}).get(tool_id)
+            if tool is None:
+                tool = turn.setdefault("tools", {})[tool_id] = {
+                    "title": "tool", "status": "running", "detail": "",
+                    "emitted": False,
+                }
+            if update.get("status"):
+                tool["status"] = update["status"]
+            raw_input = update.get("rawInput")
+            if isinstance(raw_input, dict) and raw_input:
+                tool["detail"] = _tool_use_detail(tool.get("title") or "", raw_input, max_len=160)
+            output_text = _acp_tool_content_text(update)
+            if update.get("status") == "completed" and output_text:
+                tool["output"] = output_text[:400]
+                _acp_emit_delta_unlocked(harness, sid, {
+                    "type": "assistant_block",
+                    "message_id": turn.get("msg_id") or f"acp-{harness}-tool",
+                    "blocks": [{"type": "tool_result", "id": tool_id, "text": tool["output"]}],
+                })
+            if not tool.get("emitted") and update.get("status") in ("completed", "failed"):
+                # Terminal status only: emitting at the first rawInput would
+                # freeze the row at in_progress. Long calls live in the
+                # bubble meanwhile; anything still open flushes at turn end.
+                tool["emitted"] = True
+                _acp_emit_event_unlocked(harness, sid, _acp_tool_event(turn, tool_id, tool))
             return
 
         if kind == "available_commands_update":
@@ -27666,6 +27685,57 @@ def _acp_handle_session_update(harness, sid, update):
         # plan and unknown update kinds: recorded nowhere, never fatal.
 
 
+def _acp_tool_content_text(update):
+    """Join an update's content-block text; fall back to rawOutput."""
+    parts = []
+    for c in update.get("content") or []:
+        if isinstance(c, dict):
+            inner = c.get("content")
+            if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+                parts.append(inner["text"])
+    text = "".join(parts).strip()
+    if not text and isinstance(update.get("rawOutput"), str):
+        text = update["rawOutput"].strip()
+    return text
+
+
+def _acp_tool_event(turn, tool_id, tool):
+    """One finalized conv event per tool call, emitted once rawInput (or
+    completion) gives us the real detail — never a kind-only placeholder."""
+    block = {
+        "kind": "tool_use",
+        "name": tool.get("title") or "tool",
+        "detail": tool.get("detail") or "",
+        "id": tool_id,
+    }
+    status = tool.get("status")
+    if status and status not in ("pending", "in_progress", "running"):
+        block["tool_status"] = status
+    if tool.get("output"):
+        block["output_preview"] = tool["output"]
+    return {
+        "type": "assistant",
+        "message_id": (turn or {}).get("msg_id") or f"acp-tool-{tool_id}",
+        "blocks": [block],
+    }
+
+
+def _acp_permission_tool_detail(tool):
+    """Kimi's permission toolCall carries the description in content text
+    ('Requesting approval to Running: <cmd>') — surface the actual command."""
+    parts = []
+    for c in tool.get("content") or []:
+        if isinstance(c, dict):
+            inner = c.get("content")
+            if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+                parts.append(inner["text"])
+    text = " ".join(" ".join(parts).split())
+    prefix = "Requesting approval to "
+    if text.startswith(prefix):
+        text = text[len(prefix):]
+    return text[:200]
+
+
 def _acp_message_event(state, speaker, text):
     if speaker == "user":
         return {"type": "user_text", "text": text}
@@ -27687,6 +27757,12 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
         error = response.get("error")
         stop_reason = ((response.get("result") or {}).get("stopReason")) if not error else None
         if turn is not None:
+            # Flush tool rows not yet emitted (calls that never got rawInput,
+            # or ended mid-flight) so every tool has exactly one rich row.
+            for tid, tool in (turn.get("tools") or {}).items():
+                if not tool.get("emitted"):
+                    tool["emitted"] = True
+                    _acp_emit_event_unlocked(harness, sid, _acp_tool_event(turn, tid, tool))
             blocks = []
             if turn.get("thought"):
                 blocks.append({"kind": "thinking", "text": turn["thought"]})
@@ -46290,6 +46366,11 @@ def _iso_to_epoch(ts):
     as "skip the timestamp gate" rather than failing the request."""
     if not ts:
         return None
+    if isinstance(ts, (int, float)):
+        # Numeric epoch (Kimi state.json writes int ms): anything past 1e12
+        # is milliseconds (1e12 s would be ~year 33658).
+        v = float(ts)
+        return v / 1000.0 if v > 1e12 else v
     try:
         # datetime.fromisoformat handles "+00:00" but not "Z" before py3.11.
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
@@ -64775,6 +64856,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             _record_interaction(sid)
             result = _acp_resolve_approval(harness, sid, request_id, option_id)
+            self.send_json(result, 200 if result.get("ok") else 409)
+        elif path == "/api/acp/config":
+            # Set a config option on a live ACP session (mode/model/thinking)
+            # — e.g. flip a default-mode session to auto approvals.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            harness = (payload.get("harness") or "kimi").strip() or "kimi"
+            sid = (payload.get("session_id") or "").strip()
+            config_id = (payload.get("config_id") or "").strip()
+            value = payload.get("value")
+            if harness not in _ACP_HARNESSES:
+                self.send_json({"ok": False, "error": f"unknown ACP harness: {harness}"}, 400)
+                return
+            if not sid or not config_id:
+                self.send_json({"ok": False, "error": "missing session_id or config_id"}, 400)
+                return
+            _record_interaction(sid)
+            result = _acp_set_config(harness, sid, config_id, value)
             self.send_json(result, 200 if result.get("ok") else 409)
         elif path == "/api/codex/grab-back":
             length = int(self.headers.get("Content-Length", "0"))

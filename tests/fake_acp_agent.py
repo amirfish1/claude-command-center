@@ -54,6 +54,20 @@ def main():
                     "toolCall": {"toolCallId": "tc-1", "title": "Bash", "kind": "execute"},
                     "options": [{"optionId": "allow", "name": "Allow"}, {"optionId": "deny", "name": "Deny"}],
                 }})
+            # One full tool sequence: pending call, streamed rawInput, completed.
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": sid,
+                "update": {"sessionUpdate": "tool_call", "toolCallId": "tc-1", "title": "Bash", "kind": "execute", "status": "pending"},
+            }})
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": sid,
+                "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-1", "status": "in_progress", "rawInput": {"command": "echo TEST"}},
+            }})
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": sid,
+                "update": {"sessionUpdate": "tool_call_update", "toolCallId": "tc-1", "status": "completed",
+                           "content": [{"type": "content", "content": {"type": "text", "text": "TEST\n"}}], "rawOutput": "TEST\n"},
+            }})
             for chunk in ("Hel", "lo"):
                 send({"jsonrpc": "2.0", "method": "session/update", "params": {
                     "sessionId": sid,

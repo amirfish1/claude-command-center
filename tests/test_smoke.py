@@ -16496,13 +16496,22 @@ class TestAcpKimiEngine(unittest.TestCase):
 
             events = server._acp_transcript_events_after(self.FAKE_HARNESS, sid, 0)
             kinds = [e.get("type") for e in events]
-            self.assertEqual(kinds, ["user_text", "assistant", "result"])
+            self.assertEqual(kinds, ["user_text", "assistant", "assistant", "result"])
             texts = [
                 b.get("text")
                 for e in events if e.get("type") == "assistant"
                 for b in e.get("blocks", []) if b.get("kind") == "text"
             ]
             self.assertEqual(texts, ["Hello"])
+            # Rich tool rows: exactly one finalized event per call (deferred
+            # until rawInput arrives), carrying the command detail + status.
+            tool_blocks = [
+                b for e in events if e.get("type") == "assistant"
+                for b in e.get("blocks", []) if b.get("kind") == "tool_use"
+            ]
+            self.assertEqual(len(tool_blocks), 1)
+            self.assertEqual(tool_blocks[0].get("detail"), "echo TEST")
+            self.assertEqual(tool_blocks[0].get("tool_status"), "completed")
             # Delta cursor: replay from a line beyond the tail is empty.
             last_line = events[-1]["line"]
             self.assertEqual(
