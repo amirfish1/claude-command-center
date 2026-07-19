@@ -385,11 +385,12 @@
           }
         } catch (_) {}
         // Chip color mode — same FOIT-guard reasoning. Persisted as
-        // `ccc-chips-mode` ('color' default, 'level', or 'muted').
+        // `ccc-chips-mode` ('muted' default, 'color', or 'level').
         try {
           const m = localStorage.getItem('ccc-chips-mode');
-          if (m === 'muted') document.body.classList.add('chips-muted');
+          if (m === 'color') { /* explicit colorful preference */ }
           else if (m === 'level') document.body.classList.add('chips-level');
+          else document.body.classList.add('chips-muted');
         } catch (_) {}
         // Conversation-list collapse (CCC-132). Desktop only — on mobile the
         // list IS the screen, so never hide it there. Restored before paint to
@@ -462,8 +463,8 @@
              `ccc-status-pos`; the body class is restored on page load
              before first paint to avoid a layout flash. -->
         <button id="statusPosToggle" class="sh-btn" title="Move status (branch / context / cost / model) between the strip above the input and a right-side rail" aria-label="Toggle status position"><span aria-hidden="true" id="statusPosIcon">&#9707;</span></button>
-        <!-- Folder chip color toggle. Three states: color (per-folder hue —
-             default), level (shared object/repo hierarchy colors), and muted
+        <!-- Folder chip color toggle. Three states: muted (uniform neutral —
+             default), color (per-folder hue), and level (shared hierarchy colors),
              (uniform neutral). Persisted under `ccc-chips-mode`; body classes
              flip the palette via CSS so no chip needs to re-render. -->
         <button id="chipsColorToggle" class="sh-btn" title="Toggle folder chip color mode" aria-label="Toggle folder chip color mode"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
