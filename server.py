@@ -6976,11 +6976,19 @@ def _archive_corpus_signature():
 def _archive_signature_delta(old_sig, new_sig):
     """File-level diff between two remembered corpus signatures.
 
-    Returns (changed_paths, removed_paths) — changed covers added AND edited
-    Claude transcripts — or None when a full rebuild is required: unknown
-    signature (restart, LRU eviction), a non-Claude engine source changed
+    Returns (changed_paths, removed_paths, refresh_engines) — changed covers
+    added AND edited Claude transcripts, refresh_engines names non-Claude
+    engines whose rows must be rebuilt and merged engine-wide — or None when
+    a full rebuild is required: unknown signature (restart, LRU eviction), a
+    non-Claude engine source changed that we cannot rebuild in isolation
     (those are dir-granularity in the signature, so no file diff exists), or
     the delta is too large to be worth the incremental path.
+
+    Hermes is the one engine source with an isolated refresh path: its
+    state.db mtime flips per internal event, and treating that like the
+    dir-granular sources forced a full O(all-rows) rebuild on every poll
+    while a hermes session ran (measured 60-95s burns). Rebuilding hermes
+    rows alone is milliseconds.
     """
     if not old_sig or not new_sig or old_sig == new_sig:
         return None
@@ -6991,15 +6999,35 @@ def _archive_signature_delta(old_sig, new_sig):
         return None
     old_files, old_extras = old
     new_files, new_extras = new
+    refresh_engines = set()
     if old_extras != new_extras:
-        return None
+        changed_extras = {
+            k for k in set(old_extras) | set(new_extras)
+            if old_extras.get(k) != new_extras.get(k)
+        }
+        if changed_extras - {_ARCHIVE_HERMES_EXTRA_KEY}:
+            return None
+        refresh_engines.add("hermes")
     changed = [p for p, st in new_files.items() if old_files.get(p) != st]
     removed = [p for p in old_files if p not in new_files]
-    if not changed and not removed:
+    if not changed and not removed and not refresh_engines:
         return None
     if _ARCHIVE_INCR_MAX_FILES <= 0 or len(changed) > _ARCHIVE_INCR_MAX_FILES:
         return None
-    return changed, removed
+    return changed, removed, refresh_engines
+
+
+def _archive_merge_engine_rows(cached_rows, engine, fresh_rows):
+    """Replace one engine's whole row set in the cached rows (engine-scoped
+    refresh). Unlike _archive_merge_incremental_rows — which patches by
+    session id — this also drops that engine's vanished sessions, and leaves
+    every other engine's rows byte-identical."""
+    kept = [
+        r for r in cached_rows or []
+        if str((r or {}).get("engine") or (r or {}).get("source") or "") != engine
+    ]
+    kept.extend(fresh_rows or [])
+    return kept
 
 
 def _archive_merge_incremental_rows(cached_rows, fresh_rows, removed_paths):
@@ -7065,6 +7093,13 @@ def _archive_canonical_project_dirs(projects_root):
     return out
 
 
+# The hermes gateway DB is signature-gated at FILE granularity (its mtime
+# flips per event) — see _archive_signature_delta, which converts hermes-only
+# churn into an engine-scoped row refresh instead of a full rebuild.
+_ARCHIVE_HERMES_EXTRA_PATH = Path.home() / ".hermes" / "state.db"
+_ARCHIVE_HERMES_EXTRA_KEY = str(_ARCHIVE_HERMES_EXTRA_PATH)
+
+
 def _archive_corpus_signature_parts():
     """Cheap stat-only fingerprint of the conversation corpus on disk.
 
@@ -7113,7 +7148,7 @@ def _archive_corpus_signature_parts():
         Path.home() / ".codex" / "sessions",
         Path.home() / ".cursor" / "projects",
         Path.home() / ".gemini" / "antigravity" / "brain",
-        Path.home() / ".hermes" / "state.db",
+        _ARCHIVE_HERMES_EXTRA_PATH,
         # Kimi sessions dir — NOT session_index.jsonl: that file's mtime
         # flips on per-turn updates, which forced a full O(all-rows) archive
         # rebuild every poll while a kimi session ran. The dir mtime only
@@ -7151,19 +7186,35 @@ try:
     _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "10")))
 except ValueError:
     _ARCHIVE_SERVE_TTL = 10.0
-_archive_serve_cache = {}      # key -> {"ts", "rows"}
+_archive_serve_cache = {}      # key -> {"ts", "rows", "ver"} (+ optional prebuilt body)
 _archive_serve_lock = threading.Lock()
 _archive_serve_refreshing = set()  # keys with a background refresh in flight
 _archive_serve_generation = 0
+_archive_serve_version = 0       # monotonic per store; tags prebuilt response bodies
 
 
 def _archive_serve_cache_store(key, rows, generation):
     """Store rows only if no lifecycle mutation invalidated their build."""
+    global _archive_serve_version
     with _archive_serve_lock:
         if generation != _archive_serve_generation:
             return False
-        _archive_serve_cache[key] = {"ts": time.time(), "rows": rows}
+        _archive_serve_version += 1
+        _archive_serve_cache[key] = {
+            "ts": time.time(), "rows": rows, "ver": _archive_serve_version,
+        }
         return True
+
+
+def _archive_serve_ver_for_rows(key, rows):
+    """The serve entry's version IFF it currently holds exactly this row list
+    (identity) — 0 otherwise. Body prebuilding keys off this so a response
+    body can never be cached against rows it wasn't serialized from."""
+    with _archive_serve_lock:
+        sc = _archive_serve_cache.get(key)
+        if sc is not None and sc.get("rows") is rows:
+            return sc.get("ver", 0)
+    return 0
 
 
 def _clear_archive_serve_cache():
@@ -7345,7 +7396,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
             if entry and not cache_options.get("include_prs"):
                 delta = _archive_signature_delta(entry.get("signature"), sig)
                 if delta is not None:
-                    changed, removed = delta
+                    changed, removed, refresh_engines = delta
                     try:
                         fresh = find_all_conversations(
                             resolve_pr_states=cache_options.get("resolve_pr_states", False),
@@ -7356,6 +7407,17 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                         merged = _archive_merge_incremental_rows(
                             entry.get("conversations") or [], fresh, removed,
                         )
+                        if "hermes" in refresh_engines:
+                            merged = _archive_merge_engine_rows(
+                                merged,
+                                "hermes",
+                                find_hermes_conversations(
+                                    include_old=True,
+                                    repo_only=False,
+                                    resolve_pr_states=cache_options.get("resolve_pr_states", False),
+                                    resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+                                ),
+                            )
                         _archive_response_cache_put(key, merged, signature=sig)
                         _save_conv_meta_cache()
                         rows = _rehydrate_archive_cached_rows(merged)
@@ -7414,6 +7476,11 @@ def _archive_refresh_is_cheap(key, cache_options):
 
 
 def _archive_serve_rows(key, cache_options):
+    rows, from_cache, _snap_ver = _archive_serve_rows_versioned(key, cache_options)
+    return rows, from_cache
+
+
+def _archive_serve_rows_versioned(key, cache_options):
     """Archive rows for an ?all=1 request, stale-while-revalidate.
 
     The endpoint is polled continuously by the dashboard AND the COO board, and
@@ -7433,17 +7500,22 @@ def _archive_serve_rows(key, cache_options):
     plus one background refresh. The signature still gates the actual rebuild, so
     a changed corpus re-parses only the touched sessions.
 
-    Returns (rows, from_cache). from_cache is False only on the cold build.
+    Returns (rows, from_cache, snap_ver). from_cache is False only on the cold
+    build. snap_ver is the serve snapshot's version when the returned rows are
+    exactly the stored snapshot (the /api/conversations/all sender prebuilds
+    body+etag+gzip per version), else 0.
     """
     global _archive_serve_refreshing
     if _ARCHIVE_SERVE_TTL <= 0:
-        return _archive_compute_rows(key, cache_options)
+        rows, from_cache = _archive_compute_rows(key, cache_options)
+        return rows, from_cache, 0
     now = time.time()
     with _archive_serve_lock:
         serve_generation = _archive_serve_generation
         sc = _archive_serve_cache.get(key)
         if sc is not None:
             rows = [dict(r) for r in sc.get("rows") or []]
+            snap_ver = sc.get("ver", 0)
             stale = (now - sc.get("ts", 0)) >= _ARCHIVE_SERVE_TTL
             if stale and key not in _archive_serve_refreshing:
                 _archive_serve_refreshing.add(key)
@@ -7452,6 +7524,7 @@ def _archive_serve_rows(key, cache_options):
                 spawn = False
         else:
             rows = None
+            snap_ver = 0
             spawn = False
     if rows is not None:
         if spawn:
@@ -7465,19 +7538,20 @@ def _archive_serve_rows(key, cache_options):
             # → full rebuild) keep the stale-serve + background refresh.
             if _archive_refresh_is_cheap(key, cache_options):
                 try:
-                    return _archive_compute_rows(key, cache_options, serve_generation)
+                    new_rows, from_cache = _archive_compute_rows(key, cache_options, serve_generation)
+                    return new_rows, from_cache, _archive_serve_ver_for_rows(key, new_rows)
                 except Exception as e:
                     print(f"  [archive-serve] sync refresh failed, serving stale: {e}")
                 finally:
                     with _archive_serve_lock:
                         _archive_serve_refreshing.discard(key)
-                return rows, True
+                return rows, True, snap_ver
             threading.Thread(
                 target=_archive_serve_refresh,
                 args=(key, cache_options, serve_generation),
                 daemon=True,
             ).start()
-        return rows, True
+        return rows, True, snap_ver
     # Cold (e.g. just after a restart): the in-memory serve snapshot is empty.
     # Rather than block this first caller on a full rebuild (~20-30s cold), serve
     # the persisted response payload from the last run (rehydrated for fresh
@@ -7502,9 +7576,10 @@ def _archive_serve_rows(key, cache_options):
                 args=(key, cache_options, serve_generation),
                 daemon=True,
             ).start()
-        return [dict(r) for r in rows], True
+        return [dict(r) for r in rows], True, _archive_serve_ver_for_rows(key, rows)
     # Nothing persisted yet — build once synchronously.
-    return _archive_compute_rows(key, cache_options, serve_generation)
+    rows, from_cache = _archive_compute_rows(key, cache_options, serve_generation)
+    return rows, from_cache, _archive_serve_ver_for_rows(key, rows)
 
 
 _ARCHIVE_SIDECAR_DEFAULTS = {
@@ -60489,13 +60564,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # parallel. Share the same short-lived serve snapshot and
                 # single-flight refresh used by /api/sessions?all=1; otherwise
                 # every tab independently rehydrates thousands of rows and can
-                # starve even cached requests behind sustained CPU work.
-                convs, from_cache = _archive_serve_rows(cache_key, cache_options)
-                self.send_json({
+                # starve even cached requests behind sustained CPU work. The
+                # snapshot sender replays the prebuilt body for repeat polls.
+                convs, from_cache, snap_ver = _archive_serve_rows_versioned(cache_key, cache_options)
+                self._send_archive_snapshot_json(cache_key, {
                     "conversations": convs,
                     "count": len(convs),
                     "cached": from_cache,
-                }, etag=True)
+                }, snap_ver)
                 return
             if not background:
                 _archive_load_begin()
@@ -66022,6 +66098,62 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Vary", "Accept-Encoding")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_archive_snapshot_json(self, key, data, snap_ver):
+        """send_json for the /api/conversations/all serve snapshot: identical
+        etag/304/gzip semantics, but the serialized body + sha1 etag + gzip
+        copy are built ONCE per snapshot version and replayed for every poll
+        of the same snapshot (dashboard + COO board poll in parallel, so most
+        serves are byte-identical to the previous one — previously each paid
+        json.dumps(~8.5MB) + sha1 + gzip). snap_ver=0 disables the body cache
+        (rows are not the stored snapshot, e.g. TTL off or a skipped store).
+        """
+        accept_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
+        raw = gzip_body = etag_val = None
+        if snap_ver:
+            with _archive_serve_lock:
+                sc = _archive_serve_cache.get(key)
+                if (sc is not None and sc.get("ver") == snap_ver
+                        and sc.get("body_raw") is not None):
+                    raw = sc["body_raw"]
+                    gzip_body = sc.get("body_gzip")
+                    etag_val = sc.get("etag")
+        if raw is None:
+            raw = json.dumps(data).encode()
+            etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
+            gzip_body = (
+                gzip.compress(raw, compresslevel=5)
+                if len(raw) >= self._GZIP_MIN_BYTES else None
+            )
+            if snap_ver:
+                with _archive_serve_lock:
+                    sc = _archive_serve_cache.get(key)
+                    if (sc is not None and sc.get("ver") == snap_ver
+                            and sc.get("body_raw") is None):
+                        sc["body_raw"] = raw
+                        sc["body_gzip"] = gzip_body
+                        sc["etag"] = etag_val
+        if self.headers.get("If-None-Match") == etag_val:
+            self.send_response(304)
+            self.send_header("ETag", etag_val)
+            self.end_headers()
+            return
+        if accept_gzip and gzip_body is not None:
+            body, enc = gzip_body, "gzip"
+        else:
+            body, enc = raw, None
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag_val)
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def send_json(self, data, status=200, etag=False):
         # Any 5xx is a real server-side error — feed the in-process health

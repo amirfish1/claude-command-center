@@ -961,9 +961,9 @@ def test_conversations_all_stale_ok_uses_coalesced_serve_cache(monkeypatch):
 
     def serve_rows(key, options):
         calls.append((key, options))
-        return expected, True
+        return expected, True, 0  # snap_ver 0: bypass the body cache in this test
 
-    monkeypatch.setattr(server, "_archive_serve_rows", serve_rows)
+    monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve_rows)
     monkeypatch.setattr(
         server,
         "_build_archive_conversations",
@@ -1109,6 +1109,119 @@ def test_archive_all_serve_cache_coalesces_concurrent_polls(big_projects, isolat
         "serve-cache window must not even rehydrate — concurrent polls within "
         "the TTL must share one snapshot (the per-request liveness-probe drain)"
     )
+
+
+def test_archive_signature_delta_hermes_churn_is_engine_scoped_refresh():
+    """Hermes state.db mtime flips per internal event; that churn must NOT force
+    a full O(all-rows) rebuild — the delta converts it to an engine-scoped row
+    refresh (the measured 60-95s-per-poll burn while hermes ran)."""
+    hermes_key = server._ARCHIVE_HERMES_EXTRA_KEY
+    codex_key = str(Path.home() / ".codex" / "sessions")
+    files = {"/p/a.jsonl": (1, 100)}
+    old_extras = {hermes_key: 100, codex_key: 200}
+    with server._archive_sig_lock:
+        server._ARCHIVE_STATMAP_BY_SIG["sig_old"] = (dict(files), dict(old_extras))
+        server._ARCHIVE_STATMAP_BY_SIG["sig_hermes"] = (
+            dict(files), {hermes_key: 300, codex_key: 200})
+        server._ARCHIVE_STATMAP_BY_SIG["sig_codex"] = (
+            dict(files), {hermes_key: 100, codex_key: 999})
+        server._ARCHIVE_STATMAP_BY_SIG["sig_both"] = (
+            {"/p/a.jsonl": (2, 100), "/p/b.jsonl": (1, 10)},
+            {hermes_key: 300, codex_key: 200})
+    try:
+        changed, removed, engines = server._archive_signature_delta("sig_old", "sig_hermes")
+        assert changed == [] and removed == []
+        assert engines == {"hermes"}
+        # A non-hermes engine-source change still forces the full rebuild.
+        assert server._archive_signature_delta("sig_old", "sig_codex") is None
+        # Claude transcript churn + hermes churn ride the same delta.
+        changed, removed, engines = server._archive_signature_delta("sig_old", "sig_both")
+        assert changed == ["/p/a.jsonl", "/p/b.jsonl"] and removed == []
+        assert engines == {"hermes"}
+    finally:
+        with server._archive_sig_lock:
+            for k in ("sig_old", "sig_hermes", "sig_codex", "sig_both"):
+                server._ARCHIVE_STATMAP_BY_SIG.pop(k, None)
+
+
+def test_archive_serve_snapshot_body_cache_replays_per_version(big_projects, isolated_archive_cache, monkeypatch):
+    """The /api/conversations/all snapshot sender must serialize+etag+gzip ONCE
+    per serve-snapshot version, not per poll (the ~8.5MB json.dumps churn on
+    every parallel dashboard/COO poll)."""
+    monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 60.0)
+    _, _, ver = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
+    assert ver > 0, "cold build stores the snapshot with a version"
+    # Same version across repeat polls within the TTL.
+    _, _, ver2 = server._archive_serve_rows_versioned(_ALL_KEY, _ALL_OPTS)
+    assert ver2 == ver
+    # Simulate the sender's prebuilt body, then store a NEW snapshot: the new
+    # entry must NOT inherit the old body (a body is only ever served against
+    # the exact rows it was serialized from).
+    with server._archive_serve_lock:
+        server._archive_serve_cache[_ALL_KEY]["body_raw"] = b"{}"
+    new_rows = [{"session_id": "s"}]
+    gen = server._archive_serve_generation
+    assert server._archive_serve_cache_store(_ALL_KEY, new_rows, gen) is True
+    with server._archive_serve_lock:
+        sc = server._archive_serve_cache[_ALL_KEY]
+        assert "body_raw" not in sc
+        assert sc["ver"] != ver
+    # ver_for_rows is identity-based, never equality-based.
+    assert server._archive_serve_ver_for_rows(_ALL_KEY, new_rows) == sc["ver"]
+    assert server._archive_serve_ver_for_rows(_ALL_KEY, [{"session_id": "s"}]) == 0
+
+
+def test_archive_snapshot_sender_replays_body_and_304s(isolated_archive_cache):
+    """End-to-end on a fake handler: first serve serializes once and caches the
+    body on the snapshot; an If-None-Match poll gets a 304 with no body; the
+    same payload is replayed verbatim for repeat polls of that version."""
+    import io
+
+    key = "sender-test"
+    rows = [{"session_id": "abc"}]
+    assert server._archive_serve_cache_store(key, rows, server._archive_serve_generation)
+    with server._archive_serve_lock:
+        ver = server._archive_serve_cache[key]["ver"]
+
+    class FakeHandler:
+        _GZIP_MIN_BYTES = 1024
+
+        def __init__(self, headers):
+            self.headers = headers
+            self.status = None
+            self.out_headers = {}
+            self.wfile = io.BytesIO()
+
+        def send_response(self, status):
+            self.status = status
+
+        def send_header(self, k, v):
+            self.out_headers[k] = v
+
+        def end_headers(self):
+            pass
+
+    send = server.CommandCenterHandler._send_archive_snapshot_json
+    data = {"conversations": rows, "count": 1, "cached": True}
+
+    h1 = FakeHandler({"Accept-Encoding": "identity"})
+    send(h1, key, data, ver)
+    assert h1.status == 200
+    assert h1.wfile.getvalue() == json.dumps(data).encode()
+    etag = h1.out_headers["ETag"]
+    with server._archive_serve_lock:
+        assert server._archive_serve_cache[key].get("body_raw") is not None
+
+    h2 = FakeHandler({"If-None-Match": etag})
+    send(h2, key, data, ver)
+    assert h2.status == 304
+    assert h2.wfile.getvalue() == b""
+
+    # Tamper with the data but keep the version: replay serves the CACHED body
+    # (version == rows identity, guaranteed by the store/ver contract).
+    h3 = FakeHandler({"Accept-Encoding": "identity"})
+    send(h3, key, {"conversations": [{"session_id": "DIFFERENT"}], "count": 1}, ver)
+    assert h3.wfile.getvalue() == json.dumps(data).encode()
 
 
 def test_ux_fixes_health_payload_coalesces_concurrent_polls(monkeypatch):
