@@ -6174,15 +6174,10 @@ def find_all_conversations(
 
     project_dirs = []
     if projects_root_exists:
-        try:
-            project_dirs = list(projects_root.iterdir())
-        except OSError:
-            project_dirs = []
+        project_dirs = _archive_canonical_project_dirs(projects_root)
 
     for project_dir in project_dirs:
         if _only_dirs is not None and str(project_dir) not in _only_dirs:
-            continue
-        if not project_dir.is_dir():
             continue
         slug = project_dir.name
 
@@ -7014,6 +7009,33 @@ def _archive_corpus_signature_uncached():
     return _archive_corpus_signature_parts()[0]
 
 
+def _archive_canonical_project_dirs(projects_root):
+    """Return each physical Claude project directory once, in stable order.
+
+    `~/.claude/projects` may contain convenience symlinks. Walking both a
+    symlink and its target doubles a large archive's stat/parsing work while
+    contributing no distinct sessions, so canonicalize the top-level dirs
+    before either archive path scans their JSONL files.
+    """
+    try:
+        candidates = sorted(e.path for e in os.scandir(projects_root) if e.is_dir())
+    except OSError:
+        return []
+    out = []
+    seen = set()
+    for candidate in candidates:
+        try:
+            directory = Path(candidate).resolve()
+        except (OSError, RuntimeError):
+            continue
+        key = str(directory)
+        if key in seen or not directory.is_dir():
+            continue
+        seen.add(key)
+        out.append(directory)
+    return out
+
+
 def _archive_corpus_signature_parts():
     """Cheap stat-only fingerprint of the conversation corpus on disk.
 
@@ -7041,15 +7063,9 @@ def _archive_corpus_signature_parts():
     files = {}
     extras_map = {}
     projects_root = Path.home() / ".claude" / "projects"
-    try:
-        dir_paths = sorted(
-            e.path for e in os.scandir(projects_root) if e.is_dir()
-        )
-    except OSError:
-        dir_paths = []
-    for d in dir_paths:
+    for directory in _archive_canonical_project_dirs(projects_root):
         try:
-            with os.scandir(d) as it:
+            with os.scandir(directory) as it:
                 for e in it:
                     if not e.name.endswith(".jsonl"):
                         continue

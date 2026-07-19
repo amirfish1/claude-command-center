@@ -1908,3 +1908,19 @@ def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     rows, _ = server._archive_compute_rows(key, opts)
     assert new_sid not in {r.get("session_id") for r in rows}
     assert len(builds) == 1
+
+
+def test_archive_signature_dedupes_symlinked_project_dirs(big_projects, tmp_path):
+    """A symlink to an existing Claude project must not double-stat its corpus."""
+    n, _ = big_projects
+    projects = tmp_path / ".claude" / "projects"
+    target = projects / "-tmp-perf-repo"
+    alias = projects / "-tmp-perf-repo-alias"
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    _sig, files, _extras = server._archive_corpus_signature_parts()
+
+    assert len(files) == n
