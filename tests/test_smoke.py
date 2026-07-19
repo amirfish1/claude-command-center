@@ -2586,6 +2586,46 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
+    def test_spawn_defaults_worker_engine_round_trips_and_validates(self):
+        """worker_engine is the WatchTower queue-worker default (WT reads this
+        key); it must persist, round-trip, stay blank by default, and reject
+        unknown engines."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                with mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                    defaults = server._load_spawn_defaults()
+                    self.assertEqual(defaults["worker_engine"], "")
+
+                    saved = server._save_spawn_defaults({"worker_engine": "kimi"})
+                    self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["worker_engine"], "kimi")
+                    on_disk = json.loads(server.SPAWN_DEFAULTS_FILE.read_text())
+                    self.assertEqual(on_disk["worker_engine"], "kimi")
+
+                    defaults = server._load_spawn_defaults()
+                    self.assertEqual(defaults["worker_engine"], "kimi")
+
+                    # A later save that omits worker_engine must not drop it.
+                    saved = server._save_spawn_defaults({"engine": "claude"})
+                    self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["worker_engine"], "kimi")
+
+                    # Blank clears back to WT's own fallback chain.
+                    saved = server._save_spawn_defaults({"worker_engine": ""})
+                    self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["worker_engine"], "")
+
+                    rejected = server._save_spawn_defaults({"worker_engine": "bogus"})
+                    self.assertFalse(rejected["ok"])
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
     def test_codex_spawn_default_prefers_best_model(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
@@ -5755,6 +5795,23 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertNotIn("engine", config["config"])
         self.assertNotIn("model", config["config"])
+
+    def test_queue_config_accepts_kimi_engine_and_model(self):
+        config = self.server._queue_config_from_payload({
+            "queue": "DEMO_QUEUE",
+            "engine": "kimi",
+            "model": "kimi-code/kimi-for-coding-highspeed",
+        })
+        self.assertEqual(config["config"]["engine"], "kimi")
+        self.assertEqual(config["config"]["model"], "kimi-code/kimi-for-coding-highspeed")
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "DEMO_QUEUE", "engine": "bogus"})
+
+    def test_queue_config_options_include_kimi_models(self):
+        options = self.server._queue_config_options()
+        kimi_models = (options.get("models_by_engine") or {}).get("kimi") or []
+        self.assertIn("kimi-code/kimi-for-coding-highspeed", kimi_models)
+        self.assertIn("kimi-code/k3", kimi_models)
 
     def test_queue_config_payload_rejects_bad_queue_name_and_github_without_repo(self):
         with self.assertRaises(ValueError):

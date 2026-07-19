@@ -1414,6 +1414,18 @@
             The New session model picker mirrors this value. Explicit API payloads still win.
           </div>
         </div>
+        <div>
+          <label class="bug-label" for="spawnDefaultsWorkerEngine">Worker engine</label>
+          <select id="spawnDefaultsWorkerEngine" class="bug-input">
+            <option value="">WatchTower default</option>
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+            <option value="kimi">Kimi</option>
+          </select>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).
+          </div>
+        </div>
         <div id="spawnDefaultsEffortField" style="display:none;">
           <label class="bug-label" for="spawnDefaultsEffort">Default reasoning effort</label>
           <select id="spawnDefaultsEffort" class="bug-input">

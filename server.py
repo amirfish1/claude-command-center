@@ -335,8 +335,8 @@ def _queue_config_from_payload(payload):
     if backend not in ("file", "github"):
         raise ValueError("backend must be file or github")
     engine = str(payload.get("engine", "claude") or "").strip().lower()
-    if engine not in ("", "claude", "codex"):
-        raise ValueError("engine must be claude, codex, or blank for CCC spawn default")
+    if engine not in ("", "claude", "codex", "kimi"):
+        raise ValueError("engine must be claude, codex, kimi, or blank for CCC spawn default")
     try:
         workers = int(payload.get("workers", 1))
     except (TypeError, ValueError):
@@ -387,7 +387,7 @@ def _queue_config_options():
         engine: {str(option["id"]): str(option["label"])
                  for option in options}
         for engine, options in _ENGINE_CURATED_MODELS.items()
-        if engine in ("claude", "codex")
+        if engine in ("claude", "codex", "kimi")
     }
     queues = []
     for name, conf in cfg.items():
@@ -4033,6 +4033,7 @@ def _build_engine_model_catalog(force_refresh=False):
         "antigravity": os.environ.get("CCC_ANTIGRAVITY_MODEL"),
         "kilo": os.environ.get("CCC_KILO_MODEL"),
         "hermes": os.environ.get("CCC_HERMES_MODEL"),
+        "kimi": os.environ.get("CCC_KIMI_MODEL"),
     }
     for engine, model in env_defaults.items():
         _model_catalog_add(catalog, engine, model, source="env")
@@ -4132,6 +4133,7 @@ def _load_spawn_defaults():
     defaults = {
         "engine": "claude",
         "reasoning_effort": "",
+        "worker_engine": "",
         "models": {
             engine: _spawn_fallback_model_for_engine(engine)
             for engine in _ORCHESTRATION_SPAWN_ENGINES
@@ -4164,7 +4166,20 @@ def _load_spawn_defaults():
     reasoning_effort = str(raw.get("reasoning_effort") or raw.get("effort") or "").strip().lower()
     if reasoning_effort not in CODEX_REASONING_EFFORTS:
         reasoning_effort = ""
-    return {"engine": engine, "models": models, "reasoning_effort": reasoning_effort}
+    # The WatchTower queue-worker default (WT's config.engine() fallback chain
+    # reads this key). Separate from `engine`, which is the interactive
+    # new-session default (WT-105). Blank = WT picks (codex when installed).
+    worker_engine_raw = str(raw.get("worker_engine") or "").strip()
+    worker_engine = (
+        _normalize_orchestration_spawn_engine(worker_engine_raw)
+        if worker_engine_raw else ""
+    )
+    if worker_engine not in _ORCHESTRATION_SPAWN_ENGINES:
+        worker_engine = ""
+    return {
+        "engine": engine, "models": models,
+        "reasoning_effort": reasoning_effort, "worker_engine": worker_engine,
+    }
 
 
 def _save_spawn_defaults(config):
@@ -4180,6 +4195,19 @@ def _save_spawn_defaults(config):
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
             }
         current["engine"] = engine
+
+    if "worker_engine" in config:
+        worker_raw = str(config.get("worker_engine") or "").strip()
+        worker_engine = (
+            _normalize_orchestration_spawn_engine(worker_raw) if worker_raw else ""
+        )
+        if worker_engine not in (*_ORCHESTRATION_SPAWN_ENGINES, ""):
+            return {
+                "ok": False,
+                "error": f"unsupported worker_engine: {config.get('worker_engine')}",
+                "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+            }
+        current["worker_engine"] = worker_engine
 
     if "reasoning_effort" in config or "effort" in config:
         reasoning_effort = str((
@@ -4216,6 +4244,7 @@ def _save_spawn_defaults(config):
     payload = {
         "engine": current["engine"],
         "reasoning_effort": current.get("reasoning_effort", ""),
+        "worker_engine": current.get("worker_engine", ""),
         "models": {
             engine: current["models"].get(engine, "")
             for engine in _ORCHESTRATION_SPAWN_ENGINES
@@ -27534,9 +27563,13 @@ def _acp_handle_message(harness, payload):
             entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
             if entry is not None:
                 entry["response"] = payload
-                entry["event"].set()
+        # Fold prompt turns BEFORE releasing waiters: a synchronous ask
+        # (_acp_ask_and_wait) reads final_text off the entry, which only
+        # exists once _acp_finalize_turn ran.
         if entry is not None and entry.get("method") == "session/prompt" and entry.get("sid"):
             _acp_finalize_turn(harness, entry["sid"], payload, entry)
+        if entry is not None:
+            entry["event"].set()
         return
     if method == "session/update":
         params = payload.get("params") or {}
@@ -27792,6 +27825,9 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
                 _acp_emit_event_unlocked(harness, sid, {
                     "type": "assistant", "message_id": turn["msg_id"], "blocks": blocks,
                 })
+            # Synchronous-ask handoff: _acp_ask_and_wait reads this after the
+            # pending event fires (set post-fold in _acp_handle_message).
+            pending_entry["final_text"] = turn.get("text") or ""
             state["active_turn"] = None
             state["status"] = "idle"
             state["stop_reason"] = stop_reason or ("error" if error else None)
@@ -28010,7 +28046,54 @@ def _acp_prompt(harness, sid, text, mode="send"):
         }, save=True)
     return {
         "ok": True, "via": "acp-prompt", "harness": harness,
-        "session_id": sid, "turn": state.get("turn_seq"),
+        "session_id": sid, "turn": state.get("turn_seq"), "req_id": req_id,
+    }
+
+
+def _acp_ask_and_wait(harness, sid, text, timeout_ms=30000):
+    """Synchronous inject+wait for an ACP harness session (the /api/ask
+    contract): drive session/prompt, block for the turn-end response, and
+    return the assistant text the turn produced."""
+    source = f"{harness}-acp"
+    started = time.monotonic()
+    res = _acp_prompt(harness, sid, text)
+    if not res.get("ok"):
+        res.setdefault("source", source)
+        return res
+    req_id = res.get("req_id")
+    if req_id is None:
+        return {"ok": False, "error": f"ACP {harness} send failed", "source": source}
+    timeout_s = max(0.5, timeout_ms / 1000.0)
+    with _ACP_LOCK:
+        entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
+    if entry is None:
+        return {"ok": False, "error": "prompt request not registered", "source": source}
+    entry["event"].wait(timeout_s)
+    with _ACP_LOCK:
+        entry = (_ACP_PENDING.get(harness) or {}).pop(req_id, None) or entry
+    response = entry.get("response")
+    duration_ms = int((time.monotonic() - started) * 1000)
+    if response is None:
+        # Timed out mid-turn — the still-running turn's partial text is the
+        # best reply we have (mirrors ask_engine_session_and_wait's timeout).
+        with _ACP_LOCK:
+            state = _acp_session(harness, sid)
+            partial = str(((state or {}).get("active_turn") or {}).get("text") or "")
+        return {
+            "ok": False, "error": "timeout", "partial": partial.strip(),
+            "duration_ms": duration_ms, "source": source,
+        }
+    final_text = str(entry.get("final_text") or "").strip()
+    if response.get("error"):
+        err = response["error"]
+        message = err.get("message") if isinstance(err, dict) else str(err)
+        return {
+            "ok": False, "error": message or "ACP turn failed",
+            "partial": final_text, "duration_ms": duration_ms, "source": source,
+        }
+    return {
+        "ok": True, "text": final_text, "duration_ms": duration_ms,
+        "num_turns": 1, "cost_usd": None, "source": source,
     }
 
 
@@ -28113,9 +28196,29 @@ def _acp_set_config(harness, sid, config_id, value):
     attach_err = _acp_ensure_session_loaded(harness, sid)
     if attach_err is not None:
         return attach_err
-    return _acp_request(harness, "session/set_config_option", {
+    resp = _acp_request(harness, "session/set_config_option", {
         "sessionId": sid, "configId": config_id, "value": value,
     }, timeout=10, sid=sid)
+    if resp.get("ok"):
+        # Keep the local snapshot honest — session rows read state["model"]
+        # for the cost-tier icon, and it otherwise stays at the session/new
+        # default forever.
+        result = resp.get("result") or {}
+        with _ACP_LOCK:
+            state = _acp_session(harness, sid, create=True)
+            options = result.get("configOptions")
+            if isinstance(options, list):
+                state["config_options"] = options
+                for opt in options:
+                    if isinstance(opt, dict) and opt.get("id") == "model":
+                        state["model"] = opt.get("currentValue")
+            elif config_id == "model":
+                state["model"] = value
+            for opt in state.get("config_options") or []:
+                if isinstance(opt, dict) and opt.get("id") == config_id:
+                    opt["currentValue"] = value
+            _acp_save_state_unlocked(harness)
+    return resp
 
 
 def _acp_ensure_session_loaded(harness, sid):
@@ -28282,15 +28385,17 @@ def _kimi_state_meta(session_dir):
 
 
 def _kimi_wire_head(session_dir):
-    """First user prompt + main wire path from agents/main/wire.jsonl.
+    """First user prompt, main wire path, and model alias from
+    agents/main/wire.jsonl.
 
     The wire format is undocumented (observed: turn.prompt carries
-    input=[{type:text,text}]); anything unexpected yields ("", path).
+    input=[{type:text,text}]; config.update carries modelAlias, llm.request
+    confirms it). Anything unexpected just leaves that field empty.
     """
     wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
+    info = {"first_prompt": "", "wire_path": str(wire) if wire else "", "model": ""}
     if wire is None or not wire.is_file():
-        return "", str(wire) if wire else ""
-    first_prompt = ""
+        return info
     try:
         with wire.open() as f:
             for i, line in enumerate(f):
@@ -28300,20 +28405,27 @@ def _kimi_wire_head(session_dir):
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if ev.get("type") != "turn.prompt":
-                    continue
-                blocks = ev.get("input")
-                if isinstance(blocks, list):
-                    text = "".join(
-                        str(b.get("text") or "") for b in blocks
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    ).strip()
-                    if text:
-                        first_prompt = text
-                        break
+                etype = ev.get("type")
+                if etype == "config.update":
+                    alias = str(ev.get("modelAlias") or "").strip()
+                    if alias:
+                        # Keep the LAST alias in the window: a session created
+                        # with the default model and immediately re-configured
+                        # (CCC spawn, kimi -m) records k3 then the real model
+                        # within the first lines.
+                        info["model"] = alias
+                elif etype == "turn.prompt" and not info["first_prompt"]:
+                    blocks = ev.get("input")
+                    if isinstance(blocks, list):
+                        text = "".join(
+                            str(b.get("text") or "") for b in blocks
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ).strip()
+                        if text:
+                            info["first_prompt"] = text
     except OSError:
         pass
-    return first_prompt, str(wire)
+    return info
 
 
 def find_kimi_conversations(
@@ -28386,12 +28498,10 @@ def find_kimi_conversations(
         title = _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
         last_prompt = _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
         first_message = last_prompt
-        wire_path = ""
+        wire_info = _kimi_wire_head(idx.get("session_dir"))
         if not first_message:
-            first_message, wire_path = _kimi_wire_head(idx.get("session_dir"))
-        else:
-            wire_dir = idx.get("session_dir") or ""
-            wire_path = str(Path(wire_dir) / "agents" / "main" / "wire.jsonl") if wire_dir else ""
+            first_message = wire_info["first_prompt"]
+        wire_path = wire_info["wire_path"]
         display_name = (
             name_overrides.get(sid)
             or _truncate_session_name(title)
@@ -28439,7 +28549,9 @@ def find_kimi_conversations(
             "session_cwd": effective_cwd,
             "session_cwd_exists": cwd_exists,
             "acp": bool(acp),
-            "model": acp.get("model") or "",
+            # Live ACP value wins; the wire's initial config.update alias
+            # covers never-attached (TUI / WT-spawned) sessions.
+            "model": acp.get("model") or wire_info["model"],
         }
         if status:
             row["status"] = "running" if status == "active" else "idle"
@@ -46869,7 +46981,10 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
 def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     """Synchronously inject `text` into a session and wait for its reply.
 
-    Two paths, picked from the session's live status:
+    Non-claude engines route first: codex/gemini/antigravity/hermes go to
+    ask_engine_session_and_wait (engine resume + stream tail); kimi goes to
+    _acp_ask_and_wait (ACP session/prompt, blocks for the turn-end response).
+    Claude sessions then pick between two paths, chosen from live status:
 
     - **Live target** (the user has `claude` open in a terminal for this
       session_id): inject via `inject_input_via_keystroke()` and tail the
@@ -46900,6 +47015,8 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     engine = _detect_session_engine(session_id)
     if engine in ("codex", "gemini", "antigravity", "hermes"):
         return ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
+    if engine == "kimi":
+        return _acp_ask_and_wait("kimi", session_id, text, timeout_ms)
 
     # Live-tail short-circuit: if the target session has a running `claude`
     # process with a usable tty, drive it via keystroke + jsonl tail. This

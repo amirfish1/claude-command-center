@@ -50,6 +50,11 @@ def test_cost_tier_matrix_executes_production_classifier():
         ["codex", "gpt-5.5", ""],
         ["codex", "claude-opus-4-8", ""],
         ["claude", "gpt-5.6-sol", ""],
+        ["kimi", "kimi-code/k3", "premium"],
+        ["kimi", "kimi-code/kimi-for-coding", "medium"],
+        ["kimi", "kimi-code/kimi-for-coding-highspeed", "low"],
+        ["kimi", "k3", "premium"],
+        ["kimi", "", ""],
         ["claude", "", ""],
         ["", "fable-5", ""],
     ]
