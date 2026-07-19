@@ -17649,6 +17649,22 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--green, #3fb950);
 }
 .fq-health-drain-toggle.is-on:hover { background: rgba(63,185,80,0.18); }
+.fq-health-drain-toggle.is-pending {
+  font-style: italic;
+  pointer-events: none;
+}
+.fq-health-drain-toggle.is-pending::after {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 4px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: fq-drain-spin 0.7s linear infinite;
+}
+@keyframes fq-drain-spin { to { transform: rotate(360deg); } }
 .fq-health-drain-val { font-weight: 700; }
 .fq-health-type-toggle {
   flex-shrink: 0; cursor: pointer;

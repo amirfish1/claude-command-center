@@ -34461,8 +34461,11 @@
         if (!btn) return;
         ev.preventDefault();
         ev.stopPropagation();
+        if (btn.classList.contains('is-pending')) return;
         const queue = btn.getAttribute('data-drain-queue');
         const newVal = btn.getAttribute('data-drain-on') !== '1';
+        const drainVal = btn.querySelector('.fq-health-drain-val');
+        const priorTitle = btn.title;
         // Drain policy does not change ticket depth/claimability, so classify
         // the outcome from the same snapshot that rendered the clicked row.
         // A concurrent health request may have started before this POST and
@@ -34470,7 +34473,12 @@
         const queueHealth = (_uxqHealthCache.queues || []).find(q =>
           q && String(q.queue || '').toUpperCase() === String(queue || '').toUpperCase()
         );
-        btn.style.opacity = '0.4';
+        btn.classList.toggle('is-on', newVal);
+        btn.classList.add('is-pending');
+        btn.setAttribute('aria-busy', 'true');
+        btn.setAttribute('data-drain-on', newVal ? '1' : '0');
+        btn.title = newVal ? 'Enabling auto-drain…' : 'Disabling auto-drain…';
+        if (drainVal) drainVal.textContent = newVal ? 'on' : 'off';
         try {
           const res = await fetch('/api/queue/drain', {
             method: 'POST',
@@ -34488,9 +34496,14 @@
             showOpToast('Auto-drain disabled for ' + queue + '.', 'success');
           }
         } catch (err) {
+          btn.classList.toggle('is-on', !newVal);
+          btn.setAttribute('data-drain-on', newVal ? '0' : '1');
+          btn.title = priorTitle;
+          if (drainVal) drainVal.textContent = newVal ? 'off' : 'on';
           showOpToast('Auto-drain update failed: ' + ((err && err.message) || 'unknown'), 'error');
         } finally {
-          btn.style.opacity = '';
+          btn.classList.remove('is-pending');
+          btn.removeAttribute('aria-busy');
           _uxqHealthCache.ts = 0;
           _renderQueueHealthStrip(true, null);
         }

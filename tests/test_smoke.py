@@ -4292,6 +4292,7 @@ class TestServerImports(unittest.TestCase):
     def test_queue_drain_toggle_reports_parked_and_failed_updates(self):
         """Turning on drain must explain why zero-claimable queues stay idle."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         toggle_js = app_js[
             app_js.index("const toggleDrain = async (ev) =>"):
             app_js.index("const cycleClaimTypes = async (ev) =>")
@@ -4302,6 +4303,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Auto-drain enabled for", toggle_js)
         self.assertIn("Auto-drain disabled for", toggle_js)
         self.assertIn("Auto-drain update failed", toggle_js)
+        self.assertIn("btn.classList.add('is-pending');", toggle_js)
+        self.assertIn("btn.setAttribute('aria-busy', 'true');", toggle_js)
+        self.assertIn("btn.classList.toggle('is-on', newVal);", toggle_js)
+        self.assertIn("drainVal.textContent = newVal ? 'on' : 'off';", toggle_js)
+        self.assertIn("btn.classList.remove('is-pending');", toggle_js)
+        self.assertIn("btn.removeAttribute('aria-busy');", toggle_js)
+        self.assertIn(".fq-health-drain-toggle.is-pending::after", app_css)
         self.assertLess(
             toggle_js.index("const queueHealth ="),
             toggle_js.index("await fetch('/api/queue/drain'"),
