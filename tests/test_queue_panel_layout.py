@@ -228,6 +228,22 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("font-size: 13px;", empty_css)
         self.assertIn("font-size: 12px;", empty_sub_css)
 
+    def test_queue_rows_compact_refs_and_overlay_priority_bump(self):
+        """Queue names belong in the scope picker, not in every narrow row."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        queue_js = app_js[
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
+        ]
+
+        self.assertIn("const compactRef = ref.replace(/^.*-/, '#');", queue_js)
+        self.assertIn("fq-priority-chip", queue_js)
+        self.assertIn("_uxqChips(it, priorityBumpHtml)", queue_js)
+        self.assertIn(".fq-priority-chip .fq-prio-bump", app_css)
+        self.assertIn("position: absolute;", app_css)
+
 
 if __name__ == "__main__":
     unittest.main()

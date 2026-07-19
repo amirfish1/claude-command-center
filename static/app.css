@@ -17047,6 +17047,15 @@ body:has(.gc-reader) .pwa-install-banner {
   border-color: rgba(88,166,255,0.30);
   color: var(--accent, #58a6ff);
 }
+.fq-priority-chip { position: relative; }
+.fq-priority-chip .fq-prio-bump {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  background: var(--bg, #0d1117);
+}
+.fq-row:hover .fq-priority-chip .fq-prio-bump { opacity: 1; }
 .fq-prio-bump.is-top { opacity: 0 !important; pointer-events: none; }
 
 /* Blocked-work (WT-28): a ticket waiting on a human. Red (CCC-465) — it needs

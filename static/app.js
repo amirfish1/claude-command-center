@@ -34142,7 +34142,7 @@
       // engine needs to reason about).
       const _uxqUnresolvedNotes = it => (it && it.resolution && Array.isArray(it.resolution.unresolved))
         ? it.resolution.unresolved.filter(Boolean) : [];
-      const _uxqChips = it => {
+      const _uxqChips = (it, priorityBumpHtml = '') => {
         const c = [];
         if (it.needs_input) c.push('<span class="fq-chip fq-blocked" title="' + escapeAttr(it.block_question || 'needs human input') + '">needs input</span>');
         const unresolvedNotes = _uxqUnresolvedNotes(it);
@@ -34153,9 +34153,10 @@
           const typeLabel = _typeShort[it.type] || it.type;
           const typeAndPriority = it.priority ? typeLabel + '/' + it.priority : typeLabel;
           const typeTitle = it.priority ? it.type + ' / ' + it.priority : it.type;
-          c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + '" title="' + escapeAttr(typeTitle) + '">' + escapeHtml(typeAndPriority) + '</span>');
+          const priorityChipClass = it.priority ? ' fq-priority-chip' : '';
+          c.push('<span class="fq-chip fq-type-' + escapeAttr(it.type) + priorityChipClass + '" title="' + escapeAttr(typeTitle) + '">' + escapeHtml(typeAndPriority) + priorityBumpHtml + '</span>');
         } else if (it.priority) {
-          c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>');
+          c.push('<span class="fq-chip fq-prio-' + escapeAttr(it.priority) + ' fq-priority-chip">' + escapeHtml(it.priority) + priorityBumpHtml + '</span>');
         }
         if (it.readiness) c.push('<span class="fq-chip fq-ready-' + escapeAttr(it.readiness) + '">' + escapeHtml(_readyShort[it.readiness] || it.readiness) + '</span>');
         if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '-') + '/' + escapeHtml(it.confidence || '-') + '</span>');
@@ -34188,6 +34189,8 @@
         const np = nextPrio[curPrio] || 'p2';
         const atTop = curPrio === 'p0';
         const bumpTitle = atTop ? 'Already highest priority (p0)' : ('Bump to ' + np);
+        const priorityBumpHtml = '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>';
+        const compactRef = ref.replace(/^.*-/, '#');
         const runnable = it.watchtower_runnable !== false;
         const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
         const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up' : status;
@@ -34203,10 +34206,9 @@
         const ageStr = !isNaN(ageMs) ? timeAgo(ageMs).replace(/\s+ago$/, '') : '';
         return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
-          + '<span class="fq-ref">' + escapeHtml(ref) + '</span>'
-          + _uxqChips(it)
+          + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(compactRef) + '</span>'
+          + _uxqChips(it, priorityBumpHtml)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
-          + '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>'
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</div>';
