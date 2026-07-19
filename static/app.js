@@ -37790,6 +37790,12 @@
     } else {
       parts.push('<span class="wp-kind ' + kindCls + '" title="' + escapeHtml(kindTitle) + '">' + kindLabel + '</span>');
     }
+    // The responsive layout hides the descriptive WORKTREE chip in a narrow
+    // split pane. Keep this compact marker beside the branch so the landing
+    // directory remains identifiable even after that progressive trim.
+    if (kindCls === 'wp-kind-worktree') {
+      parts.push('<span class="wp-worktree-icon" role="img" aria-label="worktree" title="' + escapeHtml(kindTitle) + '">🌿</span>');
+    }
     if (pillBranch) {
       parts.push('<span class="wp-icon">⎇</span><span class="wp-branch">' + escapeHtml(pillBranch) + '</span>');
     }

@@ -2875,6 +2875,9 @@
   }
   .conv-input-context.visible { display: flex; }
   .conv-input-context .wp-icon { opacity: 0.7; font-size: 11px; }
+  .conv-input-context .wp-worktree-icon {
+    color: var(--accent); font-size: 13px; line-height: 1;
+  }
   .conv-input-context .wp-branch {
     font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
     font-size: 13px; color: var(--accent);
