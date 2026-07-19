@@ -48357,6 +48357,11 @@
         $list.style.display = '';
         $list.innerHTML = _archiveLoadingPlaceholderHtml('Preparing archive…');
       }
+      // A saved Queue sidebar owns the shared panel, but its usual mount
+      // happens during the archive render below. Warm its independent queue
+      // snapshot now so the scope selector is ready even when the cross-repo
+      // archive scan takes much longer than the selected-repo session load.
+      if (_sharedQueuePanelHost === 'sidebar') _renderQueuePanel();
       _firstSessionsLoaded.then(() => setArchiveMode());
     }
     // Periodic archive refresh. archiveData carries last_interacted /
