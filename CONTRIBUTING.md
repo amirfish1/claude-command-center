@@ -112,6 +112,14 @@ python3 -m venv .venv && .venv/bin/pip install pytest  # one-time setup
 .venv/bin/python3 -m pytest tests/
 ```
 
+To exercise a specific interpreter such as Python 3.12 without replacing an
+existing `.venv`, give that interpreter its own local environment:
+
+```bash
+python3.12 -m venv .venv-py312 && .venv-py312/bin/pip install pytest
+.venv-py312/bin/python -m pytest tests/
+```
+
 Focus on the session classification logic (`classifyKanbanColumn`,
 `session_live_status`) — that's where subtle bugs hurt.
 
