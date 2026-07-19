@@ -33420,6 +33420,17 @@
       b.classList.toggle('is-active', b.getAttribute('data-uxq-type-filter') === cur);
     });
   }
+  // Keep the two Queue filters composable. This is deliberately independent
+  // of scope, so All queues applies the same status/type intersection as a
+  // repo-derived queue on every refresh.
+  function _uxqFilterItems(items, statusFilter, typeFilter) {
+    const source = Array.isArray(items) ? items : [];
+    const statusScoped = statusFilter === 'all'
+      ? source : source.filter(it => (it && it.status) !== 'closed');
+    return typeFilter === 'all'
+      ? statusScoped
+      : statusScoped.filter(it => ((it && it.type) === 'feature' ? 'feature' : 'bug') === typeFilter);
+  }
   const _UXQ_WRAP_TITLES_LS = 'ccc-uxq-wrap-titles';
   function _uxqGetWrapTitles() {
     try { return localStorage.getItem(_UXQ_WRAP_TITLES_LS) === '1'; } catch (_) { return false; }
@@ -34096,11 +34107,7 @@
       // 15s TTL cache, so this is normally a no-op await, not a fetch.
       await _fetchUxqHealth(allowStale);
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
-      // Status filter: 'open' hides closed (shows open + in_progress).
-      const statusScoped = _uxqGetFilter() === 'all' ? inScope : inScope.filter(it => (it && it.status) !== 'closed');
-      const typeScoped = _uxqGetTypeFilter() === 'all'
-        ? statusScoped
-        : statusScoped.filter(it => ((it && it.type) === 'feature' ? 'feature' : 'bug') === _uxqGetTypeFilter());
+      const typeScoped = _uxqFilterItems(inScope, _uxqGetFilter(), _uxqGetTypeFilter());
       // Free-text search over ref/note/text (CCC-432).
       const $qSearch = document.getElementById('queueSearchInput');
       const qTerm = $qSearch ? $qSearch.value.trim().toLowerCase() : '';
@@ -34238,13 +34245,16 @@
           : (it.updated_at || it.created_at);
         const ageMs = ageSrc ? Date.parse(ageSrc) : NaN;
         const ageStr = !isNaN(ageMs) ? timeAgo(ageMs).replace(/\s+ago$/, '') : '';
+        const signalsHtml = '<span class="fq-row-signals">'
+          + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
+          + statusAction
+          + '</span>';
         return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(displayRef) + '</span>'
           + _uxqChips(it, priorityBumpHtml)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
-          + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
-          + statusAction
+          + signalsHtml
           + '</div>';
       }).join('') || _uxqEmptyHtml(proj, items.length);
       const historyPagerHtml = historyOrder && rows.length > _UXQ_HISTORY_PAGE_SIZE

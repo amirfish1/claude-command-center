@@ -1,4 +1,6 @@
+import json
 import pathlib
+import subprocess
 import unittest
 
 
@@ -174,8 +176,57 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn('data-uxq-type-filter="feature"', index_html)
         self.assertIn("const _UXQ_TYPE_FILTER_LS = 'ccc-uxq-type-filter';", app_js)
         self.assertIn("function _uxqGetTypeFilter()", app_js)
-        self.assertIn("typeScoped = _uxqGetTypeFilter() === 'all'", app_js)
+        self.assertIn("function _uxqFilterItems(items, statusFilter, typeFilter)", app_js)
+        self.assertIn("const typeScoped = _uxqFilterItems(inScope, _uxqGetFilter(), _uxqGetTypeFilter());", app_js)
         self.assertIn("[data-uxq-type-filter]", app_js)
+
+    def test_all_queue_status_and_type_filters_cover_every_combination(self):
+        """All-queue filtering must intersect status and type on every rerender."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _uxqFilterItems(items, statusFilter, typeFilter)", app_js)
+        helper_start = app_js.index("function _uxqFilterItems(items, statusFilter, typeFilter)")
+        helper_end = app_js.index("function _renderQueuePanel(options)", helper_start)
+        helper = app_js[helper_start:helper_end]
+        node_program = """
+const vm = require('vm');
+const context = {};
+vm.createContext(context);
+vm.runInContext(%s, context);
+const items = [
+  { id: 'open-bug', status: 'open', type: 'bug' },
+  { id: 'closed-bug', status: 'closed', type: 'bug' },
+  { id: 'open-feature', status: 'open', type: 'feature' },
+  { id: 'closed-feature', status: 'closed', type: 'feature' },
+];
+const cases = {
+  'all/all': ['open-bug', 'closed-bug', 'open-feature', 'closed-feature'],
+  'all/bug': ['open-bug', 'closed-bug'],
+  'all/feature': ['open-feature', 'closed-feature'],
+  'open/all': ['open-bug', 'open-feature'],
+  'open/bug': ['open-bug'],
+  'open/feature': ['open-feature'],
+};
+for (const [key, expected] of Object.entries(cases)) {
+  const [status, type] = key.split('/');
+  const got = context._uxqFilterItems(items, status, type).map(item => item.id);
+  if (JSON.stringify(got) !== JSON.stringify(expected)) throw new Error(key + ': ' + JSON.stringify(got));
+}
+""" % json.dumps(helper)
+        subprocess.run(["node", "-e", node_program], cwd=PROJECT_ROOT, check=True)
+
+    def test_wrap_mode_pins_queue_age_and_status_to_the_right_rail(self):
+        """Wrapping a title must not let it displace the row's right-edge signals."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        start = app_css.index(".files-queue-panel.queue-wrap-titles .fq-row {")
+        end = app_css.index("/* Status as a compact colored dot", start)
+        wrap_css = app_css[start:end]
+
+        self.assertIn('class="fq-row-signals"', app_js)
+        self.assertIn(".fq-row-signals {", app_css)
+        self.assertIn(".files-queue-panel.queue-wrap-titles .fq-row-signals {", wrap_css)
+        self.assertIn("margin-left: auto;", wrap_css)
+        self.assertIn("flex: 0 0 auto;", wrap_css)
 
     def test_queue_health_rows_include_live_and_recent_worker_sessions(self):
         """Queue health should carry Triggered Workers' live and Past 24h sessions inline."""

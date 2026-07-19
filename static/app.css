@@ -16966,6 +16966,12 @@ body:has(.gc-reader) .pwa-install-banner {
   align-items: flex-start;
   flex-wrap: wrap;
 }
+.fq-row-signals {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
 .files-queue-panel.queue-wrap-titles .fq-chips {
   flex-wrap: wrap;
 }
@@ -16978,6 +16984,11 @@ body:has(.gc-reader) .pwa-install-banner {
   text-overflow: clip;
   overflow-wrap: anywhere;
   padding-top: 3px;
+}
+.files-queue-panel.queue-wrap-titles .fq-row-signals {
+  margin-left: auto;
+  align-self: flex-start;
+  flex: 0 0 auto;
 }
 .files-queue-panel.queue-wrap-titles .fq-status {
   margin-top: 2px;
