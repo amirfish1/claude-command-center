@@ -54941,28 +54941,15 @@
       btn.setAttribute('aria-selected', active ? 'true' : 'false');
     });
     _settingsCurrentSection = sectionId;
+    // Single-panel mode (kimi-web parity): one section at a time. Search
+    // mode overrides this via .is-searching (shows all matches).
+    $settingsPane.querySelectorAll('.settings-section').forEach(sec => {
+      const active = sec.getAttribute('data-section-id') === sectionId;
+      sec.classList.toggle('is-active-section', active);
+      sec.setAttribute('aria-hidden', active ? 'false' : 'true');
+    });
     if (opts.scroll === false) return;
-    const target = $settingsPane.querySelector('.settings-section[data-section-id="' + sectionId + '"]');
-    if (!target) return;
-    let reduceMotion = false;
-    try { reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) {}
-    target.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' });
-  }
-
-  let _settingsScrollSpyTicking = false;
-  function settingsPaneScrollSpy() {
-    if (!$settingsPane || !$settingsModalInner) return;
-    if ($settingsModalInner.classList.contains('is-searching')) return;
-    const sections = Array.from($settingsPane.querySelectorAll('.settings-section'));
-    if (!sections.length) return;
-    const paneTop = $settingsPane.getBoundingClientRect().top;
-    let current = sections[0];
-    for (const s of sections) {
-      const r = s.getBoundingClientRect();
-      if (r.top - paneTop <= 24) current = s;
-    }
-    const sid = current.getAttribute('data-section-id');
-    if (sid && sid !== _settingsCurrentSection) setActiveSettingsRailSection(sid, { scroll: false });
+    $settingsPane.scrollTop = 0;
   }
 
   function ensureSettingsRowCrumb(row, text) {
@@ -55217,16 +55204,8 @@
       if (sid) setActiveSettingsRailSection(sid);
     });
   }
-  if ($settingsPane) {
-    $settingsPane.addEventListener('scroll', () => {
-      if (_settingsScrollSpyTicking) return;
-      _settingsScrollSpyTicking = true;
-      requestAnimationFrame(() => {
-        _settingsScrollSpyTicking = false;
-        settingsPaneScrollSpy();
-      });
-    });
-  }
+  // Scroll-spy removed: the pane shows one section at a time (single-panel
+  // mode), so there is nothing to spy on scroll for.
   if ($settingsSearchInput) {
     $settingsSearchInput.addEventListener('input', (e) => applySettingsSearch(e.target.value));
   }
