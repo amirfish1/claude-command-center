@@ -3946,8 +3946,8 @@
     }
     if (engineKey === 'codex') {
       if (hasFamily('sol')) return 'premium';
-      if (hasFamily('terra')) return 'medium';
-      if (hasFamily('luna')) return 'low';
+      if (hasFamily('terra')) return 'high';
+      if (hasFamily('luna')) return 'medium';
     }
     return '';
   }
