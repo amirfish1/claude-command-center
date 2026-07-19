@@ -34071,6 +34071,7 @@
     _fetchUxqItems(allowStale).then(async items => {
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
+      const allQueues = _uxqProjectKey(requestedProject) === 'ALL';
       _uxqLastResolvedProject = proj;
       _uxqRenderScopeSelect(items, proj);
       _uxqRenderFilterToggle();
@@ -34207,6 +34208,8 @@
         const bumpTitle = atTop ? 'Already highest priority (p0)' : ('Bump to ' + np);
         const priorityBumpHtml = '<button class="fq-prio-bump' + (atTop ? ' is-top' : '') + '" data-ref="' + escapeAttr(ref) + '" data-next-prio="' + escapeAttr(np) + '" title="' + escapeAttr(bumpTitle) + '" aria-label="' + escapeAttr(bumpTitle) + '">↑</button>';
         const compactRef = ref.replace(/^.*-/, '#');
+        const queuePrefix = String(it.project || ref.split('-')[0] || '').slice(0, 4);
+        const displayRef = allQueues && queuePrefix ? queuePrefix + compactRef : compactRef;
         const runnable = it.watchtower_runnable !== false;
         const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
         const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up' : status;
@@ -34222,7 +34225,7 @@
         const ageStr = !isNaN(ageMs) ? timeAgo(ageMs).replace(/\s+ago$/, '') : '';
         return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
-          + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(compactRef) + '</span>'
+          + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(displayRef) + '</span>'
           + _uxqChips(it, priorityBumpHtml)
           + '<span class="fq-note">' + escapeHtml(noteShown) + '</span>'
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
