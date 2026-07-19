@@ -207,6 +207,27 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn(".fq-status.fq-status-pending", app_css)
         self.assertIn("@keyframes fq-status-pending-spin", app_css)
 
+    def test_play_handlers_set_pending_state_after_they_read_the_ticket_ref(self):
+        """The spinner must be initiated inside, not before, its click handlers."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        queue_clicks = app_js[
+            app_js.index("const $queueList = document.getElementById('sidebarQueueList')"):
+            app_js.index("// Priority bump button", app_js.index("const $queueList = document.getElementById('sidebarQueueList')"))
+        ]
+
+        self.assertIn(
+            "const ref = runBtn.getAttribute('data-ref');\n"
+            "          _uxqPendingRunRefs.add(ref);\n"
+            "          runBtn.disabled = true;",
+            queue_clicks,
+        )
+        self.assertIn(
+            "const ref = runOnceBtn.getAttribute('data-ref');\n"
+            "          _uxqPendingRunRefs.add(ref);\n"
+            "          runOnceBtn.disabled = true;",
+            queue_clicks,
+        )
+
     def test_queue_panel_can_filter_tickets_by_type(self):
         """Type controls keep bugs and features independently scannable."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
