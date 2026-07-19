@@ -32780,6 +32780,35 @@
   // _fetchMissingWorkerConvs() so _twCardById can resolve cross-repo workers
   // and render the full session card instead of the fallback row.
   const _wtWorkerConvsCache = {};
+  // Per-repo fetch gating (CCC-614): workers whose session_id never resolves
+  // (ended/cross-machine sessions) otherwise re-fire one
+  // /api/conversations?repo_path= per repo on EVERY sidebar re-render, in
+  // parallel, with no dedupe. Recheck each repo at most once per 15s (the
+  // _fetchWtWorkers cadence) and share one in-flight promise per repo_path.
+  const _wtWorkerConvsRepoTs = {};
+  const _wtWorkerConvsRepoInflight = new Map();
+  const _WT_WORKER_CONVS_REPO_TTL_MS = 15000;
+  async function _fetchWorkerConvsForRepo(repoPath, sids) {
+    const pending = _wtWorkerConvsRepoInflight.get(repoPath);
+    if (pending) return pending;
+    const p = (async () => {
+      let found = false;
+      try {
+        const res = await fetch('/api/conversations?repo_path=' + encodeURIComponent(repoPath), { cache: 'no-store' });
+        const data = await res.json().catch(() => ([]));
+        const convs = Array.isArray(data) ? data : ((data && data.conversations) || []);
+        convs.forEach(c => {
+          const sid = c && (c.session_id || c.id);
+          if (sid && sids.has(sid)) { _wtWorkerConvsCache[sid] = c; found = true; }
+        });
+        _wtWorkerConvsRepoTs[repoPath] = Date.now();
+      } catch (_) {}
+      return found;
+    })();
+    _wtWorkerConvsRepoInflight.set(repoPath, p);
+    p.finally(() => _wtWorkerConvsRepoInflight.delete(repoPath));
+    return p;
+  }
   async function _fetchMissingWorkerConvs() {
     const workers = (_wtWorkersCache && _wtWorkersCache.workers) || [];
     const currentSids = new Set(
@@ -32804,19 +32833,13 @@
       repoToSids.get(rp).add(w.session_id);
     });
     if (!repoToSids.size) return false;
-    let found = false;
-    await Promise.all([...repoToSids.entries()].map(async ([repoPath, sids]) => {
-      try {
-        const res = await fetch('/api/conversations?repo_path=' + encodeURIComponent(repoPath), { cache: 'no-store' });
-        const data = await res.json().catch(() => ([]));
-        const convs = Array.isArray(data) ? data : ((data && data.conversations) || []);
-        convs.forEach(c => {
-          const sid = c && (c.session_id || c.id);
-          if (sid && sids.has(sid)) { _wtWorkerConvsCache[sid] = c; found = true; }
-        });
-      } catch (_) {}
+    const now = Date.now();
+    const results = await Promise.all([...repoToSids.entries()].map(([repoPath, sids]) => {
+      const last = _wtWorkerConvsRepoTs[repoPath] || 0;
+      if (now - last < _WT_WORKER_CONVS_REPO_TTL_MS) return false;
+      return _fetchWorkerConvsForRepo(repoPath, sids);
     }));
-    return found;
+    return results.some(Boolean);
   }
   // The Triggered Workers sidebar section renders queue headers + worker rows
   // synchronously from the caches (above), then this warms BOTH caches in the
@@ -44958,6 +44981,10 @@
   // ship is live (or just finished, until dismissed) its step log takes over
   // the "Needs your attention" panel as a terminal-style feed.
   const _shipPollTimers = {};   // repo_path -> intervalId
+  // Dedupe concurrent status GETs per repo (CCC-614): overlapping conv-list
+  // re-renders each hydrate every folder header, and without sharing the
+  // in-flight promise the same repo_path is fetched multiple times at once.
+  const _shipStatusInflight = new Map();  // repo_path -> Promise
   let _shipLogRepo = null;      // repo whose log currently owns the NYA panel
   let _shipLogActive = false;   // true while the log feed owns the NYA panel
 
@@ -45181,20 +45208,27 @@
     if (!repo) return null;
     box = box || _shipBox(repo);
     if (!box) return null;
-    try {
-      const res = await fetch('/api/repo/ship/status?repo_path=' + encodeURIComponent(repo));
-      const data = await res.json().catch(() => ({}));
-      _renderShipStatus(_shipBox(repo) || box, data);
-      // Drive the live log panel when this repo is shipping, or keep it
-      // updated if it already owns the panel (until the user dismisses it).
-      if (data && data.job && (data.job.running || _shipLogRepo === repo)) {
-        _renderShipLogPanel(repo, data);
-        if (data.job.running) _startShipPolling(repo);
+    const pending = _shipStatusInflight.get(repo);
+    if (pending) return pending;
+    const p = (async () => {
+      try {
+        const res = await fetch('/api/repo/ship/status?repo_path=' + encodeURIComponent(repo));
+        const data = await res.json().catch(() => ({}));
+        _renderShipStatus(_shipBox(repo) || box, data);
+        // Drive the live log panel when this repo is shipping, or keep it
+        // updated if it already owns the panel (until the user dismisses it).
+        if (data && data.job && (data.job.running || _shipLogRepo === repo)) {
+          _renderShipLogPanel(repo, data);
+          if (data.job.running) _startShipPolling(repo);
+        }
+        return data;
+      } catch (_) {
+        return null;
       }
-      return data;
-    } catch (_) {
-      return null;
-    }
+    })();
+    _shipStatusInflight.set(repo, p);
+    p.finally(() => _shipStatusInflight.delete(repo));
+    return p;
   }
 
   function _startShipPolling(repo) {

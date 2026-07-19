@@ -1263,6 +1263,95 @@ def test_ux_fixes_health_payload_coalesces_concurrent_polls(monkeypatch):
     assert all(r["queues"] == [{"queue": "CCC"}] for r in results)
 
 
+def _stub_repo_ship_status_deps(monkeypatch, *, ttl=60.0):
+    """Isolate repo_ship_status from disk/git so the only measurable work left
+    is the `git status --porcelain` subprocess (the CCC-614 fan-out cost)."""
+    server._repo_ship_status_cache.clear()
+    server._repo_ship_status_build_locks.clear()
+    monkeypatch.setattr(server, "_REPO_SHIP_STATUS_TTL", ttl)
+    monkeypatch.setattr(server, "resolve_repo_path", lambda p: p)
+    monkeypatch.setattr(server, "_load_repo_ship_state", lambda: {})
+    monkeypatch.setattr(server, "_load_ship_job", lambda repo_path: None)
+    monkeypatch.setattr(server, "_resolve_vercel_project", lambda repo_path=None: "")
+
+
+def test_repo_ship_status_coalesces_concurrent_polls(monkeypatch):
+    """The conv-list folder burst fires one /api/repo/ship/status per repo
+    header at once; concurrent requests for the same repo must share ONE
+    `git status` subprocess, not each spawn their own (CCC-614)."""
+    _stub_repo_ship_status_deps(monkeypatch)
+
+    calls = []
+    lock = threading.Lock()
+
+    def slow_git(args, cwd, timeout=10):
+        with lock:
+            calls.append((args, cwd))
+        time.sleep(0.05)
+        return 0, "", ""
+
+    monkeypatch.setattr(server, "_git", slow_git)
+
+    barrier = threading.Barrier(8)
+
+    def call_status():
+        barrier.wait(timeout=2)
+        return server.repo_ship_status("/repo/a")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: call_status(), range(8)))
+
+    assert len(calls) == 1, "concurrent ship/status polls each ran git status"
+    assert all(r == results[0] for r in results)
+    assert results[0]["dirty"] is False
+
+
+def test_repo_ship_status_ttl_covers_render_burst(monkeypatch):
+    """Every conversation-list re-render re-hydrates every folder header; within
+    the TTL those repeat polls must reuse the snapshot instead of re-running
+    `git status` per render."""
+    _stub_repo_ship_status_deps(monkeypatch)
+
+    calls = _count_calls(monkeypatch, "_git", (0, "x", ""))
+    for _ in range(10):
+        server.repo_ship_status("/repo/a")
+    assert len(calls) == 1, "render burst within TTL re-ran git status"
+
+    # A second repo builds its own snapshot once (per-repo keying).
+    server.repo_ship_status("/repo/b")
+    assert len(calls) == 2
+
+    # Past the TTL the live dirty check refreshes.
+    monkeypatch.setattr(server, "_REPO_SHIP_STATUS_TTL", 0.0)
+    server.repo_ship_status("/repo/a")
+    assert len(calls) == 3
+
+
+def test_repo_ship_status_live_job_overrides_cached_disk_job(monkeypatch):
+    """The in-memory job (live phase ticks for the 3s ship poll) must never be
+    flattened by the TTL cache — only the disk fallback is cached."""
+    _stub_repo_ship_status_deps(monkeypatch)
+    monkeypatch.setattr(server, "_load_ship_job", lambda repo_path: {"running": False, "phase": "pushed"})
+    monkeypatch.setattr(server, "_git", lambda *a, **k: (0, "", ""))
+
+    live_job = {"running": True, "phase": "pushing"}
+    with server._ship_jobs_lock:
+        server._ship_jobs["/repo/a"] = dict(live_job)
+    try:
+        first = server.repo_ship_status("/repo/a")
+        second = server.repo_ship_status("/repo/a")  # served from the TTL cache
+    finally:
+        with server._ship_jobs_lock:
+            server._ship_jobs.pop("/repo/a", None)
+
+    assert first["job"] == live_job
+    assert second["job"] == live_job, "cached poll must still see the live in-memory job"
+
+    # With no in-memory job the cached disk copy is the fallback.
+    third = server.repo_ship_status("/repo/a")
+    assert third["job"] == {"running": False, "phase": "pushed"}
+
+
 def test_live_activity_cache_covers_dashboard_poll_interval(monkeypatch):
     """The live sidebar polls every 5s; that steady-state poll must not force
     a real live-activity rebuild every time when a recent snapshot exists."""

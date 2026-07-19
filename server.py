@@ -49514,24 +49514,62 @@ def start_repo_ship(repo_path):
     return snapshot
 
 
+_REPO_SHIP_STATUS_TTL = 5.0
+_repo_ship_status_cache = {}        # repo_path -> {"ts", "data"}
+_repo_ship_status_cache_lock = threading.Lock()
+_repo_ship_status_build_locks = {}  # repo_path -> threading.Lock
+
+
+def _repo_ship_status_slow_parts(repo_path):
+    """The expensive half of ship/status: the `git status` subprocess, the
+    on-disk job/state JSON reads, and the vercel-link probe. TTL-cached per
+    repo with a per-repo build lock so the folder-header burst (one request
+    per repo on every conversation-list render) collapses to one subprocess
+    per repo per TTL instead of one per request (CCC-614)."""
+    now = time.time()
+    with _repo_ship_status_cache_lock:
+        ent = _repo_ship_status_cache.get(repo_path)
+        if ent is not None and now - ent["ts"] < _REPO_SHIP_STATUS_TTL:
+            return ent["data"]
+        lock = _repo_ship_status_build_locks.setdefault(repo_path, threading.Lock())
+    with lock:
+        with _repo_ship_status_cache_lock:
+            ent = _repo_ship_status_cache.get(repo_path)
+            if ent is not None and time.time() - ent["ts"] < _REPO_SHIP_STATUS_TTL:
+                return ent["data"]
+        persisted = _load_repo_ship_state().get(repo_path) or {}
+        rc, out, _ = _git(["status", "--porcelain"], repo_path)
+        data = {
+            "job": _load_ship_job(repo_path),
+            "dirty": bool(out.strip()) if rc == 0 else None,
+            "last_ship_at": persisted.get("last_ship_at"),
+            "last_ship_sha": persisted.get("last_ship_sha"),
+            "vercel": bool(_resolve_vercel_project(repo_path)),
+        }
+        with _repo_ship_status_cache_lock:
+            if len(_repo_ship_status_cache) > 256:
+                _repo_ship_status_cache.clear()
+                _repo_ship_status_build_locks.clear()
+            _repo_ship_status_cache[repo_path] = {"ts": time.time(), "data": data}
+        return data
+
+
 def repo_ship_status(repo_path):
     """Current ship phase + persisted last-ship + live dirty/clean for a repo."""
     repo_path = resolve_repo_path(repo_path)
     with _ship_jobs_lock:
         job = dict(_ship_jobs.get(repo_path) or {}) or None
+    cached = _repo_ship_status_slow_parts(repo_path)
     if job is None:                       # in-memory gone (refresh/restart) → disk
-        job = _load_ship_job(repo_path)
-    persisted = _load_repo_ship_state().get(repo_path) or {}
-    rc, out, _ = _git(["status", "--porcelain"], repo_path)
-    dirty = bool(out.strip()) if rc == 0 else None
+        job = cached["job"]
     return {
         "ok": True,
         "repo_path": repo_path,
-        "dirty": dirty,
+        "dirty": cached["dirty"],
         "job": job,
-        "last_ship_at": persisted.get("last_ship_at"),
-        "last_ship_sha": persisted.get("last_ship_sha"),
-        "vercel": bool(_resolve_vercel_project(repo_path)),
+        "last_ship_at": cached["last_ship_at"],
+        "last_ship_sha": cached["last_ship_sha"],
+        "vercel": cached["vercel"],
     }
 
 
