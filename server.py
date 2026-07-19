@@ -28217,6 +28217,16 @@ def _acp_load(harness, sid, cwd):
             state["loaded_conn"] = id(conn)
             if cwd:
                 state["cwd"] = cwd
+            # load AND resume both return configOptions (kimi server.ts:363-408)
+            # — refresh the snapshot so attach-on-view picks up the session's
+            # real model/mode instead of keeping a stale spawn-time value.
+            result = resp.get("result") or {}
+            options = result.get("configOptions")
+            if isinstance(options, list) and options:
+                state["config_options"] = options
+                for opt in options:
+                    if isinstance(opt, dict) and opt.get("id") == "model":
+                        state["model"] = opt.get("currentValue")
         _acp_save_state_unlocked(harness)
     if not resp.get("ok"):
         return resp
