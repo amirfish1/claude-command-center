@@ -1,0 +1,1 @@
+- Fixed Kimi sessions vanishing from the session list: newer Kimi Code writes `createdAt`/`updatedAt` in `state.json` as epoch-millisecond ints instead of ISO strings, which crashed `_iso_to_epoch` and aborted the whole Kimi scan. `_iso_to_epoch` now accepts numeric epochs (s or ms).
