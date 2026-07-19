@@ -27954,27 +27954,14 @@ def _acp_prompt(harness, sid, text, mode="send"):
     session/update notifications and finishes in _acp_finalize_turn."""
     if not text:
         return {"ok": False, "error": "empty prompt"}
-    conn = _acp_ensure(harness)
-    if conn is None:
-        return {"ok": False, "error": _acp_conn_error(harness)}
     text = _strip_lone_surrogates(str(text))
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
         if state.get("status") == "active" and mode != "steer":
             return {"ok": False, "error": "turn already in progress", "code": "busy"}
-        loaded = state.get("loaded_conn") == id(conn)
-        cwd = state.get("cwd") or ""
-    if not loaded:
-        # Session exists on disk (TUI or pre-restart) but isn't attached to
-        # this ACP connection — attach first (resume keeps CCC's transcript).
-        if not cwd and harness == "kimi":
-            idx = _kimi_session_index().get(sid) or {}
-            cwd = idx.get("work_dir") or ""
-        if not cwd:
-            return {"ok": False, "error": "session cwd unknown — cannot attach", "code": "no_cwd"}
-        attached = _acp_load(harness, sid, cwd)
-        if not attached.get("ok"):
-            return attached
+    attach_err = _acp_ensure_session_loaded(harness, sid)
+    if attach_err is not None:
+        return attach_err
     req_id = _acp_request_async(harness, "session/prompt", {
         "sessionId": sid,
         "prompt": [{"type": "text", "text": text}],
@@ -28103,9 +28090,35 @@ def _acp_list(harness, cwd=None):
 
 
 def _acp_set_config(harness, sid, config_id, value):
+    attach_err = _acp_ensure_session_loaded(harness, sid)
+    if attach_err is not None:
+        return attach_err
     return _acp_request(harness, "session/set_config_option", {
         "sessionId": sid, "configId": config_id, "value": value,
     }, timeout=10, sid=sid)
+
+
+def _acp_ensure_session_loaded(harness, sid):
+    """Ensure the ACP conn is up and `sid` is attached to it (auto-attach
+    from the harness's on-disk store when needed). Returns an error dict on
+    failure, None when the session is loaded."""
+    conn = _acp_ensure(harness)
+    if conn is None:
+        return {"ok": False, "error": _acp_conn_error(harness)}
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid, create=True)
+        loaded = state.get("loaded_conn") == id(conn)
+        cwd = state.get("cwd") or ""
+    if loaded:
+        return None
+    if not cwd and harness == "kimi":
+        cwd = (_kimi_session_index().get(sid) or {}).get("work_dir") or ""
+    if not cwd:
+        return {"ok": False, "error": "session cwd unknown — cannot attach", "code": "no_cwd"}
+    attached = _acp_load(harness, sid, cwd)
+    if not attached.get("ok"):
+        return attached
+    return None
 
 
 def _acp_resolve_approval(harness, sid, request_id, option_id=None):
