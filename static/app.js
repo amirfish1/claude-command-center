@@ -33992,6 +33992,20 @@
     }
     return null;
   }
+  // The edit endpoint returns the canonical ticket after persistence. Replace
+  // its cached counterpart before repainting so the Queue row reflects the
+  // saved field without waiting for a separate list request.
+  function _uxqReplaceCachedItem(item) {
+    const ref = _uxqItemRef(item);
+    if (!ref) return false;
+    const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
+    const index = items.findIndex(candidate => _uxqItemRef(candidate) === ref);
+    if (index < 0) return false;
+    const freshItems = items.slice();
+    freshItems[index] = item;
+    _uxqItemsCache = { ts: Date.now(), items: freshItems };
+    return true;
+  }
   async function _uxqOpenItemDetail(ref) {
     const fallback = _uxqItemForRef(ref);
     try {
@@ -34050,8 +34064,12 @@
       const d = await res.json().catch(() => ({}));
       if (res.ok && d.ok) {
         showOpToast('Saved', 'success');
-        _uxqItemsCache.ts = 0;
-        _renderQueuePanel();
+        if (_uxqReplaceCachedItem(d.item)) {
+          _renderQueuePanel({ allowStale: true });
+        } else {
+          _uxqItemsCache.ts = 0;
+          _renderQueuePanel();
+        }
       } else {
         showOpToast('Save failed: ' + (d.error || res.status), 'error');
       }
