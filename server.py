@@ -61802,6 +61802,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         kind="bespoke" if wants_ccc_session else "",
                         dry_run=bool(payload.get("dry_run")),
                     )
+                except TypeError:
+                    # Older watchtower without extra_instructions/kind kwargs:
+                    # spawn tracked with what it understands (model only).
+                    try:
+                        recs = _wt_workers.spawn_workers(
+                            project, 1, engine,
+                            repo_path=str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
+                            model=model or "",
+                            dry_run=bool(payload.get("dry_run")),
+                        )
+                    except TypeError:
+                        recs = _wt_workers.spawn_workers(
+                            project, 1, engine,
+                            repo_path=str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
+                            dry_run=bool(payload.get("dry_run")),
+                        )
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
                     return
