@@ -794,6 +794,35 @@ def _wt_past_workers(hours=24, max_per_queue=3):
 _queue_answer = _q.answer
 
 
+def _comment_queue_item_and_notify_worker(ref, text):
+    """Record a dashboard comment and alert its active WatchTower worker.
+
+    ``wt comment`` already has this delivery contract.  CCC writes directly to
+    the queue for its dashboard endpoint, so it must preserve the same
+    best-effort notification without letting a delivery failure lose the
+    durable comment.
+    """
+    item = _q.comment(ref, text, by="human", session_id="ccc")
+    delivery = None
+    target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
+    if (
+        item
+        and _WT_QUEUE_AVAILABLE
+        and item.get("status") == "in_progress"
+        and target
+    ):
+        prompt = (
+            f"[WATCHTOWER] A new comment was added to your claimed ticket "
+            f"{item['ref']}:\n\n{text}"
+        )
+        try:
+            from watchtower import messages as wt_messages
+            delivery = wt_messages.send(str(target), prompt, mode="steer")
+        except Exception as e:
+            delivery = {"ok": False, "error": str(e)}
+    return item, delivery
+
+
 def _uxq_item_timeline(item):
     """Return ticket activity even when CCC uses its stdlib-only queue fallback.
 
@@ -62479,8 +62508,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "WatchTower comments unavailable"}, 400)
                 return
             try:
-                item = comment_fn(ref, text, by="human", session_id="ccc")
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                item, delivery = _comment_queue_item_and_notify_worker(ref, text)
+                self.send_json({
+                    "ok": bool(item),
+                    "item": _uxq_item_payload(item),
+                    "delivery": delivery,
+                })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
