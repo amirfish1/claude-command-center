@@ -305,7 +305,7 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 
 ## Features
 
-- **Multi-engine orchestration**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
+- **One board, five engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
 - **ACP adapter** (optional): expose CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, and agents like Hermes) can drive Claude Code sessions over JSON-RPC stdio. Runs as a separate process (`python3 ccc_acp.py`); install with the `acp` extra. The core server stays stdlib-only.
 - **Kanban** across every session, with drag-drop between columns,
   rubber-band multi-select, and per-column tinting.
