@@ -5751,7 +5751,11 @@ _TRANSCRIPT_CONTROL_PREFIXES = (
 
 def _is_transcript_control_text(text):
     """Return True for Claude Code bookkeeping stored as user transcript text."""
-    return bool((text or "").lstrip().startswith(_TRANSCRIPT_CONTROL_PREFIXES))
+    normalized = (text or "").strip()
+    return (
+        normalized == "[Request interrupted by user]"
+        or normalized.startswith(_TRANSCRIPT_CONTROL_PREFIXES)
+    )
 
 
 def _extract_command_invocation_text(text):
