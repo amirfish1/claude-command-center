@@ -34121,14 +34121,38 @@
       // win over filing time so a live agent or human question is never buried
       // under a newer, inert ticket in All queues.
       const _PR = { p0: 0, p1: 1, p2: 2, p3: 3 };
+      const _liveWorkers = (((_uxqHealthCache || {}).wt_workers) || [])
+        .filter(worker => worker && worker.alive !== false);
+      const _hasClaimMetadata = it => !!(it && (it.claimed_by || it.claimed_at || it.claimed_session_id));
+      const _hasLiveClaim = it => {
+        if (!_hasClaimMetadata(it)) return false;
+        const project = _uxqProjectKey(it && it.project);
+        const claimedSession = String((it && it.claimed_session_id) || '').trim();
+        const claimedBy = String((it && it.claimed_by) || '').trim();
+        return _liveWorkers.some(worker => {
+          if (project && _uxqProjectKey(worker.queue) !== project) return false;
+          const session = String(worker.session_id || '').trim();
+          const id = String(worker.worker_id || '').trim();
+          return (claimedSession && claimedSession === session)
+            || (claimedBy && (claimedBy === session || claimedBy === id));
+        });
+      };
+      const _isStaleClaim = it => {
+        const rawStatus = String((it && it.status) || 'open');
+        return rawStatus === 'in_progress'
+          ? !_hasLiveClaim(it)
+          : _hasClaimMetadata(it) && !_hasLiveClaim(it);
+      };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
         if (it && it.needs_input) return 'blocked';
-        if (rawStatus === 'open' && it && (it.claimed_by || it.claimed_at || it.claimed_session_id)) {
+        if (rawStatus === 'in_progress' && _isStaleClaim(it)) return 'open';
+        if (rawStatus === 'open' && _hasLiveClaim(it)) {
           return 'in_progress';
         }
         return rawStatus;
       };
+      const _isLiveWip = it => _effectiveStatus(it) === 'in_progress' && _hasLiveClaim(it);
       const _unready = it => (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec') ? 1 : 0);
       const _prioRank = it => (it && _PR[it.priority] != null) ? _PR[it.priority] : (it && it.lane === 'express' ? 0 : 2);
       // A close with unresolved work is not a clean green close. Put it with
@@ -34138,13 +34162,13 @@
       const _hasUnresolved = it => _uxqUnresolvedNotes(it).length > 0;
       const _isWaitingToDrain = it => {
         if (_effectiveStatus(it) !== 'open') return false;
-        return it.claimable !== false && it.watchtower_runnable !== false && !_unready(it);
+        return !_isStaleClaim(it) && it.claimable !== false && it.watchtower_runnable !== false && !_unready(it);
       };
       // WIP → needs input → unresolved attention → claimable work → clean
       // closes → non-claimable, unready, or otherwise inert open work.
       const _operationalBucket = it => {
         const status = _effectiveStatus(it);
-        if (status === 'in_progress') return 0;
+        if (_isLiveWip(it)) return 0;
         if (status === 'blocked') return 1;
         if (_hasUnresolved(it)) return 2;
         if (_isWaitingToDrain(it)) return 3;
@@ -34213,6 +34237,7 @@
         const noteFull = String(it.note || '');
         const rawStatus = it.status || 'open';
         const status = _effectiveStatus(it);
+        const staleClaim = _isStaleClaim(it);
         const ref = _uxqItemRef(it);
         const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
@@ -34234,12 +34259,15 @@
         const displayRef = allQueues && queuePrefix ? queuePrefix + compactRef : compactRef;
         const runnable = it.watchtower_runnable !== false;
         const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
-        const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up' : status;
-        const statusAction = (!runnable && status === 'open')
-          ? '<button class="fq-status fq-status-action fq-run" data-ref="' + escapeAttr(ref) + '" title="Run with WatchTower" aria-label="Run with WatchTower">▶</button>'
-          : (!autoDrainQueue && status === 'open')
-            ? '<button class="fq-status fq-status-action fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once - spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
-            : '<span class="fq-status" title="' + escapeAttr(statusTitle) + '">' + escapeHtml(status) + '</span>';
+        const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
+          : staleClaim ? 'stale claim - no current live worker' : status;
+        const statusAction = staleClaim
+          ? '<span class="fq-status" title="' + escapeAttr(statusTitle) + '">' + escapeHtml(status) + '</span>'
+          : ((!runnable && status === 'open')
+            ? '<button class="fq-status fq-status-action fq-run" data-ref="' + escapeAttr(ref) + '" title="Run with WatchTower" aria-label="Run with WatchTower">▶</button>'
+            : (!autoDrainQueue && status === 'open')
+              ? '<button class="fq-status fq-status-action fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once - spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
+              : '<span class="fq-status" title="' + escapeAttr(statusTitle) + '">' + escapeHtml(status) + '</span>');
         const ageSrc = status === 'closed'
           ? (it.closed_at || it.updated_at || it.created_at)
           : (it.updated_at || it.created_at);
@@ -34249,7 +34277,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(displayRef) + '</span>'
           + _uxqChips(it, priorityBumpHtml)

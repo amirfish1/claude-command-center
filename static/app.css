@@ -17029,6 +17029,13 @@ body:has(.gc-reader) .pwa-install-banner {
   animation: fq-status-glow 1.5s ease-in-out infinite;
   will-change: opacity, box-shadow;
 }
+/* Historical claim fields can outlive their worker. Keep that stale state
+   visible in the tooltip without giving it a live, repeating blue pulse. */
+.fq-row.is-in_progress.is-stale-claim .fq-status {
+  background: var(--text-muted, #8b949e);
+  animation: none;
+  box-shadow: 0 0 0 3px rgba(139,148,158,0.16);
+}
 .fq-age {
   flex-shrink: 0; font-size: 11px; color: var(--text-muted);
   min-width: 34px; text-align: right;

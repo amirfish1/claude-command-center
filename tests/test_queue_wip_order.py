@@ -27,12 +27,30 @@ class TestQueueWipOrder(unittest.TestCase):
             "const _operationalBucket = it => {",
             app_js,
         )
-        self.assertIn("if (status === 'in_progress') return 0;", app_js)
+        self.assertIn("if (_isLiveWip(it)) return 0;", app_js)
         self.assertIn("if (status === 'blocked') return 1;", app_js)
         self.assertIn("if (_hasUnresolved(it)) return 2;", app_js)
         self.assertIn("if (_isWaitingToDrain(it)) return 3;", app_js)
         self.assertIn("if (status === 'closed') return 4;", app_js)
         self.assertIn("return 5;", app_js)
+
+    def test_only_a_live_worker_backed_claim_is_animated_as_wip(self):
+        """Historical claim metadata must not make an open row look live."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        queue_render = app_js[
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
+        ]
+
+        self.assertIn("const _liveWorkers =", queue_render)
+        self.assertIn("worker.alive !== false", queue_render)
+        self.assertIn("const _hasLiveClaim = it =>", queue_render)
+        self.assertIn("rawStatus === 'open' && _hasLiveClaim(it)", queue_render)
+        self.assertIn("rawStatus === 'in_progress'", queue_render)
+        self.assertIn("if (rawStatus === 'in_progress' && _isStaleClaim(it)) return 'open';", queue_render)
+        self.assertIn("is-stale-claim", queue_render)
+        self.assertIn("stale claim - no current live worker", queue_render)
+        self.assertIn("const statusAction = staleClaim", queue_render)
 
     def test_newly_fetched_queue_items_get_a_temporary_highlight(self):
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
