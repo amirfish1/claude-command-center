@@ -27824,6 +27824,43 @@ def _acp_handle_session_update(harness, sid, update):
                 state["config_options"] = options
             return
 
+        if kind == "plan":
+            # Whole-plan replace from the harness's TodoList tool (see
+            # docs/kimi-code-reference.md §1). Update the live bubble block in
+            # place (same message_id) and persist each CHANGED snapshot so a
+            # reload shows the plan as of that turn.
+            entries = update.get("entries")
+            if not isinstance(entries, list):
+                return
+            norm = []
+            for e in entries:
+                if not isinstance(e, dict):
+                    continue
+                content = str(e.get("content") or "").strip()
+                if not content:
+                    continue
+                norm.append({
+                    "content": content[:300],
+                    "status": str(e.get("status") or "pending"),
+                    "priority": str(e.get("priority") or ""),
+                })
+            if norm == (state.get("plan") or []):
+                return
+            state["plan"] = norm
+            turn = state.get("active_turn")
+            msg_id = (turn or {}).get("msg_id") or f"acp-{harness}-plan"
+            _acp_emit_delta_unlocked(harness, sid, {
+                "type": "assistant_block",
+                "message_id": msg_id,
+                "blocks": [{"type": "plan", "entries": norm}],
+            })
+            _acp_emit_event_unlocked(harness, sid, {
+                "type": "assistant",
+                "message_id": f"{msg_id}-plan",
+                "blocks": [{"kind": "plan", "entries": norm}],
+            }, save=True)
+            return
+
         if kind == "current_mode_update":
             state["mode"] = update.get("currentModeId")
             return
@@ -28089,6 +28126,7 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None):
         _acp_set_config(harness, sid, "mode", mode)
     if model:
         _acp_set_config(harness, sid, "model", model)
+    _acp_wire_tail_start(harness)
     if prompt:
         sent = _acp_prompt(harness, sid, prompt)
         if not sent.get("ok"):
@@ -28250,6 +28288,8 @@ def _acp_load(harness, sid, cwd):
                     if isinstance(opt, dict) and opt.get("id") == "model":
                         state["model"] = opt.get("currentValue")
         _acp_save_state_unlocked(harness)
+    if resp.get("ok"):
+        _acp_wire_tail_start(harness)
     if not resp.get("ok"):
         return resp
     return {"ok": True, "session_id": sid, "harness": harness, "via": f"acp-{method.split('/')[-1]}"}
@@ -28271,19 +28311,26 @@ def _acp_maybe_attach_on_view(harness, sid):
     with _ACP_LOCK:
         state = _acp_session(harness, sid)
         conn = _ACP_CONNS.get(harness)
-        if state and conn and state.get("loaded_conn") == id(conn):
-            return None
+        loaded = bool(state and conn and state.get("loaded_conn") == id(conn))
         attempted = (state or {}).get("attach_attempted_at") or 0
-        if time.time() - attempted < _ACP_ATTACH_VIEW_MIN_INTERVAL_S:
-            return None
+    cwd = (state or {}).get("cwd") or ""
+    if not cwd and harness == "kimi":
+        cwd = (_kimi_session_index().get(sid) or {}).get("work_dir") or ""
+    # Viewed sessions are watched for TUI-originated turns (KIMI-FIXES-3) —
+    # independent of whether an attach/backfill is needed this process.
+    with _ACP_LOCK:
+        st = _acp_session(harness, sid, create=True, cwd=cwd)
+        st["wire_watch"] = True
+    _acp_wire_tail_start(harness)
+    if loaded:
+        return None
+    if time.time() - attempted < _ACP_ATTACH_VIEW_MIN_INTERVAL_S:
+        return None
     try:
         if _acp_transcript_path(harness, sid).stat().st_size > 0:
             return None
     except OSError:
         pass
-    cwd = (state or {}).get("cwd") or ""
-    if not cwd and harness == "kimi":
-        cwd = (_kimi_session_index().get(sid) or {}).get("work_dir") or ""
     if not cwd:
         return None
     with _ACP_LOCK:
@@ -28414,6 +28461,232 @@ def _is_kimi_session(session_id):
 
 def _resolve_kimi_bin():
     return _acp_resolve_bin("kimi")
+
+
+# ---------------------------------------------------------------------------
+# wire.jsonl tail (KIMI-FIXES-3): TUI-originated turns for attached sessions.
+#
+# Each `kimi acp` process only streams ITS OWN turns. A session the user also
+# drives from the kimi TUI writes every turn to
+# ~/.kimi-code/sessions/<wd>/<sid>/agents/main/wire.jsonl (event-sourced; see
+# docs/kimi-code-reference.md §5). This watcher tails the wire of ATTACHED
+# sessions and folds new turns into the CCC conv stream, so the CCC pane shows
+# TUI-originated work live too.
+#
+# Dedup: a CCC-driven turn writes the same content to the wire — so folding
+# pauses while a turn is active or a replay is in flight, and every candidate
+# row is content-matched against the recent in-memory events before emit.
+# Wire events carry COMPLETE message parts (deltas are live-only, never
+# persisted), so one row per message is the natural grain here.
+# ---------------------------------------------------------------------------
+
+_ACP_WIRE_TAIL = {"thread": None, "stop": False}
+_ACP_WIRE_TAIL_POLL_S = 1.0
+_ACP_WIRE_DEDUP_WINDOW = 50
+
+
+def _acp_wire_path(harness, sid):
+    """The harness session's wire.jsonl, or None when unknown/not applicable."""
+    if harness != "kimi":
+        return None
+    try:
+        idx = _kimi_session_index()
+        session_dir = (idx.get(sid) or {}).get("session_dir") or ""
+    except Exception:
+        return None
+    if not session_dir:
+        return None
+    return Path(session_dir) / "agents" / "main" / "wire.jsonl"
+
+
+def _acp_wire_recent_texts(state, limit=_ACP_WIRE_DEDUP_WINDOW):
+    """(kind, normalized-text, tool-id-suffix) tuples of the last N events,
+    used to suppress re-folding rows CCC already emitted via the ACP stream."""
+    seen_user, seen_assistant, seen_tools = set(), set(), set()
+    for ev in list(state.get("events") or [])[-limit:]:
+        etype = ev.get("type")
+        if etype == "user_text":
+            seen_user.add(" ".join(str(ev.get("text") or "").split()))
+        elif etype == "assistant":
+            for b in ev.get("blocks") or []:
+                if b.get("kind") in ("text", "thinking"):
+                    seen_assistant.add(" ".join(str(b.get("text") or "").split()))
+                elif b.get("kind") == "tool_use":
+                    tid = str(b.get("id") or "")
+                    if tid:
+                        seen_tools.add(tid.rsplit(":", 1)[-1])
+    return seen_user, seen_assistant, seen_tools
+
+
+def _acp_wire_fold(harness, sid, events):
+    """Fold a batch of wire.jsonl events into the conv stream (dedup'd)."""
+    with _ACP_LOCK:
+        state = _acp_session(harness, sid)
+        if state is None or not (state.get("wire_watch") or state.get("attached")):
+            return
+        if state.get("status") == "active" or state.get("replay") is not None:
+            return
+        seen_user, seen_assistant, seen_tools = _acp_wire_recent_texts(state)
+        for ev in events:
+            etype = ev.get("type")
+            if etype == "context.append_message":
+                msg = ev.get("message") or {}
+                if msg.get("role") != "user":
+                    continue
+                origin = msg.get("origin") or {}
+                if origin and origin.get("kind") not in (None, "user"):
+                    continue
+                text = "".join(
+                    str(b.get("text") or "") for b in (msg.get("content") or [])
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ).strip()
+                if not text or text.startswith("<system-reminder>"):
+                    continue
+                norm = " ".join(text.split())
+                if norm in seen_user:
+                    continue
+                seen_user.add(norm)
+                _acp_emit_event_unlocked(harness, sid, {
+                    "type": "user_text", "text": text, "via": "wire-tail",
+                }, save=True)
+            elif etype == "context.append_loop_event":
+                loop = ev.get("event") or {}
+                ltype = loop.get("type")
+                if ltype == "content.part":
+                    part = loop.get("part") or {}
+                    if part.get("type") == "text":
+                        text = str(part.get("text") or "").strip()
+                        kind = "text"
+                    elif part.get("type") == "think":
+                        text = str(part.get("think") or "").strip()
+                        kind = "thinking"
+                    else:
+                        continue
+                    if not text:
+                        continue
+                    norm = " ".join(text.split())
+                    if norm in seen_assistant:
+                        continue
+                    seen_assistant.add(norm)
+                    _acp_emit_event_unlocked(harness, sid, {
+                        "type": "assistant",
+                        "message_id": f"acp-wire-{state['next_line']}",
+                        "blocks": [{"kind": kind, "text": text}],
+                    }, save=True)
+                elif ltype == "tool.call":
+                    raw_id = str(loop.get("toolCallId") or "")
+                    if raw_id and raw_id in seen_tools:
+                        continue
+                    if raw_id:
+                        seen_tools.add(raw_id)
+                    name = str(loop.get("name") or "tool")
+                    args = loop.get("args")
+                    detail = (
+                        _tool_use_detail(name, args, max_len=160)
+                        if isinstance(args, dict) and args else ""
+                    )
+                    _acp_emit_event_unlocked(harness, sid, {
+                        "type": "assistant",
+                        "message_id": f"acp-wire-{state['next_line']}",
+                        "blocks": [{
+                            "kind": "tool_use", "name": name,
+                            "detail": detail, "id": raw_id,
+                        }],
+                    }, save=True)
+                elif ltype == "step.end":
+                    finish = str(loop.get("finishReason") or "end_turn")
+                    # Dedup: step.end carries no content to key on — skip when
+                    # the last folded row is the same result (re-fold of an
+                    # already-covered step).
+                    recent = list(state.get("events") or [])[-1:]
+                    if (recent and recent[0].get("type") == "result"
+                            and recent[0].get("subtype") == finish):
+                        continue
+                    _acp_emit_event_unlocked(harness, sid, {
+                        "type": "result", "subtype": finish,
+                    }, save=True)
+            # turn.prompt duplicates context.append_message(user); unknown and
+            # observability records (llm.*, usage.record, config.update, …)
+            # are skipped by design.
+
+
+def _acp_wire_tail_loop():
+    while not _ACP_WIRE_TAIL.get("stop"):
+        try:
+            _acp_wire_tail_tick()
+        except Exception:
+            pass
+        time.sleep(_ACP_WIRE_TAIL_POLL_S)
+
+
+def _acp_wire_tail_tick():
+    with _ACP_LOCK:
+        sessions = [
+            (sid, dict(state))
+            for sid, state in (_ACP_SESSION_STATE.get("kimi") or {}).items()
+            if state.get("wire_watch") or state.get("attached")
+        ]
+    for sid, snap in sessions:
+        path = _acp_wire_path("kimi", sid)
+        if path is None:
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        with _ACP_LOCK:
+            state = _acp_session("kimi", sid)
+            if state is None:
+                continue
+            tail = state.setdefault("wire_tail", {"offset": -1, "partial": ""})
+            if tail["offset"] < 0:
+                # First sight: skip history (already backfilled by the
+                # session/load replay) — only NEW appends fold.
+                tail["offset"] = size
+                continue
+            if size < tail["offset"]:
+                tail["offset"] = 0  # rewritten/truncated file
+            offset = tail["offset"]
+        if size <= offset:
+            continue
+        try:
+            with path.open("rb") as f:
+                f.seek(offset)
+                raw = f.read(size - offset)
+        except OSError:
+            continue
+        text = raw.decode("utf-8", "replace")
+        partial = tail["partial"] + text
+        lines = partial.split("\n")
+        tail["partial"] = lines.pop() if lines else ""
+        with _ACP_LOCK:
+            state = _acp_session("kimi", sid)
+            if state is None:
+                continue
+            state["wire_tail"]["offset"] = size
+            state["wire_tail"]["partial"] = tail["partial"]
+        batch = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                batch.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        if batch:
+            _acp_wire_fold("kimi", sid, batch)
+
+
+def _acp_wire_tail_start(harness):
+    """Start the wire tail watcher once (kimi only, no-op otherwise)."""
+    if harness != "kimi":
+        return
+    if _ACP_WIRE_TAIL.get("thread") is not None:
+        return
+    t = threading.Thread(target=_acp_wire_tail_loop, daemon=True, name="acp-wire-tail")
+    _ACP_WIRE_TAIL["thread"] = t
+    t.start()
 
 
 def _acp_shutdown_all():

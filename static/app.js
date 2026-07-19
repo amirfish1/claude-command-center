@@ -36636,6 +36636,19 @@
               name: b.name,
             });
           }
+        } else if (b.type === 'plan') {
+          // ACP plan update (kimi TodoList): whole-plan replace — swap any
+          // earlier plan element in this bubble instead of appending.
+          const planHtml = _planEntriesHtml(b.entries);
+          if (planHtml) {
+            const prev = slot.querySelector('.stream-block-plan');
+            if (prev) prev.outerHTML = planHtml;
+            else {
+              const div = document.createElement('div');
+              div.innerHTML = planHtml;
+              slot.appendChild(div.firstElementChild);
+            }
+          }
         } else if (b.type === 'thinking') {
           // Headless stream-json carries no thinking text (only a signature is
           // emitted post-turn) — so this would only ever render an empty
@@ -42053,6 +42066,24 @@
     }, 140);
   });
 
+  // Compact todo card for ACP plan updates (kimi's TodoList whole-plan
+  // replace): status glyph per row, completed struck through — the kimi-web
+  // TodoCard look. Shared by the live streaming bubble (b.type === 'plan')
+  // and the persisted transcript block renderer (b.kind === 'plan').
+  function _planEntriesHtml(entries) {
+    const rows = (Array.isArray(entries) ? entries : [])
+      .filter(e => e && String(e.content || '').trim())
+      .map(e => {
+        const status = String(e.status || 'pending').toLowerCase();
+        const glyph = status === 'completed' ? '✓' : (status === 'in_progress' ? '▶' : '○');
+        const cls = status === 'completed' ? ' is-done' : (status === 'in_progress' ? ' is-active' : '');
+        return '<div class="plan-row' + cls + '"><span class="plan-glyph">' + glyph + '</span> '
+          + escapeHtml(String(e.content)) + '</div>';
+      });
+    if (!rows.length) return '';
+    return '<div class="stream-block-plan plan-card">' + rows.join('') + '</div>';
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -42768,6 +42799,13 @@
             }
             blockParts.push('<div class="assistant-text" dir="auto">' + renderMarkdown(b.text) + '</div>');
             hasNonTool = true;
+          } else if (b.kind === 'plan') {
+            // ACP plan snapshot (kimi TodoList): compact todo card.
+            const planHtml = _planEntriesHtml(b.entries);
+            if (planHtml) {
+              blockParts.push(planHtml);
+              hasNonTool = true;
+            }
           } else if (b.kind === 'thinking') {
             if (b.signature_only || !b.text) {
               // Signature-only: reasoning text not persisted (only signature survived

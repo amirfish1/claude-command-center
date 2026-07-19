@@ -1544,6 +1544,17 @@
   .thinking-silent-note { font-size: 11px; opacity: 0.55; }
   .event.assistant.is-silent-thinking-only { display: none !important; }
 
+  /* ACP plan card (kimi TodoList whole-plan replace) — kimi-web TodoCard look. */
+  .plan-card {
+    font-size: 12px; margin: 4px 0; padding: 6px 10px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: rgba(139,148,158,0.06); max-width: 640px;
+  }
+  .plan-row { padding: 1px 0; color: var(--text); }
+  .plan-row .plan-glyph { display: inline-block; width: 14px; color: var(--text-muted); }
+  .plan-row.is-done { color: var(--text-muted); text-decoration: line-through; }
+  .plan-row.is-active .plan-glyph { color: var(--green); }
+
   /* Per-turn token chips — rendered under an assistant event when the
    * source engine exposes per-turn token usage (currently only Antigravity,
    * via GetCascadeTrajectory). Mirrors the `11.2k in | 2.6k out | 1.0k

@@ -16583,6 +16583,109 @@ class TestAcpKimiEngine(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
 
+    def test_acp_wire_fold_dedupes_and_folds_new_turns(self):
+        """TUI-originated wire.jsonl records fold into the conv stream, but a
+        CCC-driven turn's own wire records must not duplicate (KIMI-FIXES-3)."""
+        server = self.server
+        harness = self.FAKE_HARNESS
+        sid = "session_wirefoldtest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid, create=True, cwd="/tmp")
+            st["wire_watch"] = True
+            st["attached"] = True
+            # CCC already emitted this prompt via the ACP stream.
+            server._acp_emit_event_unlocked(
+                harness, sid, {"type": "user_text", "text": "from CCC"})
+        batch = [
+            # Duplicate of the CCC-driven prompt (same text) -> dropped.
+            {"type": "context.append_message", "message": {
+                "role": "user", "origin": {"kind": "user"},
+                "content": [{"type": "text", "text": "from CCC"}]}},
+            # Harness-injected reminder -> dropped.
+            {"type": "context.append_message", "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "<system-reminder>x</system-reminder>"}]}},
+            # New TUI-originated prompt -> folded.
+            {"type": "context.append_message", "message": {
+                "role": "user", "origin": {"kind": "user"},
+                "content": [{"type": "text", "text": "from TUI"}]}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "content.part", "part": {"type": "think", "think": "hmm"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "content.part", "part": {"type": "text", "text": "TUI reply"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "t1", "name": "Bash",
+                "args": {"command": "ls"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "step.end", "finishReason": "end_turn"}},
+            # Unknown kinds are skipped, never fatal.
+            {"type": "llm.request", "model": "k3"},
+        ]
+        server._acp_wire_fold(harness, sid, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid) or {}).get("events") or [])
+        kinds = [e.get("type") for e in events]
+        self.assertEqual(
+            kinds,
+            ["user_text", "user_text", "assistant", "assistant", "assistant", "result"],
+        )
+        self.assertEqual(events[1].get("text"), "from TUI")
+        self.assertEqual(events[1].get("via"), "wire-tail")
+        block_kinds = [b.get("kind") for e in events[2:5] for b in e.get("blocks", [])]
+        self.assertEqual(block_kinds, ["thinking", "text", "tool_use"])
+        self.assertEqual(events[-1].get("subtype"), "end_turn")
+        # Re-folding the same batch is a no-op (dedup across batches).
+        server._acp_wire_fold(harness, sid, batch)
+        with server._ACP_LOCK:
+            self.assertEqual(
+                len((server._acp_session(harness, sid) or {}).get("events") or []), 6)
+        # While a turn is active (or a replay is in flight) the fold pauses.
+        with server._ACP_LOCK:
+            server._acp_session(harness, sid)["status"] = "active"
+        server._acp_wire_fold(harness, sid, [{
+            "type": "context.append_message", "message": {
+                "role": "user", "origin": {"kind": "user"},
+                "content": [{"type": "text", "text": "during"}]}}])
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid)
+            texts = [e.get("text") for e in (st.get("events") or [])
+                     if e.get("type") == "user_text"]
+        self.assertNotIn("during", texts)
+
+    def test_acp_plan_update_folds_and_dedupes(self):
+        """ACP plan updates (kimi TodoList) persist as plan blocks; identical
+        snapshots are not re-emitted (KIMI-FIXES-4)."""
+        server = self.server
+        harness = self.FAKE_HARNESS
+        sid = "session_planfoldtest"
+        entries = [
+            {"content": "do a", "status": "in_progress", "priority": "medium"},
+            {"content": "do b", "status": "pending", "priority": "medium"},
+        ]
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "plan", "entries": entries})
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "plan", "entries": entries})
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid)
+            events = list(st.get("events") or [])
+            plan_state = st.get("plan")
+        plan_events = [e for e in events
+                       if any(b.get("kind") == "plan" for b in e.get("blocks", []))]
+        self.assertEqual(len(plan_events), 1, "identical plan snapshots must dedupe")
+        block = [b for e in plan_events for b in e["blocks"] if b["kind"] == "plan"][0]
+        self.assertEqual(block["entries"][0]["status"], "in_progress")
+        self.assertEqual(plan_state[1]["content"], "do b")
+        # A changed snapshot emits a fresh block.
+        changed = [dict(entries[0], status="completed"), entries[1]]
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "plan", "entries": changed})
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid) or {}).get("events") or [])
+        plan_events = [e for e in events
+                       if any(b.get("kind") == "plan" for b in e.get("blocks", []))]
+        self.assertEqual(len(plan_events), 2)
+
     def test_acp_client_end_to_end(self):
         server = self.server
         self._register_fake_harness()
