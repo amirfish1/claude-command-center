@@ -296,6 +296,28 @@ def _wt_workers_path():
                 or (_WT_HOME / "workers.json"))
 
 
+def _queue_store_path():
+    """The WT ticket store file whose mtime/size the queue-events SSE watches.
+
+    Mirrors watchtower.queue._resolve_store_path's order ($WATCHTOWER_STORE →
+    legacy CCC store → ~/.watchtower/queues.json) and prefers the watchtower
+    package's own resolver when it is importable, so a future resolver change
+    lands here automatically.
+    """
+    env = os.environ.get("WATCHTOWER_STORE")
+    if env:
+        return Path(env).expanduser()
+    try:
+        if _WT_QUEUE_AVAILABLE and getattr(_q, "store_path", None):
+            return _q.store_path()
+    except Exception:
+        pass
+    legacy = COMMAND_CENTER_STATE_DIR / "ux-fixes-queue.json"
+    if legacy.exists():
+        return legacy
+    return _WT_HOME / "queues.json"
+
+
 def _wt_read_config():
     """{queue: {auto_drain, repo_path, ...}} read straight from queue-config.json.
     Empty dict if the file is absent/unreadable. No watchtower import needed."""
@@ -59423,6 +59445,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # monitor session) instead of having it poll /api/sessions on a
             # timer. Long-lived handler — safe under ThreadingHTTPServer.
             self._stream_sessions_state_events()
+        elif path == "/api/queue/events":
+            # SSE: push WT ticket-store / workers.json change hints to the
+            # queue board so it stops polling /api/queue/{list,status} for
+            # freshness. Stat-only tick; payloads are refetch hints.
+            self._stream_queue_events()
         elif path == "/api/codex-wake-status":
             # Live breakdown of a Codex wake/turn for the conversation pane's
             # "Codex resuming…" status. Single-session + cheap: in-memory wake
@@ -65679,6 +65706,81 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 elif now - last_keepalive >= 20:
                     # Comment line keeps proxies / idle clients from dropping
                     # the connection between state changes.
+                    try:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        return
+                    last_keepalive = now
+                time.sleep(1.0)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _stream_queue_events(self):
+        """SSE for the queue board: push a hint the moment the WT ticket store
+        or workers.json changes on disk, so an open queue board stops driving
+        its 15s poll of /api/queue/list + /api/queue/status for freshness.
+
+        The tick is stat-only (~1/s: mtime_ns+size of two files) — no store
+        reads, no list_items(), no subprocess — so N subscribers cost nothing.
+        Payloads are hints, not row data; the client refetches through the
+        existing memoized endpoints, which keeps ONE payload contract. A slow
+        beat (60s) covers GitHub-backed queues, whose remote changes leave no
+        local mtime. Spawned workers land in workers.json on spawn, so this
+        also kills the auto-drain discovery lag for the queue board.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        # Defeat proxy buffering so events arrive promptly (matches nginx hint).
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def _emit(payload):
+            try:
+                blob = json.dumps(payload, ensure_ascii=False)
+                self.wfile.write(("data: " + blob + "\n\n").encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        def _stat_sig(path):
+            try:
+                st = os.stat(path)
+                return (st.st_mtime_ns, st.st_size)
+            except OSError:
+                return None
+
+        store_path = str(_queue_store_path())
+        workers_path = str(_wt_workers_path())
+        last = (_stat_sig(store_path), _stat_sig(workers_path))
+        last_beat = last_keepalive = time.time()
+        try:
+            # Baseline: have the client hydrate immediately on (re)connect.
+            if not _emit({"type": "hello", "ts": round(last_beat, 3)}):
+                return
+            while True:
+                cur = (_stat_sig(store_path), _stat_sig(workers_path))
+                now = time.time()
+                if cur != last:
+                    what = []
+                    if cur[0] != last[0]:
+                        what.append("tickets")
+                    if cur[1] != last[1]:
+                        what.append("workers")
+                    if not _emit({"type": "queue_changed", "what": what, "ts": round(now, 3)}):
+                        return
+                    last = cur
+                    last_beat = now
+                elif now - last_beat >= 60:
+                    if not _emit({"type": "tick", "ts": round(now, 3)}):
+                        return
+                    last_beat = now
+                if now - last_keepalive >= 20:
+                    # Comment line keeps proxies / idle clients from dropping
+                    # the connection between changes.
                     try:
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()

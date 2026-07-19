@@ -32644,6 +32644,9 @@
 
   let _uxqItemsCache = { ts: 0, items: [] };
   let _uxqItemsPromise = null;
+  // True while the /api/queue/events SSE stream is connected — the board then
+  // refreshes on server push instead of the 15s fallback timer.
+  let _uxqStreamLive = false;
   const _UXQ_NEW_ITEM_GLOW_MS = 4500;
   let _uxqKnownItemRefs = null;
   const _uxqNewItemExpires = new Map();
@@ -47779,13 +47782,48 @@
       refreshUxFixesQueueMeta({ force: true }).catch(() => {});
       // Queue tab (status rail) only refetches when you switch to it —
       // parked there, it never sees tickets filed after that point (CCC-441).
-      // Piggyback on this existing 15s poll to keep it live while visible.
+      // Piggyback on this existing 15s poll to keep it live while visible —
+      // but only as the FALLBACK: while /api/queue/events streams, server
+      // push already invalidated + re-rendered on every store change.
       const queuePane = document.getElementById('statusRailQueuePane');
-      if (queuePane && queuePane.classList.contains('is-active') && typeof _renderQueuePanel === 'function') {
+      if (queuePane && queuePane.classList.contains('is-active') && typeof _renderQueuePanel === 'function' && !_uxqStreamLive) {
         _uxqItemsCache.ts = 0;
         _renderQueuePanel();
       }
     }), 15 * 1000);
+    // Queue board push channel: /api/queue/events fires when the WT ticket
+    // store or workers.json changes on disk (plus a 60s beat for GitHub-backed
+    // drift). Any event invalidates the queue caches; a visible board
+    // re-renders immediately, an idle one picks it up on its next paint.
+    (function _uxqEventStream() {
+      if (typeof EventSource !== 'function') return;
+      let es = null;
+      let retryMs = 1000;
+      const invalidateAndRender = () => {
+        _uxqItemsCache.ts = 0;
+        _uxqHealthCache.ts = 0;
+        _wtWorkersCache.ts = 0;
+        const queuePane = document.getElementById('statusRailQueuePane');
+        if (queuePane && queuePane.classList.contains('is-active') && typeof _renderQueuePanel === 'function') {
+          _renderQueuePanel();
+        }
+      };
+      const schedule = () => {
+        setTimeout(connect, retryMs);
+        retryMs = Math.min(retryMs * 2, 30000);
+      };
+      const connect = () => {
+        try { es = new EventSource('/api/queue/events'); } catch (_) { schedule(); return; }
+        es.onopen = () => { retryMs = 1000; _uxqStreamLive = true; invalidateAndRender(); };
+        es.onmessage = () => { invalidateAndRender(); };
+        es.onerror = () => {
+          _uxqStreamLive = false;
+          try { es.close(); } catch (_) {}
+          schedule();
+        };
+      };
+      connect();
+    })();
   })();
 
   // Set up the In Group Chat polling exactly once at boot. Used to live

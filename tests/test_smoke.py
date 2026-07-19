@@ -5847,6 +5847,45 @@ class TestRepoContextHelpers(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_queue_events_sse_emits_baseline_hello(self):
+        """The queue board's push channel must answer with an SSE baseline so a
+        fresh subscriber hydrates immediately (then change hints on store
+        mtime/size flips)."""
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with urllib.request.urlopen(base + "/api/queue/events", timeout=5) as response:
+                self.assertEqual(response.headers.get("Content-Type"), "text/event-stream")
+                first = None
+                deadline = time.time() + 5
+                while time.time() < deadline and first is None:
+                    line = response.readline()
+                    if line.startswith(b"data: "):
+                        first = json.loads(line[len(b"data: "):].decode("utf-8"))
+                self.assertIsNotNone(first, "no SSE baseline within 5s")
+                self.assertEqual(first.get("type"), "hello")
+                self.assertIn("ts", first)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_queue_store_path_resolution_order(self):
+        """$WATCHTOWER_STORE wins; then the watchtower resolver; else the legacy
+        CCC store when it exists, else ~/.watchtower/queues.json."""
+        import unittest.mock as _mock
+        with _mock.patch.dict(os.environ, {"WATCHTOWER_STORE": "/tmp/wt-store-x.json"}):
+            self.assertEqual(str(self.server._queue_store_path()), "/tmp/wt-store-x.json")
+        with _mock.patch.dict(os.environ, {}, clear=True):
+            # No env: the watchtower package resolver answers when importable.
+            p = self.server._queue_store_path()
+            self.assertTrue(str(p).endswith(".json"))
+            self.assertNotEqual(str(p), "")
+
     def test_queue_config_options_offer_model_and_github_repo_choices(self):
         """The queue manager has useful selectors before another queue saves them."""
         config_path = self.server._wt_config_path()
