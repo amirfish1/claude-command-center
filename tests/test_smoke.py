@@ -16818,6 +16818,38 @@ class TestAcpKimiEngine(unittest.TestCase):
                        if any(b.get("kind") == "plan" for b in e.get("blocks", []))]
         self.assertEqual(len(plan_events), 2)
 
+    def test_kimi_setup_status_and_verify(self):
+        """'Add Kimi engine' guided flow: setup-status reports install state +
+        version; verify proves it with one ACP session/new (WEBINAR-DEMO-23)."""
+        server = self.server
+        avail = {"available": True, "bin": "/fake/kimi", "source": "test"}
+        missing = {"available": False, "bin": None, "reason": "kimi CLI not found on PATH"}
+        with mock.patch.object(server, "_acp_resolve_bin", return_value=avail), \
+             mock.patch.object(server, "_kimi_cli_version", return_value="9.9.9"):
+            server._KIMI_SETUP_STATUS_MEMO["ts"] = 0.0
+            server._KIMI_SETUP_STATUS_MEMO["data"] = None
+            status = server._kimi_setup_status()
+            self.assertTrue(status["installed"])
+            self.assertEqual(status["bin"], "/fake/kimi")
+            self.assertEqual(status["version"], "9.9.9")
+            self.assertIn("membership", status["docs"])
+            self.assertIn("third_party_setup", status["docs"])
+
+            with mock.patch.object(
+                server, "_acp_session_new",
+                return_value={"ok": True, "session_id": "session_test-1", "via": "acp"},
+            ) as spawned:
+                out = server._kimi_setup_verify()
+            self.assertTrue(out["ok"])
+            self.assertTrue(out["verified"])
+            self.assertEqual(out["version"], "9.9.9")
+            spawned.assert_called_once()
+
+        with mock.patch.object(server, "_acp_resolve_bin", return_value=missing):
+            out = server._kimi_setup_verify()
+            self.assertFalse(out["ok"])
+            self.assertIn("not found", out["error"])
+
     def test_acp_client_end_to_end(self):
         server = self.server
         self._register_fake_harness()

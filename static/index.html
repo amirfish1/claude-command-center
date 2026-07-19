@@ -1505,6 +1505,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
             <span>Fleet &amp; Network</span>
           </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-engines" data-section-target="engines" role="tab" aria-selected="false" aria-controls="settingsSection-engines">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            <span>Engines</span>
+          </button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-tools" data-section-target="tools" role="tab" aria-selected="false" aria-controls="settingsSection-tools">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
             <span>Tools</span>
@@ -1641,6 +1645,40 @@
 
             <div class="settings-reset-row">
               <button type="button" class="settings-reset-btn" id="settingsResetSessions">Reset Sessions &amp; Spawning to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-engines" data-section-id="engines" role="tabpanel" aria-labelledby="settingsRailTab-engines">
+            <div class="settings-section-eyebrow">Engines</div>
+
+            <div class="settings-row" data-keywords="kimi engine acp setup install moonshot membership">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Kimi (ACP)</div>
+                <div class="settings-row-desc" id="kimiSetupDesc">Checking setup…</div>
+              </div>
+              <div class="settings-row-control kimi-setup-control">
+                <span class="settings-row-value kimi-setup-version" id="kimiSetupVersion"></span>
+                <button type="button" class="settings-action-btn" id="kimiSetupVerifyBtn">Verify setup</button>
+                <button type="button" class="settings-action-btn" id="kimiSetupRecheckBtn">Recheck</button>
+              </div>
+            </div>
+
+            <div class="settings-row" id="kimiSetupStepsRow" hidden data-keywords="kimi install login guide steps">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Get started with Kimi</div>
+                <div class="settings-row-desc kimi-setup-steps" id="kimiSetupSteps"></div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="kimi docs membership third party setup guide">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Kimi documentation</div>
+                <div class="settings-row-desc">Membership plans and the official third-party agent setup guide.</div>
+              </div>
+              <div class="settings-row-control kimi-setup-links">
+                <a class="settings-action-btn" id="kimiDocsMembership" href="https://www.kimi.com/code/docs/en/kimi-code/membership.html" target="_blank" rel="noopener noreferrer">Membership</a>
+                <a class="settings-action-btn" id="kimiDocsSetup" href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>
+              </div>
             </div>
           </section>
 

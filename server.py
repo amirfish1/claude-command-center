@@ -58837,6 +58837,64 @@ def _term_resolve_cwd_change(repo_path, target):
     return candidate
 
 
+_KIMI_SETUP_STATUS_MEMO = {"ts": 0.0, "data": None}
+_KIMI_SETUP_DOCS = {
+    "membership": "https://www.kimi.com/code/docs/en/kimi-code/membership.html",
+    "third_party_setup": "https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html",
+}
+
+
+def _kimi_cli_version(bin_path):
+    """`kimi --version`, first line only, bounded — never raises."""
+    try:
+        proc = subprocess.run(
+            [bin_path, "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+        line = (proc.stdout or "").strip().splitlines()
+        return (line[0].strip() if line else "") or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _kimi_setup_status():
+    """Kimi CLI setup snapshot for the 'Add Kimi engine' guided flow:
+    installed? where from? which version? Memoized briefly — bin probing
+    hits PATH + the managed install dir on every call otherwise."""
+    now = time.time()
+    memo = _KIMI_SETUP_STATUS_MEMO
+    if memo["data"] is not None and now - memo["ts"] < 60.0:
+        return dict(memo["data"])
+    resolved = _acp_resolve_bin("kimi")
+    data = {
+        "ok": True,
+        "installed": bool(resolved.get("available")),
+        "bin": resolved.get("bin"),
+        "source": resolved.get("source"),
+        "reason": resolved.get("reason"),
+        "model": _spawn_model_for_engine("kimi"),
+        "docs": dict(_KIMI_SETUP_DOCS),
+    }
+    if data["installed"]:
+        data["version"] = _kimi_cli_version(resolved["bin"])
+    memo["ts"] = now
+    memo["data"] = dict(data)
+    return data
+
+
+def _kimi_setup_verify():
+    """Proof the Kimi setup works end-to-end: one ACP session/new roundtrip
+    (no prompt, so no tokens). Returns the spawn-kimi result shape."""
+    resolved = _acp_resolve_bin("kimi")
+    if not resolved.get("available"):
+        return {"ok": False, "error": resolved.get("reason") or "kimi CLI not found"}
+    result = _acp_session_new("kimi", os.getcwd())
+    if result.get("ok"):
+        result["verified"] = True
+        result["version"] = _kimi_cli_version(resolved["bin"])
+    return result
+
+
 def _term_split_leading_cd(cmd):
     """If `cmd` begins with `cd <path>` (alone or followed by `&&`),
     return (target, remainder). Otherwise (None, cmd).
@@ -59522,6 +59580,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _conn and _conn.get("initialized") and _conn["transport"].alive()
             )
             self.send_json(info)
+        elif path == "/api/engines/kimi/setup-status":
+            # 'Add Kimi engine' guided flow: installed? version? where from?
+            self.send_json(_kimi_setup_status())
         elif path == "/api/sessions/spawn-hermes/availability":
             info = _resolve_hermes_bin()
             info["model"] = "auto"
@@ -64065,6 +64126,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json(e.as_payload(), e.status)
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/engines/kimi/verify":
+            # 'Add Kimi engine' guided flow: proof the setup works — one ACP
+            # session/new roundtrip (no prompt, no tokens).
+            self.send_json(_kimi_setup_verify())
         elif path == "/api/sessions/spawn-kimi":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

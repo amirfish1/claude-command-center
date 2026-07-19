@@ -54928,6 +54928,76 @@
     el.textContent = v ? v : 'Not set';
   }
 
+  // ── Engines section: 'Add Kimi engine' guided setup (WEBINAR-DEMO-23) ──
+  // States: not installed (install steps) → installed, unverified (version +
+  // verify button) → verified working. Verification is one ACP session/new
+  // roundtrip server-side (no prompt, no tokens burned).
+  let _kimiSetupState = null;
+  async function refreshKimiSetupStatus() {
+    const desc = document.getElementById('kimiSetupDesc');
+    if (!desc) return;
+    const versionEl = document.getElementById('kimiSetupVersion');
+    const stepsRow = document.getElementById('kimiSetupStepsRow');
+    const stepsEl = document.getElementById('kimiSetupSteps');
+    const verifyBtn = document.getElementById('kimiSetupVerifyBtn');
+    try {
+      const res = await fetch('/api/engines/kimi/setup-status', { cache: 'no-store' });
+      const data = await res.json();
+      _kimiSetupState = data || {};
+    } catch (_) {
+      _kimiSetupState = { ok: false };
+    }
+    const st = _kimiSetupState || {};
+    if (!st.installed) {
+      desc.textContent = st.reason
+        ? ('Kimi CLI not found: ' + st.reason)
+        : 'Kimi CLI not found on this machine.';
+      if (versionEl) versionEl.textContent = 'not installed';
+      if (stepsRow) stepsRow.hidden = false;
+      if (stepsEl) stepsEl.innerHTML =
+        '1. Get a Kimi membership — see <a href="https://www.kimi.com/code/docs/en/kimi-code/membership.html" target="_blank" rel="noopener noreferrer">Membership</a> (much cheaper than Claude, includes Kimi Code).<br>'
+        + '2. Install the Kimi Code CLI — see <a href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>.<br>'
+        + '3. Sign in with your account: <code>kimi login</code>.<br>'
+        + '4. Click <strong>Recheck</strong> — then <strong>Verify setup</strong> to spawn a smoke-test session.';
+      if (verifyBtn) verifyBtn.style.display = 'none';
+      return;
+    }
+    desc.textContent = 'Installed: ' + (st.version || 'unknown version')
+      + (st.bin ? ' (' + st.bin + ')' : '')
+      + '. Default model: ' + (st.model || 'kimi-code/k3') + '.';
+    if (versionEl) versionEl.textContent = st.version || '';
+    if (stepsRow) stepsRow.hidden = true;
+    if (verifyBtn) verifyBtn.style.display = '';
+  }
+  if (document.getElementById('kimiSetupVerifyBtn')) {
+    document.getElementById('kimiSetupVerifyBtn').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const desc = document.getElementById('kimiSetupDesc');
+      btn.disabled = true;
+      btn.textContent = 'Verifying…';
+      try {
+        const res = await fetch('/api/engines/kimi/verify', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (data && data.ok && desc) {
+          desc.textContent = 'Working — spawned smoke-test session '
+            + String(data.session_id || '').slice(0, 21) + '… via ACP. Kimi is ready to use.';
+          if (typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(btn.closest('.settings-row'));
+        } else if (desc) {
+          desc.textContent = 'Setup not working yet: ' + ((data && data.error) || 'unknown error')
+            + ' — run `kimi login` in a terminal and retry.';
+        }
+      } catch (err) {
+        if (desc) desc.textContent = 'Verify failed: ' + ((err && err.message) || 'network');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Verify setup';
+      }
+    });
+  }
+  if (document.getElementById('kimiSetupRecheckBtn')) {
+    document.getElementById('kimiSetupRecheckBtn').addEventListener('click', refreshKimiSetupStatus);
+  }
+
   // ✓ Saved pulse — appended to a row's right edge (`.settings-row` is
   // `position: relative` so the absolutely-positioned pulse anchors to
   // it), removed after the CSS fade finishes. Fired on every setting
@@ -55264,6 +55334,7 @@
     buildSettingsSearchIndex();
     refreshAppearanceChecks();
     refreshSpawnEngineValue();
+    refreshKimiSetupStatus();
     setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
     setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);
   }

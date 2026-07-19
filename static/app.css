@@ -1589,6 +1589,15 @@
   .ctx-ring.is-warm .ctx-ring-fg { stroke: var(--yellow, #d29922); }
   .ctx-ring.is-hot .ctx-ring-fg { stroke: var(--red, #f85149); }
 
+  /* Engines settings section — 'Add Kimi engine' guided setup. */
+  .kimi-setup-control { display: flex; align-items: center; gap: 8px; }
+  .kimi-setup-version { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-muted); }
+  .kimi-setup-steps { line-height: 1.55; }
+  .kimi-setup-steps code { background: var(--surface-2); border-radius: 4px; padding: 1px 5px; font-size: 11.5px; }
+  .kimi-setup-steps a { color: var(--accent); }
+  .kimi-setup-links { display: flex; gap: 8px; }
+  .kimi-setup-links a.settings-action-btn { text-decoration: none; }
+
   /* Per-turn token chips — rendered under an assistant event when the
    * source engine exposes per-turn token usage (currently only Antigravity,
    * via GetCascadeTrajectory). Mirrors the `11.2k in | 2.6k out | 1.0k
