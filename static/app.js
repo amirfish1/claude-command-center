@@ -33957,6 +33957,15 @@
       ? ('Queue pinned to ' + override + ' for this session - pick Auto to follow the repo')
       : ('Showing ' + (currentScope || 'all') + ' (from this session’s repo)');
   }
+  function _uxqSetScopeLoading(isLoading) {
+    const $sel = document.getElementById('queueScopeSelect');
+    const $busy = document.getElementById('queueScopeBusy');
+    if ($sel) {
+      $sel.disabled = !!isLoading;
+      $sel.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+    }
+    if ($busy) $busy.classList.toggle('is-loading', !!isLoading);
+  }
   function _uxqEmptyHtml(project, totalCount) {
     const total = Number(totalCount) || 0;
     if (project) {
@@ -34556,7 +34565,7 @@
     const queuePanel = document.getElementById('queuePanel');
     if (queuePanel) queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());
     _uxqRenderWrapToggle();
-    _fetchUxqItems(allowStale).then(async items => {
+    return _fetchUxqItems(allowStale).then(async items => {
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
       const allQueues = _uxqProjectKey(requestedProject) === 'ALL';
@@ -35097,9 +35106,14 @@
   {
     const $scope = document.getElementById('queueScopeSelect');
     if ($scope) {
-      $scope.addEventListener('change', () => {
+      $scope.addEventListener('change', async () => {
         _uxqSetScopeOverride($scope.value);
-        _renderQueuePanel({ allowStale: true });
+        _uxqSetScopeLoading(true);
+        try {
+          await _renderQueuePanel({ allowStale: true });
+        } finally {
+          _uxqSetScopeLoading(false);
+        }
       });
     }
     const $queueAdd = document.getElementById('filesQueueAdd');

@@ -11651,6 +11651,16 @@
   }
   .fq-scope-select:hover { color: var(--text); border-color: var(--accent); }
   .fq-scope-select:focus { outline: none; border-color: var(--accent); }
+  .fq-scope-select:disabled { cursor: wait; opacity: 0.7; }
+  .fq-scope-busy { display: none; width: 10px; height: 10px; flex: 0 0 10px; }
+  .fq-scope-busy.is-loading {
+    display: inline-block;
+    border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: fq-scope-spin 0.7s linear infinite;
+  }
+  @keyframes fq-scope-spin { to { transform: rotate(360deg); } }
   /* Status filter toggle (All | Open) — segmented control in the Queue header. */
   .fq-filter {
     display: inline-flex; border: 1px solid var(--border); border-radius: 4px;

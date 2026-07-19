@@ -3278,8 +3278,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("localStorage.removeItem(_UXQ_SELECTED_SCOPE_LS);", set_body)
 
     def test_queue_scope_switch_repaints_from_completed_caches(self):
-        """Changing a client-side scope must not wait for multi-MB refetches."""
+        """Scope changes keep responsive caches, with feedback until rows repaint."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         items_fetch = app_js[
             app_js.index("async function _fetchUxqItems"):
             app_js.index("// Per-project queue-health snapshot", app_js.index("async function _fetchUxqItems"))
@@ -3287,6 +3289,10 @@ class TestServerImports(unittest.TestCase):
         health_fetch = app_js[
             app_js.index("async function _fetchUxqHealth"):
             app_js.index("// Live WatchTower workers", app_js.index("async function _fetchUxqHealth"))
+        ]
+        loading_helper = app_js[
+            app_js.index("function _uxqSetScopeLoading(isLoading)"):
+            app_js.index("function _uxqEmptyHtml", app_js.index("function _uxqSetScopeLoading(isLoading)"))
         ]
         scope_handler = app_js[
             app_js.index("// Queue scope picker:"):
@@ -3297,9 +3303,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("allowStale && _uxqItemsCache.ts", items_fetch)
         self.assertIn("async function _fetchUxqHealth(allowStale)", health_fetch)
         self.assertIn("allowStale && _uxqHealthCache.ts", health_fetch)
-        self.assertIn("_renderQueuePanel({ allowStale: true });", scope_handler)
+        self.assertIn("$scope.addEventListener('change', async () =>", scope_handler)
+        self.assertIn("$sel.disabled = !!isLoading;", loading_helper)
+        self.assertIn("$busy.classList.toggle('is-loading', !!isLoading);", loading_helper)
+        self.assertIn("await _renderQueuePanel({ allowStale: true });", scope_handler)
+        self.assertIn("_uxqSetScopeLoading(true);", scope_handler)
+        self.assertIn("_uxqSetScopeLoading(false);", scope_handler)
         self.assertNotIn("_uxqItemsCache.ts = 0;", scope_handler)
         self.assertNotIn("_uxqHealthCache.ts = 0;", scope_handler)
+        self.assertIn('id="queueScopeBusy"', app_html)
+        self.assertIn(".fq-scope-busy", app_css)
 
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
