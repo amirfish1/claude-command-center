@@ -20639,3 +20639,51 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   .settings-row { flex-wrap: wrap; }
   .settings-row-control { flex: 1 1 100%; justify-content: flex-start; margin-top: 6px; }
 }
+
+/* ── F2 pre-submit cost menu ─────────────────────────────────────────────
+   Shown at resume/ask submit time when a session is BOTH large AND stale
+   (prompt cache likely cold). Reuses the .upd-overlay / .upd-dialog shell
+   and adds graded "route" rows so the cost of each choice is visible before
+   the user pays it. Copy is honest: CCC infers coldness from staleness, it
+   cannot observe Anthropic's cache. */
+.f2cost-dialog { width: min(560px, 94vw); max-height: 88vh; overflow-y: auto; gap: 12px; }
+.f2cost-head { display: flex; flex-direction: column; gap: 6px; }
+.f2cost-title { font-size: 16px; font-weight: 600; color: var(--text); }
+.f2cost-estimate { font-size: 13px; color: var(--text); line-height: 1.5;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 9px 11px; }
+.f2cost-estimate strong { color: var(--accent); font-weight: 600; }
+.f2cost-caveat { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.f2cost-routes { display: flex; flex-direction: column; gap: 9px; }
+.f2cost-route { border: 1px solid var(--border); border-radius: 8px;
+  padding: 11px 12px; background: var(--bg); display: flex; flex-direction: column; gap: 8px; }
+.f2cost-route.is-recommended { border-color: rgba(63,185,80,0.45);
+  background: rgba(63,185,80,0.06); }
+.f2cost-route-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.f2cost-route-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.f2cost-route-cost { font-size: 11px; font-weight: 600; margin-left: auto;
+  padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+.f2cost-route-cost.free { color: #3fb950; background: rgba(63,185,80,0.14); }
+.f2cost-route-cost.slice { color: var(--accent); background: rgba(88,166,255,0.14); }
+.f2cost-route-cost.full { color: var(--text-muted); background: var(--surface-2); }
+.f2cost-route-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.f2cost-route-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+.f2cost-btn { padding: 6px 12px; font-size: 12px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  cursor: pointer; font-family: inherit; }
+.f2cost-btn:hover { background: var(--surface-2); }
+.f2cost-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.f2cost-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.f2cost-btn.primary:hover { opacity: 0.9; }
+.f2cost-recall { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.f2cost-recall-status { font-size: 11px; color: var(--text-muted); }
+.f2cost-recall-hit { border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 9px; background: var(--surface); }
+.f2cost-recall-hit .snip { font-size: 12px; color: var(--text); line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; }
+.f2cost-recall-hit .meta { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+.f2cost-recall-hit.is-this-session { border-color: var(--accent); }
+.f2cost-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
+.f2cost-dismiss { font-size: 12px; color: var(--text-muted); background: none;
+  border: none; cursor: pointer; font-family: inherit; padding: 4px; }
+.f2cost-dismiss:hover { color: var(--text); text-decoration: underline; }

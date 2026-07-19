@@ -1,0 +1,1 @@
+- Added a cost-aware menu before resuming a large, stale Claude session, with recall, lower-cost model, selective-continuation, and full-resume routes.

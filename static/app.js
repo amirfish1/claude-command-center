@@ -2553,6 +2553,362 @@
     };
   }
 
+  // ── F2 pre-submit cost menu ────────────────────────────────────────────
+  // When a user is about to resume/ask into a session that is BOTH large AND
+  // stale (prompt cache likely cold), intercept at submit time and show a
+  // graded cost menu instead of blindly reloading the whole context on the
+  // most expensive model. The token estimate is read straight off the row
+  // (latest_input_tokens / live_context_tokens — already (mtime,size)-cached
+  // server-side), so this adds NO per-row transcript parse. Staleness is
+  // inferred from mtime; CCC cannot observe Anthropic's cache, so the copy
+  // says "likely cold", never "is cold".
+  const F2_TOKEN_THRESHOLD = 50000;   // "large": ~50k+ estimated context
+  const F2_STALE_MINUTES = 60;        // "cold": older than the cache-TTL window
+  const F2_CHEAP_MODELS = [
+    { id: 'sonnet-5',  label: 'Sonnet 5' },
+    { id: 'haiku-4-5', label: 'Haiku 4-5' },
+  ];
+  // Sessions where the user knowingly picked "Full resume" — don't nag again
+  // this page-load (one decision per session, not per keystroke).
+  const f2FullResumeAck = new Set();
+
+  function f2ClearComposer() {
+    try {
+      const el = document.getElementById('convInput');
+      if (el) el.value = '';
+      if (typeof updateInputBar === 'function') updateInputBar();
+    } catch (_) {}
+  }
+  function f2FmtTokens(n) {
+    const v = Math.max(0, Math.round(Number(n) || 0));
+    if (v >= 1000) return Math.round(v / 1000) + 'k';
+    return String(v);
+  }
+  function f2FmtAge(minutes) {
+    const m = Math.max(0, Math.round(Number(minutes) || 0));
+    if (m < 90) return m + ' min';
+    const h = Math.round(m / 60);
+    if (h < 48) return h + ' hr';
+    return Math.round(h / 24) + ' days';
+  }
+  function f2DemoForceMatches(sid) {
+    let raw = '';
+    try { raw = localStorage.getItem('ccc-f2-demo-force') || ''; } catch (_) { return false; }
+    if (!raw) return false;
+    if (raw === '*') return true;
+    return raw.split(',').map(s => s.trim()).filter(Boolean).indexOf(sid) !== -1;
+  }
+  // Decide whether the menu should fire. Returns a gate object or null.
+  function f2ResumeGate(ctx) {
+    const sid = ctx && ctx.sid;
+    if (!sid) return null;
+    if (f2FullResumeAck.has(sid)) return null;
+    const row = ctx.row || {};
+    const cf = _contextFieldsFromRow(row);
+    const engine = String((ctx.session && ctx.session.source) || cf.engine || 'claude');
+    // The cache-cold story is Claude-specific; only Claude sessions expose a
+    // model picker with cheaper Claude tiers. Skip other engines.
+    const isClaude = engine === 'claude' || engine === 'interactive';
+    const tokens = Math.max(Number(cf.live_context_tokens) || 0, Number(cf.latest_input_tokens) || 0);
+    const mtime = Number(row.modified || row.mtime || 0);
+    const model = row.model || (ctx.session && ctx.session.model) || cf.model || 'the current model';
+    const forced = f2DemoForceMatches(sid);
+    if (forced) {
+      // Demo mode: synthesize a believable estimate if the real row is small,
+      // so the menu fires reliably on any session for a live walkthrough.
+      const demoTokens = tokens >= F2_TOKEN_THRESHOLD ? tokens : 328000;
+      const ageMin = mtime ? (Date.now() / 1000 - mtime) / 60 : 240;
+      return { tokens: demoTokens, ageMin, model, forced: true };
+    }
+    if (!isClaude) return null;
+    if (tokens < F2_TOKEN_THRESHOLD) return null;
+    if (!mtime) return null;
+    const ageMin = (Date.now() / 1000 - mtime) / 60;
+    if (ageMin < F2_STALE_MINUTES) return null;
+    return { tokens, ageMin, model, forced: false };
+  }
+
+  // Entry point called from sendToTerminal. Resolves to:
+  //   'proceed' → let the normal full-resume send continue
+  //   'handled' → a route ran (or the user dismissed); do NOT send
+  async function f2MaybeShowResumeCostMenu(ctx) {
+    let gate;
+    try { gate = f2ResumeGate(ctx); } catch (_) { return 'proceed'; }
+    if (!gate) return 'proceed';
+    try { return await f2ShowResumeCostMenu(ctx, gate); }
+    catch (_) { return 'proceed'; }
+  }
+
+  function f2ResolveSpawnCwd(ctx) {
+    const row = ctx.row || {};
+    const s = ctx.session || {};
+    return row.session_cwd || row.cwd || row.repo_path || row.folder_path || s.cwd || '';
+  }
+  function f2RetrievalPrompt(ctx, gate) {
+    const sid = ctx.sid;
+    const task = String(ctx.text || '').trim();
+    return [
+      'You are continuing a task from an earlier, large Claude session.',
+      '',
+      'Origin session id: ' + sid,
+      'Its transcript is a JSONL under ~/.claude/projects/. Locate it with:',
+      '  ls ~/.claude/projects/*/' + sid + '.jsonl',
+      '',
+      'Task: ' + task,
+      '',
+      'Retrieve context SELECTIVELY. Never open or Read the whole transcript',
+      '(it is ~' + f2FmtTokens(gate.tokens) + ' tokens). Pull only the slice you need:',
+      '  - Total Recall:  total-recall recall --query "<terms>" --limit 10',
+      '  - grep/rg the transcript for specific strings',
+      '  - tail the transcript for the most recent turns',
+      '',
+      'Load the minimum slice that answers the task, then proceed.',
+    ].join('\n');
+  }
+
+  // Phase 2 — continuation lineage. Link the new lean session to the origin
+  // heavy session and FLIP the hierarchy: the new session becomes primary and
+  // the origin nests under it as the collapsed "continued from" secondary.
+  // Reuses Flow's parent/child map but records a distinct edge kind so
+  // spawn-lineage vs continuation-lineage stays traceable. Fully guarded so a
+  // Flow-less context can never break the spawn.
+  function f2RecordContinuationLineage(originSid, newSid) {
+    if (!originSid || !newSid) return;
+    try {
+      // Distinct edge-kind record: this is continuation lineage (newSid
+      // continues from originSid), NOT spawn lineage (originSid did not spawn
+      // newSid). Persist so the Flow renderer can label the edge accordingly.
+      let edges = {};
+      try { edges = JSON.parse(localStorage.getItem('ccc-f2-continuation-edges') || '{}') || {}; } catch (_) { edges = {}; }
+      edges[newSid] = { continued_from: originSid, kind: 'continued-from', ts: Date.now() };
+      localStorage.setItem('ccc-f2-continuation-edges', JSON.stringify(edges));
+    } catch (_) {}
+    // Flip the Flow hierarchy when the parent/child map is available.
+    try {
+      if (typeof flowNodeKey === 'function' && typeof flowNodeParents === 'object' && flowNodeParents) {
+        const originKey = flowNodeKey('session', originSid);
+        const newKey = flowNodeKey('session', newSid);
+        // Origin heavy session nests UNDER the new lean session (the flip).
+        flowNodeParents[originKey] = newKey;
+        try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
+        if (typeof renderFlowSidebar === 'function' && typeof conversationsData !== 'undefined') {
+          try { renderFlowSidebar(conversationsData); } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  function f2ShowResumeCostMenu(ctx, gate) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (outcome) => {
+        if (settled) return;
+        settled = true;
+        try { document.removeEventListener('keydown', onKey, true); } catch (_) {}
+        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(outcome);
+      };
+      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); finish('handled'); } };
+
+      const sid = ctx.sid;
+      const tokensLabel = f2FmtTokens(gate.tokens);
+      const modelLabel = escapeHtml(String(gate.model || 'the current model'));
+      const overlay = document.createElement('div');
+      overlay.className = 'upd-overlay f2cost-overlay open';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.innerHTML =
+        '<div class="upd-backdrop" data-f2-backdrop></div>' +
+        '<div class="upd-dialog f2cost-dialog">' +
+          '<div class="f2cost-head">' +
+            '<div class="f2cost-title">This session looks large and stale</div>' +
+            '<div class="f2cost-estimate">Resuming will likely reload <strong>~' + tokensLabel + ' tokens</strong> on ' + modelLabel +
+              '. Last active ' + escapeHtml(f2FmtAge(gate.ageMin)) + ' ago, so the prompt cache has likely gone cold.</div>' +
+            '<div class="f2cost-caveat">CCC infers cache coldness from staleness. It cannot observe the model provider’s cache, so this is an estimate, not a guarantee. Pick the route that fits the question.</div>' +
+          '</div>' +
+          '<div class="f2cost-routes">' +
+            // Route 1 — Search first (free)
+            '<div class="f2cost-route is-recommended" data-f2-route="search">' +
+              '<div class="f2cost-route-head"><span class="f2cost-route-name">1. Search first</span>' +
+                '<span class="f2cost-route-cost free">0 tokens</span></div>' +
+              '<div class="f2cost-route-desc">Run the question through Total Recall over your sessions. Often the whole answer, no model spend.</div>' +
+              '<div class="f2cost-route-actions"><button class="f2cost-btn" data-f2-act="search">Search now</button></div>' +
+              '<div class="f2cost-recall" data-f2-recall hidden></div>' +
+            '</div>' +
+            // Route 2 — Cheaper model
+            '<div class="f2cost-route" data-f2-route="cheap">' +
+              '<div class="f2cost-route-head"><span class="f2cost-route-name">2. Resume on a cheaper model</span>' +
+                '<span class="f2cost-route-cost slice">same reload, lower rate</span></div>' +
+              '<div class="f2cost-route-desc">Same session, this turn on a cheaper Claude tier. Good when the reload is unavoidable but the judgment is easy.</div>' +
+              '<div class="f2cost-route-actions" data-f2-cheap-actions></div>' +
+            '</div>' +
+            // Route 3 — Spawn fresh, point at transcript
+            '<div class="f2cost-route" data-f2-route="spawn">' +
+              '<div class="f2cost-route-head"><span class="f2cost-route-name">3. Spawn fresh, point at transcript</span>' +
+                '<span class="f2cost-route-cost slice">retrieves a slice</span></div>' +
+              '<div class="f2cost-route-desc">A new lean session gets this session’s id and is told to retrieve selectively (Total Recall / grep / tail), never to read the whole transcript.</div>' +
+              '<div class="f2cost-route-actions"><button class="f2cost-btn" data-f2-act="spawn">Spawn lean retriever</button></div>' +
+            '</div>' +
+            // Route 4 — Full resume
+            '<div class="f2cost-route" data-f2-route="full">' +
+              '<div class="f2cost-route-head"><span class="f2cost-route-name">4. Full resume</span>' +
+                '<span class="f2cost-route-cost full">~' + tokensLabel + ' on ' + modelLabel + '</span></div>' +
+              '<div class="f2cost-route-desc">Reload the whole session on the model above. The right call when the question truly needs the full state.</div>' +
+              '<div class="f2cost-route-actions"><button class="f2cost-btn primary" data-f2-act="full">Full resume now</button></div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="f2cost-foot"><button class="f2cost-dismiss" data-f2-act="cancel">Cancel — keep my text, send nothing</button></div>' +
+        '</div>';
+      document.body.appendChild(overlay);
+      document.addEventListener('keydown', onKey, true);
+
+      // Populate cheaper-model buttons.
+      const cheapWrap = overlay.querySelector('[data-f2-cheap-actions]');
+      F2_CHEAP_MODELS.forEach((m) => {
+        const b = document.createElement('button');
+        b.className = 'f2cost-btn';
+        b.textContent = 'Switch to ' + m.label + ' + send';
+        b.setAttribute('data-f2-model', m.id);
+        cheapWrap.appendChild(b);
+      });
+
+      const backdrop = overlay.querySelector('[data-f2-backdrop]');
+      if (backdrop) backdrop.addEventListener('click', () => finish('handled'));
+
+      // Route 1 — Total Recall search (free).
+      const runSearch = async (btn) => {
+        const box = overlay.querySelector('[data-f2-recall]');
+        if (!box) return;
+        box.hidden = false;
+        box.innerHTML = '<div class="f2cost-recall-status">Searching Total Recall…</div>';
+        if (btn) btn.disabled = true;
+        try {
+          const q = String(ctx.text || '').trim();
+          const recallParams = new URLSearchParams({ q: q, limit: '15' });
+          const scopeCwd = f2ResolveSpawnCwd(ctx);
+          if (scopeCwd) recallParams.set('cwd', scopeCwd);
+          const r = await fetch('/api/search-recall-sessions?' + recallParams.toString());
+          const d = await r.json().catch(() => ({ results: [] }));
+          const results = (d && Array.isArray(d.results)) ? d.results : [];
+          if (d && d.error && !results.length) {
+            box.innerHTML = '<div class="f2cost-recall-status">Total Recall: ' + escapeHtml(String(d.error)) + '</div>';
+          } else if (!results.length) {
+            box.innerHTML = '<div class="f2cost-recall-status">No matches. If you still need this session, try route 2 or 4.</div>';
+          } else {
+            // Surface this session's own hits first.
+            results.sort((a, b) => ((b.session_id === sid) ? 1 : 0) - ((a.session_id === sid) ? 1 : 0));
+            const rows = results.slice(0, 8).map((it) => {
+              const isThis = it.session_id === sid;
+              const snip = escapeHtml(String(it.snippet || '').slice(0, 400));
+              const meta = [it.cwd ? escapeHtml(String(it.cwd)) : '', isThis ? 'this session' : ''].filter(Boolean).join(' · ');
+              return '<div class="f2cost-recall-hit' + (isThis ? ' is-this-session' : '') + '">' +
+                '<div class="snip">' + snip + '</div>' + (meta ? '<div class="meta">' + meta + '</div>' : '') + '</div>';
+            }).join('');
+            box.innerHTML = '<div class="f2cost-recall-status">' + results.length + ' match(es), 0 tokens spent:</div>' + rows;
+          }
+        } catch (e) {
+          box.innerHTML = '<div class="f2cost-recall-status">Search failed: ' + escapeHtml((e && e.message) || 'network') + '</div>';
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      };
+
+      // Route 2 — switch model, then send the original text.
+      const runCheap = async (model, btn) => {
+        if (btn) btn.disabled = true;
+        try {
+          const mr = await fetch('/api/session/' + encodeURIComponent(sid) + '/model', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: model, context_1m: false }),
+          });
+          const md = await mr.json().catch(() => ({}));
+          if (!mr.ok || !md.ok) {
+            if (typeof showOpToast === 'function') showOpToast('Model switch failed: ' + ((md && md.error) || ('HTTP ' + mr.status)), 'error');
+            if (btn) btn.disabled = false;
+            return;
+          }
+          const ir = await fetch('/api/inject-input', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sid, text: ctx.text, mode: 'send' }),
+          });
+          const id = await ir.json().catch(() => ({}));
+          if (ir.ok && id.ok) {
+            if (typeof showOpToast === 'function') showOpToast('Switched to ' + model + ' and sent on this session.', 'success');
+            f2ClearComposer();
+            finish('handled');
+          } else {
+            if (typeof showOpToast === 'function') showOpToast('Send failed: ' + ((id && id.error) || ('HTTP ' + ir.status)), 'error');
+            if (btn) btn.disabled = false;
+          }
+        } catch (e) {
+          if (typeof showOpToast === 'function') showOpToast('Cheaper-model resume failed: ' + ((e && e.message) || 'network'), 'error');
+          if (btn) btn.disabled = false;
+        }
+      };
+
+      // Route 3 — spawn a lean retriever pointed at the origin transcript.
+      const runSpawn = async (btn) => {
+        if (btn) btn.disabled = true;
+        try {
+          const body = {
+            prompt: f2RetrievalPrompt(ctx, gate),
+            name: 'continue-' + String(sid).slice(0, 8),
+            engine: 'claude',
+            parent_session_id: sid,
+          };
+          const cwd = f2ResolveSpawnCwd(ctx);
+          if (cwd) { body.cwd = cwd; body.repo_path = cwd; }
+          const r = await fetch('/api/sessions/spawn', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok && d.ok !== false && (d.session_id || d.spawn_id || d.pid)) {
+            const newSid = d.session_id || '';
+            f2RecordContinuationLineage(sid, newSid);
+            if (typeof showOpToast === 'function') showOpToast('Spawned a lean retriever that will pull only the slice it needs.', 'success');
+            f2ClearComposer();
+            finish('handled');
+          } else {
+            if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
+            if (btn) btn.disabled = false;
+          }
+        } catch (e) {
+          if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((e && e.message) || 'network'), 'error');
+          if (btn) btn.disabled = false;
+        }
+      };
+
+      overlay.addEventListener('click', (e) => {
+        const el = e.target.closest('[data-f2-act], [data-f2-model]');
+        if (!el || !overlay.contains(el)) return;
+        const model = el.getAttribute('data-f2-model');
+        if (model) { runCheap(model, el); return; }
+        const act = el.getAttribute('data-f2-act');
+        if (act === 'search') runSearch(el);
+        else if (act === 'spawn') runSpawn(el);
+        else if (act === 'full') { f2FullResumeAck.add(sid); finish('proceed'); }
+        else if (act === 'cancel') finish('handled');
+      });
+    });
+  }
+
+  // Dev/demo hook: open the menu standalone with a synthetic context so a
+  // headless screenshot (or a live walkthrough with no large session handy)
+  // can render it on demand. Never wired into any auto-trigger.
+  window.f2OpenDemoCostMenu = function (opts) {
+    opts = opts || {};
+    const ctx = {
+      sid: opts.sid || 'demo-session-0000',
+      text: opts.text || 'can these W21 videos be shorts?',
+      paneId: null,
+      session: { id: opts.sid || 'demo-session-0000', source: 'claude', cwd: opts.cwd || '' },
+      row: opts.row || {},
+    };
+    const gate = { tokens: opts.tokens || 328000, ageMin: opts.ageMin || 240, model: opts.model || 'fable-5', forced: true };
+    return f2ShowResumeCostMenu(ctx, gate);
+  };
+
   function _rememberLiveOverlay(sessionId, fields) {
     if (!sessionId || !fields) return;
     const prev = _sessionLiveOverlay.get(sessionId) || {};
@@ -7457,6 +7813,21 @@
     if (compactCommand && hasPendingSendEchoBeforeCompact(getConvViewForPane(paneId || activePaneId()))) {
       showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
       return;
+    }
+    // F2 pre-submit cost menu: for a plain resume/ask into a large + stale
+    // session, offer graded routes before reloading the whole context on the
+    // most expensive model. Only for ordinary sends (not steer/compact/clear/
+    // slash commands); 'proceed' falls through to the normal full resume.
+    if (injectMode === 'send' && !compactCommand && !clearCommand && !/^\//.test(text)
+        && typeof f2MaybeShowResumeCostMenu === 'function') {
+      const _f2 = await f2MaybeShowResumeCostMenu({
+        sid: sid,
+        text: text,
+        paneId: paneId || activePaneId(),
+        session: currentSession,
+        row: (typeof currentConversationRow === 'function') ? currentConversationRow() : null,
+      });
+      if (_f2 === 'handled') { if ($actionBtn) $actionBtn.disabled = false; return; }
     }
     if ($actionBtn) $actionBtn.disabled = true;
     const flashRed = () => {
