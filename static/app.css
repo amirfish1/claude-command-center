@@ -578,6 +578,10 @@
     z-index: 60;
   }
   .launch-choice-menu.open { display: block; }
+  .launch-choice-menu.opens-up {
+    top: auto;
+    bottom: calc(100% + 4px);
+  }
   .launch-choice-item {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     width: 100%; padding: 7px 12px;

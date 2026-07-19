@@ -2762,9 +2762,18 @@
     }
   }
 
+  function positionLaunchChoiceMenu(menu) {
+    if (!menu) return;
+    const rect = menu.getBoundingClientRect();
+    // A Launch control can live at the bottom of a narrow window. Keep its
+    // targets inside the dashboard instead of rendering them below the edge.
+    menu.classList.toggle('opens-up', rect.bottom > window.innerHeight && rect.top > rect.height);
+  }
+
   function closeLaunchChoiceMenus() {
     for (const menu of allLaunchChoiceMenus()) {
       menu.classList.remove('open');
+      menu.classList.remove('opens-up');
       menu.setAttribute('aria-hidden', 'true');
     }
     for (const btn of allLaunchChoiceButtons()) {
@@ -2779,6 +2788,7 @@
     if (!willOpen) return;
     renderLaunchChoiceMenu(menu);
     menu.classList.add('open');
+    positionLaunchChoiceMenu(menu);
     menu.setAttribute('aria-hidden', 'false');
     btn.setAttribute('aria-expanded', 'true');
   }

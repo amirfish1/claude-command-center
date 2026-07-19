@@ -1,0 +1,1 @@
+- Keep the Launch target menu inside the dashboard when it would overflow below the window.
