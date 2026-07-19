@@ -33055,10 +33055,6 @@
 
   // The Queue panel has two possible homes: the status rail and the sidebar's
   // Queues tab. Store changes must repaint either visible home; checking only
-  // Replaces the Play control while WatchTower starts a worker. The entry is
-  // cleared only when a refreshed ticket leaves `open`, so dispatch latency is
-  // visible instead of looking like a click was ignored.
-  const _uxqPendingRunRefs = new Set();
   // the rail leaves a just-claimed sidebar ticket visually stuck as "open".
   function _queuePanelIsVisible() {
     const panel = document.getElementById('queuePanel');
@@ -33071,6 +33067,10 @@
 
   let _uxqItemsCache = { ts: 0, items: [] };
   let _uxqItemsPromise = null;
+  // Replaces the Play control while WatchTower starts a worker. The entry is
+  // cleared only when a refreshed ticket leaves `open`, so dispatch latency is
+  // visible instead of looking like a click was ignored.
+  const _uxqPendingRunRefs = new Set();
   // True while the /api/queue/events SSE stream is connected — the board then
   // refreshes on server push instead of the 15s fallback timer.
   let _uxqStreamLive = false;
@@ -34796,9 +34796,7 @@
   {
     const $queueList = document.getElementById('sidebarQueueList');
     if ($queueList) {
-          _uxqPendingRunRefs.add(ref);
       $queueList.addEventListener('click', async (ev) => {
-          _renderQueuePanel({ allowStale: true });
         const historyPageBtn = ev.target && ev.target.closest && ev.target.closest('[data-uxq-history-page]');
         if (historyPageBtn) {
           ev.preventDefault();
@@ -34818,7 +34816,9 @@
         if (runBtn) {
           ev.stopPropagation();
           const ref = runBtn.getAttribute('data-ref');
+          _uxqPendingRunRefs.add(ref);
           runBtn.disabled = true;
+          _renderQueuePanel({ allowStale: true });
           try {
             const res = await fetch('/api/ux-fixes/run', {
               method: 'POST',
@@ -34830,9 +34830,7 @@
               showOpToast('Running ' + ref);
               _uxqItemsCache.ts = 0;
               _uxqHealthCache.ts = 0;
-          _uxqPendingRunRefs.add(ref);
               _renderQueuePanel();
-          _renderQueuePanel({ allowStale: true });
             } else {
               showOpToast('Run failed: ' + (data.error || res.status), 'error');
               _uxqPendingRunRefs.delete(ref);
@@ -34851,7 +34849,9 @@
         if (runOnceBtn) {
           ev.stopPropagation();
           const ref = runOnceBtn.getAttribute('data-ref');
+          _uxqPendingRunRefs.add(ref);
           runOnceBtn.disabled = true;
+          _renderQueuePanel({ allowStale: true });
           try {
             const res = await fetch('/api/ux-fixes/run-once', {
               method: 'POST',
