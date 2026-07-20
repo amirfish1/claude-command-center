@@ -5982,6 +5982,19 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertNotIn(dead_pid, pids)
         self.assertNotIn("22222222-2222-2222-2222-222222222222", sids)
 
+    def test_watchtower_worker_ledger_marks_conversation_rows(self):
+        """A persisted WT worker is classified before the async queue poll."""
+        worker_sid = "11111111-1111-1111-1111-111111111111"
+        ledger_path = self.server._wt_worker_sessions_path()
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text(json.dumps({"session_ids": [worker_sid]}), encoding="utf-8")
+        rows = [{"session_id": worker_sid}, {"session_id": "ordinary-session"}]
+
+        self.server._apply_watchtower_worker_display_names(rows)
+
+        self.assertTrue(rows[0]["is_watchtower_worker"])
+        self.assertNotIn("is_watchtower_worker", rows[1])
+
     def test_queue_drain_api_writes_via_watchtower_config(self):
         """/api/queue/drain delegates to watchtower.config.set_auto_drain when
         the package is importable. The desired_workers >= 1 restore on opt-in

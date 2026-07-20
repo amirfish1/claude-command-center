@@ -26480,6 +26480,7 @@
       const _currentSessionSource = _ipSearchActive
         ? (_visibleSessionConvs || []).slice()
         : (_visibleSessionConvs || []).filter(c => {
+          if (c.is_watchtower_worker) return false;
           if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;
           return true;
         });

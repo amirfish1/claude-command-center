@@ -644,6 +644,14 @@ def _apply_watchtower_worker_display_names(rows):
     """
     if not rows:
         return rows
+    # The persistent ledger is the only source that still knows about a WT
+    # worker after it has been reaped. Stamp rows here, alongside the existing
+    # WT display overlay, so Current Sessions can exclude them on its *first*
+    # render instead of waiting for the asynchronous queue-health fetch.
+    try:
+        worker_session_ids = set(_wt_read_worker_session_ids())
+    except Exception:
+        worker_session_ids = set()
     try:
         workers = _wt_read_workers()
     except Exception:
@@ -694,12 +702,16 @@ def _apply_watchtower_worker_display_names(rows):
             _wt_display_name(it.get("project"), it.get("ref"), clipped_context),
             rest_context,
         )
-    if not titles_by_sid and not sid_to_worker:
+    if not titles_by_sid and not sid_to_worker and not worker_session_ids:
         return rows
     for row in rows:
-        if not isinstance(row, dict) or row.get("name_overridden"):
+        if not isinstance(row, dict):
             continue
         sid = str(row.get("session_id") or row.get("id") or "").strip()
+        if sid in worker_session_ids:
+            row["is_watchtower_worker"] = True
+        if row.get("name_overridden"):
+            continue
         titled = titles_by_sid.get(sid)
         worker = sid_to_worker.get(sid)
         if not titled and not worker:
