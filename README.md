@@ -6,7 +6,7 @@ CCC puts every session on one local board and tells you which one needs you.
 
 _Start the next while Claude builds the first._
 
-One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** session on your machine, however you launched it. Spawn, monitor, and ingest all five; steer four of them with follow-up. Local, open source, MIT.
+One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, and **Kimi Code** session on your machine, however you launched it. Spawn, monitor, and ingest all six; steer five of them with follow-up. Local, open source, MIT.
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
@@ -37,7 +37,7 @@ Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/dem
 
 CCC latches onto every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on your machine: terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
-See the [engine support matrix](#engine-support) below for what each engine does. Spawn, monitor, and transcript ingestion work across all five; follow-up (steering a dormant session) works on four (Kilo Code is fire-and-forget), and Cursor IDE sync is metadata-only by design.
+See the [engine support matrix](#engine-support) below for what each engine does. Spawn, monitor, and transcript ingestion work across all six; follow-up (steering a dormant session) works on five (Kilo Code is fire-and-forget), and Cursor IDE sync is metadata-only by design.
 
 ## What you get
 
@@ -81,7 +81,7 @@ that already exists.
 |---|:---:|:---:|:---:|
 | Sees sessions you launched by hand | if you remember the tab | no, only what it spawned | yes, reads on-disk state |
 | Survives closing the dashboard | yes | varies | yes, the dashboard is a lens, not a runtime |
-| One board across engines | no | usually one engine | yes, five engines |
+| One board across engines | no | usually one engine | yes, six engines |
 | Tells you which session needs you | no | no | yes, read from the transcript |
 | Coordinates sessions without you as the relay | no | no | yes, group chats + sibling-ask |
 | Setup | none | proxy or routing config | one curl line, no accounts |
@@ -90,6 +90,7 @@ The whole point is the first row: the moment you touch a terminal, a tool that o
 
 ## Recent
 
+- **2026-07-20**: **v5.9.0**. **Kimi Code joins as the sixth engine** (spawn, steer, live token streaming, guided setup in Settings). **Q-FIRST**: open CCC as a queue board — queue cards with WatchTower health, full ticket detail, one-click bridge into the worker's session. Plus a FIRST FLIGHT onboarding tour, a searchable full settings modal (Cmd/Ctrl+,), a cost-aware cold-session composer that offers ranked cheaper routes instead of a blind expensive resume, a 12-skill orchestration pack, plan-to-fleet queue import, and a perf pass that gets new sessions into the list in seconds.
 - **2026-06-25**: **v5.4.0**. **Project tree**: the "By objects" sidebar now splits a live "Current sessions" triage band over a hierarchical map of your day, sessions grouped under nestable, draggable Flow objects. Plus a new `/api/sessions/events` SSE stream (subscribe to session-state changes instead of polling) and a broad Codex, sidebar, and Total Recall search polish wave.
 - **2026-06-03**: **v4.6.0**. Major performance pass: the dashboard idles instead of pinning a CPU core, group-chat opens ~40x faster, long conversations open near-instantly (windowed load + scroll-up to load earlier), and Codex sessions with screenshots no longer stall on multi-MB images. New CCC self-health readout in the footer.
 - **2026-05-21**: **v4.0.0**. Antigravity (Google DeepMind) joins the dashboard as a first-class engine alongside Claude Code and Codex.
@@ -289,7 +290,7 @@ the UI uses for the kanban.
 
 ## Engine support
 
-CCC was built around Claude Code first; Codex, Cursor, Antigravity, and Kilo Code support followed. Spawn-from-dashboard works for all five. The rest varies:
+CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, and Kimi Code support followed. Spawn-from-dashboard works for all six. The rest varies:
 
 | Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model picker |
 |---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
@@ -298,6 +299,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, and Kilo Cod
 | Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | yes — UI/default model picker; default from `CCC_CURSOR_MODEL` |
 | Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | auto-detected from transcript metadata |
 | Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | yes — UI/default model picker; default from `CCC_KILO_MODEL` |
+| Kimi Code     | yes — ACP client over `kimi acp`, token-level live streaming | yes — steer live ACP sessions with inline permission-prompt answers; attach for TUI sessions | yes — reads `~/.kimi-code/sessions/`; live list and archive | yes — UI/default model picker; default from `CCC_KIMI_MODEL` |
 
 **Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
 
@@ -305,7 +307,12 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 
 ## Features
 
-- **One board, five engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, and **Kilo Code** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity.
+- **One board, six engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, and **Kimi Code** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity. Kimi Code has a guided setup flow in Settings → Engines that detects the CLI, walks through install and `kimi login`, and verifies with a smoke-test spawn.
+- **Queue-first mode (Q-FIRST)**: open CCC as a queue board — queue cards with WatchTower health, a queue's tickets in the main view, a full ticket detail panel (edit, answer, comment, close with a note, reopen), and a one-click bridge into the worker's session (or spawn a one-off worker). Activate per-load with `?ccc_mode=queues`, from the Queue tab's Board button, or pin it as your default landing view.
+- **Cost-aware cold-session composer**: when a session is large and stale, the send button is replaced by ranked routes — continue in a new session on a cheaper tier, search history, copy session id — with the full (expensive) resume demoted to a priced link. Routes are ranked by intent: question-shaped text promotes search, task-shaped text promotes continuing fresh.
+- **FIRST FLIGHT tour**: a spotlight walkthrough of the dashboard on first run, with newcomer and multi-engine paths and sample cards on empty installs. Replay any time from Settings.
+- **Settings modal**: the gear menu is a full settings modal with instant search (Cmd/Ctrl+, to open), keyboard navigation, and per-section reset — appearance, layout, sessions, fleet & network, tools, maintenance, help.
+- **Plan-to-fleet**: import a plan or mission-brief document into a WatchTower queue from the dashboard — preview the tickets `wt import` extracts, file them on confirm, optionally drain with a worker.
 - **ACP adapter** (optional): expose CCC over the [Agent Client Protocol](https://agentclientprotocol.com) so editors and ACP clients (VS Code, JetBrains, Zed, and agents like Hermes) can drive Claude Code sessions over JSON-RPC stdio. Runs as a separate process (`python3 ccc_acp.py`); install with the `acp` extra. The core server stays stdlib-only.
 - **Kanban** across every session, with drag-drop between columns,
   rubber-band multi-select, and per-column tinting.
@@ -351,14 +358,18 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 
 CCC ships a Claude Code skill (`ccc-orchestration`) that lets one Claude
 session spawn, inject into, and synchronously ask sibling sessions over
-plain HTTP. On startup the server copies the skill to
+plain HTTP. On top of it sits a 12-skill orchestration pack
+([`skills/README.md`](skills/README.md)) that turns spawn/inject/ask into
+concrete workflows — `pair-verify`, `standup`, `second-opinion`, `bug-race`,
+`docs-drift`, `release-audit`, and more — each with stated spawn cost, a
+dry-run mode, and an honest fallback when CCC is down. On startup the server copies the skill to
 `~/.claude/skills/ccc-orchestration/SKILL.md` (set
 `CCC_SKIP_SKILL_INSTALL=1` to opt out) and writes its base URL to
 `~/.claude/command-center/port.txt` so the skill can discover the running
 instance without hardcoding a port.
 
 Spawn calls pass `repo_path` (or `cwd`) plus optional
-`engine: "claude" | "codex" | "cursor" | "antigravity" | "kilo"` to `/api/sessions/spawn`;
+`engine: "claude" | "codex" | "cursor" | "antigravity" | "kilo" | "kimi"` to `/api/sessions/spawn`;
 omitted engine/model values use the server-side defaults from the dashboard.
 Legacy `engine: "gemini"` maps to Antigravity. Successful spawns return
 `spawn_id`, `engine`, `repo_path`, `cwd`, optional `parent_session_id`, and
