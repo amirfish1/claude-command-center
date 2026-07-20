@@ -11645,9 +11645,9 @@
   /* Queue scope picker — change the source the Queue reads the project code
      from for this session (per-session override). Compact, sits in the header. */
   .fq-scope-select {
-    background: transparent; color: var(--text-muted);
+    background: transparent; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
-    font-size: 10px; padding: 1px 4px; max-width: 96px; cursor: pointer;
+    font-size: 14px; font-weight: 800; padding: 2px 5px; max-width: 220px; cursor: pointer;
   }
   .fq-scope-select:hover { color: var(--text); border-color: var(--accent); }
   .fq-scope-select:focus { outline: none; border-color: var(--accent); }
@@ -11683,9 +11683,30 @@
   }
   .fq-wrap-toggle:hover { color: var(--text); border-color: var(--accent); }
   .fq-wrap-toggle.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .fq-search-row { padding: 2px 0 4px; }
+  .fq-more-wrap { position: relative; flex: 0 0 auto; }
+  .fq-more-btn {
+    background: transparent; color: var(--text-muted); border: 1px solid var(--border);
+    border-radius: 4px; cursor: pointer; font-size: 17px; font-weight: 700;
+    line-height: 1; padding: 1px 7px 4px;
+  }
+  .fq-more-btn:hover, .fq-more-btn[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
+  .fq-more-menu {
+    display: none; position: fixed; min-width: 148px; padding: 4px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45); z-index: 60;
+  }
+  .fq-more-menu.open { display: grid; gap: 2px; }
+  .fq-more-menu button, .fq-more-menu .qf-enter-btn {
+    width: 100%; box-sizing: border-box; border: 0; border-radius: 4px;
+    background: transparent; color: var(--text); cursor: pointer; font: inherit;
+    font-size: 12px; font-weight: 600; line-height: 1.3; padding: 6px 8px;
+    text-align: left; text-transform: none; letter-spacing: normal;
+  }
+  .fq-more-menu button:hover { background: var(--surface-hover); color: var(--text); }
+  .fq-more-menu .fq-wrap-toggle.is-active { background: var(--accent); color: #fff; }
   .fq-search-input {
-    width: 100%; box-sizing: border-box;
+    box-sizing: border-box; flex: 1 1 110px; min-width: 0; max-width: 180px;
+    margin-left: auto;
     background: transparent; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
     padding: 3px 8px; font-size: 11px;
@@ -11730,6 +11751,7 @@
   }
   .files-queue-import:hover { color: var(--accent); border-color: var(--accent); }
   .files-queue-import[hidden] { display: none; }
+  .fq-more-menu .files-queue-import[hidden] { display: none; }
 
   .files-list {
     display: flex; flex-direction: column; gap: 6px;
@@ -17133,8 +17155,8 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-row.is-closed .fq-note { color: var(--text-muted); }
 .fq-row.is-closed .fq-chip { background: rgba(139,148,158,0.10) !important; color: var(--text-muted) !important; opacity: 0.6; }
 /* Closed-but-not-fully-resolved (CCC-420): resolution.unresolved means the
-   worker closed the ticket but flagged something it could not finish. This is
-   an amber follow-up state, distinct from the red needs-input hard block. */
+   worker closed the ticket but flagged something it couldn't finish. This is
+   an amber follow-up state, distinct from the red "needs input" hard block. */
 .fq-row.is-closed.has-unresolved .fq-status { background: var(--orange, #d29922); }
 .fq-row.is-closed.has-unresolved .fq-note { color: var(--orange, #d29922); }
 .fq-chip.fq-unresolved { background: rgba(210,153,34,0.20); color: var(--orange, #d29922); }
@@ -18306,7 +18328,7 @@ body:has(.gc-reader) .pwa-install-banner {
   text-overflow: ellipsis;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   box-sizing: content-box;
-
+  
   /* Animation states */
   opacity: 0;
   transform: translateX(-20px);
@@ -20673,53 +20695,145 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   .settings-row-control { flex: 1 1 100%; justify-content: flex-start; margin-top: 6px; }
 }
 
-/* ── F2 pre-submit cost menu ─────────────────────────────────────────────
-   Shown at resume/ask submit time when a session is BOTH large AND stale
-   (prompt cache likely cold). Reuses the .upd-overlay / .upd-dialog shell
-   and adds graded "route" rows so the cost of each choice is visible before
-   the user pays it. Copy is honest: CCC infers coldness from staleness, it
-   cannot observe Anthropic's cache. */
-.f2cost-dialog { width: min(560px, 94vw); max-height: 88vh; overflow-y: auto; gap: 12px; }
-.f2cost-head { display: flex; flex-direction: column; gap: 6px; }
-.f2cost-title { font-size: 16px; font-weight: 600; color: var(--text); }
-.f2cost-estimate { font-size: 13px; color: var(--text); line-height: 1.5;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 9px 11px; }
-.f2cost-estimate strong { color: var(--accent); font-weight: 600; }
-.f2cost-caveat { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
-.f2cost-routes { display: flex; flex-direction: column; gap: 9px; }
-.f2cost-route { border: 1px solid var(--border); border-radius: 8px;
-  padding: 11px 12px; background: var(--bg); display: flex; flex-direction: column; gap: 8px; }
-.f2cost-route.is-recommended { border-color: rgba(63,185,80,0.45);
-  background: rgba(63,185,80,0.06); }
-.f2cost-route-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.f2cost-route-name { font-size: 13px; font-weight: 600; color: var(--text); }
-.f2cost-route-cost { font-size: 11px; font-weight: 600; margin-left: auto;
-  padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
-.f2cost-route-cost.free { color: #3fb950; background: rgba(63,185,80,0.14); }
-.f2cost-route-cost.slice { color: var(--accent); background: rgba(88,166,255,0.14); }
-.f2cost-route-cost.full { color: var(--text-muted); background: var(--surface-2); }
-.f2cost-route-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
-.f2cost-route-actions { display: flex; gap: 7px; flex-wrap: wrap; }
-.f2cost-btn { padding: 6px 12px; font-size: 12px; border-radius: 6px;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text);
-  cursor: pointer; font-family: inherit; }
-.f2cost-btn:hover { background: var(--surface-2); }
-.f2cost-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.f2cost-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
-.f2cost-btn.primary:hover { opacity: 0.9; }
-.f2cost-recall { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
-.f2cost-recall-status { font-size: 11px; color: var(--text-muted); }
-.f2cost-recall-hit { border: 1px solid var(--border); border-radius: 6px;
-  padding: 7px 9px; background: var(--surface); }
-.f2cost-recall-hit .snip { font-size: 12px; color: var(--text); line-height: 1.45;
-  white-space: pre-wrap; word-break: break-word; }
-.f2cost-recall-hit .meta { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
-.f2cost-recall-hit.is-this-session { border-color: var(--accent); }
-.f2cost-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.f2cost-dismiss { font-size: 12px; color: var(--text-muted); background: none;
-  border: none; cursor: pointer; font-family: inherit; padding: 4px; }
-.f2cost-dismiss:hover { color: var(--text); text-decoration: underline; }
+/* ── F2 cold-session composer ────────────────────────────────────────────
+   When a session is BOTH large AND stale (prompt cache likely cold), the
+   composer stops offering Send and renders a route stack instead. Two slots
+   inside .conv-input-bar: `.f2c-rail` above the textarea (session-row data
+   only, so it paints at focus) and `.f2c-panel` below it (needs the typed
+   text, so it re-ranks on input).
+
+   All of the mock's semantic class names (.route/.tag/.cost-badge/.verdict/…)
+   are kept, but every selector is scoped under .f2c-rail / .f2c-panel — they
+   are generic enough that unscoped rules would collide across a 20k-line
+   stylesheet. Colors come from the CCC vars; the only literals are the
+   existing green/amber semantics (#3fb950 free, #d29922 warning). */
+.f2c-rail[hidden], .f2c-panel[hidden] { display: none !important; }
+
+/* Status rail — the part that fires at focus, before a keystroke. */
+.f2c-rail {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 11.5px; color: #d29922;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.f2c-rail .rail-dot { width: 6px; height: 6px; border-radius: 50%; background: #d29922; flex: none; }
+.f2c-rail strong { font-weight: 600; }
+.f2c-rail .sep { color: var(--border); }
+.f2c-rail .meta { color: var(--text-muted); }
+
+/* While the gate is hot the composer has no Send affordance at all — the
+   route stack IS the affordance. Offering Send as the primary action would
+   contradict the verdict printed directly above it. Enter still routes
+   through f2MaybeShowResumeCostMenu, which bounces back to the routes. */
+.conv-input-bar.is-f2-cold { border-color: rgba(210,153,34,0.38); }
+.conv-input-bar.is-f2-cold .send-btn,
+.conv-input-bar.is-f2-cold .submit-plus-btn { display: none !important; }
+
+.f2c-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.f2c-panel .verdict { font-size: 12.5px; color: var(--text); line-height: 1.5; }
+.f2c-panel .verdict .cost { color: #d29922; font-weight: 600; }
+
+.f2c-panel .routes { display: flex; flex-direction: column; gap: 7px; }
+.f2c-panel .route {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: border-color .14s ease, background .14s ease;
+}
+.f2c-panel .route:hover { border-color: var(--accent); }
+.f2c-panel .route.is-recommended { border-color: rgba(63,185,80,0.45); background: rgba(63,185,80,0.06); }
+.f2c-panel .route.is-recommended:hover { background: rgba(63,185,80,0.11); border-color: rgba(63,185,80,0.7); }
+
+/* The clickable surface is a separate element from .route so the launch
+   selects can be real controls rather than nested inside a button. */
+.f2c-panel .route-main {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px;
+  width: 100%; text-align: left; background: none; border: none;
+  padding: 10px 12px; font: inherit; color: var(--text); cursor: pointer;
+  border-radius: 8px;
+}
+.f2c-panel .route-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.f2c-panel .route-main:disabled { opacity: 0.55; cursor: progress; }
+.f2c-panel .route-glyph {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px; color: var(--text-muted); line-height: 1.5; width: 14px; text-align: center;
+}
+.f2c-panel .route.is-recommended .route-glyph { color: #3fb950; }
+.f2c-panel .route-body { min-width: 0; }
+.f2c-panel .route-name { display: block; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+.f2c-panel .route-desc { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.f2c-panel .route-side {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: none; padding-top: 1px;
+}
+.f2c-panel .tag {
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+  color: #3fb950; background: rgba(63,185,80,0.14);
+  padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+}
+.f2c-panel .cost-badge {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px; font-weight: 600; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+}
+.f2c-panel .cost-badge.free  { color: #3fb950; background: rgba(63,185,80,0.14); }
+.f2c-panel .cost-badge.slice { color: var(--accent); background: rgba(110,140,175,0.18); }
+
+/* Launch spec — engine + model + effort, stated as a sentence rather than a
+   form. Never a required decision: the route says what it will launch on
+   before you click it. Routes that run no model render no launch line. */
+.f2c-panel .route-model {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0 12px 10px 36px; padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11.5px; color: var(--text-muted);
+}
+.f2c-panel .route-model .f2c-select {
+  font: inherit; font-size: 11.5px; font-weight: 600; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 5px; padding: 2px 6px; cursor: pointer; max-width: 150px;
+}
+.f2c-panel .route-model .f2c-select:hover { border-color: var(--accent); }
+.f2c-panel .route-model .f2c-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.f2c-panel .route-model .rate { color: #3fb950; font-weight: 600; }
+
+/* Inline result area for the free routes (Total Recall hits, copy receipt). */
+.f2c-route-out[hidden] { display: none !important; }
+.f2c-route-out { display: flex; flex-direction: column; gap: 6px; margin: 0 12px 10px 36px; }
+.f2c-out-status { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.f2c-out-status code { font-family: var(--font-mono, monospace); color: var(--text); }
+.f2c-out-hit { border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; background: var(--bg); }
+.f2c-out-hit .snip { font-size: 12px; color: var(--text); line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.f2c-out-hit .meta { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+.f2c-out-hit.is-this-session { border-color: var(--accent); }
+
+/* The demoted escape hatch. Still one click and still priced — just not the
+   primary action, because the verdict is that you probably shouldn't. */
+.f2c-panel .escape { padding-top: 9px; border-top: 1px solid var(--border); }
+.f2c-panel .escape-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.f2c-panel .escape-note { margin: 6px 0 0; font-size: 11px; color: var(--text-muted); line-height: 1.5; max-width: 62ch; }
+.f2c-panel .escape button {
+  background: none; border: none; padding: 0; font: inherit; font-size: 12px;
+  color: var(--text-muted); cursor: pointer; text-decoration: underline;
+  text-underline-offset: 2px; text-decoration-color: var(--border);
+}
+.f2c-panel .escape button:hover { color: var(--text); text-decoration-color: var(--text-muted); }
+.f2c-panel .escape button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.f2c-panel .escape .why { font-size: 11.5px; color: var(--text-muted); }
+
+/* Enter while the gate is hot bounces back here instead of sending; a short
+   pulse says "this is the thing that answered you". */
+.f2c-panel.is-nudged .routes { animation: f2cNudge .4s ease; }
+@keyframes f2cNudge {
+  0%, 100% { transform: none; }
+  35% { transform: translateX(-3px); }
+  70% { transform: translateX(2px); }
+}
+@keyframes f2cSettle { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.f2c-panel .routes > .route { animation: f2cSettle .16s ease both; }
+.f2c-panel .routes > .route:nth-child(2) { animation-delay: .03s; }
+.f2c-panel .routes > .route:nth-child(3) { animation-delay: .06s; }
+@media (prefers-reduced-motion: reduce) {
+  .f2c-panel .routes > .route,
+  .f2c-panel.is-nudged .routes { animation: none !important; }
+  .f2c-panel .route { transition: none !important; }
+}
 
 /* The desktop status rail becomes the top status layout on mobile. Its
    content is re-parented by _applyStatusRailLayout when the breakpoint

@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCC — cold-session composer (mock)</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #6e8caf;
+    --accent-contrast: #ffffff;
+    --free: #3fb950;
+    --warn: #d29922;
+    --radius: 8px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 24px 80px;
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 14px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+
+  .page-head { margin-bottom: 32px; }
+  .page-head h1 { font-size: 17px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .page-head p { margin: 0; font-size: 13px; color: var(--text-muted); max-width: 60ch; }
+
+  .section-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--text-muted); margin: 36px 0 10px;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  /* ── composer shell ─────────────────────────────────────── */
+  .composer {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .composer.is-cold { border-color: rgba(210,153,34,0.38); }
+
+  /* status rail — the part that fires at focus, before a keystroke */
+  .rail {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 11.5px; color: var(--warn);
+    padding-bottom: 10px; border-bottom: 1px solid var(--border);
+  }
+  .rail-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex: none; }
+  .rail strong { font-weight: 600; }
+  .rail .sep { color: var(--border); }
+  .rail .meta { color: var(--text-muted); }
+
+  textarea {
+    width: 100%; min-height: 62px; resize: vertical;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 9px 11px; font-family: inherit; font-size: 14px; line-height: 1.5;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  textarea::placeholder { color: var(--text-muted); }
+
+  /* ── healthy state send row ─────────────────────────────── */
+  .send-row { display: flex; justify-content: flex-end; }
+  .send-btn {
+    background: var(--accent); color: var(--accent-contrast); border: 1px solid var(--accent);
+    font: inherit; font-size: 12.5px; font-weight: 600;
+    padding: 6px 16px; border-radius: 6px; cursor: pointer;
+  }
+  .send-btn:hover { opacity: 0.9; }
+
+  /* ── the verdict + route stack ──────────────────────────── */
+  .verdict { font-size: 12.5px; color: var(--text); }
+  .verdict .cost { color: var(--warn); font-weight: 600; }
+
+  .routes { display: flex; flex-direction: column; gap: 7px; }
+
+  .route {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color .14s ease, background .14s ease;
+  }
+  .route:hover { border-color: var(--accent); background: #262c35; }
+  .route.is-recommended { border-color: rgba(63,185,80,0.45); background: rgba(63,185,80,0.06); }
+  .route.is-recommended:hover { background: rgba(63,185,80,0.11); border-color: rgba(63,185,80,0.7); }
+
+  /* The clickable surface. A separate element so the model control can be a
+     real control instead of a button nested inside a button. */
+  .route-main {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px;
+    width: 100%; text-align: left; background: none; border: none;
+    padding: 10px 12px; font: inherit; color: var(--text); cursor: pointer;
+    border-radius: var(--radius);
+  }
+  .route-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  .route-glyph {
+    font-family: var(--mono); font-size: 13px; color: var(--text-muted);
+    line-height: 1.5; width: 14px; text-align: center;
+  }
+  .route.is-recommended .route-glyph { color: var(--free); }
+
+  .route-body { min-width: 0; }
+  .route-name { display: block; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+  .route-desc { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+  .route-side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: none; padding-top: 1px; }
+  .tag {
+    font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--free); background: rgba(63,185,80,0.14);
+    padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+  }
+  .cost-badge {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+  }
+  .cost-badge.free  { color: var(--free); background: rgba(63,185,80,0.14); }
+  .cost-badge.slice { color: var(--accent); background: rgba(110,140,175,0.18); }
+
+  /* Model tier — stated by default, overridable inline. Never a required
+     decision: the route says what it will launch on before you click it. */
+  .route-model {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin: 0 12px 10px 36px; padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    font-size: 11.5px; color: var(--text-muted);
+  }
+  .route-model select {
+    font: inherit; font-size: 11.5px; font-weight: 600; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 5px; padding: 2px 6px; cursor: pointer; max-width: 150px;
+  }
+  .route-model select:hover { border-color: var(--accent); }
+  .route-model select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .route-model .rate { color: var(--free); font-weight: 600; }
+
+  /* the demoted escape hatch */
+  .escape { padding-top: 9px; border-top: 1px solid var(--border); }
+  .escape-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .escape-note { margin: 6px 0 0; font-size: 11px; color: var(--text-muted); max-width: 62ch; }
+  .escape button {
+    background: none; border: none; padding: 0; font: inherit; font-size: 12px;
+    color: var(--text-muted); cursor: pointer; text-decoration: underline;
+    text-underline-offset: 2px; text-decoration-color: var(--border);
+  }
+  .escape button:hover { color: var(--text); text-decoration-color: var(--text-muted); }
+  .escape .why { font-size: 11.5px; color: var(--text-muted); }
+
+  /* ── annotations ────────────────────────────────────────── */
+  .note {
+    font-size: 11.5px; color: var(--text-muted); margin: 8px 2px 0;
+    padding-left: 11px; border-left: 2px solid var(--border);
+  }
+  .note b { color: var(--text); font-weight: 600; }
+
+  .intent-switch { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .intent-switch button {
+    font: inherit; font-size: 11.5px; color: var(--text-muted);
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .intent-switch button:hover { color: var(--text); border-color: var(--accent); }
+
+  kbd {
+    font-family: var(--mono); font-size: 10.5px; background: var(--surface-2);
+    border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 5px; color: var(--text-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+  @keyframes settle { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  .routes > .route { animation: settle .16s ease both; }
+  .routes > .route:nth-child(2) { animation-delay: .03s; }
+  .routes > .route:nth-child(3) { animation-delay: .06s; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-head">
+    <h1>Cold-session composer</h1>
+    <p>When a session is large and stale, the composer stops offering Send and offers the routes we
+       actually recommend. Full resume stays reachable, priced, and demoted.</p>
+  </div>
+
+  <!-- ───────────────────────── LIVE ───────────────────────── -->
+  <div class="section-label">Live — type and watch the ranking move</div>
+
+  <div class="intent-switch">
+    <button data-fill="now wire the retry backoff into the reconcile path">Try a task</button>
+    <button data-fill="what did we decide about the depth lookup failures?">Try a question</button>
+    <button data-fill="">Clear</button>
+  </div>
+
+  <div class="composer is-cold">
+    <div class="rail">
+      <span class="rail-dot"></span>
+      <strong>Large and stale</strong>
+      <span class="sep">·</span>
+      <span class="meta">328k tokens · idle 4 hr · cache likely cold</span>
+    </div>
+
+    <textarea id="input" placeholder="Ask this session something, or continue the work…"></textarea>
+
+    <div class="verdict">
+      Sending here reloads <span class="cost">~328k tokens on Opus 4.8</span>. Pick a route:
+    </div>
+
+    <div class="routes" id="routes"></div>
+
+    <div class="escape">
+      <div class="escape-row">
+        <button>Resume anyway</button>
+        <span class="why">reloads ~328k on Opus 4.8 · <kbd>⌘⏎</kbd></span>
+      </div>
+      <p class="escape-note">
+        Compacting first costs more, not less — writing the summary reloads all 328k, then
+        you still pay for the turn.
+      </p>
+    </div>
+  </div>
+
+  <p class="note">
+    The rail fires at <b>focus</b> — it needs only the session row, never your text.
+    The route stack re-ranks on <b>intent</b>: question-shaped text promotes Search, task-shaped
+    text promotes Continue. Nothing here is labelled Send.
+  </p>
+  <p class="note">
+    The <b>launch spec is stated, not chosen</b> — engine, model, and effort, the same triple the
+    queue config uses. Defaults are opinionated: same engine as the origin for tool continuity,
+    Sonnet because a scoped continuation is real work but not Opus work, Light effort because the
+    hard thinking already happened upstream. Switching engine re-scopes the model list. Routes
+    that run no model show no launch line at all.
+  </p>
+
+  <!-- ─────────────────────── CONTRAST ─────────────────────── -->
+  <div class="section-label">For contrast — a healthy session is untouched</div>
+
+  <div class="composer">
+    <textarea placeholder="Ask this session something, or continue the work…"></textarea>
+    <div class="send-row"><button class="send-btn">Send</button></div>
+  </div>
+
+  <p class="note">
+    The transformation is the whole tell. If the composer looks normal, resuming is cheap —
+    so the cold state needs no explanation, only a different shape.
+  </p>
+
+</div>
+
+<script>
+  // The launch spec is engine + model + effort — the same triple the queue
+  // config already uses (app.js:35310). Stated as a sentence before you click;
+  // every part overridable, none of it a required decision.
+  const ENGINES = [
+    { id: 'claude', label: 'Claude', models: [
+      { id: 'haiku-4-5', label: 'Haiku 4.5' },
+      { id: 'sonnet-5',  label: 'Sonnet 5'  },
+      { id: 'opus-4-8',  label: 'Opus 4.8'  },
+    ]},
+    { id: 'codex', label: 'Codex', models: [
+      { id: 'gpt-5.5-codex', label: 'gpt-5.5-codex' },
+    ]},
+    { id: 'kimi', label: 'Kimi', models: [
+      { id: 'kimi-k2', label: 'kimi-k2' },
+    ]},
+  ];
+  const EFFORTS = [
+    { id: 'low',    label: 'Light' },
+    { id: 'medium', label: 'Medium' },
+    { id: 'high',   label: 'High' },
+    { id: 'xhigh',  label: 'Extra High' },
+    { id: 'max',    label: 'Max' },
+  ];
+
+  const ROUTES = {
+    continue: {
+      glyph: '→',
+      name: 'Continue in a new session',
+      desc: 'Carries your text and this session’s id. Tails the transcript for recent state, greps for anything older.',
+      cost: '~2k', costClass: 'slice',
+      // Defaults, all deliberate: same engine as the origin (tool continuity),
+      // Sonnet because a scoped continuation is real work but not Opus work,
+      // Light effort because the thinking was already done upstream.
+      launch: { engine: 'claude', model: 'sonnet-5', effort: 'low' },
+      note: '~5x cheaper than Opus',
+    },
+    search: {
+      glyph: '⌕',
+      name: 'Search your history first',
+      desc: 'Runs the question through Total Recall. Often the whole answer, no model spend.',
+      cost: '0 tokens', costClass: 'free',
+      launch: null,                                 // no model runs at all
+    },
+    handoff: {
+      glyph: '⧉',
+      name: 'Copy session id',
+      desc: 'Hand this thread to a session you already have open and warm.',
+      cost: '0 tokens', costClass: 'free',
+      launch: null,
+    },
+  };
+
+  // Intent read: is the user retrieving a fact, or continuing the work?
+  const ASKS = /^(what|why|where|when|who|which|how|did|does|do|is|are|was|were|can|could|should|remind)\b/i;
+  function ranks(text) {
+    const t = String(text || '').trim();
+    if (!t) return ['continue', 'search', 'handoff'];       // default posture: spawn
+    const asking = t.endsWith('?') || ASKS.test(t);
+    return asking ? ['search', 'continue', 'handoff'] : ['continue', 'search', 'handoff'];
+  }
+
+  function sel(kind, routeId, list, current) {
+    return '<select data-kind="' + kind + '" data-route="' + routeId + '">' +
+      list.map(o => '<option value="' + o.id + '"' +
+        (o.id === current ? ' selected' : '') + '>' + o.label + '</option>').join('') +
+      '</select>';
+  }
+  // Reads as a sentence, not a form. Model options are scoped to the chosen
+  // engine — picking Codex should never leave "Sonnet 5" sitting in the box.
+  function launchLine(routeId, L, note) {
+    const eng = ENGINES.find(e => e.id === L.engine) || ENGINES[0];
+    return '<div class="route-model">' +
+      'Launches on ' + sel('engine', routeId, ENGINES, L.engine) +
+      sel('model', routeId, eng.models, L.model) +
+      ' at ' + sel('effort', routeId, EFFORTS, L.effort) + ' effort' +
+      (note ? '<span class="rate">' + note + '</span>' : '') +
+    '</div>';
+  }
+
+  const routesEl = document.getElementById('routes');
+  const input = document.getElementById('input');
+  let last = '';
+
+  function render() {
+    const order = ranks(input.value);
+    const key = order.join('|');
+    if (key === last) return;                                // don't thrash on every keystroke
+    last = key;
+    routesEl.innerHTML = order.map((id, i) => {
+      const r = ROUTES[id];
+      const L = r.launch;
+      return '<div class="route' + (i === 0 ? ' is-recommended' : '') + '">' +
+        '<button class="route-main">' +
+          '<span class="route-glyph">' + r.glyph + '</span>' +
+          '<span class="route-body">' +
+            '<span class="route-name">' + r.name + '</span>' +
+            '<span class="route-desc">' + r.desc + '</span>' +
+          '</span>' +
+          '<span class="route-side">' +
+            (i === 0 ? '<span class="tag">Recommended</span>' : '') +
+            '<span class="cost-badge ' + r.costClass + '">' + r.cost + '</span>' +
+          '</span>' +
+        '</button>' +
+        (L ? launchLine(id, L, r.note) : '') +
+      '</div>';
+    }).join('');
+  }
+
+  // Persist launch overrides on the route so a re-rank doesn't reset them.
+  routesEl.addEventListener('change', (e) => {
+    const s = e.target.closest('select[data-kind]');
+    if (!s) return;
+    const r = ROUTES[s.dataset.route];
+    if (!r || !r.launch) return;
+    r.launch[s.dataset.kind] = s.value;
+    if (s.dataset.kind === 'engine') {
+      // Engine changed — the old model id is meaningless now. Snap to the new
+      // engine's first model rather than leaving a stale label in the box.
+      const eng = ENGINES.find(x => x.id === s.value) || ENGINES[0];
+      r.launch.model = eng.models[0].id;
+      r.note = s.value === 'claude' && r.launch.model !== 'opus-4-8'
+        ? '~5x cheaper than Opus' : '';
+      last = '';                                     // force a repaint
+      render();
+    }
+  });
+
+  input.addEventListener('input', render);
+  document.querySelectorAll('[data-fill]').forEach(b => {
+    b.addEventListener('click', () => { input.value = b.dataset.fill; input.focus(); render(); });
+  });
+  render();
+</script>
+</body>
+</html>

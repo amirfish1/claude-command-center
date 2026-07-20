@@ -830,7 +830,14 @@
                     <select class="fq-scope-select" id="queueScopeSelect" aria-label="Queue scope for this session" title="Which queue this session shows"></select>
                     <span class="fq-scope-busy" id="queueScopeBusy" role="status" aria-label="Loading selected queue"></span>
                     <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
-                    <button class="files-queue-import" id="queueImportDoc" type="button" title="Turn a plan document into queue tickets" aria-label="Import a document into this queue" hidden>Import doc</button>
+                    <div class="fq-more-wrap">
+                      <button class="fq-more-btn" id="queueMoreBtn" type="button" title="More queue actions" aria-label="More queue actions" aria-haspopup="menu" aria-expanded="false">&hellip;</button>
+                      <div class="fq-more-menu" id="queueMoreMenu" role="menu" aria-hidden="true">
+                        <div id="queueBoardMenuSlot"></div>
+                        <button class="files-queue-import" id="queueImportDoc" type="button" title="Turn a plan document into queue tickets" role="menuitem" hidden>Import doc</button>
+                        <button class="fq-wrap-toggle" id="queueWrapToggle" type="button" role="menuitem" title="Wrap queue issue titles" aria-pressed="false">Wrap titles</button>
+                      </div>
+                    </div>
                     <div class="fq-filter" id="queueFilterToggle" role="group" aria-label="Filter queue by status">
                       <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
                       <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
@@ -840,10 +847,7 @@
                       <button class="fq-filter-btn" type="button" data-uxq-type-filter="bug">Bugs</button>
                       <button class="fq-filter-btn" type="button" data-uxq-type-filter="feature">Features</button>
                     </div>
-                    <button class="fq-wrap-toggle" id="queueWrapToggle" type="button" title="Wrap queue issue titles" aria-label="Wrap queue issue titles" aria-pressed="false">Wrap</button>
                     <span class="files-count" id="queueCount"></span>
-                  </div>
-                  <div class="fq-search-row">
                     <input type="text" id="queueSearchInput" class="fq-search-input" placeholder="Search issues…" aria-label="Search queue tickets">
                   </div>
                   <div class="files-queue-list" id="sidebarQueueList"></div>
@@ -885,9 +889,18 @@
         </button>
         <div class="conv-goal-strip" data-role="conv-goal-strip" hidden></div>
         <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
+          <!-- F2 cold-session composer. Two independent slots, because they
+               have different data dependencies:
+                 · the rail needs only the session row (tokens + mtime), so it
+                   can paint the moment a session is focused, before a keystroke;
+                 · the route stack needs the typed text to rank intent and to
+                   build the continuation prompt, so it re-renders on input.
+               Both are hidden until f2RenderComposer() decides the gate is hot. -->
+          <div class="f2c-rail rail" data-role="conv-f2-rail" hidden></div>
           <div class="conv-input-row-top">
             <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true" enterkeyhint="send" inputmode="text"></textarea>
           </div>
+          <div class="f2c-panel" data-role="conv-f2-panel" hidden></div>
           <div class="conv-input-row-bottom">
             <div class="conv-input-selectors">
               <!-- Engine picker for new-session mode. Occupies the same slot as

@@ -2553,24 +2553,90 @@
     };
   }
 
-  // ── F2 pre-submit cost menu ────────────────────────────────────────────
-  // When a user is about to resume/ask into a session that is BOTH large AND
-  // stale (prompt cache likely cold), intercept at submit time and show a
-  // graded cost menu instead of blindly reloading the whole context on the
-  // most expensive model. The token estimate is read straight off the row
-  // (latest_input_tokens / live_context_tokens — already (mtime,size)-cached
-  // server-side), so this adds NO per-row transcript parse. Staleness is
-  // inferred from mtime; CCC cannot observe Anthropic's cache, so the copy
-  // says "likely cold", never "is cold".
+  // ── F2 cold-session composer ───────────────────────────────────────────
+  // When a session is BOTH large AND stale (prompt cache likely cold), the
+  // composer stops offering Send and offers the routes we actually recommend
+  // instead. This replaced a submit-time modal: if the verdict is "don't send
+  // this", then putting Send back as the primary button contradicts the
+  // verdict, and a modal only interrupts AFTER the user already committed.
+  // The composer presents the alternatives INSTEAD of submit.
+  //
+  // The token estimate is read straight off the row (latest_input_tokens /
+  // live_context_tokens — already (mtime,size)-cached server-side), so this
+  // adds NO per-row transcript parse. Staleness is inferred from mtime; CCC
+  // cannot observe the provider's cache, so the copy always hedges ("likely"),
+  // never asserts.
   const F2_TOKEN_THRESHOLD = 50000;   // "large": ~50k+ estimated context
-  const F2_STALE_MINUTES = 60;        // "cold": older than the cache-TTL window
-  const F2_CHEAP_MODELS = [
-    { id: 'sonnet-5',  label: 'Sonnet 5' },
-    { id: 'haiku-4-5', label: 'Haiku 4-5' },
+
+  // Per-engine cache-decay profiles. These are measured, not guessed: 390,600
+  // real turns. The previous code warned on Claude only, on a comment claiming
+  // the cache-cold story was Claude-specific. That was false — Codex decays
+  // too, just with a completely different shape, so one threshold cannot serve
+  // both. Keyed by engine so adding an engine is a data change, not a new
+  // if-branch scattered through the gate.
+  //
+  //   claude — flat ~99.5% cache-hit up to 60 min, then a CLIFF to ~6%. Every
+  //            Claude model measured (opus 4.6/4.7/4.8, sonnet 5, sonnet 4.6,
+  //            fable 5) behaves identically, so the profile is model-agnostic.
+  //            Past the line the cache is ~90% dead — copy can be confident.
+  //   codex  — NO cliff. Gradual decay beginning ~8 min: ~25% broken by 10-12
+  //            min, ~26% by 25-30, ~41% by 40-50, ~68% by 50-60. Graded, so
+  //            the copy says "likely partial", never "cold", and the verdict
+  //            talks about paying for *part* of the reload.
+  //
+  // Everything else (gemini, kimi, cursor, antigravity, hermes, kilo) has no
+  // measurement behind it. Absent evidence we stay silent rather than warn —
+  // an unfounded warning trains the user to dismiss the founded ones.
+  const F2_STALE_MINUTES = 60;         // claude: the cliff
+  const F2_STALE_MINUTES_CODEX = 25;   // codex: where graded loss is material
+  const F2_ENGINE_CACHE = {
+    claude: {
+      staleMinutes: F2_STALE_MINUTES,
+      decay: 'cliff',
+      railNote: 'cache likely cold',
+      // Past the cliff ~90% of reads miss. "Likely gone cold" understated it.
+      verdictNote: 'past ' + F2_STALE_MINUTES + ' min idle roughly 9 in 10 cache reads miss, so expect to pay for nearly all of it again',
+    },
+    codex: {
+      staleMinutes: F2_STALE_MINUTES_CODEX,
+      decay: 'graded',
+      railNote: 'cache likely partial',
+      // No cliff to point at — the honest statement is "some of it", scaling
+      // with idle time, not "all of it".
+      verdictNote: 'Codex caches decay gradually rather than expiring, so a growing share of that reload is no longer cached',
+    },
+  };
+  // 'interactive' is how a Claude session started outside CCC labels itself.
+  const F2_ENGINE_ALIASES = { interactive: 'claude' };
+
+  // Launch spec for the Continue route — engine + model + effort, the same
+  // triple the queue config uses (openQueueManager, ~35310). Stated as a
+  // sentence before the click; every part overridable, none of it a required
+  // decision. Model lists are read from MODEL_OPTIONS_BY_ENGINE at call time
+  // (it is declared far below this block, so a static snapshot here would be
+  // in the temporal dead zone at module-eval); the inline fallback keeps the
+  // route renderable even if that read ever fails.
+  const F2_LAUNCH_ENGINES = [
+    { id: 'claude', label: 'Claude', fallback: [{ id: 'sonnet-5', label: 'sonnet-5' }] },
+    { id: 'codex',  label: 'Codex',  fallback: [{ id: 'gpt-5.5', label: '5.5' }] },
+    { id: 'kimi',   label: 'Kimi',   fallback: [{ id: 'kimi-code/k3', label: 'K3' }] },
   ];
-  // Sessions where the user knowingly picked "Full resume" — don't nag again
+  // Same vocabulary as CODEX_REASONING_LEVELS plus 'max' — the spec asked for
+  // the full Light…Max ladder here even though the Codex composer select tops
+  // out at Extra High.
+  const F2_LAUNCH_EFFORTS = [
+    { id: 'low',    label: 'Light' },
+    { id: 'medium', label: 'Medium' },
+    { id: 'high',   label: 'High' },
+    { id: 'xhigh',  label: 'Extra High' },
+    { id: 'max',    label: 'Max' },
+  ];
+  // Sessions where the user knowingly picked "Resume anyway" — don't nag again
   // this page-load (one decision per session, not per keystroke).
   const f2FullResumeAck = new Set();
+  // Per-pane composer state: the gate that fired, plus the launch overrides so
+  // they survive an intent re-rank (which rebuilds the route DOM from scratch).
+  const f2PaneState = new Map();
 
   function f2ClearComposer() {
     try {
@@ -2598,45 +2664,73 @@
     if (raw === '*') return true;
     return raw.split(',').map(s => s.trim()).filter(Boolean).indexOf(sid) !== -1;
   }
-  // Decide whether the menu should fire. Returns a gate object or null.
+  // Normalize a session's engine label onto a key in F2_ENGINE_CACHE. Returns
+  // '' for engines we have no measurement for — the caller must then stay
+  // silent rather than warn on a guess.
+  function f2EngineKey(raw) {
+    const e = String(raw || 'claude').trim().toLowerCase();
+    const alias = F2_ENGINE_ALIASES[e] || e;
+    return Object.prototype.hasOwnProperty.call(F2_ENGINE_CACHE, alias) ? alias : '';
+  }
+
+  // Decide whether the cold-session composer should fire. Returns a gate
+  // object or null. Deliberately depends only on the session ROW (tokens +
+  // mtime + engine) and never on the composer text, so the rail can paint at
+  // focus time, before a single keystroke.
   function f2ResumeGate(ctx) {
     const sid = ctx && ctx.sid;
     if (!sid) return null;
     if (f2FullResumeAck.has(sid)) return null;
     const row = ctx.row || {};
     const cf = _contextFieldsFromRow(row);
-    const engine = String((ctx.session && ctx.session.source) || cf.engine || 'claude');
-    // The cache-cold story is Claude-specific; only Claude sessions expose a
-    // model picker with cheaper Claude tiers. Skip other engines.
-    const isClaude = engine === 'claude' || engine === 'interactive';
+    const engineRaw = String((ctx.session && ctx.session.source) || cf.engine || 'claude');
+    const engine = f2EngineKey(engineRaw);
     const tokens = Math.max(Number(cf.live_context_tokens) || 0, Number(cf.latest_input_tokens) || 0);
     const mtime = Number(row.modified || row.mtime || 0);
     const model = row.model || (ctx.session && ctx.session.model) || cf.model || 'the current model';
     const forced = f2DemoForceMatches(sid);
     if (forced) {
       // Demo mode: synthesize a believable estimate if the real row is small,
-      // so the menu fires reliably on any session for a live walkthrough.
+      // so the composer fires reliably on any session for a live walkthrough.
       const demoTokens = tokens >= F2_TOKEN_THRESHOLD ? tokens : 328000;
       const ageMin = mtime ? (Date.now() / 1000 - mtime) / 60 : 240;
-      return { tokens: demoTokens, ageMin, model, forced: true };
+      const demoEngine = engine || 'claude';
+      return { tokens: demoTokens, ageMin, model, engine: demoEngine, cache: F2_ENGINE_CACHE[demoEngine], forced: true };
     }
-    if (!isClaude) return null;
+    // No measured decay profile for this engine → no warning. See the
+    // F2_ENGINE_CACHE comment: warning without evidence is worse than silence.
+    if (!engine) return null;
+    const cache = F2_ENGINE_CACHE[engine];
     if (tokens < F2_TOKEN_THRESHOLD) return null;
     if (!mtime) return null;
     const ageMin = (Date.now() / 1000 - mtime) / 60;
-    if (ageMin < F2_STALE_MINUTES) return null;
-    return { tokens, ageMin, model, forced: false };
+    if (ageMin < cache.staleMinutes) return null;
+    return { tokens, ageMin, model, engine, cache, forced: false };
   }
 
-  // Entry point called from sendToTerminal. Resolves to:
+  // Entry point still called from sendToTerminal. The composer normally hides
+  // Send outright when the gate is hot, but Enter (and every other keyboard
+  // path into sendToTerminal) can still reach submit, so the guard stays.
+  // Resolves to:
   //   'proceed' → let the normal full-resume send continue
-  //   'handled' → a route ran (or the user dismissed); do NOT send
+  //   'handled' → the composer is showing the routes; do NOT send
   async function f2MaybeShowResumeCostMenu(ctx) {
     let gate;
     try { gate = f2ResumeGate(ctx); } catch (_) { return 'proceed'; }
     if (!gate) return 'proceed';
-    try { return await f2ShowResumeCostMenu(ctx, gate); }
-    catch (_) { return 'proceed'; }
+    // Repaint so the route stack reflects the text just typed, then bounce the
+    // submit. The user picks a route (or the demoted "Resume anyway" link).
+    try { f2RenderComposer(ctx.paneId); } catch (_) {}
+    try {
+      const panel = f2PanelEl(ctx.paneId);
+      if (panel) {
+        panel.classList.add('is-nudged');
+        setTimeout(() => { try { panel.classList.remove('is-nudged'); } catch (_) {} }, 400);
+        const first = panel.querySelector('.route-main');
+        if (first) first.focus({ preventScroll: true });
+      }
+    } catch (_) {}
+    return 'handled';
   }
 
   function f2ResolveSpawnCwd(ctx) {
@@ -2698,215 +2792,423 @@
     } catch (_) {}
   }
 
-  function f2ShowResumeCostMenu(ctx, gate) {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (outcome) => {
-        if (settled) return;
-        settled = true;
-        try { document.removeEventListener('keydown', onKey, true); } catch (_) {}
-        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        resolve(outcome);
-      };
-      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); finish('handled'); } };
-
-      const sid = ctx.sid;
-      const tokensLabel = f2FmtTokens(gate.tokens);
-      const modelLabel = escapeHtml(String(gate.model || 'the current model'));
-      const overlay = document.createElement('div');
-      overlay.className = 'upd-overlay f2cost-overlay open';
-      overlay.setAttribute('role', 'dialog');
-      overlay.setAttribute('aria-modal', 'true');
-      overlay.innerHTML =
-        '<div class="upd-backdrop" data-f2-backdrop></div>' +
-        '<div class="upd-dialog f2cost-dialog">' +
-          '<div class="f2cost-head">' +
-            '<div class="f2cost-title">This session looks large and stale</div>' +
-            '<div class="f2cost-estimate">Resuming will likely reload <strong>~' + tokensLabel + ' tokens</strong> on ' + modelLabel +
-              '. Last active ' + escapeHtml(f2FmtAge(gate.ageMin)) + ' ago, so the prompt cache has likely gone cold.</div>' +
-            '<div class="f2cost-caveat">CCC infers cache coldness from staleness. It cannot observe the model provider’s cache, so this is an estimate, not a guarantee. Pick the route that fits the question.</div>' +
-          '</div>' +
-          '<div class="f2cost-routes">' +
-            // Route 1 — Search first (free)
-            '<div class="f2cost-route is-recommended" data-f2-route="search">' +
-              '<div class="f2cost-route-head"><span class="f2cost-route-name">1. Search first</span>' +
-                '<span class="f2cost-route-cost free">0 tokens</span></div>' +
-              '<div class="f2cost-route-desc">Run the question through Total Recall over your sessions. Often the whole answer, no model spend.</div>' +
-              '<div class="f2cost-route-actions"><button class="f2cost-btn" data-f2-act="search">Search now</button></div>' +
-              '<div class="f2cost-recall" data-f2-recall hidden></div>' +
-            '</div>' +
-            // Route 2 — Cheaper model
-            '<div class="f2cost-route" data-f2-route="cheap">' +
-              '<div class="f2cost-route-head"><span class="f2cost-route-name">2. Resume on a cheaper model</span>' +
-                '<span class="f2cost-route-cost slice">same reload, lower rate</span></div>' +
-              '<div class="f2cost-route-desc">Same session, this turn on a cheaper Claude tier. Good when the reload is unavoidable but the judgment is easy.</div>' +
-              '<div class="f2cost-route-actions" data-f2-cheap-actions></div>' +
-            '</div>' +
-            // Route 3 — Spawn fresh, point at transcript
-            '<div class="f2cost-route" data-f2-route="spawn">' +
-              '<div class="f2cost-route-head"><span class="f2cost-route-name">3. Spawn fresh, point at transcript</span>' +
-                '<span class="f2cost-route-cost slice">retrieves a slice</span></div>' +
-              '<div class="f2cost-route-desc">A new lean session gets this session’s id and is told to retrieve selectively (Total Recall / grep / tail), never to read the whole transcript.</div>' +
-              '<div class="f2cost-route-actions"><button class="f2cost-btn" data-f2-act="spawn">Spawn lean retriever</button></div>' +
-            '</div>' +
-            // Route 4 — Full resume
-            '<div class="f2cost-route" data-f2-route="full">' +
-              '<div class="f2cost-route-head"><span class="f2cost-route-name">4. Full resume</span>' +
-                '<span class="f2cost-route-cost full">~' + tokensLabel + ' on ' + modelLabel + '</span></div>' +
-              '<div class="f2cost-route-desc">Reload the whole session on the model above. The right call when the question truly needs the full state.</div>' +
-              '<div class="f2cost-route-actions"><button class="f2cost-btn primary" data-f2-act="full">Full resume now</button></div>' +
-            '</div>' +
-          '</div>' +
-          '<div class="f2cost-foot"><button class="f2cost-dismiss" data-f2-act="cancel">Cancel — keep my text, send nothing</button></div>' +
-        '</div>';
-      document.body.appendChild(overlay);
-      document.addEventListener('keydown', onKey, true);
-
-      // Populate cheaper-model buttons.
-      const cheapWrap = overlay.querySelector('[data-f2-cheap-actions]');
-      F2_CHEAP_MODELS.forEach((m) => {
-        const b = document.createElement('button');
-        b.className = 'f2cost-btn';
-        b.textContent = 'Switch to ' + m.label + ' + send';
-        b.setAttribute('data-f2-model', m.id);
-        cheapWrap.appendChild(b);
-      });
-
-      const backdrop = overlay.querySelector('[data-f2-backdrop]');
-      if (backdrop) backdrop.addEventListener('click', () => finish('handled'));
-
-      // Route 1 — Total Recall search (free).
-      const runSearch = async (btn) => {
-        const box = overlay.querySelector('[data-f2-recall]');
-        if (!box) return;
-        box.hidden = false;
-        box.innerHTML = '<div class="f2cost-recall-status">Searching Total Recall…</div>';
-        if (btn) btn.disabled = true;
-        try {
-          const q = String(ctx.text || '').trim();
-          const recallParams = new URLSearchParams({ q: q, limit: '15' });
-          const scopeCwd = f2ResolveSpawnCwd(ctx);
-          if (scopeCwd) recallParams.set('cwd', scopeCwd);
-          const r = await fetch('/api/search-recall-sessions?' + recallParams.toString());
-          const d = await r.json().catch(() => ({ results: [] }));
-          const results = (d && Array.isArray(d.results)) ? d.results : [];
-          if (d && d.error && !results.length) {
-            box.innerHTML = '<div class="f2cost-recall-status">Total Recall: ' + escapeHtml(String(d.error)) + '</div>';
-          } else if (!results.length) {
-            box.innerHTML = '<div class="f2cost-recall-status">No matches. If you still need this session, try route 2 or 4.</div>';
-          } else {
-            // Surface this session's own hits first.
-            results.sort((a, b) => ((b.session_id === sid) ? 1 : 0) - ((a.session_id === sid) ? 1 : 0));
-            const rows = results.slice(0, 8).map((it) => {
-              const isThis = it.session_id === sid;
-              const snip = escapeHtml(String(it.snippet || '').slice(0, 400));
-              const meta = [it.cwd ? escapeHtml(String(it.cwd)) : '', isThis ? 'this session' : ''].filter(Boolean).join(' · ');
-              return '<div class="f2cost-recall-hit' + (isThis ? ' is-this-session' : '') + '">' +
-                '<div class="snip">' + snip + '</div>' + (meta ? '<div class="meta">' + meta + '</div>' : '') + '</div>';
-            }).join('');
-            box.innerHTML = '<div class="f2cost-recall-status">' + results.length + ' match(es), 0 tokens spent:</div>' + rows;
-          }
-        } catch (e) {
-          box.innerHTML = '<div class="f2cost-recall-status">Search failed: ' + escapeHtml((e && e.message) || 'network') + '</div>';
-        } finally {
-          if (btn) btn.disabled = false;
-        }
-      };
-
-      // Route 2 — switch model, then send the original text.
-      const runCheap = async (model, btn) => {
-        if (btn) btn.disabled = true;
-        try {
-          const mr = await fetch('/api/session/' + encodeURIComponent(sid) + '/model', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: model, context_1m: false }),
-          });
-          const md = await mr.json().catch(() => ({}));
-          if (!mr.ok || !md.ok) {
-            if (typeof showOpToast === 'function') showOpToast('Model switch failed: ' + ((md && md.error) || ('HTTP ' + mr.status)), 'error');
-            if (btn) btn.disabled = false;
-            return;
-          }
-          const ir = await fetch('/api/inject-input', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sid, text: ctx.text, mode: 'send' }),
-          });
-          const id = await ir.json().catch(() => ({}));
-          if (ir.ok && id.ok) {
-            if (typeof showOpToast === 'function') showOpToast('Switched to ' + model + ' and sent on this session.', 'success');
-            f2ClearComposer();
-            finish('handled');
-          } else {
-            if (typeof showOpToast === 'function') showOpToast('Send failed: ' + ((id && id.error) || ('HTTP ' + ir.status)), 'error');
-            if (btn) btn.disabled = false;
-          }
-        } catch (e) {
-          if (typeof showOpToast === 'function') showOpToast('Cheaper-model resume failed: ' + ((e && e.message) || 'network'), 'error');
-          if (btn) btn.disabled = false;
-        }
-      };
-
-      // Route 3 — spawn a lean retriever pointed at the origin transcript.
-      const runSpawn = async (btn) => {
-        if (btn) btn.disabled = true;
-        try {
-          const body = {
-            prompt: f2RetrievalPrompt(ctx, gate),
-            name: 'continue-' + String(sid).slice(0, 8),
-            engine: 'claude',
-            parent_session_id: sid,
-          };
-          const cwd = f2ResolveSpawnCwd(ctx);
-          if (cwd) { body.cwd = cwd; body.repo_path = cwd; }
-          const r = await fetch('/api/sessions/spawn', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          });
-          const d = await r.json().catch(() => ({}));
-          if (r.ok && d.ok !== false && (d.session_id || d.spawn_id || d.pid)) {
-            const newSid = d.session_id || '';
-            f2RecordContinuationLineage(sid, newSid);
-            if (typeof showOpToast === 'function') showOpToast('Spawned a lean retriever that will pull only the slice it needs.', 'success');
-            f2ClearComposer();
-            finish('handled');
-          } else {
-            if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
-            if (btn) btn.disabled = false;
-          }
-        } catch (e) {
-          if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((e && e.message) || 'network'), 'error');
-          if (btn) btn.disabled = false;
-        }
-      };
-
-      overlay.addEventListener('click', (e) => {
-        const el = e.target.closest('[data-f2-act], [data-f2-model]');
-        if (!el || !overlay.contains(el)) return;
-        const model = el.getAttribute('data-f2-model');
-        if (model) { runCheap(model, el); return; }
-        const act = el.getAttribute('data-f2-act');
-        if (act === 'search') runSearch(el);
-        else if (act === 'spawn') runSpawn(el);
-        else if (act === 'full') { f2FullResumeAck.add(sid); finish('proceed'); }
-        else if (act === 'cancel') finish('handled');
-      });
-    });
+  // ── composer plumbing ──────────────────────────────────────────────────
+  // The composer lives inside .conv-input-bar (two slots, added in
+  // index.html), so it is cloned along with the pane in split mode and every
+  // lookup is pane-scoped. Never assume p1.
+  function f2PaneKey(paneId) {
+    if (paneId) return paneId;
+    try { return (typeof activePaneId === 'function' && activePaneId()) || 'p1'; } catch (_) { return 'p1'; }
+  }
+  function f2PaneRoot(paneId) {
+    try { return document.querySelector('.conv-pane[data-pane-id="' + f2PaneKey(paneId) + '"]'); }
+    catch (_) { return null; }
+  }
+  function f2RailEl(paneId) {
+    const pane = f2PaneRoot(paneId);
+    return pane ? pane.querySelector('[data-role="conv-f2-rail"]') : null;
+  }
+  function f2PanelEl(paneId) {
+    const pane = f2PaneRoot(paneId);
+    return pane ? pane.querySelector('[data-role="conv-f2-panel"]') : null;
+  }
+  function f2InputEl(paneId) {
+    const pane = f2PaneRoot(paneId);
+    return pane ? pane.querySelector('.conv-input-bar textarea') : null;
+  }
+  function f2ComposerText(paneId) {
+    const el = f2InputEl(paneId);
+    return el ? String(el.value || '') : '';
   }
 
-  // Dev/demo hook: open the menu standalone with a synthetic context so a
-  // headless screenshot (or a live walkthrough with no large session handy)
-  // can render it on demand. Never wired into any auto-trigger.
+  // Model list for a launch engine. MODEL_OPTIONS_BY_ENGINE is a `const`
+  // declared ~36k lines below this block, so a bare read during module eval
+  // would hit the temporal dead zone — and for let/const even `typeof` throws
+  // there. Hence the try/catch plus a per-engine inline fallback.
+  function f2ModelsForEngine(engineId) {
+    const spec = F2_LAUNCH_ENGINES.find(e => e.id === engineId) || F2_LAUNCH_ENGINES[0];
+    try {
+      const byEngine = MODEL_OPTIONS_BY_ENGINE;
+      const list = byEngine && byEngine[spec.id];
+      if (Array.isArray(list) && list.length) {
+        return list.map(o => ({ id: String(o.id), label: String(o.label || o.id) }));
+      }
+    } catch (_) {}
+    return spec.fallback;
+  }
+  function f2LaunchNote(launch) {
+    // Only claims a saving it can actually justify: the Claude ladder is the
+    // one place we know the relative rate. Silent everywhere else.
+    return (launch.engine === 'claude' && launch.model !== 'opus-4-8') ? '~5x cheaper than Opus' : '';
+  }
+
+  // The three routes. Names/descriptions are the product copy — the whole
+  // point of the surface is that each row prices itself before you click it.
+  const F2_ROUTES = {
+    continue: {
+      glyph: '→',
+      name: 'Continue in a new session',
+      desc: 'Carries your text and this session’s id. Tails the transcript for recent state, greps for anything older.',
+      cost: '~2k', costClass: 'slice',
+      // Only this route actually starts a model, so only this route shows a
+      // launch line. Routes that run nothing show none at all.
+      launches: true,
+    },
+    search: {
+      glyph: '⌕',
+      name: 'Search your history first',
+      desc: 'Runs the question through Total Recall. Often the whole answer, no model spend.',
+      cost: '0 tokens', costClass: 'free',
+      launches: false,
+    },
+    handoff: {
+      glyph: '⧉',
+      name: 'Copy session id',
+      desc: 'Hand this thread to a session you already have open and warm.',
+      cost: '0 tokens', costClass: 'free',
+      launches: false,
+    },
+  };
+
+  // Intent read: is the user retrieving a fact, or continuing the work?
+  // Question-shaped text promotes Search; anything else keeps the default
+  // spawn posture. Deliberately a cheap heuristic — a wrong guess costs the
+  // user one extra glance, never a wrong action, because nothing auto-runs.
+  const F2_ASKS = /^(what|why|where|when|who|which|how|did|does|do|is|are|was|were|can|could|should|remind)\b/i;
+  function f2RankRoutes(text) {
+    const t = String(text || '').trim();
+    if (!t) return ['continue', 'search', 'handoff'];   // default posture: spawn
+    const asking = t.endsWith('?') || F2_ASKS.test(t);
+    return asking ? ['search', 'continue', 'handoff'] : ['continue', 'search', 'handoff'];
+  }
+
+  // Per-pane state. Launch overrides live here, NOT in the DOM, so an intent
+  // re-rank (which rebuilds the route stack from scratch) cannot reset a
+  // choice the user already made.
+  function f2StateFor(paneId, sid, gate) {
+    const key = f2PaneKey(paneId);
+    let st = f2PaneState.get(key);
+    if (!st || st.sid !== sid) {
+      // Defaults, all deliberate: same engine as the origin session (tool
+      // continuity), Sonnet because a scoped continuation is real work but not
+      // Opus work, Light effort because the hard thinking already happened
+      // upstream and this session only has to retrieve it.
+      const engine = F2_LAUNCH_ENGINES.some(e => e.id === gate.engine) ? gate.engine : 'claude';
+      const models = f2ModelsForEngine(engine);
+      const preferred = engine === 'claude' ? 'sonnet-5' : '';
+      const model = (preferred && models.some(m => m.id === preferred)) ? preferred : (models[0] ? models[0].id : '');
+      st = { sid, launch: { engine, model, effort: 'low' }, lastOrder: '' };
+      f2PaneState.set(key, st);
+    }
+    st.gate = gate;
+    return st;
+  }
+
+  function f2SelectHtml(kind, list, current) {
+    return '<select class="f2c-select" data-f2-launch="' + kind + '" aria-label="' + kind + '">'
+      + list.map(o => '<option value="' + escapeAttr(o.id) + '"'
+          + (o.id === current ? ' selected' : '') + '>' + escapeHtml(o.label) + '</option>').join('')
+      + '</select>';
+  }
+  // Reads as a sentence, not a form. Model options are scoped to the chosen
+  // engine — picking Codex must never leave "sonnet-5" sitting in the box.
+  function f2LaunchLineHtml(launch) {
+    const engines = F2_LAUNCH_ENGINES.map(e => ({ id: e.id, label: e.label }));
+    const note = f2LaunchNote(launch);
+    return '<div class="route-model">'
+      + '<span>Launches on</span>'
+      + f2SelectHtml('engine', engines, launch.engine)
+      + f2SelectHtml('model', f2ModelsForEngine(launch.engine), launch.model)
+      + '<span>at</span>'
+      + f2SelectHtml('effort', F2_LAUNCH_EFFORTS, launch.effort)
+      + '<span>effort</span>'
+      + (note ? '<span class="rate">' + escapeHtml(note) + '</span>' : '')
+      + '</div>';
+  }
+
+  function f2RoutesHtml(order, launch) {
+    return order.map((id, i) => {
+      const r = F2_ROUTES[id];
+      return '<div class="route' + (i === 0 ? ' is-recommended' : '') + '" data-f2-route="' + id + '">'
+        // .route is a div and .route-main the button: the launch selects are
+        // real controls, and a <select> (or a button) may not nest in a button.
+        + '<button type="button" class="route-main" data-f2-act="' + id + '">'
+          + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
+          + '<span class="route-body">'
+            + '<span class="route-name">' + escapeHtml(r.name) + '</span>'
+            + '<span class="route-desc">' + escapeHtml(r.desc) + '</span>'
+          + '</span>'
+          + '<span class="route-side">'
+            + (i === 0 ? '<span class="tag">Recommended</span>' : '')
+            + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(r.cost) + '</span>'
+          + '</span>'
+        + '</button>'
+        + (r.launches ? f2LaunchLineHtml(launch) : '')
+        + '<div class="f2c-route-out" data-f2-out hidden></div>'
+        + '</div>';
+    }).join('');
+  }
+
+  // Paint (or clear) the cold-session composer for a pane. Called from
+  // updateInputBar — i.e. as soon as a session is focused, before any text
+  // exists — and again from the composer's input handler so the ranking can
+  // follow what is being typed. Fully guarded: a throw here must never be able
+  // to take the composer down.
+  function f2RenderComposer(paneId, opts) {
+    const rail = f2RailEl(paneId);
+    const panel = f2PanelEl(paneId);
+    if (!rail || !panel) return;
+    const bar = panel.closest('.conv-input-bar');
+    const clear = () => {
+      rail.hidden = true; rail.innerHTML = '';
+      panel.hidden = true; panel.innerHTML = '';
+      if (bar) bar.classList.remove('is-f2-cold');
+      f2PaneState.delete(f2PaneKey(paneId));
+    };
+    let gate = null;
+    let ctx = null;
+    try {
+      const sid = (currentSession && currentSession.id) || '';
+      const row = (typeof currentConversationRow === 'function') ? currentConversationRow() : null;
+      ctx = { sid, paneId: f2PaneKey(paneId), session: currentSession, row };
+      // Only ordinary sessions get the treatment — new-session/backlog composer
+      // modes spawn rather than resume, so there is no context to reload.
+      if (!sid || currentConversation === '__new__') { clear(); return; }
+      gate = f2ResumeGate(ctx);
+    } catch (_) { clear(); return; }
+    if (!gate) { clear(); return; }
+
+    const st = f2StateFor(paneId, ctx.sid, gate);
+    st.ctx = ctx;
+    const tokensLabel = f2FmtTokens(gate.tokens);
+    const modelLabel = String(gate.model || 'the current model');
+    const ageLabel = f2FmtAge(gate.ageMin);
+
+    // ── rail: session-row data only, so it can paint before a keystroke ──
+    rail.hidden = false;
+    rail.setAttribute('role', 'status');
+    rail.innerHTML = '<span class="rail-dot" aria-hidden="true"></span>'
+      + '<strong>Large and stale</strong>'
+      + '<span class="sep" aria-hidden="true">·</span>'
+      + '<span class="meta">' + escapeHtml(tokensLabel) + ' tokens · idle ' + escapeHtml(ageLabel)
+        + ' · ' + escapeHtml(gate.cache.railNote) + '</span>';
+
+    // ── route stack: needs the text, so it re-renders as the user types ──
+    const order = f2RankRoutes(f2ComposerText(paneId));
+    const orderKey = order.join('|');
+    const force = !!(opts && opts.force);
+    if (bar) bar.classList.add('is-f2-cold');
+    if (!force && panel.innerHTML && orderKey === st.lastOrder) return;  // don't thrash per keystroke
+    st.lastOrder = orderKey;
+    panel.hidden = false;
+    panel.innerHTML =
+      '<div class="verdict">Sending here reloads <span class="cost">~' + escapeHtml(tokensLabel)
+        + ' tokens on ' + escapeHtml(modelLabel) + '</span> — ' + escapeHtml(gate.cache.verdictNote)
+        + '. Pick a route:</div>'
+      + '<div class="routes">' + f2RoutesHtml(order, st.launch) + '</div>'
+      // Full resume survives only as a demoted text link. It is still one
+      // click, still priced — it just isn't the primary action any more,
+      // because the whole verdict is that you probably shouldn't take it.
+      + '<div class="escape">'
+        + '<div class="escape-row">'
+          + '<button type="button" data-f2-act="full">Resume anyway</button>'
+          // The mock hinted a ⌘⏎ shortcut here. There is no such binding in
+          // the real composer — while the gate is hot Enter is intercepted by
+          // f2MaybeShowResumeCostMenu — so the hint is dropped rather than
+          // advertising a key that does nothing.
+          + '<span class="why">reloads ~' + escapeHtml(tokensLabel) + ' on ' + escapeHtml(modelLabel) + '</span>'
+        + '</div>'
+        + '<p class="escape-note">CCC infers coldness from the transcript’s mtime — it cannot observe the '
+          + 'provider’s cache, so this is an estimate, not a guarantee. Compacting first costs more, not '
+          + 'less: writing the summary reloads all ' + escapeHtml(tokensLabel) + ', then you still pay for the turn.</p>'
+      + '</div>';
+  }
+
+  // ── route actions ──────────────────────────────────────────────────────
+  function f2RouteOutEl(panel, routeId) {
+    const row = panel.querySelector('.route[data-f2-route="' + routeId + '"]');
+    return row ? row.querySelector('[data-f2-out]') : null;
+  }
+
+  // Route: Search your history first (0 tokens). Same Total Recall call the
+  // old modal made — the answer is often already on disk, for no model spend.
+  async function f2RunSearch(paneId, st, btn) {
+    const panel = f2PanelEl(paneId);
+    const box = panel && f2RouteOutEl(panel, 'search');
+    if (!box) return;
+    box.hidden = false;
+    box.innerHTML = '<div class="f2c-out-status">Searching Total Recall…</div>';
+    if (btn) btn.disabled = true;
+    try {
+      const sid = st.sid;
+      const q = String(f2ComposerText(paneId) || '').trim();
+      const recallParams = new URLSearchParams({ q: q, limit: '15' });
+      const scopeCwd = f2ResolveSpawnCwd(st.ctx || {});
+      if (scopeCwd) recallParams.set('cwd', scopeCwd);
+      const r = await fetch('/api/search-recall-sessions?' + recallParams.toString());
+      const d = await r.json().catch(() => ({ results: [] }));
+      const results = (d && Array.isArray(d.results)) ? d.results : [];
+      if (d && d.error && !results.length) {
+        box.innerHTML = '<div class="f2c-out-status">Total Recall: ' + escapeHtml(String(d.error)) + '</div>';
+      } else if (!results.length) {
+        box.innerHTML = '<div class="f2c-out-status">No matches. Continue in a new session, or resume anyway.</div>';
+      } else {
+        // Surface this session's own hits first.
+        results.sort((a, b) => ((b.session_id === sid) ? 1 : 0) - ((a.session_id === sid) ? 1 : 0));
+        const rows = results.slice(0, 8).map((it) => {
+          const isThis = it.session_id === sid;
+          const snip = escapeHtml(String(it.snippet || '').slice(0, 400));
+          const meta = [it.cwd ? escapeHtml(String(it.cwd)) : '', isThis ? 'this session' : ''].filter(Boolean).join(' · ');
+          return '<div class="f2c-out-hit' + (isThis ? ' is-this-session' : '') + '">'
+            + '<div class="snip">' + snip + '</div>' + (meta ? '<div class="meta">' + meta + '</div>' : '') + '</div>';
+        }).join('');
+        box.innerHTML = '<div class="f2c-out-status">' + results.length + ' match(es), 0 tokens spent:</div>' + rows;
+      }
+    } catch (e) {
+      box.innerHTML = '<div class="f2c-out-status">Search failed: ' + escapeHtml((e && e.message) || 'network') + '</div>';
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // Route: Continue in a new session (~2k). Spawns a lean session on the
+  // stated launch spec, pointed at the origin transcript with instructions to
+  // retrieve selectively, and records continuation lineage so Flow shows the
+  // new session as primary with the heavy origin nested beneath it.
+  async function f2RunContinue(paneId, st, btn) {
+    if (btn) btn.disabled = true;
+    const sid = st.sid;
+    const ctx = Object.assign({}, st.ctx || {}, { text: f2ComposerText(paneId) });
+    const launch = st.launch;
+    try {
+      const body = {
+        prompt: f2RetrievalPrompt(ctx, st.gate),
+        name: 'continue-' + String(sid).slice(0, 8),
+        engine: launch.engine,
+        parent_session_id: sid,
+      };
+      if (launch.model) body.model = launch.model;
+      // Effort is only meaningful for the engines that expose a reasoning
+      // ladder; sending it elsewhere would be noise the server has to ignore.
+      if (launch.engine === 'codex' && launch.effort) body.reasoning_effort = launch.effort;
+      const cwd = f2ResolveSpawnCwd(ctx);
+      if (cwd) { body.cwd = cwd; body.repo_path = cwd; }
+      let endpoint = '/api/sessions/spawn';
+      try { if (typeof spawnEndpointForEngine === 'function') endpoint = spawnEndpointForEngine(launch.engine); } catch (_) {}
+      const r = await fetch(endpoint, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok !== false && (d.session_id || d.spawn_id || d.pid)) {
+        const newSid = d.session_id || '';
+        f2RecordContinuationLineage(sid, newSid);
+        if (typeof showOpToast === 'function') showOpToast('Continuing in a new session — it will pull only the slice it needs.', 'success');
+        f2ClearComposer();
+      } else {
+        if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
+      }
+    } catch (e) {
+      if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((e && e.message) || 'network'), 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // Route: Copy session id (0 tokens). The cheapest resume of all is the one
+  // someone else already paid for — paste this id into a session that is
+  // still warm and let it pick the thread up.
+  async function f2RunHandoff(paneId, st, btn) {
+    let ok = false;
+    try { ok = await copyTextValue(st.sid); } catch (_) { ok = false; }
+    const panel = f2PanelEl(paneId);
+    const box = panel && f2RouteOutEl(panel, 'handoff');
+    if (box) {
+      box.hidden = false;
+      box.innerHTML = '<div class="f2c-out-status">' + (ok
+        ? 'Copied <code>' + escapeHtml(st.sid) + '</code> — paste it into a warm session.'
+        : 'Could not reach the clipboard. Session id: <code>' + escapeHtml(st.sid) + '</code>') + '</div>';
+      setTimeout(() => { try { box.hidden = true; box.innerHTML = ''; } catch (_) {} }, 6000);
+    }
+    if (ok && typeof showOpToast === 'function') showOpToast('Session id copied.', 'success');
+    if (btn) btn.disabled = false;
+  }
+
+  // Escape hatch: the user has read the price and wants the full reload
+  // anyway. Ack the session so the gate stays quiet for the rest of this
+  // page-load (one decision per session), then run the ordinary send.
+  function f2RunFullResume(paneId, st) {
+    f2FullResumeAck.add(st.sid);
+    try { f2RenderComposer(paneId, { force: true }); } catch (_) {}
+    try { if (typeof sendToTerminal === 'function') sendToTerminal(f2PaneKey(paneId), 'send'); } catch (_) {}
+  }
+
+  // One delegated listener for every pane's composer — the route DOM is
+  // rebuilt on each re-rank, so per-node handlers would leak.
+  document.addEventListener('click', (ev) => {
+    const el = ev.target && ev.target.closest && ev.target.closest('.f2c-panel [data-f2-act]');
+    if (!el) return;
+    const panel = el.closest('.f2c-panel');
+    const pane = panel && panel.closest('.conv-pane');
+    const paneId = (pane && pane.getAttribute('data-pane-id')) || null;
+    const st = f2PaneState.get(f2PaneKey(paneId));
+    if (!st) return;
+    ev.preventDefault();
+    const act = el.getAttribute('data-f2-act');
+    try {
+      if (act === 'search') f2RunSearch(paneId, st, el);
+      else if (act === 'continue') f2RunContinue(paneId, st, el);
+      else if (act === 'handoff') f2RunHandoff(paneId, st, el);
+      else if (act === 'full') f2RunFullResume(paneId, st);
+    } catch (_) {}
+  });
+
+  // Launch-spec overrides. Persisted on the pane state (not the DOM) so an
+  // intent re-rank cannot silently revert a choice.
+  document.addEventListener('change', (ev) => {
+    const sel = ev.target && ev.target.closest && ev.target.closest('.f2c-panel [data-f2-launch]');
+    if (!sel) return;
+    const panel = sel.closest('.f2c-panel');
+    const pane = panel && panel.closest('.conv-pane');
+    const paneId = (pane && pane.getAttribute('data-pane-id')) || null;
+    const st = f2PaneState.get(f2PaneKey(paneId));
+    if (!st || !st.launch) return;
+    const kind = sel.getAttribute('data-f2-launch');
+    st.launch[kind] = sel.value;
+    if (kind === 'engine') {
+      // Engine changed — the old model id belongs to a different family and
+      // would be rejected by the CLI. Snap to the new engine's first model
+      // rather than leaving a stale label in the box.
+      const models = f2ModelsForEngine(sel.value);
+      st.launch.model = models[0] ? models[0].id : '';
+      try { f2RenderComposer(paneId, { force: true }); } catch (_) {}
+    }
+  });
+
+  // Re-rank as the user types. Delegated at the document so cloned split
+  // panes are covered without re-binding; f2RenderComposer itself no-ops
+  // unless the ranking actually changed, so this is cheap per keystroke.
+  document.addEventListener('input', (ev) => {
+    const ta = ev.target;
+    if (!ta || ta.tagName !== 'TEXTAREA' || !ta.closest) return;
+    const bar = ta.closest('.conv-input-bar.is-f2-cold');
+    if (!bar) return;
+    const pane = bar.closest('.conv-pane');
+    try { f2RenderComposer((pane && pane.getAttribute('data-pane-id')) || null); } catch (_) {}
+  });
+
+  // Dev/demo hook: force the composer onto the focused session with a
+  // synthetic gate, so a headless screenshot (or a live walkthrough with no
+  // large session handy) can render it on demand. Piggybacks the same
+  // localStorage demo switch the gate already honours.
   window.f2OpenDemoCostMenu = function (opts) {
     opts = opts || {};
-    const ctx = {
-      sid: opts.sid || 'demo-session-0000',
-      text: opts.text || 'can these W21 videos be shorts?',
-      paneId: null,
-      session: { id: opts.sid || 'demo-session-0000', source: 'claude', cwd: opts.cwd || '' },
-      row: opts.row || {},
-    };
-    const gate = { tokens: opts.tokens || 328000, ageMin: opts.ageMin || 240, model: opts.model || 'fable-5', forced: true };
-    return f2ShowResumeCostMenu(ctx, gate);
+    try {
+      const sid = opts.sid || (currentSession && currentSession.id) || '';
+      if (sid) localStorage.setItem('ccc-f2-demo-force', sid);
+      else localStorage.setItem('ccc-f2-demo-force', '*');
+    } catch (_) {}
+    try { f2RenderComposer(opts.paneId || null, { force: true }); } catch (_) {}
   };
 
   function _rememberLiveOverlay(sessionId, fields) {
@@ -6614,6 +6916,11 @@
     const isBacklogIssue = !!currentBacklogRow || (currentConversation || '').startsWith('backlog-issue-');
     const showInputBar = isConvTab && (hasSession || isNewSession || isBacklogIssue);
     renderConversationGoalStrip(activePaneId(), showInputBar ? currentConversationRow() : null);
+    // F2 cold-session composer. This is the "focus" trigger: the rail depends
+    // only on the session row, so it must paint the moment a session is
+    // selected — not at submit time, when the user has already committed.
+    // f2RenderComposer clears itself for new-session/backlog/no-session modes.
+    try { f2RenderComposer(activePaneId()); } catch (_) {}
     // Show the bar for any selected session — /api/inject-input routes to
     // live-TTY keystroke injection when the session is alive and falls back
     // to headless `claude --resume` when dormant, so the user can always
@@ -33919,6 +34226,7 @@
     $btn.classList.toggle('is-active', on);
     $btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     $btn.title = on ? 'Keep queue issue titles on one line' : 'Wrap queue issue titles';
+    $btn.textContent = on ? 'Single-line titles' : 'Wrap titles';
   }
   function _uxqWorkerProject() {
     try {
@@ -34097,7 +34405,7 @@
   function _uxqExtractImages(text) {
     if (!text) return [];
     const found = [];
-    const re = /((?:\/[^\s"'<>]+|~\/[^\s"'<>]+)\.(?:png|jpg|jpeg|gif|webp))/gi;
+    const re = /((?:https?:\/\/[^\s"'<>]+?|(?:\/[^\s"'<>]+|~\/[^\s"'<>]+))\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s"'<>)]+)?)/gi;
     let m;
     while ((m = re.exec(text)) !== null) found.push(m[1]);
     return [...new Set(found)];
@@ -34152,7 +34460,9 @@
         + '<div class="uxq-td-sec-label">Screenshots</div>'
         + '<div class="uxq-td-images">'
         + imagePaths.map(p => {
-            const src = '/api/pasted-image?path=' + encodeURIComponent(p);
+            const src = /^https?:\/\//i.test(p)
+              ? p
+              : '/api/pasted-image?path=' + encodeURIComponent(p);
             return '<a href="' + src + '" target="_blank" rel="noopener" class="uxq-td-img-wrap">'
               + '<img class="uxq-td-img" src="' + src + '" alt="screenshot" loading="lazy"></a>';
           }).join('')
@@ -35165,6 +35475,7 @@
     if ($queueImport) {
       $queueImport.addEventListener('click', async (ev) => {
         ev.stopPropagation();
+        _closeQueueMoreMenu();
         await _openImportDocDialog();
       });
       (async () => {
@@ -35200,6 +35511,7 @@
     if (queueWrapToggle) {
       queueWrapToggle.addEventListener('click', () => {
         _uxqSetWrapTitles(!_uxqGetWrapTitles());
+        _closeQueueMoreMenu();
         _renderQueuePanel();
       });
     }
@@ -35208,6 +35520,35 @@
       $queueSearch.addEventListener('input', () => { _uxqResetHistoryPage(); _renderQueuePanel(); });
       $queueSearch.addEventListener('click', (e) => e.stopPropagation());
     }
+  }
+
+  const $queueMoreBtn = document.getElementById('queueMoreBtn');
+  const $queueMoreMenu = document.getElementById('queueMoreMenu');
+  function _closeQueueMoreMenu() {
+    if (!$queueMoreMenu) return;
+    $queueMoreMenu.classList.remove('open');
+    $queueMoreMenu.setAttribute('aria-hidden', 'true');
+    if ($queueMoreBtn) $queueMoreBtn.setAttribute('aria-expanded', 'false');
+  }
+  if ($queueMoreBtn && $queueMoreMenu) {
+    $queueMoreBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const willOpen = !$queueMoreMenu.classList.contains('open');
+      _closeQueueMoreMenu();
+      if (!willOpen) return;
+      const rect = $queueMoreBtn.getBoundingClientRect();
+      $queueMoreMenu.style.top = (rect.bottom + 4) + 'px';
+      $queueMoreMenu.style.left = rect.left + 'px';
+      $queueMoreMenu.classList.add('open');
+      $queueMoreMenu.setAttribute('aria-hidden', 'false');
+      $queueMoreBtn.setAttribute('aria-expanded', 'true');
+    });
+    document.addEventListener('click', (ev) => {
+      if (!ev.target.closest('.fq-more-wrap')) _closeQueueMoreMenu();
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') _closeQueueMoreMenu();
+    });
   }
 
   function openQueueTicketComposer() {
@@ -36073,8 +36414,8 @@
       btn.title = 'Open the queue board - queues, tickets, and ticket detail in the main view with full room';
       btn.textContent = 'Board';
       btn.addEventListener('click', () => _qfShow({ screen: 'queues', queue: '', ref: '' }));
-      const label = header.querySelector('.files-title-label');
-      if (label && label.nextSibling) header.insertBefore(btn, label.nextSibling);
+      const boardSlot = document.getElementById('queueBoardMenuSlot');
+      if (boardSlot) boardSlot.appendChild(btn);
       else header.appendChild(btn);
     }
     // Return pill: visible (via CSS) while queue-first mode is on but a
@@ -48569,6 +48910,7 @@
     engine: readLegacySpawnEnginePref(),
     models: Object.assign({}, _defaultModelsByEngine),
     reasoning_effort: '',
+    worker_engine: '',
     codex_context_1m: true,
   };
   // The "new session modal" was removed from index.html, but several call
@@ -48674,6 +49016,10 @@
     });
     spawnDefaultsState.reasoning_effort = CODEX_REASONING_LEVELS.some(level => level.id === data.reasoning_effort)
       ? data.reasoning_effort
+      : '';
+    // The WatchTower queue-worker default; '' means WT picks (codex first).
+    spawnDefaultsState.worker_engine = SPAWN_DEFAULT_ENGINES.includes(data.worker_engine)
+      ? data.worker_engine
       : '';
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
     try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
@@ -52019,6 +52365,7 @@
   const $spawnDefaultsModal = document.getElementById('spawnDefaultsModal');
   const $spawnDefaultsBackdrop = document.getElementById('spawnDefaultsBackdrop');
   const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
+  const $spawnDefaultsWorkerEngine = document.getElementById('spawnDefaultsWorkerEngine');
   const $spawnDefaultsModel = document.getElementById('spawnDefaultsModel');
   const $spawnDefaultsOtherModel = document.getElementById('spawnDefaultsOtherModel');
   const $spawnDefaultsEffortField = document.getElementById('spawnDefaultsEffortField');
@@ -52033,6 +52380,7 @@
       engine: getSpawnEngine(),
       models: Object.assign({}, spawnDefaultsState.models || {}),
       reasoning_effort: spawnDefaultsState.reasoning_effort,
+      worker_engine: spawnDefaultsState.worker_engine || '',
     };
   }
   function spawnDefaultsModalError(text) {
@@ -52068,6 +52416,7 @@
   function renderSpawnDefaultsDraft() {
     if (!spawnDefaultsDraft) return;
     if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+    if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.value = spawnDefaultsDraft.worker_engine || '';
     renderSpawnDefaultsModelDraft();
     const isCodex = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine) === 'codex';
     if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = isCodex ? '' : 'none';
@@ -52104,6 +52453,7 @@
     if (!$spawnDefaultsSaveBtn || !spawnDefaultsDraft) return;
     updateSpawnDefaultsDraftModelFromControls();
     if ($spawnDefaultsEffort) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
+    if ($spawnDefaultsWorkerEngine) spawnDefaultsDraft.worker_engine = $spawnDefaultsWorkerEngine.value || '';
     spawnDefaultsModalError('');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
