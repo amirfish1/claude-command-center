@@ -1,1 +1,0 @@
-- Slimmed the cost-aware cold-session composer to a minimal single pill row: normal Send is restored (Enter always submits), the alternate routes collapse into one "Continue new" pill with the launch spec (engine, model, effort) in a follow-up dialog, and the cold-session gate now only triggers at ≥250k context.

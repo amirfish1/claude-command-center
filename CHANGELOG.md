@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.10.0] - 2026-07-21
+
+### Changed
+- Slimmed the cost-aware cold-session composer to a minimal single pill row: normal Send is restored (Enter always submits), the alternate routes collapse into one "Continue new" pill with the launch spec (engine, model, effort) in a follow-up dialog, and the cold-session gate now only triggers at ≥250k context.
+
 ## [5.9.0] - 2026-07-20
 
 ### Added
@@ -2114,7 +2119,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.9.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.10.0...HEAD
+[5.10.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.10.0
 [5.9.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.9.0
 [5.8.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.1
 [5.8.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.0
