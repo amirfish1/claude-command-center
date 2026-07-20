@@ -2706,13 +2706,6 @@
     return { tokens, ageMin, model, engine, cache, forced: false };
   }
 
-  // Entry point still called from sendToTerminal. The gate is informational
-  // now — Send is the ordinary submit even while cold (the verdict line has
-  // already stated the price), so this never blocks.
-  async function f2MaybeShowResumeCostMenu(ctx) {
-    return 'proceed';
-  }
-
   function f2ResolveSpawnCwd(ctx) {
     const row = ctx.row || {};
     const s = ctx.session || {};
@@ -2828,8 +2821,8 @@
   const F2_ROUTES = {
     continue: {
       glyph: '→',
-      short: 'Start new from here',
-      name: 'Start a new session from here',
+      short: 'Continue new',
+      name: 'Continue in a new session',
       desc: 'Carries your text and this session’s id. Tails the transcript for recent state, greps for anything older.',
       cost: '~2k', costClass: 'slice',
       launches: true,
@@ -7997,21 +7990,9 @@
       showOpToast('Wait for the pending message to land in the transcript before compacting.', 'error');
       return;
     }
-    // F2 pre-submit cost menu: for a plain resume/ask into a large + stale
-    // session, offer graded routes before reloading the whole context on the
-    // most expensive model. Only for ordinary sends (not steer/compact/clear/
-    // slash commands); 'proceed' falls through to the normal full resume.
-    if (injectMode === 'send' && !compactCommand && !clearCommand && !/^\//.test(text)
-        && typeof f2MaybeShowResumeCostMenu === 'function') {
-      const _f2 = await f2MaybeShowResumeCostMenu({
-        sid: sid,
-        text: text,
-        paneId: paneId || activePaneId(),
-        session: currentSession,
-        row: (typeof currentConversationRow === 'function') ? currentConversationRow() : null,
-      });
-      if (_f2 === 'handled') { if ($actionBtn) $actionBtn.disabled = false; return; }
-    }
+    // The F2 cold gate is purely informational — the verdict line states the
+    // reload price and the pill offers the cheap continuation, but Enter and
+    // Send always submit as usual.
     if ($actionBtn) $actionBtn.disabled = true;
     const flashRed = () => {
       $input.style.borderColor = 'var(--red)';
