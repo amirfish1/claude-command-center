@@ -20702,11 +20702,15 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    only, so it paints at focus) and `.f2c-panel` below it (needs the typed
    text, so it re-ranks on input).
 
-   All of the mock's semantic class names (.route/.tag/.cost-badge/.verdict/…)
-   are kept, but every selector is scoped under .f2c-rail / .f2c-panel — they
-   are generic enough that unscoped rules would collide across a 20k-line
-   stylesheet. Colors come from the CCC vars; the only literals are the
-   existing green/amber semantics (#3fb950 free, #d29922 warning). */
+   The shape is deliberately minimal: a one-line verdict, then four
+   equal-weight rows of exactly one line each (Continue / Search / Copy id /
+   Resume anyway), every row priced on the right. The engine+model+effort
+   choice hides behind a chip that opens a follow-up dialog. Semantic class
+   names (.route/.tag/.cost-badge/.verdict/…) are scoped under .f2c-rail /
+   .f2c-panel — they are generic enough that unscoped rules would collide
+   across a 20k-line stylesheet. Colors come from the CCC vars; the only
+   literals are the existing green/amber semantics (#3fb950 free, #d29922
+   warning). */
 .f2c-rail[hidden], .f2c-panel[hidden] { display: none !important; }
 
 /* Status rail — the part that fires at focus, before a keystroke. */
@@ -20728,94 +20732,108 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .conv-input-bar.is-f2-cold .send-btn,
 .conv-input-bar.is-f2-cold .submit-plus-btn { display: none !important; }
 
-.f2c-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.f2c-panel .verdict { font-size: 12.5px; color: var(--text); line-height: 1.5; }
+.f2c-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* One line: the price. The measured cache story and the compacting caveat
+   live in the title tooltip; the rows below carry everything else. */
+.f2c-panel .verdict {
+  font-size: 12px; color: var(--text-muted); line-height: 1.5;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .f2c-panel .verdict .cost { color: #d29922; font-weight: 600; }
 
-.f2c-panel .routes { display: flex; flex-direction: column; gap: 7px; }
+/* Four equal-weight rows, one line each. The recommendation is a small tag,
+   not a bigger box, and full resume is the fourth row priced like the rest —
+   the cost column makes the argument, not the visual hierarchy. */
+.f2c-panel .routes { display: flex; flex-direction: column; gap: 6px; }
 .f2c-panel .route {
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px;
   transition: border-color .14s ease, background .14s ease;
 }
 .f2c-panel .route:hover { border-color: var(--accent); }
-.f2c-panel .route.is-recommended { border-color: rgba(63,185,80,0.45); background: rgba(63,185,80,0.06); }
-.f2c-panel .route.is-recommended:hover { background: rgba(63,185,80,0.11); border-color: rgba(63,185,80,0.7); }
+.f2c-panel .route-row { display: flex; align-items: center; gap: 8px; padding-right: 9px; cursor: pointer; }
 
-/* The clickable surface is a separate element from .route so the launch
-   selects can be real controls rather than nested inside a button. */
+/* The clickable surface is a separate element from .route so the launch chip
+   can be a real control rather than a button nested inside a button. */
 .f2c-panel .route-main {
-  display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px;
-  width: 100%; text-align: left; background: none; border: none;
-  padding: 10px 12px; font: inherit; color: var(--text); cursor: pointer;
+  display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0;
+  background: none; border: none; padding: 7px 0 7px 10px;
+  font: inherit; color: var(--text); cursor: pointer; text-align: left;
   border-radius: 8px;
 }
 .f2c-panel .route-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .f2c-panel .route-main:disabled { opacity: 0.55; cursor: progress; }
 .f2c-panel .route-glyph {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 13px; color: var(--text-muted); line-height: 1.5; width: 14px; text-align: center;
+  font-size: 13px; color: var(--text-muted); line-height: 1.4; width: 14px; text-align: center; flex: none;
 }
 .f2c-panel .route.is-recommended .route-glyph { color: #3fb950; }
-.f2c-panel .route-body { min-width: 0; }
-.f2c-panel .route-name { display: block; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
-.f2c-panel .route-desc { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
-.f2c-panel .route-side {
-  display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: none; padding-top: 1px;
+.f2c-panel .route-name {
+  font-size: 12.5px; font-weight: 600; letter-spacing: -0.005em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .f2c-panel .tag {
+  flex: none;
   font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
   color: #3fb950; background: rgba(63,185,80,0.14);
   padding: 2px 6px; border-radius: 4px; white-space: nowrap;
 }
+/* min-width keeps the price column aligned across all four rows. */
 .f2c-panel .cost-badge {
+  flex: none;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 10.5px; font-weight: 600; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+  min-width: 52px; text-align: center;
 }
 .f2c-panel .cost-badge.free  { color: #3fb950; background: rgba(63,185,80,0.14); }
 .f2c-panel .cost-badge.slice { color: var(--accent); background: rgba(110,140,175,0.18); }
+.f2c-panel .cost-badge.warn  { color: #d29922; background: rgba(210,153,34,0.14); }
 
-/* Launch spec — engine + model + effort, stated as a sentence rather than a
-   form. Never a required decision: the route says what it will launch on
-   before you click it. Routes that run no model render no launch line. */
-.f2c-panel .route-model {
+/* Launch chip — states the spec in two words. The choice itself happens in
+   the follow-up dialog below, so the row never grows past one line. */
+.f2c-panel .f2c-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  font: inherit; font-size: 11px; font-weight: 600; color: var(--text-muted);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 5px; padding: 2px 7px; cursor: pointer; white-space: nowrap;
+}
+.f2c-panel .f2c-chip:hover { color: var(--text); border-color: var(--accent); }
+.f2c-panel .f2c-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The follow-up dialog: engine + model + effort stated as a sentence rather
+   than a form. Never a required decision — the chip already says what the
+   route will launch on before you click it. */
+.f2c-panel .f2c-config {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  margin: 0 12px 10px 36px; padding-top: 8px;
-  border-top: 1px dashed var(--border);
+  margin: 2px 9px 8px 33px; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
   font-size: 11.5px; color: var(--text-muted);
 }
-.f2c-panel .route-model .f2c-select {
+.f2c-panel .f2c-config .f2c-select {
   font: inherit; font-size: 11.5px; font-weight: 600; color: var(--text);
-  background: var(--surface); border: 1px solid var(--border);
+  background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 5px; padding: 2px 6px; cursor: pointer; max-width: 150px;
 }
-.f2c-panel .route-model .f2c-select:hover { border-color: var(--accent); }
-.f2c-panel .route-model .f2c-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.f2c-panel .route-model .rate { color: #3fb950; font-weight: 600; }
+.f2c-panel .f2c-config .f2c-select:hover { border-color: var(--accent); }
+.f2c-panel .f2c-config .f2c-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.f2c-panel .f2c-config .rate { color: #3fb950; font-weight: 600; }
+.f2c-panel .f2c-config .f2c-config-done {
+  margin-left: auto; font: inherit; font-size: 11px; font-weight: 600;
+  color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 2px 9px; cursor: pointer;
+}
+.f2c-panel .f2c-config .f2c-config-done:hover { border-color: var(--accent); }
 
 /* Inline result area for the free routes (Total Recall hits, copy receipt). */
 .f2c-route-out[hidden] { display: none !important; }
-.f2c-route-out { display: flex; flex-direction: column; gap: 6px; margin: 0 12px 10px 36px; }
+.f2c-route-out { display: flex; flex-direction: column; gap: 6px; margin: 0 9px 8px 33px; }
 .f2c-out-status { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
 .f2c-out-status code { font-family: var(--font-mono, monospace); color: var(--text); }
 .f2c-out-hit { border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; background: var(--bg); }
 .f2c-out-hit .snip { font-size: 12px; color: var(--text); line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .f2c-out-hit .meta { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
 .f2c-out-hit.is-this-session { border-color: var(--accent); }
-
-/* The demoted escape hatch. Still one click and still priced — just not the
-   primary action, because the verdict is that you probably shouldn't. */
-.f2c-panel .escape { padding-top: 9px; border-top: 1px solid var(--border); }
-.f2c-panel .escape-row { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.f2c-panel .escape-note { margin: 6px 0 0; font-size: 11px; color: var(--text-muted); line-height: 1.5; max-width: 62ch; }
-.f2c-panel .escape button {
-  background: none; border: none; padding: 0; font: inherit; font-size: 12px;
-  color: var(--text-muted); cursor: pointer; text-decoration: underline;
-  text-underline-offset: 2px; text-decoration-color: var(--border);
-}
-.f2c-panel .escape button:hover { color: var(--text); text-decoration-color: var(--text-muted); }
-.f2c-panel .escape button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-.f2c-panel .escape .why { font-size: 11.5px; color: var(--text-muted); }
 
 /* Enter while the gate is hot bounces back here instead of sending; a short
    pulse says "this is the thing that answered you". */
@@ -20829,6 +20847,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .f2c-panel .routes > .route { animation: f2cSettle .16s ease both; }
 .f2c-panel .routes > .route:nth-child(2) { animation-delay: .03s; }
 .f2c-panel .routes > .route:nth-child(3) { animation-delay: .06s; }
+.f2c-panel .routes > .route:nth-child(4) { animation-delay: .09s; }
 @media (prefers-reduced-motion: reduce) {
   .f2c-panel .routes > .route,
   .f2c-panel.is-nudged .routes { animation: none !important; }

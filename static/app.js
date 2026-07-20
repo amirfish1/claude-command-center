@@ -2842,16 +2842,17 @@
     return (launch.engine === 'claude' && launch.model !== 'opus-4-8') ? '~5x cheaper than Opus' : '';
   }
 
-  // The three routes. Names/descriptions are the product copy — the whole
-  // point of the surface is that each row prices itself before you click it.
+  // The four routes, one row each. Names are the product copy; the longer
+  // descriptions live in the row's title tooltip so every option stays a
+  // single line — the point of the surface is that each row prices itself.
   const F2_ROUTES = {
     continue: {
       glyph: '→',
       name: 'Continue in a new session',
       desc: 'Carries your text and this session’s id. Tails the transcript for recent state, greps for anything older.',
       cost: '~2k', costClass: 'slice',
-      // Only this route actually starts a model, so only this route shows a
-      // launch line. Routes that run nothing show none at all.
+      // Only this route actually starts a model, so only this route shows the
+      // launch chip. Routes that run nothing show none at all.
       launches: true,
     },
     search: {
@@ -2868,6 +2869,16 @@
       cost: '0 tokens', costClass: 'free',
       launches: false,
     },
+    // Full resume, equal weight. The verdict is still that you probably
+    // shouldn't take it — but that argument is made by its price badge
+    // sitting next to the others, not by demoting the row to a footnote.
+    full: {
+      glyph: '↵',
+      name: 'Resume anyway',
+      desc: null,                       // priced from the gate at render time
+      costClass: 'warn',
+      launches: false,
+    },
   };
 
   // Intent read: is the user retrieving a fact, or continuing the work?
@@ -2877,9 +2888,9 @@
   const F2_ASKS = /^(what|why|where|when|who|which|how|did|does|do|is|are|was|were|can|could|should|remind)\b/i;
   function f2RankRoutes(text) {
     const t = String(text || '').trim();
-    if (!t) return ['continue', 'search', 'handoff'];   // default posture: spawn
+    if (!t) return ['continue', 'search', 'handoff', 'full'];   // default posture: spawn
     const asking = t.endsWith('?') || F2_ASKS.test(t);
-    return asking ? ['search', 'continue', 'handoff'] : ['continue', 'search', 'handoff'];
+    return asking ? ['search', 'continue', 'handoff', 'full'] : ['continue', 'search', 'handoff', 'full'];
   }
 
   // Per-pane state. Launch overrides live here, NOT in the DOM, so an intent
@@ -2897,7 +2908,7 @@
       const models = f2ModelsForEngine(engine);
       const preferred = engine === 'claude' ? 'sonnet-5' : '';
       const model = (preferred && models.some(m => m.id === preferred)) ? preferred : (models[0] ? models[0].id : '');
-      st = { sid, launch: { engine, model, effort: 'low' }, lastOrder: '' };
+      st = { sid, launch: { engine, model, effort: 'low' }, lastOrder: '', configOpen: false };
       f2PaneState.set(key, st);
     }
     st.gate = gate;
@@ -2910,12 +2921,23 @@
           + (o.id === current ? ' selected' : '') + '>' + escapeHtml(o.label) + '</option>').join('')
       + '</select>';
   }
-  // Reads as a sentence, not a form. Model options are scoped to the chosen
-  // engine — picking Codex must never leave "sonnet-5" sitting in the box.
-  function f2LaunchLineHtml(launch) {
+  function f2EffortLabel(effortId) {
+    const e = F2_LAUNCH_EFFORTS.find(x => x.id === effortId);
+    return e ? e.label : String(effortId || '');
+  }
+  function f2ModelLabel(launch) {
+    const m = f2ModelsForEngine(launch.engine).find(x => x.id === launch.model);
+    return m ? m.label : String(launch.model || '');
+  }
+  // The launch spec collapses to a two-word chip on the row; the actual
+  // engine/model/effort choice happens in this follow-up dialog, so the route
+  // never grows past one line. Reads as a sentence, not a form; model options
+  // are scoped to the chosen engine — picking Codex must never leave
+  // "sonnet-5" sitting in the box.
+  function f2ConfigHtml(launch) {
     const engines = F2_LAUNCH_ENGINES.map(e => ({ id: e.id, label: e.label }));
     const note = f2LaunchNote(launch);
-    return '<div class="route-model">'
+    return '<div class="f2c-config">'
       + '<span>Launches on</span>'
       + f2SelectHtml('engine', engines, launch.engine)
       + f2SelectHtml('model', f2ModelsForEngine(launch.engine), launch.model)
@@ -2923,27 +2945,38 @@
       + f2SelectHtml('effort', F2_LAUNCH_EFFORTS, launch.effort)
       + '<span>effort</span>'
       + (note ? '<span class="rate">' + escapeHtml(note) + '</span>' : '')
+      + '<button type="button" class="f2c-config-done" data-f2-chip>Done</button>'
       + '</div>';
   }
 
-  function f2RoutesHtml(order, launch) {
+  function f2RoutesHtml(order, st, gate) {
+    const tokensLabel = f2FmtTokens(gate.tokens);
     return order.map((id, i) => {
       const r = F2_ROUTES[id];
+      const cost = id === 'full' ? '~' + tokensLabel : r.cost;
+      const desc = id === 'full'
+        ? ('Reloads ~' + tokensLabel + ' tokens on ' + String(gate.model || 'the current model')
+            + ' — ' + gate.cache.verdictNote + '.')
+        : r.desc;
       return '<div class="route' + (i === 0 ? ' is-recommended' : '') + '" data-f2-route="' + id + '">'
-        // .route is a div and .route-main the button: the launch selects are
-        // real controls, and a <select> (or a button) may not nest in a button.
-        + '<button type="button" class="route-main" data-f2-act="' + id + '">'
+        // .route is a div, .route-main the button: the launch chip is a real
+        // control and a button may not nest inside a button.
+        + '<div class="route-row">'
+        + '<button type="button" class="route-main" data-f2-act="' + id + '" title="' + escapeAttr(desc) + '">'
           + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
-          + '<span class="route-body">'
-            + '<span class="route-name">' + escapeHtml(r.name) + '</span>'
-            + '<span class="route-desc">' + escapeHtml(r.desc) + '</span>'
-          + '</span>'
-          + '<span class="route-side">'
-            + (i === 0 ? '<span class="tag">Recommended</span>' : '')
-            + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(r.cost) + '</span>'
-          + '</span>'
+          + '<span class="route-name">' + escapeHtml(r.name) + '</span>'
+          + (i === 0 ? '<span class="tag">Recommended</span>' : '')
         + '</button>'
-        + (r.launches ? f2LaunchLineHtml(launch) : '')
+        + (r.launches
+            ? '<button type="button" class="f2c-chip" data-f2-chip'
+              + ' aria-expanded="' + (st.configOpen ? 'true' : 'false') + '"'
+              + ' title="Change engine, model, or effort">'
+              + escapeHtml(f2ModelLabel(st.launch) + ' · ' + f2EffortLabel(st.launch.effort))
+              + ' ▾</button>'
+            : '')
+        + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(cost) + '</span>'
+        + '</div>'
+        + (r.launches && st.configOpen ? f2ConfigHtml(st.launch) : '')
         + '<div class="f2c-route-out" data-f2-out hidden></div>'
         + '</div>';
     }).join('');
@@ -3001,27 +3034,18 @@
     if (!force && panel.innerHTML && orderKey === st.lastOrder) return;  // don't thrash per keystroke
     st.lastOrder = orderKey;
     panel.hidden = false;
+    // One line: the price. The measured cache story and the compacting caveat
+    // moved into the tooltip — the four rows below carry everything else,
+    // including full resume, which now sits priced among its alternatives
+    // instead of demoted below them.
     panel.innerHTML =
-      '<div class="verdict">Sending here reloads <span class="cost">~' + escapeHtml(tokensLabel)
-        + ' tokens on ' + escapeHtml(modelLabel) + '</span> — ' + escapeHtml(gate.cache.verdictNote)
-        + '. Pick a route:</div>'
-      + '<div class="routes">' + f2RoutesHtml(order, st.launch) + '</div>'
-      // Full resume survives only as a demoted text link. It is still one
-      // click, still priced — it just isn't the primary action any more,
-      // because the whole verdict is that you probably shouldn't take it.
-      + '<div class="escape">'
-        + '<div class="escape-row">'
-          + '<button type="button" data-f2-act="full">Resume anyway</button>'
-          // The mock hinted a ⌘⏎ shortcut here. There is no such binding in
-          // the real composer — while the gate is hot Enter is intercepted by
-          // f2MaybeShowResumeCostMenu — so the hint is dropped rather than
-          // advertising a key that does nothing.
-          + '<span class="why">reloads ~' + escapeHtml(tokensLabel) + ' on ' + escapeHtml(modelLabel) + '</span>'
-        + '</div>'
-        + '<p class="escape-note">CCC infers coldness from the transcript’s mtime — it cannot observe the '
-          + 'provider’s cache, so this is an estimate, not a guarantee. Compacting first costs more, not '
-          + 'less: writing the summary reloads all ' + escapeHtml(tokensLabel) + ', then you still pay for the turn.</p>'
-      + '</div>';
+      '<div class="verdict" title="' + escapeAttr('Estimate: ' + gate.cache.verdictNote
+        + '. CCC infers coldness from the transcript’s mtime — it cannot observe the provider’s cache. '
+        + 'Compacting first costs more, not less: writing the summary reloads all ' + tokensLabel
+        + ', then you still pay for the turn.') + '">'
+        + 'Resuming here reloads <span class="cost">~' + escapeHtml(tokensLabel)
+        + ' tokens on ' + escapeHtml(modelLabel) + '</span></div>'
+      + '<div class="routes">' + f2RoutesHtml(order, st, gate) + '</div>';
   }
 
   // ── route actions ──────────────────────────────────────────────────────
@@ -3146,7 +3170,29 @@
   // One delegated listener for every pane's composer — the route DOM is
   // rebuilt on each re-rank, so per-node handlers would leak.
   document.addEventListener('click', (ev) => {
-    const el = ev.target && ev.target.closest && ev.target.closest('.f2c-panel [data-f2-act]');
+    // Launch chip (and the dialog's Done button): toggle the follow-up
+    // config dialog. Open/closed lives in pane state so a re-rank can't
+    // slam it shut mid-choice.
+    const chip = ev.target && ev.target.closest && ev.target.closest('.f2c-panel [data-f2-chip]');
+    if (chip) {
+      const chipPanel = chip.closest('.f2c-panel');
+      const chipPane = chipPanel && chipPanel.closest('.conv-pane');
+      const chipPaneId = (chipPane && chipPane.getAttribute('data-pane-id')) || null;
+      const chipSt = f2PaneState.get(f2PaneKey(chipPaneId));
+      if (chipSt) {
+        ev.preventDefault();
+        chipSt.configOpen = !chipSt.configOpen;
+        try { f2RenderComposer(chipPaneId, { force: true }); } catch (_) {}
+      }
+      return;
+    }
+    let el = ev.target && ev.target.closest && ev.target.closest('.f2c-panel [data-f2-act]');
+    if (!el) {
+      // The cost badge sits outside the button element; a click anywhere
+      // else on the row still means "take this route".
+      const row = ev.target && ev.target.closest && ev.target.closest('.f2c-panel .route-row');
+      el = row ? row.querySelector('[data-f2-act]') : null;
+    }
     if (!el) return;
     const panel = el.closest('.f2c-panel');
     const pane = panel && panel.closest('.conv-pane');
@@ -3181,8 +3227,10 @@
       // rather than leaving a stale label in the box.
       const models = f2ModelsForEngine(sel.value);
       st.launch.model = models[0] ? models[0].id : '';
-      try { f2RenderComposer(paneId, { force: true }); } catch (_) {}
     }
+    // Repaint on every change so the chip label tracks the choice; the open
+    // dialog survives because configOpen lives in state, not the DOM.
+    try { f2RenderComposer(paneId, { force: true }); } catch (_) {}
   });
 
   // Re-rank as the user types. Delegated at the document so cloned split
