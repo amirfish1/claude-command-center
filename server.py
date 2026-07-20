@@ -63,8 +63,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
 import model_advisor
 
 # CCC federation (stdlib-only sibling module): stable node identity, paired
-# peers, and the transport for calling a peer CCC on its own loopback. See
-# docs/superpowers/plans/2026-07-10-federated-ccc-fleet-plan.md.
+# peers, and the transport for calling a peer CCC on its own loopback.
 import federation
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
@@ -31119,7 +31118,7 @@ def _uxq_parse_ts(value):
 # them in time order so each event carries the queue's depth right after it, and
 # the replay UI interleaves them without rescanning tickets per frame.
 #
-# See docs/superpowers/specs/2026-07-16-queue-replay-design.md.
+# Queue replay design notes are kept with the implementation and tests.
 # ---------------------------------------------------------------------------
 _QUEUE_REPLAY_MAX_EVENTS = 300           # newest-wins cap on returned events
 _QUEUE_REPLAY_MAX_LOOKBACK_S = 14 * 24 * 3600  # ignore events older than this
@@ -58809,8 +58808,7 @@ def morning_launch(goal_slug, strategy_id, custom_message=None):
 # arbitrary shell as the user with no permission prompt — strictly more
 # capable than /api/inject-input (which goes through Claude). It is gated
 # only by _check_same_origin. Do NOT enable network bind without a trusted
-# network. See docs/superpowers/specs/2026-05-01-in-ui-terminal-design.md
-# and SECURITY.md.
+# network. See SECURITY.md.
 # ---------------------------------------------------------------------------
 
 _TERM_STATES = {}  # repo_path -> {cwd, popen, pgid}
@@ -61397,8 +61395,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         requests but may omit it on same-origin (varies). We allow:
           - missing Origin (curl, same-origin form posts in some browsers)
           - Origin matching localhost / 127.0.0.1 / ::1 on ANY port. The
-            multi-repo design (see docs/superpowers/specs/2026-04-30-
-            multirepo-design.md) runs sibling CCC servers on different
+            multi-repo design runs sibling CCC servers on different
             loopback ports and the browser UI on one needs to fetch from
             the others. A malicious external site can't set a loopback
             Origin header (browsers set it from the page's actual URL),

@@ -1,6 +1,6 @@
 ---
 name: superpowers-to-watchtower
-description: Use when a superpowers plan (writing-plans / brainstorming output in docs/superpowers/plans/) is ready and you want durable, dashboard-visible tracking instead of an in-session scratch ledger — it imports the plan into a Watchtower queue as tickets, then optionally dispatches one CCC lane per ticket that closes its ticket with a summary. Bridges superpowers (ephemeral subagents, file-tracked) to Watchtower (durable queue) to CCC (fleet dashboard).
+description: Use when a superpowers plan (writing-plans / brainstorming output saved locally) is ready and you want durable, dashboard-visible tracking instead of an in-session scratch ledger — it imports the plan into a Watchtower queue as tickets, then optionally dispatches one CCC lane per ticket that closes its ticket with a summary. Bridges superpowers (ephemeral subagents, file-tracked) to Watchtower (durable queue) to CCC (fleet dashboard).
 allowed-tools: Bash
 ---
 
@@ -51,13 +51,13 @@ tool-free reasoning call to infer tickets from the plan and keeps each ticket's
 source path + line anchor, so re-import is idempotent.
 
 ```bash
-wt import docs/superpowers/plans/2026-07-16-my-feature.md -q MYFEATURE
+wt import my-feature-plan.md -q MYFEATURE
 ```
 
 Read the preview. When the ticket split looks right, apply it:
 
 ```bash
-wt import docs/superpowers/plans/2026-07-16-my-feature.md -q MYFEATURE --apply --type feature
+wt import my-feature-plan.md -q MYFEATURE --apply --type feature
 wt status -q MYFEATURE --json    # confirm depth + oldest-open age
 ```
 

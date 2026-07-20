@@ -6,7 +6,7 @@ interface (over SSH for remote machines, or direct loopback for a second CCC
 on this machine). Also defines the stable cross-machine identities: canonical
 repository identity and global session references.
 
-Design rules (see docs/superpowers/specs/2026-07-10-federated-ccc-fleet-fable-prompt.md):
+Design rules:
 - stdlib only, like server.py.
 - Loopback trust model is preserved: we never listen on non-loopback here;
   the SSH transport executes a tiny HTTP client on the remote machine so the

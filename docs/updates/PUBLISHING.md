@@ -19,8 +19,8 @@ source in `updates/` and rebuild.
    ```
 
    Claims must trace to `docs/product-story/pain-feature-proof.md` (status
-   **Built**), never the never-claim list. Tone and copy rules:
-   `docs/product-story/message-architecture.md` sections 10-11. No em-dashes.
+   **Built**), never the never-claim list. Keep the copy specific and truthful;
+   do not use em-dashes.
    Every image in `media:` must be a real capture that already exists.
 
 2. **Build** (stdlib only, no `pip install`):

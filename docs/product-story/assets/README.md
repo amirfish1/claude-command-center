@@ -6,8 +6,7 @@ invented, no real user content). Captured 2026-07-10 with
 `scripts/story-capture/`, then **corrected 2026-07-16 to the LIST view as the
 hero** (the kanban board is still a documented feature but is no longer the
 primary surface in the hero/overview/attention captures). See the harness README
-for how to reproduce or add assets, and `../finish-report-2026-07-16.md` for the
-list-view correction audit.
+for how to reproduce or add assets.
 
 Videos are H.264 MP4 (yuv420p, faststart, no audio), 30 fps, 1440x900 unless
 noted, each with a matching poster in `video/posters/`. Screenshots are 2x

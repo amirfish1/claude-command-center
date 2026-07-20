@@ -307,10 +307,10 @@
       </p>
       <pre class="code fade-target"><span class="c"># 1. Superpowers wrote a plan (writing-plans / brainstorming output)</span>
 <span class="c">#    Preview the ticket split. `wt import` is preview by default: your dry run.</span>
-<span class="k">wt import</span> docs/superpowers/plans/2026-07-16-my-feature.md -q MYFEATURE
+<span class="k">wt import</span> my-feature-plan.md -q MYFEATURE
 
 <span class="c"># 2. Looks right? Apply it. The plan is now durable, board-visible tickets.</span>
-<span class="k">wt import</span> docs/superpowers/plans/2026-07-16-my-feature.md -q MYFEATURE <b>--apply</b> --type feature
+<span class="k">wt import</span> my-feature-plan.md -q MYFEATURE <b>--apply</b> --type feature
 <span class="k">wt status</span> -q MYFEATURE --json     <span class="c"># depth + oldest-open age, not "stuck"</span>
 
 <span class="c"># 3. Optional: one CCC lane per ticket. Each claims, does, closes with a summary.</span>

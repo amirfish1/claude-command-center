@@ -1531,7 +1531,7 @@ This is the most security-sensitive surface in CCC — strictly more
 powerful than `/api/inject-input` because there's no Claude permission
 prompt in the loop. Do **not** enable network bind (`CCC_BIND_HOST=
 0.0.0.0`) without a trusted network. See
-`docs/superpowers/specs/2026-05-01-in-ui-terminal-design.md`.
+the in-UI-terminal design notes.
 - Conversation input bar now has an **Esc** button next to the send button. Clicking it sends an interrupt to the selected session via the new `POST /api/inject-esc` endpoint. For live Terminal/iTerm2 sessions it lands a real Esc keystroke (cancels Claude Code's in-flight response, or clears the input buffer if nothing is streaming). For CCC-spawned headless sessions with no TTY it sends `SIGINT` to the spawned `claude -p` subprocess — note this terminates the spawn entirely rather than just cancelling the current message. Hidden for pkood agents and for dormant/new-session/backlog-issue states where there's nothing live to interrupt.
 - Render `.claude/pasted-images/paste-*.{png,jpg,…}` paths as inline images in the "Original ask", "Earlier ask", and user-message panels instead of leaving them as bare filesystem paths. Backed by a new `/api/pasted-image` route, sandboxed to `~/**/.claude/pasted-images/`.
 - **`./run.sh --install-service` (macOS).** Installs CCC as a launchd

@@ -50,7 +50,10 @@ snapshot.png
 snapshot2.png
 snapshot3.png
 throughput_*.png
-*.wt-answer-inline.png
+# Root-level WatchTower/worktree captures and temporary helpers are local-only.
+.wt-*
+.wk-*
+.tmp-*
 .claude/screenshots/
 .claude/scheduled_tasks.lock
 .claude/.cozempic-init.lock
