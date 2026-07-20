@@ -889,13 +889,18 @@
         </button>
         <div class="conv-goal-strip" data-role="conv-goal-strip" hidden></div>
         <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
-          <!-- F2 cold-session composer. Two independent slots, because they
-               have different data dependencies:
-                 · the rail needs only the session row (tokens + mtime), so it
-                   can paint the moment a session is focused, before a keystroke;
-                 · the route stack needs the typed text to rank intent and to
-                   build the continuation prompt, so it re-renders on input.
-               Both are hidden until f2RenderComposer() decides the gate is hot. -->
+          <!-- Composer expand toggle — pinned to the bar's top-right corner. -->
+          <button class="expand-btn" id="convExpandBtn" title="Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)" aria-label="Expand composer" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+            </svg>
+          </button>
+          <!-- F2 cold-session composer. Both slots are hidden until
+               f2RenderComposer() decides the gate is hot (250k+ tokens AND
+               idle past the engine's cache-decay line). The rail needs only
+               the session row (tokens + mtime), so it paints the moment a
+               session is focused; the panel states the reload price and
+               offers one cheap alternative. Send stays the ordinary submit. -->
           <div class="f2c-rail rail" data-role="conv-f2-rail" hidden></div>
           <div class="conv-input-row-top">
             <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true" enterkeyhint="send" inputmode="text"></textarea>
@@ -974,11 +979,6 @@
               <button class="compact-btn" id="convCompactBtn" title="Compact conversation context - summarize to free tokens" aria-label="Compact conversation context">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M4 8 L4 5 L7 5 M20 8 L20 5 L17 5 M4 16 L4 19 L7 19 M20 16 L20 19 L17 19 M9 12 L15 12"></path>
-                </svg>
-              </button>
-              <button class="expand-btn" id="convExpandBtn" title="Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)" aria-label="Expand composer" aria-pressed="false">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"></path>
                 </svg>
               </button>
               <button class="send-btn" id="convSendBtn" title="Send to terminal" aria-label="Send to terminal">

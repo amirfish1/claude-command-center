@@ -6565,10 +6565,23 @@
      surfaces feel consistent. */
   .conv-input-bar {
     display: none; /* shown via JS when live */
+    position: relative; /* anchors the top-right expand toggle */
     padding: 10px 20px 14px;
     border-top: 1px solid var(--border);
     background: var(--surface);
   }
+  /* Composer expand toggle — a quiet icon pinned to the bar's top-right
+     corner. The textarea reserves room for it via padding-right. */
+  .conv-input-bar > .expand-btn {
+    position: absolute; top: 8px; right: 10px; z-index: 3;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0;
+    background: none; border: none; border-radius: 6px;
+    color: var(--text-muted); cursor: pointer;
+  }
+  .conv-input-bar > .expand-btn:hover { color: var(--text); background: var(--surface-2); }
+  .conv-input-bar > .expand-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .conv-input-bar .conv-input-row-top textarea { padding-right: 36px; }
   .conv-input-bar.visible {
     display: flex;
     flex-direction: column;
@@ -20702,10 +20715,10 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    only, so it paints at focus) and `.f2c-panel` below it (needs the typed
    text, so it re-ranks on input).
 
-   The shape is deliberately minimal: a one-line verdict, then ONE row of
-   four equal-width pills (Continue / Search / Copy id / Resume), every pill
-   priced inline. The engine+model+effort choice hides behind a ▾ caret that
-   opens a follow-up dialog below the row. Semantic class
+   The shape is deliberately minimal: ONE line — the priced verdict on the
+   left, a single "Start new from here" pill on the right. Send remains the
+   ordinary submit. The engine+model+effort choice hides behind a ▾ caret
+   that opens a follow-up dialog below the line. Semantic class
    names (.route/.tag/.cost-badge/.verdict/…) are scoped under .f2c-rail /
    .f2c-panel — they are generic enough that unscoped rules would collide
    across a 20k-line stylesheet. Colors come from the CCC vars; the only
@@ -20724,31 +20737,26 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .f2c-rail .sep { color: var(--border); }
 .f2c-rail .meta { color: var(--text-muted); }
 
-/* While the gate is hot the composer has no Send affordance at all — the
-   route stack IS the affordance. Offering Send as the primary action would
-   contradict the verdict printed directly above it. Enter still routes
-   through f2MaybeShowResumeCostMenu, which bounces back to the routes. */
+/* Send stays the ordinary submit while the gate is hot — the verdict line
+   states the price and the pill offers the alternative; nothing blocks. */
 .conv-input-bar.is-f2-cold { border-color: rgba(210,153,34,0.38); }
-.conv-input-bar.is-f2-cold .send-btn,
-.conv-input-bar.is-f2-cold .submit-plus-btn { display: none !important; }
 
-.f2c-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-/* One line: the price. The measured cache story and the compacting caveat
-   live in the title tooltip; the rows below carry everything else. */
+/* The whole gate is ONE line: the price on the left, the one alternative
+   pill on the right. The launch dialog (when open) wraps to its own row. */
+.f2c-panel {
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: 8px; min-width: 0;
+}
 .f2c-panel .verdict {
+  flex: 1 1 auto; min-width: 0;
   font-size: 12px; color: var(--text-muted); line-height: 1.5;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .f2c-panel .verdict .cost { color: #d29922; font-weight: 600; }
 
-/* ALL four routes share one row of equal-width pills — full resume priced
-   like the rest. The cost badge makes the argument, not visual hierarchy;
-   the recommendation is a green-tinted border on one pill, nothing bigger. */
-.f2c-panel .routes { display: flex; gap: 6px; flex-wrap: wrap; }
+.f2c-panel .routes { flex: 0 0 auto; display: flex; }
 .f2c-panel .route {
-  /* auto basis: pills share the row but a pill with more content (Continue
-     carries a caret + badge) gets the room it needs instead of truncating */
-  flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch;
+  display: flex; align-items: stretch;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px;
   transition: border-color .14s ease, background .14s ease;
@@ -20802,6 +20810,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    than a form. Never a required decision — the caret's tooltip already says
    what the route will launch on. */
 .f2c-panel .f2c-config {
+  flex-basis: 100%;
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   margin: 0; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
@@ -20823,32 +20832,10 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 }
 .f2c-panel .f2c-config .f2c-config-done:hover { border-color: var(--accent); }
 
-/* Inline result area for the free routes (Total Recall hits, copy receipt). */
-.f2c-route-out[hidden] { display: none !important; }
-.f2c-route-out { display: flex; flex-direction: column; gap: 6px; margin: 0; }
-.f2c-out-status { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
-.f2c-out-status code { font-family: var(--font-mono, monospace); color: var(--text); }
-.f2c-out-hit { border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; background: var(--bg); }
-.f2c-out-hit .snip { font-size: 12px; color: var(--text); line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
-.f2c-out-hit .meta { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
-.f2c-out-hit.is-this-session { border-color: var(--accent); }
-
-/* Enter while the gate is hot bounces back here instead of sending; a short
-   pulse says "this is the thing that answered you". */
-.f2c-panel.is-nudged .routes { animation: f2cNudge .4s ease; }
-@keyframes f2cNudge {
-  0%, 100% { transform: none; }
-  35% { transform: translateX(-3px); }
-  70% { transform: translateX(2px); }
-}
 @keyframes f2cSettle { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .f2c-panel .routes > .route { animation: f2cSettle .16s ease both; }
-.f2c-panel .routes > .route:nth-child(2) { animation-delay: .03s; }
-.f2c-panel .routes > .route:nth-child(3) { animation-delay: .06s; }
-.f2c-panel .routes > .route:nth-child(4) { animation-delay: .09s; }
 @media (prefers-reduced-motion: reduce) {
-  .f2c-panel .routes > .route,
-  .f2c-panel.is-nudged .routes { animation: none !important; }
+  .f2c-panel .routes > .route { animation: none !important; }
   .f2c-panel .route { transition: none !important; }
 }
 
