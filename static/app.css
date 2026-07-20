@@ -20702,10 +20702,10 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    only, so it paints at focus) and `.f2c-panel` below it (needs the typed
    text, so it re-ranks on input).
 
-   The shape is deliberately minimal: a one-line verdict, then four
-   equal-weight rows of exactly one line each (Continue / Search / Copy id /
-   Resume anyway), every row priced on the right. The engine+model+effort
-   choice hides behind a chip that opens a follow-up dialog. Semantic class
+   The shape is deliberately minimal: a one-line verdict, then ONE row of
+   four equal-width pills (Continue / Search / Copy id / Resume), every pill
+   priced inline. The engine+model+effort choice hides behind a ▾ caret that
+   opens a follow-up dialog below the row. Semantic class
    names (.route/.tag/.cost-badge/.verdict/…) are scoped under .f2c-rail /
    .f2c-panel — they are generic enough that unscoped rules would collide
    across a 20k-line stylesheet. Colors come from the CCC vars; the only
@@ -20741,71 +20741,69 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 }
 .f2c-panel .verdict .cost { color: #d29922; font-weight: 600; }
 
-/* Four equal-weight rows, one line each. The recommendation is a small tag,
-   not a bigger box, and full resume is the fourth row priced like the rest —
-   the cost column makes the argument, not the visual hierarchy. */
-.f2c-panel .routes { display: flex; flex-direction: column; gap: 6px; }
+/* ALL four routes share one row of equal-width pills — full resume priced
+   like the rest. The cost badge makes the argument, not visual hierarchy;
+   the recommendation is a green-tinted border on one pill, nothing bigger. */
+.f2c-panel .routes { display: flex; gap: 6px; flex-wrap: wrap; }
 .f2c-panel .route {
+  /* auto basis: pills share the row but a pill with more content (Continue
+     carries a caret + badge) gets the room it needs instead of truncating */
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px;
   transition: border-color .14s ease, background .14s ease;
 }
 .f2c-panel .route:hover { border-color: var(--accent); }
-.f2c-panel .route-row { display: flex; align-items: center; gap: 8px; padding-right: 9px; cursor: pointer; }
+.f2c-panel .route.is-recommended { border-color: rgba(63,185,80,0.45); }
+.f2c-panel .route.is-recommended:hover { border-color: rgba(63,185,80,0.7); }
 
-/* The clickable surface is a separate element from .route so the launch chip
+/* The clickable surface is a separate element from .route so the ▾ caret
    can be a real control rather than a button nested inside a button. */
 .f2c-panel .route-main {
-  display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0;
-  background: none; border: none; padding: 7px 0 7px 10px;
-  font: inherit; color: var(--text); cursor: pointer; text-align: left;
+  display: flex; flex: 1; align-items: center; justify-content: center;
+  gap: 7px; min-width: 0;
+  background: none; border: none; padding: 6px 8px;
+  font: inherit; color: var(--text); cursor: pointer;
   border-radius: 8px;
 }
 .f2c-panel .route-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .f2c-panel .route-main:disabled { opacity: 0.55; cursor: progress; }
 .f2c-panel .route-glyph {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 13px; color: var(--text-muted); line-height: 1.4; width: 14px; text-align: center; flex: none;
+  font-size: 12.5px; color: var(--text-muted); line-height: 1.4; flex: none;
 }
 .f2c-panel .route.is-recommended .route-glyph { color: #3fb950; }
 .f2c-panel .route-name {
-  font-size: 12.5px; font-weight: 600; letter-spacing: -0.005em;
+  font-size: 12px; font-weight: 600; letter-spacing: -0.005em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.f2c-panel .tag {
-  flex: none;
-  font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
-  color: #3fb950; background: rgba(63,185,80,0.14);
-  padding: 2px 6px; border-radius: 4px; white-space: nowrap;
-}
-/* min-width keeps the price column aligned across all four rows. */
 .f2c-panel .cost-badge {
   flex: none;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 10.5px; font-weight: 600; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
-  min-width: 52px; text-align: center;
+  font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; white-space: nowrap;
 }
 .f2c-panel .cost-badge.free  { color: #3fb950; background: rgba(63,185,80,0.14); }
 .f2c-panel .cost-badge.slice { color: var(--accent); background: rgba(110,140,175,0.18); }
 .f2c-panel .cost-badge.warn  { color: #d29922; background: rgba(210,153,34,0.14); }
 
-/* Launch chip — states the spec in two words. The choice itself happens in
-   the follow-up dialog below, so the row never grows past one line. */
+/* The ▾ caret on Continue — opens the launch-spec dialog. Its tooltip
+   states the current engine/model/effort before you ever open it. */
 .f2c-panel .f2c-chip {
-  flex: none; display: inline-flex; align-items: center; gap: 4px;
-  font: inherit; font-size: 11px; font-weight: 600; color: var(--text-muted);
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 5px; padding: 2px 7px; cursor: pointer; white-space: nowrap;
+  flex: none; display: inline-flex; align-items: center;
+  font: inherit; font-size: 10px; color: var(--text-muted);
+  background: none; border: none; border-left: 1px solid var(--border);
+  padding: 0 7px; cursor: pointer;
+  border-radius: 0 8px 8px 0;
 }
-.f2c-panel .f2c-chip:hover { color: var(--text); border-color: var(--accent); }
-.f2c-panel .f2c-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.f2c-panel .f2c-chip:hover { color: var(--text); background: rgba(110,140,175,0.12); }
+.f2c-panel .f2c-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* The follow-up dialog: engine + model + effort stated as a sentence rather
-   than a form. Never a required decision — the chip already says what the
-   route will launch on before you click it. */
+   than a form. Never a required decision — the caret's tooltip already says
+   what the route will launch on. */
 .f2c-panel .f2c-config {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  margin: 2px 9px 8px 33px; padding: 8px 10px;
+  margin: 0; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.25);
   font-size: 11.5px; color: var(--text-muted);
@@ -20827,7 +20825,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 
 /* Inline result area for the free routes (Total Recall hits, copy receipt). */
 .f2c-route-out[hidden] { display: none !important; }
-.f2c-route-out { display: flex; flex-direction: column; gap: 6px; margin: 0 9px 8px 33px; }
+.f2c-route-out { display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .f2c-out-status { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
 .f2c-out-status code { font-family: var(--font-mono, monospace); color: var(--text); }
 .f2c-out-hit { border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; background: var(--bg); }

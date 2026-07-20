@@ -2566,7 +2566,9 @@
   // adds NO per-row transcript parse. Staleness is inferred from mtime; CCC
   // cannot observe the provider's cache, so the copy always hedges ("likely"),
   // never asserts.
-  const F2_TOKEN_THRESHOLD = 50000;   // "large": ~50k+ estimated context
+  // "Large" means a reload actually worth interrupting for. Below this the
+  // gate stays silent and the composer keeps its ordinary Send.
+  const F2_TOKEN_THRESHOLD = 250000;  // ~250k+ estimated context
 
   // Per-engine cache-decay profiles. These are measured, not guessed: 390,600
   // real turns. The previous code warned on Claude only, on a comment claiming
@@ -2842,38 +2844,42 @@
     return (launch.engine === 'claude' && launch.model !== 'opus-4-8') ? '~5x cheaper than Opus' : '';
   }
 
-  // The four routes, one row each. Names are the product copy; the longer
-  // descriptions live in the row's title tooltip so every option stays a
-  // single line — the point of the surface is that each row prices itself.
+  // All four routes share ONE row of equal-width pills, so the labels are
+  // terse and the full name + description live in each pill's tooltip. Each
+  // pill still prices itself — the cost badge is the argument.
   const F2_ROUTES = {
     continue: {
       glyph: '→',
+      short: 'Continue',
       name: 'Continue in a new session',
       desc: 'Carries your text and this session’s id. Tails the transcript for recent state, greps for anything older.',
       cost: '~2k', costClass: 'slice',
-      // Only this route actually starts a model, so only this route shows the
-      // launch chip. Routes that run nothing show none at all.
+      // Only this route actually starts a model, so only this route gets the
+      // ▾ caret that opens the launch-spec dialog.
       launches: true,
     },
     search: {
       glyph: '⌕',
+      short: 'Search',
       name: 'Search your history first',
       desc: 'Runs the question through Total Recall. Often the whole answer, no model spend.',
-      cost: '0 tokens', costClass: 'free',
+      cost: '0', costClass: 'free',
       launches: false,
     },
     handoff: {
       glyph: '⧉',
+      short: 'Copy id',
       name: 'Copy session id',
       desc: 'Hand this thread to a session you already have open and warm.',
-      cost: '0 tokens', costClass: 'free',
+      cost: '0', costClass: 'free',
       launches: false,
     },
     // Full resume, equal weight. The verdict is still that you probably
     // shouldn't take it — but that argument is made by its price badge
-    // sitting next to the others, not by demoting the row to a footnote.
+    // sitting next to the others, not by demoting it to a footnote.
     full: {
       glyph: '↵',
+      short: 'Resume',
       name: 'Resume anyway',
       desc: null,                       // priced from the gate at render time
       costClass: 'warn',
@@ -2959,25 +2965,21 @@
             + ' — ' + gate.cache.verdictNote + '.')
         : r.desc;
       return '<div class="route' + (i === 0 ? ' is-recommended' : '') + '" data-f2-route="' + id + '">'
-        // .route is a div, .route-main the button: the launch chip is a real
+        // .route is a div, .route-main the button: the ▾ caret is a real
         // control and a button may not nest inside a button.
-        + '<div class="route-row">'
-        + '<button type="button" class="route-main" data-f2-act="' + id + '" title="' + escapeAttr(desc) + '">'
+        + '<button type="button" class="route-main" data-f2-act="' + id + '"'
+          + ' title="' + escapeAttr(r.name + (i === 0 ? ' (recommended)' : '') + ' — ' + desc) + '">'
           + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
-          + '<span class="route-name">' + escapeHtml(r.name) + '</span>'
-          + (i === 0 ? '<span class="tag">Recommended</span>' : '')
+          + '<span class="route-name">' + escapeHtml(r.short) + '</span>'
+          + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(cost) + '</span>'
         + '</button>'
         + (r.launches
             ? '<button type="button" class="f2c-chip" data-f2-chip'
               + ' aria-expanded="' + (st.configOpen ? 'true' : 'false') + '"'
-              + ' title="Change engine, model, or effort">'
-              + escapeHtml(f2ModelLabel(st.launch) + ' · ' + f2EffortLabel(st.launch.effort))
-              + ' ▾</button>'
+              + ' aria-label="Change engine, model, or effort"'
+              + ' title="' + escapeAttr('Launches on ' + f2ModelLabel(st.launch) + ' at '
+                  + f2EffortLabel(st.launch.effort) + ' effort — click to change') + '">▾</button>'
             : '')
-        + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(cost) + '</span>'
-        + '</div>'
-        + (r.launches && st.configOpen ? f2ConfigHtml(st.launch) : '')
-        + '<div class="f2c-route-out" data-f2-out hidden></div>'
         + '</div>';
     }).join('');
   }
@@ -3034,10 +3036,11 @@
     if (!force && panel.innerHTML && orderKey === st.lastOrder) return;  // don't thrash per keystroke
     st.lastOrder = orderKey;
     panel.hidden = false;
-    // One line: the price. The measured cache story and the compacting caveat
-    // moved into the tooltip — the four rows below carry everything else,
-    // including full resume, which now sits priced among its alternatives
-    // instead of demoted below them.
+    // Two lines total: the price, then ONE row of four equal pills — full
+    // resume sits priced among its alternatives instead of demoted below
+    // them. The measured cache story and the compacting caveat live in the
+    // verdict tooltip; the launch dialog and route output render below the
+    // row only when asked for.
     panel.innerHTML =
       '<div class="verdict" title="' + escapeAttr('Estimate: ' + gate.cache.verdictNote
         + '. CCC infers coldness from the transcript’s mtime — it cannot observe the provider’s cache. '
@@ -3045,13 +3048,16 @@
         + ', then you still pay for the turn.') + '">'
         + 'Resuming here reloads <span class="cost">~' + escapeHtml(tokensLabel)
         + ' tokens on ' + escapeHtml(modelLabel) + '</span></div>'
-      + '<div class="routes">' + f2RoutesHtml(order, st, gate) + '</div>';
+      + '<div class="routes">' + f2RoutesHtml(order, st, gate) + '</div>'
+      + (st.configOpen ? f2ConfigHtml(st.launch) : '')
+      + '<div class="f2c-route-out" data-f2-out hidden></div>';
   }
 
   // ── route actions ──────────────────────────────────────────────────────
+  // One shared output area below the pill row (Total Recall hits, copy
+  // receipt) — the pills are too small to host their own.
   function f2RouteOutEl(panel, routeId) {
-    const row = panel.querySelector('.route[data-f2-route="' + routeId + '"]');
-    return row ? row.querySelector('[data-f2-out]') : null;
+    return panel.querySelector('[data-f2-out]');
   }
 
   // Route: Search your history first (0 tokens). Same Total Recall call the
