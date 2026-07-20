@@ -1,4 +1,0 @@
-- Move the cold-cache warning out of a submit-time modal and into the composer: when a session is large and stale the send button is replaced by ranked routes (continue in a new session, search history, copy session id), with full resume demoted to a priced link.
-- Rank routes by intent — question-shaped text promotes search, task-shaped text promotes continuing in a new session.
-- Let the continuation route pick its own engine, model, and effort, defaulting to a cheaper tier than the origin session.
-- Warn on stale Codex sessions too, at 25 minutes and with graded wording, since measured Codex caches decay gradually from ~8 min while Claude holds ~99.5% until a hard 60-minute cliff.

@@ -1,1 +1,0 @@
-- Prefix compact ticket numbers with their queue in the All queues view.

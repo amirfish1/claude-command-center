@@ -1,1 +1,0 @@
-- Notify an active WatchTower worker when a ticket comment is added from the Command Center queue.

@@ -1,1 +1,0 @@
-- Make live WatchTower queue claims visually distinct from unclaimed tickets.

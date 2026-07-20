@@ -1,1 +1,0 @@
-- Show queue-scope loading feedback until the selected queue's rows render.

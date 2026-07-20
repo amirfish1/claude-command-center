@@ -1,1 +1,0 @@
-- Avoid double-scanning Claude transcript archives when project directories are symlinked.

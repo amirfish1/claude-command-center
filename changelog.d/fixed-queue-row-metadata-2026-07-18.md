@@ -1,1 +1,0 @@
-- Compact queue row metadata so ticket names have more room, and reveal the run action from the status dot.

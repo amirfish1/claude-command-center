@@ -1,1 +1,0 @@
-- Queue ticket rows now update immediately after an edit is saved.

@@ -1,1 +1,0 @@
-- Show stale WatchTower claims as gray queue rows instead of live pulsing work.

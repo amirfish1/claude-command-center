@@ -1,1 +1,0 @@
-- Show a spinner while moving a conversation to or from Trash.

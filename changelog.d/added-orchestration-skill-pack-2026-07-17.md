@@ -1,1 +1,0 @@
-- Orchestration skill pack: 8 new skills that turn CCC spawn/inject/ask into concrete workflows — `pair-verify`, `standup`, `second-opinion`, `dogfood`, `handoff`, `bug-race`, `press-room`, `a-b-copy` — each with stated spawn cost, dry-run mode, and honest CCC-down fallbacks, indexed and ranked in `skills/README.md`.

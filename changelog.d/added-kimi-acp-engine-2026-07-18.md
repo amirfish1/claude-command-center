@@ -1,1 +1,0 @@
-- Added Kimi as a session engine: spawn, steer, and stream Kimi Code CLI sessions over a generic ACP client layer (`kimi acp`), with token-level live streaming, inline permission-prompt answers, and Kimi sessions in the live list and archive (including attach for TUI sessions).

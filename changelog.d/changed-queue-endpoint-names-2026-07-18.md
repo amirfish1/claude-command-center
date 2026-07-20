@@ -1,1 +1,0 @@
-- Queue endpoints are now `/api/queue/list` and `/api/queue/status` (legacy `/api/ux-fixes/*` names keep working as aliases), and both are stale-while-revalidate: requests never wait on WatchTower or `gh issue list` merges — a background thread refreshes the snapshot.

@@ -1,1 +1,0 @@
-- Prevent dense Mode 3 presentation slides from clipping or requiring unnecessary scrolling, with more compact typography and visible theme colors.

@@ -1,1 +1,0 @@
-- Added a guided "Add Kimi engine" setup flow in Settings → Engines: detects the Kimi Code CLI (path/version), walks a new user through membership, install, and `kimi login`, deep-links the official membership and third-party setup docs, and verifies the setup by spawning a smoke-test `kimi acp` session from the UI.

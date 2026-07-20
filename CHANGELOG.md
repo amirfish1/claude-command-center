@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.9.0] - 2026-07-20
+
+### Added
+- Added a cost-aware menu before resuming a large, stale Claude session, with recall, lower-cost model, selective-continuation, and full-resume routes.
+- FIRST FLIGHT onboarding tour: a spotlight walkthrough of the dashboard on first run, with two paths (newcomer and multi-engine), sample cards on empty installs, and a "Take the tour" replay in Settings.
+- Added Kimi as a session engine: spawn, steer, and stream Kimi Code CLI sessions over a generic ACP client layer (`kimi acp`), with token-level live streaming, inline permission-prompt answers, and Kimi sessions in the live list and archive (including attach for TUI sessions).
+- Added a guided "Add Kimi engine" setup flow in Settings → Engines: detects the Kimi Code CLI (path/version), walks a new user through membership, install, and `kimi login`, deep-links the official membership and third-party setup docs, and verifies the setup by spawning a smoke-test `kimi acp` session from the UI.
+- Show a pending row while a newly filed queue ticket is being confirmed.
+- Orchestration skill pack: 8 new skills that turn CCC spawn/inject/ask into concrete workflows — `pair-verify`, `standup`, `second-opinion`, `dogfood`, `handoff`, `bug-race`, `press-room`, `a-b-copy` — each with stated spawn cost, dry-run mode, and honest CCC-down fallbacks, indexed and ranked in `skills/README.md`.
+- Orchestration skill pack, wave 2: 4 more CCC-orchestration skills re-scoped from wave 1's cut list — `docs-drift` (claim-by-claim audit of a reference doc against the code), `voice-guard` (gate one finished draft against a voice guide), `threat-model` (defensive abuse-surface map of a trust-boundary change that feeds `/security-review`), and `release-audit` (GO/NO-GO on the judgment gates a release script can't check) — each with stated spawn cost, dry-run mode, and honest CCC-down fallbacks, indexed and re-ranked in `skills/README.md`.
+- Plan-to-fleet: import a plan or mission-brief document into a Watchtower queue from the dashboard. The queue panel's "Import doc" button previews the tickets `wt import` extracts, files them on confirm, and offers an optional worker drain. Hidden automatically when `wt import` is not installed.
+- Made the presentation-mode Live Updates panel height adjustable with a persistent drag handle and keyboard controls.
+- Queue-first mode (Q-FIRST): open CCC as a queue board - queue cards with WatchTower health, a queue's tickets in the main view with full room, a full ticket detail panel (edit, answer, comment, close with a note, reopen), and a one-click bridge into the worker's session (or spawn a one-off worker). Activate per-load with `?ccc_mode=queues`, from the Queue tab's Board button, or pin it as your default landing view.
+
+### Changed
+- Bespoke queue worker spawns (custom model or extra instructions via `/api/queue/spawn-worker`) are now WatchTower-tracked like any drain worker — they land in workers.json with a `bespoke` kind and their instructions ride the drain goal, instead of running as untracked shadow sessions. Requires watchtower ≥ ee3f165.
+- Move the cold-cache warning out of a submit-time modal and into the composer: when a session is large and stale the send button is replaced by ranked routes (continue in a new session, search history, copy session id), with full resume demoted to a priced link.
+- Rank routes by intent — question-shaped text promotes search, task-shaped text promotes continuing in a new session.
+- Let the continuation route pick its own engine, model, and effort, defaulting to a cheaper tier than the origin session.
+- Warn on stale Codex sessions too, at 25 minutes and with graded wording, since measured Codex caches decay gradually from ~8 min while Claude holds ~99.5% until a hard 60-minute cliff.
+- Start new Command Center installs with muted sidebar chip colors.
+- Prefix compact ticket numbers with their queue in the All queues view.
+- Queue configuration can now defer its worker engine and model to CCC spawn defaults.
+- Queue endpoints are now `/api/queue/list` and `/api/queue/status` (legacy `/api/ux-fixes/*` names keep working as aliases), and both are stale-while-revalidate: requests never wait on WatchTower or `gh issue list` merges — a background thread refreshes the snapshot.
+- The gear menu is now a full settings modal — sections for appearance, layout, sessions, fleet & network, tools, maintenance, and help, with instant search (Cmd/Ctrl+, to open), keyboard navigation, and per-section reset to defaults. Every old menu entry moved in; nothing was removed.
+
+### Fixed
+- New sessions now appear in the conversation list and search within seconds instead of minutes: the archive refresh re-parses only the transcripts that actually changed (incremental delta) instead of rebuilding every row, and a poll whose snapshot is cheaply refreshable gets the fresh data in the same response.
+- Show an in-progress spinner while an Archive action is being saved.
+- Avoid double-scanning Claude transcript archives when project directories are symlinked.
+- Removed the manual status-layout switch and automatically use the top layout on mobile.
+- Keep active empty group chats visible in the Current sessions sidebar.
+- Aligned group-chat markers with session model icons in Current Sessions.
+- Group-chat readers now replace stale session context in the right-hand rail and open their orchestration details.
+- Fixed newly created group chats appearing in Current Sessions immediately.
+- Hide Claude Code's synthetic interruption marker from conversation transcripts.
+- Clicking Steer after a Codex turn has ended now advances the conversation's
+durable queue through the normal FIFO pump instead of leaving the message stuck
+with a “No running Codex turn to steer” error.
+- Queue ticket rows now update immediately after an edit is saved.
+- Fixed Kimi sessions vanishing from the session list: newer Kimi Code writes `createdAt`/`updatedAt` in `state.json` as epoch-millisecond ints instead of ISO strings, which crashed `_iso_to_epoch` and aborted the whole Kimi scan. `_iso_to_epoch` now accepts numeric epochs (s or ms).
+- Keep the Launch target menu inside the dashboard when it would overflow below the window.
+- Make live WatchTower queue claims visually distinct from unclaimed tickets.
+- Fixed Mode 3 presentation bootstrap errors after session-scoped mode persistence.
+- Prevent dense Mode 3 presentation slides from clipping or requiring unnecessary scrolling, with more compact typography and visible theme colors.
+- Codex phantom-writer recovery now records the cleared writer, turn, and stale
+tool type while preserving FIFO delivery of the queued wake into a fresh
+CCC-owned turn.
+- Fixed the dashboard CPU burn and slow transcript loading under poll load: archive refreshes no longer re-stamp rows or rebuild on per-turn engine state changes, `last_assistant_text` is bounded on archive rows (~40% smaller payloads), effective-repo inference is served from a 30s revalidation window instead of re-walking active sessions every poll, and the queue health/list endpoints share one queue read with sane TTLs. Group-chat readers now back off from 3s to 30s when a chat stops changing.
+- Remember each session's presentation mode independently instead of leaking the selection across restarted or switched sessions.
+- Show the repository Push all action for repo-derived groups in the By Objects view.
+- Preserve URL-only Queue-first mode through settings refreshes.
+- Keep actionable WatchTower tickets ahead of closed and inert work in every Queue scope.
+- Compact queue row metadata so ticket names have more room, and reveal the run action from the status dot.
+- Make queue rows more readable by shortening repeated queue prefixes and overlaying priority bumps on their priority chips.
+- Queue scope now loads while the archive is still hydrating.
+- Show queue-scope loading feedback until the selected queue's rows render.
+- Refresh sidebar-mounted Queue rows when a worker claims a ticket.
+- Idle-TTL reaper for CCC-spawned headless workers: the FIFO stdin that lets workers survive a CCC restart also means they never see EOF (the child is a writer of its own stdin), so finished workers idled forever at ~80MB RSS each. A background sweep now retires any spawned Claude headless idle past `CCC_SPAWN_IDLE_TTL_HOURS` (default 3h, `0` disables) with a graceful SIGTERM — never mid-turn, never a live WatchTower worker — marking the registry entry `retired` while keeping the session resumable.
+- Show stale WatchTower claims as gray queue rows instead of live pulsing work.
+- Notify an active WatchTower worker when a ticket comment is added from the Command Center queue.
+- Show a spinner while moving a conversation to or from Trash.
+- Changed unresolved queue follow-ups from red to amber so they read as pending attention, not active errors.
+- Keep WatchTower worker child sessions out of Current Sessions on first render.
+- Keep a visible worktree marker beside session branches in narrow split panes.
+
 ## [5.8.1] - 2026-07-16
 
 ### Added
@@ -2048,7 +2114,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.8.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.9.0...HEAD
+[5.9.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.9.0
 [5.8.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.1
 [5.8.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.0
 [5.6.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.6.0

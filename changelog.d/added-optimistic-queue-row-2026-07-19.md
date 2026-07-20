@@ -1,1 +1,0 @@
-- Show a pending row while a newly filed queue ticket is being confirmed.

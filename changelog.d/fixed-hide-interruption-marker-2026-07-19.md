@@ -1,1 +1,0 @@
-- Hide Claude Code's synthetic interruption marker from conversation transcripts.

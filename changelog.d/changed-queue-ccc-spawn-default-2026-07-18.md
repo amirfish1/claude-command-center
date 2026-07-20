@@ -1,1 +1,0 @@
-- Queue configuration can now defer its worker engine and model to CCC spawn defaults.

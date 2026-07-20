@@ -1,1 +1,0 @@
-- Preserve URL-only Queue-first mode through settings refreshes.

@@ -1,1 +1,0 @@
-- Keep WatchTower worker child sessions out of Current Sessions on first render.
