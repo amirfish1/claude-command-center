@@ -6,6 +6,26 @@ on:
   pull_request:
 
 jobs:
+  # The public checkout must not grow private planning archives or generated
+  # working-tree captures again.
+  public-docs-boundary:
+    name: public docs boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject private-doc artifacts and archive links
+        shell: bash
+        run: |
+          if git ls-files | grep -Eq '(^|/)(\.wt-|\.wk-|\.tmp-|cache/projects\.json|PARKING_LOT\.md)$'; then
+            echo "private or generated artifact tracked in public checkout" >&2
+            exit 1
+          fi
+          if git grep -n -E 'docs/superpowers/|finish-report-2026-07-16\.md' -- \
+            ':!.github/workflows/ci.yml' ':!AGENTS.md' ':!CLAUDE.md'; then
+            echo "stale private-document reference in public checkout" >&2
+            exit 1
+          fi
+
   # Sanity: every Python file in the repo must byte-compile. Catches syntax
   # errors without needing to install or run anything.
   py-compile:

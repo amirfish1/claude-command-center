@@ -10,6 +10,14 @@ Repo lives at `github.com/amirfish1/claude-command-center`. Every commit, commen
 - No secrets — not even placeholder tokens that "look like" real ones. Use obvious fakes (`sk-ant-test-XXXX`).
 - No references to private internal systems. If a feature exists for one user, either generalize it or gitignore it (see the Morning view for the pattern).
 
+## Private documentation boundary
+
+This checkout is public. Keep non-public plans, specs, product-story source,
+backlog notes, and agent working documents in the separate private
+`CCC-private-docs` repository. Do not recreate `docs/superpowers/`, commit
+private-document copies here, or add a private-repository submodule or
+symlink. Publish only explicitly reviewed, public-safe exports.
+
 ## Commits
 
 **Conventional Commits.** Scan `git log` for existing scopes — match them. Common types in this repo:

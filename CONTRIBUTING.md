@@ -8,6 +8,10 @@ This is a tool I use daily on a single-founder SaaS workflow. I'll merge fixes
 and small features that keep the scope tight. I'm intentionally slow to accept
 architectural rewrites — the simplicity (two files, stdlib only) is load-bearing.
 
+Private plans, strategy notes, and working documents are maintained outside
+this public repository. Contributions should include only public-safe source,
+documentation, and assets.
+
 ## Running locally
 
 ```bash
