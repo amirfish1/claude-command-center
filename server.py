@@ -29908,6 +29908,43 @@ def _spawn_entry_active_tool_child(entry):
     return None
 
 
+# How long an active tool child may hold QUEUED input before the drain loop
+# stops waiting for it. A tool child normally means "mid-turn, input will land
+# at the next boundary" — but a turn can wedge indefinitely on a child that
+# outlives it (an agent-spawned `while true; ...; sleep 120` poll loop is the
+# case seen in the wild, holding one session's queue for 4h22m). Past this
+# bound the "it'll land shortly" assumption is simply false, and holding user
+# text hostage is worse than delivering it a turn late — Claude queues
+# mid-turn writes itself, so delivery here is safe either way.
+_INJECT_TOOL_CHILD_MAX_HOLD_S = 600
+
+
+def _tool_child_blocks_inject(spawn, now=None):
+    """True if `spawn` has an active tool child young enough to justify holding
+    queued input for it.
+
+    Deliberately NOT used by the retire/staleness call sites: those kill the
+    process, where a false "not busy" would destroy real work. Here the only
+    cost of being wrong is a message arriving at the next turn boundary.
+    """
+    child = _spawn_entry_active_tool_child(spawn)
+    if not child:
+        return False
+    started_at = child.get("started_at")
+    if not started_at:
+        return True
+    age = (now if now is not None else time.time()) - started_at
+    if age > _INJECT_TOOL_CHILD_MAX_HOLD_S:
+        print(
+            f"[terminal-queue] tool child pid={child.get('pid')} has held input for "
+            f"{int(age)}s (> {_INJECT_TOOL_CHILD_MAX_HOLD_S}s); delivering anyway: "
+            f"{str(child.get('command') or '')[:100]}",
+            flush=True,
+        )
+        return False
+    return True
+
+
 def _parse_ps_etime(text):
     """Parse BSD ps ``etime`` ([[DD-]HH:]MM:SS) into elapsed seconds.
 
@@ -29955,6 +29992,10 @@ def _queue_terminal_input(session_id, text, status=None):
     if status:
         payload["pid"] = status.get("pid")
         payload["status"] = status.get("status")
+        if (status.get("status") or "").lower() in _BUSY_SESSION_STATUSES | {"headless"}:
+            payload["queued_reason"] = (
+                "the current turn is still running; your message will send next"
+            )
     return payload
 
 

@@ -6413,6 +6413,10 @@ class TestRepoContextHelpers(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertTrue(result["queued"])
+            self.assertEqual(
+                result["queued_reason"],
+                "the current turn is still running; your message will send next",
+            )
             self.assertEqual(result["status"], "busy")
             self.assertEqual(result["via"], "terminal-queued")
             write.assert_not_called()
