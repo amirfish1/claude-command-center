@@ -6894,17 +6894,33 @@
         }
       }
       if (activeSteerBtn) {
-        const canSteer = canSend && (isCodex || isKimi) && hasSession && !isNewSession && !isBacklogIssue
-          && (isKimi || codexTurnSteerable());
+        // Claude headless is steerable too (CCC): the server writes an
+        // `interrupt` control request to the spawn's FIFO, which aborts the
+        // in-flight tool and ends the turn. Gate on a tool actually being in
+        // flight — that's the case a plain Send cannot reach, because a turn
+        // wedged on a long tool child never hits the boundary where queued
+        // input lands.
+        const isClaudeHeadless = !isCodex && !isKimi && !isCursor && !isHermes
+          && !isPkood && !isGemini && !isAntigravity
+          && !!liveStatus.live && !!liveStatus.headlessPresent && !liveStatus.tty;
+        const claudeSteerable = isClaudeHeadless && !!liveStatus.sidecarInFlight;
+        const canSteer = canSend && hasSession && !isNewSession && !isBacklogIssue
+          && ((isCodex && codexTurnSteerable()) || isKimi || claudeSteerable);
         activeSteerBtn.classList.toggle('visible', canSteer);
         activeSteerBtn.disabled = !canSteer;
         activeSteerBtn.title = canSteer
-          ? (isKimi ? 'Steer running Kimi turn now' : 'Steer running Codex turn now')
+          ? (isKimi
+              ? 'Steer running Kimi turn now'
+              : (isCodex
+                  ? 'Steer running Codex turn now'
+                  : 'Interrupt the running tool and send this now'))
           : (isCodex
               ? 'No running Codex turn can be steered from CCC; use Send to resume or follow up'
               : (isKimi
                   ? 'Steer is available while a Kimi turn is running'
-                  : 'Steer is only available for Codex and Kimi sessions'));
+                  : (isClaudeHeadless
+                      ? 'Steer is available while a tool is running'
+                      : 'Steer needs a live headless, Codex, or Kimi session')));
       }
       // Compact button — only for compaction-capable open sessions (Claude
       // AND Codex). cursor/gemini/antigravity return compact_unsupported_engine
@@ -7979,8 +7995,13 @@
     }
     const sid = currentSession.id;
     if (!sid) return;
-    if (injectMode === 'steer' && currentSession.source !== 'codex' && currentSession.source !== 'kimi') {
-      showOpToast('Steer is only available for Codex and Kimi sessions.', 'error');
+    if (injectMode === 'steer'
+        && currentSession.source !== 'codex'
+        && currentSession.source !== 'kimi'
+        && !(liveStatus.live && liveStatus.headlessPresent && !liveStatus.tty)) {
+      // Claude headless steers via the FIFO interrupt control request; every
+      // other non-Codex/Kimi surface still has no interrupt channel.
+      showOpToast('Steer needs a live headless, Codex, or Kimi session.', 'error');
       return;
     }
     const compactCommand = /^\/compact(?:\s|$)/i.test(text);
