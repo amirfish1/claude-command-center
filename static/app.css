@@ -11649,7 +11649,7 @@
     padding: 4px 0; position: sticky; top: 0;
     background: var(--surface);
   }
-  .files-queue-panel .files-header { flex-wrap: wrap; }
+  .files-queue-panel .files-header { flex-wrap: wrap; gap: 4px; }
   .files-count {
     background: rgba(88,166,255,0.18); color: var(--accent, #58a6ff);
     font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 700;
@@ -11718,8 +11718,7 @@
   .fq-more-menu button:hover { background: var(--surface-hover); color: var(--text); }
   .fq-more-menu .fq-wrap-toggle.is-active { background: var(--accent); color: #fff; }
   .fq-search-input {
-    box-sizing: border-box; flex: 1 1 110px; min-width: 0; max-width: 180px;
-    margin-left: auto;
+    box-sizing: border-box; flex: 1 1 80px; min-width: 80px; max-width: none; margin-left: 0;
     background: transparent; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
     padding: 3px 8px; font-size: 11px;

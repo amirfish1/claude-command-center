@@ -1,0 +1,1 @@
+- Keep queue search on the filter row in a 390px status rail.
