@@ -5050,7 +5050,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
         self.assertIn("function codexTurnSteerable()", app_js)
-        self.assertIn("&& (isKimi || codexTurnSteerable());", app_js)
+        self.assertIn("(isCodex && codexTurnSteerable()) || isKimi || claudeSteerable", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
         self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
         send_handler = app_js[
@@ -5058,6 +5058,28 @@ class TestServerImports(unittest.TestCase):
             app_js.index("function insertPendingSpawnCard")
         ]
         self.assertNotIn("postInjectInput(sid, text, 'send', { announcedFrom })", send_handler)
+
+    def test_claude_headless_steer_uses_interrupt_control_request(self):
+        """Steering a wedged Claude headless writes an `interrupt` control
+        request to its FIFO, so a turn stuck on a long tool child reaches a
+        boundary where queued input can land."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("def _write_stream_json_interrupt(", server_py)
+        self.assertIn('"type": "control_request"', server_py)
+        self.assertIn('"subtype": "interrupt"', server_py)
+        self.assertIn('"via": "claude-interrupt-steer"', server_py)
+        # The interrupt must be written BEFORE the follow-up text, or Claude
+        # reads the text into the turn the interrupt is about to abort.
+        interrupt_at = server_py.index('"via": "claude-interrupt-steer"')
+        branch = server_py[interrupt_at - 1200:interrupt_at]
+        self.assertLess(
+            branch.index("_write_stream_json_interrupt(spawn)"),
+            branch.index("_write_stream_json_user_message(spawn, text)"),
+        )
+        # Frontend no longer hard-blocks steer for non-Codex/Kimi sources.
+        self.assertNotIn("Steer is only available for Codex and Kimi sessions.", app_js)
+        self.assertIn("claudeSteerable", app_js)
 
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers

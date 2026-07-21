@@ -41934,6 +41934,36 @@ def _write_stream_json_user_message(target, text, timeout=0.25):
     return _write_via_pipe(target, line)
 
 
+def _write_stream_json_interrupt(target, timeout=0.25):
+    """Emit a stream-json `interrupt` control request to a running headless.
+
+    Claude's stream-json *input* accepts control requests alongside user
+    messages; `interrupt` aborts the in-flight tool and ends the turn
+    (verified against claude 2.1.216: the running Bash comes back as
+    "The user doesn't want to proceed with this tool use" and the turn
+    closes with `terminal_reason: aborted_tools`). That abort is the whole
+    point — a wedged turn never reaches a boundary on its own, so queued
+    input can never land. Interrupting manufactures the boundary.
+
+    Same FIFO and same cached writer fd as `_write_stream_json_user_message`,
+    so this works across a CCC restart for any spawn that still has its FIFO.
+    """
+    msg = {
+        "type": "control_request",
+        "request_id": str(uuid.uuid4()),
+        "request": {"subtype": "interrupt"},
+        "uuid": str(uuid.uuid4()),
+    }
+    line = (json.dumps(msg) + "\n").encode("utf-8")
+
+    if isinstance(target, dict):
+        if _write_via_spawn_fd(target, line, timeout=timeout):
+            return True
+        return _write_via_pipe(target.get("proc"), line)
+
+    return _write_via_pipe(target, line)
+
+
 def inject_into_spawned(pid, text):
     """Send a follow-up user message to a previously spawned session."""
     text = _strip_ccc_session_state_instruction(text)
@@ -46562,6 +46592,41 @@ def _inject_text_into_session(
                 return steer_result
             return resume_session_codex(session_id, text)
         return steer_result
+    if (
+        mode == "steer"
+        and not is_codex
+        and not is_cursor
+        and not is_hermes
+        and not has_tty
+    ):
+        # Claude headless steer. Without this, a turn wedged on a long-running
+        # tool child (a `while true` poll loop, a slow build) never reaches a
+        # turn boundary, so `_spawn_entry_active_tool_child` holds every queued
+        # inject indefinitely — the UI sits on "sending…" for hours with no
+        # failure to report, because nothing actually failed.
+        #
+        # The interrupt control request manufactures the missing boundary: it
+        # aborts the in-flight tool, ends the turn, and leaves the process alive
+        # to read the next stdin message (both verified against claude 2.1.216).
+        # Order matters — write the interrupt first, then the text, so Claude
+        # consumes the abort before it reads the follow-up as a fresh turn.
+        spawn = _find_live_spawn_entry_for_session(session_id)
+        if spawn is not None and (spawn.get("engine") or "claude") == "claude":
+            if _write_stream_json_interrupt(spawn):
+                delivered = _write_stream_json_user_message(spawn, text)
+                if delivered:
+                    return {
+                        "ok": True,
+                        "via": "claude-interrupt-steer",
+                        "pid": spawn.get("pid"),
+                    }
+                # Interrupt landed but the text did not. The turn is now ending
+                # anyway, so park the text for the drain loop rather than
+                # reporting a failure the user can't act on.
+                return _queue_terminal_input(session_id, text, status)
+        # No live CCC-owned spawn to interrupt (foreign writer, or the process
+        # is gone). Fall through to the normal send routing below — steering a
+        # session we don't own isn't possible, but delivering to it may be.
     if status.get("live") and has_tty:
         if not _from_terminal_queue and not answering_tty_question:
             busy_or_pending = (
