@@ -27222,7 +27222,7 @@
     };
     // CCC-182: "Needs you" section removed — waiting sessions now show a
     // blinking in-row marker and stay in their project group (no jumping).
-    const _openAskHtml = _renderActionSection(_openAskConvs, {
+    const _openAskHtml = getOpenAskPref() === 'hide' ? '' : _renderActionSection(_openAskConvs, {
       kind: 'openask', label: 'Open ask', collapseKey: 'ccc-openask-collapsed',
       hint: 'A session that ENDED while still waiting on your answer (last 48h). '
         + 'Open it and reply to pick the work back up.',
@@ -55523,6 +55523,14 @@
       if (typeof renderSidebar === 'function') renderSidebar(conversationsData);
     }
   }
+  function getOpenAskPref() {
+    try { return localStorage.getItem('ccc-view-open-ask') || 'show'; } catch (_) { return 'show'; }
+  }
+  function applyOpenAskPref() {
+    if (typeof conversationsData !== 'undefined' && typeof renderSidebar === 'function') {
+      renderSidebar(conversationsData);
+    }
+  }
   // Segmented-control + toggle state for the Appearance / Layout & View
   // sections of the settings modal. Also drives the Sessions & Spawning
   // "current engine" value span. Called on modal open and after every
@@ -55547,6 +55555,12 @@
     if ($ghToggle) {
       $ghToggle.classList.toggle('is-on', ghOn);
       $ghToggle.setAttribute('aria-checked', String(ghOn));
+    }
+    const openAskOn = getOpenAskPref() !== 'hide';
+    const $openAskToggle = document.getElementById('settingsOpenAskToggle');
+    if ($openAskToggle) {
+      $openAskToggle.classList.toggle('is-on', openAskOn);
+      $openAskToggle.setAttribute('aria-checked', String(openAskOn));
     }
     let lv = 'A';
     try { lv = localStorage.getItem('ccc-hero-live-variant') || 'A'; } catch (_) {}
@@ -55906,10 +55920,12 @@
   function settingsResetLayout() {
     try {
       localStorage.removeItem('ccc-view-gh');
+      localStorage.removeItem('ccc-view-open-ask');
       localStorage.removeItem('ccc-hero-live-variant');
       localStorage.removeItem('ccc-q-first');
     } catch (_) {}
     applyViewGh(getViewGhPref());
+    applyOpenAskPref();
     if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(false);
     refreshAppearanceChecks();
   }
@@ -56058,6 +56074,15 @@
         applyViewGh(next);
         refreshAppearanceChecks();
         showSettingsSavedPulse(viewGhToggle.closest('.settings-row'));
+        return;
+      }
+      const openAskToggle = e.target.closest('[data-view-openask-toggle]');
+      if (openAskToggle) {
+        const next = getOpenAskPref() === 'hide' ? 'show' : 'hide';
+        try { localStorage.setItem('ccc-view-open-ask', next); } catch (_) {}
+        applyOpenAskPref();
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(openAskToggle.closest('.settings-row'));
         return;
       }
       const liveVariantToggle = e.target.closest('[data-live-variant-toggle]');
