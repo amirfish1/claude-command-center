@@ -6885,6 +6885,13 @@ class TestRepoContextHelpers(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_inject_input_accepts_slash_prefixed_worker_identity(self):
+        """Codex worker ids such as /root can report completion to a parent."""
+        self.assertEqual(
+            self.server._normalize_announced_from({"announced_from": "/root"}),
+            ("/root", None),
+        )
+
     def test_inject_input_accepts_answer_mode(self):
         sid = "00000000-0000-4000-8000-000000000022"
         httpd = self.server.http.server.ThreadingHTTPServer(

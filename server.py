@@ -40787,7 +40787,7 @@ _RETURN_ADDRESS_RE = re.compile(
 _RETURN_ADDRESS_FOOTER_RE = re.compile(
     r"dispatched by another CCC session \(id `([A-Za-z0-9_.:-]{8,166})`\)"
 )
-_ANNOUNCED_FROM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. @:+/-]{0,79}$")
+_ANNOUNCED_FROM_RE = re.compile(r"^[A-Za-z0-9/][A-Za-z0-9_. @:+/-]{0,79}$")
 
 
 def _normalize_return_address(payload):
