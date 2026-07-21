@@ -31009,7 +31009,7 @@ def _start_resume_queue_watcher() -> None:
                             continue
                     if status.get("live") and not status.get("tty"):
                         spawn = _find_live_spawn_entry_for_session(sid)
-                        if spawn is not None and _spawn_entry_active_tool_child(spawn):
+                        if spawn is not None and _tool_child_blocks_inject(spawn):
                             continue
                         # Foreign live writer (not ours, no channel): hold the
                         # queue until that process exits — injecting now would
@@ -46532,13 +46532,24 @@ def _inject_text_into_session(
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
+    mode_value = str(mode or "").strip().lower()
+    mode = mode_value if mode_value in ("answer", "steer") else "send"
     if compact_command and not is_codex:
+        # Steered /compact: clear the wedge first, then compact. `mode` used to
+        # be parsed BELOW this early return, so a steered /compact silently
+        # dropped the steer and queued behind the very turn it was meant to
+        # interrupt — the case that stacked five /compact entries on one
+        # session. Compaction itself still goes through compact_session_context;
+        # only the interrupt is added, because "/compact" written to a FIFO as
+        # user text is prompt text, not a command.
+        if mode == "steer":
+            spawn = _find_live_spawn_entry_for_session(session_id)
+            if spawn is not None and (spawn.get("engine") or "claude") == "claude":
+                _write_stream_json_interrupt(spawn)
         return compact_session_context(
             session_id,
             _from_terminal_queue=_from_terminal_queue,
         )
-    mode_value = str(mode or "").strip().lower()
-    mode = mode_value if mode_value in ("answer", "steer") else "send"
     cwd = find_session_cwd(session_id)
     status = session_live_status(session_id, cwd)
     tty = status.get("tty")

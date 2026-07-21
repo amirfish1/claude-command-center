@@ -133,6 +133,28 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 - `hooks/` scripts run inside Claude Code's hook pipeline — they must exit fast and never prompt.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
 
+## Never block a turn on a polling loop
+
+Don't wait for something by holding a foreground Bash call open:
+
+```bash
+# WRONG — holds the turn open for hours
+while true; do wt ls -q QUEUE ...; sleep 120; done
+```
+
+A foreground tool child keeps the turn alive, and CCC treats a live turn as
+"input will land at the next boundary". A loop that polls for minutes or hours
+means that boundary never arrives, so every message queued to that session sits
+on "sending…" for as long as the loop runs. Three of these in one session held
+its queue for over four hours.
+
+Use `run_in_background: true`, or the `Monitor` tool, or just end the turn and
+check on the next one. If a loop genuinely must run in the foreground, bound it
+to minutes — never hours.
+
+(`_tool_child_blocks_inject` now force-delivers after 10 minutes, so this
+degrades instead of wedging. Don't rely on it: it's a backstop, not a licence.)
+
 ## Testing
 
 `tests/test_smoke.py` imports `server.py` and checks nothing explodes. CI is minimal by design. If you add a feature, a smoke-level assertion is nice-to-have but not required — the bar is "doesn't break the import."

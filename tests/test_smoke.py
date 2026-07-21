@@ -5081,6 +5081,56 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("Steer is only available for Codex and Kimi sessions.", app_js)
         self.assertIn("claudeSteerable", app_js)
 
+    def test_tool_child_stops_blocking_queued_input_after_cap(self):
+        """A tool child that outlives its turn must not hold queued input
+        forever — an agent-spawned poll loop once held one session's queue for
+        over four hours."""
+        server = importlib.import_module("server")
+        spawn = {"pid": 4242, "engine": "claude"}
+        original = server._spawn_entry_active_tool_child
+        try:
+            server._spawn_entry_active_tool_child = lambda entry: None
+            self.assertFalse(server._tool_child_blocks_inject(spawn))
+
+            now = 1_000_000.0
+            # Young child: still mid-turn, keep holding.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99, "command": "npm run build", "started_at": now - 30,
+            }
+            self.assertTrue(server._tool_child_blocks_inject(spawn, now=now))
+
+            # Past the cap: deliver rather than hold user text hostage.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99,
+                "command": "while true; do wt ls -q Q; sleep 120; done",
+                "started_at": now - (server._INJECT_TOOL_CHILD_MAX_HOLD_S + 1),
+            }
+            self.assertFalse(server._tool_child_blocks_inject(spawn, now=now))
+
+            # Unknown start time is not evidence of staleness — keep holding.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99, "command": "x", "started_at": None,
+            }
+            self.assertTrue(server._tool_child_blocks_inject(spawn, now=now))
+        finally:
+            server._spawn_entry_active_tool_child = original
+
+    def test_steered_compact_interrupts_before_compacting(self):
+        """`mode` must be parsed before the /compact early return, or a steered
+        /compact drops the steer and queues behind the turn it should abort."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        fn = server_py[server_py.index("def _inject_text_into_session("):]
+        fn = fn[:fn.index("\ndef ", 10)]
+        self.assertLess(
+            fn.index('mode = mode_value if mode_value in ("answer", "steer")'),
+            fn.index("if compact_command and not is_codex:"),
+        )
+        compact_branch = fn[fn.index("if compact_command and not is_codex:"):]
+        compact_branch = compact_branch[:compact_branch.index("compact_session_context(")]
+        self.assertIn("_write_stream_json_interrupt(spawn)", compact_branch)
+        # The drain loop must use the age-capped gate, not the raw one.
+        self.assertIn("_tool_child_blocks_inject(spawn)", server_py)
+
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers
         without exposing a brittle manual composer field."""
