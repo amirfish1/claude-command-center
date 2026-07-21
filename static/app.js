@@ -33243,6 +33243,9 @@
 
   let _uxqItemsCache = { ts: 0, items: [] };
   let _uxqItemsPromise = null;
+  // Every server-confirmed ticket mutation advances this version. A list read
+  // that began before that mutation is stale and must not overwrite its row.
+  let _uxqItemsVersion = 0;
   // Replaces the Play control while WatchTower starts a worker. The entry is
   // cleared only when a refreshed ticket leaves `open`, so dispatch latency is
   // visible instead of looking like a click was ignored.
@@ -33265,11 +33268,13 @@
     if (allowStale && _uxqItemsCache.ts) return _uxqItemsCache.items;
     if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
     if (_uxqItemsPromise) return _uxqItemsPromise;
+    const requestVersion = _uxqItemsVersion;
     _uxqItemsPromise = (async () => {
     try {
       const res = await fetch('/api/queue/list', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
+      if (requestVersion !== _uxqItemsVersion) return _uxqItemsCache.items;
       const now = Date.now();
       const refs = new Set(items.map(_uxqItemRef).filter(Boolean));
       // Establish the first fetched list as the baseline. Subsequent live
@@ -34175,6 +34180,7 @@
     if (index < 0) return false;
     const freshItems = items.slice();
     freshItems[index] = item;
+    _uxqItemsVersion += 1;
     _uxqItemsCache = { ts: Date.now(), items: freshItems };
     return true;
   }
@@ -34635,8 +34641,13 @@
           const d = await res.json().catch(() => ({}));
           if (res.ok && d.ok) {
             showOpToast('Ticket closed', 'success');
-            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
-            _renderQueuePanel(); close();
+            _uxqHealthCache.ts = 0;
+            if (_uxqReplaceCachedItem(d.item)) {
+              _renderQueuePanel({ allowStale: true }); close();
+            } else {
+              _uxqItemsCache.ts = 0;
+              _renderQueuePanel(); close();
+            }
           } else {
             showOpToast('Close failed: ' + (d.error || res.status), 'error');
             markClosedBtn.disabled = false;

@@ -1,0 +1,1 @@
+- Closing a queue ticket now updates its status immediately and ignores an older in-flight queue refresh.
