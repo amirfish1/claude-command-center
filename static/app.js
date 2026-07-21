@@ -33524,10 +33524,12 @@
       const detailHtml = escapeHtml(restDetail).replace(/\b([A-Z]+-\d+)\b/g, '<span class="wl-ref">$1</span>');
       rows.push(
         '<div class="wl-row ' + verbClass + '">'
+        + '<span class="wl-meta">'
         + '<span class="wl-ts" title="' + tsTip + '">' + escapeHtml(localTime) + '</span>'
         + '<span class="wl-queue" style="color:' + qColor + '">' + escapeHtml(queue) + '</span>'
         + '<span class="wl-ref-col">' + refHtml + '</span>'
         + '<span class="wl-verb">' + escapeHtml(verb) + '</span>'
+        + '</span>'
         + '<span class="wl-worker-col">' + workerHtml + '</span>'
         + '<span class="wl-detail">' + detailHtml + '</span>'
         + '</div>'

@@ -18074,16 +18074,18 @@ body:has(.gc-reader) .pwa-install-banner {
   overflow-y: auto;
   color: var(--text-muted);
 }
-.wl-row { display: flex; gap: 10px; align-items: baseline; padding: 1px 0; }
-.wl-ts { flex-shrink: 0; width: 66px; opacity: 0.45; cursor: default; white-space: nowrap; }
-.wl-queue { flex-shrink: 0; width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-/* Ticket ref column — pulled to the LEFT of the verb so the item ID reads
-   before the action taken on it. Empty for reconciler rows (worker ids). */
-.wl-ref-col { flex-shrink: 0; width: 124px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wl-verb { flex-shrink: 0; width: 80px; white-space: nowrap; }
-.wl-worker-col { flex-shrink: 0; width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-row { display: flex; gap: 10px; align-items: baseline; min-width: 0; padding: 1px 0; }
+/* Keep timestamp, queue, ticket, and verb in one compact metadata column.
+   Fixed-width standalone cells left a wide empty gutter before every detail. */
+.wl-meta { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: baseline; gap: 0 10px; min-width: 0; }
+.wl-ts { flex: 0 0 auto; opacity: 0.45; cursor: default; white-space: nowrap; }
+.wl-queue { flex: 0 1 auto; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+/* Ticket ref stays before the verb, but takes no space on reconciler rows. */
+.wl-ref-col { flex: 0 1 auto; max-width: 124px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-verb { flex: 0 0 auto; white-space: nowrap; }
+.wl-worker-col { flex: 0 1 96px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wl-worker-id { opacity: 0.6; font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
-.wl-detail { flex: 1; opacity: 0.82; word-break: break-word; }
+.wl-detail { flex: 1 1 260px; min-width: 0; opacity: 0.82; word-break: break-word; }
 .wl-worker .wl-verb { color: #3fb950; font-weight: 600; }
 .wl-reconciler .wl-verb { color: #d29922; font-weight: 600; }
 .wl-queue-action .wl-verb { color: #58a6ff; }
