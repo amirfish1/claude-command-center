@@ -4520,6 +4520,25 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_uxqPendingQueueAdds.delete(pendingId);", add_body)
         self.assertIn("await _renderQueuePanel();", add_body)
 
+    def test_queue_add_clears_obscuring_state_and_reveals_the_new_ticket(self):
+        """A successful Add must leave its canonical row visible in its own queue."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _uxqPrepareNewTicketView(item, fallbackProject)", app_js)
+        helper_start = app_js.index("function _uxqPrepareNewTicketView(item, fallbackProject)")
+        helper_end = app_js.index("async function _addQueueTicket()", helper_start)
+        helper = app_js[helper_start:helper_end]
+        add_start = helper_end
+        add_body = app_js[add_start:app_js.index("// ── Q-FIRST", add_start)]
+
+        self.assertIn("_uxqSetScopeOverride(project);", helper)
+        self.assertIn("_uxqSetFilter('open');", helper)
+        self.assertIn("_uxqSetTypeFilter('all');", helper)
+        self.assertIn("$qSearch.value = '';", helper)
+        self.assertIn("_uxqResetHistoryPage();", helper)
+        self.assertIn("row.scrollIntoView({ block: 'center' });", helper)
+        self.assertIn("_uxqPrepareNewTicketView(data.item, targetProj);", add_body)
+        self.assertIn("_uxqRevealNewTicket(ref);", add_body)
+
     def test_queue_manager_can_create_and_revise_full_watchtower_config(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

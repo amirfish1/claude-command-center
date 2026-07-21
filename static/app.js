@@ -35619,6 +35619,27 @@
 
   // Routes a ticket into the panel's current scope. The trigger is rendered
   // as the queue's last row, so it is delegated from #sidebarQueueList.
+  function _uxqPrepareNewTicketView(item, fallbackProject) {
+    // A successful add is navigation to the created work: use the ticket's
+    // actual queue, clear only view state that can hide it, and leave layout
+    // preferences (panel host, rail width, title wrapping) untouched.
+    const project = _uxqProjectKey((item && item.project) || fallbackProject);
+    if (project) _uxqSetScopeOverride(project);
+    // New tickets are open. This eliminates the All-history pager while
+    // retaining the Queue panel's normal operational view.
+    _uxqSetFilter('open');
+    _uxqSetTypeFilter('all');
+    const $qSearch = document.getElementById('queueSearchInput');
+    if ($qSearch) $qSearch.value = '';
+    _uxqResetHistoryPage();
+  }
+  function _uxqRevealNewTicket(ref) {
+    const row = Array.from(document.querySelectorAll('.fq-row[data-ref]'))
+      .find(el => el.getAttribute('data-ref') === ref);
+    if (row && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'center' });
+    }
+  }
   async function _addQueueTicket() {
     const note = await openQueueTicketComposer();
     if (!note) return;
@@ -35641,9 +35662,11 @@
         showOpToast('Added ' + ref + ' to queue');
         _uxqItemsCache.ts = 0;  // bust cache so the new row shows
         _uxqHealthCache.ts = 0;
+        _uxqPrepareNewTicketView(data.item, targetProj);
         await _renderQueuePanel();
         _uxqPendingQueueAdds.delete(pendingId);
-        _renderQueuePanel({ allowStale: true });
+        await _renderQueuePanel({ allowStale: true });
+        _uxqRevealNewTicket(ref);
       } else {
         _uxqPendingQueueAdds.delete(pendingId);
         _renderQueuePanel({ allowStale: true });

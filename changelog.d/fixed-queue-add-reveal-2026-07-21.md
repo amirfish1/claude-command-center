@@ -1,0 +1,1 @@
+- Queue Add now clears obscuring filters, selects the created ticket's queue, and brings the new highlighted row into view.
