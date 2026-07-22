@@ -5837,6 +5837,7 @@ _TRANSCRIPT_CONTROL_PREFIXES = (
     "<command-",
     "<local-command",
     "<bash-",
+    "<kimi-skill-loaded",
 )
 
 
@@ -19103,8 +19104,10 @@ def _tool_use_detail(name, tool_input, max_len=200):
     detail = (
         tool_input.get("file_path")
         or tool_input.get("pattern")
+        or tool_input.get("path")
         or tool_input.get("command", "")
         or tool_input.get("query", "")
+        or tool_input.get("url", "")
         or tool_input.get("prompt", "")
         or ""
     )
@@ -27788,7 +27791,9 @@ def _acp_handle_session_update(harness, sid, update):
         if replay is not None and kind in ("user_message_chunk", "agent_message_chunk"):
             speaker = "user" if kind == "user_message_chunk" else "assistant"
             if replay.get("kind") and replay["kind"] != speaker and replay.get("text"):
-                _acp_emit_event_unlocked(harness, sid, _acp_message_event(state, replay["kind"], replay["text"]))
+                ev = _acp_message_event(state, replay["kind"], replay["text"])
+                if ev is not None:
+                    _acp_emit_event_unlocked(harness, sid, ev)
                 replay["text"] = ""
             replay["kind"] = speaker
             replay["text"] = (replay.get("text") or "") + (chunk or "")
@@ -27816,12 +27821,25 @@ def _acp_handle_session_update(harness, sid, update):
         if kind == "tool_call":
             tool_id = str(update.get("toolCallId") or "")
             title = update.get("title") or update.get("kind") or "tool"
+            # rawInput arrives on the CREATE for non-streamed calls (never on
+            # the lazy create — docs/kimi-code-reference.md §vocabulary), so
+            # seed detail/input here too, not only on tool_call_update.
+            raw_input = update.get("rawInput")
+            detail = update.get("kind") or ""
+            if isinstance(raw_input, dict) and raw_input:
+                detail = _tool_use_detail(title, raw_input, max_len=160) or detail
+            diff = _acp_tool_content_diff(update)
             turn = state.get("active_turn")
             if turn is not None:
-                turn.setdefault("tools", {})[tool_id] = {
+                entry = {
                     "title": title, "status": update.get("status") or "running",
-                    "detail": update.get("kind") or "", "emitted": False,
+                    "detail": detail, "emitted": False,
                 }
+                if isinstance(raw_input, dict) and raw_input:
+                    entry["input"] = _tool_input_payload(raw_input)
+                if diff:
+                    entry["diff"] = diff
+                turn.setdefault("tools", {})[tool_id] = entry
             # Live bubble shows the call immediately; the finalized conv row
             # is deferred until rawInput arrives (rich detail) — see update.
             _acp_emit_delta_unlocked(harness, sid, {
@@ -27829,7 +27847,7 @@ def _acp_handle_session_update(harness, sid, update):
                 "message_id": (turn or {}).get("msg_id") or f"acp-{harness}-tool",
                 "blocks": [{
                     "type": "tool_use", "name": title, "id": tool_id,
-                    "summary": update.get("kind") or "",
+                    "summary": detail,
                 }],
             })
             return
@@ -27845,11 +27863,19 @@ def _acp_handle_session_update(harness, sid, update):
                     "title": "tool", "status": "running", "detail": "",
                     "emitted": False,
                 }
+            if update.get("title"):
+                # The started-upgrade replaces the lazy create's name-only
+                # title with the canonical one (description ?? name).
+                tool["title"] = update["title"]
             if update.get("status"):
                 tool["status"] = update["status"]
             raw_input = update.get("rawInput")
             if isinstance(raw_input, dict) and raw_input:
                 tool["detail"] = _tool_use_detail(tool.get("title") or "", raw_input, max_len=160)
+                tool["input"] = _tool_input_payload(raw_input)
+            diff = _acp_tool_content_diff(update)
+            if diff:
+                tool["diff"] = diff
             output_text = _acp_tool_content_text(update)
             if update.get("status") == "completed" and output_text:
                 tool["output"] = output_text[:400]
@@ -27938,6 +27964,23 @@ def _acp_tool_content_text(update):
     return text
 
 
+def _acp_tool_content_diff(update):
+    """First {type:'diff', path, oldText, newText} content block, if any.
+
+    Edit/Write calls carry these (see docs/kimi-code-reference.md §Content
+    shapes); kept in full so the client can render the diff."""
+    for c in update.get("content") or []:
+        if isinstance(c, dict) and c.get("type") == "diff":
+            old = c.get("oldText")
+            new = c.get("newText")
+            return {
+                "path": str(c.get("path") or ""),
+                "oldText": old if isinstance(old, str) else "",
+                "newText": new if isinstance(new, str) else "",
+            }
+    return None
+
+
 def _acp_tool_event(turn, tool_id, tool):
     """One finalized conv event per tool call, emitted once rawInput (or
     completion) gives us the real detail — never a kind-only placeholder."""
@@ -27952,6 +27995,11 @@ def _acp_tool_event(turn, tool_id, tool):
         block["tool_status"] = status
     if tool.get("output"):
         block["output_preview"] = tool["output"]
+    if tool.get("input"):
+        block["has_input"] = True
+        block["input"] = tool["input"]
+    if tool.get("diff"):
+        block["diff"] = tool["diff"]
     return {
         "type": "assistant",
         "message_id": (turn or {}).get("msg_id") or f"acp-tool-{tool_id}",
@@ -27975,7 +28023,26 @@ def _acp_permission_tool_detail(tool):
     return text[:200]
 
 
+_ACP_EMBEDDED_CONTROL_RE = re.compile(
+    r"<system-reminder>.*?</system-reminder>"
+    r"|<kimi-skill-loaded\b[^>]*>.*?</kimi-skill-loaded>",
+    re.DOTALL,
+)
+
+
 def _acp_message_event(state, speaker, text):
+    """Replayed user/assistant text → conv event. Control bookkeeping
+    (system-reminders, skill-load wrappers, command XML) is dropped like the
+    Claude transcript path; empty-after-filter messages return None."""
+    text = (text or "").strip()
+    if not text or _is_transcript_control_text(text):
+        return None
+    # Kimi ACP appends injected control XML to the user's real prose instead
+    # of delivering it as a standalone message — strip the embedded blocks,
+    # then re-check for control-only / empty text.
+    text = _ACP_EMBEDDED_CONTROL_RE.sub("", text).strip()
+    if not text or _is_transcript_control_text(text):
+        return None
     if speaker == "user":
         return {"type": "user_text", "text": text}
     return {
@@ -28336,7 +28403,9 @@ def _acp_load(harness, sid, cwd):
         state = _acp_session(harness, sid, create=True, cwd=cwd)
         replay = state.get("replay")
         if replay and replay.get("text"):
-            _acp_emit_event_unlocked(harness, sid, _acp_message_event(state, replay["kind"], replay["text"]))
+            ev = _acp_message_event(state, replay["kind"], replay["text"])
+            if ev is not None:
+                _acp_emit_event_unlocked(harness, sid, ev)
         state["replay"] = None
         if resp.get("ok"):
             state["attached"] = True
@@ -28581,6 +28650,10 @@ def _acp_wire_recent_texts(state, limit=_ACP_WIRE_DEDUP_WINDOW):
                     tid = str(b.get("id") or "")
                     if tid:
                         seen_tools.add(tid.rsplit(":", 1)[-1])
+        elif etype == "tool_result":
+            tid = str(ev.get("tool_use_id") or "")
+            if tid:
+                seen_tools.add(tid.rsplit(":", 1)[-1])
     return seen_user, seen_assistant, seen_tools
 
 
@@ -28593,6 +28666,50 @@ def _acp_wire_fold(harness, sid, events):
         if state.get("status") == "active" or state.get("replay") is not None:
             return
         seen_user, seen_assistant, seen_tools = _acp_wire_recent_texts(state)
+        # Pre-index this batch's tool results so a tool.call folded below can
+        # carry its output inline — call and result almost always land in the
+        # same tail batch. Leftover results emit standalone tool_result rows.
+        tool_results = {}
+        for ev in events:
+            if ev.get("type") != "context.append_loop_event":
+                continue
+            loop = ev.get("event") or {}
+            if loop.get("type") != "tool.result":
+                continue
+            rid = str(loop.get("toolCallId") or "")
+            if not rid:
+                continue
+            res = loop.get("result") or {}
+            out = res.get("output")
+            if isinstance(out, str):
+                out_text = out
+            elif isinstance(out, list):
+                out_text = "\n".join(
+                    str(p.get("text") or "") for p in out
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+            else:
+                out_text = ""
+            tool_results[rid] = (out_text.strip(), bool(res.get("isError")))
+
+        def _attach_result(rid, res):
+            """Best-effort in-place attach to an already-folded tool_use row
+            (covers results whose call landed in an earlier tail batch)."""
+            out_text, is_error = res
+            for ev in reversed(list(state.get("events") or [])[-200:]):
+                if ev.get("type") != "assistant":
+                    continue
+                for b in ev.get("blocks") or []:
+                    if b.get("kind") != "tool_use":
+                        continue
+                    bid = str(b.get("id") or "")
+                    if bid == rid or bid.rsplit(":", 1)[-1] == rid:
+                        if out_text:
+                            b["output_preview"] = out_text[:400]
+                        b["tool_status"] = "failed" if is_error else "completed"
+                        return True
+            return False
+
         for ev in events:
             etype = ev.get("type")
             if etype == "context.append_message":
@@ -28606,7 +28723,7 @@ def _acp_wire_fold(harness, sid, events):
                     str(b.get("text") or "") for b in (msg.get("content") or [])
                     if isinstance(b, dict) and b.get("type") == "text"
                 ).strip()
-                if not text or text.startswith("<system-reminder>"):
+                if not text or _is_transcript_control_text(text):
                     continue
                 norm = " ".join(text.split())
                 if norm in seen_user:
@@ -28642,6 +28759,9 @@ def _acp_wire_fold(harness, sid, events):
                 elif ltype == "tool.call":
                     raw_id = str(loop.get("toolCallId") or "")
                     if raw_id and raw_id in seen_tools:
+                        res = tool_results.pop(raw_id, None)
+                        if res is not None:
+                            _attach_result(raw_id, res)
                         continue
                     if raw_id:
                         seen_tools.add(raw_id)
@@ -28651,13 +28771,20 @@ def _acp_wire_fold(harness, sid, events):
                         _tool_use_detail(name, args, max_len=160)
                         if isinstance(args, dict) and args else ""
                     )
+                    block = {
+                        "kind": "tool_use", "name": name,
+                        "detail": detail, "id": raw_id,
+                    }
+                    res = tool_results.pop(raw_id, None)
+                    if res is not None:
+                        out_text, is_error = res
+                        if out_text:
+                            block["output_preview"] = out_text[:400]
+                        block["tool_status"] = "failed" if is_error else "completed"
                     _acp_emit_event_unlocked(harness, sid, {
                         "type": "assistant",
                         "message_id": f"acp-wire-{state['next_line']}",
-                        "blocks": [{
-                            "kind": "tool_use", "name": name,
-                            "detail": detail, "id": raw_id,
-                        }],
+                        "blocks": [block],
                     }, save=True)
                 elif ltype == "step.end":
                     finish = str(loop.get("finishReason") or "end_turn")
@@ -28674,6 +28801,20 @@ def _acp_wire_fold(harness, sid, events):
             # turn.prompt duplicates context.append_message(user); unknown and
             # observability records (llm.*, usage.record, config.update, …)
             # are skipped by design.
+        # Results whose call wasn't in this batch: attach to the already-folded
+        # row when possible, else emit a Claude-shaped standalone tool_result.
+        for rid, res in tool_results.items():
+            if rid in seen_tools:
+                _attach_result(rid, res)
+                continue
+            out_text, is_error = res
+            _acp_emit_event_unlocked(harness, sid, {
+                "type": "tool_result",
+                "text": out_text[:400],
+                "tool_use_id": rid,
+                "is_error": is_error,
+                "via": "wire-tail",
+            }, save=True)
 
 
 def _acp_wire_tail_loop():

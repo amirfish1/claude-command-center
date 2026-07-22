@@ -4612,7 +4612,9 @@
       el = document.createElement('div');
       el.className = 'conv-live-tool-inline optimistic';
     }
-    el.innerHTML = '<span class="cl-pulse"></span>'
+    // kimi panes: moon-phases spinner while waiting for the first delta
+    // (kimi-web MoonSpinner.vue) instead of the generic pulse dot.
+    el.innerHTML = (_viewIsKimiPane($view) ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
       + '<span class="cl-tool">Sending&hellip;</span>'
       + '<span class="cl-age">0s</span>';
     $view.appendChild(el);
@@ -34793,6 +34795,7 @@
     if (queuePanel) queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());
     _uxqRenderWrapToggle();
     return _fetchUxqItems(allowStale).then(async items => {
+      const renderVersion = _uxqItemsVersion;
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
       const allQueues = _uxqProjectKey(requestedProject) === 'ALL';
@@ -34808,6 +34811,7 @@
       // wrongly show on auto-drain queues too. _fetchUxqHealth has its own
       // 15s TTL cache, so this is normally a no-op await, not a fetch.
       await _fetchUxqHealth(allowStale);
+      if (renderVersion !== _uxqItemsVersion) return _renderQueuePanel({ allowStale: true });
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
       const typeScoped = _uxqFilterItems(inScope, _uxqGetFilter(), _uxqGetTypeFilter());
       // Free-text search over ref/note/text (CCC-432).
@@ -37422,6 +37426,7 @@
     if (paneId && (!pane || (convId && pane.conversationId !== convId))) return;
     const $view = paneId ? getConvViewForPane(paneId) : getConvView();
     const wasAtBottom = $view && isConversationAtBottom($view);
+    const _kimiStream = _viewIsKimiPane($view);
     for (const ev of events) {
       if (!ev || typeof ev !== 'object') continue;
       if (ev.type === 'result') {
@@ -37457,13 +37462,26 @@
           }
         } else if (b.type === 'tool_use') {
           const div = document.createElement('div');
-          div.className = 'stream-block-tool';
           div.dataset.renderTs = nowStamp();
-          const summary = b.summary ? ' - ' + b.summary : '';
-          const toolName = b.name === 'AskUserQuestion' ? 'Question' : (b.name || 'tool');
-          div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
-            + escapeHtml(toolName) + '</span>'
-            + '<span style="opacity:0.8;">' + escapeHtml(summary) + '</span>';
+          if (_kimiStream) {
+            // kimi panes: same ToolRow look as the finalized transcript —
+            // per-kind glyph, display name, muted summary, pulsing status dot.
+            div.className = 'stream-block-tool kimi-tool kimi-stream-tool';
+            const summary = b.summary ? String(b.summary) : '';
+            div.innerHTML = '<div class="kimi-tool-head">'
+              + '<span class="kimi-tool-glyph">' + _kimiToolGlyph(b.name) + '</span>'
+              + '<span class="kimi-tool-name">' + escapeHtml(b.name === 'AskUserQuestion' ? 'Question' : toolDisplayName(b.name || 'tool')) + '</span>'
+              + (summary ? '<span class="kimi-tool-arg" title="' + escapeAttr(summary) + '">' + escapeHtml(summary) + '</span>' : '')
+              + '<span class="kimi-tool-rt"><span class="kimi-tool-status running"><span class="kimi-pulse-dot"></span></span></span>'
+              + '</div>';
+          } else {
+            div.className = 'stream-block-tool';
+            const summary = b.summary ? ' - ' + b.summary : '';
+            const toolName = b.name === 'AskUserQuestion' ? 'Question' : (b.name || 'tool');
+            div.innerHTML = '<span>⚙</span> <span class="stream-tool-name">'
+              + escapeHtml(toolName) + '</span>'
+              + '<span style="opacity:0.8;">' + escapeHtml(summary) + '</span>';
+          }
           slot.appendChild(div);
           // If this is a Task tool_use from the master (no parent_tool_use_id
           // on the event), seed the subagent tab label so the tab gets a
@@ -37488,6 +37506,29 @@
             }
           }
         } else if (b.type === 'thinking') {
+          if (_kimiStream) {
+            // kimi ACP streams real thinking deltas: show a live window with
+            // the tail of the thinking text (kimi-web ThinkingBlock.vue,
+            // streaming state) — max-height 5 lines, pinned to the bottom.
+            // Append-or-merge like text blocks above.
+            const delta = String(b.text || b.thinking || '');
+            if (delta) {
+              let last = slot.lastElementChild;
+              let node;
+              if (last && last.classList.contains('stream-block-thinking')) {
+                node = last;
+                node.dataset.raw = (node.dataset.raw || '') + delta;
+              } else {
+                node = document.createElement('div');
+                node.className = 'stream-block-thinking';
+                node.dataset.renderTs = nowStamp();
+                node.dataset.raw = delta;
+                slot.appendChild(node);
+              }
+              node.textContent = node.dataset.raw;
+              node.scrollTop = node.scrollHeight;
+            }
+          }
           // Headless stream-json carries no thinking text (only a signature is
           // emitted post-turn) — so this would only ever render an empty
           // "🧠 thought" marker that appears after the fact with nothing behind
@@ -42941,13 +42982,407 @@
       .filter(e => e && String(e.content || '').trim())
       .map(e => {
         const status = String(e.status || 'pending').toLowerCase();
-        const glyph = status === 'completed' ? '✓' : (status === 'in_progress' ? '▶' : '○');
+        const glyph = status === 'completed' ? '✓' : (status === 'in_progress' ? '●' : '○');
         const cls = status === 'completed' ? ' is-done' : (status === 'in_progress' ? ' is-active' : '');
         return '<div class="plan-row' + cls + '"><span class="plan-glyph">' + glyph + '</span> '
           + escapeHtml(String(e.content)) + '</div>';
       });
     if (!rows.length) return '';
     return '<div class="stream-block-plan plan-card">' + rows.join('') + '</div>';
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Kimi-pane conversation rendering (kimi-web parity). Everything below is
+  // gated on `.conv-pane.is-kimi-session` / kimi panes; the Claude/Codex path
+  // is untouched. Kimi events arrive fragmented (one assistant event per tool
+  // call, one more for thinking+text), so consecutive assistant events are
+  // merged into ONE `.kimi-turn` container — mirroring kimi-web's
+  // messagesToTurns (user messages are the hard turn boundary).
+  // ────────────────────────────────────────────────────────────────────────
+
+  function _viewIsKimiPane($view) {
+    return !!($view && $view.closest && $view.closest('.conv-pane.is-kimi-session'));
+  }
+
+  // Defensive client-side strip of control XML wrappers that should never
+  // reach a bubble (the server filters these too; belt-and-suspenders for
+  // older transcripts). Returns the cleaned text; caller decides what to do
+  // when nothing is left.
+  function _stripKimiControlXml(text) {
+    let out = String(text || '');
+    if (out.indexOf('<') === -1) return out;
+    // Paired wrappers (attribute-tolerant), then unclosed-truncated tails.
+    out = out
+      .replace(/<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder\s*>/g, '')
+      .replace(/<kimi-skill-loaded\b[^>]*>[\s\S]*?<\/kimi-skill-loaded\s*>/g, '')
+      .replace(/<command-(name|message|args)\b[^>]*>[\s\S]*?<\/command-\1\s*>/g, '')
+      .replace(/<system-reminder\b[^>]*>[\s\S]*$/g, '')
+      .replace(/<kimi-skill-loaded\b[^>]*>[\s\S]*$/g, '')
+      .replace(/<\/?local-command-[a-z-]+\s*>/g, '');
+    return out;
+  }
+
+  // Fold real-world tool-name spellings into the canonical lowercase kind,
+  // mirroring kimi-web's normalizeToolName (lib/toolMeta.ts).
+  const _KIMI_TOOL_NAME_ALIASES = {
+    multiedit: 'multi_edit', shell: 'bash', run: 'bash', exec: 'bash', execute: 'bash',
+    ripgrep: 'grep', rg: 'grep', find: 'glob',
+    fetch: 'web_fetch', webfetch: 'web_fetch', url_fetch: 'web_fetch', urlfetch: 'web_fetch',
+    list: 'ls', listdir: 'ls', list_dir: 'ls',
+    todowrite: 'todo', todo_write: 'todo', todoread: 'todo', todolist: 'todo', todo_list: 'todo',
+    agent: 'task', subagent: 'task', websearch: 'search', web_search: 'search',
+  };
+  function _kimiNormToolName(name) {
+    const lower = String(name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return _KIMI_TOOL_NAME_ALIASES[lower] || lower;
+  }
+
+  // Simple 14px inline SVG glyphs (stroke: currentColor), one per tool kind,
+  // mirroring kimi-web's toolGlyph map (lib/toolMeta.ts + lib/icons.ts).
+  function _kimiSvg(inner) {
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+      + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + inner + '</svg>';
+  }
+  const _KIMI_GLYPHS = {
+    'file-text': _kimiSvg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>'),
+    'terminal': _kimiSvg('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
+    'pencil': _kimiSvg('<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>'),
+    'file-plus': _kimiSvg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>'),
+    'search': _kimiSvg('<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
+    'globe': _kimiSvg('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'),
+    'folder': _kimiSvg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'),
+    'check-list': _kimiSvg('<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'),
+    'sparkles': _kimiSvg('<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/>'),
+    'tool': _kimiSvg('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
+    'list': _kimiSvg('<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>'),
+    'chevron-right': _kimiSvg('<polyline points="9 18 15 12 9 6"/>'),
+    'check': _kimiSvg('<polyline points="20 6 9 17 4 12"/>'),
+    'close': _kimiSvg('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'),
+  };
+  const _KIMI_TOOL_GLYPH = {
+    read: 'file-text', bash: 'terminal', edit: 'pencil', multi_edit: 'pencil',
+    write: 'file-plus', grep: 'search', search: 'search', glob: 'search',
+    ls: 'folder', web_fetch: 'globe', todo: 'check-list', task: 'sparkles',
+  };
+  function _kimiToolGlyph(name) {
+    const key = _KIMI_TOOL_GLYPH[_kimiNormToolName(name)] || 'tool';
+    return _KIMI_GLYPHS[key] || _KIMI_GLYPHS['tool'];
+  }
+
+  // Muted 12px arg summary for a tool row header, mirroring kimi-web's
+  // toolSummary (Bash → command; Read/Write/Edit → path; Grep → pattern;
+  // Fetch → host). Accepts the block's `input` (object or JSON string) or
+  // `detail` (object or plain string).
+  function _kimiToolSummary(name, b) {
+    const clip = (s, max) => {
+      const t = String(s || '').trim();
+      return t.length > (max || 80) ? t.slice(0, (max || 80) - 1) + '…' : t;
+    };
+    try {
+      let d = null;
+      let raw = '';
+      const cand = (b && b.input != null) ? b.input : (b && b.detail != null ? b.detail : null);
+      if (cand && typeof cand === 'object') d = cand;
+      else if (typeof cand === 'string') {
+        raw = cand;
+        const s = cand.trim();
+        if (s.startsWith('{')) { try { const v = JSON.parse(s); if (v && typeof v === 'object' && !Array.isArray(v)) d = v; } catch (_) {} }
+      }
+      const str = v => (typeof v === 'string' && v ? v : undefined);
+      const num = v => (typeof v === 'number' && isFinite(v) ? v : undefined);
+      const filePath = dd => str(dd.path) || str(dd.file_path) || str(dd.filePath) || str(dd.filename);
+      const fallback = () => {
+        // The current wire projection stuffs the tool.call *kind* ("other",
+        // "execute") into `detail` when no real args were captured — that's
+        // noise, not a summary. Real input/detail arrives from the server.
+        const r = raw.replace(/^·\s*/, '').trim();
+        if (r && r !== 'other' && r !== 'execute') return clip(r);
+        return '';
+      };
+      if (!d) return fallback();
+      switch (_kimiNormToolName(name)) {
+        case 'read': {
+          const p = filePath(d);
+          if (!p) return fallback();
+          const start = num(d.offset) || num(d.line_start) || num(d.start_line);
+          const len = num(d.limit) || num(d.length);
+          const end = num(d.line_end) || num(d.end_line) || (start !== undefined && len !== undefined ? start + len : undefined);
+          if (start !== undefined && end !== undefined) return clip(p + ':' + start + '-' + end);
+          if (start !== undefined) return clip(p + ':' + start);
+          return clip(p);
+        }
+        case 'write': case 'edit': case 'multi_edit': {
+          const p = filePath(d);
+          return p ? clip(p) : fallback();
+        }
+        case 'bash': {
+          const cmd = str(d.command) || str(d.cmd) || str(d.script);
+          return cmd ? clip(cmd, 64) : fallback();
+        }
+        case 'grep': case 'search': {
+          const pattern = str(d.pattern) || str(d.query) || str(d.regex);
+          const p = str(d.path) || str(d.glob) || str(d.include);
+          if (pattern && p) return clip(pattern + '  in ' + p);
+          return pattern ? clip(pattern) : fallback();
+        }
+        case 'glob': {
+          const pattern = str(d.pattern) || str(d.glob) || str(d.query);
+          const p = str(d.path) || str(d.cwd);
+          if (pattern && p) return clip(pattern + '  in ' + p);
+          return pattern ? clip(pattern) : (str(d.path) ? clip(str(d.path)) : fallback());
+        }
+        case 'ls': {
+          const dir = str(d.path) || str(d.dir) || str(d.directory) || str(d.cwd);
+          return dir ? clip(dir) : fallback();
+        }
+        case 'web_fetch': {
+          const url = str(d.url) || str(d.uri);
+          if (!url) return fallback();
+          try {
+            const u = new URL(url);
+            const seg = u.pathname.split('/').filter(Boolean)[0];
+            return clip(seg ? u.host + '/' + seg : u.host);
+          } catch (_) { return clip(url.replace(/^https?:\/\//, '')); }
+        }
+        case 'todo': case 'task': {
+          const label = str(d.description) || str(d.title) || str(d.prompt) || str(d.name) || str(d.subagent_type);
+          if (label) return clip(label);
+          const items = Array.isArray(d.todos) ? d.todos : (Array.isArray(d.items) ? d.items : undefined);
+          if (items) return clip(items.length + ' todos');
+          return fallback();
+        }
+        default:
+          return fallback();
+      }
+    } catch (_) {
+      try { return String(formatToolCallDetail(name, b && b.detail).display || ''); } catch (__) { return ''; }
+    }
+  }
+
+  // Aggregate a tool block's status. kimi ACP blocks carry a terminal
+  // tool_status (completed/failed) once the result lands. CCC renders each
+  // JSONL line exactly once (dedupe by data-jsonl-line), so a block with NO
+  // explicit status would spin forever if treated as running — mirror
+  // kimi-web's flushGroup settle rule and render it ok. Only explicit
+  // in-flight values (or a pending permission prompt) pulse.
+  function _kimiToolStatusOf(b) {
+    const s = String((b && b.tool_status) || '').toLowerCase();
+    if (s === 'failed' || s === 'error') return 'error';
+    if (s === 'running' || s === 'in_progress' || s === 'pending') return 'running';
+    if (b && b.approval_required) return 'running';
+    return 'ok';
+  }
+
+  // Unified-ish diff rows from {path, oldText, newText} (removed lines then
+  // added lines — the simple LCS-free view kimi-web's buildDiffLines uses).
+  function _kimiDiffHtml(diff) {
+    if (!diff || typeof diff !== 'object') return '';
+    const oldText = typeof diff.oldText === 'string' ? diff.oldText : '';
+    const newText = typeof diff.newText === 'string' ? diff.newText : '';
+    if (!oldText && !newText) return '';
+    const rows = [];
+    if (oldText) {
+      for (const line of oldText.split('\n')) {
+        rows.push('<div class="kimi-diff-row del"><span class="kimi-diff-sign">-</span>'
+          + '<span class="kimi-diff-text">' + escapeHtml(line) + '</span></div>');
+      }
+    }
+    if (newText) {
+      for (const line of newText.split('\n')) {
+        rows.push('<div class="kimi-diff-row add"><span class="kimi-diff-sign">+</span>'
+          + '<span class="kimi-diff-text">' + escapeHtml(line) + '</span></div>');
+      }
+    }
+    if (!rows.length) return '';
+    return '<div class="kimi-diff">'
+      + (diff.path ? '<div class="kimi-diff-path">' + escapeHtml(String(diff.path)) + '</div>' : '')
+      + rows.join('') + '</div>';
+  }
+
+  // One kimi-web ToolRow: glyph + display name + muted arg summary + status
+  // indicator, with an expandable sunken body (diff → input/command → output
+  // preview). ACP permission buttons render inside the body and force it open.
+  function _kimiToolRowHtml(b) {
+    const status = _kimiToolStatusOf(b);
+    const baseName = toolDisplayName(b.name);
+    const displayName = baseName === 'AskUserQuestion' ? 'Question' : baseName;
+    const summary = _kimiToolSummary(b.name, b);
+    const toolUseId = String(b.id || b.tool_use_id || '').trim();
+    // ACP (kimi) permission requests carry their options on the block —
+    // same markup/contract as the shared renderer (delegated click handler
+    // POSTs /api/acp/approval), just nested in the row body.
+    const acpPermOpts = (b.approval_required && Array.isArray(b.acp_options) && b.acp_options.length)
+      ? '<div class="acp-perm-options">' + b.acp_options.map(function (o) {
+          const oid = String((o && (o.optionId || o.id)) || '');
+          const oname = String((o && (o.name || o.title || o.optionId || o.id)) || 'Choose');
+          return '<button type="button" class="acp-perm-opt"'
+            + ' data-acp-harness="' + escapeAttr(String(b.acp_harness || 'kimi')) + '"'
+            + ' data-acp-req="' + escapeAttr(String(b.acp_request_id)) + '"'
+            + ' data-acp-opt="' + escapeAttr(oid) + '"'
+            + ' title="Respond to this permission request">' + escapeHtml(oname) + '</button>';
+        }).join('') + '</div>'
+      : '';
+    const diffHtml = _kimiDiffHtml(b.diff);
+    const bodyParts = [];
+    if (diffHtml) bodyParts.push(diffHtml);
+    // Full input/command first, then the output preview.
+    let inputText = '';
+    if (b.input != null) inputText = typeof b.input === 'string' ? b.input : JSON.stringify(b.input, null, 2);
+    else if (b.detail != null && typeof b.detail === 'object') inputText = JSON.stringify(b.detail, null, 2);
+    else if (typeof b.detail === 'string') inputText = b.detail;
+    inputText = String(inputText || '').trim();
+    // The current wire projection stuffs the tool.call *kind* ("other",
+    // "execute") into `detail` when no real args were captured — drop it.
+    if (inputText === 'other' || inputText === 'execute') inputText = '';
+    const outputText = String(b.output_preview || '').trim();
+    if (inputText && !diffHtml) bodyParts.push('<pre class="kimi-tool-io">' + escapeHtml(inputText) + '</pre>');
+    if (outputText) bodyParts.push('<pre class="kimi-tool-io is-output">' + escapeHtml(outputText) + '</pre>');
+    if (acpPermOpts) bodyParts.push(acpPermOpts);
+    const expandable = bodyParts.length > 0;
+    const open = !!b.approval_required;
+    const statusHtml = status === 'ok'
+      ? '<span class="kimi-tool-status ok" role="status" aria-label="done">' + _KIMI_GLYPHS['check'] + '</span>'
+      : status === 'error'
+        ? '<span class="kimi-tool-status error" role="status" aria-label="failed">' + _KIMI_GLYPHS['close'] + '</span>'
+        : '<span class="kimi-tool-status running" role="status" aria-label="running"><span class="kimi-pulse-dot"></span></span>';
+    return '<div class="kimi-tool' + (status === 'error' ? ' err' : '') + (open ? ' open' : '')
+      + (b.approval_required ? ' acp-needs-approval' : '') + '"'
+      + (toolUseId ? ' data-tool-use-id="' + escapeAttr(toolUseId) + '"' : '') + '>'
+      + '<div class="kimi-tool-head"' + (expandable ? ' onclick="this.parentElement.classList.toggle(\'open\')"' : '') + '>'
+      + '<span class="kimi-tool-glyph">' + _kimiToolGlyph(b.name) + '</span>'
+      + '<span class="kimi-tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
+      + (summary ? '<span class="kimi-tool-arg" title="' + escapeAttr(summary) + '">' + escapeHtml(summary) + '</span>' : '')
+      + '<span class="kimi-tool-rt">' + statusHtml + '</span>'
+      + (expandable ? '<span class="kimi-tool-car">' + _KIMI_GLYPHS['chevron-right'] + '</span>' : '')
+      + '</div>'
+      + (expandable ? '<div class="kimi-tool-body"><div class="kimi-tool-body-pad">' + bodyParts.join('') + '</div></div>' : '')
+      + '</div>';
+  }
+
+  // Thinking block (kimi-web ThinkingBlock.vue): NO label header. Multi-
+  // paragraph thinking collapses to a teaser = the LAST paragraph (faint);
+  // clicking toggles the full text inline (kimi-web opens a side panel —
+  // inline toggle is the pragmatic equivalent here). Single-paragraph
+  // thinking has nothing to fold and renders straight.
+  function _kimiThinkingHtml(text) {
+    const full = String(text || '');
+    if (!full.trim()) return '';
+    const paragraphs = full.split(/\n{2,}/).filter(p => p.trim().length > 0);
+    if (paragraphs.length <= 1) {
+      return '<div class="kimi-thinking is-single"><pre class="kimi-thinking-full">' + escapeHtml(full) + '</pre></div>';
+    }
+    const teaser = paragraphs[paragraphs.length - 1];
+    return '<div class="kimi-thinking" onclick="this.classList.toggle(\'open\')" title="Click to show the full thinking">'
+      + '<pre class="kimi-thinking-teaser">' + escapeHtml(teaser) + '</pre>'
+      + '<pre class="kimi-thinking-full">' + escapeHtml(full) + '</pre>'
+      + '</div>';
+  }
+
+  // Rebuild the tool grouping inside one `.kimi-turn`: runs of >=2
+  // consecutive `.kimi-tool` rows fuse into ONE `.kimi-tool-group` card
+  // (kimi-web ToolGroup.vue); single tools stay standalone. Hidden marker
+  // divs (`.kimi-marker`, per-event dedupe anchors) are transparent — they
+  // neither join nor break a run. Collapse state survives a regroup via a
+  // data flag mirrored onto the rows.
+  function _kimiRegroupTools(turn) {
+    const collapsedBefore = [];
+    Array.from(turn.querySelectorAll(':scope > .kimi-tool-group')).forEach(g => {
+      if (g.classList.contains('collapsed')) collapsedBefore.push(g);
+      const body = g.querySelector('.kimi-tool-group-body');
+      while (body && body.firstElementChild) {
+        const row = body.firstElementChild;
+        if (g.classList.contains('collapsed')) row.dataset.kimiCollapsed = '1';
+        else delete row.dataset.kimiCollapsed;
+        g.parentNode.insertBefore(row, g);
+      }
+      g.remove();
+    });
+    let run = [];
+    const flush = () => {
+      if (run.length >= 2) {
+        const grp = document.createElement('div');
+        grp.className = 'kimi-tool-group';
+        if (run.every(r => r.dataset.kimiCollapsed === '1')) grp.classList.add('collapsed');
+        grp.innerHTML = '<div class="kimi-tool-group-head" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
+          + '<span class="kimi-tg-dot"></span>'
+          + '<span class="kimi-tg-ic">' + _KIMI_GLYPHS['list'] + '</span>'
+          + '<span class="kimi-tg-title"></span>'
+          + '<span class="kimi-tg-meta"></span>'
+          + '<span class="kimi-tg-car">' + _KIMI_GLYPHS['chevron-right'] + '</span>'
+          + '</div>'
+          + '<div class="kimi-tool-group-body"></div>';
+        const body = grp.querySelector('.kimi-tool-group-body');
+        turn.insertBefore(grp, run[0]);
+        for (const row of run) {
+          delete row.dataset.kimiCollapsed;
+          body.appendChild(row);
+        }
+        _kimiUpdateToolGroupHead(grp);
+      }
+      run = [];
+    };
+    for (const kid of Array.from(turn.children)) {
+      if (kid.classList.contains('kimi-tool')) { run.push(kid); continue; }
+      if (kid.classList.contains('kimi-marker')) continue;
+      flush();
+    }
+    flush();
+  }
+
+  // Aggregate status for a ToolGroup header (kimi-web ToolGroup.vue):
+  // any running → running; else any error → failed; else done.
+  function _kimiUpdateToolGroupHead(grp) {
+    const rows = Array.from(grp.querySelectorAll('.kimi-tool-group-body > .kimi-tool'));
+    const count = rows.length;
+    let state = 'done';
+    if (rows.some(r => r.querySelector('.kimi-tool-status.running'))) state = 'running';
+    else if (rows.some(r => r.querySelector('.kimi-tool-status.error'))) state = 'failed';
+    grp.dataset.kimiGroupState = state;
+    const title = grp.querySelector('.kimi-tg-title');
+    if (title) title.textContent = count + ' tool call' + (count === 1 ? '' : 's');
+    const meta = grp.querySelector('.kimi-tg-meta');
+    if (meta) meta.textContent = '· ' + state;
+  }
+
+  // Append one kimi assistant event into the conversation view: consecutive
+  // assistant events merge into the trailing `.kimi-turn` (any other node —
+  // user bubble, result footer, stream bubble — closes the turn). The event
+  // div itself stays as a hidden `.kimi-marker` so data-jsonl-line dedupe,
+  // the msg_id stream hand-off, and other .event lookups keep working.
+  function _kimiAppendAssistantEvent($view, marker, blockEls) {
+    // The open turn is the last non-stream-bubble child: the live
+    // `.stream-bubble` gets re-anchored to the tail after every render, so a
+    // naive lastElementChild check would start a fresh turn per poll batch
+    // while a stream is in flight. User/result events are real boundaries
+    // and stop the backward scan.
+    let turn = null;
+    for (let i = $view.children.length - 1; i >= 0; i--) {
+      const n = $view.children[i];
+      if (!n || !n.classList) break;
+      if (n.classList.contains('stream-bubble')) continue;
+      if (n.classList.contains('kimi-turn')) turn = n;
+      break;
+    }
+    if (!turn) {
+      turn = document.createElement('div');
+      turn.className = 'kimi-turn';
+      $view.appendChild(turn);
+    }
+    turn.appendChild(marker);
+    for (const el of blockEls) turn.appendChild(el);
+    _kimiRegroupTools(turn);
+    return turn;
+  }
+
+  // Moon-phases waiting spinner (kimi-web MoonSpinner.vue): cycles the 8 moon
+  // emoji at 120ms/frame, 18px — CSS-only, frames stacked with delayed
+  // opacity keyframes. Shown in kimi panes while waiting for the first delta.
+  function _kimiMoonHtml() {
+    const frames = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'];
+    return '<span class="kimi-moon" role="img" aria-label="Waiting for response…">'
+      + frames.map((f, i) => '<span style="--kmd:' + (i * 120) + 'ms" aria-hidden="true">' + f + '</span>').join('')
+      + '</span>';
   }
 
   function renderConversationEvents(events, paneId, opts) {
@@ -42964,6 +43399,10 @@
       pane.firstUserMsgRendered = true;
     }
     const $view = getConvViewForPane(paneId) || $conversationsView;
+    // Kimi panes render kimi-web style: merged turns, right-aligned user
+    // bubbles, ToolGroup cards. Gated here so the Claude/Codex path below
+    // stays byte-for-byte the shared renderer.
+    const _kimiPane = _viewIsKimiPane($view);
     // Stick-to-bottom only when the user is *already* near the bottom.
     // If they've scrolled up to read, leave the scroll position alone so
     // newly-streamed events don't yank them back down. 80px tolerance is
@@ -43472,6 +43911,14 @@
         if (_rawText && !String(cleanedText || '').trim()) {
           cleanedText = ev.text;
         }
+        // Kimi: defensively strip control-XML wrappers (system reminders,
+        // skill-loaded blocks, command envelopes) before they reach a
+        // bubble. A message that becomes empty keeps its (hidden) event div
+        // so data-jsonl-line dedupe still anchors it.
+        if (_kimiPane) {
+          cleanedText = _stripKimiControlXml(cleanedText);
+          if (!String(cleanedText || '').trim()) div.classList.add('kimi-xml-only');
+        }
         const bridgeSenderHtml = whatsappBridgeSenderHtml(ev);
         const notification = parseTaskNotificationBlock(cleanedText);
         if (notification) div.classList.add('task-notification-event');
@@ -43527,6 +43974,61 @@
           + userSteerHtml;
 
       } else if (ev.type === 'assistant') {
+        if (_kimiPane) {
+          // kimi-web turn rendering: consecutive assistant events merge into
+          // ONE `.kimi-turn`; blocks render in original order (thinking,
+          // text, plan, tool rows), tool runs of >=2 fuse into a ToolGroup
+          // card. The event div stays as a hidden `.kimi-marker` so
+          // data-jsonl-line dedupe + the msg_id stream hand-off keep working.
+          div.classList.add('kimi-marker');
+          const kimiBlockEls = [];
+          const kimiAnswerParts = [];
+          const kimiBlocks = Array.isArray(ev.blocks)
+            ? ev.blocks
+            : (String(ev.text || '').trim() ? [{ kind: 'text', text: String(ev.text || '') }] : []);
+          const _kimiHolder = document.createElement('div');
+          for (const b of kimiBlocks) {
+            if (!b || !b.kind) continue;
+            if (b.kind === 'tool_use') {
+              // Seed the subagent-tab label (same as the shared path).
+              if (b.name === 'Task' && b.id && $view) {
+                const _info = (b.detail && (b.detail.description || b.detail.prompt))
+                  || (typeof b.detail === 'string' ? b.detail : '');
+                _convPaneSeedTaskInfo($view, b.id, {
+                  description: typeof _info === 'string' ? _info : (_info && _info.description) || '',
+                  name: 'Task',
+                });
+              }
+              _kimiHolder.innerHTML = _kimiToolRowHtml(b);
+              if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
+            } else if (b.kind === 'text') {
+              const txt = _stripKimiControlXml(String(b.text || ''));
+              if (!txt.trim()) continue;
+              kimiAnswerParts.push(txt);
+              const t = document.createElement('div');
+              t.className = 'assistant-text';
+              t.dir = 'auto';
+              t.innerHTML = renderMarkdown(txt);
+              kimiBlockEls.push(t);
+            } else if (b.kind === 'thinking') {
+              if (b.signature_only || !b.text) continue;
+              // Thinking is NOT XML-stripped: the model quoting a wrapper
+              // while reasoning about it is legitimate content (kimi-web
+              // doesn't strip thinking either).
+              _kimiHolder.innerHTML = _kimiThinkingHtml(String(b.text));
+              if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
+            } else if (b.kind === 'plan') {
+              const planHtml = _planEntriesHtml(b.entries);
+              if (planHtml) {
+                _kimiHolder.innerHTML = planHtml;
+                if (_kimiHolder.firstElementChild) kimiBlockEls.push(_kimiHolder.firstElementChild);
+              }
+            }
+          }
+          div._agentAnswerText = kimiAnswerParts.join('\n\n').trim();
+          _kimiAppendAssistantEvent($view, div, kimiBlockEls);
+          continue;
+        }
         let html = assistantMessageActionsHtml(ev)
           + '<span class="line-num">L' + ev.line + '</span>'
           + tsSpan(ev.ts);
@@ -43775,7 +44277,9 @@
           const cost = typeof ev.cost_usd === 'number' ? '$' + ev.cost_usd.toFixed(4) : ev.cost_usd;
           statsHtml += '<span>Cost: ' + escapeHtml(String(cost)) + '</span>';
         }
-        statsHtml += '<span>Duration: ' + escapeHtml(String(dur)) + '</span>';
+        if (dur !== undefined && dur !== null && dur !== '') {
+          statsHtml += '<span>Duration: ' + escapeHtml(String(dur)) + '</span>';
+        }
         // A turn can end in error — most importantly a token/quota/subscription
         // limit. Don't mislabel that as "Done": say what actually happened so
         // the user knows it stopped because it's out of tokens, not because it
@@ -43793,6 +44297,10 @@
             + (_outcome.detail ? '<div class="result-error-detail">' + escapeHtml(_outcome.detail) + '</div>' : '')
             + '<div class="stats">' + statsHtml + '</div>';
         } else {
+          // kimi result events carry no duration/token stats — an empty
+          // "Done" footer is pure noise, so hide it (kimi-web only shows a
+          // muted footer when there's real meta to show).
+          if (_kimiPane && !statsHtml) div.classList.add('kimi-result-empty');
           div.innerHTML = '<span class="label">Done</span>'
             + '<button type="button" class="result-copy-agent-answer" data-copy-agent-answer title="Copy agent answer" aria-label="Copy agent answer">&#128203;</button>'
             + '<span class="line-num">L' + ev.line + '</span>'

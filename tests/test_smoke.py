@@ -16990,6 +16990,104 @@ class TestAcpKimiEngine(unittest.TestCase):
                        if any(b.get("kind") == "plan" for b in e.get("blocks", []))]
         self.assertEqual(len(plan_events), 2)
 
+    def test_acp_tool_detail_diff_and_wire_result(self):
+        """Kimi tool rows carry real detail (rawInput on the CREATE for
+        non-streamed calls), a full-input disclosure, diff blocks, and wire
+        tool.result output — plus replay control-text filtering."""
+        server = self.server
+        harness = self.FAKE_HARNESS
+        sid = "session_tooldetailtest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid, create=True, cwd="/tmp")
+            st["active_turn"] = {"msg_id": "m1", "text": "", "thought": ""}
+        # rawInput on the CREATE (non-streamed call) must seed the detail —
+        # previously it was ignored and the row froze at kind-only ("execute").
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "tool_call", "toolCallId": "1:t1",
+            "title": "Bash", "kind": "execute", "status": "in_progress",
+            "rawInput": {"command": "ls -la"}})
+        # Terminal update for a second call: kimi arg keys (path) + diff block.
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "tool_call_update", "toolCallId": "1:t2",
+            "title": "Edit", "status": "completed",
+            "rawInput": {"path": "/tmp/a.py", "oldText": "x", "newText": "y"},
+            "content": [
+                {"type": "diff", "path": "/tmp/a.py",
+                 "oldText": "old-full", "newText": "new-full"},
+                {"type": "content", "content": {"type": "text", "text": "done"}}]})
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid) or {}
+            events = list(st.get("events") or [])
+            t1 = (st.get("active_turn") or {}).get("tools", {}).get("1:t1") or {}
+        self.assertEqual(t1.get("detail"), "ls -la")
+        self.assertIn("ls -la", t1.get("input") or "")
+        tool_blocks = [b for e in events for b in e.get("blocks", [])
+                       if b.get("kind") == "tool_use"]
+        self.assertEqual(len(tool_blocks), 1)
+        block = tool_blocks[0]
+        self.assertEqual(block["detail"], "/tmp/a.py")
+        self.assertEqual(block["tool_status"], "completed")
+        self.assertEqual(block["output_preview"], "done")
+        self.assertTrue(block["has_input"])
+        self.assertIn("/tmp/a.py", block["input"])
+        self.assertEqual(block["diff"], {
+            "path": "/tmp/a.py", "oldText": "old-full", "newText": "new-full"})
+        # Replay control text is filtered like the Claude transcript path.
+        fake_state = {"sid": sid, "next_line": 1}
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "user",
+            '<kimi-skill-loaded name="x">BODY\nARGUMENTS: y</kimi-skill-loaded>'))
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "assistant", "<system-reminder>note</system-reminder>"))
+        self.assertIsNone(server._acp_message_event(fake_state, "user", "  "))
+        ev = server._acp_message_event(fake_state, "user", "hello")
+        self.assertEqual(ev, {"type": "user_text", "text": "hello"})
+        # Control XML embedded after real prose (Kimi ACP appends injected
+        # reminders to the user turn) is stripped, not leaked into the event.
+        ev = server._acp_message_event(
+            fake_state, "user",
+            "real question?<system-reminder>\nAuto permission mode…\n</system-reminder>")
+        self.assertEqual(ev, {"type": "user_text", "text": "real question?"})
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "user",
+            '<kimi-skill-loaded name="x">BODY</kimi-skill-loaded>'
+            "<system-reminder>note</system-reminder>"))
+        # Wire tool.result attaches to its call; orphans emit tool_result rows.
+        sid2 = "session_wireresulttest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid2, create=True, cwd="/tmp")
+            st["wire_watch"] = True
+        batch = [
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "w1", "name": "Bash",
+                "args": {"command": "make test"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "w1",
+                "result": {"output": "all ok", "isError": False}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "w-orphan",
+                "result": {"output": "boom", "isError": True}}},
+        ]
+        server._acp_wire_fold(harness, sid2, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid2) or {}).get("events") or [])
+        block = [b for e in events for b in e.get("blocks", [])
+                 if b.get("kind") == "tool_use"][0]
+        self.assertEqual(block["detail"], "make test")
+        self.assertEqual(block["output_preview"], "all ok")
+        self.assertEqual(block["tool_status"], "completed")
+        orphans = [e for e in events if e.get("type") == "tool_result"]
+        self.assertEqual(len(orphans), 1)
+        self.assertEqual(orphans[0]["tool_use_id"], "w-orphan")
+        self.assertEqual(orphans[0]["text"], "boom")
+        self.assertTrue(orphans[0]["is_error"])
+        # Re-folding the same batch must not duplicate the orphan row.
+        server._acp_wire_fold(harness, sid2, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid2) or {}).get("events") or [])
+        self.assertEqual(
+            len([e for e in events if e.get("type") == "tool_result"]), 1)
+
     def test_kimi_setup_status_and_verify(self):
         """'Add Kimi engine' guided flow: setup-status reports install state +
         version; verify proves it with one ACP session/new (WEBINAR-DEMO-23)."""
