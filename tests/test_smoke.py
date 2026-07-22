@@ -16900,7 +16900,9 @@ class TestAcpKimiEngine(unittest.TestCase):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
         self.assertIn('"/api/acp/approval"', server_py)
-        self.assertIn('if _is_kimi_session(session_id):\n        return _acp_prompt', server_py)
+        self.assertIn('if _is_kimi_session(session_id):\n        result = _acp_prompt', server_py)
+        self.assertIn('result.get("code") == "busy"', server_py)
+        self.assertIn('return _queue_terminal_input(session_id, text, {"status": "running"})', server_py)
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
 

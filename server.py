@@ -4701,6 +4701,11 @@ def _archive_session_is_live_uncached(session_id):
     """
     if not session_id:
         return False
+    # Kimi sessions share one ACP harness rather than owning a per-session
+    # process. As long as that harness is available, a Kimi session can receive
+    # queued input once its current turn becomes idle.
+    if _is_kimi_session(session_id):
+        return bool(_acp_resolve_bin("kimi").get("available"))
     is_non_claude_engine = (
         _is_codex_session(session_id)
         or _is_cursor_session(session_id)
@@ -29884,6 +29889,11 @@ def _session_status_is_busy(status):
     return (status.get("status") or "").lower() in _BUSY_SESSION_STATUSES
 
 
+def _terminal_queue_waits_for_active_acp(status):
+    """Keep FIFO input parked while an ACP turn is running."""
+    return status.get("kind") == "acp" and _session_status_is_busy(status)
+
+
 def _pending_question_option_matches_text(session_id, text):
     """True when text is exactly one of the current terminal question options."""
     clean = str(text or "").strip()
@@ -31153,6 +31163,8 @@ def _start_resume_queue_watcher() -> None:
                     # transcript scan here would deadlock forever.
                     status = session_live_status(sid, find_session_cwd(sid))
                     if _ask_question_blocking_inject(sid, status):
+                        continue
+                    if _terminal_queue_waits_for_active_acp(status):
                         continue
                     if status.get("live") and status.get("tty") and _session_status_is_busy(status):
                         continue
@@ -46922,7 +46934,14 @@ def _inject_text_into_session(
     if is_codex:
         return resume_session_codex(session_id, text)
     if _is_kimi_session(session_id):
-        return _acp_prompt("kimi", session_id, text, mode=mode)
+        result = _acp_prompt("kimi", session_id, text, mode=mode)
+        if (
+            result.get("code") == "busy"
+            and not _from_terminal_queue
+            and mode != "steer"
+        ):
+            return _queue_terminal_input(session_id, text, {"status": "running"})
+        return result
     if _is_gemini_session(session_id):
         return resume_session_gemini(session_id, text)
     if is_cursor:
