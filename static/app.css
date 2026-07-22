@@ -1555,11 +1555,11 @@
   .plan-row.is-done { color: var(--text-muted); text-decoration: line-through; }
   .plan-row.is-active .plan-glyph { color: var(--green); }
 
-  /* ── Kimi-web conversation parity, scoped to kimi panes ─────────────────
+  /* ── Web-UI conversation parity, scoped to webui panes (kimi + codex) ────
      Palette + layout mirror apps/kimi-web (ChatPane.vue dark theme, style.css
-     tokens). Everything is gated on .conv-pane.is-kimi-session so Claude /
-     Codex panes keep the shared styles. */
-  .conv-pane.is-kimi-session {
+     tokens). Everything is gated on .conv-pane.is-webui-session so Claude and
+     other engine panes keep the shared legacy styles. */
+  .conv-pane.is-webui-session {
     --kw-bg: #0d1117; --kw-surface: #161b22; --kw-raised: #1c2128; --kw-sunken: #0d1117;
     --kw-line: #2d333b; --kw-text: #c9cdd4; --kw-muted: #9aa0a8; --kw-faint: #6b7280;
     --kw-accent: #58a6ff; --kw-accent-hover: #79b8ff;
@@ -1570,44 +1570,44 @@
   }
 
   /* Reading column ~760px centered; chat padding 22px 20px 26px. */
-  .conv-pane.is-kimi-session .conversations-view { padding: 22px 20px 26px; }
-  .conv-pane.is-kimi-session .conversations-view > .kimi-turn,
-  .conv-pane.is-kimi-session .conversations-view > .event.user_text,
-  .conv-pane.is-kimi-session .conversations-view > .event.result,
-  .conv-pane.is-kimi-session .conversations-view > .stream-bubble,
-  .conv-pane.is-kimi-session .conversations-view > .conv-live-tool-inline {
+  .conv-pane.is-webui-session .conversations-view { padding: 22px 20px 26px; }
+  .conv-pane.is-webui-session .conversations-view > .kimi-turn,
+  .conv-pane.is-webui-session .conversations-view > .event.user_text,
+  .conv-pane.is-webui-session .conversations-view > .event.result,
+  .conv-pane.is-webui-session .conversations-view > .stream-bubble,
+  .conv-pane.is-webui-session .conversations-view > .conv-live-tool-inline {
     max-width: 760px; margin-left: auto; margin-right: auto;
   }
   /* Turn gaps: 16px before a user turn, 10px before an assistant turn. */
-  .conv-pane.is-kimi-session .conversations-view > .kimi-turn { margin-top: 10px; margin-bottom: 0; }
-  .conv-pane.is-kimi-session .conversations-view > .event.user_text { margin-top: 16px; margin-bottom: 0; }
-  .conv-pane.is-kimi-session .conversations-view > .event.result { margin-top: 10px; margin-bottom: 0; }
-  .conv-pane.is-kimi-session .conversations-view > .kimi-turn:first-child,
-  .conv-pane.is-kimi-session .conversations-view > .event.user_text:first-child,
-  .conv-pane.is-kimi-session .conversations-view > .event.result:first-child { margin-top: 0; }
+  .conv-pane.is-webui-session .conversations-view > .kimi-turn { margin-top: 10px; margin-bottom: 0; }
+  .conv-pane.is-webui-session .conversations-view > .event.user_text { margin-top: 16px; margin-bottom: 0; }
+  .conv-pane.is-webui-session .conversations-view > .event.result { margin-top: 10px; margin-bottom: 0; }
+  .conv-pane.is-webui-session .conversations-view > .kimi-turn:first-child,
+  .conv-pane.is-webui-session .conversations-view > .event.user_text:first-child,
+  .conv-pane.is-webui-session .conversations-view > .event.result:first-child { margin-top: 0; }
   /* Block gap inside a turn: 10px. */
-  .conv-pane.is-kimi-session .kimi-turn > * + * { margin-top: 10px; }
-  .conv-pane.is-kimi-session .kimi-turn { color: var(--kw-text); font-size: 15px; }
+  .conv-pane.is-webui-session .kimi-turn > * + * { margin-top: 10px; }
+  .conv-pane.is-webui-session .kimi-turn { color: var(--kw-text); font-size: 15px; }
   /* Per-event hidden dedupe markers (kimi turns merge events). */
-  .conv-pane.is-kimi-session .kimi-marker { display: none !important; }
+  .conv-pane.is-webui-session .kimi-marker { display: none !important; }
   /* Control-XML-only user messages render nothing (dedupe anchor only). */
-  .conv-pane.is-kimi-session .event.user_text.kimi-xml-only { display: none !important; }
+  .conv-pane.is-webui-session .event.user_text.kimi-xml-only { display: none !important; }
 
   /* User turn — right-aligned soft-blue bubble (kimi-web .u-bub). The event
      div is a full-width transparent flex container; the bubble carries the
      style. Must fully undo CCC's aurora .event.user_text bubble (fit-content
      width, gradient, border, glow). */
-  .conv-pane.is-kimi-session .event.user_text {
+  .conv-pane.is-webui-session .event.user_text {
     background: none; border: none; box-shadow: none;
     width: auto; max-width: 760px;
     padding: 0; border-radius: 0;
     display: flex; flex-direction: column; align-items: flex-end;
   }
-  .conv-pane.is-kimi-session .event.user_text .label,
-  .conv-pane.is-kimi-session .event.user_text .line-num,
-  .conv-pane.is-kimi-session .event.user_text .msg-ts,
-  .conv-pane.is-kimi-session .event.user_text .event-model-meta { display: none; }
-  .conv-pane.is-kimi-session .event.user_text .user-msg {
+  .conv-pane.is-webui-session .event.user_text .label,
+  .conv-pane.is-webui-session .event.user_text .line-num,
+  .conv-pane.is-webui-session .event.user_text .msg-ts,
+  .conv-pane.is-webui-session .event.user_text .event-model-meta { display: none; }
+  .conv-pane.is-webui-session .event.user_text .user-msg {
     align-self: flex-end;
     max-width: 78%;
     margin: 0;
@@ -1622,156 +1622,156 @@
     overflow-wrap: anywhere;
   }
   /* Pending / queued echo states keep readable without the green chrome. */
-  .conv-pane.is-kimi-session .event.user_text.pending,
-  .conv-pane.is-kimi-session .event.user_text.not-acknowledged { font-style: italic; }
+  .conv-pane.is-webui-session .event.user_text.pending,
+  .conv-pane.is-webui-session .event.user_text.not-acknowledged { font-style: italic; }
 
   /* Assistant text: plain left-aligned, no bubble/background/role label. */
-  .conv-pane.is-kimi-session .kimi-turn .assistant-text {
+  .conv-pane.is-webui-session .kimi-turn .assistant-text {
     font-size: 15px; line-height: 1.6; color: var(--kw-text); padding: 0;
   }
 
   /* Result footer — small muted line under the turn (kimi-web turn meta). */
-  .conv-pane.is-kimi-session .event.result {
+  .conv-pane.is-webui-session .event.result {
     background: none; border-left: none; padding: 0 4px; border-radius: 0;
     font-size: 12px; color: var(--kw-faint);
   }
-  .conv-pane.is-kimi-session .event.result .label,
-  .conv-pane.is-kimi-session .event.result .line-num,
-  .conv-pane.is-kimi-session .event.result .msg-ts { display: none; }
-  .conv-pane.is-kimi-session .event.result .stats { margin-top: 0; display: flex; gap: 16px; flex-wrap: wrap; }
-  .conv-pane.is-kimi-session .event.result .stats span { margin-right: 0; }
-  .conv-pane.is-kimi-session .event.result.result-error {
+  .conv-pane.is-webui-session .event.result .label,
+  .conv-pane.is-webui-session .event.result .line-num,
+  .conv-pane.is-webui-session .event.result .msg-ts { display: none; }
+  .conv-pane.is-webui-session .event.result .stats { margin-top: 0; display: flex; gap: 16px; flex-wrap: wrap; }
+  .conv-pane.is-webui-session .event.result .stats span { margin-right: 0; }
+  .conv-pane.is-webui-session .event.result.result-error {
     background: var(--kw-danger-soft); border-left: 3px solid var(--kw-danger);
     border-radius: 6px; padding: 7px 14px; color: var(--kw-text);
   }
-  .conv-pane.is-kimi-session .event.result.result-error .label { display: inline; color: var(--kw-danger); }
-  .conv-pane.is-kimi-session .event.result.kimi-result-empty { display: none; }
+  .conv-pane.is-webui-session .event.result.result-error .label { display: inline; color: var(--kw-danger); }
+  .conv-pane.is-webui-session .event.result.kimi-result-empty { display: none; }
 
   /* ── ToolGroup card (kimi-web ToolGroup.vue) ── */
-  .conv-pane.is-kimi-session .kimi-tool-group {
+  .conv-pane.is-webui-session .kimi-tool-group {
     background: var(--kw-surface); border: 1px solid var(--kw-line);
     border-radius: 8px; overflow: hidden;
   }
-  .conv-pane.is-kimi-session .kimi-tool-group-head {
+  .conv-pane.is-webui-session .kimi-tool-group-head {
     display: flex; align-items: center; gap: 8px;
     height: 32px; padding: 0 11px;
     font-size: 13px; color: var(--kw-muted);
     cursor: pointer; user-select: none;
   }
-  .conv-pane.is-kimi-session .kimi-tool-group-head:hover { background: var(--kw-sunken); color: var(--kw-text); }
-  .conv-pane.is-kimi-session .kimi-tg-ic { color: var(--kw-faint); flex: none; display: inline-flex; }
-  .conv-pane.is-kimi-session .kimi-tg-title { font-weight: 500; color: var(--kw-text); }
-  .conv-pane.is-kimi-session .kimi-tg-meta { color: var(--kw-faint); }
-  .conv-pane.is-kimi-session .kimi-tg-car {
+  .conv-pane.is-webui-session .kimi-tool-group-head:hover { background: var(--kw-sunken); color: var(--kw-text); }
+  .conv-pane.is-webui-session .kimi-tg-ic { color: var(--kw-faint); flex: none; display: inline-flex; }
+  .conv-pane.is-webui-session .kimi-tg-title { font-weight: 500; color: var(--kw-text); }
+  .conv-pane.is-webui-session .kimi-tg-meta { color: var(--kw-faint); }
+  .conv-pane.is-webui-session .kimi-tg-car {
     margin-left: auto; color: var(--kw-faint); flex: none; display: inline-flex;
     transition: transform 0.15s ease;
   }
-  .conv-pane.is-kimi-session .kimi-tool-group:not(.collapsed) .kimi-tg-car { transform: rotate(90deg); }
-  .conv-pane.is-kimi-session .kimi-tool-group.collapsed .kimi-tool-group-body { display: none; }
-  .conv-pane.is-kimi-session .kimi-tg-dot {
+  .conv-pane.is-webui-session .kimi-tool-group:not(.collapsed) .kimi-tg-car { transform: rotate(90deg); }
+  .conv-pane.is-webui-session .kimi-tool-group.collapsed .kimi-tool-group-body { display: none; }
+  .conv-pane.is-webui-session .kimi-tg-dot {
     width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--kw-faint);
   }
-  .conv-pane.is-kimi-session .kimi-tool-group[data-kimi-group-state="running"] .kimi-tg-dot {
+  .conv-pane.is-webui-session .kimi-tool-group[data-kimi-group-state="running"] .kimi-tg-dot {
     background: var(--kw-accent); animation: kimiPulse 1.2s ease-in-out infinite;
   }
-  .conv-pane.is-kimi-session .kimi-tool-group[data-kimi-group-state="failed"] .kimi-tg-dot { background: var(--kw-danger); }
-  .conv-pane.is-kimi-session .kimi-tool-group[data-kimi-group-state="done"] .kimi-tg-dot { background: var(--kw-success); }
+  .conv-pane.is-webui-session .kimi-tool-group[data-kimi-group-state="failed"] .kimi-tg-dot { background: var(--kw-danger); }
+  .conv-pane.is-webui-session .kimi-tool-group[data-kimi-group-state="done"] .kimi-tg-dot { background: var(--kw-success); }
   /* Rows inside a group: flat, separated by a top hairline only. */
-  .conv-pane.is-kimi-session .kimi-tool-group .kimi-tool { border: none; border-radius: 0; }
-  .conv-pane.is-kimi-session .kimi-tool-group .kimi-tool + .kimi-tool { border-top: 1px solid var(--kw-line); }
+  .conv-pane.is-webui-session .kimi-tool-group .kimi-tool { border: none; border-radius: 0; }
+  .conv-pane.is-webui-session .kimi-tool-group .kimi-tool + .kimi-tool { border-top: 1px solid var(--kw-line); }
 
   /* ── Tool rows (kimi-web ToolRow.vue) ── */
-  .conv-pane.is-kimi-session .kimi-tool {
+  .conv-pane.is-webui-session .kimi-tool {
     background: var(--kw-surface); border: 1px solid var(--kw-line);
     border-radius: 8px; overflow: hidden;
   }
-  .conv-pane.is-kimi-session .kimi-tool-head {
+  .conv-pane.is-webui-session .kimi-tool-head {
     display: flex; align-items: center; gap: 8px;
     min-height: 30px; padding: 0 11px;
     font-family: var(--font-mono, 'SF Mono', SFMono-Regular, Consolas, monospace);
     font-size: 13px; color: var(--kw-text);
   }
-  .conv-pane.is-kimi-session .kimi-tool-head[onclick] { cursor: pointer; }
-  .conv-pane.is-kimi-session .kimi-tool-head:hover,
-  .conv-pane.is-kimi-session .kimi-tool.open .kimi-tool-head { background: var(--kw-sunken); }
-  .conv-pane.is-kimi-session .kimi-tool.err .kimi-tool-head { background: rgba(248,81,73,0.06); }
-  .conv-pane.is-kimi-session .kimi-tool.err .kimi-tool-head:hover { background: rgba(248,81,73,0.1); }
-  .conv-pane.is-kimi-session .kimi-tool-glyph {
+  .conv-pane.is-webui-session .kimi-tool-head[onclick] { cursor: pointer; }
+  .conv-pane.is-webui-session .kimi-tool-head:hover,
+  .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-head { background: var(--kw-sunken); }
+  .conv-pane.is-webui-session .kimi-tool.err .kimi-tool-head { background: rgba(248,81,73,0.06); }
+  .conv-pane.is-webui-session .kimi-tool.err .kimi-tool-head:hover { background: rgba(248,81,73,0.1); }
+  .conv-pane.is-webui-session .kimi-tool-glyph {
     display: inline-flex; align-items: center; color: var(--kw-faint); flex: none;
   }
-  .conv-pane.is-kimi-session .kimi-tool-name { font-weight: 500; flex: none; }
-  .conv-pane.is-kimi-session .kimi-tool-arg {
+  .conv-pane.is-webui-session .kimi-tool-name { font-weight: 500; flex: none; }
+  .conv-pane.is-webui-session .kimi-tool-arg {
     color: var(--kw-muted); font-size: 12px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     flex: 1; min-width: 0;
   }
-  .conv-pane.is-kimi-session .kimi-tool-rt {
+  .conv-pane.is-webui-session .kimi-tool-rt {
     margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none;
   }
-  .conv-pane.is-kimi-session .kimi-tool-status { display: inline-flex; align-items: center; flex: none; }
-  .conv-pane.is-kimi-session .kimi-tool-status.ok { color: var(--kw-success); }
-  .conv-pane.is-kimi-session .kimi-tool-status.error { color: var(--kw-danger); }
-  .conv-pane.is-kimi-session .kimi-pulse-dot {
+  .conv-pane.is-webui-session .kimi-tool-status { display: inline-flex; align-items: center; flex: none; }
+  .conv-pane.is-webui-session .kimi-tool-status.ok { color: var(--kw-success); }
+  .conv-pane.is-webui-session .kimi-tool-status.error { color: var(--kw-danger); }
+  .conv-pane.is-webui-session .kimi-pulse-dot {
     width: 7px; height: 7px; border-radius: 50%;
     background: var(--kw-accent); display: inline-block;
     animation: kimiPulse 1.2s ease-in-out infinite;
   }
   @keyframes kimiPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-  .conv-pane.is-kimi-session .kimi-tool-car {
+  .conv-pane.is-webui-session .kimi-tool-car {
     flex: none; color: var(--kw-faint); display: inline-flex; transition: transform 0.15s ease;
   }
-  .conv-pane.is-kimi-session .kimi-tool.open .kimi-tool-car { transform: rotate(90deg); }
-  .conv-pane.is-kimi-session .kimi-tool-body { display: none; }
-  .conv-pane.is-kimi-session .kimi-tool.open .kimi-tool-body { display: block; }
-  .conv-pane.is-kimi-session .kimi-tool-body-pad {
+  .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-car { transform: rotate(90deg); }
+  .conv-pane.is-webui-session .kimi-tool-body { display: none; }
+  .conv-pane.is-webui-session .kimi-tool.open .kimi-tool-body { display: block; }
+  .conv-pane.is-webui-session .kimi-tool-body-pad {
     padding: 8px 12px 12px;
     background: var(--kw-sunken); border-top: 1px solid var(--kw-line);
     font-family: var(--font-mono, 'SF Mono', SFMono-Regular, Consolas, monospace);
     font-size: 13px; line-height: 1.65; color: var(--kw-text);
     white-space: pre-wrap; word-break: break-word;
   }
-  .conv-pane.is-kimi-session .kimi-tool-io { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
-  .conv-pane.is-kimi-session .kimi-tool-io.is-output { color: var(--kw-muted); margin-bottom: 0; }
-  .conv-pane.is-kimi-session .kimi-tool .acp-perm-options { display: flex; gap: 8px; flex-wrap: wrap; font-family: inherit; }
+  .conv-pane.is-webui-session .kimi-tool-io { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
+  .conv-pane.is-webui-session .kimi-tool-io.is-output { color: var(--kw-muted); margin-bottom: 0; }
+  .conv-pane.is-webui-session .kimi-tool .acp-perm-options { display: flex; gap: 8px; flex-wrap: wrap; font-family: inherit; }
 
   /* ── Edit diffs (kimi-web DiffLines.vue) ── */
-  .conv-pane.is-kimi-session .kimi-diff {
+  .conv-pane.is-webui-session .kimi-diff {
     font-family: var(--font-mono, 'SF Mono', SFMono-Regular, Consolas, monospace);
     font-size: 13px; line-height: 1.5; margin: 0 0 8px;
   }
-  .conv-pane.is-kimi-session .kimi-diff-path { color: var(--kw-muted); margin-bottom: 4px; }
-  .conv-pane.is-kimi-session .kimi-diff-row { display: flex; align-items: flex-start; white-space: pre-wrap; word-break: break-word; }
-  .conv-pane.is-kimi-session .kimi-diff-sign {
+  .conv-pane.is-webui-session .kimi-diff-path { color: var(--kw-muted); margin-bottom: 4px; }
+  .conv-pane.is-webui-session .kimi-diff-row { display: flex; align-items: flex-start; white-space: pre-wrap; word-break: break-word; }
+  .conv-pane.is-webui-session .kimi-diff-sign {
     flex: none; width: 16px; text-align: center; color: var(--kw-muted); user-select: none;
   }
-  .conv-pane.is-kimi-session .kimi-diff-row.add {
+  .conv-pane.is-webui-session .kimi-diff-row.add {
     background: var(--kw-success-soft); box-shadow: inset 2px 0 0 var(--kw-success);
   }
-  .conv-pane.is-kimi-session .kimi-diff-row.add .kimi-diff-sign { color: var(--kw-success); }
-  .conv-pane.is-kimi-session .kimi-diff-row.del {
+  .conv-pane.is-webui-session .kimi-diff-row.add .kimi-diff-sign { color: var(--kw-success); }
+  .conv-pane.is-webui-session .kimi-diff-row.del {
     background: var(--kw-danger-soft); box-shadow: inset 2px 0 0 var(--kw-danger);
   }
-  .conv-pane.is-kimi-session .kimi-diff-row.del .kimi-diff-sign { color: var(--kw-danger); }
+  .conv-pane.is-webui-session .kimi-diff-row.del .kimi-diff-sign { color: var(--kw-danger); }
 
   /* ── Thinking (kimi-web ThinkingBlock.vue): no label header; teaser = last
      paragraph (faint), click toggles the full text inline. ── */
-  .conv-pane.is-kimi-session .kimi-thinking .kimi-thinking-teaser,
-  .conv-pane.is-kimi-session .kimi-thinking .kimi-thinking-full {
+  .conv-pane.is-webui-session .kimi-thinking .kimi-thinking-teaser,
+  .conv-pane.is-webui-session .kimi-thinking .kimi-thinking-full {
     margin: 0; font-size: 14px; line-height: 1.7;
     white-space: pre-wrap; word-break: break-word;
   }
-  .conv-pane.is-kimi-session .kimi-thinking { cursor: pointer; }
-  .conv-pane.is-kimi-session .kimi-thinking.is-single { cursor: default; }
-  .conv-pane.is-kimi-session .kimi-thinking-teaser { color: var(--kw-faint); }
-  .conv-pane.is-kimi-session .kimi-thinking:hover .kimi-thinking-teaser { color: var(--kw-text); }
-  .conv-pane.is-kimi-session .kimi-thinking-full { display: none; color: var(--kw-muted); }
-  .conv-pane.is-kimi-session .kimi-thinking.open .kimi-thinking-teaser { display: none; }
-  .conv-pane.is-kimi-session .kimi-thinking.open .kimi-thinking-full,
-  .conv-pane.is-kimi-session .kimi-thinking.is-single .kimi-thinking-full { display: block; }
+  .conv-pane.is-webui-session .kimi-thinking { cursor: pointer; }
+  .conv-pane.is-webui-session .kimi-thinking.is-single { cursor: default; }
+  .conv-pane.is-webui-session .kimi-thinking-teaser { color: var(--kw-faint); }
+  .conv-pane.is-webui-session .kimi-thinking:hover .kimi-thinking-teaser { color: var(--kw-text); }
+  .conv-pane.is-webui-session .kimi-thinking-full { display: none; color: var(--kw-muted); }
+  .conv-pane.is-webui-session .kimi-thinking.open .kimi-thinking-teaser { display: none; }
+  .conv-pane.is-webui-session .kimi-thinking.open .kimi-thinking-full,
+  .conv-pane.is-webui-session .kimi-thinking.is-single .kimi-thinking-full { display: block; }
 
   /* Live thinking window in the stream bubble: tail of the text, 5 lines max,
      pinned to the bottom (JS keeps scrollTop at scrollHeight). */
-  .conv-pane.is-kimi-session .stream-block-thinking {
+  .conv-pane.is-webui-session .stream-block-thinking {
     margin: 0; font-size: 14px; line-height: 1.7; color: var(--kw-muted);
     font-style: normal; opacity: 1;
     white-space: pre-wrap; word-break: break-word;
@@ -1779,29 +1779,29 @@
   }
 
   /* ── Plan / TodoCard (kimi-web TodoCard.vue) ── */
-  .conv-pane.is-kimi-session .plan-card {
+  .conv-pane.is-webui-session .plan-card {
     border: none; background: none; padding: 0; margin: 0; max-width: none;
     font-size: 14px; display: flex; flex-direction: column; gap: 1px;
   }
-  .conv-pane.is-kimi-session .plan-row {
+  .conv-pane.is-webui-session .plan-row {
     display: flex; align-items: center; gap: 7px; padding: 4px 0; color: var(--kw-text);
   }
-  .conv-pane.is-kimi-session .plan-row .plan-glyph { width: auto; color: var(--kw-faint); flex: none; }
-  .conv-pane.is-kimi-session .plan-row.is-active { color: var(--kw-accent); font-weight: 500; }
-  .conv-pane.is-kimi-session .plan-row.is-active .plan-glyph { color: var(--kw-accent); }
-  .conv-pane.is-kimi-session .plan-row.is-done { color: var(--kw-faint); text-decoration: line-through; }
-  .conv-pane.is-kimi-session .plan-row.is-done .plan-glyph { color: var(--kw-success); text-decoration: none; }
+  .conv-pane.is-webui-session .plan-row .plan-glyph { width: auto; color: var(--kw-faint); flex: none; }
+  .conv-pane.is-webui-session .plan-row.is-active { color: var(--kw-accent); font-weight: 500; }
+  .conv-pane.is-webui-session .plan-row.is-active .plan-glyph { color: var(--kw-accent); }
+  .conv-pane.is-webui-session .plan-row.is-done { color: var(--kw-faint); text-decoration: line-through; }
+  .conv-pane.is-webui-session .plan-row.is-done .plan-glyph { color: var(--kw-success); text-decoration: none; }
 
-  /* Stream bubble in kimi panes: plain column, no bubble chrome. */
-  .conv-pane.is-kimi-session .stream-bubble {
+  /* Stream bubble in webui panes: plain column, no bubble chrome. */
+  .conv-pane.is-webui-session .stream-bubble {
     background: none; border: none; border-left: none; padding: 0; border-radius: 0;
   }
-  .conv-pane.is-kimi-session .stream-bubble-header { display: none; }
-  .conv-pane.is-kimi-session .stream-bubble .assistant-text {
+  .conv-pane.is-webui-session .stream-bubble-header { display: none; }
+  .conv-pane.is-webui-session .stream-bubble .assistant-text {
     font-size: 15px; line-height: 1.6; color: var(--kw-text); padding: 0;
   }
-  .conv-pane.is-kimi-session .stream-bubble-blocks { gap: 10px; }
-  .conv-pane.is-kimi-session .kimi-stream-tool { display: block; padding: 0; align-self: stretch; }
+  .conv-pane.is-webui-session .stream-bubble-blocks { gap: 10px; }
+  .conv-pane.is-webui-session .kimi-stream-tool { display: block; padding: 0; align-self: stretch; }
 
   /* Moon-phases waiting spinner (kimi-web MoonSpinner.vue): 8 frames, 120ms. */
   .kimi-moon {
@@ -1821,17 +1821,17 @@
 
   /* Tool-call group header: aggregate status color cue (legacy kimi branch of
      updateToolGroupLabel — unused by the kimi turn renderer, kept for the
-     shared "Ran N commands" groups if one ever lands in a kimi pane). */
-  .conv-pane.is-kimi-session .tool-call-group[data-kimi-group-state="error"] .tcg-label { color: var(--red, #f85149); }
-  .conv-pane.is-kimi-session .tool-call-group[data-kimi-group-state="running"] .tcg-label { color: var(--green); }
+     shared "Ran N commands" groups if one ever lands in a webui pane). */
+  .conv-pane.is-webui-session .tool-call-group[data-kimi-group-state="error"] .tcg-label { color: var(--red, #f85149); }
+  .conv-pane.is-webui-session .tool-call-group[data-kimi-group-state="running"] .tcg-label { color: var(--green); }
 
   /* "Hide tool calls" toggle covers kimi rows/groups too — but never hide a
      row carrying an ACP permission prompt (its buttons are the only way to
      answer). */
-  .conv-pane.is-kimi-session .conversations-view.hide-tools .kimi-turn > .kimi-tool,
-  .conv-pane.is-kimi-session .conversations-view.hide-tools .kimi-turn > .kimi-tool-group { display: none !important; }
-  .conv-pane.is-kimi-session .conversations-view.hide-tools .kimi-turn > .kimi-tool.acp-needs-approval,
-  .conv-pane.is-kimi-session .conversations-view.hide-tools .kimi-turn > .kimi-tool-group:has(.acp-needs-approval) { display: block !important; }
+  .conv-pane.is-webui-session .conversations-view.hide-tools .kimi-turn > .kimi-tool,
+  .conv-pane.is-webui-session .conversations-view.hide-tools .kimi-turn > .kimi-tool-group { display: none !important; }
+  .conv-pane.is-webui-session .conversations-view.hide-tools .kimi-turn > .kimi-tool.acp-needs-approval,
+  .conv-pane.is-webui-session .conversations-view.hide-tools .kimi-turn > .kimi-tool-group:has(.acp-needs-approval) { display: block !important; }
 
   /* Expanded composer (kimi-web maximize-input parity): Enter inserts
      newlines, Ctrl+Enter sends; collapses back after send/clear. */

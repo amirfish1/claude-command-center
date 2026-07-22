@@ -2977,10 +2977,12 @@
     const sid = st.sid;
     const ctx = Object.assign({}, st.ctx || {}, { text: f2ComposerText(paneId) });
     const launch = st.launch;
+    const subject = 'continue-' + String(sid).slice(0, 8);
+    const tempPid = 'tmp-f2-' + Date.now();
     try {
       const body = {
         prompt: f2RetrievalPrompt(ctx, st.gate),
-        name: 'continue-' + String(sid).slice(0, 8),
+        name: subject,
         engine: launch.engine,
         parent_session_id: sid,
       };
@@ -2992,6 +2994,20 @@
       if (cwd) { body.cwd = cwd; body.repo_path = cwd; }
       let endpoint = '/api/sessions/spawn';
       try { if (typeof spawnEndpointForEngine === 'function') endpoint = spawnEndpointForEngine(launch.engine); } catch (_) {}
+      // Continue New is a navigation action as well as a spawn. Use the
+      // ordinary pending-card handoff so this pane moves immediately, then
+      // lets the existing placeholder reconciliation bind the real session.
+      const source = (typeof spawnSourceForEngine === 'function')
+        ? spawnSourceForEngine(launch.engine) : launch.engine;
+      insertPendingSpawnCard(tempPid, subject, source, null, {
+        first_message: body.prompt,
+        repo_path: cwd || '',
+        folder_path: cwd || '',
+        spawn_cwd: cwd || '',
+        cwd: cwd || '',
+        session_cwd: cwd || '',
+        session_cwd_exists: !!cwd,
+      });
       const r = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2999,13 +3015,23 @@
       const d = await r.json().catch(() => ({}));
       if (r.ok && d.ok !== false && (d.session_id || d.spawn_id || d.pid)) {
         const newSid = d.session_id || '';
+        const spawnId = d.spawn_id || d.pid || '';
+        const placeholder = spawnId
+          ? adoptPendingSpawnPid(tempPid, spawnId, d.log, newSid)
+          : pendingSpawns.get(tempPid);
+        if (placeholder && newSid) placeholder.expected_session_id = newSid;
         f2RecordContinuationLineage(sid, newSid);
         if (typeof showOpToast === 'function') showOpToast('Continuing in a new session — it will pull only the slice it needs.', 'success');
         f2ClearComposer();
+        setTimeout(refreshConversationList, 600);
+        setTimeout(refreshConversationList, 1500);
+        setTimeout(refreshConversationList, 3000);
       } else {
+        _removePendingSpawnCard(tempPid);
         if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
       }
     } catch (e) {
+      _removePendingSpawnCard(tempPid);
       if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((e && e.message) || 'network'), 'error');
     } finally {
       if (btn) btn.disabled = false;
@@ -4614,7 +4640,7 @@
     }
     // kimi panes: moon-phases spinner while waiting for the first delta
     // (kimi-web MoonSpinner.vue) instead of the generic pulse dot.
-    el.innerHTML = (_viewIsKimiPane($view) ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
+    el.innerHTML = (_viewIsWebUiPane($view) ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
       + '<span class="cl-tool">Sending&hellip;</span>'
       + '<span class="cl-age">0s</span>';
     $view.appendChild(el);
@@ -32839,7 +32865,9 @@
       paneEl.classList.toggle('is-cursor-session', source === 'cursor');
       paneEl.classList.toggle('is-antigravity-session', source === 'antigravity');
       paneEl.classList.toggle('is-hermes-session', source === 'hermes');
-      paneEl.classList.toggle('is-kimi-session', source === 'kimi');
+      // Web-UI rendering mode (kimi-web parity conversation renderer):
+      // currently enabled for kimi + codex panes. Claude stays legacy.
+      paneEl.classList.toggle('is-webui-session', source === 'kimi' || source === 'codex');
     }
     const isPendingSpawn = !!(selectedConv && selectedConv.pending_spawn);
     if (source === 'backlog') {
@@ -37426,7 +37454,7 @@
     if (paneId && (!pane || (convId && pane.conversationId !== convId))) return;
     const $view = paneId ? getConvViewForPane(paneId) : getConvView();
     const wasAtBottom = $view && isConversationAtBottom($view);
-    const _kimiStream = _viewIsKimiPane($view);
+    const _kimiStream = _viewIsWebUiPane($view);
     for (const ev of events) {
       if (!ev || typeof ev !== 'object') continue;
       if (ev.type === 'result') {
@@ -37464,13 +37492,13 @@
           const div = document.createElement('div');
           div.dataset.renderTs = nowStamp();
           if (_kimiStream) {
-            // kimi panes: same ToolRow look as the finalized transcript —
+            // webui panes: same ToolRow look as the finalized transcript —
             // per-kind glyph, display name, muted summary, pulsing status dot.
             div.className = 'stream-block-tool kimi-tool kimi-stream-tool';
             const summary = b.summary ? String(b.summary) : '';
             div.innerHTML = '<div class="kimi-tool-head">'
               + '<span class="kimi-tool-glyph">' + _kimiToolGlyph(b.name) + '</span>'
-              + '<span class="kimi-tool-name">' + escapeHtml(b.name === 'AskUserQuestion' ? 'Question' : toolDisplayName(b.name || 'tool')) + '</span>'
+              + '<span class="kimi-tool-name">' + escapeHtml(b.name === 'AskUserQuestion' ? 'Question' : _webuiToolDisplayName(b.name || 'tool')) + '</span>'
               + (summary ? '<span class="kimi-tool-arg" title="' + escapeAttr(summary) + '">' + escapeHtml(summary) + '</span>' : '')
               + '<span class="kimi-tool-rt"><span class="kimi-tool-status running"><span class="kimi-pulse-dot"></span></span></span>'
               + '</div>';
@@ -41120,10 +41148,10 @@
     const codeReads = Number(group.dataset.codeReadCount || 0);
     const calls = Array.from(group.querySelectorAll('.tool-call'));
     const resultEl = group.querySelector('.tcg-result');
-    // Kimi-web parity (KIMI-FIXES-16): kimi panes get the ToolGroup.vue
+    // Kimi-web parity (KIMI-FIXES-16): webui panes get the ToolGroup.vue
     // header shape — "N tool calls · <aggregate status>" — instead of the
     // command-summary sentence. Aggregate from per-row terminal classes.
-    if (count >= 1 && group.closest('.conv-pane.is-kimi-session')) {
+    if (count >= 1 && group.closest('.conv-pane.is-webui-session')) {
       let state = 'done';
       if (calls.some(tc => tc.classList.contains('tool-call-fail'))) state = 'error';
       else if (calls.some(tc => !tc.classList.contains('tool-call-ok'))) state = 'running';
@@ -42992,16 +43020,17 @@
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  // Kimi-pane conversation rendering (kimi-web parity). Everything below is
-  // gated on `.conv-pane.is-kimi-session` / kimi panes; the Claude/Codex path
-  // is untouched. Kimi events arrive fragmented (one assistant event per tool
-  // call, one more for thinking+text), so consecutive assistant events are
-  // merged into ONE `.kimi-turn` container — mirroring kimi-web's
-  // messagesToTurns (user messages are the hard turn boundary).
+  // Web-UI pane conversation rendering (kimi-web parity). Everything below is
+  // gated on `.conv-pane.is-webui-session` — set for kimi + codex panes; the
+  // Claude path (and other engines) stay on the shared legacy renderer.
+  // Webui events arrive fragmented (one assistant event per tool call, one
+  // more for thinking+text), so consecutive assistant events are merged into
+  // ONE `.kimi-turn` container — mirroring kimi-web's messagesToTurns (user
+  // messages are the hard turn boundary).
   // ────────────────────────────────────────────────────────────────────────
 
-  function _viewIsKimiPane($view) {
-    return !!($view && $view.closest && $view.closest('.conv-pane.is-kimi-session'));
+  function _viewIsWebUiPane($view) {
+    return !!($view && $view.closest && $view.closest('.conv-pane.is-webui-session'));
   }
 
   // Defensive client-side strip of control XML wrappers that should never
@@ -43023,7 +43052,9 @@
   }
 
   // Fold real-world tool-name spellings into the canonical lowercase kind,
-  // mirroring kimi-web's normalizeToolName (lib/toolMeta.ts).
+  // mirroring kimi-web's normalizeToolName (lib/toolMeta.ts). The second
+  // line folds Codex's item names (exec_command / apply_patch / …) onto the
+  // same kinds so glyphs + summaries work unchanged in codex panes.
   const _KIMI_TOOL_NAME_ALIASES = {
     multiedit: 'multi_edit', shell: 'bash', run: 'bash', exec: 'bash', execute: 'bash',
     ripgrep: 'grep', rg: 'grep', find: 'glob',
@@ -43031,10 +43062,25 @@
     list: 'ls', listdir: 'ls', list_dir: 'ls',
     todowrite: 'todo', todo_write: 'todo', todoread: 'todo', todolist: 'todo', todo_list: 'todo',
     agent: 'task', subagent: 'task', websearch: 'search', web_search: 'search',
+    exec_command: 'bash', write_stdin: 'bash', apply_patch: 'edit',
+    update_plan: 'todo', view_image: 'read', view_file: 'read',
   };
   function _kimiNormToolName(name) {
     const lower = String(name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
     return _KIMI_TOOL_NAME_ALIASES[lower] || lower;
+  }
+
+  // Pretty display names for codex-style snake_case tool names — kimi tool
+  // names already arrive display-ready ("Bash", "Read"), so only names that
+  // toolDisplayName would pass through verbatim get mapped here.
+  const _WEBUI_TOOL_DISPLAY_NAMES = {
+    exec_command: 'Shell', shell: 'Shell', write_stdin: 'Stdin',
+    apply_patch: 'Apply patch', update_plan: 'Update plan',
+    view_image: 'View image', view_file: 'View file',
+  };
+  function _webuiToolDisplayName(rawName) {
+    return _WEBUI_TOOL_DISPLAY_NAMES[String(rawName || '').trim().toLowerCase()]
+      || toolDisplayName(rawName);
   }
 
   // Simple 14px inline SVG glyphs (stroke: currentColor), one per tool kind,
@@ -43096,8 +43142,14 @@
         // The current wire projection stuffs the tool.call *kind* ("other",
         // "execute") into `detail` when no real args were captured — that's
         // noise, not a summary. Real input/detail arrives from the server.
+        // Same for codex custom tools whose detail degrades to the tool's
+        // own name ("apply_patch" on an Apply patch row).
         const r = raw.replace(/^·\s*/, '').trim();
-        if (r && r !== 'other' && r !== 'execute') return clip(r);
+        const selfName = String(name || '').trim().toLowerCase();
+        if (r && r !== 'other' && r !== 'execute' && r.toLowerCase() !== selfName) return clip(r);
+        // Codex tool_use blocks carry the raw (redacted) shell command on
+        // `command` even when no structured args made it into detail.
+        if (b && typeof b.command === 'string' && b.command.trim()) return clip(b.command, 64);
         return '';
       };
       if (!d) return fallback();
@@ -43205,7 +43257,7 @@
   // preview). ACP permission buttons render inside the body and force it open.
   function _kimiToolRowHtml(b) {
     const status = _kimiToolStatusOf(b);
-    const baseName = toolDisplayName(b.name);
+    const baseName = _webuiToolDisplayName(b.name);
     const displayName = baseName === 'AskUserQuestion' ? 'Question' : baseName;
     const summary = _kimiToolSummary(b.name, b);
     const toolUseId = String(b.id || b.tool_use_id || '').trim();
@@ -43235,6 +43287,9 @@
     // The current wire projection stuffs the tool.call *kind* ("other",
     // "execute") into `detail` when no real args were captured — drop it.
     if (inputText === 'other' || inputText === 'execute') inputText = '';
+    // Codex blocks carry the full redacted shell command on `command`; it
+    // beats the one-line activity label `detail` as the expandable body.
+    if (typeof b.command === 'string' && b.command.trim()) inputText = b.command.trim();
     const outputText = String(b.output_preview || '').trim();
     if (inputText && !diffHtml) bodyParts.push('<pre class="kimi-tool-io">' + escapeHtml(inputText) + '</pre>');
     if (outputText) bodyParts.push('<pre class="kimi-tool-io is-output">' + escapeHtml(outputText) + '</pre>');
@@ -43399,10 +43454,10 @@
       pane.firstUserMsgRendered = true;
     }
     const $view = getConvViewForPane(paneId) || $conversationsView;
-    // Kimi panes render kimi-web style: merged turns, right-aligned user
-    // bubbles, ToolGroup cards. Gated here so the Claude/Codex path below
-    // stays byte-for-byte the shared renderer.
-    const _kimiPane = _viewIsKimiPane($view);
+    // Webui panes (kimi + codex) render kimi-web style: merged turns,
+    // right-aligned user bubbles, ToolGroup cards. Gated here so the Claude
+    // path below stays byte-for-byte the shared legacy renderer.
+    const _kimiPane = _viewIsWebUiPane($view);
     // Stick-to-bottom only when the user is *already* near the bottom.
     // If they've scrolled up to read, leave the scroll position alone so
     // newly-streamed events don't yank them back down. 80px tolerance is
@@ -44027,6 +44082,9 @@
           }
           div._agentAnswerText = kimiAnswerParts.join('\n\n').trim();
           _kimiAppendAssistantEvent($view, div, kimiBlockEls);
+          // Codex mode-3 presentation artifacts attach to the assistant
+          // event — the shared tail below is skipped by this branch.
+          attachPresentationArtifactToAssistant($view, div, ev, renderedConversationId);
           continue;
         }
         let html = assistantMessageActionsHtml(ev)
@@ -44317,13 +44375,58 @@
             _convPaneMarkTaskCompleted($view, ev.tool_use_id);
           }
         }
-        // Inline the result text under the most recent tool_call in the
-        // current group. If we can't find one, drop the marker silently —
-        // empty .event.tool_result rows are hidden by CSS anyway.
         const text = eventTextString(ev.text).trim();
         const _answerConfirm = /^User answered the question/.test(text);
         const _isErr = !!ev.is_error && !_answerConfirm;
         const shouldRenderResult = !!text || _isErr;
+        if (_kimiPane) {
+          // Webui panes: fold the result into the matching `.kimi-tool` row
+          // (codex emits tool_result as a separate event keyed by call_id;
+          // kimi rows usually carry output_preview from the server already,
+          // in which case this is a no-op). The event div stays unappended —
+          // empty .event.tool_result rows are hidden by CSS anyway.
+          if (shouldRenderResult && ev.tool_use_id) {
+            const escId = (window.CSS && CSS.escape) ? CSS.escape(String(ev.tool_use_id)) : String(ev.tool_use_id);
+            const row = $view.querySelector('.kimi-tool[data-tool-use-id="' + escId + '"]');
+            if (row && !row.querySelector('.kimi-tool-io.is-output')) {
+              let body = row.querySelector('.kimi-tool-body');
+              if (!body) {
+                const head = row.querySelector('.kimi-tool-head');
+                if (head && !head.getAttribute('onclick')) {
+                  head.setAttribute('onclick', "this.parentElement.classList.toggle('open')");
+                  const car = document.createElement('span');
+                  car.className = 'kimi-tool-car';
+                  car.innerHTML = _KIMI_GLYPHS['chevron-right'];
+                  head.appendChild(car);
+                }
+                body = document.createElement('div');
+                body.className = 'kimi-tool-body';
+                body.innerHTML = '<div class="kimi-tool-body-pad"></div>';
+                row.appendChild(body);
+              }
+              const pad = body.querySelector('.kimi-tool-body-pad') || body;
+              const out = document.createElement('pre');
+              out.className = 'kimi-tool-io is-output';
+              out.textContent = text || 'No error details returned.';
+              pad.appendChild(out);
+              if (_isErr) {
+                row.classList.add('err');
+                const st = row.querySelector('.kimi-tool-status');
+                if (st) {
+                  st.className = 'kimi-tool-status error';
+                  st.setAttribute('aria-label', 'failed');
+                  st.innerHTML = _KIMI_GLYPHS['close'];
+                }
+              }
+              const grp = row.parentElement && row.parentElement.closest('.kimi-tool-group');
+              if (grp) _kimiUpdateToolGroupHead(grp);
+            }
+          }
+          continue;
+        }
+        // Inline the result text under the most recent tool_call in the
+        // current group. If we can't find one, drop the marker silently —
+        // empty .event.tool_result rows are hidden by CSS anyway.
         if (shouldRenderResult && _currentToolGroup) {
           const last = toolCallForResult(_currentToolGroup, ev.tool_use_id || '');
           if (last && !last.querySelector('.tool-result-output, .tool-result-code-preview')) {

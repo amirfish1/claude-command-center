@@ -4158,6 +4158,10 @@ def _build_engine_model_catalog(force_refresh=False):
             for engine, bucket in catalog.items()
         },
         "enforced": [],
+        # Kimi thinking-effort picker metadata (from kimi's config.toml
+        # support_efforts / [thinking] effort). The new-session input bar
+        # builds its effort select from this when engine=kimi.
+        "kimi_thinking": _kimi_thinking_config(),
     }
     _MODEL_CATALOG_CACHE["ts"] = now
     _MODEL_CATALOG_CACHE["data"] = copy.deepcopy(payload)
@@ -4360,6 +4364,70 @@ def _spawn_request_reasoning_effort(payload, engine):
         value = defaults.get("reasoning_effort") or ""
     value = str(value or "").strip().lower()
     return value if value in CODEX_REASONING_EFFORTS else ""
+
+
+# Canonical effort ladder, cheap→expensive. Kimi model configs declare their
+# own subsets via support_efforts; ordering here is the display/union order.
+_KIMI_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+
+
+def _kimi_thinking_config():
+    """{"efforts": [...], "default": str} from kimi's config.toml.
+
+    efforts = ordered union of every [models."<alias>"] support_efforts
+    list; default = [thinking] effort (the CLI's global default). Both empty
+    when the config is unreadable or tomllib is unavailable — callers then
+    treat any ladder value as acceptable and show the static list."""
+    out = {"efforts": [], "default": ""}
+    if tomllib is None:
+        return out
+    try:
+        raw = (_kimi_code_home() / "config.toml").read_text(encoding="utf-8")
+    except OSError:
+        return out
+    try:
+        data = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError:
+        return out
+    if not isinstance(data, dict):
+        return out
+    thinking = data.get("thinking")
+    if isinstance(thinking, dict):
+        out["default"] = str(thinking.get("effort") or "").strip().lower()
+    seen = set()
+    models = data.get("models")
+    if isinstance(models, dict):
+        for spec in models.values():
+            if not isinstance(spec, dict):
+                continue
+            levels = spec.get("support_efforts")
+            if isinstance(levels, list):
+                seen.update(
+                    str(x).strip().lower() for x in levels if str(x).strip()
+                )
+            if not out["default"] and spec.get("default_effort"):
+                out["default"] = str(spec.get("default_effort")).strip().lower()
+    out["efforts"] = [e for e in _KIMI_EFFORT_ORDER if e in seen]
+    return out
+
+
+def _spawn_request_kimi_effort(payload):
+    """Validate an explicit Kimi thinking effort from a spawn payload.
+
+    Blank means "leave kimi's configured default alone". When the local
+    config declares support_efforts, reject values outside the union so a
+    stale picker can't send something the model would reject; otherwise any
+    ladder value passes (older CLI builds coerce it to the default anyway)."""
+    payload = payload if isinstance(payload, dict) else {}
+    value = str(
+        payload.get("reasoning_effort") or payload.get("effort") or ""
+    ).strip().lower()
+    if not value or value not in _KIMI_EFFORT_ORDER:
+        return ""
+    supported = _kimi_thinking_config().get("efforts") or []
+    if supported and value not in supported:
+        return ""
+    return value
 
 
 # Archive view delegates all per-session JSONL inspection to the
@@ -20178,6 +20246,7 @@ CODEX_GOALS_DB_CANDIDATES = (
     Path.home() / ".codex" / "sqlite" / "goals_1.sqlite",
 )
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
+KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
 _CODEX_META_VERSION = 4
 CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
@@ -25223,6 +25292,64 @@ def _is_codex_session(session_id):
     return bool(_codex_thread_row(session_id))
 
 
+_KIMI_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _kimi_session_dir(session_id):
+    """~/.kimi-code/sessions/<wd_*>/session_<id> for a Kimi session id, or None.
+
+    The CLI's own session_index.jsonl is authoritative when it knows the id;
+    otherwise glob the sessions tree. (The ACP-level _is_kimi_session further
+    down answers "is this a Kimi session at all" — this one resolves the
+    on-disk transcript dir the throughput engine reads.)
+    """
+    sid = str(session_id or "").strip()
+    if not sid or not _KIMI_SESSION_ID_RE.fullmatch(sid):
+        return None
+    try:
+        indexed = (_kimi_session_index().get(sid) or {}).get("session_dir") or ""
+        if indexed:
+            path = Path(indexed)
+            if path.is_dir():
+                return path
+    except Exception:
+        pass
+    root = KIMI_SESSIONS_ROOT
+    if not root.is_dir():
+        return None
+    try:
+        matches = [
+            p for p in root.glob(f"*/session_{sid}")
+            if p.is_dir()
+        ]
+    except OSError:
+        return None
+    return matches[0] if matches else None
+
+
+def _kimi_wd_folder_path(wd_name):
+    """wd_<path-with-underscores>_<hash> → the working-dir portion, best effort."""
+    text = str(wd_name or "")
+    if text.startswith("wd_"):
+        text = text[len("wd_"):]
+    m = re.match(r"^(.*)_([0-9a-f]{8,16})$", text)
+    if m:
+        text = m.group(1)
+    return text
+
+
+def _throughput_kimi_wire_files(session_dir):
+    """All agent wire transcripts under a Kimi session dir, main agent first."""
+    if session_dir is None:
+        return []
+    try:
+        files = [p for p in session_dir.glob("agents/*/wire.jsonl") if p.is_file()]
+    except OSError:
+        return []
+    files.sort(key=lambda p: (p.parent.name != "main", p.parent.name))
+    return files
+
+
 def _codex_tool_name(name):
     return (name or "").rsplit(".", 1)[-1]
 
@@ -25281,6 +25408,65 @@ def _codex_custom_tool_kind(source, fallback_name=""):
     if "tools.write_stdin" in text:
         return "write_stdin"
     return _codex_tool_name(fallback_name) or "tool"
+
+
+_CODEX_JS_OBJ_KEY_RE = re.compile(r'([{,]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:')
+
+
+def _codex_custom_tool_plan_entries(source):
+    """Best-effort extraction of update_plan entries from a custom-tool JS body
+    (`tools.update_plan({plan: [{step: "...", status: "..."}, ...]})`).
+
+    The body is a JS object literal, not JSON, so this scans for the `plan`
+    array, bracket-matches it (string-aware), then repairs unquoted keys per
+    entry object before json.loads. Returns [] on any shape mismatch — the
+    caller then falls back to rendering the call as a plain tool row.
+    """
+    text = source if isinstance(source, str) else ""
+    match = re.search(r'(?<![A-Za-z0-9_$"])plan\s*:\s*\[', text)
+    if not match:
+        return []
+    start = match.end() - 1
+    depth = 0
+    quote = None
+    escaped = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in ("\"", "'", "`"):
+            quote = ch
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        return []
+    entries = []
+    for obj_match in re.finditer(r"\{[^{}]*\}", text[start:end + 1]):
+        try:
+            obj = json.loads(_CODEX_JS_OBJ_KEY_RE.sub(r'\1"\2":', obj_match.group(0)))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        step = str(obj.get("step") or obj.get("content") or "").strip()
+        if step:
+            entries.append({
+                "content": step[:300],
+                "status": str(obj.get("status") or "pending"),
+            })
+    return entries
 
 
 def _codex_custom_tool_detail(source, fallback_name=""):
@@ -27655,11 +27841,16 @@ def _acp_request_async(harness, method, params, sid=None, on_registered=None,
             "sid": sid,
             "is_active": False,
         }
+        _ACP_PENDING.setdefault(harness, {})[req_id] = entry
+        if on_registered is not None:
+            on_registered(req_id, entry)
     if not _acp_send(harness, {
         "jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {},
     }):
         with _ACP_LOCK:
             _ACP_PENDING.get(harness, {}).pop(req_id, None)
+            if on_send_failed is not None:
+                on_send_failed(req_id, entry)
         return None
     return req_id
 
@@ -27714,16 +27905,11 @@ def _acp_handle_message(harness, payload):
     method = payload.get("method")
     if "id" in payload and method:
         _acp_handle_agent_request(harness, payload.get("id"), str(method), payload.get("params") or {})
-        _ACP_PENDING.setdefault(harness, {})[req_id] = entry
-        if on_registered is not None:
-            on_registered(req_id, entry)
         return
     if "id" in payload:
         req_id = payload.get("id")
         with _ACP_LOCK:
             entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
-            if on_send_failed is not None:
-                on_send_failed(req_id, entry)
             if entry is not None:
                 entry["response"] = payload
         # Fold prompt turns BEFORE releasing waiters: a synchronous ask
@@ -28236,7 +28422,7 @@ def _acp_ensure(harness):
     return None
 
 
-def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None):
+def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=None):
     """session/new (+ optional config + optional first prompt)."""
     conn = _acp_ensure(harness)
     if conn is None:
@@ -28270,6 +28456,13 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None):
         _acp_set_config(harness, sid, "mode", mode)
     if model:
         _acp_set_config(harness, sid, "model", model)
+    if effort:
+        # Kimi's ACP "thinking" option: binary on/off on older CLI builds
+        # (any non-off value coerces to the model's default effort — a
+        # harmless no-op), a real effort picker (low/high/max from the
+        # model's support_efforts) on newer ones. Set AFTER the model so the
+        # effort validates against the right support_efforts list.
+        _acp_set_config(harness, sid, "thinking", effort)
     _acp_wire_tail_start(harness)
     if prompt:
         sent = _acp_prompt(harness, sid, prompt)
@@ -28297,6 +28490,36 @@ def _acp_prompt(harness, sid, text, mode="send"):
     attach_err = _acp_ensure_session_loaded(harness, sid)
     if attach_err is not None:
         return attach_err
+    def activate_turn(req_id, entry):
+        """Install a turn before its request is visible to the ACP reader.
+
+        A local ACP harness can return the terminal prompt response before
+        ``_acp_request_async`` returns.  Registering the turn at the request
+        boundary prevents that completion from being folded first and then
+        resurrected as a permanent active/Thinking turn.
+        """
+        state = _acp_session(harness, sid, create=True)
+        state["turn_seq"] += 1
+        state["active_turn"] = {
+            "req_id": req_id,
+            "msg_id": f"acp-{harness}-{state['turn_seq']}",
+            "text": "", "thought": "", "tools": {},
+            "started_at": time.time(),
+        }
+        state["status"] = "active"
+        state["deltas"].clear()
+        entry["is_active"] = True
+        _acp_emit_event_unlocked(harness, sid, {
+            "type": "user_text", "text": text,
+        }, save=True)
+
+    def roll_back_unsent_turn(req_id, _entry):
+        state = _acp_session(harness, sid)
+        turn = (state or {}).get("active_turn") or {}
+        if turn.get("req_id") == req_id:
+            state["active_turn"] = None
+            state["status"] = "idle"
+
     req_id = _acp_request_async(harness, "session/prompt", {
         "sessionId": sid,
         "prompt": [{"type": "text", "text": text}],
@@ -28336,36 +28559,6 @@ def _acp_ask_and_wait(harness, sid, text, timeout_ms=30000):
         # Timed out mid-turn — the still-running turn's partial text is the
         # best reply we have (mirrors ask_engine_session_and_wait's timeout).
         with _ACP_LOCK:
-    def activate_turn(req_id, entry):
-        """Install a turn before its request is visible to the ACP reader.
-
-        A local ACP harness can return the terminal prompt response before
-        ``_acp_request_async`` returns.  Registering the turn at the request
-        boundary prevents that completion from being folded first and then
-        resurrected as a permanent active/Thinking turn.
-        """
-        state = _acp_session(harness, sid, create=True)
-        state["turn_seq"] += 1
-        state["active_turn"] = {
-            "req_id": req_id,
-            "msg_id": f"acp-{harness}-{state['turn_seq']}",
-            "text": "", "thought": "", "tools": {},
-            "started_at": time.time(),
-        }
-        state["status"] = "active"
-        state["deltas"].clear()
-        entry["is_active"] = True
-        _acp_emit_event_unlocked(harness, sid, {
-            "type": "user_text", "text": text,
-        }, save=True)
-
-    def roll_back_unsent_turn(req_id, _entry):
-        state = _acp_session(harness, sid)
-        turn = (state or {}).get("active_turn") or {}
-        if turn.get("req_id") == req_id:
-            state["active_turn"] = None
-            state["status"] = "idle"
-
             state = _acp_session(harness, sid)
             partial = str(((state or {}).get("active_turn") or {}).get("text") or "")
         return {
@@ -29067,6 +29260,14 @@ def find_kimi_conversations(
         name_overrides = _load_session_name_overrides()
     except Exception:
         name_overrides = {}
+    try:
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
+    except Exception:
+        archived_set, trashed_set = set(), set()
+    try:
+        verified_set = set(_load_verified_conversations())
+    except Exception:
+        verified_set = set()
     now = time.time()
     max_age_days = int(os.environ.get("CCC_MAX_CONV_AGE_DAYS", "30") or "30")
     cutoff = 0 if include_old else now - (max_age_days * 86400)
@@ -29157,6 +29358,9 @@ def find_kimi_conversations(
             "session_cwd": effective_cwd,
             "session_cwd_exists": cwd_exists,
             "acp": bool(acp),
+            "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
+            "verified": sid in verified_set,
             # Live ACP value wins; the wire's initial config.update alias
             # covers never-attached (TUI / WT-spawned) sessions.
             "model": acp.get("model") or wire_info["model"],
@@ -29625,11 +29829,66 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
         return None
     if ev_type != "response_item":
         return None
+    if ptype == "reasoning":
+        # Reasoning summaries render as thinking teasers in webui panes.
+        parts = []
+        for item in payload.get("summary") or []:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        text = "\n\n".join(p.strip() for p in parts if p.strip()).strip()
+        if not text:
+            return None
+        return {
+            "line": line_num,
+            "ts": ts,
+            "type": "assistant",
+            "message_id": f"codex-reasoning-{line_num}",
+            "blocks": [{"kind": "thinking", "text": text}],
+        }
     if ptype in ("function_call", "custom_tool_call"):
         name = payload.get("name") or "tool"
         is_custom_tool = ptype == "custom_tool_call"
         raw_input = payload.get("input") if isinstance(payload.get("input"), str) else ""
         args = {} if is_custom_tool else _codex_args(payload.get("arguments"))
+        # Structured update_plan calls render as the plan card (kimi-web
+        # TodoList look) in webui panes instead of a tool row.
+        if not is_custom_tool and _codex_tool_name(name) == "update_plan":
+            plan = args.get("plan")
+            if isinstance(plan, list) and plan:
+                entries = []
+                for item in plan:
+                    if not isinstance(item, dict):
+                        continue
+                    step = str(item.get("step") or item.get("content") or "").strip()
+                    if step:
+                        entries.append({
+                            "content": step[:300],
+                            "status": str(item.get("status") or "pending"),
+                        })
+                if entries:
+                    return {
+                        "line": line_num,
+                        "ts": ts,
+                        "type": "assistant",
+                        "message_id": f"codex-plan-{line_num}",
+                        "blocks": [{"kind": "plan", "entries": entries}],
+                    }
+        # Custom-tool update_plan (JS body). Pure plan calls render as just
+        # the plan card; mixed bodies (e.g. Promise.all batching exec_command
+        # + update_plan in one call) keep their tool row and get the plan
+        # card prepended as an extra block below.
+        custom_plan_entries = (
+            _codex_custom_tool_plan_entries(raw_input)
+            if is_custom_tool and "tools.update_plan" in raw_input else []
+        )
+        if custom_plan_entries and _codex_custom_tool_kind(raw_input, name) == "update_plan":
+            return {
+                "line": line_num,
+                "ts": ts,
+                "type": "assistant",
+                "message_id": f"codex-plan-{line_num}",
+                "blocks": [{"kind": "plan", "entries": custom_plan_entries}],
+            }
         detail = (
             _codex_custom_tool_detail(raw_input, name)
             if is_custom_tool else _codex_tool_detail(name, args)
@@ -29661,12 +29920,15 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
                 block["command"] = redacted_command
                 here = _extract_shell_heredoc(command_text)
                 block["command_kind"] = _shell_script_label(here.get("head", "")) if here else "Shell command"
+        blocks = [block]
+        if custom_plan_entries:
+            blocks.insert(0, {"kind": "plan", "entries": custom_plan_entries})
         return {
             "line": line_num,
             "ts": ts,
             "type": "assistant",
             "message_id": f"codex-tool-{line_num}",
-            "blocks": [block],
+            "blocks": blocks,
         }
     if ptype in ("function_call_output", "custom_tool_call_output"):
         output = payload.get("output") or ""
@@ -41582,7 +41844,7 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_kimi(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+def spawn_session_kimi(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, effort=None):
     """Spawn a Kimi session via the ACP harness (session/new + first prompt).
 
     Unlike the CLI-spawning engines there is no per-session process or log
@@ -41614,7 +41876,7 @@ def spawn_session_kimi(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     # tool call. "auto" auto-approves safe operations; CCC_KIMI_SPAWN_MODE=yolo
     # for full bypass, "default" to opt back into manual approvals.
     spawn_mode = (os.environ.get("CCC_KIMI_SPAWN_MODE") or "auto").strip() or "auto"
-    result = _acp_session_new("kimi", spawn_cwd, prompt=prompt or None, model=model_to_use or None, mode=spawn_mode)
+    result = _acp_session_new("kimi", spawn_cwd, prompt=prompt or None, model=model_to_use or None, mode=spawn_mode, effort=effort or None)
     if not result.get("ok"):
         return {
             "ok": False,
@@ -54027,7 +54289,7 @@ def _scoped_weekly_limit_from_usage(usage, model_name):
     return {"utilization": None, "resets_at": None}
 
 
-def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None, codex=None):
+def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None, codex=None, kimi=None):
     """Compact the direct Claude usage response into the persisted JSONL shape."""
     if not isinstance(plan_usage, dict) or not plan_usage.get("ok"):
         return None
@@ -54046,6 +54308,7 @@ def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None, codex=Non
             snap[key] = {"utilization": None, "resets_at": None}
     snap["seven_day_fable"] = _scoped_weekly_limit_from_usage(usage, "fable")
     snap["codex"] = codex
+    snap["kimi"] = kimi
     return snap
 
 
@@ -54245,6 +54508,194 @@ def _read_codex_usage_from_rollouts(now_epoch=None):
     )
 
 
+# ---------------------------------------------------------------------------
+# Kimi (Moonshot "Kimi Code" CLI) weekly/session usage via the usages API.
+# Mirrors the Codex block above: a live fetch normalized into the same
+# {weekly, session, plan_type, snapshot_ts, fetched_at, from_cache} shape,
+# with the persisted usage-snapshots.jsonl history as the fallback when the
+# fetch fails (401, offline, malformed response) — there is no token-refresh
+# flow here; the Kimi CLI refreshes its own stored token whenever it runs.
+# ---------------------------------------------------------------------------
+
+_KIMI_CREDENTIALS_FILE = Path(
+    os.environ.get("KIMI_CREDENTIALS_FILE")
+    or (Path.home() / ".kimi-code" / "credentials" / "kimi-code.json")
+)
+_KIMI_USAGE_BASE_URL = os.environ.get(
+    "KIMI_CODE_BASE_URL", "https://api.kimi.com/coding/v1"
+).rstrip("/")
+_KIMI_USAGE_TIMEOUT_SECS = 8
+_KIMI_UNIT_MINUTES = {
+    "TIME_UNIT_MINUTE": 1,
+    "TIME_UNIT_HOUR": 60,
+    "TIME_UNIT_DAY": 1440,
+}
+
+
+def _kimi_usage_int(value):
+    """API numeric fields arrive as strings; accept ints/floats too."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _kimi_usage_reset_epoch(value):
+    """ISO 8601 (fractional seconds, Z) or epoch → epoch float, or None."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    try:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        # fromisoformat caps fractional seconds at 6 digits — truncate longer
+        m = re.match(r"^(.*\.\d{6})\d+(.*)$", text)
+        if m:
+            text = m.group(1) + m.group(2)
+        return datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _kimi_usage_window_block(block, window_minutes):
+    """{pct, resets_at, window_minutes} from a usage/detail object, or None."""
+    if not isinstance(block, dict):
+        return None
+    limit = _kimi_usage_int(block.get("limit"))
+    if not limit:
+        return None
+    used = _kimi_usage_int(block.get("used"))
+    if used is None:
+        remaining = _kimi_usage_int(block.get("remaining"))
+        if remaining is None:
+            return None
+        used = limit - remaining
+    pct = used / limit * 100
+    if not math.isfinite(pct) or pct < 0 or pct > 100:
+        return None
+    resets_at = None
+    for key in ("resetTime", "reset_at", "resetAt", "reset_time"):
+        if block.get(key) is not None:
+            resets_at = block.get(key)
+            break
+    resets_iso = _codex_usage_iso_from_epoch(_kimi_usage_reset_epoch(resets_at))
+    if not resets_iso:
+        return None
+    return {"pct": pct, "resets_at": resets_iso, "window_minutes": window_minutes}
+
+
+def _kimi_window_minutes(window):
+    duration = _kimi_usage_int((window or {}).get("duration"))
+    if duration is None:
+        return None
+    unit = str((window or {}).get("timeUnit") or "").upper()
+    return duration * _KIMI_UNIT_MINUTES.get(unit, 1)
+
+
+def _kimi_session_window(limits):
+    """The 5h (300-minute) entry from limits[], else the smallest window."""
+    candidates = []
+    for entry in limits if isinstance(limits, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        minutes = _kimi_window_minutes(entry.get("window"))
+        if not minutes:
+            continue
+        parsed = _kimi_usage_window_block(entry.get("detail"), minutes)
+        if parsed:
+            candidates.append((minutes, parsed))
+    if not candidates:
+        return None
+    for minutes, parsed in candidates:
+        if minutes == 300:
+            return parsed
+    return min(candidates, key=lambda c: c[0])[1]
+
+
+def _kimi_plan_type(level):
+    """"LEVEL_ADVANCED" → "Advanced"."""
+    if not level:
+        return None
+    text = str(level)
+    if text.startswith("LEVEL_"):
+        text = text[len("LEVEL_"):]
+    return text.replace("_", " ").title() or None
+
+
+def _kimi_load_access_token():
+    creds = json.loads(_KIMI_CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    token = creds.get("access_token") if isinstance(creds, dict) else None
+    if not token:
+        raise ValueError("no access_token in Kimi credentials")
+    return token
+
+
+def _kimi_fetch_usages(token):
+    req = urllib.request.Request(
+        f"{_KIMI_USAGE_BASE_URL}/usages",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=_KIMI_USAGE_TIMEOUT_SECS) as res:
+        return json.loads(res.read().decode("utf-8"))
+
+
+def _kimi_usage_from_response(data, now_epoch=None):
+    """Normalize the /usages response, or None if weekly can't be derived."""
+    if now_epoch is None:
+        now_epoch = time.time()
+    if not isinstance(data, dict):
+        return None
+    weekly = _kimi_usage_window_block(data.get("usage"), 10080)
+    if weekly is None:
+        return None
+    return {
+        "weekly": weekly,
+        "session": _kimi_session_window(data.get("limits")),
+        "plan_type": _kimi_plan_type(
+            ((data.get("user") or {}).get("membership") or {}).get("level")
+        ),
+        "snapshot_ts": _usage_snapshot_iso(now_epoch),
+        "fetched_at": _usage_snapshot_iso(now_epoch),
+        "from_cache": False,
+    }
+
+
+def _read_kimi_usage(now_epoch=None):
+    """Freshest Kimi usage snapshot, or the last persisted one. Shape mirrors
+    _read_codex_usage: {weekly, session, plan_type, snapshot_ts, fetched_at,
+    from_cache}, or None if Kimi usage has never been fetched successfully."""
+    if now_epoch is None:
+        now_epoch = time.time()
+    try:
+        token = _kimi_load_access_token()
+        data = _kimi_fetch_usages(token)
+        usage = _kimi_usage_from_response(data, now_epoch=now_epoch)
+        if usage:
+            return usage
+    except Exception:
+        pass
+    cached = _latest_kimi_usage_from_snapshots(now_epoch=now_epoch)
+    if cached:
+        cached = dict(cached)
+        cached["from_cache"] = True
+        return cached
+    return None
+
+
 def _read_codex_usage(now_epoch=None):
     # An explicit timestamp asks for a deterministic historical view, which a
     # current account snapshot cannot provide. Live callers omit it and prefer
@@ -54423,6 +54874,19 @@ def _usage_snapshot_block(snapshot, window):
             "utilization": (block or {}).get("pct"),
             "resets_at": (block or {}).get("resets_at"),
         }
+    kimi = (snapshot or {}).get("kimi") or {}
+    if window == "kimi_five_hour":
+        block = kimi.get("session") if isinstance(kimi, dict) else None
+        return {
+            "utilization": (block or {}).get("pct"),
+            "resets_at": (block or {}).get("resets_at"),
+        }
+    if window == "kimi_weekly":
+        block = kimi.get("weekly") if isinstance(kimi, dict) else None
+        return {
+            "utilization": (block or {}).get("pct"),
+            "resets_at": (block or {}).get("resets_at"),
+        }
     block = (snapshot or {}).get(window)
     return block if isinstance(block, dict) else {}
 
@@ -54450,7 +54914,7 @@ def _detect_usage_reset_events(prev, curr, now_epoch=None):
     prev_epoch = _usage_snapshot_epoch(prev)
     prev_age = None if prev_epoch is None else max(0, now_epoch - prev_epoch)
     events = []
-    for window in ("five_hour", "seven_day", "codex_five_hour", "codex_weekly"):
+    for window in ("five_hour", "seven_day", "codex_five_hour", "codex_weekly", "kimi_five_hour", "kimi_weekly"):
         prev_block = _usage_snapshot_block(prev, window)
         curr_block = _usage_snapshot_block(curr, window)
         old_reset = _stats_parse_ts(prev_block.get("resets_at"))
@@ -54769,6 +55233,7 @@ def usage_current_payload(now_epoch=None):
     sonnet = (snap or {}).get("seven_day_sonnet") or {}
     fable = (snap or {}).get("seven_day_fable") or {}
     codex = _latest_codex_usage_from_snapshots(now_epoch=now_epoch)
+    kimi = _latest_kimi_usage_from_snapshots(now_epoch=now_epoch)
     cal = _weekly_pct_calibration()
     reset_events = usage_reset_events_payload(days=30, now_epoch=now_epoch).get("events", [])
     return {
@@ -54798,6 +55263,12 @@ def usage_current_payload(now_epoch=None):
             "pace": codex_usage_pace_payload(codex=codex, now_epoch=now_epoch),
             "plan_type": (codex or {}).get("plan_type"),
         },
+        "kimi": {
+            "session": (kimi or {}).get("session"),
+            "weekly": (kimi or {}).get("weekly"),
+            "pace": kimi_usage_pace_payload(kimi=kimi, now_epoch=now_epoch),
+            "plan_type": (kimi or {}).get("plan_type"),
+        },
         "calibration": {
             "pct_per_token": (cal or {}).get("pct_per_token"),
             "calibrated_at": (cal or {}).get("calibrated_at"),
@@ -54811,15 +55282,16 @@ def _poll_plan_usage_once():
     global _plan_usage_cache, _plan_usage_cache_time
     res = _fetch_plan_usage()
     codex = _read_codex_usage()
+    kimi = _read_kimi_usage()
     if not isinstance(res, dict) or not res.get("ok"):
-        if codex:
-            snap = {"ts": _usage_snapshot_iso(), "source": "native", "codex": codex}
+        if codex or kimi:
+            snap = {"ts": _usage_snapshot_iso(), "source": "native", "codex": codex, "kimi": kimi}
             prev = _latest_native_usage_snapshot()
             _append_native_usage_snapshot(snap)
             for event in _detect_usage_reset_events(prev, snap):
                 _append_usage_reset_event(event)
         return False
-    snap = _native_usage_snapshot_from_plan_usage(res, codex=codex)
+    snap = _native_usage_snapshot_from_plan_usage(res, codex=codex, kimi=kimi)
     if snap:
         prev = _latest_native_usage_snapshot()
         _append_native_usage_snapshot(snap)
@@ -55264,7 +55736,7 @@ def _throughput_scope(session_id, range_key=None):
 
 def _throughput_engine_filter(value):
     v = str(value or "claude").strip().lower()
-    return "codex" if v == "codex" else "claude"
+    return v if v in ("codex", "kimi") else "claude"
 
 
 def _throughput_trigger_preview(tev):
@@ -55810,6 +56282,174 @@ def _throughput_codex_turns_from_file(
     return turns
 
 
+def _kimi_record_timestamp(rec):
+    """Epoch-ms `time`/`created_at` from a Kimi wire record → aware datetime."""
+    raw = rec.get("time")
+    if raw is None:
+        raw = rec.get("created_at")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value > 100000000000:  # epoch milliseconds
+        value = value / 1000.0
+    try:
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _throughput_kimi_turns_from_wire(
+    path,
+    session_id,
+    *,
+    session_name="",
+    model_hint="",
+    cutoff_epoch=None,
+):
+    """Per-turn token deltas from one Kimi wire.jsonl transcript.
+
+    Each `usage.record` line (usageScope "turn") carries the token counts for
+    one model call: inputOther (uncached input), inputCacheRead,
+    inputCacheCreation and output. Those map onto the Claude-style buckets
+    (cache read/write are additive, not a subset of input), so the shared
+    normalizer produces raw-context and cache-adjusted totals the same way it
+    does for Codex turns. `usageScope: "session"` records are skipped — they
+    restate session totals and would double-count."""
+    turns = []
+    current_model = model_hint or ""
+    last_boundary_ts = None
+    line_num = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line_num += 1
+                if '"usage"' not in line and '"model"' not in line and '"turn.prompt"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rtype = rec.get("type")
+                t_end = _kimi_record_timestamp(rec)
+                if rtype == "turn.prompt":
+                    if t_end:
+                        last_boundary_ts = t_end
+                    continue
+                if rtype == "llm.request":
+                    model = rec.get("modelAlias") or rec.get("model")
+                    if isinstance(model, str) and model.strip():
+                        current_model = model.strip()
+                    continue
+                if rtype != "usage.record":
+                    continue
+                if rec.get("usageScope") not in (None, "turn"):
+                    continue
+                usage_raw = rec.get("usage")
+                if not isinstance(usage_raw, dict) or not usage_raw or not t_end:
+                    continue
+                if cutoff_epoch is not None and t_end.timestamp() < cutoff_epoch:
+                    last_boundary_ts = t_end
+                    continue
+                t_start = last_boundary_ts
+                if not t_start or t_start > t_end:
+                    t_start = t_end - timedelta(seconds=1)
+                dur_sec = max((t_end - t_start).total_seconds(), 1.0)
+
+                model = rec.get("model") or current_model or model_hint or "kimi"
+                usage = _throughput_normalize_usage(
+                    {
+                        "input_tokens": _codex_int(usage_raw.get("inputOther")),
+                        "cache_read_input_tokens": _codex_int(usage_raw.get("inputCacheRead")),
+                        "cache_creation_input_tokens": _codex_int(usage_raw.get("inputCacheCreation")),
+                        "output_tokens": _codex_int(usage_raw.get("output")),
+                    },
+                    engine="kimi",
+                    model=model,
+                )
+                tokens_in = usage["raw_context_tokens"]
+                tokens_out = usage["output_total_tokens"]
+                effective_input = usage["effective_input_tokens"]
+                effective_total = usage["effective_total_tokens"]
+                in_tps = tokens_in / dur_sec if dur_sec > 0 else 0.0
+                out_tps = tokens_out / dur_sec if dur_sec > 0 else 0.0
+                total_tps = (tokens_in + tokens_out) / dur_sec if dur_sec > 0 else 0.0
+                effective_input_tps = effective_input / dur_sec if dur_sec > 0 else 0.0
+                effective_total_tps = effective_total / dur_sec if dur_sec > 0 else 0.0
+                turns.append({
+                    "turn_index": len(turns) + 1,
+                    "session_id": session_id,
+                    "session_name": session_name,
+                    "engine": "kimi",
+                    "model": usage["model"] or model,
+                    "message_id": f"kimi-usage-{line_num}",
+                    "request_id": "",
+                    "is_sidechain": False,
+                    "trigger_type": "usage_record",
+                    "trigger_preview": "Kimi model call",
+                    "assistant_preview": "Kimi token usage event",
+                    "t_start": _throughput_iso(t_start),
+                    "t_end": _throughput_iso(t_end),
+                    "dur_sec": round(dur_sec, 2),
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "in_tps": round(in_tps, 2),
+                    "out_tps": round(out_tps, 2),
+                    "total_tps": round(total_tps, 2),
+                    "in_tpm": round(in_tps * 60.0, 2),
+                    "out_tpm": round(out_tps * 60.0, 2),
+                    "total_tpm": round(total_tps * 60.0, 2),
+                    "fresh_input_tokens": usage["fresh_input_tokens"],
+                    "cache_read_tokens": usage["cache_read_tokens"],
+                    "cache_write_tokens": usage["cache_write_tokens"],
+                    "cache_write_5m_tokens": usage["cache_write_5m_tokens"],
+                    "cache_write_1h_tokens": usage["cache_write_1h_tokens"],
+                    "raw_context_tokens": tokens_in,
+                    "effective_input_tokens": round(effective_input, 2),
+                    "effective_total_tokens": round(effective_total, 2),
+                    "effective_input_tps": round(effective_input_tps, 2),
+                    "effective_input_tpm": round(effective_input_tps * 60.0, 2),
+                    "cache_adjusted_total_tps": round(effective_total_tps, 2),
+                    "cache_adjusted_total_tpm": round(effective_total_tps * 60.0, 2),
+                    "reasoning_output_tokens": usage["reasoning_output_tokens"],
+                    "tool_tokens": usage["tool_tokens"],
+                    "cost_usd": round(usage["cost_usd"], 6),
+                    "cost_available": usage["cost_available"],
+                    "cost_basis": usage["cost_basis"],
+                    "cache_write_weight": usage["cache_write_weight"],
+                    "cache_write_1h_weight": usage["cache_write_1h_weight"],
+                    "cache_read_weight": usage["cache_read_weight"],
+                })
+                last_boundary_ts = t_end
+    except OSError:
+        return []
+    return turns
+
+
+def _throughput_kimi_turns_from_file(
+    session_id,
+    *,
+    session_name="",
+    model_hint="",
+    cutoff_epoch=None,
+):
+    """All turns for a Kimi session — every agents/*/wire.jsonl in its dir."""
+    session_dir = _kimi_session_dir(session_id)
+    turns = []
+    for wire_path in _throughput_kimi_wire_files(session_dir):
+        turns.extend(_throughput_kimi_turns_from_wire(
+            wire_path,
+            session_id,
+            session_name=session_name,
+            model_hint=model_hint,
+            cutoff_epoch=cutoff_epoch,
+        ))
+    turns.sort(key=lambda t: t.get("t_start") or "")
+    for idx, turn in enumerate(turns, 1):
+        turn["turn_index"] = idx
+    return turns
+
+
 def _throughput_empty_bucket():
     return {
         "turns": 0,
@@ -56065,6 +56705,50 @@ def _throughput_recent_conversations(
             if progress:
                 progress("folders_scanned", folder_index)
                 progress("sessions_discovered", len(rows))
+    elif engine == "kimi":
+        # A Kimi "conversation" is one session_<uuid> dir; its transcript is
+        # the agents/*/wire.jsonl set (main agent first). Rows point at the
+        # main agent wire so (mtime,size) caching keys on a real file.
+        root = KIMI_SESSIONS_ROOT
+        try:
+            wd_dirs = [p for p in root.iterdir() if p.is_dir()]
+        except OSError:
+            wd_dirs = []
+        for wd_dir in wd_dirs:
+            try:
+                session_dirs = [
+                    p for p in wd_dir.iterdir()
+                    if p.is_dir() and p.name.startswith("session_")
+                ]
+            except OSError:
+                continue
+            for session_dir in session_dirs:
+                wire_files = _throughput_kimi_wire_files(session_dir)
+                if not wire_files:
+                    continue
+                try:
+                    modified = max(p.stat().st_mtime for p in wire_files)
+                except OSError:
+                    continue
+                if cutoff_epoch is not None and modified < cutoff_epoch:
+                    continue
+                sid = session_dir.name[len("session_"):]
+                rows.append({
+                    "session_id": sid,
+                    "jsonl_path": str(wire_files[0]),
+                    "modified": modified,
+                    "mtime": modified,
+                    "engine": "kimi",
+                    "source": "kimi",
+                    "display_name": sid[:8],
+                    "model": "",
+                    "folder_path": _kimi_wd_folder_path(wd_dir.name),
+                })
+                if progress and (len(rows) == 1 or len(rows) % 25 == 0):
+                    progress("sessions_discovered", len(rows))
+        if progress:
+            progress("folders_scanned", 1)
+            progress("sessions_discovered", len(rows))
     else:
         try:
             threads = _codex_fetch_threads(limit=None) or []
@@ -56873,6 +57557,30 @@ def _latest_codex_usage_from_snapshots(now_epoch=None, max_age_secs=None):
     return newest
 
 
+def _latest_kimi_usage_from_snapshots(now_epoch=None, max_age_secs=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    newest = None
+    newest_epoch = None
+    with _usage_snapshots_lock:
+        snapshots = _read_native_usage_snapshots_unlocked()
+    for item in snapshots:
+        kimi = item.get("kimi") if isinstance(item, dict) else None
+        if not isinstance(kimi, dict):
+            continue
+        ts_epoch = _usage_snapshot_epoch(item)
+        if ts_epoch is None:
+            continue
+        if newest_epoch is None or ts_epoch > newest_epoch:
+            newest = kimi
+            newest_epoch = ts_epoch
+    if newest is None:
+        return None
+    if max_age_secs is not None and now_epoch - newest_epoch > max_age_secs:
+        return None
+    return newest
+
+
 def codex_usage_pace_payload(codex=None, now_epoch=None):
     if now_epoch is None:
         now_epoch = time.time()
@@ -56911,6 +57619,47 @@ def codex_usage_pace_payload(codex=None, now_epoch=None):
         "window_minutes": window_minutes,
         "session": (codex or {}).get("session"),
         "plan_type": (codex or {}).get("plan_type"),
+    }
+
+
+def kimi_usage_pace_payload(kimi=None, now_epoch=None):
+    if now_epoch is None:
+        now_epoch = time.time()
+    if kimi is None:
+        kimi = _latest_kimi_usage_from_snapshots(now_epoch=now_epoch)
+        if kimi is not None:
+            newest_epoch = _usage_snapshot_epoch({
+                "ts": kimi.get("snapshot_ts") or kimi.get("fetched_at")
+            })
+            # Persisted Kimi data is a fallback between poll cycles. Do not
+            # surface it as live usage once its source snapshot is stale.
+            if newest_epoch is None or now_epoch - newest_epoch > _USAGE_NATIVE_FRESH_SECS:
+                return {"ok": False, "weekly_pct": None, "projected_pct": None, "stale": True}
+    weekly = (kimi or {}).get("weekly") or {}
+    weekly_pct = weekly.get("pct")
+    resets_at_iso = weekly.get("resets_at")
+    window_minutes = weekly.get("window_minutes") or 10080
+    resets_at = _stats_parse_ts(resets_at_iso)
+    if not isinstance(weekly_pct, (int, float)) or resets_at is None:
+        return {"ok": False, "weekly_pct": weekly_pct, "projected_pct": None}
+    week_start = resets_at.astimezone() - timedelta(minutes=window_minutes)
+    now_local = datetime.fromtimestamp(now_epoch, tz=timezone.utc).astimezone(week_start.tzinfo)
+    h_start, h_end = _usage_work_window()
+    total_h = _elapsed_work_hours(week_start, resets_at.astimezone(week_start.tzinfo), h_start, h_end)
+    elapsed_h = _elapsed_work_hours(week_start, now_local, h_start, h_end)
+    projected_pct = (weekly_pct / elapsed_h) * total_h if elapsed_h > 0 else None
+    return {
+        "ok": True,
+        "weekly_pct": weekly_pct,
+        "projected_pct": projected_pct,
+        "week_start": week_start.isoformat(),
+        "weekly_resets_at": resets_at_iso,
+        "elapsed_h": elapsed_h,
+        "total_h": total_h,
+        "hours_left": max(0.0, total_h - elapsed_h),
+        "window_minutes": window_minutes,
+        "session": (kimi or {}).get("session"),
+        "plan_type": (kimi or {}).get("plan_type"),
     }
 
 
@@ -57045,6 +57794,7 @@ def _weekly_usage_block():
         display_pct = max(est_pct, real_pct)
     pace = usage_pace_payload(live=live)
     codex_pace = codex_usage_pace_payload()
+    kimi_pace = kimi_usage_pace_payload()
     return {
         "available": True,
         "est_pct": est_pct,
@@ -57069,6 +57819,7 @@ def _weekly_usage_block():
         "expected_pct": pace.get("expected_pct"),
         "delta_pp": pace.get("delta_pp"),
         "codex": codex_pace,
+        "kimi": kimi_pace,
     }
 
 
@@ -57217,6 +57968,15 @@ def _throughput_payload(
                     time.time() - _THROUGHPUT_DISCOVERY_DAYS * 86400,
                     progress=progress,
                 )
+            elif engine_filter == "kimi":
+                # The archive scanner only knows Claude/Codex sessions; Kimi
+                # discovery is a cheap dir scan, so run it directly for the
+                # wider scopes too.
+                recent = _throughput_recent_conversations(
+                    engine_filter,
+                    cutoff_epoch,
+                    progress=progress,
+                )
             else:
                 # Preserve the public semantics of 56-day and all-time scopes.
                 all_conversations = find_all_conversations(
@@ -57256,7 +58016,8 @@ def _throughput_payload(
             engine = conv_row.get("engine") or conv_row.get("source") or ""
             model_hint = conv_row.get("model") or ""
             is_codex = engine == "codex"
-            if not bounded_recent and not is_codex:
+            is_kimi = engine == "kimi"
+            if not bounded_recent and not is_codex and not is_kimi:
                 try:
                     is_codex = _is_codex_session(sid)
                 except Exception:
@@ -57264,7 +58025,10 @@ def _throughput_payload(
             if engine_filter == "codex":
                 if not is_codex:
                     continue
-            elif is_codex:
+            elif engine_filter == "kimi":
+                if not is_kimi:
+                    continue
+            elif is_codex or is_kimi:
                 continue
             if progress:
                 progress("session_read")
@@ -57272,56 +58036,82 @@ def _throughput_payload(
             # Resolve the transcript path so we can (mtime,size)-cache its full
             # turn list. Extraction runs with cutoff_epoch=None — the window
             # filter is applied below, never baked into the cached entry.
-            if is_codex:
-                cache_path = _resolve_codex_rollout_path(sid)
+            if is_kimi:
+                # One row per session dir, one cache entry per agent wire file.
+                full_turns = []
+                for wire_path in _throughput_kimi_wire_files(_kimi_session_dir(sid)):
+                    def _extract(p=wire_path):
+                        return _throughput_kimi_turns_from_wire(
+                            p, sid, session_name=name, model_hint=model_hint,
+                            cutoff_epoch=None,
+                        )
 
-                def _extract():
-                    return _throughput_codex_turns_from_file(
-                        sid, session_name=name, model_hint=model_hint, cutoff_epoch=None
-                    )
+                    try:
+                        file_turns = _throughput_file_turns(
+                            str(wire_path), _extract, progress=progress
+                        )
+                    except Exception:
+                        file_turns = None
+                    if file_turns is None:
+                        try:
+                            if progress:
+                                progress("parsed")
+                            file_turns = _extract()
+                        except Exception:
+                            continue
+                    full_turns.extend(file_turns)
+                full_turns.sort(key=lambda t: t.get("t_start") or "")
             else:
-                cache_path = conv_row.get("jsonl_path")
+                if is_codex:
+                    cache_path = _resolve_codex_rollout_path(sid)
 
-                def _extract():
-                    parsed = parse_conversation(sid, repo_path=repo_path)
-                    return _throughput_turns_from_events(
-                        parsed.get("events") or [],
-                        session_id=sid,
-                        session_name=name,
-                        engine=engine,
-                        model_hint=model_hint,
-                        cutoff_epoch=None,
-                    )
+                    def _extract():
+                        return _throughput_codex_turns_from_file(
+                            sid, session_name=name, model_hint=model_hint, cutoff_epoch=None
+                        )
+                else:
+                    cache_path = conv_row.get("jsonl_path")
 
-            full_turns = None
-            if cache_path:
-                full_turns = _throughput_file_turns(cache_path, _extract, progress=progress)
-            if full_turns is None:
-                # No stat-able path (or cache disabled) — fall back to a direct,
-                # cutoff-scoped extraction so we never serve nothing.
-                _fb_cutoff = (
-                    time.time() - 14 * 86400
-                    if session_id == "all_7_days" and cutoff_epoch is not None
-                    else cutoff_epoch
-                )
-                try:
-                    if progress:
-                        progress("parsed")
-                    if is_codex:
-                        turns.extend(_throughput_codex_turns_from_file(
-                            sid, session_name=name, model_hint=model_hint,
-                            cutoff_epoch=_fb_cutoff,
-                        ))
-                    else:
+                    def _extract():
                         parsed = parse_conversation(sid, repo_path=repo_path)
-                        turns.extend(_throughput_turns_from_events(
+                        return _throughput_turns_from_events(
                             parsed.get("events") or [],
-                            session_id=sid, session_name=name, engine=engine,
-                            model_hint=model_hint, cutoff_epoch=_fb_cutoff,
-                        ))
-                except Exception:
+                            session_id=sid,
+                            session_name=name,
+                            engine=engine,
+                            model_hint=model_hint,
+                            cutoff_epoch=None,
+                        )
+
+                full_turns = None
+                if cache_path:
+                    full_turns = _throughput_file_turns(cache_path, _extract, progress=progress)
+                if full_turns is None:
+                    # No stat-able path (or cache disabled) — fall back to a direct,
+                    # cutoff-scoped extraction so we never serve nothing.
+                    _fb_cutoff = (
+                        time.time() - 14 * 86400
+                        if session_id == "all_7_days" and cutoff_epoch is not None
+                        else cutoff_epoch
+                    )
+                    try:
+                        if progress:
+                            progress("parsed")
+                        if is_codex:
+                            turns.extend(_throughput_codex_turns_from_file(
+                                sid, session_name=name, model_hint=model_hint,
+                                cutoff_epoch=_fb_cutoff,
+                            ))
+                        else:
+                            parsed = parse_conversation(sid, repo_path=repo_path)
+                            turns.extend(_throughput_turns_from_events(
+                                parsed.get("events") or [],
+                                session_id=sid, session_name=name, engine=engine,
+                                model_hint=model_hint, cutoff_epoch=_fb_cutoff,
+                            ))
+                    except Exception:
+                        continue
                     continue
-                continue
 
             # Copy each kept turn so the per-request turn_index reassignment
             # below doesn't mutate the shared cached dicts.
@@ -57342,6 +58132,13 @@ def _throughput_payload(
         engine, model_hint = _throughput_session_hints(session_id)
         if engine == "codex" or _is_codex_session(session_id):
             turns = _throughput_codex_turns_from_file(
+                session_id,
+                session_name="",
+                model_hint=model_hint,
+                cutoff_epoch=cutoff_epoch,
+            )
+        elif engine == "kimi" or _kimi_session_dir(session_id) is not None or _is_kimi_session(session_id):
+            turns = _throughput_kimi_turns_from_file(
                 session_id,
                 session_name="",
                 model_hint=model_hint,
@@ -57456,14 +58253,33 @@ def _throughput_window_turns(start_epoch, end_epoch, engine_filter):
         row_engine = conv_row.get("engine") or conv_row.get("source") or ""
         model_hint = conv_row.get("model") or ""
         is_codex = row_engine == "codex"
-        if (engine == "codex") != is_codex:
+        is_kimi = row_engine == "kimi"
+        if engine == "codex":
+            if not is_codex:
+                continue
+        elif engine == "kimi":
+            if not is_kimi:
+                continue
+        elif is_codex or is_kimi:
             continue
 
-        if is_codex:
+        if is_kimi:
+            file_jobs = [
+                (
+                    str(wire_path),
+                    (lambda p=wire_path: _throughput_kimi_turns_from_wire(
+                        p, sid, session_name=name, model_hint=model_hint,
+                        cutoff_epoch=None,
+                    )),
+                )
+                for wire_path in _throughput_kimi_wire_files(_kimi_session_dir(sid))
+            ]
+        elif is_codex:
             def _extract():
                 return _throughput_codex_turns_from_file(
                     sid, session_name=name, model_hint=model_hint, cutoff_epoch=None
                 )
+            file_jobs = [(conv_row.get("jsonl_path"), _extract)]
         else:
             def _extract():
                 parsed = parse_conversation(sid)
@@ -57475,20 +58291,23 @@ def _throughput_window_turns(start_epoch, end_epoch, engine_filter):
                     model_hint=model_hint,
                     cutoff_epoch=None,
                 )
+            file_jobs = [(conv_row.get("jsonl_path"), _extract)]
 
-        cache_path = conv_row.get("jsonl_path")
-        try:
-            full_turns = (
-                _throughput_file_turns(cache_path, _extract)
-                if cache_path else _extract()
-            )
-        except Exception:
-            continue
-        if full_turns is None:
+        full_turns = []
+        for cache_path, extract_fn in file_jobs:
             try:
-                full_turns = _extract()
+                file_turns = (
+                    _throughput_file_turns(cache_path, extract_fn)
+                    if cache_path else extract_fn()
+                )
             except Exception:
                 continue
+            if file_turns is None:
+                try:
+                    file_turns = extract_fn()
+                except Exception:
+                    continue
+            full_turns.extend(file_turns)
 
         folder = conv_row.get("folder_path") or ""
         for t in full_turns:
@@ -64077,6 +64896,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                             parent_session_id=parent_session_id,
+                            effort=_spawn_request_kimi_effort(payload),
                         )
                     elif engine == "antigravity":
                         result = spawn_session_antigravity(
@@ -64509,6 +65329,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         worktree=bool(payload.get("worktree")),
                         model=payload.get("model"),
                         parent_session_id=payload.get("parent_session_id"),
+                        effort=_spawn_request_kimi_effort(payload),
                     )
                     if result.get("code") in ("kimi_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
