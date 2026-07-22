@@ -27633,7 +27633,8 @@ def _acp_send(harness, payload):
         return False
 
 
-def _acp_request_async(harness, method, params, sid=None):
+def _acp_request_async(harness, method, params, sid=None, on_registered=None,
+                       on_send_failed=None):
     """Register a pending id and send without waiting. Returns req_id|None."""
     conn = _acp_conn(harness)
     transport = (conn or {}).get("transport")
@@ -27642,7 +27643,7 @@ def _acp_request_async(harness, method, params, sid=None):
     with _ACP_LOCK:
         req_id = conn["next_id"]
         conn["next_id"] += 1
-        _ACP_PENDING.setdefault(harness, {})[req_id] = {
+        entry = {
             "event": threading.Event(),
             "response": None,
             "method": method,
@@ -27708,11 +27709,16 @@ def _acp_handle_message(harness, payload):
     method = payload.get("method")
     if "id" in payload and method:
         _acp_handle_agent_request(harness, payload.get("id"), str(method), payload.get("params") or {})
+        _ACP_PENDING.setdefault(harness, {})[req_id] = entry
+        if on_registered is not None:
+            on_registered(req_id, entry)
         return
     if "id" in payload:
         req_id = payload.get("id")
         with _ACP_LOCK:
             entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
+            if on_send_failed is not None:
+                on_send_failed(req_id, entry)
             if entry is not None:
                 entry["response"] = payload
         # Fold prompt turns BEFORE releasing waiters: a synchronous ask
@@ -28289,29 +28295,9 @@ def _acp_prompt(harness, sid, text, mode="send"):
     req_id = _acp_request_async(harness, "session/prompt", {
         "sessionId": sid,
         "prompt": [{"type": "text", "text": text}],
-    }, sid=sid)
+    }, sid=sid, on_registered=activate_turn, on_send_failed=roll_back_unsent_turn)
     if req_id is None:
         return {"ok": False, "error": f"ACP {harness} send failed"}
-    with _ACP_LOCK:
-        state = _acp_session(harness, sid, create=True)
-        entry = (_ACP_PENDING.get(harness) or {}).get(req_id)
-        if state.get("status") != "active":
-            state["turn_seq"] += 1
-            state["active_turn"] = {
-                "req_id": req_id,
-                "msg_id": f"acp-{harness}-{state['turn_seq']}",
-                "text": "", "thought": "", "tools": {},
-                "started_at": time.time(),
-            }
-            state["status"] = "active"
-            # New turn: drop the previous turn's bubble deltas so a
-            # late-attaching stream replays only the in-flight turn.
-            state["deltas"].clear()
-            if entry is not None:
-                entry["is_active"] = True
-        _acp_emit_event_unlocked(harness, sid, {
-            "type": "user_text", "text": text,
-        }, save=True)
     return {
         "ok": True, "via": "acp-prompt", "harness": harness,
         "session_id": sid, "turn": state.get("turn_seq"), "req_id": req_id,
@@ -28345,6 +28331,36 @@ def _acp_ask_and_wait(harness, sid, text, timeout_ms=30000):
         # Timed out mid-turn — the still-running turn's partial text is the
         # best reply we have (mirrors ask_engine_session_and_wait's timeout).
         with _ACP_LOCK:
+    def activate_turn(req_id, entry):
+        """Install a turn before its request is visible to the ACP reader.
+
+        A local ACP harness can return the terminal prompt response before
+        ``_acp_request_async`` returns.  Registering the turn at the request
+        boundary prevents that completion from being folded first and then
+        resurrected as a permanent active/Thinking turn.
+        """
+        state = _acp_session(harness, sid, create=True)
+        state["turn_seq"] += 1
+        state["active_turn"] = {
+            "req_id": req_id,
+            "msg_id": f"acp-{harness}-{state['turn_seq']}",
+            "text": "", "thought": "", "tools": {},
+            "started_at": time.time(),
+        }
+        state["status"] = "active"
+        state["deltas"].clear()
+        entry["is_active"] = True
+        _acp_emit_event_unlocked(harness, sid, {
+            "type": "user_text", "text": text,
+        }, save=True)
+
+    def roll_back_unsent_turn(req_id, _entry):
+        state = _acp_session(harness, sid)
+        turn = (state or {}).get("active_turn") or {}
+        if turn.get("req_id") == req_id:
+            state["active_turn"] = None
+            state["status"] = "idle"
+
             state = _acp_session(harness, sid)
             partial = str(((state or {}).get("active_turn") or {}).get("text") or "")
         return {
