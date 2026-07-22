@@ -47100,6 +47100,29 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None):
             }
     if reasoning_effort is None:
         reasoning_effort = (_get_session_override(session_id) or {}).get("reasoning_effort") or ""
+    if engine == "kimi":
+        # Kimi's ACP harness supports a live ``model`` config option. Unlike
+        # the other non-Claude engines, it has no resume path that consumes a
+        # deferred session override, so queuing here left the active session
+        # permanently on its previous model.
+        result = _acp_set_config("kimi", session_id, "model", model)
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "error": result.get("error") or "Kimi rejected the model change",
+                "code": result.get("code") or "kimi_model_switch_failed",
+                "engine": engine,
+            }
+        _set_session_override(session_id, model, context_1m, engine, reasoning_effort)
+        return {
+            "ok": True,
+            "model": model,
+            "context_1m": bool(context_1m),
+            "engine": engine,
+            "reasoning_effort": reasoning_effort,
+            "applied": "live",
+            "via": "kimi-acp-config",
+        }
     _set_session_override(session_id, model, context_1m, engine, reasoning_effort)
     payload = {
         "ok": True,

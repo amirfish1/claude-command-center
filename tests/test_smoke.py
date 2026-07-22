@@ -13348,6 +13348,23 @@ class TestModelPicker(unittest.TestCase):
         self.assertGreater(post_idx, 0)
         self.assertIn("_check_same_origin", src[post_idx:post_idx + 200])
 
+    def test_kimi_model_switch_applies_live_through_acp(self):
+        """Kimi exposes model selection as a live ACP config option."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        with mock.patch.object(server, "_detect_session_engine", return_value="kimi"), \
+             mock.patch.object(server, "_set_session_override"), \
+             mock.patch.object(server, "_acp_set_config", return_value={"ok": True}) as set_config:
+            result = server._set_session_model("session-kimi-switch", "kimi-code/k3", False)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["applied"], "live")
+        self.assertEqual(result["via"], "kimi-acp-config")
+        set_config.assert_called_once_with(
+            "kimi", "session-kimi-switch", "model", "kimi-code/k3"
+        )
+
     def test_extract_session_slash_commands_from_init_event(self):
         for mod in ("server",):
             sys.modules.pop(mod, None)
