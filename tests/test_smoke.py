@@ -4319,14 +4319,14 @@ class TestServerImports(unittest.TestCase):
 
         textarea_css = app_css[
             app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"):
-            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"))
+            app_css.index("/* Native-app typing on mobile.", app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"))
         ]
         self.assertIn("overflow-x: hidden;", textarea_css)
         self.assertIn("scrollbar-width: none;", textarea_css)
         self.assertIn(".conv-input-bar textarea::-webkit-scrollbar", app_css)
         self.assertIn("display: none;", app_css[
             app_css.index(".conv-input-bar textarea::-webkit-scrollbar"):
-            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea::-webkit-scrollbar"))
+            app_css.index("/* Native-app typing on mobile.", app_css.index(".conv-input-bar textarea::-webkit-scrollbar"))
         ])
 
     def test_empty_composer_arrow_up_recalls_last_command(self):
@@ -4483,7 +4483,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const canonical = (conv && conv.first_message) || '';", app_js)
         self.assertIn("if (canonPrefix && norm(evText).startsWith(canonPrefix)) return evText;", app_js)
         self.assertIn("return canonical || evText;", app_js)
-        self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
+        self.assertIn("cleanIssuePrompt(originalAskTextForEvent(ev, paneId))", app_js)
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):
         """The right rail keeps activity in Metadata, with Files and Queue as
