@@ -3156,6 +3156,9 @@
       if (archiveLoaded && typeof _scheduleSidebarRender === 'function') {
         _scheduleSidebarRender();
       }
+      if (typeof window.__cccRenderThroughputActivity === 'function') {
+        window.__cccRenderThroughputActivity();
+      }
       return _liveSessionsActivityLast;
     } catch (_) { return _liveSessionsActivityLast; }
     finally { _liveSessionsActivityPromise = null; }
@@ -48042,6 +48045,24 @@
   // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
+  window.__cccThroughputActivityRows = function () {
+    const source = Array.isArray(archiveData) && archiveData.length
+      ? archiveData : (Array.isArray(conversationsData) ? conversationsData : []);
+    const rows = new Map();
+    source.forEach((raw) => {
+      if (!raw) return;
+      const row = _applyLiveOverlayToRow(raw);
+      const sid = row.session_id || row.id;
+      if (sid && row.source !== 'backlog') rows.set(String(sid), row);
+    });
+    const live = (_liveSessionsActivityLast && _liveSessionsActivityLast.sessions) || {};
+    Object.keys(live).forEach((sid) => {
+      const merged = Object.assign({}, rows.get(sid) || {}, live[sid] || {});
+      merged.session_id = merged.session_id || sid;
+      rows.set(sid, merged);
+    });
+    return Array.from(rows.values());
+  };
   let _lastArchiveRenderFilter = null;
   let uxFixesQueueMeta = { total: 0, byClaimedSession: new Map() };
   let _uxFixesQueueMetaPromise = null;
@@ -48743,6 +48764,9 @@
         const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force });
         archiveData = _mergeArchivePrSnapshot(convs, archiveData);
         archiveLoaded = true;
+        if (typeof window.__cccRenderThroughputActivity === 'function') {
+          window.__cccRenderThroughputActivity();
+        }
         // Re-poll COO escalated markers on each data refresh so newly-bounced
         // sessions surface their badge without a manual reload.
         loadCooEscalated({ force: true });
@@ -58661,9 +58685,10 @@
 
 // ── Throughput strip (W87) ──────────────────────────────────────────────────
 // Compact "today's burn" strip pinned above the conversation list: sparkline
-// of today's hourly cache-adjusted tokens, total burn, active lanes in the
-// last hour, and pace vs yesterday at the same time. Click-through to the
-// full throughput dashboard; small link to yesterday's daily report.
+// of today's hourly cache-adjusted tokens, total burn, sessions working now
+// and active in the last 5/10 minutes, and pace vs yesterday at the same time.
+// Click-through to the full throughput dashboard; small link to yesterday's
+// daily report.
 // Data: /api/throughput/daily?date=today — the server coalesces recomputes
 // behind a 180s TTL + single-flight lock, so the 120s hidden-guarded poll
 // here never stacks work (and multiple tabs share one compute).
@@ -58739,7 +58764,7 @@
     ensureStyle();
     var strip = document.createElement('div');
     strip.id = 'cccThroughputStrip';
-    strip.title = 'Today’s token throughput — cache-adjusted burn, active lanes (last hour), pace vs yesterday at this time. Click to open the throughput dashboard.';
+    strip.title = 'Today’s token throughput — cache-adjusted burn, live and recently active sessions, pace vs yesterday at this time. Click to open the throughput dashboard.';
     strip.setAttribute('role', 'button');
     strip.innerHTML =
       '<span class="ts-spark"></span>' +
@@ -58753,6 +58778,7 @@
       window.open('/throughput.html', '_blank');
     });
     panel.insertBefore(strip, panel.firstChild);
+    renderActivity();
     return true;
   }
 
@@ -58761,8 +58787,7 @@
     if (!strip || !d || !d.ok) return;
     var tot = (d.totals && d.totals.cache_adjusted_tokens) || 0;
     strip.querySelector('.ts-burn').textContent = 'Today ' + fmtTok(tot);
-    var lanes = Number(d.active_sessions_last_hour) || 0;
-    strip.querySelector('.ts-lanes').textContent = lanes ? (lanes + ' lane' + (lanes === 1 ? '' : 's')) : '';
+    renderActivity();
     var paceEl = strip.querySelector('.ts-pace');
     var y = d.yesterday;
     if (y && y.cache_adjusted_tokens_to_same_time > 0) {
@@ -58776,6 +58801,41 @@
     }
     strip.querySelector('.ts-spark').innerHTML = sparkSvg(d.hourly);
   }
+
+  function renderActivity() {
+    var strip = document.getElementById('cccThroughputStrip');
+    if (!strip) return;
+    var now = Date.now() / 1000;
+    var working = 0, recent5 = 0, recent10 = 0;
+    var rows = typeof window.__cccThroughputActivityRows === 'function'
+      ? window.__cccThroughputActivityRows() : [];
+    rows.forEach(function (row) {
+      var sid = row.session_id || row.id;
+      var optimistic = !!(sid && typeof sessionIsOptimisticallySending === 'function'
+        && sessionIsOptimisticallySending(sid));
+      var isWorking = (typeof sessionIsActivelyWorking === 'function')
+        ? sessionIsActivelyWorking(row, optimistic)
+        : !!(row.state === 'working' || row.codex_state === 'working' || optimistic);
+      var activityAt = Math.max(
+        Number(row.sidecar_ts) || 0,
+        Number(row.codex_app_server_last_activity_at) || 0,
+        Number(row.last_interacted) || 0,
+        Number(row.last_activity) || 0,
+        Number(row.modified) || 0,
+        Number(row.mtime) || 0
+      );
+      if (isWorking) working += 1;
+      if (isWorking || activityAt >= now - 300) recent5 += 1;
+      if (isWorking || activityAt >= now - 600) recent10 += 1;
+    });
+    var el = strip.querySelector('.ts-lanes');
+    if (!el) return;
+    el.textContent = 'WIP ' + working + ' now · ' + recent5 + ' in 5m · ' + recent10 + ' in 10m';
+    el.title = working + ' working right now · ' + recent5
+      + ' active in the last 5 minutes · ' + recent10 + ' active in the last 10 minutes';
+  }
+
+  window.__cccRenderThroughputActivity = renderActivity;
 
   var busy = false;
   function refresh() {
@@ -58792,6 +58852,9 @@
     // The conv list panel exists in static markup, so mount is immediate;
     // the retry covers popout/embedded pages where it never appears.
     if (!mount()) { setTimeout(mount, 3000); }
+    if (typeof refreshLiveSessionsActivity === 'function') {
+      refreshLiveSessionsActivity();
+    }
     refresh();
     setInterval(refresh, 120000);
   }
