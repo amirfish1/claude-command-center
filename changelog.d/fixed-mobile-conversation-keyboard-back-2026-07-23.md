@@ -1,0 +1,1 @@
+- Prevent focus zoom, keep Back visible above the keyboard, and move the mobile Original ask into a compact expandable toolbar row.

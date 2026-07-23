@@ -10986,6 +10986,25 @@
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  const $mobileOriginalAsk = document.getElementById('mobileOriginalAsk');
+  const $mobileOriginalAskText = document.getElementById('mobileOriginalAskText');
+  function syncMobileOriginalAsk(text) {
+    if (!$mobileOriginalAsk || !$mobileOriginalAskText) return;
+    const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+    $mobileOriginalAskText.textContent = cleaned;
+    $mobileOriginalAsk.hidden = !cleaned;
+    $mobileOriginalAsk.classList.remove('is-expanded');
+    $mobileOriginalAsk.setAttribute('aria-expanded', 'false');
+    $mobileOriginalAsk.title = cleaned ? 'Show the full original ask' : '';
+  }
+  if ($mobileOriginalAsk) {
+    $mobileOriginalAsk.addEventListener('click', () => {
+      const expanded = !$mobileOriginalAsk.classList.contains('is-expanded');
+      $mobileOriginalAsk.classList.toggle('is-expanded', expanded);
+      $mobileOriginalAsk.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      $mobileOriginalAsk.title = expanded ? 'Collapse original ask' : 'Show the full original ask';
+    });
+  }
   function handleMobileBreakpointChange() {
     // When transitioning to narrow viewport with an active conversation,
     // show the pane overlay; when transitioning to wide, hide it
@@ -32409,14 +32428,18 @@
   // instead of hiding behind it. iOS Safari/WKWebView don't shrink the
   // layout viewport when the keyboard opens (and ignore the viewport
   // `interactive-widget` hint), so we feed `visualViewport.height` into the
-  // `--app-vh` custom property that `body` reads. Wired up only under a
-  // coarse pointer — desktop keeps the plain `100vh` fallback untouched.
+  // `--app-vh` custom property that the app shell and fixed mobile panes
+  // read. The viewport may also pan downward to reveal the focused field,
+  // so track offsetTop to keep the conversation toolbar (especially Back)
+  // inside the visible frame. Wired up only under a coarse pointer —
+  // desktop keeps the plain `100vh` / top:0 fallbacks untouched.
   if (window.visualViewport && window.matchMedia('(pointer: coarse)').matches) {
     const vv = window.visualViewport;
     let _vvRaf = 0;
     const syncVisualViewport = () => {
       _vvRaf = 0;
       document.documentElement.style.setProperty('--app-vh', vv.height + 'px');
+      document.documentElement.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
     };
     const queueVisualViewportSync = () => {
       if (_vvRaf) return;
@@ -32855,6 +32878,7 @@
     pane.firstLine = 0;
     pane.loadBeforeLine = 0;
     pane.wantFull = false;
+    if (paneId === activePaneId()) syncMobileOriginalAsk('');
     // Drop any visual "Clear" watermark (CCC-474) — a fresh (re)select of a
     // conversation always shows full history.
     const _selClearView = getConvViewForPane(paneId);
@@ -43759,6 +43783,8 @@
           // conversation. The chevron toggles to `.is-expanded` (50vh)
           // and back; that state is ephemeral, scoped to this sticky DOM
           // node, and resets every time the user switches conversations.
+          const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
+          if (paneId === activePaneId()) syncMobileOriginalAsk(mobileOriginalAskText);
           sticky.innerHTML = resolveBtn + issueBtn
             + '<button type="button" class="conv-sticky-header__close" data-csh-close title="Hide this panel completely">×</button>'
             + '<div class="csh-row">'
@@ -43766,8 +43792,7 @@
             +     '<div class="csh-ask-original">'
             +       '<div class="label">Original ask</div>'
             +       (function () {
-                      const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
-                      const parts = splitFirstSentence(cleaned);
+                      const parts = splitFirstSentence(mobileOriginalAskText);
                       const imagesHtml = renderImageDescriptors(ev.images);
                       let h = '<div class="user-msg" dir="auto">';
                       h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';
@@ -43845,7 +43870,19 @@
           if (closeBtn) {
             closeBtn.addEventListener('click', (e) => {
               e.stopPropagation();
-              sticky.style.display = 'none';
+              // Use the semantic hidden state instead of an inline
+              // `display:none`. The mobile right-rail fallback restores the
+              // sticky with `display:block !important`, which otherwise wins
+              // over the inline declaration and makes this button appear to
+              // do nothing. Once the duplicate panel is gone, put the first
+              // user turn back in the transcript so the original request is
+              // still readable.
+              sticky.hidden = true;
+              const firstUser = $view.querySelector('.event.user_text.is-pinned-in-sticky');
+              if (firstUser) firstUser.classList.remove('is-pinned-in-sticky');
+              if (_dynamicAskState && _dynamicAskState.sticky === sticky) {
+                _dynamicAskState = null;
+              }
             });
           }
           const resolveClickBtn = sticky.querySelector('.resolve-btn');

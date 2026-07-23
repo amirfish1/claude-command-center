@@ -2576,6 +2576,11 @@
     display: flex; flex-direction: column;
     box-sizing: border-box;
   }
+  /* The dismiss button sets the semantic `hidden` state. Keep it stronger
+     than the mobile right-rail fallback's `display:block !important`, or the
+     Original ask panel cannot actually be dismissed at that breakpoint. */
+  body.status-pos-right .conv-sticky-header[hidden],
+  .conv-sticky-header[hidden] { display: none !important; }
   .conv-sticky-header .user-msg {
     font-size: 14px; color: var(--text); line-height: 1.4;
     font-weight: 700;
@@ -7083,12 +7088,12 @@
     height: 0;
     display: none;
   }
-  /* Native-app typing on touch devices. iOS Safari/WKWebView auto-zoom the
-     page whenever a focused input renders below 16px — the single biggest
-     "this is a web page" tell. Bump the composers to 16px on coarse
-     pointers only (desktop keeps the denser 15px) and pad the bottom past
-     the home indicator so the bar clears it in standalone PWA mode. */
-  @media (pointer: coarse) {
+  /* Native-app typing on mobile. iOS Safari/WKWebView auto-zooms the page
+     whenever a focused input renders below 16px. Some embedded webviews
+     report a fine pointer even on a phone, so key this safeguard to either
+     touch input OR the same narrow viewport used by the mobile layout.
+     Desktop keeps the denser 15px composer at full width. */
+  @media (pointer: coarse), (max-width: 1200px) {
     .conv-input-bar input,
     .conv-input-bar textarea,
     #cpInput {
@@ -12387,7 +12392,14 @@
     .sidebar-resizer { display: none !important; }
 
     body:not(.kanban-split) .main {
-      position: fixed; inset: 0; z-index: 800; background: var(--bg);
+      /* Follow the visual viewport while the software keyboard is open.
+         iOS can pan the visual viewport down without moving the layout
+         viewport; a fixed inset:0 pane then leaves its toolbar (and Back)
+         above the visible frame. app.js keeps both vars in sync. */
+      position: fixed;
+      top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;
+      height: var(--app-vh, 100vh);
+      z-index: 800; background: var(--bg);
       transform: translateX(100%); transition: transform 0.2s ease-out;
     }
     body:not(.kanban-split).mobile-show-main .main {
@@ -12482,11 +12494,11 @@
 
     .conv-panel {
       position: fixed !important;
-      top: 0; left: 0; right: 0; bottom: auto;
+      top: var(--app-vv-top, 0px); left: 0; right: 0; bottom: auto;
       /* Use the dynamic viewport so the panel resizes with iOS Safari's
          URL bar and on-screen keyboard — otherwise the input bar slides
          off-screen and the user can't see "Send to terminal…". */
-      height: 100vh; height: 100dvh;
+      height: var(--app-vh, 100vh);
       padding-bottom: env(safe-area-inset-bottom);
       box-sizing: border-box;
       z-index: 900;
@@ -21153,5 +21165,91 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   }
   body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky {
     display: none;
+  }
+}
+
+/* iOS focus-zoom guard. Keep this after conversation-theme rules: themes may
+   use !important typography (for example Stitch's 14px monospace composer),
+   but a focused mobile control must compute to at least 16px or WebKit zooms
+   the entire page and pushes the Back button outside the visible frame. */
+@media (pointer: coarse), (max-width: 1200px) {
+  #convInput,
+  #cpInput {
+    font-size: 16px !important;
+  }
+}
+
+/* Mobile original ask: use the otherwise-empty reader toolbar instead of
+   floating a large sticky card over the transcript. The disclosure is one
+   ellipsized row by default and expands in place only when requested. */
+.mobile-original-ask { display: none; }
+@media (max-width: 1200px) {
+  body .conversations-view .conv-sticky-header {
+    display: none !important;
+  }
+  #convToolbar {
+    align-items: flex-start;
+  }
+  #mobileOriginalAsk:not([hidden]) {
+    order: -99;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 34px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  #mobileOriginalAsk:not([hidden]):hover,
+  #mobileOriginalAsk:not([hidden]):focus-visible {
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  }
+  .mobile-original-ask__label {
+    color: var(--green);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .mobile-original-ask__text {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 550;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-original-ask__chevron {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1;
+    transition: transform 0.15s ease;
+  }
+  #mobileOriginalAsk.is-expanded {
+    align-items: start;
+    max-height: min(40vh, 320px);
+    overflow-y: auto;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+  #mobileOriginalAsk.is-expanded .mobile-original-ask__text {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+  #mobileOriginalAsk.is-expanded .mobile-original-ask__chevron {
+    margin-top: 3px;
+    transform: rotate(180deg);
   }
 }

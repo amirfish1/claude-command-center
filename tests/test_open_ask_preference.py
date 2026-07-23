@@ -28,6 +28,15 @@ class TestOpenAskPreference(unittest.TestCase):
 
         self.assertIn("const _openAskHtml = getOpenAskPref() === 'hide' ? ''", app_js)
 
+    def test_original_ask_panel_can_be_dismissed_on_mobile(self):
+        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("sticky.hidden = true;", app_js)
+        self.assertIn("firstUser.classList.remove('is-pinned-in-sticky');", app_js)
+        self.assertIn("body.status-pos-right .conv-sticky-header[hidden]", app_css)
+        self.assertIn(".conv-sticky-header[hidden] { display: none !important; }", app_css)
+
 
 if __name__ == "__main__":
     unittest.main()
