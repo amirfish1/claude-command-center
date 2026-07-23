@@ -31001,6 +31001,21 @@
               ac.name_overridden = !!newName;
             }
           }
+          // If this conversation is open in any pane, refresh its RHS header
+          // title now — the sidebar re-render below only repaints the list,
+          // not the open conversation's top-right title. Without this the
+          // rename appears in the row but the pane header stays stale until
+          // the conversation is reopened, which reads as "it didn't stick".
+          try {
+            splitState.panes.forEach(p => {
+              if (p && p.conversationId === item.dataset.id) {
+                const openRow = c
+                  || { id: item.dataset.id, session_id: item.dataset.sessionId,
+                       display_name: newName || null, name_overridden: !!newName };
+                updatePaneHeader(p.id, openRow);
+              }
+            });
+          } catch (_) {}
           // Brief toast on the item title
           const toast = document.createElement('div');
           toast.style.cssText = 'position:fixed;bottom:20px;left:20px;background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
