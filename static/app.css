@@ -6733,6 +6733,10 @@
   .conv-signal.pkood-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
   .conv-signal.pkood-stuck { background: rgba(248,81,73,0.25); color: var(--red); font-weight: 700; }
   .conv-signal.codex-stuck { background: rgba(248,81,73,0.20); color: var(--red); font-weight: 700; }
+  /* Muted "turn finished recently" chip (kimi/codex rows) — calm end state,
+   * deliberately quieter than the committed/pushed greens so it reads as
+   * lifecycle info, not a git signal. */
+  .conv-signal.done { background: rgba(63,185,80,0.10); color: var(--text-muted); }
   .conv-signal.hermes-platform {
     background: rgba(45, 212, 191, 0.14);
     color: #5eead4;
@@ -10214,6 +10218,16 @@
     box-shadow: none;
     animation: none;
   }
+  /* Persistent stuck-mid-turn card (kimi webui panes): the turn looks
+   * unfinished but the wire has had no output past the stale threshold.
+   * Warning channel, no pulse — it replaces the "Working…" moon. */
+  .conv-live-tool-inline.is-stuck {
+    color: #F0883E;
+    background: linear-gradient(rgba(240,136,62,0.12), rgba(240,136,62,0.12)), var(--bg);
+    border-color: rgba(240,136,62,0.45);
+  }
+  .conv-live-tool-inline.is-stuck .cl-stuck-icon { flex: 0 0 auto; }
+  .conv-live-tool-inline.is-stuck .cl-file { color: inherit; opacity: 0.75; }
   .conv-live-tool-inline .cl-dismiss {
     margin-left: auto;
     flex: 0 0 auto;

@@ -31,6 +31,188 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+class TestWebuiPaneRegressionGuards(unittest.TestCase):
+    """Regression guards for the kimi/codex webui-pane bug fixes."""
+
+    def test_codex_busy_turn_error_is_queued_not_exec_fallback(self):
+        """"Cannot launch a new turn while another turn is active" must take
+        the durable-queue fallback — the exec fallback spawned a second writer
+        per queue-pump retry, littering the transcript with duplicate user
+        bubbles and identical error banners."""
+        server = importlib.import_module("server")
+        busy = {"error": {"message": "Invalid request: Cannot launch a new turn while another turn (ID 7) is active"}}
+        self.assertTrue(server._codex_error_is_not_steerable(busy))
+        self.assertTrue(server._codex_error_is_not_steerable({"error": {"message": "activeTurnNotSteerable"}}))
+        # Unrelated failures still take the exec fallback.
+        self.assertFalse(server._codex_error_is_not_steerable({"error": {"message": "connection refused"}}))
+
+    def test_wire_fold_assistant_dedupe_is_containment_not_equality(self):
+        """The finalized ACP turn text can be a truncated tail or multi-step
+        concatenation of a wire part; exact-match dedupe let the same reply
+        render twice (partial + full). Long blocks dedupe by containment."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server._acp_wire_fold)
+        self.assertIn("len(norm) >= 80", src)
+        self.assertIn("len(prev) >= 80", src)
+
+    def test_wire_fold_marks_unanswered_tool_calls_running(self):
+        """A wire-folded tool.call with no result in the batch is in flight,
+        not done — it must be emitted with tool_status running so the pane
+        shows the pulsing dot instead of a false checkmark."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server._acp_wire_fold)
+        self.assertIn('block["tool_status"] = "running"', src)
+
+    def test_kimi_status_includes_wire_activity_busy_signal(self):
+        """TUI-originated kimi turns never flip the ACP snapshot to active;
+        session_live_status must fall back to wire.jsonl mtime freshness."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.session_live_status)
+        self.assertIn("_acp_wire_path", src)
+
+
+class TestKimiStuckDetection(unittest.TestCase):
+    """Kimi stuck-mid-turn classification: wire-tail turn shape plus the
+    stale threshold must produce the same stale_tool_call contract codex
+    rows carry."""
+
+    def _wire_dir(self, events):
+        d = tempfile.mkdtemp(prefix="ccc-kimi-wire-")
+        self.addCleanup(shutil.rmtree, d, True)
+        wire = pathlib.Path(d) / "agents" / "main"
+        wire.mkdir(parents=True)
+        with (wire / "wire.jsonl").open("w") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+        return d, wire / "wire.jsonl"
+
+    def _loop(self, ltype, **kw):
+        ev = {"type": ltype}
+        ev.update(kw)
+        return {"type": "context.append_loop_event", "event": ev}
+
+    def test_completed_turn_reads_result_not_stuck(self):
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "hi"}]},
+            self._loop("step.begin"),
+            self._loop("content.part", part={"type": "text", "text": "done"}),
+            self._loop("step.end", finishReason="end_turn"),
+            {"type": "usage.record", "usage": {}},
+        ])
+        old = time.time() - 3600
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["last_event_type"], "result")
+        self.assertIsNone(meta["pending_tool"])
+        self.assertFalse(meta["mid_turn"])
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertFalse(fields["stale_tool_call"])
+
+    def test_dangling_tool_call_is_mid_turn(self):
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "run"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Bash"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["pending_tool"], "Bash")
+        self.assertTrue(meta["mid_turn"])
+        self.assertEqual(meta["last_event_type"], "assistant")
+
+    def test_step_end_tool_use_is_still_mid_turn(self):
+        """step.end with finishReason tool_use only closes a STEP — the agent
+        loop continues, so the session must not read as done."""
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("tool.call", toolCallId="t1", name="Read"),
+            self._loop("tool.result", toolCallId="t1", result={"output": "ok"}),
+            self._loop("step.end", finishReason="tool_use"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertTrue(meta["mid_turn"])
+        self.assertNotEqual(meta["last_event_type"], "result")
+
+    def test_turn_cancel_reads_result(self):
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            {"type": "turn.cancel"},
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["last_event_type"], "result")
+        self.assertFalse(meta["mid_turn"])
+
+    def test_stale_mid_turn_flags_stuck_with_tool_name(self):
+        """Mid-turn + wire silent past the threshold => stale_tool_call, the
+        flag the row Stuck pill and pane stuck card bind to."""
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Edit"),
+        ])
+        old = time.time() - 1200
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertTrue(fields["stale_tool_call"])
+        self.assertGreaterEqual(fields["stale_tool_age_s"], 1200)
+
+    def test_fresh_mid_turn_is_not_stuck(self):
+        """Mid-turn but the wire was just written — a live turn, not stuck."""
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Edit"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertFalse(fields["stale_tool_call"])
+        self.assertGreater(fields["stale_tool_age_s"], -1)
+
+    def test_acp_active_turn_with_silent_wire_is_stuck(self):
+        """CCC-driven turn: ACP snapshot active, wire silent past threshold —
+        the harness wedged mid-turn."""
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("content.part", part={"type": "text", "text": "working"}),
+            self._loop("step.end", finishReason="end_turn"),
+        ])
+        old = time.time() - 2000
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertFalse(meta["mid_turn"])  # wire tail alone reads finished
+        fields = server._kimi_stale_tool_fields(meta, acp_active=True, threshold_s=900)
+        self.assertTrue(fields["stale_tool_call"])
+
+    def test_row_builder_stamps_kimi_stale_fields(self):
+        """find_kimi_conversations must stamp the stale contract on rows so
+        the sidebar Stuck pill lights up with no client changes."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.find_kimi_conversations)
+        self.assertIn("_kimi_wire_tail_meta", src)
+        self.assertIn("_kimi_stale_tool_fields", src)
+
+    def test_session_status_emits_kimi_stale_fields(self):
+        """session_live_status must emit stale fields for kimi so the pane's
+        stuck card and the sidebar-row mirror pick them up."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.session_live_status)
+        self.assertIn("_kimi_stale_tool_fields", src)
+
+
 class TestServerImports(unittest.TestCase):
     def test_codex_agent_task_labels_humanize_cleartext_paths(self):
         server = importlib.import_module("server")
@@ -524,6 +706,69 @@ class TestServerImports(unittest.TestCase):
                 server.CODEX_SESSIONS_ROOT = old_root
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._codex_usage_file_cache.clear()
+
+    def test_kimi_usage_persists_snapshot_and_surfaces_in_usage_current(self):
+        """Kimi /usages data is stored additively in native usage snapshots
+        and surfaces in /api/usage/current next to the Codex block."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+                kimi = server._kimi_usage_from_response({
+                    "user": {"membership": {"level": "LEVEL_ADVANCED"}},
+                    "usage": {
+                        "limit": "100",
+                        "used": "15",
+                        "remaining": "85",
+                        "resetTime": "2026-07-28T13:52:21.141644Z",
+                    },
+                    "limits": [{
+                        "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                        "detail": {
+                            "limit": "100",
+                            "remaining": "60",
+                            "resetTime": "2026-07-21T05:20:00Z",
+                        },
+                    }],
+                }, now_epoch=1_783_011_600)
+                self.assertEqual(kimi["plan_type"], "Advanced")
+                self.assertEqual(kimi["weekly"]["pct"], 15.0)
+                self.assertEqual(kimi["weekly"]["window_minutes"], 10080)
+                self.assertEqual(kimi["session"]["pct"], 40.0)
+                self.assertEqual(kimi["session"]["window_minutes"], 300)
+
+                snap = server._native_usage_snapshot_from_plan_usage(
+                    {"ok": True, "usage": {"five_hour": {}, "seven_day": {}, "seven_day_sonnet": {}}},
+                    kimi=kimi,
+                    now_epoch=1_783_011_600,
+                )
+                self.assertEqual(snap["kimi"]["weekly"]["pct"], 15.0)
+                self.assertTrue(server._append_native_usage_snapshot(snap, now_epoch=1_783_011_600))
+                current = server.usage_current_payload(now_epoch=1_783_011_600)
+                self.assertTrue(current["ok"])
+                self.assertEqual(current["kimi"]["weekly"]["pct"], 15.0)
+                self.assertEqual(current["kimi"]["session"]["pct"], 40.0)
+                self.assertEqual(current["kimi"]["plan_type"], "Advanced")
+                pace = server.kimi_usage_pace_payload(kimi=kimi, now_epoch=1_783_011_600)
+                self.assertTrue(pace["ok"])
+                self.assertEqual(pace["weekly_pct"], 15.0)
+                prev = {"ts": "2026-07-02T15:55:00Z", "kimi": {
+                    "session": {"pct": 30.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 40.0, "resets_at": "2026-07-09T07:00:00Z"},
+                }}
+                curr = {"ts": "2026-07-02T16:00:00Z", "kimi": {
+                    "session": {"pct": 2.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 39.0, "resets_at": "2026-07-10T07:00:00Z"},
+                }}
+                events = server._detect_usage_reset_events(prev, curr, now_epoch=1_783_008_000)
+                self.assertIn(("kimi_five_hour", "unscheduled"), {(e["window"], e["kind"]) for e in events})
+                self.assertIn(("kimi_weekly", "scheduled"), {(e["window"], e["kind"]) for e in events})
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
 
     def test_codex_usage_pace_rejects_stale_persisted_snapshot(self):
         """The weekly meter must not present an old Codex rollout as current."""

@@ -7833,6 +7833,14 @@ def _rehydrate_archive_cached_rows(rows):
                             row[k] = live_row[k]
                 except Exception:
                     pass
+            if row.get("engine") == "kimi" or row.get("source") == "kimi":
+                # Kimi turn-shape fields (last_event_type / pending_tool /
+                # stale_tool_call) can't wait for a corpus-signature rebuild —
+                # wire appends deliberately don't bust it. One stat per row.
+                try:
+                    _restamp_kimi_row_tail_fields(row)
+                except Exception:
+                    pass
         hydrated.append(row)
 
     _apply_pinned_conversation_fields(hydrated, pinned_list)
@@ -13194,6 +13202,39 @@ def session_live_status(session_id, session_cwd):
             if snap.get("pending_permissions"):
                 result["needs_approval"] = True
                 result["needs_approval_message"] = "Kimi is waiting for a tool approval"
+            # TUI-originated turns never flip the ACP snapshot to "active"
+            # (that only happens for CCC-driven turns), but they do append to
+            # the session's wire.jsonl. Fresh wire activity is the only honest
+            # busy signal for those turns — use it so the pane can show a
+            # working indicator instead of sitting static.
+            if result["status"] != "running":
+                try:
+                    wire = _acp_wire_path("kimi", session_id)
+                    if wire:
+                        wire_age = time.time() - wire.stat().st_mtime
+                        result["recently_written"] = wire_age < 300
+                        if wire_age < 10:
+                            result["status"] = "running"
+                except OSError:
+                    pass
+            # Stuck-mid-turn detection — same stale_tool_call contract codex
+            # rows carry, so the pane's stuck card and the sidebar row's Stuck
+            # pill work for kimi with no client-side engine special cases.
+            # Mid-turn = ACP turn active OR the wire tail shows an unfinished
+            # turn; stale = the wire (appended to throughout a live turn) has
+            # had no output past CCC_STALE_TOOL_SEC.
+            try:
+                idx_entry = _kimi_session_index().get(session_id) or {}
+                tail_meta = _kimi_wire_tail_meta(idx_entry.get("session_dir"))
+                result["last_event_type"] = tail_meta.get("last_event_type")
+                if tail_meta.get("pending_tool"):
+                    result["pending_tool"] = tail_meta["pending_tool"]
+                    result["pending_tool_ts"] = tail_meta.get("wire_mtime") or 0
+                if not result.get("needs_approval"):
+                    result.update(_kimi_stale_tool_fields(
+                        tail_meta, acp_active=(snap.get("status") == "active")))
+            except Exception:
+                pass
         return result
 
     if _is_codex_session(session_id):
@@ -22554,7 +22595,15 @@ def _codex_error_text(response):
 
 def _codex_error_is_not_steerable(response):
     text = _codex_error_text(response)
-    return "activeTurnNotSteerable" in text or "not steerable" in text.lower()
+    lowered = text.lower()
+    if "activeTurnNotSteerable" in text or "not steerable" in lowered:
+        return True
+    # Busy-thread rejection ("Invalid request: Cannot launch a new turn while
+    # another turn (ID 7) is active"): the message must take the durable-queue
+    # fallback, NOT the exec fallback — the exec spawn dies with turn.failed
+    # and litters the transcript with duplicate user bubbles + error banners
+    # on every queue-pump retry.
+    return "cannot launch a new turn" in lowered or "another turn" in lowered
 
 
 def _codex_response_succeeded(response):
@@ -28962,7 +29011,17 @@ def _acp_wire_fold(harness, sid, events):
                     if not text:
                         continue
                     norm = " ".join(text.split())
-                    if norm in seen_assistant:
+                    # Containment, not just equality: the finalized turn text
+                    # can be a truncated tail (ACP text cap) or a multi-step
+                    # concatenation of this wire part, so exact matching lets
+                    # the same reply render twice (partial + full). The 80-char
+                    # floor keeps a short legit message from being swallowed
+                    # by an unrelated long one.
+                    if norm in seen_assistant or any(
+                        (len(norm) >= 80 and norm in prev)
+                        or (len(prev) >= 80 and prev in norm)
+                        for prev in seen_assistant
+                    ):
                         continue
                     seen_assistant.add(norm)
                     _acp_emit_event_unlocked(harness, sid, {
@@ -28995,6 +29054,13 @@ def _acp_wire_fold(harness, sid, events):
                         if out_text:
                             block["output_preview"] = out_text[:400]
                         block["tool_status"] = "failed" if is_error else "completed"
+                    else:
+                        # No result yet — the tool is genuinely in flight
+                        # (TUI-originated turn). Mark it running so the pane
+                        # shows the pulsing dot instead of a false "done";
+                        # _attach_result flips it when the result lands, and
+                        # the client settles dangling rows once idle.
+                        block["tool_status"] = "running"
                     _acp_emit_event_unlocked(harness, sid, {
                         "type": "assistant",
                         "message_id": f"acp-wire-{state['next_line']}",
@@ -29229,6 +29295,167 @@ def _kimi_wire_head(session_dir):
     return info
 
 
+_KIMI_WIRE_TAIL_BYTES = 65536
+_KIMI_WIRE_TAIL_CACHE = {}  # wire path -> ((mtime_ns, size), meta)
+
+
+def _kimi_wire_tail_meta(session_dir):
+    """Last-turn shape from the tail of agents/main/wire.jsonl.
+
+    The kimi analogue of _extract_codex_tail_meta: a bounded tail read
+    ((mtime,size)-keyed cache, so repeat polls cost one stat) answering "did
+    the last turn finish, and is a tool call still dangling?" The wire is
+    event-sourced (docs/kimi-code-reference.md §5): a finished turn always
+    ends in step.end (finishReason end_turn / cancelled / …) or turn.cancel.
+    step.end with finishReason "tool_use" only closes a STEP — the agent
+    loop continues — so it still reads mid-turn.
+    """
+    meta = {"last_event_type": None, "pending_tool": None, "mid_turn": False, "wire_mtime": 0.0}
+    wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
+    if wire is None:
+        return meta
+    try:
+        st = wire.stat()
+    except OSError:
+        return meta
+    meta["wire_mtime"] = st.st_mtime
+    key = (st.st_mtime_ns, st.st_size)
+    cache_key = str(wire)
+    cached = _KIMI_WIRE_TAIL_CACHE.get(cache_key)
+    if cached and cached[0] == key:
+        return dict(cached[1])
+    try:
+        with wire.open("rb") as f:
+            if st.st_size > _KIMI_WIRE_TAIL_BYTES:
+                f.seek(-_KIMI_WIRE_TAIL_BYTES, os.SEEK_END)
+            raw = f.read(_KIMI_WIRE_TAIL_BYTES)
+    except OSError:
+        return meta
+    pending = {}
+    last_type = None
+    mid_turn = False
+    for line in raw.decode("utf-8", "replace").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # the window's first line is usually truncated
+        etype = ev.get("type")
+        if etype == "turn.prompt":
+            pending.clear()
+            last_type = "user"
+            mid_turn = True
+        elif etype == "turn.cancel":
+            pending.clear()
+            last_type = "result"
+            mid_turn = False
+        elif etype == "context.append_message":
+            if (ev.get("message") or {}).get("role") == "user":
+                last_type = "user"
+                mid_turn = True
+        elif etype == "context.append_loop_event":
+            loop = ev.get("event") or {}
+            ltype = loop.get("type")
+            if ltype == "step.begin":
+                mid_turn = True
+            elif ltype == "content.part":
+                if (loop.get("part") or {}).get("type") in ("text", "think"):
+                    last_type = "assistant"
+            elif ltype == "tool.call":
+                tid = str(loop.get("toolCallId") or "")
+                if tid:
+                    pending[tid] = str(loop.get("name") or "tool")
+                last_type = "assistant"
+            elif ltype == "tool.result":
+                pending.pop(str(loop.get("toolCallId") or ""), None)
+                last_type = "assistant"
+            elif ltype == "step.end":
+                finish = str(loop.get("finishReason") or "end_turn")
+                if finish == "tool_use":
+                    # Only a step closed — the agent loop continues.
+                    mid_turn = True
+                    last_type = "assistant"
+                else:
+                    pending.clear()
+                    last_type = "result"
+                    mid_turn = False
+        # llm.*, usage.record, config.update and observability rows carry no
+        # turn-shape signal — skipped by design.
+    meta["last_event_type"] = last_type
+    meta["pending_tool"] = list(pending.values())[-1] if pending else None
+    meta["mid_turn"] = bool(mid_turn or pending or last_type in ("user", "assistant"))
+    if len(_KIMI_WIRE_TAIL_CACHE) > 512:
+        _KIMI_WIRE_TAIL_CACHE.clear()
+    _KIMI_WIRE_TAIL_CACHE[cache_key] = (key, dict(meta))
+    return meta
+
+
+def _kimi_stale_tool_fields(tail_meta, acp_active=False, now=None, threshold_s=None):
+    """Stale-tool fields for a kimi session — same contract as
+    _codex_stale_tool_fields, so the existing row "Stuck" pill / stuck chip
+    and the pane's stuck card light up with no client-side engine special
+    cases. Mid-turn means the ACP snapshot says a turn is active OR the wire
+    tail shows an unfinished turn; "stale" means the wire (appended to
+    throughout a live turn) has had no output for CCC_STALE_TOOL_SEC
+    (default 900s)."""
+    threshold = _stale_tool_threshold_s() if threshold_s is None else max(0.0, float(threshold_s))
+    fields = {
+        "stale_tool_call": False,
+        "stale_tool_age_s": 0,
+        "stale_tool_threshold_s": int(threshold),
+    }
+    if not tail_meta:
+        return fields
+    if not (acp_active or tail_meta.get("mid_turn")):
+        return fields
+    ts = tail_meta.get("wire_mtime") or 0
+    if not ts:
+        return fields
+    try:
+        age = max(0.0, float(now if now is not None else time.time()) - float(ts))
+    except (TypeError, ValueError):
+        return fields
+    fields["stale_tool_age_s"] = int(age)
+    fields["stale_tool_call"] = bool(threshold > 0 and age >= threshold)
+    return fields
+
+
+def _restamp_kimi_row_tail_fields(row):
+    """Serve-time refresh of a kimi row's wire-tail fields, IN PLACE.
+
+    The archive corpus signature covers kimi at directory granularity (per-
+    turn wire.jsonl appends deliberately do NOT bust the build cache), so
+    build-time stamps alone would freeze last_event_type / stale_tool_call
+    until an unrelated rebuild. Recompute from the (mtime,size)-keyed tail
+    cache on every rehydrate — one stat per kimi row when nothing changed.
+    """
+    sid = row.get("session_id") or row.get("id")
+    idx = _kimi_session_index().get(sid) or {}
+    tail_meta = _kimi_wire_tail_meta(idx.get("session_dir"))
+    row["last_event_type"] = tail_meta.get("last_event_type")
+    if tail_meta.get("wire_mtime"):
+        row["last_event_ts"] = tail_meta["wire_mtime"]
+    pending = tail_meta.get("pending_tool")
+    row["pending_tool"] = pending
+    row["pending_tool_ts"] = tail_meta.get("wire_mtime") if pending else 0
+    acp_active = False
+    try:
+        with _ACP_LOCK:
+            _acp_load_state("kimi")
+            state = _acp_session("kimi", sid)
+            acp_active = bool(state and state.get("status") == "active")
+            waiting = bool(state and state.get("pending_permissions"))
+    except Exception:
+        waiting = False
+    if waiting or row.get("needs_approval"):
+        # Parked on a human approval is "waiting", never "stuck".
+        row.update(_kimi_stale_tool_fields(None))
+    else:
+        row.update(_kimi_stale_tool_fields(tail_meta, acp_active=acp_active))
+
+
 def find_kimi_conversations(
     repo_path=None,
     include_old=True,
@@ -29373,6 +29600,21 @@ def find_kimi_conversations(
             if acp.get("pending_permissions"):
                 row["needs_approval"] = True
                 row["needs_approval_message"] = "Kimi is waiting for a tool approval"
+        # Wire-tail turn shape: last_event_type feeds the row's "done" chip
+        # (result + recent), a dangling tool names the Stuck pill, and the
+        # stale fields light the same stuck indicators codex rows use.
+        tail_meta = _kimi_wire_tail_meta(idx.get("session_dir"))
+        row["last_event_type"] = tail_meta.get("last_event_type")
+        if tail_meta.get("wire_mtime"):
+            row["last_event_ts"] = tail_meta["wire_mtime"]
+        if tail_meta.get("pending_tool"):
+            row["pending_tool"] = tail_meta["pending_tool"]
+            row["pending_tool_ts"] = tail_meta["wire_mtime"]
+        if row.get("needs_approval"):
+            # Parked on a human approval is "waiting", never "stuck".
+            row.update(_kimi_stale_tool_fields(None))
+        else:
+            row.update(_kimi_stale_tool_fields(tail_meta, acp_active=(status == "active")))
         rows.append(row)
     rows.sort(key=lambda r: r.get("modified") or 0, reverse=True)
     if limit:
@@ -61162,6 +61404,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # sidecar (most-recently completed). The detail pane uses these
             # to render an in-progress strip without polling /api/sessions.
             is_codex_status = _is_codex_session(sid) if sid else False
+            is_kimi_status = _is_kimi_session(sid) if sid else False
             is_gemini_status = _is_gemini_session(sid) if sid else False
             is_antigravity_status = _is_antigravity_session(sid) if sid else False
             is_hermes_status = _is_hermes_session(sid) if sid else False
@@ -61284,9 +61527,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["sidecar_in_flight"] = False
                 # Default stale-tool fields so the response shape matches Codex
                 # (the UI reads stale_tool_call/age unconditionally). Filled in
-                # below when a long-running tool child is detected.
-                status.update(_claude_stale_tool_fields(None, False))
-                if status.get("live") and not status.get("tty"):
+                # below when a long-running tool child is detected. Kimi sessions
+                # already carry their own wire-tail stale fields from
+                # session_live_status — don't clobber them, and they have no
+                # Claude tool-child process to probe.
+                if not is_kimi_status:
+                    status.update(_claude_stale_tool_fields(None, False))
+                if not is_kimi_status and status.get("live") and not status.get("tty"):
                     spawn = _find_live_spawn_entry_for_session(sid)
                     active_child = _spawn_entry_active_tool_child(spawn) if spawn else None
                     if active_child:
@@ -61561,6 +61808,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     pass
                 return
             result = parse_conversation(conv_id, after_line, tail=tail, before=before)
+            # Advertise the detected engine so view paths that opened the
+            # conversation without a row (e.g. a popout URL missing `source`)
+            # can still pick the right renderer (webui panes for kimi/codex).
+            try:
+                result["engine"] = _detect_session_engine(conv_id)
+            except Exception:
+                pass
             raw = json.dumps(result).encode()
             gz = None
             if len(raw) >= self._GZIP_MIN_BYTES:

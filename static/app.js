@@ -3796,6 +3796,11 @@
       liveStatus = {
         forSessionId: _fetchedFor,
         live: !!data.live,
+        // Engine-reported turn state ("running"|"idle" for kimi ACP; null
+        // elsewhere) — drives the webui-pane busy indicator for turns that
+        // produce no live deltas (TUI-originated kimi turns).
+        status: data.status || null,
+        recentlyWritten: !!data.recently_written,
         pid: data.pid || null,
         tty: data.tty || null,
         terminalApp: data.terminal_app || null,
@@ -3831,6 +3836,9 @@
           ? data.codex_app_server_token_usage : null,
         staleToolCall: !!data.stale_tool_call,
         staleToolAgeS: data.stale_tool_age_s || 0,
+        // Dangling tool name (codex rollout / kimi wire tail) — labels the
+        // Stuck pill/card so the user sees WHAT stopped producing output.
+        pendingTool: data.pending_tool || null,
         needsApproval: !!data.needs_approval,
         needsApprovalMessage: data.needs_approval_message || '',
         questionWaiting: !!data.question_waiting,
@@ -3936,7 +3944,7 @@
         codex_desktop_attached: !!data.codex_desktop_attached,
       });
     } catch (err) {
-      liveStatus = { forSessionId: _fetchedFor, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, status: null, recentlyWritten: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -5433,6 +5441,58 @@
     // zero DOM work each tick until a session goes live again.
     const needsApproval = liveStatusMatchesOpenConv() && !!liveStatus.needsApproval;
     const codexStateWorking = liveStatusMatchesOpenConv() && liveStatus.codexState === 'working';
+    // Webui panes (kimi/codex): the engine-reported turn state. Kimi TUI
+    // turns arrive via wire-tail at whole-message granularity — no deltas,
+    // no sidecar — so `status: running` (server: ACP active turn or fresh
+    // wire.jsonl activity) is the only busy signal they get.
+    const _webuiPane = (typeof _viewIsWebUiPane === 'function') && _viewIsWebUiPane($view);
+    const _webuiBusy = codexStateWorking || (!!liveStatus && liveStatus.status === 'running');
+    // Kimi webui stuck-mid-turn: the server flags stale_tool_call when the
+    // turn looks unfinished (ACP active / dangling tool / mid-turn wire tail)
+    // but the wire has had no output past the stale threshold. Rendered as a
+    // persistent warning card instead of the "Working…" moon. Codex webui
+    // panes keep their own state badge (updateCodexStateBadge) — no
+    // double-render here.
+    const _isKimiWebuiPane = _webuiPane && !!currentSession
+      && (currentSession.source === 'kimi' || currentSession.engine === 'kimi');
+    const _kimiWebuiStuck = _isKimiWebuiPane && liveStatusMatchesOpenConv() && !!liveStatus.staleToolCall;
+    // kimi-web parity: once the session is idle, a tool row still showing
+    // "running" is a missed result, not live work — settle it (and the
+    // group header aggregate) instead of pulsing forever. A STUCK session is
+    // not idle — its dangling tool rows keep pulsing to back the stuck card.
+    if (_webuiPane && !_webuiBusy && !_kimiWebuiStuck) _settleWebuiRunningTools($view);
+    if (_kimiWebuiStuck && !needsApproval) {
+      const stuckAgeS = liveStatus.staleToolAgeS || 0;
+      const stuckMins = Math.max(1, Math.floor(stuckAgeS / 60));
+      const stuckToolName = liveStatus.pendingTool || '';
+      document.querySelectorAll('.conv-live-tool-strip').forEach(n => n.remove());
+      let stuckInline = getSingleLiveToolInline($view);
+      if (!stuckInline) {
+        stuckInline = document.createElement('div');
+        stuckInline.className = 'conv-live-tool-inline';
+        $view.appendChild(stuckInline);
+      }
+      stuckInline.className = 'conv-live-tool-inline is-stuck';
+      stuckInline.innerHTML = '<span class="cl-stuck-icon">⚠</span>'
+        + '<span class="cl-tool">Stuck — no output for ' + stuckMins + 'm</span>'
+        + (stuckToolName ? '<span class="cl-file">last: ' + escapeHtml(stuckToolName) + '</span>' : '');
+      stuckInline.title = 'This turn has produced no output for ' + stuckMins
+        + 'm — the session may be stuck. Click to focus the composer; sending a message nudges it.';
+      if (stuckInline.parentElement !== $view || stuckInline !== $view.lastElementChild) {
+        $view.appendChild(stuckInline);
+      }
+      if (!stuckInline.dataset.stuckClickBound) {
+        stuckInline.dataset.stuckClickBound = '1';
+        stuckInline.addEventListener('click', () => {
+          try {
+            const input = (typeof composerInputForPane === 'function' && composerInputForPane(activePaneId())) || document.getElementById('convInput');
+            if (input) input.focus();
+          } catch (_) {}
+        });
+      }
+      _liveStripShown = true;
+      return;
+    }
     if (!liveStatus.live && !codexStateWorking) {
       if (needsApproval) {
         // Continue below so an approval prompt can render even if liveness
@@ -5492,7 +5552,8 @@
     // a permanent "Generating…" (CCC-81). sidecar_status flips off at turn
     // end; the age cap covers a stale sidecar that never got cleared.
     const isGenerating = (liveStatus.live || codexStateWorking) && !tool
-      && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking);
+      && ((liveStatus.sidecarStatus === 'active' && ageSec < 120) || codexStateWorking
+        || (_webuiBusy && !(_streamingBubble && _streamingBubble.parentNode === $view)));
     const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');
     const shouldShow = needsApproval
       || (liveStatus.live && tool && liveStatus.sidecarStatus === 'active'
@@ -5578,10 +5639,13 @@
       const _liveMatches = liveStatusMatchesOpenConv();
       const _activeItem = _liveMatches ? codexActiveItemLabel(liveStatus.codexAppServerActiveItem) : { label: '', detail: '' };
       const _tokTxt = _liveMatches ? codexTokenUsageText(liveStatus.codexAppServerTokenUsage) : '';
-      const _toolTxt = _activeItem.label || 'Generating…';
+      const _toolTxt = _activeItem.label || (_webuiPane ? 'Working…' : 'Generating…');
       const _detailTxt = _activeItem.label ? _activeItem.detail : '';
       inline.className = 'conv-live-tool-inline is-generating' + (_activeItem.label ? ' in-flight' : '');
-      inline.innerHTML = '<span class="cl-pulse"></span>'
+      // Webui panes get the kimi-web moon-phases waiting spinner (honest
+      // busy signal — no fake per-token streaming); other engines keep the
+      // generic pulse.
+      inline.innerHTML = (_webuiPane && !_activeItem.label ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
         + '<span class="cl-tool">' + (_activeItem.label ? '▶ ' : '') + escapeHtml(_toolTxt) + '</span>'
         + (_detailTxt ? '<span class="cl-file">' + escapeHtml(truncate(_detailTxt, 80)) + '</span>' : '')
         + (_tokTxt ? '<span class="cl-age cl-tokens">' + escapeHtml(_tokTxt) + '</span>' : '');
@@ -24662,6 +24726,7 @@
         }
       }
       const isCodexRow = c.source === 'codex' || c.engine === 'codex';
+      const isKimiRow = c.source === 'kimi' || c.engine === 'kimi';
       const isGeminiRow = c.source === 'gemini' || c.engine === 'gemini';
       const isCursorRow = c.source === 'cursor' || c.engine === 'cursor';
       const isAntigravityRow = c.source === 'antigravity' || c.engine === 'antigravity';
@@ -24808,6 +24873,15 @@
       }
       const _rowActivityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
       const _rowActivityAge = _rowActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _rowActivityTs)) : 9999;
+      // "done" chip: a turn that completed within the last 15 min reads as a
+      // calm done state; older completed sessions render as plain idle (no
+      // chip spam on every row). Scoped to kimi/codex rows — claude rows
+      // keep their existing lifecycle chips unchanged. last_event_ts (wire /
+      // rollout append time) wins over the row mtime when the server has it.
+      const _DONE_CHIP_FRESH_S = 15 * 60;
+      const _doneActivityTs = c.last_event_ts || _rowActivityTs;
+      const _doneAgeSec = _doneActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _doneActivityTs)) : 9999;
+      const _doneRecently = (isKimiRow || isCodexRow) && c.last_event_type === 'result' && _doneAgeSec < _DONE_CHIP_FRESH_S;
       const _isQuestionWaiting = c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'));
       const _isWaitingForUser = c.is_live && (c.needs_approval || _isQuestionWaiting);
       const _knownActivityTool = c.sidecar_tool || c.pending_tool || '';
@@ -24946,6 +25020,12 @@
         // the row doesn't masquerade as actively running. Uses a muted
         // class (.gh-in-progress) instead of .activity-working.
         signals += '<span class="conv-signal gh-in-progress" title="Linked GitHub issue carries the claude-in-progress label">issue: in progress</span>';
+      } else if (_doneRecently && !liveToolHtml) {
+        // Muted "done" — the turn finished a few minutes ago. Last in the
+        // activity-chip chain so any live/waiting/stuck signal outranks it.
+        const doneMins = Math.floor(_doneAgeSec / 60);
+        const doneTitle = 'Turn finished ' + (doneMins < 1 ? 'just now' : doneMins + 'm ago');
+        signals += '<span class="conv-signal done" title="' + escapeAttr(doneTitle) + '">✓ done</span>';
       }
       const _showGitStateSignals = !_rowsCompactOn;
       if (c.source === 'pkood') {
@@ -38299,6 +38379,17 @@
       // while the fetch was in-flight), discard the stale response.
       const currentPane = paneByPaneId(fetchPaneId);
       if (!currentPane || currentPane.conversationId !== id) return;
+      // The server authoritatively detects the engine while parsing. View
+      // paths that opened the conversation WITHOUT a list row (popout URLs
+      // missing `source`, synthetic rows defaulting to 'interactive') set
+      // is-webui-session wrong at select time — correct it here, before the
+      // first render picks a renderer.
+      if (data && typeof data.engine === 'string' && data.engine) {
+        const _enginePaneEl = document.querySelector('.conv-pane[data-pane-id="' + fetchPaneId + '"]');
+        if (_enginePaneEl) {
+          _enginePaneEl.classList.toggle('is-webui-session', data.engine === 'kimi' || data.engine === 'codex');
+        }
+      }
       // Re-anchor activeIndex to fetchPaneId — the user may have clicked
       // another conv (in either pane) while this fetch was in-flight, shifting
       // splitState.activeIndex away. Mirror the savedIdx/try/finally pattern
@@ -43400,6 +43491,75 @@
     if (meta) meta.textContent = '· ' + state;
   }
 
+  // kimi-web parity (messagesToTurns flushGroup): when the session is IDLE,
+  // a tool row still marked "running" is a result that never landed (missed
+  // wire batch, dropped frame) — not live work. Settle it to done so it
+  // doesn't pulse forever after the turn already finished.
+  function _settleWebuiRunningTools($view) {
+    if (!$view) return;
+    const running = $view.querySelectorAll('.kimi-tool-status.running');
+    if (!running.length) return;
+    running.forEach(st => {
+      st.className = 'kimi-tool-status ok';
+      st.setAttribute('aria-label', 'done');
+      st.innerHTML = _KIMI_GLYPHS['check'];
+    });
+    $view.querySelectorAll('.kimi-tool-group').forEach(grp => _kimiUpdateToolGroupHead(grp));
+  }
+
+  // Normalize a text/thinking block for duplicate detection (kimi-web
+  // contentSig: whitespace differences between a streamed copy and the
+  // persisted part must not defeat the dedup).
+  function _kimiNormBlockText(s) {
+    return String(s || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // kimi-web covers() parity (messagesToTurns.ts): the same logical reply can
+  // arrive twice on DIFFERENT transcript lines — e.g. a finalized partial
+  // (ACP text cap) plus the full wire-tail part — so per-line dedupe can't
+  // catch it. Within one merged turn, drop an incoming text/thinking block
+  // already covered by an existing block (exact, prefix, or long-substring),
+  // upgrade the existing block when the incoming one is the superset, and
+  // drop duplicate tool rows (same tool-use id).
+  function _kimiTurnCoveredBlocks(turn, blockEls) {
+    const kept = [];
+    for (const el of blockEls) {
+      if (!el || !el.classList) continue;
+      const isText = el.classList.contains('assistant-text');
+      const isThinking = el.classList.contains('kimi-thinking');
+      if (isText || isThinking) {
+        const sel = isText ? '.assistant-text' : '.kimi-thinking';
+        const inc = _kimiNormBlockText(el.textContent);
+        if (!inc) continue;
+        let absorbed = false;
+        for (const ex of turn.querySelectorAll(sel)) {
+          const prev = _kimiNormBlockText(ex.textContent);
+          if (!prev) continue;
+          if (prev === inc
+              || prev.indexOf(inc) === 0
+              || (inc.length >= 80 && prev.indexOf(inc) !== -1)) {
+            absorbed = true;  // existing block already covers the incoming one
+            break;
+          }
+          if (inc.indexOf(prev) === 0 || (prev.length >= 80 && inc.indexOf(prev) !== -1)) {
+            ex.replaceWith(el);  // incoming supersedes a shorter/partial copy
+            absorbed = true;
+            break;
+          }
+        }
+        if (absorbed) continue;
+      } else if (el.classList.contains('kimi-tool')) {
+        const tid = el.getAttribute('data-tool-use-id') || '';
+        if (tid) {
+          const escTid = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid;
+          if (turn.querySelector('.kimi-tool[data-tool-use-id="' + escTid + '"]')) continue;
+        }
+      }
+      kept.push(el);
+    }
+    return kept;
+  }
+
   // Append one kimi assistant event into the conversation view: consecutive
   // assistant events merge into the trailing `.kimi-turn` (any other node —
   // user bubble, result footer, stream bubble — closes the turn). The event
@@ -43425,7 +43585,7 @@
       $view.appendChild(turn);
     }
     turn.appendChild(marker);
-    for (const el of blockEls) turn.appendChild(el);
+    for (const el of _kimiTurnCoveredBlocks(turn, blockEls)) turn.appendChild(el);
     _kimiRegroupTools(turn);
     return turn;
   }
@@ -43953,6 +44113,29 @@
             if (pane && currentConversation) syncPendingSendsMapForConv(pane, currentConversation);
           }
         }
+        // Webui panes: collapse a durable user bubble that repeats the most
+        // recent durable user bubble when that bubble was NEVER ANSWERED.
+        // The Codex queue pump can persist the same queued text several
+        // times while a busy turn rejects delivery, producing alternating
+        // bubble/banner repeats with no assistant turn in between — render
+        // the first copy only. A repeat the user genuinely re-sent comes
+        // AFTER an assistant reply (a `.kimi-turn` sits between the bubbles),
+        // so it always renders. (Pending-echo reconciliation above has
+        // already run, so the optimistic echo is still cleared.)
+        if (_kimiPane && normed && !ev.pending) {
+          const _userRows = $view.querySelectorAll(
+            '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)');
+          const _lastUserRow = _userRows.length ? _userRows[_userRows.length - 1] : null;
+          const _lastUserMsg = _lastUserRow && _lastUserRow.querySelector('.user-msg');
+          if (_lastUserMsg
+              && _normSend(_lastUserMsg.getAttribute('data-raw-text') || _lastUserMsg.textContent) === normed) {
+            const _turns = $view.querySelectorAll('.kimi-turn');
+            const _lastTurn = _turns.length ? _turns[_turns.length - 1] : null;
+            const _answered = !!(_lastTurn
+              && (_lastUserRow.compareDocumentPosition(_lastTurn) & Node.DOCUMENT_POSITION_FOLLOWING));
+            if (!_answered) continue;
+          }
+        }
         const imagesHtml = renderImageDescriptors(ev.images);
         // Safety net: if cleanIssuePrompt strips a user's typed message
         // down to empty (it's matching a spawn-prompt boilerplate
@@ -44344,6 +44527,17 @@
         // finished.
         const _outcome = _resultOutcomeInfo(ev);
         if (_outcome) {
+          // Webui panes: a repeated failed delivery (e.g. the Codex queue
+          // pump retrying against a busy turn) lands one identical error
+          // footer per attempt. Collapse consecutive identical outcomes —
+          // a genuinely stopped session keeps exactly one banner.
+          if (_kimiPane && _outcome.kind !== 'silent') {
+            const _sig = _outcome.kind + '|' + _outcome.label + '|' + String(_outcome.detail || '');
+            const _prevErrs = $view.querySelectorAll('.event.result.result-error');
+            const _prevErr = _prevErrs.length ? _prevErrs[_prevErrs.length - 1] : null;
+            if (_prevErr && _prevErr.dataset.resultSig === _sig) continue;
+            div.dataset.resultSig = _sig;
+          }
           if (_outcome.kind === 'silent') {
             div.classList.add('result-silent');
           } else {
@@ -48977,6 +49171,10 @@
         stale_tool_age_s: c.stale_tool_age_s || 0,
         stale_tool_threshold_s: c.stale_tool_threshold_s || 0,
         last_event_type: c.last_event_type || null,
+        // Wire/rollout append time of the last event (kimi wire, codex tail).
+        // The row's "done" chip ages from this — mtime lags real turn-end for
+        // engines whose transcript isn't the row's `modified` source.
+        last_event_ts: c.last_event_ts || 0,
         needs_approval: !!c.needs_approval,
         needs_approval_message: c.needs_approval_message || '',
         question_waiting: !!c.question_waiting,
