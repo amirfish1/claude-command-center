@@ -7084,12 +7084,12 @@
     height: 0;
     display: none;
   }
-  /* Native-app typing on touch devices. iOS Safari/WKWebView auto-zoom the
-     page whenever a focused input renders below 16px — the single biggest
-     "this is a web page" tell. Bump the composers to 16px on coarse
-     pointers only (desktop keeps the denser 15px) and pad the bottom past
-     the home indicator so the bar clears it in standalone PWA mode. */
-  @media (pointer: coarse) {
+  /* Native-app typing on mobile. iOS Safari/WKWebView auto-zooms the page
+     whenever a focused input renders below 16px. Some embedded webviews
+     report a fine pointer even on a phone, so key this safeguard to either
+     touch input OR the same narrow viewport used by the mobile layout.
+     Desktop keeps the denser 15px composer at full width. */
+  @media (pointer: coarse), (max-width: 1200px) {
     .conv-input-bar input,
     .conv-input-bar textarea,
     #cpInput {
@@ -21151,5 +21151,16 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   }
   body.status-pos-right .conversations-view .event.user_text.is-pinned-in-sticky {
     display: none;
+  }
+}
+
+/* iOS focus-zoom guard. Keep this after conversation-theme rules: themes may
+   use !important typography (for example Stitch's 14px monospace composer),
+   but a focused mobile control must compute to at least 16px or WebKit zooms
+   the entire page and pushes the Back button outside the visible frame. */
+@media (pointer: coarse), (max-width: 1200px) {
+  #convInput,
+  #cpInput {
+    font-size: 16px !important;
   }
 }

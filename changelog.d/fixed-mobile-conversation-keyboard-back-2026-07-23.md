@@ -1,1 +1,1 @@
-- Keep the mobile conversation header and Back button visible when the on-screen keyboard opens.
+- Prevent focus zoom and keep the mobile conversation header and Back button visible when the on-screen keyboard opens.

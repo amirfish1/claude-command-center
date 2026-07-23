@@ -3553,7 +3553,8 @@ class TestServerImports(unittest.TestCase):
 
     def test_mobile_conversation_follows_visual_viewport(self):
         """The fixed conversation pane must remain inside the viewport after
-        iOS pans and shrinks it for the software keyboard."""
+        iOS pans and shrinks it for the software keyboard, and its composer
+        must not trigger iOS focus zoom even when pointer detection is wrong."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -3563,6 +3564,11 @@ class TestServerImports(unittest.TestCase):
         )
         self.assertIn("top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;", app_css)
         self.assertIn("height: var(--app-vh, 100vh);", app_css)
+        self.assertIn("@media (pointer: coarse), (max-width: 1200px)", app_css)
+        self.assertIn(
+            "#convInput,\n  #cpInput {\n    font-size: 16px !important;",
+            app_css,
+        )
 
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""
