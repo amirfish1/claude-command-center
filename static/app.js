@@ -5513,23 +5513,47 @@
       const msg = liveStatus.needsApprovalMessage || liveStatus.sidecarFile || 'Codex is waiting for approval';
       const approvalItem = liveStatusMatchesOpenConv() ? liveStatus.codexAppServerActiveItem : null;
       const canApprove = !!(approvalItem && approvalItem.needs_approval && approvalItem.request_id && approvalItem.can_approve);
+      // Claude has no approval API — its prompt can only be answered by driving
+      // the TUI picker with a keystroke, which is macOS + live-TTY only. Offer
+      // Approve/Deny when the server reports that capability; on Linux/headless
+      // hosts there is no route, so point the user at the terminal instead.
+      const _isClaudeSess = !!(currentSession && isClaudeSource(currentSession.source));
+      const _caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
+      const canAnswerClaude = !canApprove && _isClaudeSess && !!_caps.answerPermission;
+      const claudeNoRoute = !canApprove && _isClaudeSess && !_caps.answerPermission;
+      const hasButtons = canApprove || canAnswerClaude;
+      let actionsHtml;
+      if (canApprove) {
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<button type="button" class="cl-approval-btn" data-decision="accept">Approve</button>'
+          + '<button type="button" class="cl-approval-btn" data-decision="acceptForSession">Approve session</button>'
+          + '<button type="button" class="cl-approval-btn is-negative" data-decision="decline">Deny</button>'
+          + '<button type="button" class="cl-approval-btn is-negative" data-decision="cancel">Cancel</button>'
+          + '</span>';
+      } else if (canAnswerClaude) {
+        // Drive the Claude picker: Approve sends Return (highlighted "Yes"),
+        // Deny sends Esc, both into the session's live terminal.
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<button type="button" class="cl-approval-btn" data-claude-decision="accept" title="Approve this once — sends Return to the session\'s terminal picker">Approve</button>'
+          + '<button type="button" class="cl-approval-btn is-negative" data-claude-decision="decline" title="Deny — sends Esc to the session\'s terminal picker">Deny</button>'
+          + '</span>';
+      } else if (claudeNoRoute) {
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<span class="cl-approval-note" title="Answering permission prompts from CCC is macOS-only today — approve or deny in the session\'s own terminal">Answer in terminal</span>'
+          + '</span>';
+      } else {
+        // Dead-zone escape hatch: a Codex approval owned by an external writer
+        // (mobile/desktop) with no app-server request id CCC can answer. Without
+        // a control here the thread is a true dead end, so offer Grab back —
+        // reclaim into CCC and deny the pending approval.
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<button type="button" class="ccs-grab-back" title="This approval is owned by another Codex writer and can\'t be answered from CCC - reclaim the thread and deny the pending approval">Grab back</button>'
+          + '</span>';
+      }
       inline.className = 'conv-live-tool-inline is-question';
       inline.innerHTML = '<span class="cl-pulse"></span><span class="cl-tool">Needs approval</span>'
-        + (msg ? '<span class="cl-file">' + escapeHtml(truncate(msg, canApprove ? 86 : 120)) + '</span>' : '')
-        + (canApprove
-          ? '<span class="cl-approval-actions">'
-            + '<button type="button" class="cl-approval-btn" data-decision="accept">Approve</button>'
-            + '<button type="button" class="cl-approval-btn" data-decision="acceptForSession">Approve session</button>'
-            + '<button type="button" class="cl-approval-btn is-negative" data-decision="decline">Deny</button>'
-            + '<button type="button" class="cl-approval-btn is-negative" data-decision="cancel">Cancel</button>'
-            + '</span>'
-          // Dead-zone escape hatch: this approval is owned by an external
-          // writer (mobile/desktop) and has no app-server request id CCC can
-          // answer. Without a control here the thread is a true dead end, so
-          // offer Grab back — reclaim into CCC and deny the pending approval.
-          : '<span class="cl-approval-actions">'
-            + '<button type="button" class="ccs-grab-back" title="This approval is owned by another Codex writer and can\'t be answered from CCC - reclaim the thread and deny the pending approval">Grab back</button>'
-            + '</span>');
+        + (msg ? '<span class="cl-file">' + escapeHtml(truncate(msg, hasButtons ? 86 : 120)) + '</span>' : '')
+        + actionsHtml;
       inline.title = msg;
       if (canApprove) {
         inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
@@ -5538,6 +5562,15 @@
             ev.stopPropagation();
             const sid = currentSession && currentSession.id;
             if (sid) respondCodexApproval(sid, btn.dataset.decision || 'accept', btn);
+          });
+        });
+      } else if (canAnswerClaude) {
+        inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
+          btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const sid = currentSession && currentSession.id;
+            if (sid) respondClaudePermission(sid, btn.dataset.claudeDecision || 'accept', btn);
           });
         });
       } else {
@@ -30974,6 +31007,16 @@
       else item.setAttribute('draggable', previousDraggable);
       if (save) {
         const newName = input.value.trim();
+        // Show a spinner beside the (now read-only) input until the save
+        // round-trips. The write-through to the session .jsonl can take a
+        // beat, and without feedback the rename looks like it hung.
+        input.readOnly = true;
+        input.classList.add('is-saving');
+        const spinner = document.createElement('span');
+        spinner.className = 'conv-rename-spinner';
+        spinner.setAttribute('role', 'status');
+        spinner.setAttribute('aria-label', 'Saving name…');
+        input.insertAdjacentElement('afterend', spinner);
         try {
           const res = await fetch('/api/conversations/' + item.dataset.id + '/rename', {
             method: 'POST',
@@ -31029,6 +31072,14 @@
           document.body.appendChild(toast);
           setTimeout(() => toast.remove(), 3500);
         } catch (err) { /* swallow */ }
+        finally {
+          // Drop the spinner and re-enable the input regardless of outcome.
+          // The input is swapped back to a title element just below, but on
+          // an error path (no swap forced) the row must not be left spinning.
+          spinner.remove();
+          input.readOnly = false;
+          input.classList.remove('is-saving');
+        }
       }
       // Swap the title element back in place BEFORE asking for a render.
       // The re-render below repaints the whole list anyway, but if it gets
