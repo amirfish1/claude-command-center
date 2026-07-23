@@ -1276,6 +1276,15 @@
               <div class="weekly-label">Codex</div>
             </div>
           </div>
+          <div class="weekly-meter weekly-meter-kimi" id="weekly-kimi-meter" style="display: none;">
+            <div class="weekly-gauge">
+              <div class="weekly-gauge-fill" id="weekly-kimi-fill"></div>
+            </div>
+            <div class="weekly-main">
+              <div class="weekly-pct" id="weekly-kimi-pct">–%</div>
+              <div class="weekly-label">Kimi</div>
+            </div>
+          </div>
         </div>
         <div class="weekly-sub" id="weekly-sub">
           <div class="weekly-sub-line" id="weekly-sync-line"></div>
@@ -1288,6 +1297,7 @@
         <div class="weekly-reset-schedule" aria-label="Next weekly resets">
           <span id="claude-next-reset"><strong>Claude next reset:</strong> —</span>
           <span id="codex-next-reset"><strong>Codex next reset:</strong> —</span>
+          <span id="kimi-next-reset"><strong>Kimi next reset:</strong> —</span>
         </div>
       </div>
 
@@ -1296,6 +1306,7 @@
           <button type="button" class="engine-tab" id="engine-tab-combined" role="tab" aria-selected="false" onclick="setThroughputEngine('combined')">Combined</button>
           <button type="button" class="engine-tab active" id="engine-tab-claude" role="tab" aria-selected="true" onclick="setThroughputEngine('claude')">Claude</button>
           <button type="button" class="engine-tab" id="engine-tab-codex" role="tab" aria-selected="false" onclick="setThroughputEngine('codex')">Codex</button>
+          <button type="button" class="engine-tab" id="engine-tab-kimi" role="tab" aria-selected="false" onclick="setThroughputEngine('kimi')">Kimi</button>
         </div>
       </div>
 
@@ -1375,6 +1386,10 @@
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #f5c842;background:transparent;"></span>
                   <span style="color:#f5c842;">Fable % of weekly</span>
                 </div>
+                <div class="legend-item" id="kimi-overlay-legend" style="display:none;">
+                  <span class="legend-color" style="height:2px;border-radius:0;border-top:2px solid #c084fc;background:transparent;"></span>
+                  <span style="color:#c084fc;">Kimi weekly %</span>
+                </div>
                 <div class="legend-item" id="account-usage-legend" style="display:none;">
                   <span class="legend-color" style="height:5px;border-radius:1px;background:#60a5fa;"></span>
                   <span style="color:#60a5fa;">Codex account daily total</span>
@@ -1450,6 +1465,7 @@
 
     function throughputEngineLabel() {
       if (activeThroughputEngine === 'combined') return 'Combined';
+      if (activeThroughputEngine === 'kimi') return 'Kimi';
       return activeThroughputEngine === 'codex' ? 'Codex' : 'Claude';
     }
 
@@ -1824,6 +1840,7 @@
       const combined = document.getElementById('engine-tab-combined');
       const claude = document.getElementById('engine-tab-claude');
       const codex = document.getElementById('engine-tab-codex');
+      const kimi = document.getElementById('engine-tab-kimi');
       if (combined) {
         combined.classList.toggle('active', activeThroughputEngine === 'combined');
         combined.setAttribute('aria-selected', activeThroughputEngine === 'combined' ? 'true' : 'false');
@@ -1836,12 +1853,16 @@
         codex.classList.toggle('active', activeThroughputEngine === 'codex');
         codex.setAttribute('aria-selected', activeThroughputEngine === 'codex' ? 'true' : 'false');
       }
+      if (kimi) {
+        kimi.classList.toggle('active', activeThroughputEngine === 'kimi');
+        kimi.setAttribute('aria-selected', activeThroughputEngine === 'kimi' ? 'true' : 'false');
+      }
       const badge = document.getElementById('active-engine-badge');
       if (badge) badge.textContent = `Engine: ${throughputEngineLabel()}`;
     }
 
     async function setThroughputEngine(engine) {
-      const next = ['combined', 'codex'].includes(engine) ? engine : 'claude';
+      const next = ['combined', 'codex', 'kimi'].includes(engine) ? engine : 'claude';
       if (next === activeThroughputEngine) return;
       activeThroughputEngine = next;
       activeSessionId = null;
@@ -2386,6 +2407,11 @@
         if (!codex || !codex.ok || codex.weekly_pct == null) return null;
         return { pct: Number(codex.weekly_pct), start: codex.week_start, resetAt: codex.weekly_resets_at };
       }
+      if (engine === 'kimi') {
+        const kimi = weeklyData.kimi;
+        if (!kimi || !kimi.ok || kimi.weekly_pct == null) return null;
+        return { pct: Number(kimi.weekly_pct), start: kimi.week_start, resetAt: kimi.weekly_resets_at };
+      }
       if (weeklyData.display_pct == null) return null;
       return { pct: Number(weeklyData.display_pct), start: weeklyData.week_start, resetAt: weeklyData.weekly_resets_at };
     }
@@ -2788,13 +2814,19 @@
       const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
         ? weeklyData.codex.weekly_pct
         : null;
+      const kimiWeeklyPct = weeklyData && weeklyData.kimi && weeklyData.kimi.ok
+        ? weeklyData.kimi.weekly_pct
+        : null;
       return {
         claudeWeeklyPct,
         claudeWeeklyTotalTokens: rows.reduce((sum, model) =>
-          sum + (isCodexModelRow(model) ? 0 : modelWeeklyBasisTokens(model)), 0),
+          sum + ((isCodexModelRow(model) || isKimiModelRow(model)) ? 0 : modelWeeklyBasisTokens(model)), 0),
         codexWeeklyPct,
         codexWeeklyTotalTokens: rows.reduce((sum, model) =>
           sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
+        kimiWeeklyPct,
+        kimiWeeklyTotalTokens: rows.reduce((sum, model) =>
+          sum + (isKimiModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
         engine: activeThroughputEngine,
       };
     }
@@ -2805,6 +2837,12 @@
       return engine === 'codex' || label.startsWith('gpt-') || label.includes('codex');
     }
 
+    function isKimiModelRow(model, fallbackEngine) {
+      const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
+      const label = String((model && (model.model || model.engine)) || '').toLowerCase();
+      return engine === 'kimi' || label.startsWith('kimi');
+    }
+
     function formatModelWeeklyPct(model, context) {
       const ctx = context || {};
       const tokens = modelWeeklyBasisTokens(model);
@@ -2812,6 +2850,12 @@
       if (isCodexModelRow(model, ctx.engine)) {
         const total = Number(ctx.codexWeeklyTotalTokens || 0);
         const pct = Number(ctx.codexWeeklyPct);
+        if (!(total > 0) || !Number.isFinite(pct)) return '—';
+        return `${((tokens / total) * pct).toFixed(2)}%`;
+      }
+      if (isKimiModelRow(model, ctx.engine)) {
+        const total = Number(ctx.kimiWeeklyTotalTokens || 0);
+        const pct = Number(ctx.kimiWeeklyPct);
         if (!(total > 0) || !Number.isFinite(pct)) return '—';
         return `${((tokens / total) * pct).toFixed(2)}%`;
       }
@@ -2881,15 +2925,17 @@
       const first = rows[0].d.getTime();
       const last = rows[rows.length - 1].d.getTime();
       let visibleResetEvents = resetEvents.filter(event => shouldRenderResetMarker(event, resetMarkerWindow));
-      if (resetMarkerWindow === 'codex_weekly' && Number.isFinite(resetPeriodStart)) {
-        const automatic = visibleResetEvents.filter(event => event.kind !== 'manual');
-        const nearestResetEvent = automatic.reduce((nearest, event) => {
-          const distance = Math.abs(new Date(event.detected_at).getTime() - resetPeriodStart);
-          if (!Number.isFinite(distance)) return nearest;
-          return !nearest || distance < nearest.distance ? { event, distance } : nearest;
-        }, null);
-        visibleResetEvents = visibleResetEvents.filter(event => event.kind === 'manual');
-        if (nearestResetEvent) visibleResetEvents.unshift(nearestResetEvent.event);
+      if (resetMarkerWindow === 'codex_weekly' || resetMarkerWindow === 'kimi_weekly') {
+        if (Number.isFinite(resetPeriodStart)) {
+          const automatic = visibleResetEvents.filter(event => event.kind !== 'manual');
+          const nearestResetEvent = automatic.reduce((nearest, event) => {
+            const distance = Math.abs(new Date(event.detected_at).getTime() - resetPeriodStart);
+            if (!Number.isFinite(distance)) return nearest;
+            return !nearest || distance < nearest.distance ? { event, distance } : nearest;
+          }, null);
+          visibleResetEvents = visibleResetEvents.filter(event => event.kind === 'manual');
+          if (nearestResetEvent) visibleResetEvents.unshift(nearestResetEvent.event);
+        }
       }
       let markerLabelCount = 0;
       visibleResetEvents.forEach(event => {
@@ -3047,6 +3093,13 @@
           Number(codex.weekly_pct), codex.week_start, codex.weekly_resets_at
         ));
       }
+      const kimi = weeklyData.kimi;
+      if (activeThroughputEngine === 'kimi' &&
+          kimi && kimi.weekly_pct != null && kimi.week_start && kimi.weekly_resets_at) {
+        crossings.push(forecastCrossingAt100(
+          Number(kimi.weekly_pct), kimi.week_start, kimi.weekly_resets_at
+        ));
+      }
       return crossings.filter(Number.isFinite).length ? Math.min(...crossings.filter(Number.isFinite)) : null;
     }
 
@@ -3055,9 +3108,11 @@
         if (!weeklyData || weeklyData.pct_per_token == null || !weeklyData.weekly_resets_at) return null;
         return { pctPerToken: weeklyData.pct_per_token, resetAt: weeklyData.weekly_resets_at };
       }
-      const codex = weeklyData && weeklyData.codex;
-      if (!codex || !codex.ok || codex.weekly_pct == null || !codex.weekly_resets_at) return null;
-      const resetAt = new Date(codex.weekly_resets_at);
+      // Codex and Kimi derive their own pct-per-token: the provider's weekly %
+      // over this period's locally-counted tokens (same math, per engine).
+      const quota = weeklyData && (activeThroughputEngine === 'kimi' ? weeklyData.kimi : weeklyData.codex);
+      if (!quota || !quota.ok || quota.weekly_pct == null || !quota.weekly_resets_at) return null;
+      const resetAt = new Date(quota.weekly_resets_at);
       const periodStart = new Date(resetAt.getTime() - 7 * 86400000);
       const periodTokens = ((summary && summary.hourly) || []).reduce((total, row) => {
         const at = new Date(row.hour || '');
@@ -3065,7 +3120,7 @@
         return total + (row.raw_context_tokens || 0) + (row.output_tokens || 0);
       }, 0);
       if (periodTokens <= 0) return null;
-      return { pctPerToken: codex.weekly_pct / periodTokens, resetAt: codex.weekly_resets_at };
+      return { pctPerToken: quota.weekly_pct / periodTokens, resetAt: quota.weekly_resets_at };
     }
 
     function quotaTokenEvents(componentSummary, weekStart) {
@@ -3243,6 +3298,8 @@
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
       const quotaContextLegend = document.getElementById('quota-context-legend');
       if (quotaContextLegend) quotaContextLegend.style.display = isAggregate && sixhourly && !showWeeklyOverlay ? 'flex' : 'none';
+      const kimiLegend = document.getElementById('kimi-overlay-legend');
+      if (kimiLegend) kimiLegend.style.display = showWeeklyOverlay && activeThroughputEngine === 'kimi' ? 'flex' : 'none';
       const accountLegend = document.getElementById('account-usage-legend');
       if (accountLegend) accountLegend.style.display = showAccountUsage ? 'flex' : 'none';
       // Hide week nav when not in sixhourly aggregate mode
@@ -3675,7 +3732,9 @@
 
       const resetMarkerWindow = activeThroughputEngine === 'codex'
         ? 'codex_weekly'
-        : (activeThroughputEngine === 'claude' && (showWeeklyOverlay || showCumulative)) ? 'seven_day' : null;
+        : activeThroughputEngine === 'kimi'
+          ? 'kimi_weekly'
+          : (activeThroughputEngine === 'claude' && (showWeeklyOverlay || showCumulative)) ? 'seven_day' : null;
       if (activeThroughputEngine === 'combined') {
         renderResetMarkers(svg, sourceRows, xScale, padding, height, 'seven_day', selPeriodStart && selPeriodStart.getTime());
         const codexStart = weeklyData && weeklyData.codex && weeklyData.codex.week_start;
@@ -3697,21 +3756,33 @@
         const componentSummaries = summary.components || {};
         const claudeComponent = componentSummaries.claude || (activeThroughputEngine === 'claude' ? summary : null);
         const codexComponent = componentSummaries.codex || (activeThroughputEngine === 'codex' ? summary : null);
+        const kimiComponent = componentSummaries.kimi || (activeThroughputEngine === 'kimi' ? summary : null);
+        const kimiWeekly = weeklyData.kimi || {};
         const claudeEvents = quotaTokenEvents(claudeComponent, weeklyData.week_start);
         const codexEvents = quotaTokenEvents(codexComponent, weeklyData.codex && weeklyData.codex.week_start);
+        const kimiEvents = quotaTokenEvents(kimiComponent, kimiWeekly.week_start);
         const claudeCurrentTokens = claudeEvents.reduce((sum, event) => sum + event.tokens, 0);
         const codexCurrentTokens = codexEvents.reduce((sum, event) => sum + event.tokens, 0);
+        const kimiCurrentTokens = kimiEvents.reduce((sum, event) => sum + event.tokens, 0);
         const claudePpt = claudeCurrentTokens > 0 ? weeklyData.display_pct / claudeCurrentTokens : 0;
         const codexPpt = codexCurrentTokens > 0 ? weeklyData.codex.weekly_pct / codexCurrentTokens : 0;
+        const kimiPpt = kimiCurrentTokens > 0 ? kimiWeekly.weekly_pct / kimiCurrentTokens : 0;
         const claudeSeries = claudePpt > 0 ? buildQuotaSeries(
           claudeComponent, weeklyData.week_start, sourceRows, claudePpt, weeklyData.display_pct
         ) : null;
         const codexSeries = codexPpt > 0 ? buildQuotaSeries(
           codexComponent, weeklyData.codex.week_start, sourceRows, codexPpt, weeklyData.codex.weekly_pct
         ) : null;
-        const primarySeries = activeThroughputEngine === 'codex' ? codexSeries : claudeSeries;
+        const kimiSeries = kimiPpt > 0 ? buildQuotaSeries(
+          kimiComponent, kimiWeekly.week_start, sourceRows, kimiPpt, kimiWeekly.weekly_pct
+        ) : null;
+        const primarySeries = activeThroughputEngine === 'codex' ? codexSeries
+          : (activeThroughputEngine === 'kimi' ? kimiSeries : claudeSeries);
         if (!primarySeries) return;
-        const ppt = activeThroughputEngine === 'codex' ? codexPpt : claudePpt;
+        const ppt = activeThroughputEngine === 'codex' ? codexPpt
+          : (activeThroughputEngine === 'kimi' ? kimiPpt : claudePpt);
+        // Kimi's weekly line is purple so it never reads as the Claude meter.
+        const weeklyLineColor = activeThroughputEngine === 'kimi' ? '#c084fc' : '#f59e0b';
 
         // 1. Cumulative actual % — normalized to the authoritative meter.
         const cumActVals = primarySeries.actual;
@@ -3770,18 +3841,18 @@
           });
           const actLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           actLine.setAttribute('d', ap); actLine.setAttribute('fill', 'none');
-          actLine.setAttribute('stroke', '#f59e0b'); actLine.setAttribute('stroke-width', '2.5');
+          actLine.setAttribute('stroke', weeklyLineColor); actLine.setAttribute('stroke-width', '2.5');
           actLine.setAttribute('stroke-linecap', 'round'); actLine.setAttribute('opacity', '1');
           svg.appendChild(actLine);
           // "Right now" dot + label at end of actual line
           const nx = xScale(lastActIdx + 1), ny = yPct(cumAct);
           const nowDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
           nowDot.setAttribute('cx', nx); nowDot.setAttribute('cy', ny);
-          nowDot.setAttribute('r', '5'); nowDot.setAttribute('fill', '#f59e0b');
+          nowDot.setAttribute('r', '5'); nowDot.setAttribute('fill', weeklyLineColor);
           svg.appendChild(nowDot);
           const nowLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           nowLbl.setAttribute('x', nx + 8); nowLbl.setAttribute('y', ny - 6);
-          nowLbl.setAttribute('fill', '#f59e0b'); nowLbl.setAttribute('font-size', '11px');
+          nowLbl.setAttribute('fill', weeklyLineColor); nowLbl.setAttribute('font-size', '11px');
           nowLbl.setAttribute('font-weight', 'bold'); nowLbl.setAttribute('text-anchor', 'start');
           nowLbl.setAttribute('font-family', 'var(--font-mono)');
           nowLbl.textContent = `${activeThroughputEngine === 'combined' ? 'Claude ' : ''}${cumAct.toFixed(1)}% · right now`;
@@ -3800,7 +3871,7 @@
           }
           const projLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           projLine.setAttribute('d', pp); projLine.setAttribute('fill', 'none');
-          projLine.setAttribute('stroke', '#f59e0b'); projLine.setAttribute('stroke-width', '1.8');
+          projLine.setAttribute('stroke', weeklyLineColor); projLine.setAttribute('stroke-width', '1.8');
           projLine.setAttribute('stroke-dasharray', '7,4'); projLine.setAttribute('opacity', '0.7');
           svg.appendChild(projLine);
           // End-of-period projected label — big number + subtitle
@@ -3808,7 +3879,7 @@
           const plyBase = padding.top + 14;
           const bigNum = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           bigNum.setAttribute('x', projectedLabelAnchor); bigNum.setAttribute('y', plyBase);
-          bigNum.setAttribute('fill', '#f59e0b'); bigNum.setAttribute('font-size', '20px');
+          bigNum.setAttribute('fill', weeklyLineColor); bigNum.setAttribute('font-size', '20px');
           bigNum.setAttribute('font-weight', 'bold'); bigNum.setAttribute('text-anchor', 'end');
           bigNum.setAttribute('font-family', 'var(--font-mono)'); bigNum.setAttribute('opacity', '0.95');
           const overflowSuffix = projectedEnd > WEEKLY_AXIS_MAX ? ' ↑' : '';
@@ -3816,13 +3887,13 @@
           svg.appendChild(bigNum);
           const projWord = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           projWord.setAttribute('x', projectedLabelAnchor); projWord.setAttribute('y', plyBase + 15);
-          projWord.setAttribute('fill', '#f59e0b'); projWord.setAttribute('font-size', '11px');
+          projWord.setAttribute('fill', weeklyLineColor); projWord.setAttribute('font-size', '11px');
           projWord.setAttribute('font-weight', 'bold'); projWord.setAttribute('text-anchor', 'end');
           projWord.setAttribute('font-family', 'var(--font-mono)'); projWord.setAttribute('opacity', '0.75');
           projWord.textContent = 'expected 100%'; svg.appendChild(projWord);
           const rateNote = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           rateNote.setAttribute('x', projectedLabelAnchor); rateNote.setAttribute('y', plyBase + 27);
-          rateNote.setAttribute('fill', '#f59e0b'); rateNote.setAttribute('font-size', '9px');
+          rateNote.setAttribute('fill', weeklyLineColor); rateNote.setAttribute('font-size', '9px');
           rateNote.setAttribute('text-anchor', 'end'); rateNote.setAttribute('opacity', '0.45');
           rateNote.setAttribute('font-family', 'var(--font-mono)');
           const projectedRow = [...sourceRows].reverse().find(row => row && row._projected);
@@ -4309,6 +4380,8 @@
       if (value === 'seven_day') return 'Weekly';
       if (value === 'codex_five_hour') return 'Codex 5-hour session';
       if (value === 'codex_weekly') return 'Codex weekly';
+      if (value === 'kimi_five_hour') return 'Kimi 5-hour session';
+      if (value === 'kimi_weekly') return 'Kimi weekly';
       return value || 'unknown';
     }
 
@@ -4466,6 +4539,20 @@
         } else if (codexMeter) {
           codexMeter.style.display = 'none';
         }
+        const kimiMeter = document.getElementById('weekly-kimi-meter');
+        if (d.kimi && d.kimi.ok && d.kimi.weekly_pct != null) {
+          kimiMeter.style.display = 'grid';
+          setWeeklyPctText(document.getElementById('weekly-kimi-pct'), d.kimi.weekly_pct);
+          setWeeklyFill(document.getElementById('weekly-kimi-fill'), d.kimi.weekly_pct);
+          if (d.kimi.plan_type) bits.push(`Kimi plan ${d.kimi.plan_type}`);
+          const kProj = d.kimi.projected_pct != null ? ` · projected ${Math.round(d.kimi.projected_pct)}%` : '';
+          bits.push(`Kimi weekly ${Math.round(d.kimi.weekly_pct)}%${kProj}`);
+          if (d.kimi.projected_pct != null) resetBits.push(`Kimi ${Math.round(d.kimi.projected_pct)}% projected`);
+          const kSession = d.kimi.session;
+          if (kSession && kSession.pct != null) bits.push(`Kimi session ${Math.round(kSession.pct)}%`);
+        } else if (kimiMeter) {
+          kimiMeter.style.display = 'none';
+        }
         const reset = fmtResetCountdown(d.weekly_resets_at);
         if (reset) {
           resetBits.unshift(reset);
@@ -4482,6 +4569,9 @@
         document.getElementById('claude-next-reset').innerHTML = formatNextReset('Claude', d.weekly_resets_at);
         document.getElementById('codex-next-reset').innerHTML = formatNextReset(
           'Codex', d.codex && d.codex.weekly_resets_at
+        );
+        document.getElementById('kimi-next-reset').innerHTML = formatNextReset(
+          'Kimi', d.kimi && d.kimi.weekly_resets_at
         );
         banner.style.display = 'grid';
     }
@@ -4852,7 +4942,7 @@
         zoom = { level: 1, startMs: zoom.l1.startMs, endMs: zoom.l1.endMs };
         renderL1();
       });
-      const engine = (typeof activeThroughputEngine === 'string' && activeThroughputEngine === 'codex') ? 'codex' : 'claude';
+      const engine = (typeof activeThroughputEngine === 'string' && (activeThroughputEngine === 'codex' || activeThroughputEngine === 'kimi')) ? activeThroughputEngine : 'claude';
       const url = '/api/throughput/window?start=' + (hourMs / 1000) + '&end=' + ((hourMs + 3600e3) / 1000) +
         '&engine=' + engine + '&limit=30';
       fetch(url, { cache: 'no-store' })
@@ -4867,7 +4957,7 @@
           const sessions = d.sessions || [];
           if (!sessions.length) {
             body.innerHTML = '<div class="tz-note">No session activity in this hour' +
-              (engine === 'codex' ? ' (codex)' : '') + '.</div>';
+              (engine !== 'claude' ? ' (' + engine + ')' : '') + '.</div>';
             return;
           }
           const tot = d.totals || {};

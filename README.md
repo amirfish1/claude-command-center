@@ -398,7 +398,8 @@ better for those).
 
 Read-only usage integrations can poll `GET /api/usage/current` for CCC's
 consolidated local usage state: Claude plan windows, Codex rate-limit windows,
-pace projections, calibration metadata, recent reset events, and `fetched_at`.
+Kimi usage windows, pace projections, calibration metadata, recent reset
+events, and `fetched_at`.
 Fields are nullable so external tools can gracefully degrade when a provider
 has not emitted usage yet.
 

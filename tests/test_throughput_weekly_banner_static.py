@@ -10,10 +10,16 @@ def test_weekly_banner_surfaces_codex_fable_and_timestamp():
     assert 'class="weekly-meter weekly-meter-claude"' in throughput_html
     assert 'class="weekly-meter weekly-meter-fable"' in throughput_html
     assert 'class="weekly-meter weekly-meter-codex"' in throughput_html
+    assert 'class="weekly-meter weekly-meter-kimi"' in throughput_html
     assert 'id="weekly-fable-fill"' in throughput_html
     assert 'id="weekly-fable-pct"' in throughput_html
     assert 'id="weekly-codex-fill"' in throughput_html
     assert 'id="weekly-codex-pct"' in throughput_html
+    assert 'id="weekly-kimi-fill"' in throughput_html
+    assert 'id="weekly-kimi-pct"' in throughput_html
+    assert 'id="kimi-next-reset"' in throughput_html
+    assert "Kimi session" in throughput_html
+    assert "Kimi plan" in throughput_html
     assert "Codex session" in throughput_html
     assert "Codex plan" in throughput_html
     assert "Claude weekly limit" in throughput_html
