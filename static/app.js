@@ -6712,7 +6712,7 @@
   function conversationGoalSourceKind(source) {
     const s = String(source || '').trim().toLowerCase();
     if (s === 'codex') return 'codex';
-    if (s === 'gemini' || s === 'cursor' || s === 'antigravity' || s === 'pkood') return '';
+    if (s === 'gemini' || s === 'cursor' || s === 'antigravity' || s === 'pkood' || s === 'kimi') return '';
     return 'claude';
   }
 
