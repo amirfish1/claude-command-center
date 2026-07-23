@@ -43680,7 +43680,19 @@
           if (closeBtn) {
             closeBtn.addEventListener('click', (e) => {
               e.stopPropagation();
-              sticky.style.display = 'none';
+              // Use the semantic hidden state instead of an inline
+              // `display:none`. The mobile right-rail fallback restores the
+              // sticky with `display:block !important`, which otherwise wins
+              // over the inline declaration and makes this button appear to
+              // do nothing. Once the duplicate panel is gone, put the first
+              // user turn back in the transcript so the original request is
+              // still readable.
+              sticky.hidden = true;
+              const firstUser = $view.querySelector('.event.user_text.is-pinned-in-sticky');
+              if (firstUser) firstUser.classList.remove('is-pinned-in-sticky');
+              if (_dynamicAskState && _dynamicAskState.sticky === sticky) {
+                _dynamicAskState = null;
+              }
             });
           }
           const resolveClickBtn = sticky.querySelector('.resolve-btn');

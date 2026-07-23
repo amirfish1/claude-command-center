@@ -2576,6 +2576,11 @@
     display: flex; flex-direction: column;
     box-sizing: border-box;
   }
+  /* The dismiss button sets the semantic `hidden` state. Keep it stronger
+     than the mobile right-rail fallback's `display:block !important`, or the
+     Original ask panel cannot actually be dismissed at that breakpoint. */
+  body.status-pos-right .conv-sticky-header[hidden],
+  .conv-sticky-header[hidden] { display: none !important; }
   .conv-sticky-header .user-msg {
     font-size: 14px; color: var(--text); line-height: 1.4;
     font-weight: 700;
