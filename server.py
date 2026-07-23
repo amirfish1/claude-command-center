@@ -25403,6 +25403,19 @@ def _codex_tool_name(name):
     return (name or "").rsplit(".", 1)[-1]
 
 
+_CODEX_OPAQUE_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-+/=]+")
+
+
+def _codex_opaque_token(value):
+    """True for encrypted/opaque agent-runtime tokens (e.g. the `message` blob
+    codex puts on spawn_agent/followup_task calls: a long whitespace-free
+    base64url string). Those must never be used as human-readable summaries."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    return len(text) > 60 and bool(_CODEX_OPAQUE_TOKEN_RE.fullmatch(text))
+
+
 def _codex_js_string_literal_value(literal):
     if not isinstance(literal, str) or not literal:
         return ""
@@ -25456,6 +25469,10 @@ def _codex_custom_tool_kind(source, fallback_name=""):
         return "update_plan"
     if "tools.write_stdin" in text:
         return "write_stdin"
+    if "tools.web__run" in text:
+        return "web_search"
+    if "tools.update_goal" in text:
+        return "update_goal"
     return _codex_tool_name(fallback_name) or "tool"
 
 
@@ -25518,14 +25535,42 @@ def _codex_custom_tool_plan_entries(source):
     return entries
 
 
+_CODEX_PATCH_FILE_RE = re.compile(r"\*\*\* (?:Add|Update|Delete) File: ([^\"\\\n]+)")
+_CODEX_WEB_QUERY_RE = re.compile(r'(?<![A-Za-z0-9_$"])q\s*:\s*"((?:\\.|[^"\\])*)"')
+
+
 def _codex_custom_tool_detail(source, fallback_name=""):
     text = source if isinstance(source, str) else ""
     cmd = _codex_custom_tool_arg(text, "cmd") or _codex_custom_tool_arg(text, "command")
     if cmd:
         return _shell_command_activity_label(cmd)
-    for key in ("path", "file_path", "filename", "query", "pattern", "prompt", "message"):
+    if "tools.apply_patch" in text:
+        # The patch body is a JS string literal in the custom-tool body, so
+        # the file markers survive as `*** Add File: <path>\n` text. Surface
+        # the touched file(s) instead of the bare "apply_patch" fallback.
+        files = [f.strip() for f in _CODEX_PATCH_FILE_RE.findall(text) if f.strip()]
+        if files:
+            first = files[0]
+            return first if len(files) == 1 else f"{first} (+{len(files) - 1} more)"
+    if "tools.web__run" in text:
+        queries = [
+            _codex_js_string_literal_value('"' + m + '"')
+            for m in _CODEX_WEB_QUERY_RE.findall(text)
+        ]
+        queries = [q.strip() for q in queries if q.strip()]
+        if queries:
+            return queries[0] if len(queries) == 1 else f"{queries[0]} (+{len(queries) - 1} more)"
+    if "tools.update_goal" in text:
+        status = _codex_custom_tool_arg(text, "status")
+        if status:
+            return status
+    if "tools.write_stdin" in text:
+        chars = _codex_custom_tool_arg(text, "chars")
+        if chars:
+            return chars
+    for key in ("path", "file_path", "filename", "query", "pattern", "title", "prompt", "message"):
         value = _codex_custom_tool_arg(text, key)
-        if value:
+        if value and not _codex_opaque_token(value):
             return value
     return _codex_custom_tool_kind(text, fallback_name)
 
@@ -25574,9 +25619,29 @@ def _codex_tool_detail(name, args):
         return _shell_command_activity_label(args.get("cmd") or args.get("command") or "")
     if lname == "write_stdin":
         return args.get("chars") or args.get("session_id") or ""
+    if lname == "spawn_agent":
+        # `message` is an encrypted runtime token — the task name is the only
+        # human-readable summary on the call.
+        task_name = args.get("task_name")
+        if isinstance(task_name, str) and task_name.strip():
+            return task_name.strip()
+    if lname == "followup_task":
+        target = args.get("target")
+        if isinstance(target, str) and target.strip():
+            return target.strip().rsplit("/", 1)[-1]
+    if lname in ("wait_agent", "wait"):
+        cell_id = args.get("cell_id")
+        if lname == "wait" and cell_id not in (None, ""):
+            return f"cell {cell_id}"
+        timeout_ms = args.get("timeout_ms") or args.get("yield_time_ms")
+        if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+            return f"timeout {timeout_ms / 1000:g}s"
+        if cell_id not in (None, ""):
+            return f"cell {cell_id}"
+        return ""
     for key in ("path", "file_path", "filename", "query", "pattern", "prompt", "message"):
         val = args.get(key)
-        if isinstance(val, str) and val:
+        if isinstance(val, str) and val and not _codex_opaque_token(val):
             return val
     return ""
 

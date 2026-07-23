@@ -43155,6 +43155,8 @@
     agent: 'task', subagent: 'task', websearch: 'search', web_search: 'search',
     exec_command: 'bash', write_stdin: 'bash', apply_patch: 'edit',
     update_plan: 'todo', view_image: 'read', view_file: 'read',
+    spawn_agent: 'task', wait_agent: 'task', list_agents: 'task',
+    followup_task: 'task', update_goal: 'todo',
   };
   function _kimiNormToolName(name) {
     const lower = String(name || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -43168,6 +43170,9 @@
     exec_command: 'Shell', shell: 'Shell', write_stdin: 'Stdin',
     apply_patch: 'Apply patch', update_plan: 'Update plan',
     view_image: 'View image', view_file: 'View file',
+    spawn_agent: 'Spawn agent', wait_agent: 'Wait for agent', wait: 'Wait',
+    list_agents: 'List agents', followup_task: 'Follow-up task',
+    update_goal: 'Update goal', web_search: 'Web search',
   };
   function _webuiToolDisplayName(rawName) {
     return _WEBUI_TOOL_DISPLAY_NAMES[String(rawName || '').trim().toLowerCase()]
