@@ -4396,6 +4396,13 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("Codex sessions do not use Claude slash commands", app_js)
         self.assertIn("const failurePrefix = compactCommand ? '/compact failed'", app_js)
 
+    def test_kimi_sessions_do_not_offer_unsupported_slash_commands(self):
+        """Kimi ACP has no slash-command protocol, so its composer must not
+        offer Claude's fallback commands as though they were executable."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("if (source === 'kimi') return 'Slash commands are not wired for Kimi sessions';", app_js)
+        self.assertIn("(engine === 'claude' || engine === 'codex')", app_js)
+
     def test_slash_command_picker_selects_on_press(self):
         """Mouse/touch selection must commit on press, before focus refreshes
         or document-level click handlers can interfere with the popup."""

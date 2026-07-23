@@ -7200,6 +7200,7 @@
     const sess = activeConvSession();
     const source = sess && sess.source;
     if (source === 'gemini') return 'Slash commands are not wired for Gemini sessions';
+    if (source === 'kimi') return 'Slash commands are not wired for Kimi sessions';
     if (source === 'cursor') return 'Slash commands are not wired for Cursor sessions';
     if (source === 'antigravity') return 'Slash commands are not wired for Antigravity sessions';
     if (source === 'pkood') return 'pkood agents do not use slash commands';
