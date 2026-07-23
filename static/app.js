@@ -32329,14 +32329,18 @@
   // instead of hiding behind it. iOS Safari/WKWebView don't shrink the
   // layout viewport when the keyboard opens (and ignore the viewport
   // `interactive-widget` hint), so we feed `visualViewport.height` into the
-  // `--app-vh` custom property that `body` reads. Wired up only under a
-  // coarse pointer — desktop keeps the plain `100vh` fallback untouched.
+  // `--app-vh` custom property that the app shell and fixed mobile panes
+  // read. The viewport may also pan downward to reveal the focused field,
+  // so track offsetTop to keep the conversation toolbar (especially Back)
+  // inside the visible frame. Wired up only under a coarse pointer —
+  // desktop keeps the plain `100vh` / top:0 fallbacks untouched.
   if (window.visualViewport && window.matchMedia('(pointer: coarse)').matches) {
     const vv = window.visualViewport;
     let _vvRaf = 0;
     const syncVisualViewport = () => {
       _vvRaf = 0;
       document.documentElement.style.setProperty('--app-vh', vv.height + 'px');
+      document.documentElement.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
     };
     const queueVisualViewportSync = () => {
       if (_vvRaf) return;

@@ -12378,7 +12378,14 @@
     .sidebar-resizer { display: none !important; }
 
     body:not(.kanban-split) .main {
-      position: fixed; inset: 0; z-index: 800; background: var(--bg);
+      /* Follow the visual viewport while the software keyboard is open.
+         iOS can pan the visual viewport down without moving the layout
+         viewport; a fixed inset:0 pane then leaves its toolbar (and Back)
+         above the visible frame. app.js keeps both vars in sync. */
+      position: fixed;
+      top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;
+      height: var(--app-vh, 100vh);
+      z-index: 800; background: var(--bg);
       transform: translateX(100%); transition: transform 0.2s ease-out;
     }
     body:not(.kanban-split).mobile-show-main .main {
@@ -12473,11 +12480,11 @@
 
     .conv-panel {
       position: fixed !important;
-      top: 0; left: 0; right: 0; bottom: auto;
+      top: var(--app-vv-top, 0px); left: 0; right: 0; bottom: auto;
       /* Use the dynamic viewport so the panel resizes with iOS Safari's
          URL bar and on-screen keyboard — otherwise the input bar slides
          off-screen and the user can't see "Send to terminal…". */
-      height: 100vh; height: 100dvh;
+      height: var(--app-vh, 100vh);
       padding-bottom: env(safe-area-inset-bottom);
       box-sizing: border-box;
       z-index: 900;

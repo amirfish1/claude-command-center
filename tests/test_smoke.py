@@ -3551,6 +3551,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("#convToolbar .font-size-controls { display: none !important; }", app_css)
         self.assertIn("order: -100;", app_css)
 
+    def test_mobile_conversation_follows_visual_viewport(self):
+        """The fixed conversation pane must remain inside the viewport after
+        iOS pans and shrinks it for the software keyboard."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "setProperty('--app-vv-top', vv.offsetTop + 'px')",
+            app_js,
+        )
+        self.assertIn("top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;", app_css)
+        self.assertIn("height: var(--app-vh, 100vh);", app_css)
+
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
