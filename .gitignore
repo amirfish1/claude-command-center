@@ -140,5 +140,13 @@ throughput_*.png
 # COO board personal sidecar (curated session list/analysis) — local only
 /static/coo-notes.json
 
+# Session scratch artifacts (ad-hoc verification output, not project files)
+/f2_snapshot_tmp.js
+/out/
+/worktrees/
+/queue-status-verified.png
+/unresolved-amber.png
+/docs/product-story/pain-feature-proof copy.md
+
 # Product-story proof videos ship with the GitHub Pages site (exception to *.mp4)
 !docs/product-story/assets/video/*.mp4
