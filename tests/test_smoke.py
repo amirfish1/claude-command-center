@@ -4235,10 +4235,16 @@ class TestServerImports(unittest.TestCase):
         the rendered event IS that message, the full event text wins (CCC-456)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
-        self.assertIn("const canonical = (conv && conv.first_message) || '';", app_js)
+        self.assertIn(
+            "const canonical = (conv && (conv.original_ask || conv.first_message)) || '';",
+            app_js,
+        )
         self.assertIn("if (canonPrefix && norm(evText).startsWith(canonPrefix)) return evText;", app_js)
         self.assertIn("return canonical || evText;", app_js)
-        self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
+        self.assertIn(
+            "const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));",
+            app_js,
+        )
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):
         """The right rail keeps activity in Metadata, with Files and Queue as
@@ -16991,11 +16997,116 @@ class TestAcpKimiEngine(unittest.TestCase):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
         self.assertIn('"/api/acp/approval"', server_py)
-        self.assertIn('if _is_kimi_session(session_id):\n        result = _acp_prompt', server_py)
+        self.assertIn('if _is_kimi_session(session_id):', server_py)
+        self.assertIn('result = _acp_prompt(', server_py)
         self.assertIn('result.get("code") == "busy"', server_py)
         self.assertIn('return _queue_terminal_input(session_id, text, {"status": "running"})', server_py)
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
+
+    def test_kimi_original_ask_uses_first_wire_prompt(self):
+        server = self.server
+        sid = "session_original_ask"
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = pathlib.Path(tmp, sid)
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            (session_dir / "state.json").write_text(json.dumps({
+                "title": "Session title",
+                "lastPrompt": "Continue",
+                "workDir": tmp,
+                "createdAt": "2026-07-23T00:00:00Z",
+            }))
+            (wire_dir / "wire.jsonl").write_text(json.dumps({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "The actual original request"}],
+            }) + "\n")
+            with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                 mock.patch.object(server, "_ACP_STATE_LOADED", {"kimi"}), \
+                 mock.patch.object(server, "_kimi_session_index", return_value={
+                     sid: {"session_dir": str(session_dir), "work_dir": tmp},
+                 }), \
+                 mock.patch.object(server, "_load_repo_pins", return_value={}), \
+                 mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+                 mock.patch.object(
+                     server, "_load_conversation_lifecycle_sets",
+                     return_value=(set(), set()),
+                 ), \
+                 mock.patch.object(server, "_load_verified_conversations", return_value=[]):
+                rows = server.find_kimi_conversations(
+                    repo_only=False, include_old=True,
+                )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["first_message"], "The actual original request")
+        self.assertEqual(rows[0]["original_ask"], "The actual original request")
+        self.assertEqual(rows[0]["last_prompt"], "Continue")
+
+    def test_kimi_wire_state_prevents_early_prompt(self):
+        server = self.server
+        sid = "session_external_turn"
+        with tempfile.TemporaryDirectory() as tmp:
+            wire = pathlib.Path(tmp, "wire.jsonl")
+
+            def write_boundary(kind, finish_reason=None):
+                event = {"type": kind}
+                if finish_reason:
+                    event["finishReason"] = finish_reason
+                wire.write_text(json.dumps({
+                    "type": "context.append_loop_event",
+                    "event": event,
+                }) + "\n")
+
+            with mock.patch.object(server, "_acp_wire_path", return_value=wire):
+                write_boundary("step.begin")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "tool_use")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "end_turn")
+                self.assertFalse(server._kimi_wire_turn_active(sid))
+
+                write_boundary("step.begin")
+                with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                     mock.patch.object(server, "_kimi_wire_turn_active", return_value=True), \
+                     mock.patch.object(server, "_acp_ensure_session_loaded") as attach:
+                    result = server._acp_prompt("kimi", sid, "too early")
+                self.assertEqual(result.get("code"), "busy")
+                attach.assert_not_called()
+
+    def test_kimi_remote_busy_error_requeues_without_red_result(self):
+        server = self.server
+        sid = "session_remote_busy"
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(server, "_ACP_TRANSCRIPT_DIR", pathlib.Path(tmp)), \
+             mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+             mock.patch.object(server, "_queue_terminal_input") as queue:
+            with server._ACP_LOCK:
+                state = server._acp_session("kimi", sid, create=True)
+                state["status"] = "active"
+                state["active_turn"] = {
+                    "req_id": 7,
+                    "msg_id": "m7",
+                    "text": "",
+                    "thought": "",
+                    "tools": {},
+                    "prompt": "Continue",
+                    "from_queue": False,
+                }
+            server._acp_finalize_turn("kimi", sid, {
+                "error": {
+                    "message": (
+                        "Invalid request: Cannot launch a new turn while "
+                        "another turn (ID 7) is active"
+                    ),
+                },
+            }, {"req_id": 7, "is_active": True})
+            with server._ACP_LOCK:
+                events = list(server._acp_session("kimi", sid)["events"])
+            queue.assert_called_once_with(sid, "Continue", {"status": "running"})
+            self.assertFalse(any(
+                event.get("type") == "result"
+                and event.get("subtype") == "error"
+                for event in events
+            ))
 
     def test_acp_wire_fold_dedupes_and_folds_new_turns(self):
         """TUI-originated wire.jsonl records fold into the conv stream, but a

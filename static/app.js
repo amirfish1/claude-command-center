@@ -2035,7 +2035,7 @@
 
   function originalAskTextForEvent(ev, paneId) {
     const conv = convRowForPane(paneId) || {};
-    const canonical = (conv && conv.first_message) || '';
+    const canonical = (conv && (conv.original_ask || conv.first_message)) || '';
     const evText = ev.text || '';
     // The row's first_message is server-truncated (~200 chars, sometimes
     // whitespace-collapsed with a trailing "..."). It stays the anchor for

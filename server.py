@@ -13281,7 +13281,11 @@ def session_live_status(session_id, session_cwd):
         if resolved.get("available"):
             snap = _acp_session_snapshot("kimi", session_id) or {}
             result["live"] = True
-            result["status"] = "running" if snap.get("status") == "active" else "idle"
+            result["status"] = (
+                "running"
+                if snap.get("status") == "active" or _kimi_wire_turn_active(session_id)
+                else "idle"
+            )
             result["kind"] = "acp"
             result["cwd"] = snap.get("cwd") or session_cwd
             result["match_count"] = 1
@@ -28347,12 +28351,16 @@ def _acp_message_event(state, speaker, text):
 def _acp_finalize_turn(harness, sid, response, pending_entry):
     """A session/prompt response arrived: the turn is over (end_turn,
     cancelled, or error). Fold accumulated text into conv events."""
+    requeue_text = None
+    requeue_front = False
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
         turn = state.get("active_turn")
         if turn is None or (pending_entry.get("is_active") is False and turn.get("req_id") != pending_entry.get("req_id")):
             turn = None
         error = response.get("error")
+        message = error.get("message") if isinstance(error, dict) else str(error or "")
+        remote_busy = harness == "kimi" and _acp_remote_turn_busy_error(message)
         stop_reason = ((response.get("result") or {}).get("stopReason")) if not error else None
         if turn is not None:
             # Flush tool rows not yet emitted (calls that never got rawInput,
@@ -28376,14 +28384,16 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
             state["active_turn"] = None
             state["status"] = "idle"
             state["stop_reason"] = stop_reason or ("error" if error else None)
-        if error:
-            message = error.get("message") if isinstance(error, dict) else str(error)
+            if remote_busy:
+                requeue_text = turn.get("prompt") or ""
+                requeue_front = bool(turn.get("from_queue"))
+        if error and not remote_busy:
             _acp_emit_event_unlocked(harness, sid, {
                 "type": "result", "subtype": "error",
                 "error": message or "ACP turn failed",
             }, save=True)
             _acp_emit_delta_unlocked(harness, sid, {"type": "result", "subtype": "error"})
-        else:
+        elif not error:
             # The wire tail may have folded this turn's step.end already —
             # don't emit a second identical result row.
             recent = list(state.get("events") or [])[-1:]
@@ -28396,6 +28406,15 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
                 "type": "result", "subtype": stop_reason or "end_turn",
             })
         _ACP_LOCK.notify_all()
+    # Kimi can reject a prompt when a turn started outside CCC after our
+    # preflight check. Preserve the user's action instead of surfacing a red
+    # concurrency error. The queue watcher waits on Kimi's wire state and
+    # retries after the external turn reaches its real end boundary.
+    if requeue_text:
+        if requeue_front:
+            _requeue_terminal_input_front(sid, requeue_text)
+        else:
+            _queue_terminal_input(sid, requeue_text, {"status": "running"})
 
 
 def _acp_reader(harness, conn):
@@ -28572,7 +28591,7 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
     }
 
 
-def _acp_prompt(harness, sid, text, mode="send"):
+def _acp_prompt(harness, sid, text, mode="send", from_queue=False):
     """Async session/prompt: ACK returns immediately; the turn streams via
     session/update notifications and finishes in _acp_finalize_turn."""
     if not text:
@@ -28582,6 +28601,12 @@ def _acp_prompt(harness, sid, text, mode="send"):
         state = _acp_session(harness, sid, create=True)
         if state.get("status") == "active" and mode != "steer":
             return {"ok": False, "error": "turn already in progress", "code": "busy"}
+    if (
+        harness == "kimi"
+        and mode != "steer"
+        and _kimi_wire_turn_active(sid)
+    ):
+        return {"ok": False, "error": "turn already in progress", "code": "busy"}
     attach_err = _acp_ensure_session_loaded(harness, sid)
     if attach_err is not None:
         return attach_err
@@ -28599,6 +28624,8 @@ def _acp_prompt(harness, sid, text, mode="send"):
             "req_id": req_id,
             "msg_id": f"acp-{harness}-{state['turn_seq']}",
             "text": "", "thought": "", "tools": {},
+            "prompt": text,
+            "from_queue": bool(from_queue),
             "started_at": time.time(),
         }
         state["status"] = "active"
@@ -28941,6 +28968,48 @@ def _acp_wire_path(harness, sid):
     if not session_dir:
         return None
     return Path(session_dir) / "agents" / "main" / "wire.jsonl"
+
+
+def _acp_remote_turn_busy_error(message):
+    """True for the Kimi ACP rejection emitted while another turn owns a session."""
+    text = str(message or "").lower()
+    return "cannot launch a new turn while another turn" in text and "active" in text
+
+
+def _kimi_wire_turn_active(sid):
+    """Read Kimi's latest durable step boundary.
+
+    CCC's ACP state only knows about turns CCC launched. A Kimi TUI or another
+    client can own the same session, so the wire is the authoritative pre-send
+    guard for those external turns.
+    """
+    path = _acp_wire_path("kimi", sid)
+    if path is None:
+        return False
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - (4 * 1024 * 1024)))
+            raw = fh.read()
+    except OSError:
+        return False
+    for line in reversed(raw.decode("utf-8", "replace").splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "context.append_loop_event":
+            continue
+        loop = event.get("event") or {}
+        kind = loop.get("type")
+        if kind == "step.begin":
+            return True
+        if kind == "step.end":
+            # tool_use is an intermediate model step; Kimi still owns the
+            # enclosing turn while it runs the tool and starts the next step.
+            return str(loop.get("finishReason") or "") == "tool_use"
+    return False
 
 
 def _acp_wire_recent_texts(state, limit=_ACP_WIRE_DEDUP_WINDOW):
@@ -29401,10 +29470,8 @@ def find_kimi_conversations(
             continue
         title = _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
         last_prompt = _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
-        first_message = last_prompt
         wire_info = _kimi_wire_head(idx.get("session_dir"))
-        if not first_message:
-            first_message = wire_info["first_prompt"]
+        first_message = wire_info["first_prompt"] or last_prompt
         wire_path = wire_info["wire_path"]
         display_name = (
             name_overrides.get(sid)
@@ -29438,6 +29505,7 @@ def find_kimi_conversations(
             "branch": "",
             "git_branch": "",
             "first_message": first_message[:200],
+            "original_ask": first_message,
             "display_name": display_name,
             "ai_title": title or None,
             "name_overridden": bool(name_overrides.get(sid)),
@@ -47291,7 +47359,16 @@ def _inject_text_into_session(
     if is_codex:
         return resume_session_codex(session_id, text)
     if _is_kimi_session(session_id):
-        result = _acp_prompt("kimi", session_id, text, mode=mode)
+        if (
+            not _from_terminal_queue
+            and mode != "steer"
+            and _terminal_input_queue_has_pending(session_id)
+        ):
+            return _queue_terminal_input(session_id, text, {"status": "running"})
+        result = _acp_prompt(
+            "kimi", session_id, text, mode=mode,
+            from_queue=_from_terminal_queue,
+        )
         if (
             result.get("code") == "busy"
             and not _from_terminal_queue
