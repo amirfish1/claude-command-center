@@ -44784,25 +44784,11 @@ def _coordinate_sessions(payload):
     except OSError as exc:
         return {"ok": False, "error": f"cannot write chat file: {exc}"}
 
-    results = []
     self_node = federation.node_id()
-    for sid in session_ids:
-        owner, _native = federation.parse_session_ref(sid)
-        remote = owner and owner != self_node
-        text = _group_chat_inject_text(
-            chat_path, topic, mode, sid, chat_uuid=chat_uuid,
-            remote_host_node=self_node if remote else "")
-        inject_result = _inject_text_into_session(sid, text)
-        results.append({
-            "session_id": sid,
-            "ok": bool(inject_result.get("ok")),
-            "error": inject_result.get("error", ""),
-        })
 
-    # Register with background watcher before writing sidecar.
-    _register_coordination(chat_path)
-
-    # Write sidecar JSON so nudge can re-inject participants later.
+    # Write the sidecar before injecting participants. An injected participant
+    # can begin its check-in immediately, and that workflow needs name_map and
+    # the session list from the sidecar to be available already.
     # name_map stored for loop detection: display_name → session_id reverse lookup.
     # archived/closed_at stay absent at registration time; the watcher fills
     # closed_at on idle/done drop and the archive endpoint flips archived.
@@ -44829,8 +44815,25 @@ def _coordinate_sessions(payload):
                 "read_state": {},
                 "nudged_at": {},
             }, fh)
-    except OSError:
-        pass  # sidecar failure is non-fatal
+    except OSError as exc:
+        return {"ok": False, "error": f"cannot write group-chat sidecar: {exc}"}
+
+    # Register with the background watcher only after the sidecar is complete.
+    _register_coordination(chat_path)
+
+    results = []
+    for sid in session_ids:
+        owner, _native = federation.parse_session_ref(sid)
+        remote = owner and owner != self_node
+        text = _group_chat_inject_text(
+            chat_path, topic, mode, sid, chat_uuid=chat_uuid,
+            remote_host_node=self_node if remote else "")
+        inject_result = _inject_text_into_session(sid, text)
+        results.append({
+            "session_id": sid,
+            "ok": bool(inject_result.get("ok")),
+            "error": inject_result.get("error", ""),
+        })
 
     # System log line for the chat creation. Includes the initial
     # participants if there were any so the chat reads as a self-
