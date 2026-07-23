@@ -10359,6 +10359,15 @@
     background: color-mix(in srgb, #f85149 8%, transparent 92%);
     color: #ffb3ad;
   }
+  /* Non-actionable hint shown when a Claude permission prompt can't be answered
+     from CCC (Linux/headless host has no keystroke route) — point at the terminal. */
+  .conv-live-tool-inline .cl-approval-note {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--muted, #8b949e);
+    white-space: nowrap;
+    font-style: italic;
+  }
   /* Grab-back escape hatch shown in the approval strip when the approval is
      owned externally and can't be answered from CCC. Match the approval-button
      sizing so the dead-end always has one styled, actionable control. */

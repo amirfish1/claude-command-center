@@ -14371,13 +14371,15 @@ def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
     }
 
 
-def interrupt_input_via_keystroke(tty, terminal_app):
-    """Focus the terminal tab for `tty`, then send Esc (key code 53) via System Events.
+def interrupt_input_via_keystroke(tty, terminal_app, key_code=53):
+    """Focus the terminal tab for `tty`, then send a single key via System Events.
 
-    Mirrors `inject_input_via_keystroke` but delivers an interrupt instead of
-    text — Claude Code's TUI treats Esc as cancel-the-current-stream when a
-    response is in flight, and as clear-input-buffer when one isn't. Same focus
-    + restore-prev-process dance so the user's browser doesn't stay buried.
+    Mirrors `inject_input_via_keystroke` but delivers a lone keypress instead of
+    text — with the default Esc (key code 53), Claude Code's TUI treats it as
+    cancel-the-current-stream when a response is in flight, and as
+    clear-input-buffer when one isn't. Callers can pass another `key_code` to
+    drive a picker (e.g. Return=36 to accept a permission prompt). Same focus +
+    restore-prev-process dance so the user's browser doesn't stay buried.
     """
     tty_short = tty.replace("/dev/", "")
     tty_full = "/dev/" + tty_short
@@ -14420,7 +14422,7 @@ def interrupt_input_via_keystroke(tty, terminal_app):
         delay 0.15
         tell application "System Events"
           tell process "iTerm2"
-            key code 53
+            key code {key_code}
           end tell
         end tell
         delay 0.08
@@ -14465,7 +14467,7 @@ def interrupt_input_via_keystroke(tty, terminal_app):
         delay 0.15
         tell application "System Events"
           tell process "Terminal"
-            key code 53
+            key code {key_code}
           end tell
         end tell
         delay 0.08
@@ -14501,6 +14503,87 @@ def interrupt_input_via_keystroke(tty, terminal_app):
     if result_str == "notfound":
         return {"ok": False, "error": f"No {terminal_app} tab found for {tty_short} - tab may be hidden, on another Space, or behind a fullscreen app"}
     return {"ok": True, "tty": tty}
+
+
+def respond_claude_permission(session_id, decision):
+    """Answer a pending Claude Code permission prompt from the dashboard.
+
+    Claude has no approval API the way Codex does — a permission prompt reaches
+    CCC only as the Notification-hook `_needs_approval` marker, and the only way
+    to answer it is to drive the interactive TUI picker. Claude highlights "Yes"
+    (option 1) by default, so a lone Return approves the tool call once and Esc
+    denies it. Delivered as a single System Events keystroke, so it is macOS +
+    live-TTY only (the keystroke route does not exist on Linux/headless hosts).
+
+    Guarded to a session that is (a) Claude — Codex/Kimi/etc. have their own
+    approval routes, (b) live on a real tty, and (c) actually parked on a
+    blocking permission prompt.
+    """
+    if not session_id:
+        return {"ok": False, "error": "missing session_id"}
+    decision = (decision or "accept").strip().lower()
+    if decision not in ("accept", "decline"):
+        return {"ok": False, "error": f"unknown decision: {decision}"}
+    if sys.platform != "darwin":
+        _log_macos_only("claudePermissionAnswer")
+        return {
+            "ok": False,
+            "code": "macos_only",
+            "error": (
+                "Answering a permission prompt from CCC is macOS-only today — "
+                "approve or deny it in the session's own terminal."
+            ),
+        }
+    if not isClaudeSource_backend(session_id):
+        return {
+            "ok": False,
+            "code": "not_claude",
+            "error": "This isn't a Claude session; use its own approval control.",
+        }
+    cwd = find_session_cwd(session_id)
+    status = session_live_status(session_id, cwd)
+    tty = status.get("tty")
+    if not status.get("live") or not _is_real_tty(tty):
+        return {
+            "ok": False,
+            "code": "not_live_tty",
+            "error": "No live terminal for this session to answer the prompt in.",
+        }
+    if not _notification_blocks_inject(session_id):
+        return {
+            "ok": False,
+            "code": "no_pending_prompt",
+            "error": "No permission prompt is pending for this session.",
+        }
+    # Return (36) accepts the highlighted "Yes"; Esc (53) denies.
+    key_code = 36 if decision == "accept" else 53
+    result = interrupt_input_via_keystroke(
+        tty, status.get("terminal_app") or "Terminal", key_code=key_code
+    )
+    if isinstance(result, dict) and result.get("ok"):
+        # The prompt has been answered — drop the stale marker so the strip
+        # stops showing "Needs approval" before the next hook event lands.
+        # PostToolUse (accept) or the resumed turn (deny) would clear it anyway.
+        try:
+            (SIDECAR_STATE_DIR / f"{session_id}_needs_approval.json").unlink()
+        except OSError:
+            pass
+        result["decision"] = decision
+    return result
+
+
+def isClaudeSource_backend(session_id):
+    """True when `session_id` is a Claude session (not Codex/Gemini/Cursor/
+    Kimi/Antigravity/Hermes). Mirrors the frontend `isClaudeSource` gate for
+    Claude-only server actions."""
+    return not (
+        _is_codex_session(session_id)
+        or _is_gemini_session(session_id)
+        or _is_cursor_session(session_id)
+        or _is_kimi_session(session_id)
+        or _is_antigravity_session(session_id)
+        or _is_hermes_session(session_id)
+    )
 
 
 def focus_terminal_by_tty(tty, terminal_app):
@@ -66969,6 +67052,33 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             elif result.get("code") == "codex_app_server_unavailable":
                 status_code = 503
             self.send_json(result, status_code)
+        elif path == "/api/claude/permission":
+            # Answer a pending Claude Code permission prompt by driving the
+            # interactive TUI picker (Return=approve once, Esc=deny). macOS +
+            # live-TTY only; see respond_claude_permission for the guards.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            sid = (payload.get("session_id") or "").strip()
+            decision = (payload.get("decision") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            if not decision:
+                self.send_json({"ok": False, "error": "missing decision"}, 400)
+                return
+            _record_interaction(sid)
+            result = respond_claude_permission(sid, decision)
+            status_code = 200 if result.get("ok") else 409
+            if result.get("code") == "macos_only":
+                status_code = 501
+            self.send_json(result, status_code)
         elif path == "/api/acp/approval":
             # Answer a pending ACP session/request_permission (kimi and any
             # future ACP harness). option_id omitted/null = cancel the prompt.
@@ -68820,6 +68930,7 @@ def _platform_capabilities():
         "annotate": True,             # browser-page DOM picker
         "terminalJump": is_mac,       # bring the session's terminal to front
         "launchTerminal": is_mac,     # open a session in a visible terminal
+        "answerPermission": is_mac,   # approve/deny a Claude permission prompt via keystroke
         "folderPicker": is_mac or _linux_folder_picker_cmd() is not None,
         "desktopDeepLinks": is_mac,   # open in Claude / Codex desktop apps
         "revealFile": is_mac,         # reveal a file in Finder

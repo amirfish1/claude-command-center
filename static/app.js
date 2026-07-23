@@ -24019,6 +24019,35 @@
     }
   }
 
+  // Answer a Claude Code permission prompt from the dashboard. Claude has no
+  // approval API, so the server drives the interactive TUI picker with a
+  // keystroke (Return=approve once, Esc=deny) — macOS + live-TTY only.
+  async function respondClaudePermission(sessionId, decision, btnEl) {
+    if (!sessionId) return;
+    const originalText = btnEl ? btnEl.textContent : '';
+    if (btnEl) { btnEl.disabled = true; btnEl.textContent = '…'; }
+    try {
+      const res = await fetch('/api/claude/permission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, decision }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) { data = {}; }
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      showOpToast(decision === 'decline' ? 'Denied.' : 'Approved.');
+      touchSessionOptimistically(sessionId);
+      try { refreshLiveStatus(); } catch (_) {}
+      setTimeout(refreshConversationList, 700);
+      if (btnEl) { btnEl.textContent = '✓'; }
+    } catch (err) {
+      showOpToast('Approval failed: ' + (err.message || 'unknown'), 'error');
+      if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalText; }
+    }
+  }
+
   // "Grab back" a Codex thread that drifted to an external writer (mobile /
   // desktop Codex opening the session flips it to interactive and stalls CCC
   // sends). POSTs the server-side recovery endpoint, which reapplies the
