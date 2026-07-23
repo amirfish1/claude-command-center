@@ -6,6 +6,34 @@ from unittest import mock
 
 
 class KimiBusyQueueTests(unittest.TestCase):
+    def test_bare_kimi_uuid_routes_to_the_canonical_acp_session_id(self):
+        """Group-chat sidecars may retain Kimi's UUID without ``session_``.
+
+        Kimi's index uses the prefixed id, so routing the bare value as a
+        Claude session falls through to repo context resolution and produces
+        an unrelated ``repo_required`` error.
+        """
+        server = importlib.import_module("server")
+        bare_sid = "71247a48-6db9-4221-975b-a6bf31f20d9b"
+        canonical_sid = f"session_{bare_sid}"
+        with mock.patch.object(server, "_kimi_session_index", return_value={
+            canonical_sid: {"session_dir": "/tmp/kimi", "work_dir": "/tmp"},
+        }), \
+             mock.patch.object(server, "_is_codex_session", return_value=False), \
+             mock.patch.object(server, "find_session_cwd", return_value="/tmp"), \
+             mock.patch.object(server, "session_live_status", return_value={
+                 "live": False, "status": "idle", "kind": "acp",
+                 "tty": None, "terminal_app": None,
+             }), \
+             mock.patch.object(server, "_acp_prompt", return_value={"ok": True}) as prompt, \
+             mock.patch.object(server, "_try_wt_send_for_headless_delivery", return_value={
+                 "ok": False, "error": "should not route through WatchTower",
+             }):
+            result = server._inject_text_into_session(bare_sid, "follow up")
+
+        self.assertTrue(result["ok"])
+        prompt.assert_called_once_with("kimi", canonical_sid, "follow up", mode="send")
+
     def test_busy_kimi_follow_up_is_preserved_in_the_durable_input_queue(self):
         server = importlib.import_module("server")
         sid = "kimi-busy-queue-session"

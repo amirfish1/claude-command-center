@@ -29304,6 +29304,15 @@ def _kimi_session_index():
     return rows
 
 
+def _canonical_kimi_session_id(session_id):
+    """Return Kimi's indexed ``session_<uuid>`` id for a bare UUID alias."""
+    sid = str(session_id or "").strip()
+    if not sid or sid.startswith("session_"):
+        return sid
+    canonical = f"session_{sid}"
+    return canonical if canonical in _kimi_session_index() else sid
+
+
 def _kimi_state_meta(session_dir):
     """Read <sessionDir>/state.json. Defensive: any failure -> {}."""
     if not session_dir:
@@ -47270,6 +47279,11 @@ def _inject_text_into_session(
     # id. It is searchable, but Claude cannot resume it independently; route
     # the message through the parent session that owns the child transcript.
     session_id = _claude_subagent_parent_session_id(session_id) or session_id
+    # Kimi persists ACP sessions as ``session_<uuid>``, while older group-chat
+    # sidecars can contain only the UUID shown in the UI. Resolve that alias
+    # before engine detection so a Kimi nudge cannot fall through to a Claude
+    # resume and fail with an unrelated ``repo_required`` error.
+    session_id = _canonical_kimi_session_id(session_id)
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
