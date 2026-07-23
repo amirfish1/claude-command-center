@@ -2844,6 +2844,97 @@ def _detect_session_engine_uncached(session_id):
     return "claude"
 
 
+_LINUX_PICKER_UNSET = object()
+_linux_picker_cmd_cache = _LINUX_PICKER_UNSET
+
+
+def _linux_folder_picker_cmd():
+    """Return an argv template for the first available Linux GUI folder picker,
+    or None on a headless box / when none of the known tools is installed.
+
+    `{prompt}` in the template is substituted with the dialog title. The result
+    is cached: capability flags are computed once, not per request, and tools
+    don't appear mid-run.
+    """
+    global _linux_picker_cmd_cache
+    if _linux_picker_cmd_cache is not _LINUX_PICKER_UNSET:
+        return _linux_picker_cmd_cache
+    cmd = None
+    if platform.system() == "Linux" and (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        if shutil.which("zenity"):
+            cmd = ["zenity", "--file-selection", "--directory", "--title={prompt}"]
+        elif shutil.which("kdialog"):
+            cmd = ["kdialog", "--title", "{prompt}", "--getexistingdirectory",
+                   str(Path.home())]
+        elif shutil.which("yad"):
+            cmd = ["yad", "--file-selection", "--directory", "--title={prompt}",
+                   "--separator="]
+    _linux_picker_cmd_cache = cmd
+    return cmd
+
+
+def _linux_pick_folder(prompt_text):
+    """Linux folder chooser via zenity/kdialog/yad. Same return contract as
+    _native_pick_folder. All three tools exit 1 on Cancel with empty stderr,
+    so any non-zero exit is treated as a cancel."""
+    cmd = _linux_folder_picker_cmd()
+    if not cmd:
+        return {"ok": False, "error": "no GUI folder picker found (install zenity or kdialog); type a path instead"}
+    argv = [a.replace("{prompt}", prompt_text) for a in cmd]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "folder picker timed out (10 min)"}
+    except OSError as e:
+        return {"ok": False, "error": f"folder picker failed to launch: {e}"}
+    if r.returncode == 0:
+        # yad/zenity print the path on stdout; take the first line in case a
+        # tool appends anything extra.
+        path = (r.stdout or "").strip().splitlines()
+        path = path[0].rstrip("/") if path else ""
+        if not path:
+            return {"ok": False, "error": "no path returned"}
+        return {"ok": True, "path": path}
+    return {"ok": False, "cancelled": True}
+
+
+def _list_dirs_for_picker(raw_path):
+    """List immediate subdirectories for the in-browser folder picker.
+
+    This is the headless-Linux fallback: when no native GUI chooser exists
+    (no zenity/kdialog and no display — the common remote-box case), the web
+    UI walks the filesystem through this read-only endpoint instead. Hidden
+    dirs are skipped and the listing is capped so a huge directory can't
+    stall the dashboard.
+    """
+    target = (raw_path or "").strip() or str(Path.home())
+    p = Path(target).expanduser()
+    try:
+        p = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return {"ok": False, "error": f"not a directory: {target}"}
+    if not p.is_dir():
+        return {"ok": False, "error": f"not a directory: {target}"}
+    dirs = []
+    try:
+        for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+            if child.name.startswith("."):
+                continue
+            try:
+                if child.is_dir():
+                    dirs.append({"name": child.name, "path": str(child)})
+            except OSError:
+                continue  # dangling symlink, race with unlink, ...
+    except PermissionError:
+        return {"ok": False, "error": f"permission denied: {p}"}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    parent = str(p.parent) if p.parent != p else None
+    return {"ok": True, "path": str(p), "parent": parent, "dirs": dirs[:500]}
+
+
 def _native_pick_folder(prompt_text="Pick a repo folder for Command Center"):
     """Open the OS-native folder chooser and return the selected absolute path.
 
@@ -2852,12 +2943,16 @@ def _native_pick_folder(prompt_text="Pick a repo folder for Command Center"):
       {"ok": False, "cancelled": True}                — user clicked Cancel
       {"ok": False, "error": "..."}                   — something else failed
 
-    macOS only today — shells out to osascript. Other platforms return an
-    error so the client can show an explanatory message instead of crashing.
+    macOS shells out to osascript; Linux uses zenity/kdialog/yad when one is
+    installed and a display is available. Anything else returns an error so
+    the client can show an explanatory message instead of crashing.
     """
-    if platform.system() != "Darwin":
+    system = platform.system()
+    if system == "Linux":
+        return _linux_pick_folder(prompt_text)
+    if system != "Darwin":
         _log_macos_only("folderPicker")
-        return {"ok": False, "error": "native folder picker is macOS-only today; type a path instead"}
+        return {"ok": False, "error": "native folder picker is not available on this platform; type a path instead"}
     # Two -e args: activate brings the chooser to front (otherwise it can
     # appear behind the browser on some setups). `with prompt` sets the title
     # of the dialog so the user knows what they're picking for.
@@ -60333,6 +60428,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/voice-focus":
             # Current remote-focus target (set via POST). O(1) in-memory poll.
             self.send_json(dict(_VOICE_FOCUS))
+        elif path == "/api/fs/list":
+            # Read-only subdirectory listing for the in-browser folder picker
+            # (the headless-Linux fallback when no native GUI chooser exists).
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_list_dirs_for_picker(qs.get("path", [""])[0]))
         elif path == "/api/car-mode/status":
             # Car Mode running state + capability mode + which keys are set
             # (booleans only — never the key values). O(1).
@@ -68630,9 +68730,11 @@ def _platform_capabilities():
     """Report platform-specific UI capabilities.
 
     Page annotations are browser-native and can save URL / selector / text
-    anchors on any platform. Native desktop helpers remain macOS-only; the
-    frontend hides those controls when their flags are false so users never
-    see buttons that only return a stub.
+    anchors on any platform. The folder picker also works on Linux when
+    zenity/kdialog/yad is installed (see _linux_folder_picker_cmd). Other
+    native desktop helpers remain macOS-only; the frontend hides those
+    controls when their flags are false so users never see buttons that only
+    return a stub.
     """
     is_mac = platform.system() == "Darwin"
     return {
@@ -68641,7 +68743,7 @@ def _platform_capabilities():
         "annotate": True,             # browser-page DOM picker
         "terminalJump": is_mac,       # bring the session's terminal to front
         "launchTerminal": is_mac,     # open a session in a visible terminal
-        "folderPicker": is_mac,       # native GUI folder chooser
+        "folderPicker": is_mac or _linux_folder_picker_cmd() is not None,
         "desktopDeepLinks": is_mac,   # open in Claude / Codex desktop apps
         "revealFile": is_mac,         # reveal a file in Finder
         "openBrowser": is_mac,        # open a URL via the OS `open` command

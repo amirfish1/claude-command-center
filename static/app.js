@@ -55142,6 +55142,128 @@
     if (input) input.focus();
   });
 
+  // ── In-browser folder picker ──
+  // Fallback for hosts with no native GUI chooser (headless Linux: no
+  // zenity/kdialog, no DISPLAY). Walks the server filesystem via the
+  // read-only GET /api/fs/list endpoint. Shared by every "Browse" affordance.
+  const folderPickerEls = {
+    backdrop: document.getElementById('folderPickerBackdrop'),
+    note: document.getElementById('folderPickerNote'),
+    up: document.getElementById('folderPickerUp'),
+    path: document.getElementById('folderPickerPath'),
+    list: document.getElementById('folderPickerList'),
+    error: document.getElementById('folderPickerError'),
+    cancel: document.getElementById('folderPickerCancel'),
+    select: document.getElementById('folderPickerSelect'),
+  };
+  let folderPickerOnPick = null;
+  let folderPickerKeyHandler = null;
+
+  function closeWebFolderPicker() {
+    if (folderPickerEls.backdrop) folderPickerEls.backdrop.classList.remove('visible');
+    folderPickerOnPick = null;
+    if (folderPickerKeyHandler) {
+      document.removeEventListener('keydown', folderPickerKeyHandler, true);
+      folderPickerKeyHandler = null;
+    }
+  }
+
+  function folderPickerShowError(msg) {
+    const el = folderPickerEls.error;
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('visible', !!msg);
+  }
+
+  async function folderPickerNavigate(path) {
+    folderPickerShowError('');
+    if (folderPickerEls.path) folderPickerEls.path.value = path || '';
+    if (folderPickerEls.list) folderPickerEls.list.innerHTML = '<div class="fp-empty">Loading…</div>';
+    let data = {};
+    try {
+      const r = await fetch('/api/fs/list?path=' + encodeURIComponent(path || ''));
+      data = await r.json().catch(() => ({}));
+    } catch (err) {
+      data = { ok: false, error: (err && err.message) || 'network error' };
+    }
+    if (!data.ok) {
+      if (folderPickerEls.list) folderPickerEls.list.innerHTML = '';
+      folderPickerShowError(data.error || 'could not list folder');
+      return;
+    }
+    if (folderPickerEls.path) folderPickerEls.path.value = data.path;
+    if (folderPickerEls.up) {
+      folderPickerEls.up.disabled = !data.parent;
+      folderPickerEls.up.dataset.parent = data.parent || '';
+    }
+    const list = folderPickerEls.list;
+    if (!list) return;
+    list.innerHTML = '';
+    if (!data.dirs || !data.dirs.length) {
+      list.innerHTML = '<div class="fp-empty">No subfolders — Select uses this one</div>';
+      return;
+    }
+    for (const d of data.dirs) {
+      const item = document.createElement('div');
+      item.className = 'fp-item';
+      item.textContent = d.name + '/';
+      item.title = d.path;
+      item.setAttribute('role', 'option');
+      item.addEventListener('click', () => folderPickerNavigate(d.path));
+      list.appendChild(item);
+    }
+  }
+
+  // The raw native-picker error ("install zenity or kdialog…") is ops jargon —
+  // log it for debugging but show the user what the fallback actually is.
+  function webPickerFallbackNote(picked) {
+    if (picked && picked.error) console.debug('[ccc] native folder picker:', picked.error);
+    return 'No desktop folder dialog on the server — browse its folders below.';
+  }
+
+  // opts: { startPath?, note?, onPick(absPath) }
+  function openWebFolderPicker(opts) {
+    opts = opts || {};
+    if (!folderPickerEls.backdrop) {
+      showOpToast(opts.note || 'Type a path instead', 'error');
+      return;
+    }
+    folderPickerOnPick = typeof opts.onPick === 'function' ? opts.onPick : null;
+    if (folderPickerEls.note) {
+      folderPickerEls.note.textContent = opts.note || '';
+      folderPickerEls.note.hidden = !opts.note;
+    }
+    folderPickerEls.backdrop.classList.add('visible');
+    folderPickerKeyHandler = (ev) => {
+      if (ev.key === 'Escape') { ev.stopPropagation(); closeWebFolderPicker(); }
+    };
+    document.addEventListener('keydown', folderPickerKeyHandler, true);
+    folderPickerNavigate(opts.startPath || '');
+  }
+
+  if (folderPickerEls.backdrop) {
+    folderPickerEls.backdrop.addEventListener('click', (ev) => {
+      if (ev.target === folderPickerEls.backdrop) closeWebFolderPicker();
+    });
+  }
+  if (folderPickerEls.cancel) folderPickerEls.cancel.addEventListener('click', closeWebFolderPicker);
+  if (folderPickerEls.up) folderPickerEls.up.addEventListener('click', () => {
+    const parent = folderPickerEls.up.dataset.parent;
+    if (parent) folderPickerNavigate(parent);
+  });
+  if (folderPickerEls.path) folderPickerEls.path.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      folderPickerNavigate(folderPickerEls.path.value);
+    }
+  });
+  if (folderPickerEls.select) folderPickerEls.select.addEventListener('click', () => {
+    const chosen = folderPickerEls.path ? folderPickerEls.path.value.trim() : '';
+    const cb = folderPickerOnPick;
+    closeWebFolderPicker();
+    if (chosen && cb) cb(chosen);
+  });
+
   async function chooseSpawnCwdFolder() {
     const btn = document.getElementById('spawnCwdBrowseBtn');
     if (btn) btn.disabled = true;
@@ -55151,29 +55273,38 @@
       const picked = await r.json().catch(() => ({}));
       if (picked && picked.cancelled) return;
       if (!picked || !picked.ok || !picked.path) {
-        showOpToast('Folder picker failed: ' + ((picked && picked.error) || 'unknown'), 'error');
+        // No native chooser on this host (headless Linux) — walk the
+        // filesystem in-page instead of dead-ending on an error toast.
+        openWebFolderPicker({
+          startPath: getSpawnCwd(),
+          note: webPickerFallbackNote(picked),
+          onPick: (chosen) => { void useSpawnCwdSelection(chosen); },
+        });
         return;
       }
-      let selectedPath = picked.path;
-      try {
-        const addRes = await fetch('/api/repo/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: selectedPath }),
-        });
-        const addData = await addRes.json().catch(() => ({}));
-        if (addRes.ok && addData && addData.ok) {
-          selectedPath = addData.path || selectedPath;
-          if (Array.isArray(addData.repos)) repoListState.repos = addData.repos;
-          populateSpawnCwdPicker();
-        }
-      } catch (_) {}
-      setSpawnCwdInputValue(selectedPath);
+      await useSpawnCwdSelection(picked.path);
     } catch (err) {
       showOpToast('Folder picker failed: ' + ((err && err.message) || 'network'), 'error');
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  async function useSpawnCwdSelection(selectedPath) {
+    try {
+      const addRes = await fetch('/api/repo/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: selectedPath }),
+      });
+      const addData = await addRes.json().catch(() => ({}));
+      if (addRes.ok && addData && addData.ok) {
+        selectedPath = addData.path || selectedPath;
+        if (Array.isArray(addData.repos)) repoListState.repos = addData.repos;
+        populateSpawnCwdPicker();
+      }
+    } catch (_) {}
+    setSpawnCwdInputValue(selectedPath);
   }
 
   // CCC-128: click the "📁 cwd missing — set folder" pill to point a session at
@@ -55187,10 +55318,22 @@
       const picked = await r.json().catch(() => ({}));
       if (picked && picked.cancelled) return;
       if (!picked || !picked.ok || !picked.path) {
-        showOpToast('Folder picker failed: ' + ((picked && picked.error) || 'unknown'), 'error');
+        openWebFolderPicker({
+          note: webPickerFallbackNote(picked),
+          onPick: (chosen) => { void applySessionCwd(sid, chosen); },
+        });
         return;
       }
-      const chosen = picked.path;
+      await applySessionCwd(sid, picked.path);
+    } catch (err) {
+      showOpToast('Folder picker failed: ' + ((err && err.message) || 'network'), 'error');
+    } finally {
+      if (triggerEl) triggerEl.disabled = false;
+    }
+  }
+
+  async function applySessionCwd(sid, chosen) {
+    try {
       try {
         const addRes = await fetch('/api/repo/add', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -55214,8 +55357,6 @@
       if (typeof fetchSessionWorkspace === 'function') fetchSessionWorkspace(sid);
     } catch (err) {
       showOpToast('Could not set folder: ' + ((err && err.message) || 'network'), 'error');
-    } finally {
-      if (triggerEl) triggerEl.disabled = false;
     }
   }
   document.addEventListener('click', (ev) => {

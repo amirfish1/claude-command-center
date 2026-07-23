@@ -5818,7 +5818,10 @@ class TestLinuxCapabilities(unittest.TestCase):
 
     def test_capabilities_hide_native_desktop_features_on_linux(self):
         server = self._server()
-        with mock.patch.object(server.platform, "system", return_value="Linux"):
+        # Patch the picker detection so the result doesn't depend on whether
+        # the test host happens to have zenity/kdialog and a display.
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             caps = server._platform_capabilities()
         self.assertEqual(caps["platform"], "linux")
         self.assertTrue(caps["annotate"], "page annotations should be cross-platform")
@@ -5826,6 +5829,16 @@ class TestLinuxCapabilities(unittest.TestCase):
                     "folderPicker", "desktopDeepLinks", "revealFile",
                     "openBrowser", "notifications"):
             self.assertFalse(caps[key], f"{key} should be False on Linux")
+
+    def test_capabilities_folder_picker_on_linux_with_zenity(self):
+        """On a Linux desktop with zenity/kdialog/yad present the folder
+        picker flag flips to True so the UI can offer Browse."""
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd",
+                               return_value=["zenity", "--file-selection"]):
+            caps = server._platform_capabilities()
+        self.assertTrue(caps["folderPicker"])
 
     def test_app_config_exposes_capabilities(self):
         server = self._server()
@@ -5840,8 +5853,13 @@ class TestLinuxCapabilities(unittest.TestCase):
         """Each gated entry point returns a structured no-op on non-Darwin
         instead of raising or shelling out to a missing macOS tool."""
         server = self._server()
+        # _linux_folder_picker_cmd is patched to None so the folder picker
+        # takes its graceful "no tool installed" path even on a test host
+        # that has zenity and a display — otherwise this test would pop a
+        # real dialog and block for 10 minutes.
         with mock.patch.object(server.platform, "system", return_value="Linux"), \
-             mock.patch.object(server.sys, "platform", "linux"):
+             mock.patch.object(server.sys, "platform", "linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             for result in (
                 server._native_pick_folder(),
                 server._capture_screenshot_native(),
@@ -5852,6 +5870,47 @@ class TestLinuxCapabilities(unittest.TestCase):
                 self.assertIsInstance(result, dict)
                 self.assertFalse(result.get("ok", False))
                 self.assertIn("error", result)
+
+    def test_linux_pick_folder_uses_zenity(self):
+        """With a picker tool available, a zero exit yields the picked path
+        and a non-zero exit (Cancel) yields the cancelled marker."""
+        server = self._server()
+        zenity = ["zenity", "--file-selection", "--directory", "--title={prompt}"]
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=zenity):
+            with mock.patch.object(server.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess(zenity, 0, stdout="/tmp/repo\n", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": True, "path": "/tmp/repo"})
+                # {prompt} substitution reached argv
+                self.assertIn("--title=Pick a repo folder for Command Center",
+                              run.call_args[0][0])
+                run.return_value = subprocess.CompletedProcess(zenity, 1, stdout="", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": False, "cancelled": True})
+
+    def test_list_dirs_for_picker(self):
+        """The in-browser picker fallback lists visible subdirectories with a
+        parent link, skips dotdirs, and errors cleanly on non-directories."""
+        server = self._server()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            (base / "alpha").mkdir()
+            (base / "Beta").mkdir()
+            (base / ".hidden").mkdir()
+            (base / "a-file.txt").write_text("x")
+            result = server._list_dirs_for_picker(str(base))
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["path"], str(base.resolve()))
+            self.assertEqual(result["parent"], str(base.resolve().parent))
+            self.assertEqual([d["name"] for d in result["dirs"]], ["alpha", "Beta"])
+            root = server._list_dirs_for_picker("/")
+            self.assertTrue(root["ok"])
+            self.assertIsNone(root["parent"])
+            bad = server._list_dirs_for_picker(str(base / "a-file.txt"))
+            self.assertFalse(bad["ok"])
+            self.assertIn("error", bad)
+            missing = server._list_dirs_for_picker(str(base / "nope"))
+            self.assertFalse(missing["ok"])
+            self.assertIn("error", missing)
 
     def test_sys_memory_and_cpu_work_on_linux(self):
         """The system-monitor stats must not go blank on Linux: memory comes

@@ -2219,6 +2219,23 @@
     </div>
   </div>
 </div>
+<div class="folder-picker-backdrop" id="folderPickerBackdrop">
+  <div class="folder-picker" role="dialog" aria-modal="true" aria-labelledby="folderPickerTitle">
+    <h3 id="folderPickerTitle">Choose a folder</h3>
+    <div class="fp-note" id="folderPickerNote" hidden></div>
+    <div class="fp-path-row">
+      <button id="folderPickerUp" class="fp-up-btn" type="button" title="Up one level" aria-label="Up one level">&#8593;</button>
+      <input type="text" id="folderPickerPath" autocomplete="off" spellcheck="false"
+             placeholder="/path/to/folder" aria-label="Folder path">
+    </div>
+    <div class="fp-list" id="folderPickerList" role="listbox" aria-label="Subfolders"></div>
+    <div class="modal-error" id="folderPickerError"></div>
+    <div class="modal-footer">
+      <button class="modal-cancel" id="folderPickerCancel">Cancel</button>
+      <button class="modal-start" id="folderPickerSelect" type="button">Select this folder</button>
+    </div>
+  </div>
+</div>
 <script id="ccc-hermes-bridge-plugin">
 (function () {
   var port = "8765";
