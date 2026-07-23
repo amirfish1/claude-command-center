@@ -507,3 +507,24 @@ def test_post_router_exposes_trash_endpoints():
     assert '"trashed": bool(meta.get("trashed"))' in inspect.getsource(
         server._list_group_chats
     )
+
+
+def test_every_engine_finder_stamps_lifecycle_state():
+    # A finder that omits archived/trashed serves rows with those fields
+    # missing, so the UI treats a trashed session as active and it pops
+    # back out of the Trash section on the next poll (kimi regression).
+    finders = [
+        server.find_conversations,
+        server.find_codex_conversations,
+        server.find_kimi_conversations,
+        server.find_gemini_conversations,
+        server.find_cursor_conversations,
+        server.find_antigravity_conversations,
+        server.find_hermes_conversations,
+        server.find_kilo_conversations,
+    ]
+    for finder in finders:
+        source = inspect.getsource(finder)
+        assert "_load_conversation_lifecycle_sets" in source, finder.__name__
+        assert '"archived"' in source, finder.__name__
+        assert '"trashed"' in source, finder.__name__

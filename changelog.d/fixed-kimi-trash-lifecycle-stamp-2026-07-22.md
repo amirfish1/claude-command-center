@@ -1,0 +1,1 @@
+Kimi sessions no longer pop out of Trash back into the All list: the kimi session finder now stamps `archived`/`trashed`/`verified` lifecycle state on its rows like every other engine, so trashed kimi sessions stay in the Trash section after the next poll.
