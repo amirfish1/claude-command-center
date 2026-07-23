@@ -175,6 +175,20 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("const rawStatus = it.status || 'open';", queue_js)
         self.assertNotIn("const status = it.status || 'open';", queue_js)
 
+    def test_closed_unresolved_rows_use_an_amber_attention_state(self):
+        """Unresolved follow-up is attention-worthy without implying a hard block."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        unresolved_css = app_css[
+            app_css.index(".fq-row.is-closed.has-unresolved .fq-status {"):
+            app_css.index("/* Triage chips", app_css.index(".fq-row.is-closed.has-unresolved .fq-status {"))
+        ]
+
+        self.assertIn("background: var(--orange, #d29922);", unresolved_css)
+        self.assertIn("color: var(--orange, #d29922);", unresolved_css)
+        self.assertNotIn("var(--red, #f85149)", unresolved_css)
+        self.assertNotIn("#ff7b72", unresolved_css)
+        self.assertNotIn("rgba(248,81,73", unresolved_css)
+
     def test_live_queue_refreshes_when_mounted_in_sidebar_tab(self):
         """A worker claim refreshes sidebar rows and ends the Play spinner."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
