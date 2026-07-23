@@ -10922,6 +10922,25 @@
   }
   const $mobileBackBtn = document.getElementById('mobileBackBtn');
   if ($mobileBackBtn) $mobileBackBtn.addEventListener('click', () => mobileShowMain(false));
+  const $mobileOriginalAsk = document.getElementById('mobileOriginalAsk');
+  const $mobileOriginalAskText = document.getElementById('mobileOriginalAskText');
+  function syncMobileOriginalAsk(text) {
+    if (!$mobileOriginalAsk || !$mobileOriginalAskText) return;
+    const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+    $mobileOriginalAskText.textContent = cleaned;
+    $mobileOriginalAsk.hidden = !cleaned;
+    $mobileOriginalAsk.classList.remove('is-expanded');
+    $mobileOriginalAsk.setAttribute('aria-expanded', 'false');
+    $mobileOriginalAsk.title = cleaned ? 'Show the full original ask' : '';
+  }
+  if ($mobileOriginalAsk) {
+    $mobileOriginalAsk.addEventListener('click', () => {
+      const expanded = !$mobileOriginalAsk.classList.contains('is-expanded');
+      $mobileOriginalAsk.classList.toggle('is-expanded', expanded);
+      $mobileOriginalAsk.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      $mobileOriginalAsk.title = expanded ? 'Collapse original ask' : 'Show the full original ask';
+    });
+  }
   function handleMobileBreakpointChange() {
     // When transitioning to narrow viewport with an active conversation,
     // show the pane overlay; when transitioning to wide, hide it
@@ -32779,6 +32798,7 @@
     pane.firstLine = 0;
     pane.loadBeforeLine = 0;
     pane.wantFull = false;
+    if (paneId === activePaneId()) syncMobileOriginalAsk('');
     // Drop any visual "Clear" watermark (CCC-474) — a fresh (re)select of a
     // conversation always shows full history.
     const _selClearView = getConvViewForPane(paneId);
@@ -43598,6 +43618,8 @@
           // conversation. The chevron toggles to `.is-expanded` (50vh)
           // and back; that state is ephemeral, scoped to this sticky DOM
           // node, and resets every time the user switches conversations.
+          const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
+          if (paneId === activePaneId()) syncMobileOriginalAsk(mobileOriginalAskText);
           sticky.innerHTML = resolveBtn + issueBtn
             + '<button type="button" class="conv-sticky-header__close" data-csh-close title="Hide this panel completely">×</button>'
             + '<div class="csh-row">'
@@ -43605,8 +43627,7 @@
             +     '<div class="csh-ask-original">'
             +       '<div class="label">Original ask</div>'
             +       (function () {
-                      const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
-                      const parts = splitFirstSentence(cleaned);
+                      const parts = splitFirstSentence(mobileOriginalAskText);
                       const imagesHtml = renderImageDescriptors(ev.images);
                       let h = '<div class="user-msg" dir="auto">';
                       h += '<span class="ask-first">' + linkifyPastedImages(escapeHtml(parts[0])) + '</span>';

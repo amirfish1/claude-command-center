@@ -1,1 +1,1 @@
-- Prevent focus zoom and keep the mobile conversation header and Back button visible when the on-screen keyboard opens.
+- Prevent focus zoom, keep Back visible above the keyboard, and move the mobile Original ask into a compact expandable toolbar row.

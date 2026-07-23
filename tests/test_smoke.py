@@ -3570,6 +3570,19 @@ class TestServerImports(unittest.TestCase):
             app_css,
         )
 
+    def test_mobile_original_ask_uses_toolbar_disclosure(self):
+        """Phones show one compact original-ask row in the stable toolbar
+        instead of the transcript's large sticky card."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="mobileOriginalAsk"', index_html)
+        self.assertIn("syncMobileOriginalAsk(mobileOriginalAskText)", app_js)
+        self.assertIn("body .conversations-view .conv-sticky-header {\n    display: none !important;", app_css)
+        self.assertIn("#mobileOriginalAsk:not([hidden])", app_css)
+        self.assertIn("#mobileOriginalAsk.is-expanded .mobile-original-ask__text", app_css)
+
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")

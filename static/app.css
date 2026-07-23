@@ -21164,3 +21164,78 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     font-size: 16px !important;
   }
 }
+
+/* Mobile original ask: use the otherwise-empty reader toolbar instead of
+   floating a large sticky card over the transcript. The disclosure is one
+   ellipsized row by default and expands in place only when requested. */
+.mobile-original-ask { display: none; }
+@media (max-width: 1200px) {
+  body .conversations-view .conv-sticky-header {
+    display: none !important;
+  }
+  #convToolbar {
+    align-items: flex-start;
+  }
+  #mobileOriginalAsk:not([hidden]) {
+    order: -99;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 34px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  #mobileOriginalAsk:not([hidden]):hover,
+  #mobileOriginalAsk:not([hidden]):focus-visible {
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  }
+  .mobile-original-ask__label {
+    color: var(--green);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .mobile-original-ask__text {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 550;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobile-original-ask__chevron {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1;
+    transition: transform 0.15s ease;
+  }
+  #mobileOriginalAsk.is-expanded {
+    align-items: start;
+    max-height: min(40vh, 320px);
+    overflow-y: auto;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+  #mobileOriginalAsk.is-expanded .mobile-original-ask__text {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+  #mobileOriginalAsk.is-expanded .mobile-original-ask__chevron {
+    margin-top: 3px;
+    transform: rotate(180deg);
+  }
+}
