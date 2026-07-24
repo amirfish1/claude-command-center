@@ -167,12 +167,14 @@ cd claude-command-center
 Open [http://localhost:8090](http://localhost:8090), then pick a repo from
 the repo dropdown before starting repo-scoped actions.
 
-`--install-service` writes `~/Library/LaunchAgents/com.github.claude-command-center.plist`
-and registers it in your per-user launchd domain so CCC starts immediately,
-restarts if it exits, and starts again at macOS login. It bakes in whatever
+`--install-service` writes separate dashboard and persistent-worker launch
+agents under `~/Library/LaunchAgents/`. The worker has an independent lifecycle
+so dashboard upgrades do not make it part of the dashboard's process tree.
+Both start immediately and again at macOS login. The installer bakes in whatever
 `PORT` / `CCC_*` env vars were set when you ran it. Re-run it to update config;
 check with `./run.sh --service-status`; remove with `./run.sh --uninstall-service`.
-Service logs go to `~/.claude/command-center/logs/service.{out,err}.log`.
+Dashboard logs use `~/.claude/command-center/logs/service.{out,err}.log`;
+worker logs use `worker.{out,err}.log`.
 Normal CCC app updates keep using the same checkout path; re-run
 `./run.sh --install-service` only when you want to change baked-in env vars or
 pick up a release that changes the launchd plist itself.
@@ -231,9 +233,11 @@ cd claude-command-center
 ./run.sh --install-service
 ```
 
-`--install-service` writes a systemd user unit to
-`~/.config/systemd/user/ccc.service` and runs `systemctl --user enable --now`.
-Check it with `./run.sh --service-status` (or `systemctl --user status ccc`),
+`--install-service` writes independent `ccc.service` and
+`ccc-worker.service` systemd user units under `~/.config/systemd/user/`.
+The dashboard wants the worker but does not own its control group, so restarting
+the dashboard leaves the worker running. Check both with
+`./run.sh --service-status` (or `systemctl --user status ccc ccc-worker`),
 follow logs with `journalctl --user -u ccc -f`, and remove it with
 `./run.sh --uninstall-service`. On a headless box with no active login session,
 run `sudo loginctl enable-linger $USER` once so the service survives logout and
@@ -478,6 +482,8 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_CURSOR_MODEL` | `auto` | Default model for Cursor spawns/resumes when no dashboard or API model override is set. |
 | `CCC_KILO_BIN` | *(auto)* | Absolute path to the Kilo Code CLI (`kilo`) if it is not on the service PATH. |
 | `CCC_KILO_MODEL` | `kilo/stepfun/step-3.7-flash:free` | Default model for Kilo spawns when no dashboard or API model override is set. |
+| `CCC_WORKER_SOCKET` | `~/.claude/command-center/worker.sock` | Local Unix socket used between the restartable dashboard and persistent execution worker. |
+| `CCC_WORK_LEDGER` | `~/.claude/command-center/control-plane.sqlite3` | Durable SQLite work graph, idempotency, lease, and recovery ledger. |
 | `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN. **No auth, see [`SECURITY.md`](SECURITY.md)** |
 | `CCC_ALLOWED_ORIGIN` | *(empty)* | Comma-separated origins (e.g. `http://my-mac.tailnet.ts.net:8090`) added to the same-origin POST allowlist. Use with `CCC_BIND_HOST=0.0.0.0` to reach the UI from another device on a trusted network (Tailscale / VPN). **No auth, see [`SECURITY.md`](SECURITY.md)** |
 | `CCC_TRUST_TAILNET` | *(off)* | When set (`1`/`true`/`yes`/`on`), CCC shells out to `tailscale status --json` at startup and adds the local node's MagicDNS hostname + Tailscale IPs to the allowlist automatically. Same trust caveat as `CCC_ALLOWED_ORIGIN`. |

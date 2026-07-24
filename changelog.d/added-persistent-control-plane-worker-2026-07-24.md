@@ -1,0 +1,1 @@
+- Added an independently managed `ccc-worker` service, authenticated local IPC, and a durable SQLite work graph foundation so agent execution can be migrated out of the restartable dashboard process.

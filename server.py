@@ -65,6 +65,7 @@ import model_advisor
 # CCC federation (stdlib-only sibling module): stable node identity, paired
 # peers, and the transport for calling a peer CCC on its own loopback.
 import federation
+from control_plane import ControlPlaneClient
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
@@ -89,6 +90,15 @@ COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
 _PYTHON_STACK_DUMP_FILE = None
+_CONTROL_PLANE_CLIENT = ControlPlaneClient(timeout=1.5)
+
+
+def _control_plane_request(method, params=None):
+    """Call the persistent worker without making dashboard availability depend on it."""
+    response = _CONTROL_PLANE_CLIENT.request(method, params)
+    if not isinstance(response, dict):
+        return {"ok": False, "available": False, "error": "invalid worker response"}
+    return response
 
 
 def _install_python_stack_dump_handler(log_path=None):
@@ -63782,6 +63792,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
+        elif path == "/api/control-plane/status":
+            self.send_json(_control_plane_request("health"))
         elif path == "/api/voice-focus":
             # Current remote-focus target (set via POST). O(1) in-memory poll.
             self.send_json(dict(_VOICE_FOCUS))
@@ -66126,6 +66138,37 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **_set_voice_focus(sid)})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
+            return
+
+        if path in (
+            "/api/control-plane/drain",
+            "/api/control-plane/work",
+            "/api/control-plane/work/transition",
+        ):
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            method = {
+                "/api/control-plane/drain": "drain.set",
+                "/api/control-plane/work": "work.submit",
+                "/api/control-plane/work/transition": "work.transition",
+            }[path]
+            result = _control_plane_request(method, payload)
+            if result.get("ok"):
+                status = 200
+            elif not result.get("available", True):
+                status = 503
+            elif result.get("code") == "not_found":
+                status = 404
+            else:
+                status = 409
+            self.send_json(result, status)
             return
 
         if path == "/api/car-mode/start":
