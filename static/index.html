@@ -641,11 +641,33 @@
         </div>
         <div id="setupBanner" class="ccc-setup-banner"></div>
       </div>
+      <!-- Mobile redesign only (body.ccc-mobile-redesign): collapses the
+           Annotate/Screen/Notes/Worktrees/Stats/Terminal/deploy-pill row
+           above into one "More" button. app.js reparents those EXACT
+           button nodes into #cccTopbarMoreMenu when mobile mode is active
+           (not clones — same listeners/state), and moves them back on
+           exit. Hidden on desktop via inline style. -->
+      <div class="mobile-more-wrap">
+        <button type="button" id="cccTopbarMoreBtn" class="mobile-more-btn" style="display:none;" aria-haspopup="menu" aria-expanded="false">More</button>
+        <div id="cccTopbarMoreMenu" class="mobile-more-menu" role="menu" hidden></div>
+      </div>
       <div class="font-size-controls">
         <button class="font-size-btn" id="fontMinus" title="Decrease font size">A-</button>
         <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
       </div>
       <span style="font-size:11px;color:var(--text-muted);font-family:'SF Mono',SFMono-Regular,Consolas,monospace;opacity:0.6;cursor:pointer;user-select:all;margin-left:8px;" id="convSessionId" title="Click to copy session ID"></span>
+      <!-- Mobile redesign only (body.ccc-mobile-redesign): labeled chip +
+           full-width Copy button, replacing the 11px low-opacity #convSessionId
+           span above. Populated by setCopyableSessionId() alongside it —
+           same sid, no new data source. Hidden on desktop via inline style;
+           CSS flips visibility under the mobile-redesign body class. -->
+      <div class="mobile-id-chip-wrap" id="convSessionIdMobileWrap" style="display:none;">
+        <span class="mobile-id-chip">
+          <span class="mobile-id-label">Session</span>
+          <code class="mobile-id-value" id="convSessionIdMobileValue"></code>
+        </span>
+        <button type="button" class="mobile-copy-btn" id="convSessionIdMobileCopyBtn">Copy</button>
+      </div>
       <div class="conv-overflow-wrap">
         <button type="button" class="conv-overflow-btn" id="convOverflowBtn" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
         <div class="conv-overflow-menu" id="convOverflowMenu" role="menu" aria-hidden="true"></div>
@@ -700,6 +722,27 @@
             <button type="button" class="conv-presentation-mode" data-presentation-mode="off" aria-pressed="true" title="Normal transcript view">Off</button>
             <button type="button" class="conv-presentation-mode" data-presentation-mode="2" aria-pressed="false" title="Present assistant answers as semantic slides with complete live updates">Present</button>
             <button type="button" class="conv-presentation-mode" data-presentation-mode="3" aria-pressed="false" title="Ask the working agent to design a structured slide deck alongside each answer">Mode 3</button>
+          </div>
+          <!-- Mobile redesign only (body.ccc-mobile-redesign): plain-language,
+               full-width buttons replacing the "Off / Present / Mode 3"
+               segment above. Reuses the SAME class + data-presentation-mode
+               values, so the existing delegated click handler and
+               syncPresentationToolbar() (both querySelectorAll-scoped, not
+               id-scoped) wire and sync these automatically — no JS changes
+               needed for the wiring itself. -->
+          <div class="conv-presentation-mobile-list" role="group" aria-label="Conversation presentation mode">
+            <button type="button" class="conv-presentation-mode mobile-view-btn" data-presentation-mode="off" aria-pressed="true">
+              <span class="mobile-view-name">Chat</span>
+              <span class="mobile-view-desc">The normal back-and-forth transcript.</span>
+            </button>
+            <button type="button" class="conv-presentation-mode mobile-view-btn" data-presentation-mode="2" aria-pressed="false">
+              <span class="mobile-view-name">Slides</span>
+              <span class="mobile-view-desc">Turns each answer into a slide instantly. No extra cost.</span>
+            </button>
+            <button type="button" class="conv-presentation-mode mobile-view-btn" data-presentation-mode="3" aria-pressed="false">
+              <span class="mobile-view-name">Slides, agent-designed</span>
+              <span class="mobile-view-desc">Asks the working agent to lay out a proper deck. Uses extra tokens.</span>
+            </button>
           </div>
           <div class="conv-presentation-progress" data-role="presentation-progress" hidden>
             <span class="conv-presentation-answer-label"></span>

@@ -5813,6 +5813,37 @@
       delete el.dataset.copySessionId;
       el.title = '';
     }
+    // Mobile redesign: same sid, additionally mirrored into the labeled
+    // chip + full-width Copy button (index.html #convSessionIdMobileWrap).
+    // No-op when that element isn't in the page (popouts, etc).
+    _syncMobileSessionIdChip(value);
+  }
+
+  function _syncMobileSessionIdChip(sid) {
+    const wrap = document.getElementById('convSessionIdMobileWrap');
+    const valueEl = document.getElementById('convSessionIdMobileValue');
+    if (!wrap || !valueEl) return;
+    const value = sid || '';
+    wrap.dataset.sid = value;
+    valueEl.textContent = value ? shortSessionId(value) : '';
+    wrap.classList.toggle('is-empty', !value);
+  }
+
+  const $convSessionIdMobileCopyBtn = document.getElementById('convSessionIdMobileCopyBtn');
+  if ($convSessionIdMobileCopyBtn) {
+    $convSessionIdMobileCopyBtn.addEventListener('click', async () => {
+      const wrap = document.getElementById('convSessionIdMobileWrap');
+      const sid = wrap && wrap.dataset.sid || '';
+      if (!sid) return;
+      const ok = await copyTextValue(sid);
+      const btn = $convSessionIdMobileCopyBtn;
+      btn.textContent = ok ? 'Copied' : 'Copy failed';
+      btn.setAttribute('aria-pressed', ok ? 'true' : 'false');
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+        btn.setAttribute('aria-pressed', 'false');
+      }, 1500);
+    });
   }
 
   function shortSessionId(sid) {
@@ -10891,6 +10922,94 @@
   } catch (_) {}
   const $cpMobileBackBtn = document.getElementById('cpMobileBackBtn');
   if ($cpMobileBackBtn) $cpMobileBackBtn.addEventListener('click', () => mobileShowConv(false));
+
+  // ── Mobile REDESIGN gate ──
+  // Separate from isMobile()/_mobileMQ above, which only controls pane
+  // navigation (single-column + back button) at 1200px. This gate controls
+  // whether cards/topbar/session-id/view-mode actually render the
+  // simplified mobile UI (one status line, labeled copy chip, plain-language
+  // view buttons, collapsed "More" menu) — a different concern, a different
+  // (narrower) breakpoint, and independently forceable for desktop testing.
+  const _mobileRedesignMQ = window.matchMedia('(max-width: 768px)');
+  const _mobileRedesignForcedByUrl = (function () {
+    try { return new URLSearchParams(window.location.search || '').get('mobile') === '1'; }
+    catch (_) { return false; }
+  })();
+  function isMobileRedesign() {
+    return window.CCC_FORCE_MOBILE_REDESIGN === true
+      || _mobileRedesignForcedByUrl
+      || _mobileRedesignMQ.matches;
+  }
+  function _syncMobileRedesignBodyClass() {
+    document.body.classList.toggle('ccc-mobile-redesign', isMobileRedesign());
+    _syncMobileMoreMenu();
+  }
+
+  // ── Mobile "More" menu ──
+  // Reparents the ACTUAL topbar action nodes (not clones) into
+  // #cccTopbarMoreMenu when mobile mode is active, so their existing
+  // listeners/state carry over untouched; moves them back on exit.
+  const _mobileMoreMenuIds = [
+    'annotationStartBtn', 'annotationScreenBtn', 'annotationNotesBtn',
+    'kptWorktreesBtn', 'statsBtn', 'termToggleBtn', 'deployPill',
+  ];
+  const _mobileMoreMenuHome = new Map();
+  function _mobileMoreMenuNodes() {
+    const nodes = _mobileMoreMenuIds.map(id => document.getElementById(id)).filter(Boolean);
+    const localhostWrap = document.querySelector('.localhost-wrap');
+    if (localhostWrap) nodes.push(localhostWrap);
+    return nodes;
+  }
+  function _syncMobileMoreMenu() {
+    const menu = document.getElementById('cccTopbarMoreMenu');
+    const topbar = document.getElementById('cccTopbar');
+    const moreBtn = document.getElementById('cccTopbarMoreBtn');
+    if (!menu || !topbar) return;
+    const nodes = _mobileMoreMenuNodes();
+    if (isMobileRedesign()) {
+      // Snapshot each node's original next-sibling once, before any move,
+      // so exiting mobile mode can restore exact original order.
+      nodes.forEach(n => { if (!_mobileMoreMenuHome.has(n)) _mobileMoreMenuHome.set(n, n.nextSibling); });
+      nodes.forEach(n => menu.appendChild(n));
+      if (moreBtn) moreBtn.style.display = '';
+    } else {
+      // Restore in reverse so each anchor is back in the topbar before
+      // the node before it needs to insertBefore against it.
+      nodes.slice().reverse().forEach(n => {
+        const nextSib = _mobileMoreMenuHome.get(n);
+        if (nextSib && nextSib.parentNode === topbar) topbar.insertBefore(n, nextSib);
+        else topbar.appendChild(n);
+      });
+      if (moreBtn) moreBtn.style.display = 'none';
+      menu.hidden = true;
+      if (moreBtn) moreBtn.setAttribute('aria-expanded', 'false');
+    }
+  }
+  const $cccTopbarMoreBtn = document.getElementById('cccTopbarMoreBtn');
+  const $cccTopbarMoreMenu = document.getElementById('cccTopbarMoreMenu');
+  if ($cccTopbarMoreBtn && $cccTopbarMoreMenu) {
+    $cccTopbarMoreBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const open = !$cccTopbarMoreMenu.hidden;
+      $cccTopbarMoreMenu.hidden = open;
+      $cccTopbarMoreBtn.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+    document.addEventListener('click', (ev) => {
+      if ($cccTopbarMoreMenu.hidden) return;
+      if (ev.target.closest('#cccTopbarMoreMenu, #cccTopbarMoreBtn')) return;
+      $cccTopbarMoreMenu.hidden = true;
+      $cccTopbarMoreBtn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  _syncMobileRedesignBodyClass();
+  try {
+    if (_mobileRedesignMQ.addEventListener) _mobileRedesignMQ.addEventListener('change', _syncMobileRedesignBodyClass);
+    else if (_mobileRedesignMQ.addListener) _mobileRedesignMQ.addListener(_syncMobileRedesignBodyClass);
+  } catch (_) {}
+  // Console convenience: `window.CCC_FORCE_MOBILE_REDESIGN = true; cccSyncMobileRedesign()`
+  // re-syncs immediately without needing a resize/reload.
+  window.cccSyncMobileRedesign = _syncMobileRedesignBodyClass;
 
   // ---------------------------------------------------------------------------
   // Mobile swipe-to-rotate among recently-opened conversations.
@@ -22178,6 +22297,63 @@
     return !c.has_edit;
   }
 
+  // ── Mobile redesign: single dominant status per card ──
+  // Reduces the ~7 same-weight badges (issue chip, needs-approval, question,
+  // stale-tool, stage chip, no-edits/read-only) desktop shows directly on
+  // the card face into one Working/Idle/Stuck/Offline line. Reads the exact
+  // same fields desktop already computes (is_live, sidecar_status,
+  // stale_tool_call, needs_approval, question_waiting) — no new data source.
+  function deriveMobileCardStatus(c, trulyActiveCls) {
+    if (!c.is_live) {
+      return { state: 'offline', word: 'Offline', detail: '' };
+    }
+    if (c.stale_tool_call) {
+      const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
+      const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts)
+        : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
+      return { state: 'stuck', word: 'Stuck', detail: liveActivityToolLabel(staleTool) + (staleAge ? ' for ' + staleAge : '') };
+    }
+    if (c.needs_approval) {
+      const msg = c.needs_approval_message || '';
+      return { state: 'idle', word: 'Idle', detail: 'needs approval' + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+    }
+    if (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')) {
+      const msg = c.sidecar_file || c.question_text || '';
+      return { state: 'idle', word: 'Idle', detail: 'has a question' + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+    }
+    if (trulyActiveCls) {
+      const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
+      let detail = '';
+      if (c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion' && sidecarAge < 300) {
+        const shortFile = shortenLiveActivityDetail(c.sidecar_file || '', c.sidecar_tool, isCommandActivityTool(c.sidecar_tool) ? 40 : 24);
+        detail = liveActivityToolLabel(c.sidecar_tool) + (shortFile ? ' ' + shortFile : '');
+      }
+      return { state: 'working', word: 'Working', detail: detail };
+    }
+    return { state: 'idle', word: 'Idle', detail: 'no live process' };
+  }
+
+  function mobileCardStatusLineHtml(status) {
+    return '<div class="mobile-status-line is-' + status.state + '">'
+      + '<span class="mobile-status-dot" aria-hidden="true"></span>'
+      + '<span class="mobile-status-word">' + escapeHtml(status.word) + '</span>'
+      + (status.detail ? '<span class="mobile-status-detail">— ' + escapeHtml(status.detail) + '</span>' : '')
+      + '</div>';
+  }
+
+  // Delegated once at parse time (not per-render) since clicks bubble from
+  // any card's Details button, present or future.
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.mobile-details-toggle');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const panel = btn.nextElementSibling;
+    const open = btn.getAttribute('aria-pressed') === 'true';
+    btn.setAttribute('aria-pressed', open ? 'false' : 'true');
+    if (panel && panel.classList.contains('mobile-details-panel')) panel.hidden = open;
+  });
+
   function renderKanbanBoard(convs, targetEl, isSplit) {
     convs = filterGhIssues(convs);
     if (!targetEl) targetEl = $kanbanBoard;
@@ -22549,6 +22725,13 @@
         // Notification hook badge — Claude Code is asking for permission
         // (or otherwise needs the user). Sits above the title so it's the
         // first thing the eye lands on when scanning the Waiting column.
+        // Mobile redesign: replaced by one dominant status line below —
+        // this whole badge-soup block (needs-approval/question/issue chip/
+        // stage/no-edits/read-only) folds into a collapsed Details panel
+        // instead, so desktop keeps every statement below unchanged.
+        if (isMobileRedesign()) {
+          html += mobileCardStatusLineHtml(deriveMobileCardStatus(c, trulyActive));
+        } else {
         if (c.needs_approval) {
           const msg = c.needs_approval_message || '';
           const shortMsg = msg && msg.length <= 80 ? msg : '';
@@ -22569,6 +22752,7 @@
         if (issueBadge) {
           html += '<div class="kanban-card-badges">' + issueBadge + '</div>';
         }
+        }
         html += '<div class="kanban-card-title' + titleClass + '" data-action="edit-title" title="Click to open; click again to rename">' + titleHtml + '</div>';
         if (descHtml) {
           html += '<div class="kanban-card-desc">' + descHtml + '</div>';
@@ -22579,18 +22763,22 @@
             + 'Last interacted ' + escapeHtml(relativeTime(c.last_interacted))
             + '</div>';
         }
+        if (!isMobileRedesign()) {
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
         if (noEditsAttr) {
           html += '<span class="kanban-card-stage no-edits" title="Agent has not edited any files in this session">no edits</span>';
         } else if (readOnlyAttr) {
           html += '<span class="kanban-card-stage read-only" title="Agent completed read-only work without file edits">read-only</span>';
         }
+        }
 
         // ── Task 8: Approve/Deny for waiting cards with pending_tool ──
         // Live "what's running right now" \u2014 render whenever sidecar shows
         // active work and the data is fresh (<5 min). Closes the Working
         // column gap where the card showed nothing while Claude was busy.
-        if (c.stale_tool_call) {
+        // Mobile: same signals already drove the status line above; the
+        // Details panel below carries the raw tool/age text instead.
+        if (!isMobileRedesign() && c.stale_tool_call) {
           const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
           const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
           const staleDetail = c.pending_file || c.sidecar_file || '';
@@ -22606,7 +22794,7 @@
             + ' <span class="kanban-live-file">' + escapeHtml(liveActivityToolLabel(staleTool)) + '</span>'
             + (staleAge ? '<span class="kanban-live-age">' + escapeHtml(staleAge) + '</span>' : '')
             + '</div>';
-        } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
+        } else if (!isMobileRedesign() && c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
           const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
           if (sidecarAge < 300) {
             const rawDetail = c.sidecar_file || '';
@@ -22625,6 +22813,32 @@
               + '<span class="kanban-live-age">' + ageLbl + '</span>'
               + '</div>';
           }
+        }
+
+        if (isMobileRedesign()) {
+          // Collapsed Details toggle — everything the badges above carried
+          // on desktop (engine, cost tier, linked issue, stage, edit
+          // status, live tool) still exists, just demoted behind a tap.
+          const pres = sessionIconPresentation(c, false);
+          const detailBits = [pres.engineLabel + (pres.tierLabel ? ' \u00b7 ' + pres.tierLabel + ' cost' : '')];
+          if (linkedIssue) detailBits.push('GH #' + linkedIssue);
+          detailBits.push(stageLabel);
+          if (noEditsAttr) detailBits.push('no edits');
+          else if (readOnlyAttr) detailBits.push('read-only');
+          if (c.stale_tool_call) {
+            detailBits.push('stuck on ' + liveActivityToolLabel(c.pending_tool || c.sidecar_tool || 'tool'));
+          } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
+            const _sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
+            if (_sidecarAge < 300) {
+              const _dur = _sidecarAge < 2 ? '<1s' : _sidecarAge < 60 ? _sidecarAge + 's' : Math.floor(_sidecarAge / 60) + 'm';
+              detailBits.push((c.sidecar_in_flight ? 'running ' : '') + liveActivityToolLabel(c.sidecar_tool) + ' ' + _dur);
+            }
+          }
+          html += '<button type="button" class="mobile-details-toggle" aria-pressed="false">Details</button>'
+            + '<div class="mobile-details-panel" hidden>'
+            + escapeHtml(detailBits.filter(Boolean).join(' \u00b7 '))
+            + (issueBadge ? '<div class="mobile-details-badges">' + issueBadge + '</div>' : '')
+            + '</div>';
         }
 
         if (colKey === 'waiting' && c.pending_tool && !c.sidecar_status) {
