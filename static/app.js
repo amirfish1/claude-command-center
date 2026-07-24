@@ -10943,6 +10943,7 @@
   function _syncMobileRedesignBodyClass() {
     document.body.classList.toggle('ccc-mobile-redesign', isMobileRedesign());
     _syncMobileMoreMenu();
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
   }
 
   // ── Mobile "More" menu ──
@@ -11010,6 +11011,135 @@
   // Console convenience: `window.CCC_FORCE_MOBILE_REDESIGN = true; cccSyncMobileRedesign()`
   // re-syncs immediately without needing a resize/reload.
   window.cccSyncMobileRedesign = _syncMobileRedesignBodyClass;
+
+  // ── Simple / Advanced interface mode ──
+  // A presentation-level preference, separate from isMobileRedesign() (which
+  // gates mobile-vs-desktop CHROME). This gates plain-language labels and
+  // progressive disclosure of technical info within whatever chrome is
+  // already showing. Explicit user choice (localStorage 'ccc-ui-mode')
+  // always wins; unset defaults to 'simple' on a narrow/mobile viewport and
+  // 'advanced' otherwise, so an existing desktop user's first load after
+  // this ships looks exactly as it did before — nothing changes until they
+  // opt in from Settings.
+  function getUiMode() {
+    try {
+      const stored = localStorage.getItem('ccc-ui-mode');
+      if (stored === 'simple' || stored === 'advanced') return stored;
+    } catch (_) {}
+    return isMobileRedesign() ? 'simple' : 'advanced';
+  }
+  function setUiMode(mode) {
+    const value = mode === 'simple' ? 'simple' : 'advanced';
+    try { localStorage.setItem('ccc-ui-mode', value); } catch (_) {}
+    _syncUiModeBodyClass();
+  }
+  function isSimpleMode() { return getUiMode() === 'simple'; }
+  function _syncUiModeBodyClass() {
+    document.body.classList.toggle('ccc-simple-mode', isSimpleMode());
+    const toggle = document.getElementById('settingsUiModeToggle');
+    if (toggle) {
+      const on = isSimpleMode();
+      toggle.classList.toggle('is-on', on);
+      toggle.setAttribute('aria-checked', String(on));
+    }
+    if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+  }
+  _syncUiModeBodyClass();
+  try {
+    if (_mobileRedesignMQ.addEventListener) _mobileRedesignMQ.addEventListener('change', _syncUiModeBodyClass);
+    else if (_mobileRedesignMQ.addListener) _mobileRedesignMQ.addListener(_syncUiModeBodyClass);
+  } catch (_) {}
+  window.cccSetUiMode = setUiMode;
+
+  // Centralized plain-language label map (Simple mode only). One lookup
+  // table instead of scattering ternaries through every render path —
+  // per-phrase, not per-render-path, so new callers just add a key here.
+  const SIMPLE_LABELS = {
+    'New session': 'Start a task',
+    'Active': 'In progress',
+    'All': 'History',
+    'Issues': 'Requests',
+    'Queues': 'Automations',
+    'Open Ask': 'Needs your reply',
+    'Offline': 'Not running',
+    'Idle': 'Waiting',
+    'Current Sessions': 'Work in progress',
+    'Project Tree': 'Projects',
+    'Triggered Workers': 'Automation activity',
+    // Kanban column labels not in the brief's table, extended in the same
+    // plain-language spirit.
+    'GH Issues': 'Requests',
+    'Icebox': 'Parked',
+    'Stuck': 'Needs attention',
+    'Resume': 'Continue',
+    'Spawn': 'Start',
+    'Ingest': 'Import',
+    'Headless': 'Background',
+    'DID': 'Completed',
+    'INSIGHT': 'Key finding',
+    'NEXT STEP USER': 'What I need from you',
+  };
+  function simpleLabel(key) {
+    if (!isSimpleMode()) return key;
+    return Object.prototype.hasOwnProperty.call(SIMPLE_LABELS, key) ? SIMPLE_LABELS[key] : key;
+  }
+
+  // ── Simple-mode mobile bottom nav ──
+  // Drives the EXISTING sidebar tab bar (data-conv-tab, localStorage
+  // 'ccc-sidebar-tab') and Settings modal — no new screens/state, no
+  // duplicated render logic. Only visible when both Simple mode and the
+  // mobile chrome gate are active.
+  function _mobileBottomNavShouldShow() {
+    return isSimpleMode() && isMobileRedesign();
+  }
+  function _syncMobileBottomNav() {
+    const nav = document.getElementById('mobileBottomNav');
+    if (!nav) return;
+    const show = _mobileBottomNavShouldShow();
+    nav.style.display = show ? '' : 'none';
+    document.body.classList.toggle('has-mobile-bottom-nav', show);
+    if (!show) return;
+    let tab = 'inprogress';
+    try { tab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
+    const activeNavKey = tab === 'archived' ? 'tasks' : tab === 'queues' ? 'automations' : 'home';
+    nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
+      const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
+      btn.classList.toggle('is-active', active);
+      if (active) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    });
+  }
+  function _wireMobileBottomNav() {
+    const nav = document.getElementById('mobileBottomNav');
+    if (!nav) return;
+    nav.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-mobile-nav]');
+      if (!btn) return;
+      const dest = btn.getAttribute('data-mobile-nav');
+      if (dest === 'more') {
+        if (typeof openSettingsModal === 'function') openSettingsModal();
+        return;
+      }
+      const tabByDest = { home: 'inprogress', tasks: 'archived', automations: 'queues' };
+      const targetTab = tabByDest[dest];
+      if (!targetTab) return;
+      // Reuse the existing tab bar's own click handler by clicking its
+      // matching button when present, instead of duplicating its
+      // re-render logic here.
+      const existingTabBtn = document.querySelector('[data-conv-tab="' + targetTab + '"]');
+      if (existingTabBtn) {
+        existingTabBtn.click();
+      } else {
+        try { localStorage.setItem('ccc-sidebar-tab', targetTab); } catch (_) {}
+        if (typeof renderArchiveList === 'function') {
+          renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+        }
+      }
+      _syncMobileBottomNav();
+    });
+  }
+  _wireMobileBottomNav();
+  _syncMobileBottomNav();
 
   // ---------------------------------------------------------------------------
   // Mobile swipe-to-rotate among recently-opened conversations.
@@ -22334,9 +22464,13 @@
   }
 
   function mobileCardStatusLineHtml(status) {
+    // Feeds both the kanban card and the main session list — one change
+    // here covers both render paths. simpleLabel() is a no-op in Advanced
+    // mode, so this line has zero effect unless Simple mode is on.
+    const word = simpleLabel(status.word);
     return '<div class="mobile-status-line is-' + status.state + '">'
       + '<span class="mobile-status-dot" aria-hidden="true"></span>'
-      + '<span class="mobile-status-word">' + escapeHtml(status.word) + '</span>'
+      + '<span class="mobile-status-word">' + escapeHtml(word) + '</span>'
       + (status.detail ? '<span class="mobile-status-detail">— ' + escapeHtml(status.detail) + '</span>' : '')
       + '</div>';
   }
@@ -22444,11 +22578,12 @@
       const visibleItems = (!showAll && items.length > maxVisible) ? items.slice(0, maxVisible) : items;
       const hasMore = !showAll && items.length > maxVisible;
 
+      const colLabel = simpleLabel(col.label);
       html += '<div class="kanban-column ' + col.key + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '">';
-      const colTitle = col.hint ? (col.label + ' - ' + col.hint) : col.label;
+      const colTitle = col.hint ? (colLabel + ' - ' + col.hint) : colLabel;
       html += '<div class="kanban-column-header' + (isCollapsed ? ' collapsed' : '') + '" data-col="' + col.key + '" draggable="true" title="' + escapeHtml(colTitle) + '">';
       html += '<span class="arrow">' + (isCollapsed ? '&#9656;' : '&#9662;') + '</span>';
-      html += '<span>' + escapeHtml(col.label) + '</span>';
+      html += '<span>' + escapeHtml(colLabel) + '</span>';
       html += '<span class="count">' + items.length + '</span>';
       html += '</div>';
       html += '<div class="kanban-cards">';
@@ -28114,7 +28249,7 @@
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
         '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '">'
-        + escapeHtml(label)
+        + escapeHtml(simpleLabel(label))
         + (n ? '<span class="conv-tab-count">' + n + '</span>' : '')
         + '</button>').join('')
       + '</div>';
@@ -29105,6 +29240,7 @@
         try { localStorage.setItem('ccc-sidebar-tab', nextTab); } catch (_) {}
         _setSharedQueuePanelHost(nextTab === 'queues' ? 'sidebar' : 'rail');
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+        if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
       });
     }
     // By-objects drag-to-reparent (CCC-88): drop a session row on an object
@@ -55854,6 +55990,7 @@
       $qfToggle.classList.toggle('is-on', qf);
       $qfToggle.setAttribute('aria-checked', String(qf));
     }
+    _syncUiModeBodyClass();
   }
   // Live-update when the user has 'system' selected and OS theme flips.
   _systemThemeMQ.addEventListener && _systemThemeMQ.addEventListener('change', () => {
@@ -56368,6 +56505,13 @@
         if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(!on);
         refreshAppearanceChecks();
         showSettingsSavedPulse(qfirstToggle.closest('.settings-row'));
+        return;
+      }
+      const uiModeToggle = e.target.closest('[data-ui-mode-toggle]');
+      if (uiModeToggle) {
+        setUiMode(isSimpleMode() ? 'advanced' : 'simple');
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(uiModeToggle.closest('.settings-row'));
         return;
       }
       const ffToggle = e.target.closest('[data-ff-toggle]');

@@ -21164,3 +21164,41 @@ body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal-icon-only {
   display: inline-flex !important;
   margin: 2px 4px 2px 0;
 }
+
+/* ---- Simple-mode mobile bottom nav ---- */
+.mobile-bottom-nav { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-bottom-nav {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 50;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+}
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 6px 4px;
+  min-height: 48px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-btn.is-active {
+  color: var(--green);
+}
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-icon { font-size: 18px; line-height: 1; }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-label { font-size: 10.5px; font-weight: 600; }
+/* Reserve room at the bottom of the page so the fixed nav never overlaps
+   the last card in the list. */
+body.has-mobile-bottom-nav #convList {
+  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+}

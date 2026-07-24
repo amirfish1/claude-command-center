@@ -109,6 +109,28 @@
 </script>
 </head>
 <body>
+  <!-- Simple-mode mobile bottom nav (body.ccc-mobile-redesign.ccc-simple-mode
+       only). Drives the EXISTING sidebar tab bar (data-conv-tab) and Settings
+       modal rather than introducing new screens/state — see app.js
+       _wireMobileBottomNav(). Hidden everywhere else via inline style. -->
+  <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="home" aria-current="page">
+      <span class="mobile-nav-icon" aria-hidden="true">&#8962;</span>
+      <span class="mobile-nav-label">Home</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="tasks">
+      <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
+      <span class="mobile-nav-label">Tasks</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="automations">
+      <span class="mobile-nav-icon" aria-hidden="true">&#9889;</span>
+      <span class="mobile-nav-label">Automations</span>
+    </button>
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="more">
+      <span class="mobile-nav-icon" aria-hidden="true">&#8943;</span>
+      <span class="mobile-nav-label">More</span>
+    </button>
+  </nav>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar
        Annotate button is hidden by the popout CSS, so this floating affordance
        surfaces the same flow in a conversation popout window. It reuses the
@@ -1617,6 +1639,18 @@
 
           <section class="settings-section" id="settingsSection-layout" data-section-id="layout" role="tabpanel" aria-labelledby="settingsRailTab-layout">
             <div class="settings-section-eyebrow">Layout &amp; View</div>
+
+            <div class="settings-row" data-keywords="simple advanced mode interface beginner plain language jargon technical">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Simple mode</div>
+                <div class="settings-row-desc">Plain-language labels, one status per task, and technical details (sessions, branches, tokens, models) tucked behind an Actions menu. Advanced mode is today's full interface, unchanged.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsUiModeToggle" data-ui-mode-toggle role="switch" aria-checked="false" aria-label="Simple mode">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
 
             <div class="settings-row" data-keywords="github issues show hide gh view conversation list">
               <div class="settings-row-main">
