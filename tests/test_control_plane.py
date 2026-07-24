@@ -1,7 +1,11 @@
+import ast
 import json
 import os
 import pathlib
+import signal
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -10,6 +14,7 @@ import unittest
 
 from ccc_worker import WorkerRuntime, WorkerServer
 from control_plane import ControlPlaneClient, WorkLedger
+from worker_engines import EngineHost
 
 
 class TestWorkLedger(unittest.TestCase):
@@ -36,6 +41,7 @@ class TestWorkLedger(unittest.TestCase):
         self.assertFalse(created)
         self.assertEqual(duplicate["id"], parent["id"])
         self.assertEqual(duplicate["payload"]["prompt"], "Coordinate the work")
+        self.assertEqual(len(parent["prompt_hash"]), 64)
 
         child, created = self.ledger.submit(
             engine="codex",
@@ -85,6 +91,10 @@ class TestWorkLedger(unittest.TestCase):
         self.assertTrue(enabled["enabled"])
         reopened = WorkLedger(self.root / "control-plane.sqlite3")
         self.assertEqual(reopened.drain_state()["reason"], "dashboard upgrade")
+        self.assertEqual(
+            (self.root / "control-plane.sqlite3").stat().st_mode & 0o777,
+            0o600,
+        )
 
 
 class TestWorkerIPC(unittest.TestCase):
@@ -115,6 +125,10 @@ class TestWorkerIPC(unittest.TestCase):
         health = self.client.request("health")
         self.assertTrue(health["ok"])
         self.assertEqual(health["active"], 0)
+        self.assertIn(
+            "engine-execution-v1",
+            health["worker"]["capabilities"],
+        )
 
         drained = self.client.request("drain.set", {
             "enabled": True,
@@ -146,6 +160,28 @@ class TestWorkerIPC(unittest.TestCase):
         response = self.client.request("health")
         self.assertFalse(response["ok"])
         self.assertEqual(response["code"], "unauthorized")
+
+    def test_malformed_reply_after_send_is_ambiguous(self):
+        malformed_path = self.root / "malformed.sock"
+        raw_server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raw_server.bind(str(malformed_path))
+        raw_server.listen(1)
+        self.addCleanup(raw_server.close)
+
+        def respond():
+            connection, _ = raw_server.accept()
+            with connection:
+                connection.recv(65536)
+                connection.sendall(b"not-json\\n")
+
+        threading.Thread(target=respond, daemon=True).start()
+        response = ControlPlaneClient(
+            path=malformed_path,
+            token_file=self.token_path,
+        ).request("engine.execute", {"idempotency_key": "one-action"})
+        self.assertFalse(response["ok"])
+        self.assertTrue(response["available"])
+        self.assertTrue(response["ambiguous"])
 
     def test_dashboard_http_proxy_preserves_json_contract(self):
         import server
@@ -190,6 +226,401 @@ class TestWorkerServiceDefinition(unittest.TestCase):
             'if launchctl print "$(worker_service_target)" >/dev/null 2>&1; then',
             source,
         )
+        self.assertIn('"engine-execution-v1" in capabilities', source)
+        self.assertIn('kill "$existing_worker_pid"', source)
+        self.assertIn("Never roll an older worker with unresolved work.", source)
+
+    def test_restart_handler_has_no_function_local_uuid_shadow(self):
+        source = pathlib.Path("server.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        handler = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "do_POST"
+        )
+        local_uuid_imports = [
+            node for node in ast.walk(handler)
+            if isinstance(node, ast.Import)
+            and any(
+                alias.name == "uuid" and alias.asname in (None, "uuid")
+                for alias in node.names
+            )
+        ]
+        self.assertEqual(local_uuid_imports, [])
+        self.assertIn('restart_id = str(uuid.uuid4())', source)
+        self.assertIn('"engine.adopt", {}, engine_timeout=True', source)
+        self.assertIn("if active_kimi:", source)
+        self.assertIn('"engine-execution-v1" in worker_capabilities', source)
+
+    def test_restart_safety_detects_dashboard_owned_work(self):
+        import server
+
+        old_state = server._ACP_SESSION_STATE
+        old_spawned = server._spawned_sessions
+        old_poll = server._poll_spawn_entry
+        self.addCleanup(setattr, server, "_ACP_SESSION_STATE", old_state)
+        self.addCleanup(setattr, server, "_spawned_sessions", old_spawned)
+        self.addCleanup(setattr, server, "_poll_spawn_entry", old_poll)
+        server._ACP_SESSION_STATE = {
+            "kimi": {
+                "kimi-active": {"status": "active"},
+                "kimi-idle": {"status": "idle"},
+            },
+        }
+        server._spawned_sessions = [{
+            "engine": "claude",
+            "session_id": "claude-active",
+            "pid": 123,
+        }]
+        server._poll_spawn_entry = lambda _entry: None
+
+        active = server._dashboard_owned_active_executions()
+
+        self.assertEqual(
+            {(item["engine"], item["session_id"]) for item in active},
+            {("kimi", "kimi-active"), ("claude", "claude-active")},
+        )
+
+    def test_older_worker_rejection_uses_safe_legacy_fallback(self):
+        import server
+
+        class OlderWorker:
+            @staticmethod
+            def request(_method, _params):
+                return {
+                    "ok": False,
+                    "available": True,
+                    "code": "method_not_found",
+                }
+
+        old_client = server._CONTROL_PLANE_ENGINE_CLIENT
+        self.addCleanup(
+            setattr, server, "_CONTROL_PLANE_ENGINE_CLIENT", old_client
+        )
+        server._CONTROL_PLANE_ENGINE_CLIENT = OlderWorker()
+
+        self.assertIsNone(server._control_plane_engine_call(
+            "claude",
+            "inject",
+            {"session_id": "legacy-session", "text": "continue"},
+            idempotency_key="legacy-action",
+        ))
+
+
+class TestEngineHost(unittest.TestCase):
+    class FakeLegacy:
+        def __init__(self):
+            self.config_calls = 0
+            self._spawned_sessions = []
+            self.reattach_calls = 0
+            self.kimi_attach_calls = []
+
+        def _acp_set_config(self, harness, sid, config_id, value):
+            self.config_calls += 1
+            return {
+                "ok": True,
+                "harness": harness,
+                "session_id": sid,
+                "config_id": config_id,
+                "value": value,
+            }
+
+        def _inject_text_into_session(self, session_id, text, **_kwargs):
+            return {
+                "ok": True,
+                "queued": True,
+                "via": "durable-test-queue",
+                "session_id": session_id,
+                "text": text,
+            }
+
+        @staticmethod
+        def _headless_log_result_count(_entry):
+            return 0
+
+        def _reattach_spawned_orphans(self, **_kwargs):
+            self.reattach_calls += 1
+            self._spawned_sessions.append({"pid": 42, "engine": "claude"})
+
+        @staticmethod
+        def _load_spawn_registry():
+            return [{"engine": "kimi", "session_id": "kimi-session"}]
+
+        def _acp_maybe_attach_on_view(self, harness, sid):
+            self.kimi_attach_calls.append((harness, sid))
+            return None
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        ledger = WorkLedger(pathlib.Path(self.tmp.name, "ledger.sqlite3"))
+        self.runtime = WorkerRuntime(ledger=ledger, token="a" * 64)
+        self.host = EngineHost(self.runtime)
+        self.runtime._engine_host = self.host
+        self.fake = self.FakeLegacy()
+        self.host._module = self.fake
+
+    def test_mutating_engine_rpc_is_idempotent(self):
+        params = {
+            "engine": "kimi",
+            "operation": "config",
+            "idempotency_key": "same-browser-action",
+            "args": {
+                "session_id": "session-1",
+                "config_id": "model",
+                "value": "k3",
+            },
+        }
+        first = self.host.execute(params)
+        second = self.host.execute(params)
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertTrue(second["deduplicated"])
+        self.assertEqual(first["work_id"], second["work_id"])
+        self.assertEqual(self.fake.config_calls, 1)
+        self.assertEqual(second["work"]["state"], "completed")
+
+    def test_drain_records_but_does_not_dispatch_work(self):
+        self.runtime.ledger.set_drain(True, "dashboard restart")
+        response = self.host.execute({
+            "engine": "kimi",
+            "operation": "config",
+            "idempotency_key": "queued-during-drain",
+            "args": {
+                "session_id": "session-1",
+                "config_id": "model",
+                "value": "k3",
+            },
+        })
+        self.assertTrue(response["queued"])
+        self.assertTrue(response["deferred"])
+        self.assertEqual(response["work"]["state"], "queued")
+        self.assertEqual(self.fake.config_calls, 0)
+        resumed = self.runtime.dispatch("drain.set", {"enabled": False})
+        self.assertEqual(resumed["replayed"], 1)
+        self.assertEqual(self.fake.config_calls, 1)
+        self.assertEqual(
+            self.runtime.ledger.get(response["work_id"])["state"],
+            "completed",
+        )
+
+    def test_claude_queued_inject_is_durable_and_idempotent(self):
+        request = {
+            "engine": "claude",
+            "operation": "inject",
+            "idempotency_key": "claude-browser-action",
+            "args": {"session_id": "session-claude", "text": "continue"},
+        }
+        first = self.host.execute(request)
+        duplicate = self.host.execute(request)
+        self.assertTrue(first["ok"])
+        self.assertTrue(first["queued"])
+        self.assertEqual(first["work"]["state"], "completed")
+        self.assertTrue(duplicate["deduplicated"])
+        self.assertEqual(first["work_id"], duplicate["work_id"])
+
+    def test_parent_session_creates_durable_child_edge(self):
+        parent, _ = self.runtime.ledger.submit(
+            engine="claude",
+            idempotency_key="parent-action",
+            session_id="parent-session",
+            kind="spawn",
+            payload={"operation": "spawn", "args": {}},
+        )
+        child = self.host.execute({
+            "engine": "kimi",
+            "operation": "config",
+            "idempotency_key": "child-action",
+            "args": {
+                "session_id": "child-session",
+                "parent_session_id": "parent-session",
+                "config_id": "model",
+                "value": "k3",
+            },
+        })
+        graph = self.runtime.ledger.graph(parent["id"])
+        self.assertTrue(child["ok"])
+        self.assertEqual(len(graph["edges"]), 1)
+        self.assertEqual(graph["edges"][0]["child_id"], child["work_id"])
+
+    def test_adopt_registry_takes_over_legacy_transports(self):
+        adopted = self.host.adopt_registry()
+
+        self.assertTrue(adopted["ok"])
+        self.assertEqual(adopted["adopted"], 1)
+        self.assertEqual(adopted["tracked"], 1)
+        self.assertEqual(adopted["kimi_attached"], 1)
+        self.assertEqual(self.fake.reattach_calls, 1)
+        self.assertEqual(
+            self.fake.kimi_attach_calls,
+            [("kimi", "kimi-session")],
+        )
+
+
+@unittest.skipIf(os.name != "posix", "Unix socket and FIFO integration")
+class TestPersistentWorkerIntegration(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = pathlib.Path(self.tmp.name)
+        self.state = self.root / "state"
+        self.socket = self.state / "worker.sock"
+        self.token = self.state / "worker.token"
+        self.fake_claude = self.root / "fake-claude"
+        self.fake_claude.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+import uuid
+if "--version" in sys.argv:
+    print("fake-claude 1.0")
+    raise SystemExit(0)
+sid = str(uuid.uuid4())
+print(json.dumps({"type":"system","subtype":"init","session_id":sid}), flush=True)
+for line in sys.stdin:
+    try:
+        event = json.loads(line)
+    except Exception:
+        continue
+    text = str(((event.get("message") or {}).get("content") or ""))
+    print(json.dumps({
+        "type":"assistant",
+        "session_id":sid,
+        "message":{"content":[{"type":"text","text":"ack:" + text}]},
+    }), flush=True)
+    print(json.dumps({
+        "type":"result",
+        "session_id":sid,
+        "subtype":"success",
+        "result":"done",
+    }), flush=True)
+""",
+            encoding="utf-8",
+        )
+        self.fake_claude.chmod(0o755)
+        self.env = dict(os.environ)
+        self.env.update({
+            "HOME": str(self.root),
+            "CCC_STATE_DIR": str(self.state),
+            "CCC_WORKER_SOCKET": str(self.socket),
+            "CCC_WORK_LEDGER": str(self.state / "ledger.sqlite3"),
+            "CCC_CLAUDE_BIN": str(self.fake_claude),
+            "CCC_SKIP_SKILL_INSTALL": "1",
+        })
+        self.worker = None
+        self.child_pid = None
+        self._start_worker()
+        self.addCleanup(self._cleanup_processes)
+
+    def _start_worker(self):
+        self.worker = subprocess.Popen(
+            [sys.executable, "ccc_worker.py", "--socket", str(self.socket)],
+            cwd=pathlib.Path(__file__).resolve().parents[1],
+            env=self.env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            if self.socket.exists() and self.token.exists():
+                client = ControlPlaneClient(
+                    path=self.socket, token_file=self.token, timeout=2
+                )
+                if client.request("health").get("ok"):
+                    self.client = ControlPlaneClient(
+                        path=self.socket, token_file=self.token, timeout=15
+                    )
+                    return
+            if self.worker.poll() is not None:
+                break
+            time.sleep(0.05)
+        self.fail("worker did not become healthy")
+
+    def _cleanup_processes(self):
+        if self.worker is not None and self.worker.poll() is None:
+            self.worker.terminate()
+            try:
+                self.worker.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.worker.kill()
+        if self.child_pid:
+            try:
+                os.killpg(self.child_pid, signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
+
+    def _wait_for(self, predicate, timeout=8):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            value = predicate()
+            if value:
+                return value
+            time.sleep(0.1)
+        self.fail("timed out waiting for worker state")
+
+    def test_claude_turn_survives_dashboard_and_worker_reconnects(self):
+        request = {
+            "engine": "claude",
+            "operation": "spawn",
+            "idempotency_key": "integration-spawn",
+            "args": {
+                "prompt": "first turn",
+                "cwd": str(pathlib.Path(__file__).resolve().parents[1]),
+            },
+        }
+        spawned = self.client.request("engine.execute", request)
+        self.assertTrue(spawned["ok"], spawned)
+        self.child_pid = spawned["pid"]
+        duplicate = self.client.request("engine.execute", request)
+        self.assertEqual(duplicate["pid"], self.child_pid)
+        self.assertTrue(duplicate["deduplicated"])
+
+        def completed_spawn():
+            row = self.client.request(
+                "work.get", {"work_id": spawned["work_id"]}
+            ).get("work")
+            return row if row and row["state"] == "completed" else None
+
+        row = self._wait_for(completed_spawn)
+        sid = row["session_id"]
+        self.assertTrue(sid)
+
+        # A brand-new client stands in for a restarted dashboard process.
+        dashboard_after_restart = ControlPlaneClient(
+            path=self.socket, token_file=self.token, timeout=3
+        )
+        injected = dashboard_after_restart.request("engine.execute", {
+            "engine": "claude",
+            "operation": "inject",
+            "idempotency_key": "integration-inject",
+            "args": {"session_id": sid, "text": "second turn"},
+        })
+        self.assertTrue(injected["ok"], injected)
+
+        # Restart the worker itself. Its child remains alive, the FIFO is
+        # reopened, and evidence reconciles the in-flight item conservatively.
+        self.worker.terminate()
+        self.worker.wait(timeout=3)
+        self._start_worker()
+        health = self.client.request("health")
+        self.assertTrue(health["ok"])
+        self.assertTrue(os.kill(self.child_pid, 0) is None)
+
+        self.client.request("drain.set", {
+            "enabled": True,
+            "reason": "integration drain",
+        })
+        deferred = self.client.request("engine.execute", {
+            "engine": "claude",
+            "operation": "inject",
+            "idempotency_key": "integration-deferred",
+            "args": {"session_id": sid, "text": "third turn"},
+        })
+        self.assertTrue(deferred["deferred"])
+        resumed = self.client.request("drain.set", {
+            "enabled": False,
+            "reason": "integration resume",
+        })
+        self.assertEqual(resumed["replayed"], 1)
 
 
 if __name__ == "__main__":

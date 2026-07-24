@@ -1807,11 +1807,22 @@
 
             <div class="settings-row" data-keywords="restart server 8090 reboot reload">
               <div class="settings-row-main">
-                <div class="settings-row-label">Restart server</div>
-                <div class="settings-row-desc">Restart the CCC server. Any open connections briefly drop.</div>
+                <div class="settings-row-label">Restart dashboard</div>
+                <div class="settings-row-desc">Restart the web dashboard while the execution worker keeps agent turns alive.</div>
               </div>
               <div class="settings-row-control">
-                <button type="button" class="settings-action-btn danger" id="restartServerBtn"><span id="restartServerLabel">Restart server</span></button>
+                <button type="button" class="settings-action-btn danger" id="restartServerBtn"><span id="restartServerLabel">Restart dashboard</span></button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="worker execution pause drain queue control plane">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Execution worker</div>
+                <div class="settings-row-desc" id="controlPlaneStatus">Checking persistent worker…</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="controlPlaneReconcileBtn" hidden>Reconcile</button>
+                <button type="button" class="settings-action-btn" id="controlPlaneDrainBtn" disabled>Pause dispatch</button>
               </div>
             </div>
           </section>

@@ -242,7 +242,9 @@ follow logs with `journalctl --user -u ccc -f`, and remove it with
 `./run.sh --uninstall-service`. On a headless box with no active login session,
 run `sudo loginctl enable-linger $USER` once so the service survives logout and
 starts at boot. If `systemctl` is not available, run CCC in the foreground or
-under your own process manager instead.
+under your own process manager instead. A foreground `./run.sh` also ensures a
+detached worker is running before it starts the dashboard; its logs use
+`~/.claude/command-center/logs/worker.{out,err}.log`.
 
 In WSL2, `./run.sh --install-service` requires a distro with systemd enabled.
 If your WSL distro does not expose `systemctl --user`, keep CCC in the
@@ -378,6 +380,9 @@ instance without hardcoding a port.
 Spawn calls pass `repo_path` (or `cwd`) plus optional
 `engine: "claude" | "codex" | "cursor" | "antigravity" | "kilo" | "kimi"` to `/api/sessions/spawn`;
 omitted engine/model values use the server-side defaults from the dashboard.
+Clients that may retry a spawn or `/api/inject-input` request should also pass
+a stable `idempotency_key` for that user action. CCC returns the original work
+record instead of dispatching the same engine turn twice.
 Legacy `engine: "gemini"` maps to Antigravity. Successful spawns return
 `spawn_id`, `engine`, `repo_path`, `cwd`, optional `parent_session_id`, and
 `session_id` when the native engine has emitted one; callers can poll
@@ -452,15 +457,32 @@ you can hand to Claude Code so it implements the integration for you:
 
 ## Architecture
 
-Two files: a single Python file (stdlib-only HTTP server) and a single HTML
-file (vanilla JS, no framework, no build). State lives in JSON sidecar
-files under `~/.claude/command-center/`, all human-readable, all rewriteable
-by hand.
+CCC stays stdlib-only and build-free: the dashboard is a Python HTTP server
+plus vanilla HTML/CSS/JS, while `ccc-worker` is a separately managed Python
+process. The dashboard can restart without closing worker-owned Claude,
+Codex, or Kimi transports.
 
-The server has no background workers. Every API request scans Claude's
-session directories, merges in sidecar state, enriches with cached GitHub
-issue data, and returns a flat list. The client classifies into columns
-using rules like "has_push → Review", "live + sidecar_has_writes → Working".
+The two processes communicate over an authenticated, mode-0600 Unix socket.
+The worker records every owned spawn and turn in
+`~/.claude/command-center/control-plane.sqlite3`, including its idempotency
+key, lease, result, and parent/child edges. Work known not to have been sent
+replays after a drain or worker start. Work that may already have reached an
+engine becomes `uncertain` and is never blindly replayed; live-process
+evidence can reconcile it automatically, while
+`POST /api/control-plane/resolve` supports an explicit `retry`, `complete`,
+`fail`, or `cancel` decision.
+
+The Maintenance settings show worker health and active/queued/uncertain
+counts. **Pause dispatch** durably queues new owned work. **Restart dashboard**
+briefly drains dispatch, restarts only the HTTP/UI process, then resumes and
+replays provably unsent work. `GET /api/control-plane/work` and
+`GET /api/control-plane/graph?root_id=…` expose the durable work records.
+
+Session metadata still lives in JSON sidecar files under
+`~/.claude/command-center/`. Read APIs scan the engine session directories,
+merge sidecar state, enrich cached GitHub issue data, and return flat rows;
+the client classifies them with rules like “has_push → Review” and
+“live + sidecar_has_writes → Working”.
 
 Hooks are the only invasive thing. On first run the server copies
 `hooks/post-tool-use.py` and `hooks/stop.py` to `~/.claude/command-center/hooks/`

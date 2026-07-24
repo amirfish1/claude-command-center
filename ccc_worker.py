@@ -33,6 +33,8 @@ class WorkerRuntime:
         self.ledger = ledger or WorkLedger()
         self.token = token or ensure_token()
         self.recovered = self.ledger.recover_orphaned_running(self.epoch)
+        self._engine_host = None
+        self._engine_host_lock = threading.Lock()
 
     def dispatch(self, method, params):
         params = params if isinstance(params, dict) else {}
@@ -43,6 +45,11 @@ class WorkerRuntime:
                     "pid": self.pid,
                     "epoch": self.epoch,
                     "recovered_uncertain": len(self.recovered),
+                    "capabilities": [
+                        "engine-execution-v1",
+                        "work-graph-v1",
+                        "safe-drain-v1",
+                    ],
                 },
                 **self.ledger.summary(),
             }
@@ -50,7 +57,23 @@ class WorkerRuntime:
             state = self.ledger.set_drain(
                 params.get("enabled"), params.get("reason") or ""
             )
-            return {"ok": True, "drain": state, **self.ledger.summary()}
+            replayed = []
+            if not state.get("enabled"):
+                queued = self.ledger.list(states=["queued"], limit=2000)
+                dispatchable = any(
+                    isinstance(item.get("payload"), dict)
+                    and item["payload"].get("operation")
+                    and isinstance(item["payload"].get("args"), dict)
+                    for item in queued
+                )
+                if self._engine_host is not None or dispatchable:
+                    replayed = self._engines().dispatch_queued()
+            return {
+                "ok": True,
+                "drain": state,
+                "replayed": len(replayed),
+                **self.ledger.summary(),
+            }
         if method == "work.submit":
             item, created = self.ledger.submit(**params)
             draining = bool(self.ledger.drain_state().get("enabled"))
@@ -87,7 +110,34 @@ class WorkerRuntime:
             return {"ok": True, "work": item}
         if method == "work.graph":
             return {"ok": True, "graph": self.ledger.graph(params.get("root_id"))}
+        if method == "work.reconcile":
+            reconciled = self._engines().reconcile_uncertain()
+            return {
+                "ok": True,
+                "reconciled": len(reconciled),
+                "work": reconciled,
+                **self.ledger.summary(),
+            }
+        if method == "work.resolve":
+            return self._engines().resolve_uncertain(
+                params.get("work_id"), params.get("action")
+            )
+        if method == "engine.adopt":
+            return self._engines().adopt_registry()
+        if method in ("engine.execute", "engine.query"):
+            host = self._engines()
+            if method == "engine.execute":
+                return host.execute(params)
+            return host.query(params)
         return {"ok": False, "code": "method_not_found", "error": "unknown method"}
+
+    def _engines(self):
+        if self._engine_host is None:
+            with self._engine_host_lock:
+                if self._engine_host is None:
+                    from worker_engines import EngineHost
+                    self._engine_host = EngineHost(self)
+        return self._engine_host
 
 
 class WorkerRequestHandler(socketserver.StreamRequestHandler):
@@ -156,6 +206,21 @@ def serve(path=None):
         f"CCC worker running pid={runtime.pid} epoch={runtime.epoch} socket={path}",
         flush=True,
     )
+    if (
+        not runtime.ledger.drain_state().get("enabled")
+        and (
+            runtime.ledger.summary().get("queued")
+            or runtime.ledger.summary().get("uncertain")
+        )
+    ):
+        def recover():
+            runtime._engines().reconcile_uncertain()
+            runtime._engines().dispatch_queued()
+        threading.Thread(
+            target=recover,
+            daemon=True,
+            name="ccc-reconcile",
+        ).start()
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

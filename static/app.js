@@ -8204,7 +8204,11 @@
         res = await fetch('/api/session/compact', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid, terminal_app: liveStatus && liveStatus.terminalApp }),
+          body: JSON.stringify({
+            session_id: sid,
+            terminal_app: liveStatus && liveStatus.terminalApp,
+            idempotency_key: durableActionId('compact'),
+          }),
         });
       } else if (clearCommand && isClaudeSource(currentSession.source) && !(liveStatus && liveStatus.terminalPresent)) {
         // /clear is a REPL-only command. Written to a headless stream-json stdin
@@ -8237,7 +8241,12 @@
         if ($actionBtn) $actionBtn.disabled = false;
         return;
       } else {
-        const payload = { session_id: sid, text, mode: injectMode };
+        const payload = {
+          session_id: sid,
+          text,
+          mode: injectMode,
+          idempotency_key: durableActionId('inject'),
+        };
         if (injectMode === 'send'
             && _paneEl
             && String(_paneEl.dataset.presentationMode || '').toLowerCase() === '3') {
@@ -23662,7 +23671,10 @@
   }
 
   async function postCompactSession(sessionId, terminalApp) {
-    const payload = { session_id: sessionId };
+    const payload = {
+      session_id: sessionId,
+      idempotency_key: durableActionId('compact'),
+    };
     if (terminalApp) payload.terminal_app = terminalApp;
     // The server usually completes Claude compaction within its own three
     // minute deadline. Do not leave the UI disabled forever if that request
@@ -49917,6 +49929,14 @@
     if (engine === 'kimi') return '/api/sessions/spawn-kimi';
     return '/api/sessions/spawn';
   }
+  function durableActionId(kind) {
+    const prefix = String(kind || 'action').replace(/[^a-z0-9_-]/gi, '-');
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return prefix + ':' + window.crypto.randomUUID();
+    }
+    return prefix + ':' + Date.now().toString(36) + ':'
+      + Math.random().toString(36).slice(2);
+  }
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
@@ -50440,6 +50460,7 @@
         const body = spawnSupportsWorktree(engine)
           ? { prompt, repo_path: repoPath, worktree: useWorktree, engine }
           : { prompt, repo_path: repoPath, engine };
+        body.idempotency_key = durableActionId('spawn');
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -50761,6 +50782,7 @@
         setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
       };
       const pendingSend = appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, activePaneId());
+      const idempotencyKey = durableActionId('inject');
       const draftConversation = currentConversation;
       $cpInput.value = '';
       clearInputDraftForConversation(draftConversation);
@@ -50777,6 +50799,7 @@
           });
         } else if (
           currentSession.spawnPid
+          && String(sid || '').startsWith('spawning-')
           && currentSession.source !== 'codex'
           && currentSession.source !== 'gemini'
           && currentSession.source !== 'cursor'
@@ -50791,7 +50814,11 @@
             body: JSON.stringify({ text }),
           });
         } else {
-          const payload = { session_id: sid, text };
+          const payload = {
+            session_id: sid,
+            text,
+            idempotency_key: idempotencyKey,
+          };
           if (announcedFrom) payload.announced_from = announcedFrom;
           res = await fetch('/api/inject-input', {
             method: 'POST',
@@ -51504,18 +51531,22 @@
   // Settings menu → POST /api/restart → wait for the same port to answer.
   const $restartServerBtn = document.getElementById('restartServerBtn');
   const $restartServerLabel = document.getElementById('restartServerLabel');
+  const $controlPlaneStatus = document.getElementById('controlPlaneStatus');
+  const $controlPlaneDrainBtn = document.getElementById('controlPlaneDrainBtn');
+  const $controlPlaneReconcileBtn = document.getElementById('controlPlaneReconcileBtn');
   let restartServerPort = '';
+  let controlPlaneDraining = false;
 
   function restartServerSetPort(port) {
     const clean = String(port || '').replace(/[^\d]/g, '');
     restartServerPort = clean;
     if ($restartServerLabel) {
-      $restartServerLabel.textContent = 'Restart server' + (clean ? ' (:' + clean + ')' : '');
+      $restartServerLabel.textContent = 'Restart dashboard' + (clean ? ' (:' + clean + ')' : '');
     }
     if ($restartServerBtn) {
       $restartServerBtn.title = clean
-        ? 'Restart the Command Center server on :' + clean
-        : 'Restart the Command Center server';
+        ? 'Restart the Command Center dashboard on :' + clean
+        : 'Restart the Command Center dashboard';
     }
   }
 
@@ -51541,13 +51572,77 @@
     } catch (_) { /* location.port fallback is good enough */ }
   }
 
+  function renderControlPlaneStatus(data) {
+    if (!data || !data.ok) {
+      if ($controlPlaneStatus) {
+        $controlPlaneStatus.textContent =
+          'Worker unavailable; active compatibility work may block dashboard restart.';
+      }
+      if ($controlPlaneDrainBtn) $controlPlaneDrainBtn.disabled = true;
+      if ($controlPlaneReconcileBtn) {
+        $controlPlaneReconcileBtn.hidden = true;
+        $controlPlaneReconcileBtn.disabled = true;
+      }
+      return;
+    }
+    const capabilities = (data.worker && data.worker.capabilities) || [];
+    if (!capabilities.includes('engine-execution-v1')) {
+      if ($controlPlaneStatus) {
+        $controlPlaneStatus.textContent =
+          'Worker update pending; compatibility execution remains active.';
+      }
+      if ($controlPlaneDrainBtn) $controlPlaneDrainBtn.disabled = true;
+      if ($controlPlaneReconcileBtn) {
+        $controlPlaneReconcileBtn.hidden = true;
+        $controlPlaneReconcileBtn.disabled = true;
+      }
+      return;
+    }
+    const drain = data.drain || {};
+    controlPlaneDraining = !!drain.enabled;
+    const active = Number(data.active || 0);
+    const queued = Number(data.queued || 0);
+    const uncertain = Number(data.uncertain || 0);
+    const parts = [
+      'Persistent worker online',
+      active + ' active',
+      queued + ' queued',
+    ];
+    if (uncertain) parts.push(uncertain + ' need reconciliation');
+    if (controlPlaneDraining) parts.push('dispatch paused');
+    if ($controlPlaneStatus) $controlPlaneStatus.textContent = parts.join(' · ');
+    if ($controlPlaneDrainBtn) {
+      $controlPlaneDrainBtn.disabled = false;
+      $controlPlaneDrainBtn.textContent =
+        controlPlaneDraining ? 'Resume dispatch' : 'Pause dispatch';
+    }
+    if ($controlPlaneReconcileBtn) {
+      $controlPlaneReconcileBtn.hidden = uncertain === 0;
+      $controlPlaneReconcileBtn.disabled = false;
+    }
+  }
+
+  async function refreshControlPlaneStatus() {
+    if (!$controlPlaneStatus) return;
+    try {
+      const response = await fetch('/api/control-plane/status', {
+        cache: 'no-store',
+      });
+      renderControlPlaneStatus(await response.json());
+    } catch (_) {
+      renderControlPlaneStatus(null);
+    }
+  }
+
   async function restartServerRun() {
     if (!$restartServerBtn) return;
     closeSettingsModal();
     $restartServerBtn.disabled = true;
     restartServerShowOverlay(
       'Restarting&hellip;',
-      'Waiting for the server' + (restartServerPort ? ' on :' + restartServerPort : '') + ' to bind again.'
+      'Agent work stays in the persistent worker while the dashboard'
+        + (restartServerPort ? ' on :' + restartServerPort : '')
+        + ' comes back.'
     );
     try { sessionStorage.setItem('ccc-restarting', '1'); } catch (_) {}
 
@@ -51588,8 +51683,68 @@
   }
 
   if ($restartServerBtn) {
-    if (!READER_ONLY_POPOUT) restartServerRefreshPort();
+    if (!READER_ONLY_POPOUT) {
+      restartServerRefreshPort();
+      refreshControlPlaneStatus();
+    }
     $restartServerBtn.addEventListener('click', restartServerRun);
+  }
+  if ($controlPlaneDrainBtn) {
+    $controlPlaneDrainBtn.addEventListener('click', async () => {
+      $controlPlaneDrainBtn.disabled = true;
+      try {
+        const response = await fetch('/api/control-plane/drain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: !controlPlaneDraining,
+            reason: controlPlaneDraining
+              ? 'operator resumed dispatch'
+              : 'operator paused dispatch',
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        renderControlPlaneStatus(data);
+      } catch (error) {
+        showOpToast(
+          'Worker control failed: ' + ((error && error.message) || error),
+          'error'
+        );
+        refreshControlPlaneStatus();
+      }
+    });
+  }
+  if ($controlPlaneReconcileBtn) {
+    $controlPlaneReconcileBtn.addEventListener('click', async () => {
+      $controlPlaneReconcileBtn.disabled = true;
+      try {
+        const response = await fetch('/api/control-plane/reconcile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        renderControlPlaneStatus(data);
+        showOpToast(
+          data.reconciled
+            ? 'Reclaimed ' + data.reconciled + ' live work item(s).'
+            : 'No additional live work evidence found.',
+          data.reconciled ? 'success' : 'info'
+        );
+      } catch (error) {
+        showOpToast(
+          'Reconciliation failed: ' + ((error && error.message) || error),
+          'error'
+        );
+        refreshControlPlaneStatus();
+      }
+    });
   }
 
   // ── Sidebar refresh split-button ──────────────────────────────
@@ -55762,7 +55917,13 @@
       // accepting this tab's model value verbatim — producing exactly the
       // "unknown codex model" error for a model picked from the Claude list.
       // Always send the engine the UI actually shows so the two can't diverge.
-      const spawnBody = { prompt, name: subject, cwd: launchCwd, engine };
+      const spawnBody = {
+        prompt,
+        name: subject,
+        cwd: launchCwd,
+        engine,
+        idempotency_key: durableActionId('spawn'),
+      };
       if (repoPath) spawnBody.repo_path = repoPath;
       if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none' && $convInputModelSelect.value) {
         const pickedModel = $convInputModelSelect.value;

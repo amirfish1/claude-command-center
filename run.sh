@@ -532,4 +532,77 @@ if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
   exit 1
 fi
 
+# Foreground installs do not have launchd/systemd to start the independent
+# execution worker. Ensure one is healthy before replacing this shell with the
+# restartable dashboard. `nohup` + a separate session keeps it alive across the
+# dashboard's in-place exec restart (and across a closed terminal).
+case "${CCC_CONTROL_PLANE_ENGINES:-1}" in
+  0|false|False|no|No) ;;
+  *)
+    worker_health="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null || true)"
+    read -r existing_worker_pid existing_worker_idle worker_compatible <<EOF
+$(printf '%s' "$worker_health" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
+capabilities = worker.get("capabilities") or []
+idle = not any(int(data.get(key) or 0) for key in (
+    "active", "queued", "uncertain",
+))
+print(
+    int(worker.get("pid") or 0),
+    int(bool(data.get("ok")) and idle),
+    int("engine-execution-v1" in capabilities),
+)
+')
+EOF
+    if [ "${worker_compatible:-0}" != "1" ] \
+      && [ "${existing_worker_idle:-0}" = "1" ] \
+      && [ "${existing_worker_pid:-0}" -gt 1 ] 2>/dev/null; then
+      # A pre-engine-control worker owns no live work. Retire that exact PID;
+      # launchd/systemd may replace it, otherwise the detached start below
+      # does. Never roll an older worker with unresolved work.
+      kill "$existing_worker_pid" >/dev/null 2>&1 || true
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        sleep 0.1
+        worker_health="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null || true)"
+        if printf '%s' "$worker_health" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+caps = (data.get("worker") or {}).get("capabilities") or []
+raise SystemExit(0 if "engine-execution-v1" in caps else 1)
+'; then
+          worker_compatible=1
+          break
+        fi
+      done
+    fi
+    if [ "${worker_compatible:-0}" != "1" ] \
+      && "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+      echo "⚠ Older persistent worker still has unresolved work; using compatibility execution." >&2
+    elif [ "${worker_compatible:-0}" != "1" ]; then
+      nohup "$PYTHON" "$HERE/ccc_worker.py" \
+        >>"$SERVICE_LOG_DIR/worker.out.log" \
+        2>>"$SERVICE_LOG_DIR/worker.err.log" </dev/null &
+      worker_pid=$!
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+          echo "  worker   : persistent (pid $worker_pid)"
+          break
+        fi
+        sleep 0.1
+      done
+      if ! "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+        echo "⚠ Persistent worker did not become ready; dashboard uses legacy execution." >&2
+      fi
+    fi
+    ;;
+esac
+
 exec "$PYTHON" "$HERE/server.py"

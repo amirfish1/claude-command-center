@@ -30,10 +30,15 @@ WORK_STATES = frozenset({
 })
 ALLOWED_TRANSITIONS = {
     "queued": {"dispatching", "cancelled"},
-    "dispatching": {"running", "queued", "failed", "interrupted", "uncertain"},
+    "dispatching": {
+        "running", "completed", "queued", "failed", "cancelled", "interrupted",
+        "uncertain",
+    },
     "running": {"completed", "failed", "cancelled", "interrupted", "uncertain"},
     "interrupted": {"queued", "cancelled", "uncertain"},
-    "uncertain": {"queued", "completed", "failed", "cancelled", "interrupted"},
+    "uncertain": {
+        "queued", "running", "completed", "failed", "cancelled", "interrupted",
+    },
     "completed": set(),
     "failed": {"queued"},
     "cancelled": {"queued"},
@@ -103,6 +108,10 @@ def ensure_token(path: Optional[Path] = None) -> str:
         existing = path.read_text(encoding="utf-8").strip()
         if len(existing) < 32:
             raise RuntimeError("CCC worker token exists but is invalid")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
         return existing
     try:
         os.write(fd, (token + "\n").encode("ascii"))
@@ -121,6 +130,10 @@ class WorkLedger:
 
     def _connect(self):
         conn = sqlite3.connect(str(self.path), timeout=5.0)
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
@@ -246,7 +259,14 @@ class WorkLedger:
         if not str(idempotency_key or "").strip():
             raise ValueError("idempotency_key is required")
         payload = payload if isinstance(payload, dict) else {}
-        prompt = str(payload.get("prompt") or payload.get("text") or "")
+        nested_args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+        prompt = str(
+            payload.get("prompt")
+            or payload.get("text")
+            or nested_args.get("prompt")
+            or nested_args.get("text")
+            or ""
+        )
         prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
         now = time.time()
         work_id = str(work_id or uuid.uuid4())
@@ -263,19 +283,28 @@ class WorkLedger:
                 ).fetchone()
                 if parent is None:
                     raise ValueError("parent work item does not exist")
-            conn.execute(
-                """
-                INSERT INTO work_items(
-                    id, idempotency_key, engine, session_id, kind, state,
-                    prompt_hash, payload_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
-                """,
-                (
-                    work_id, str(idempotency_key), str(engine),
-                    str(session_id or ""), str(kind or "turn"), prompt_hash,
-                    _json(payload), now, now,
-                ),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO work_items(
+                        id, idempotency_key, engine, session_id, kind, state,
+                        prompt_hash, payload_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                    """,
+                    (
+                        work_id, str(idempotency_key), str(engine),
+                        str(session_id or ""), str(kind or "turn"), prompt_hash,
+                        _json(payload), now, now,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing = conn.execute(
+                    "SELECT * FROM work_items WHERE idempotency_key=?",
+                    (str(idempotency_key),),
+                ).fetchone()
+                if existing is not None:
+                    return self._row(existing), False
+                raise
             if parent_id:
                 conn.execute(
                     """
@@ -302,6 +331,47 @@ class WorkLedger:
                 "SELECT * FROM work_items WHERE id=?", (str(work_id),)
             ).fetchone())
 
+    def latest_for_session(self, session_id):
+        if not session_id:
+            return None
+        with self._connect() as conn:
+            return self._row(conn.execute(
+                """
+                SELECT * FROM work_items
+                WHERE session_id=?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (str(session_id),),
+            ).fetchone())
+
+    def bind_session(self, work_id, session_id):
+        if not session_id:
+            return self.get(work_id)
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE work_items SET session_id=?, updated_at=? WHERE id=?",
+                (str(session_id), now, str(work_id)),
+            )
+            row = conn.execute(
+                "SELECT * FROM work_items WHERE id=?", (str(work_id),)
+            ).fetchone()
+        return self._row(row)
+
+    def update_payload(self, work_id, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be an object")
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE work_items SET payload_json=?, updated_at=? WHERE id=?",
+                (_json(payload), now, str(work_id)),
+            )
+            row = conn.execute(
+                "SELECT * FROM work_items WHERE id=?", (str(work_id),)
+            ).fetchone()
+        return self._row(row)
+
     def list(self, states=None, session_id=None, limit=200):
         clauses = []
         args = []
@@ -322,6 +392,26 @@ class WorkLedger:
                 args,
             ).fetchall()
         return [self._row(row) for row in rows]
+
+    def children(self, parent_id, states=None):
+        clauses = ["e.parent_id=?"]
+        args = [str(parent_id)]
+        if states:
+            states = [state for state in states if state in WORK_STATES]
+            if states:
+                clauses.append("w.state IN (%s)" % ",".join("?" for _ in states))
+                args.extend(states)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT w.*, e.relation
+                FROM work_edges e JOIN work_items w ON w.id=e.child_id
+                WHERE %s
+                ORDER BY w.created_at
+                """ % " AND ".join(clauses),
+                args,
+            ).fetchall()
+        return [self._row(row) | {"relation": row["relation"]} for row in rows]
 
     def transition(
         self,
@@ -346,6 +436,14 @@ class WorkLedger:
             old_state = row["state"]
             if new_state != old_state and new_state not in ALLOWED_TRANSITIONS[old_state]:
                 raise ValueError(f"invalid transition: {old_state} -> {new_state}")
+            if (
+                old_state == "uncertain"
+                and new_state == "running"
+                and owner_epoch is None
+            ):
+                raise ValueError(
+                    "uncertain work requires a worker owner to resume running"
+                )
             lease_expires = (
                 now + max(1.0, float(lease_seconds))
                 if lease_seconds is not None else row["lease_expires_at"]
@@ -527,9 +625,13 @@ class ControlPlaneClient:
         }).encode("utf-8") + b"\n"
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
+        connected = False
+        sent = False
         try:
             sock.connect(str(self.path))
+            connected = True
             sock.sendall(payload)
+            sent = True
             chunks = bytearray()
             while b"\n" not in chunks:
                 chunk = sock.recv(65536)
@@ -539,13 +641,23 @@ class ControlPlaneClient:
                 if len(chunks) > 4 * 1024 * 1024:
                     raise ValueError("CCC worker response too large")
         except (OSError, ValueError) as exc:
-            return {"ok": False, "available": False, "error": str(exc)}
+            return {
+                "ok": False,
+                "available": connected,
+                "ambiguous": sent,
+                "error": str(exc),
+            }
         finally:
             sock.close()
         try:
             response = json.loads(bytes(chunks).split(b"\n", 1)[0])
         except (ValueError, UnicodeDecodeError) as exc:
-            return {"ok": False, "available": False, "error": str(exc)}
+            return {
+                "ok": False,
+                "available": connected,
+                "ambiguous": sent,
+                "error": str(exc),
+            }
         if isinstance(response, dict):
             response.setdefault("available", True)
             return response
