@@ -63102,7 +63102,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except (ValueError, OSError) as e:
                 self.send_json({"error": f"invalid JSON: {e}"}, 400)
                 return
-            if path == "/api/fleet/plan":
+            if path == "/api/fleet/pin":
+                # Favourites. Pinned repos sort first and render expanded;
+                # everything else collapses to a name row.
+                res = _fleet_set_pinned(data.get("identity"),
+                                        bool(data.get("pinned")))
+                if res is None:
+                    self.send_json({"ok": False, "error": "bad_request",
+                                    "detail": "identity required"}, 400)
+                else:
+                    self.send_json(res, 200 if res.get("ok") else 500)
+            elif path == "/api/fleet/plan":
                 self.send_json({"ok": True, "plan": _fleet_plan_create()})
             elif path == "/api/fleet/execute":
                 payload, status = _fleet_execute_payload(
@@ -70805,6 +70815,43 @@ def _fleet_config():
     except (OSError, ValueError):
         pass
     return {"pinned": [], "hidden": [], "automap": True}
+
+
+_FLEET_CONFIG_LOCK = threading.Lock()
+
+
+def _fleet_set_pinned(identity, pinned):
+    """Add/remove one repo identity from the pinned ("favourites") list.
+
+    Read-modify-write under a lock: the Fleet page can fire several toggles
+    in quick succession and this file is a single shared JSON blob, so an
+    unsynchronised write would silently drop a concurrent pin. Unknown keys
+    in the file are preserved.
+    """
+    identity = str(identity or "").strip()
+    if not identity:
+        return None
+    with _FLEET_CONFIG_LOCK:
+        try:
+            raw = json.loads(FLEET_CONFIG_FILE.read_text())
+            if not isinstance(raw, dict):
+                raw = {}
+        except (OSError, ValueError):
+            raw = {}
+        current = [str(x) for x in (raw.get("pinned") or []) if str(x)]
+        if pinned:
+            if identity not in current:
+                current.append(identity)
+        else:
+            current = [x for x in current if x != identity]
+        raw["pinned"] = current
+        try:
+            FLEET_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            FLEET_CONFIG_FILE.write_text(json.dumps(raw, indent=2))
+        except OSError as e:
+            return {"ok": False, "error": "write_failed", "detail": str(e)}
+        return {"ok": True, "identity": identity,
+                "pinned": bool(pinned), "all_pinned": current}
 
 
 _FLEET_PRS_CACHE = {}
