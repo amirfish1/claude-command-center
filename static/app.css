@@ -21202,3 +21202,80 @@ body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-label { font-size: 10.5px; 
 body.has-mobile-bottom-nav #convList {
   padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
 }
+
+/* ---- Simple mode: session Actions menu ---- */
+/* Session-id chip moves behind Actions -> Technical details in Simple
+   mode (it stays directly visible in mobile-redesign + Advanced, per the
+   earlier mobile pass). */
+body.ccc-mobile-redesign.ccc-simple-mode #convSessionIdMobileWrap { display: none !important; }
+.mobile-actions-wrap { position: relative; display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-actions-wrap { display: inline-flex; margin-left: 8px; }
+body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-btn {
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  min-height: 32px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-btn[aria-expanded="true"] {
+  background: rgba(63,185,80,0.12);
+  border-color: var(--green);
+  color: var(--green);
+}
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-actions-menu {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 4px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  max-width: calc(100vw - 16px);
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-actions-menu[hidden] { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  border-radius: 7px;
+  font-size: 13px;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-item:hover,
+body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-item:focus-visible {
+  background: var(--surface-2, var(--surface));
+}
+
+/* ---- Simple mode: composer simplification ----
+   Only the message field, mic (voice), and Send stay. Terminal-oriented
+   controls (Esc-to-cancel, Codex steer, context-compact, phone-mode
+   Submit+, the raw keyboard-shortcut hint row) hide — still fully present
+   and working in Advanced mode, this only affects Simple + mobile chrome. */
+body.ccc-mobile-redesign.ccc-simple-mode #convEscBtn,
+body.ccc-mobile-redesign.ccc-simple-mode #convSteerBtn,
+body.ccc-mobile-redesign.ccc-simple-mode #convCompactBtn,
+body.ccc-mobile-redesign.ccc-simple-mode #convSubmitPlusBtn,
+body.ccc-mobile-redesign.ccc-simple-mode #convTtsRateControl,
+body.ccc-mobile-redesign.ccc-simple-mode #convInputHint {
+  display: none !important;
+}

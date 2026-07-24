@@ -11141,6 +11141,67 @@
   _wireMobileBottomNav();
   _syncMobileBottomNav();
 
+  // ── Simple-mode session Actions menu ──
+  // Consolidates rename/move-to-project/change-model/technical-details into
+  // one button. Every item forwards to an EXISTING control via .click()
+  // instead of reimplementing it — same reparent/forward pattern as the
+  // topbar More menu above. Pause/stop/Continue/Archive for the currently
+  // OPEN session are intentionally left out of this menu for now: this
+  // codebase's existing single-session equivalents for those live on the
+  // list-row cards, not inside the open conversation pane, and forwarding
+  // to a list row that may not be the active session risked acting on the
+  // wrong conversation — left as a follow-up rather than wired unreliably.
+  function _revealStatusRailThenClick(targetId) {
+    const restore = document.getElementById('statusRailRestoreBtn');
+    const doClick = () => {
+      const target = document.getElementById(targetId);
+      if (target) target.click();
+    };
+    if (restore && restore.offsetParent !== null) {
+      restore.click();
+      setTimeout(doClick, 50);
+    } else {
+      doClick();
+    }
+  }
+  function _wireSimpleActionsMenu() {
+    const btn = document.getElementById('convSimpleActionsBtn');
+    const menu = document.getElementById('convSimpleActionsMenu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const open = !menu.hidden;
+      menu.hidden = open;
+      btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+    document.addEventListener('click', (ev) => {
+      if (menu.hidden) return;
+      if (ev.target.closest('#convSimpleActionsMenu, #convSimpleActionsBtn')) return;
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    });
+    menu.addEventListener('click', (ev) => {
+      const item = ev.target.closest('[data-simple-action]');
+      if (!item) return;
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+      const action = item.getAttribute('data-simple-action');
+      if (action === 'rename') {
+        _revealStatusRailThenClick('statusRailTitleRenameBtn');
+      } else if (action === 'move-to-project') {
+        _revealStatusRailThenClick('statusRailAddObjectBtn');
+      } else if (action === 'change-model') {
+        const picker = document.querySelector('.conv-pane.is-active [data-model-picker]')
+          || document.querySelector('[data-model-picker]');
+        if (picker) picker.click();
+      } else if (action === 'technical-details') {
+        const restore = document.getElementById('statusRailRestoreBtn');
+        if (restore && restore.offsetParent !== null) restore.click();
+      }
+    });
+  }
+  _wireSimpleActionsMenu();
+
   // ---------------------------------------------------------------------------
   // Mobile swipe-to-rotate among recently-opened conversations.
   //

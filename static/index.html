@@ -690,6 +690,22 @@
         </span>
         <button type="button" class="mobile-copy-btn" id="convSessionIdMobileCopyBtn">Copy</button>
       </div>
+      <!-- Simple mode only (body.ccc-mobile-redesign.ccc-simple-mode): one
+           contextual Actions menu. Items forward to EXISTING controls
+           (status-rail rename/add-to-object, composer model picker) via
+           .click() rather than duplicating their logic — see
+           _wireSimpleActionsMenu() in app.js. Technical details reveals the
+           status rail's own Metadata tab (session id, branch, model,
+           tokens) instead of duplicating that content here. -->
+      <div class="mobile-actions-wrap">
+        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false">Actions</button>
+        <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
+          <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem">Rename task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem">Move to project</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem">Change assistant/model</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem">Open technical details</button>
+        </div>
+      </div>
       <div class="conv-overflow-wrap">
         <button type="button" class="conv-overflow-btn" id="convOverflowBtn" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
         <div class="conv-overflow-menu" id="convOverflowMenu" role="menu" aria-hidden="true"></div>
