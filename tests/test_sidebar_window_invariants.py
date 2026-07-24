@@ -21,8 +21,10 @@ window honest: one key, defaulting to 'all'.
 """
 import os
 import re
+import inspect
 
 import pytest
+import server
 
 APP_JS = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")
 
@@ -102,3 +104,15 @@ def test_all_tab_archived_group_chats_respect_window(app_js):
         "Archived group chats bypass archiveRows. They must be filtered with "
         "_archiveWindowAllowsRow() so the All tab's 1d/7d/All control is honest."
     )
+
+
+def test_sidebar_uses_additive_list_endpoint_and_search_widens_history(app_js):
+    source = inspect.getsource(server.CommandCenterHandler.do_GET)
+
+    assert 'path == "/api/conversations/list"' in source
+    assert 'path == "/api/conversations/all"' in source
+    assert "_archive_all_rows_cached(cache_options)" in source
+    assert "'/api/conversations/list'" in app_js
+    assert "let archiveDataWindow = null;" in app_js
+    assert "function _refreshArchiveWindow(value)" in app_js
+    assert "refreshArchiveData({ staleOk: true, window: 'all' })" in app_js

@@ -7549,6 +7549,100 @@ def _archive_all_rows_cached(cache_options):
     return _archive_serve_rows(key, cache_options)
 
 
+# Sidebar rows are shaped from this projection in static/app.js. Keep this
+# allowlist explicit: /api/conversations/all remains the compatibility payload,
+# while /list must not serialize transcripts, parser/debug state, or JSONL paths.
+_ARCHIVE_LIST_FIELDS = (
+    "id", "session_id", "source", "engine", "source_platform",
+    "hermes_source", "hermes_origin", "hermes_profile", "hermes_chat_type",
+    "hermes_tool_calls", "folder_label", "folder_path", "slug", "pinned_repo",
+    "session_cwd", "session_cwd_exists", "session_cwd_is_worktree", "mtime",
+    "modified", "last_interacted", "size", "first_message", "ai_title",
+    "branch", "git_branch", "effective_branch", "effective_kind", "display_name",
+    "spawn_named", "spawn_pid", "name_overridden", "archived", "trashed",
+    "recently_unarchived", "verified", "pinned", "pin_rank", "all_lane_override",
+    "worktree_dirty", "has_commit", "has_push", "has_edit", "tail_pr_number",
+    "tail_pr_url", "pr_state", "pr_notes", "is_live", "worktree_label", "state",
+    "ended_blocked", "last_event_type", "last_event_ts", "pending_tool", "pending_file",
+    "pending_tool_ts", "stale_tool_call", "stale_tool_age_s",
+    "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
+    "subagent_in_flight_count", "subagent_recent", "session_state", "goal",
+    "goal_status", "parent_session_id", "hermes_parent_session_id",
+    "hermes_continued_from", "hermes_child_session_ids",
+    "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
+    "model", "latest_input_tokens", "live_context_tokens", "live_context_limit",
+    "live_context_percent", "context_limit", "quality_score", "quality_grade",
+    "quality_summary", "quality_timestamp", "sidecar_status", "sidecar_has_writes",
+    "sidecar_tool", "sidecar_file", "sidecar_ts", "sidecar_in_flight",
+    "needs_approval", "needs_approval_message", "question_waiting", "question_text",
+    "question_header", "question_preamble", "question_options",
+    "question_option_details", "can_headless_resume", "can_app_resume", "codex_state",
+    "codex_fresh", "codex_state_reason", "codex_writer", "codex_desktop_attached",
+)
+
+
+def _archive_list_window(value):
+    value = (value or "all").strip().lower()
+    return value if value in ("1d", "7d", "all") else "all"
+
+
+def _archive_list_window_cutoff(window, now=None):
+    days = {"1d": 1, "7d": 7}.get(_archive_list_window(window))
+    return (time.time() if now is None else now) - days * 86400 if days else None
+
+
+def _archive_list_row_ts(row):
+    for key in ("modified", "mtime", "last_interacted", "last_activity", "last_mtime",
+                "archived_at", "closed_at", "started_at"):
+        try:
+            ts = float((row or {}).get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(ts) and ts > 0:
+            return ts / 1000 if ts > 100000000000 else ts
+    return 0
+
+
+def _archive_list_window_allows_row(row, cutoff):
+    if not cutoff:
+        return True
+    engine = ((row or {}).get("engine") or (row or {}).get("source") or "").lower()
+    return bool((row or {}).get("pinned")) or engine == "hermes" or _archive_list_row_ts(row) >= cutoff
+
+
+def _archive_list_project_row(row):
+    return {key: copy.deepcopy(row[key]) for key in _ARCHIVE_LIST_FIELDS if key in row}
+
+
+def _archive_list_project_rows(rows, *, window="all", now=None):
+    cutoff = _archive_list_window_cutoff(window, now=now)
+    return [
+        _archive_list_project_row(row) for row in (rows or [])
+        if isinstance(row, dict) and _archive_list_window_allows_row(row, cutoff)
+    ]
+
+
+def _archive_list_rows_cached(cache_options, *, window="all", now=None):
+    rows, from_cache = _archive_all_rows_cached(cache_options)
+    return _archive_list_project_rows(rows, window=window, now=now), from_cache
+
+
+def _archive_list_payload(rows, *, window="all", now=None, cached=None):
+    window = _archive_list_window(window)
+    projected = _archive_list_project_rows(rows, window=window, now=now)
+    payload = {
+        "ok": True,
+        "conversations": projected,
+        "count": len(projected),
+        "total_count": sum(isinstance(row, dict) for row in (rows or [])),
+        "window": window,
+        "fields": list(_ARCHIVE_LIST_FIELDS),
+    }
+    if cached is not None:
+        payload["cached"] = bool(cached)
+    return payload
+
+
 def _stamp_archive_state(rows):
     """Stamp the single-source-of-truth coarse `state` + `ended_blocked` onto
     every archive row, IN PLACE.
@@ -62103,7 +62197,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif re.match(r"^/api/session/[^/]+/spawn-stream$", path):
             sid = path.split("/")[-2]
             self._stream_spawn_deltas(sid)
-        elif re.match(r"^/api/conversations/(?!all$|order$)[^/]+$", path):
+        elif re.match(r"^/api/conversations/(?!all$|list$|order$)[^/]+$", path):
             conv_id = path.split("/")[-1]
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
@@ -62847,6 +62941,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # The UI polls this to know which peers to fetch per-repo data
             # from. Read-only; loopback trust applies.
             self.send_json({"peers": _read_registry_pruned()})
+        elif path == "/api/conversations/list":
+            # Lightweight archive feed for the sidebar. This deliberately
+            # projects the existing cache-backed snapshot; /all keeps its full
+            # compatibility response for integrations and non-sidebar callers.
+            qs = urllib.parse.parse_qs(parsed.query)
+            window = _archive_list_window(qs.get("window", ["all"])[0])
+            cache_options = {
+                "include_prs": qs.get("include_prs", ["0"])[0] in ("1", "true"),
+                "resolve_pr_states": qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
+                "resolve_effective": qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
+                "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
+            }
+            rows, from_cache = _archive_all_rows_cached(cache_options)
+            self.send_json(
+                _archive_list_payload(rows, window=window, cached=from_cache), etag=True,
+            )
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every
             # folder under ~/.claude/projects/, tagged with folder + reverse
