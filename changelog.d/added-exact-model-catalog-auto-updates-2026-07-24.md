@@ -1,0 +1,1 @@
+- Discover exact versioned Claude models from Anthropic's public catalog, add Opus 5, and automatically keep supported engine CLIs updated.
