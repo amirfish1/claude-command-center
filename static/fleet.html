@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
+<meta name="theme-color" content="#0d1117">
+<title>CCC — Fleet</title>
+<!-- Borrowed for the .fleet-* / .upd-* / .fed-* component classes so this
+     page looks identical to the view it replaced. Only the page shell below
+     is defined here; app.css's `body` rule is the dashboard's fixed flex
+     shell, which a scrollable standalone page must override. -->
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body {
+    display: block;
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+  }
+  .fleet-page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 24px 20px 64px;
+  }
+  .fleet-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .fleet-page-title {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .fleet-page-sub {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+    max-width: 640px;
+    line-height: 1.5;
+  }
+  .fleet-page-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  /* The progress line. The whole point of this page's redesign: a scan that
+     takes a minute must say what it is doing, not spin silently. */
+  .fleet-progress {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 4px;
+    padding: 8px 12px;
+    border: 1px solid var(--border, rgba(48, 54, 61, 0.6));
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    background: var(--surface-card, rgba(22, 28, 41, 0.5));
+  }
+  .fleet-progress.visible { display: flex; }
+  .fleet-chip.is-pending { opacity: 0.7; font-style: italic; }
+  .fleet-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%) translateY(12px);
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    background: var(--surface, #12161f);
+    border: 1px solid var(--border, rgba(48, 54, 61, 0.6));
+    color: var(--text, #e6edf3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 10001;
+  }
+  .fleet-toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .fleet-toast.is-error { border-color: var(--red, #f85149); }
+</style>
+</head>
+<body>
+  <div class="fleet-page">
+    <div class="fleet-page-header">
+      <div>
+        <div class="fleet-page-title">Fleet</div>
+        <div class="fleet-page-sub">
+          Every repo across every paired node - worktrees, branches, PRs,
+          deployments, and sessions as independent dimensions, each with its
+          own freshness.
+        </div>
+      </div>
+      <div class="fleet-page-actions">
+        <span class="fleet-refresh-time" id="fleetRefreshTime"></span>
+        <button type="button" class="upd-btn fed-btn" id="fleetRefreshBtn"><span class="fleet-spinner" id="fleetRefreshSpinner" hidden></span><span>Refresh</span></button>
+        <button type="button" class="upd-btn upd-primary fed-btn" id="fleetResolveBtn">Resolve all…</button>
+      </div>
+    </div>
+
+    <div class="fleet-progress" id="fleetProgress"></div>
+    <div class="fleet-health-strip" id="fleetHealthStrip"></div>
+    <div class="upd-error" id="fleetError"></div>
+    <div class="fleet-matrix" id="fleetMatrix"></div>
+  </div>
+
+  <!-- Resolve-all plan / job modal. openFleetPlan() POSTs /api/fleet/plan and
+       renders the reviewable actions (checkboxes, kind + destructive badges,
+       reasons, evidence, blockers). Confirm POSTs /api/fleet/execute, then the
+       same body switches to a live job view polling /api/fleet/job. -->
+  <div id="fleetPlanModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="fleetPlanTitle">
+    <div class="upd-backdrop" id="fleetPlanBackdrop"></div>
+    <div class="upd-dialog" style="width:min(780px,94vw);max-height:88vh;overflow-y:auto;">
+      <div class="upd-title" id="fleetPlanTitle">Resolve all</div>
+      <div class="upd-versions" id="fleetPlanSubtitle">
+        Review the proposed actions. Destructive steps are outlined in red.
+        Nothing runs until you confirm.
+      </div>
+      <div class="fleet-plan-body" id="fleetPlanBody"></div>
+      <div class="upd-error" id="fleetPlanError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="fleetPlanCancel">Cancel</button>
+        <button type="button" class="upd-btn upd-primary fed-btn" id="fleetPlanConfirm" disabled>Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/fleet.js"></script>
+</body>
+</html>

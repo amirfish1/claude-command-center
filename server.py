@@ -52671,7 +52671,7 @@ def _worktree_dirty_cached(path, event_ts):
     return dirty
 
 
-def list_repo_worktrees(repo_top):
+def list_repo_worktrees(repo_top, include_prs=True):
     """Return all worktrees for a repo with a `dirty` flag (uncommitted
     changes). Powers the topbar's "open worktrees" modal.
 
@@ -52679,6 +52679,11 @@ def list_repo_worktrees(repo_top):
     field (or None) when its branch matches an open PR's head ref, and
     the response includes `orphan_prs` for open PRs whose branch has no
     local worktree.
+
+    `include_prs=False` skips the `gh pr list` subprocess entirely. The
+    Fleet view's first pass uses it: `gh` is a network round-trip (~5s
+    cold) and a fleet scan touches every mapped repo, so PR data is
+    fetched in a second, enriching pass rather than blocking first paint.
     """
     repo_top = resolve_repo_path(repo_top)
     wts = _list_worktrees(repo_top)
@@ -52693,7 +52698,7 @@ def list_repo_worktrees(repo_top):
         if wt["is_agent"]:
             agent_n += 1
 
-    prs = _open_prs_cached(repo_top)
+    prs = _open_prs_cached(repo_top) if include_prs else []
     pr_by_branch = {p["headRefName"]: p for p in prs if p.get("headRefName")}
     matched_branches = set()
     for wt in wts:
@@ -52712,6 +52717,9 @@ def list_repo_worktrees(repo_top):
         "agent_count": agent_n,
         "open_prs_count": len(prs),
         "orphan_prs": orphan_prs,
+        # Distinguishes "checked, found none" from "not checked yet" so the
+        # Fleet view's first pass cannot render an absence as a fact.
+        "prs_skipped": not include_prs,
     }
 
 
@@ -62274,6 +62282,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/fleet.html" or path == "/fleet":
+            # Fleet lives on its own page rather than a dashboard modal: a
+            # fleet scan touches every repo on every node, which is far too
+            # slow to hold the dashboard hostage behind an overlay.
+            try:
+                body = (STATIC_DIR / "fleet.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "fleet.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/throughput-daily.html" or path == "/throughput-daily":
             # Daily throughput report page (narrow route — the generic static
             # handler refuses arbitrary *.html), mirroring /throughput.
@@ -62777,16 +62804,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "repos": _fleet_local_inventory(
                     fetch=(qs_fed.get("fetch") or ["0"])[0] in ("1", "true"),
                     include_deploy=(qs_fed.get("deploy") or ["1"])[0] not in ("0", "false"),
+                    include_prs=(qs_fed.get("prs") or ["1"])[0] not in ("0", "false"),
+                    include_sessions=(qs_fed.get("sessions") or ["1"])[0] not in ("0", "false"),
                 ),
             })
         elif path == "/api/fleet/inventory":
             # The Fleet view: repo × node matrix, every dimension separate,
             # every source carrying observed_at + explicit errors. fetch=1
             # is the one allowed mutation-adjacent step (git fetch origin).
+            # prs=0 / deploy=0 / sessions=0 drop the three slow dimensions
+            # (`gh`, the deploy provider, the all-rows archive cache) so the
+            # page can paint git facts immediately and enrich in a second call.
             qs_fleet = urllib.parse.parse_qs(parsed.query)
             self.send_json(_fleet_inventory_payload(
                 fetch=(qs_fleet.get("fetch") or ["0"])[0] in ("1", "true"),
                 include_deploy=(qs_fleet.get("deploy") or ["1"])[0] not in ("0", "false"),
+                include_prs=(qs_fleet.get("prs") or ["1"])[0] not in ("0", "false"),
+                include_sessions=(qs_fleet.get("sessions") or ["1"])[0] not in ("0", "false"),
             ))
         elif path == "/api/fleet/recommendations":
             qs_fleet = urllib.parse.parse_qs(parsed.query)
@@ -70315,7 +70349,8 @@ def _federation_default_branch_view(repo_path):
     return {"branch": branch, "sha": out.strip() if rc == 0 else None}
 
 
-def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, fetch=False):
+def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None,
+                                       fetch=False, include_prs=True):
     """Git/worktree inventory for ONE repo on THIS node. Path is validated
     here — the node that owns the filesystem does the checking."""
     if not repo_path and repo_identity_key:
@@ -70332,7 +70367,7 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, f
         # The one explicitly-requested mutation-adjacent step a scan may do:
         # refresh remote refs. Never touches the working tree.
         _git(["fetch", "--quiet", "--prune", "origin"], repo_path, timeout=60)
-    wt_payload = list_repo_worktrees(repo_path)
+    wt_payload = list_repo_worktrees(repo_path, include_prs=include_prs)
     worktrees = []
     for wt in wt_payload.get("worktrees", []):
         entry = dict(wt)
@@ -70382,6 +70417,7 @@ def _federation_repo_inventory_payload(repo_path=None, repo_identity_key=None, f
         "worktrees": worktrees,
         "orphan_prs": wt_payload.get("orphan_prs", []),
         "open_prs_count": wt_payload.get("open_prs_count", 0),
+        "prs_skipped": bool(wt_payload.get("prs_skipped")),
     }, 200
 
 
@@ -70890,18 +70926,29 @@ def _fleet_sessions_for_repo(repo_path):
     return out
 
 
-def _fleet_local_repo_entry(repo_path, fetch=False, include_deploy=True):
+def _fleet_local_repo_entry(repo_path, fetch=False, include_deploy=True,
+                            include_prs=True, include_sessions=True):
     """Every dimension for ONE repo on THIS node."""
     payload, status = _federation_repo_inventory_payload(
-        repo_path=repo_path, fetch=fetch)
+        repo_path=repo_path, fetch=fetch, include_prs=include_prs)
     if status != 200:
         return {"ok": False, "node_id": federation.node_id(),
                 "repo_path": repo_path, "observed_at": time.time(),
                 "error": payload.get("error"), "detail": payload.get("detail")}
-    payload["prs"] = _fleet_prs(payload["repo_path"],
-                                payload.get("repo_identity_kind"))
+    payload["prs"] = (_fleet_prs(payload["repo_path"],
+                                 payload.get("repo_identity_kind"))
+                      if include_prs else {"skipped": "excluded",
+                                           "observed_at": time.time()})
     payload["deployment"] = (_fleet_deployment(payload["repo_path"])
-                             if include_deploy else {"skipped": "excluded"})
+                             if include_deploy else {"skipped": "excluded",
+                                                     "observed_at": time.time()})
+    if not include_sessions:
+        # The session dimension reads the all-rows archive cache, which costs
+        # a full transcript parse when cold (~45s). That is the single worst
+        # thing to put in front of first paint, so the fast pass drops it.
+        payload["sessions"] = []
+        payload["sessions_skipped"] = True
+        return payload
     payload["sessions"] = _fleet_sessions_for_repo(payload["repo_path"])
     # Fold current hook markers into the persisted provenance index while
     # we're already looking at these sessions (fleet scans are off the
@@ -70912,10 +70959,20 @@ def _fleet_local_repo_entry(repo_path, fetch=False, include_deploy=True):
     return payload
 
 
-def _fleet_local_inventory(fetch=False, include_deploy=True):
+_FLEET_SCAN_WORKERS = 12
+
+
+def _fleet_local_inventory(fetch=False, include_deploy=True, include_prs=True,
+                           include_sessions=True):
     """{identity: entry} for every repo mapped (or discoverable) on this
     node. Known repos are auto-mapped by identity as a side effect so a
-    freshly-paired fleet needs no hand mapping."""
+    freshly-paired fleet needs no hand mapping.
+
+    Repos are scanned on a bounded thread pool. Every dimension is
+    IO-bound (git subprocesses, `gh`, the deploy provider) and a real
+    fleet is tens of repos, so scanning serially made the whole view wait
+    on the sum of every repo's network latency.
+    """
     repo_map = dict(federation.load_repo_map())
     if _fleet_config().get("automap", True):
         for rp in _known_repo_paths():
@@ -70927,14 +70984,33 @@ def _fleet_local_inventory(fetch=False, include_deploy=True):
                 except (OSError, ValueError):
                     pass
     out = {}
+    scannable = []
     for identity_key, path in sorted(repo_map.items()):
         if not os.path.isdir(path):
             out[identity_key] = {"ok": False, "error": "stale_mapping",
                                  "detail": f"mapped path missing: {path}",
                                  "observed_at": time.time()}
             continue
-        out[identity_key] = _fleet_local_repo_entry(
-            path, fetch=fetch, include_deploy=include_deploy)
+        scannable.append((identity_key, path))
+    if not scannable:
+        return out
+
+    def _scan(item):
+        identity_key, path = item
+        try:
+            return identity_key, _fleet_local_repo_entry(
+                path, fetch=fetch, include_deploy=include_deploy,
+                include_prs=include_prs, include_sessions=include_sessions)
+        except Exception as e:
+            return identity_key, {"ok": False, "error": "scan_failed",
+                                  "detail": str(e)[:300],
+                                  "repo_path": path,
+                                  "observed_at": time.time()}
+
+    workers = min(_FLEET_SCAN_WORKERS, len(scannable))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for identity_key, entry in pool.map(_scan, scannable):
+            out[identity_key] = entry
     return out
 
 
@@ -70943,33 +71019,46 @@ _FLEET_PEER_CACHE_LOCK = threading.Lock()
 _FLEET_PEER_TTL = 15.0
 
 
-def _fleet_fetch_peer_inventory(peer, fetch=False):
+def _fleet_fetch_peer_inventory(peer, fetch=False, include_prs=True,
+                                include_deploy=True, include_sessions=True):
     node = peer["node_id"]
+    # The fast pass and the enriching pass return different shapes, so they
+    # cannot share a cache slot — a fast-pass hit would otherwise satisfy the
+    # enrich request with PR-less data forever.
+    cache_key = (node, bool(include_prs), bool(include_deploy),
+                 bool(include_sessions))
     now = time.time()
     with _FLEET_PEER_CACHE_LOCK:
-        hit = _FLEET_PEER_CACHE.get(node)
+        hit = _FLEET_PEER_CACHE.get(cache_key)
         if hit and now - hit["ts"] < _FLEET_PEER_TTL and not fetch:
             return {**hit["payload"], "stale": False}, None
     try:
         payload = federation.PeerClient(peer).request(
-            "GET", f"/api/federation/v1/fleet-inventory?fetch={1 if fetch else 0}",
+            "GET", "/api/federation/v1/fleet-inventory"
+            f"?fetch={1 if fetch else 0}"
+            f"&prs={1 if include_prs else 0}"
+            f"&deploy={1 if include_deploy else 0}"
+            f"&sessions={1 if include_sessions else 0}",
             timeout=120 if fetch else 45)
     except federation.PeerError as e:
         with _FLEET_PEER_CACHE_LOCK:
-            hit = _FLEET_PEER_CACHE.get(node)
+            hit = _FLEET_PEER_CACHE.get(cache_key)
         if hit:
             return {**hit["payload"], "stale": True}, {"error": e.kind, "detail": str(e)}
         return None, {"error": e.kind, "detail": str(e)}
     with _FLEET_PEER_CACHE_LOCK:
-        _FLEET_PEER_CACHE[node] = {"ts": now, "payload": payload}
+        _FLEET_PEER_CACHE[cache_key] = {"ts": now, "payload": payload}
     _federation_touch_peer(node)
     return {**payload, "stale": False}, None
 
 
-def _fleet_inventory_payload(fetch=False, include_deploy=True):
+def _fleet_inventory_payload(fetch=False, include_deploy=True, include_prs=True,
+                             include_sessions=True):
     """The Fleet view's data: repo × node matrix with per-source freshness."""
     me = _federation_self_hello()
-    local = _fleet_local_inventory(fetch=fetch, include_deploy=include_deploy)
+    local = _fleet_local_inventory(fetch=fetch, include_deploy=include_deploy,
+                                   include_prs=include_prs,
+                                   include_sessions=include_sessions)
     nodes = [{"node_id": me["node_id"], "name": me["display_name"],
               "self": True, "ok": True, "stale": False,
               "observed_at": time.time()}]
@@ -70982,7 +71071,10 @@ def _fleet_inventory_payload(fetch=False, include_deploy=True):
     peers = federation.load_peers()
     if peers:
         def _one(peer):
-            return peer, _fleet_fetch_peer_inventory(peer, fetch=fetch)
+            return peer, _fleet_fetch_peer_inventory(
+                peer, fetch=fetch, include_prs=include_prs,
+                include_deploy=include_deploy,
+                include_sessions=include_sessions)
         with ThreadPoolExecutor(max_workers=min(4, len(peers))) as pool:
             results = list(pool.map(_one, peers))
         for peer, (payload, err) in results:
