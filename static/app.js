@@ -17,7 +17,7 @@
   const _PAUSE_WHEN_HIDDEN = new Set([
     'liveStatus', 'liveToolStrip', 'sessionsList', 'gcActive', 'issues',
     'vercelDeploy', 'localhost', 'worktreesBadge', 'archiveTimes',
-    'uxFixesQueueMeta', 'stuckSessions',
+    'uxFixesQueueMeta', 'stuckSessions', 'modelCatalog',
   ]);
   function _pollerSkip(name) {
     return _pollerOff(name) || (_PAUSE_WHEN_HIDDEN.has(name) && document.hidden);
@@ -67,6 +67,7 @@
     archiveProgress:{ ms: 250,   label: 'archive', surface: 'Sidebar - archive loading bar',               desc: 'Archive load progress bar (transient, self-clears).' },
     cccHealth:      { ms: 5000,  label: 'health',  surface: 'Sidebar - bottom-left CCC health bar',         desc: 'CCC self-health: server CPU%, live-activity build latency, recent errors.' },
     stuckSessions:  { ms: 60000, label: 'stuck',   surface: 'Sidebar - bottom-left stuck-session count',    desc: 'Recent Codex sessions currently labeled Stuck by the stale-transcript heuristic.' },
+    modelCatalog:   { ms: 3600000, label: 'models', surface: 'Model picker - engine catalogs',               desc: 'Refresh exact engine model choices from the server-owned catalog.' },
   };
   // Per-trigger runtime stats for the strip: last-fired epoch + total ticks.
   const _pollerStats = {};
@@ -39557,6 +39558,9 @@
 
   function claudeModelSupportsOneM(model) {
     const n = _normalizeModelId(model);
+    const option = (MODEL_OPTIONS_BY_ENGINE.claude || [])
+      .find(row => _normalizeModelId(row.id) === n);
+    if (option && option.oneM != null) return !!option.oneM;
     return n === 'opus-4-8' || n === 'opus-4-7';
   }
 
@@ -39881,8 +39885,9 @@
   // toggle is offered for that model.
   const MODEL_OPTIONS_BY_ENGINE = {
     claude: [
-      { id: 'fable-5',   label: 'fable-5',   oneM: false },
-      { id: 'sonnet-5',  label: 'sonnet-5',  oneM: false },
+      { id: 'fable-5',   label: 'fable-5',   oneM: true },
+      { id: 'opus-5',    label: 'opus-5',    oneM: true },
+      { id: 'sonnet-5',  label: 'sonnet-5',  oneM: true },
       { id: 'opus-4-8',  label: 'opus-4-8',  oneM: true },
       { id: 'haiku-4-5', label: 'haiku-4-5', oneM: false },
     ],
@@ -50119,7 +50124,13 @@
       spawnEffortChoiceDirty = true;
     });
   }
+  const refreshEngineModelCatalog = _gated('modelCatalog', loadEngineModelCatalog);
   const modelCatalogReady = loadEngineModelCatalog();
+  // The server refreshes Anthropic's catalog immediately after startup and
+  // hourly. Retry once after that startup race, then keep already-open tabs
+  // current without requiring a page reload.
+  setTimeout(refreshEngineModelCatalog, 15000);
+  setInterval(refreshEngineModelCatalog, 3600000);
   const spawnDefaultsReady = loadSpawnDefaults();
   modelCatalogReady.finally(syncSpawnEngineDependentUi);
   syncSpawnEngineDependentUi();
@@ -56777,6 +56788,82 @@
     el.textContent = v ? v : 'Not set';
   }
 
+  // ── Engines section: automatic harness updates ─────────────────────
+  let _engineUpdatePollTimer = null;
+  function _engineUpdateSummary(data) {
+    const engines = data && data.engines && typeof data.engines === 'object'
+      ? data.engines : {};
+    return Object.values(engines).map((row) => {
+      const label = row.label || 'Engine';
+      const version = row.version_after || row.version_before || '';
+      if (row.status === 'updated') return label + ' updated to ' + (version || 'latest');
+      if (row.status === 'current') return label + ' ' + (version || 'is current');
+      if (row.status === 'managed') return label + ' is managed by its app';
+      if (row.status === 'missing') {
+        return label + ' is not installed' + (row.install ? ' — ' + row.install : '');
+      }
+      if (row.status === 'failed') {
+        const detail = String(row.message || '').trim().split('\n').pop();
+        return label + ' update failed' + (detail ? ' — ' + detail : '');
+      }
+      return label + ' is pending';
+    }).join(' · ');
+  }
+
+  async function refreshEngineUpdateStatus() {
+    const desc = document.getElementById('engineUpdateStatusDesc');
+    if (!desc) return;
+    const lastRun = document.getElementById('engineUpdateLastRun');
+    const btn = document.getElementById('engineUpdateNowBtn');
+    if (_engineUpdatePollTimer) {
+      clearTimeout(_engineUpdatePollTimer);
+      _engineUpdatePollTimer = null;
+    }
+    try {
+      const res = await fetch('/api/engines/update-status', { cache: 'no-store' });
+      const data = await res.json();
+      const running = !!data.running;
+      desc.textContent = running
+        ? 'Updating installed engines and refreshing model catalogs…'
+        : (_engineUpdateSummary(data) || 'Automatic updates run hourly.');
+      desc.title = Object.values(data.engines || {}).map((row) => {
+        return (row.label || 'Engine') + ': ' + (row.message || row.status || 'pending');
+      }).join('\n');
+      if (lastRun) {
+        lastRun.textContent = data.last_finished_at
+          ? 'Last run ' + new Date(data.last_finished_at).toLocaleString()
+          : 'Always on';
+      }
+      if (btn) {
+        btn.disabled = running;
+        btn.textContent = running ? 'Updating…' : 'Update now';
+      }
+      if (running) {
+        _engineUpdatePollTimer = setTimeout(refreshEngineUpdateStatus, 2000);
+      }
+    } catch (_) {
+      desc.textContent = 'Automatic updates are on; status is temporarily unavailable.';
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Update now';
+      }
+    }
+  }
+
+  const engineUpdateNowBtn = document.getElementById('engineUpdateNowBtn');
+  if (engineUpdateNowBtn) {
+    engineUpdateNowBtn.addEventListener('click', async () => {
+      engineUpdateNowBtn.disabled = true;
+      engineUpdateNowBtn.textContent = 'Starting…';
+      const desc = document.getElementById('engineUpdateStatusDesc');
+      if (desc) desc.textContent = 'Starting engine updates…';
+      try {
+        await fetch('/api/engines/update-now', { method: 'POST' });
+      } catch (_) {}
+      _engineUpdatePollTimer = setTimeout(refreshEngineUpdateStatus, 400);
+    });
+  }
+
   // ── Engines section: 'Add Kimi engine' guided setup (WEBINAR-DEMO-23) ──
   // States: not installed (install steps) → installed, unverified (version +
   // verify button) → verified working. Verification is one ACP session/new
@@ -57185,6 +57272,7 @@
     buildSettingsSearchIndex();
     refreshAppearanceChecks();
     refreshSpawnEngineValue();
+    refreshEngineUpdateStatus();
     refreshKimiSetupStatus();
     setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
     setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);

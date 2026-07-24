@@ -3734,8 +3734,9 @@ def _spawn_fallback_model_for_engine(engine):
 # merges additional local sources into this list at /api/engines/models.
 _ENGINE_CURATED_MODELS = {
     "claude": (
-        {"id": "fable-5", "label": "fable-5", "oneM": False},
-        {"id": "sonnet-5", "label": "sonnet-5", "oneM": False},
+        {"id": "fable-5", "label": "fable-5", "oneM": True},
+        {"id": "opus-5", "label": "opus-5", "oneM": True},
+        {"id": "sonnet-5", "label": "sonnet-5", "oneM": True},
         {"id": "opus-4-8", "label": "opus-4-8", "oneM": True},
         {"id": "haiku-4-5", "label": "haiku-4-5", "oneM": False},
     ),
@@ -3812,6 +3813,10 @@ _CODEX_PICKER_MODEL_IDS = frozenset(
 
 _MODEL_CATALOG_CACHE = {"ts": 0.0, "data": None}
 _MODEL_CATALOG_TTL_SEC = 30.0
+_CLAUDE_MODELS_OVERVIEW_URL = (
+    "https://platform.claude.com/docs/en/about-claude/models/overview.md"
+)
+_CLAUDE_MODEL_CATALOG_FILE = COMMAND_CENTER_STATE_DIR / "claude-models.json"
 
 # Known typo/guess patterns for a model id that doesn't exist -- e.g. an
 # agent assuming codex model names always end in "-codex" (they don't; the
@@ -3855,6 +3860,22 @@ def _model_catalog_add(catalog, engine, model, *, label=None, source="observed",
     model = _clean_spawn_default_model(model)
     if not model:
         return
+    if engine == "claude":
+        # CCC's Claude picker uses short, exact aliases. Observed sessions can
+        # contain both the CLI form (`claude-opus-5`) and rolling family aliases
+        # (`opus`); canonicalize the former and keep the latter out of choices.
+        modern = re.fullmatch(r"claude-((?:fable|opus|sonnet|haiku)-\d[\w.-]*)", model, re.I)
+        if modern:
+            model = modern.group(1)
+            label_match = re.fullmatch(
+                r"claude-((?:fable|opus|sonnet|haiku)-\d[\w.-]*)",
+                _clean_spawn_default_model(label),
+                re.I,
+            )
+            if label_match:
+                label = label_match.group(1)
+        if model.lower() in {"fable", "opus", "sonnet", "haiku"}:
+            return
     if not _model_catalog_allows_model(engine, model):
         return
     bucket = catalog.setdefault(engine, {
@@ -3977,11 +3998,108 @@ def _codex_models_cache_records():
     return _model_records_from_json(data, source="codex-cache", skip_hidden=True)
 
 
+def _parse_anthropic_model_overview(markdown):
+    """Parse exact model aliases from Anthropic's latest-model table."""
+    text = str(markdown or "")
+    section = re.search(
+        r"(?ims)^###\s+Latest models comparison\s*$([\s\S]*?)(?=^###\s+|\Z)",
+        text,
+    )
+    if not section:
+        return []
+    rows = []
+    for line in section.group(1).splitlines():
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) >= 2:
+            rows.append(cells)
+    if len(rows) < 3:
+        return []
+
+    def clean(value):
+        return re.sub(r"[*_`]", "", str(value or "")).strip()
+
+    header = rows[0]
+    aliases = next(
+        (row for row in rows[1:] if clean(row[0]).lower() == "claude api alias"),
+        None,
+    )
+    contexts = next(
+        (row for row in rows[1:] if clean(row[0]).lower() == "context window"),
+        None,
+    )
+    if not aliases:
+        return []
+    records = []
+    for index in range(1, min(len(header), len(aliases))):
+        alias = clean(aliases[index])
+        if not re.fullmatch(r"claude-[a-z0-9][a-z0-9.-]*", alias):
+            continue
+        context = clean(contexts[index]) if contexts and index < len(contexts) else ""
+        context_key = context.lower().replace(",", "").replace(" ", "")
+        records.append({
+            "id": alias.removeprefix("claude-"),
+            "label": alias.removeprefix("claude-"),
+            "display_name": clean(header[index]),
+            "oneM": (
+                "1mtoken" in context_key
+                or "1000000token" in context_key
+            ),
+            "source": "anthropic-models-overview",
+        })
+    return records
+
+
+def _load_claude_model_catalog_records():
+    try:
+        data = json.loads(_CLAUDE_MODEL_CATALOG_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    rows = data.get("records") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [
+        row for row in rows
+        if isinstance(row, dict) and _clean_spawn_default_model(row.get("id"))
+    ]
+
+
+def _refresh_claude_model_catalog():
+    """Refresh the public Anthropic catalog, preserving stale cache on error."""
+    request = urllib.request.Request(
+        _CLAUDE_MODELS_OVERVIEW_URL,
+        headers={
+            "Accept": "text/markdown,text/plain;q=0.9,*/*;q=0.5",
+            "User-Agent": f"claude-command-center/{__version__}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            body = response.read().decode("utf-8", "replace")
+        records = _parse_anthropic_model_overview(body)
+        if not records:
+            return {"ok": False, "error": "Anthropic model table was not recognized"}
+        payload = {
+            "fetched_at": datetime.now(tz=timezone.utc).isoformat(),
+            "source_url": _CLAUDE_MODELS_OVERVIEW_URL,
+            "records": records,
+        }
+        _CLAUDE_MODEL_CATALOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _CLAUDE_MODEL_CATALOG_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, _CLAUDE_MODEL_CATALOG_FILE)
+        _MODEL_CATALOG_CACHE["ts"] = 0.0
+        _MODEL_CATALOG_CACHE["data"] = None
+        return {"ok": True, **payload}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def _resolve_harness_bin(engine):
     if engine == "codex":
         info = _resolve_codex_bin()
-    elif engine == "claude":
-        info = _resolve_claude_bin()
     else:
         return None
     if not info.get("available") or not info.get("bin"):
@@ -3990,32 +4108,18 @@ def _resolve_harness_bin(engine):
 
 
 def _harness_model_list_result(engine):
-    """Best-effort future hook for harnesses that add JSON model discovery.
-
-    Codex exposes its raw catalog through `codex debug models`; Claude is still
-    only a free-form --model flag today. If either harness adds another
-    machine-readable command, CCC starts merging it without a browser-side
-    change. Failures are ignored and cached by the outer catalog builder.
-    """
+    """Best-effort JSON model discovery for harnesses that implement it."""
     engine = _normalize_orchestration_spawn_engine(engine)
-    if engine not in ("codex", "claude"):
+    if engine != "codex":
         return {"available": False, "records": []}
     bin_path = _resolve_harness_bin(engine)
     if not bin_path:
         return {"available": False, "records": []}
-    candidates = []
-    if engine == "codex":
-        candidates = [
-            [bin_path, "debug", "models"],
-            [bin_path, "models", "list", "--json"],
-            [bin_path, "model", "list", "--json"],
-        ]
-    elif engine == "claude":
-        candidates = [
-            [bin_path, "models", "--json"],
-            [bin_path, "models", "list", "--json"],
-            [bin_path, "model", "list", "--json"],
-        ]
+    candidates = [
+        [bin_path, "debug", "models"],
+        [bin_path, "models", "list", "--json"],
+        [bin_path, "model", "list", "--json"],
+    ]
     for cmd in candidates:
         try:
             proc = subprocess.run(
@@ -4159,6 +4263,17 @@ def _build_engine_model_catalog(force_refresh=False):
             "models": [],
             "_index": {},
         }
+        if engine == "claude":
+            for row in _load_claude_model_catalog_records():
+                _model_catalog_add(
+                    catalog,
+                    "claude",
+                    row.get("id"),
+                    label=row.get("label"),
+                    source=row.get("source") or "anthropic-models-overview",
+                    oneM=row.get("oneM"),
+                    display_name=row.get("display_name"),
+                )
         for opt in _ENGINE_CURATED_MODELS.get(engine, ()):
             attrs = {}
             if "oneM" in opt:
@@ -4212,7 +4327,7 @@ def _build_engine_model_catalog(force_refresh=False):
         )
 
     harness_results = {}
-    for engine in ("claude", "codex"):
+    for engine in ("codex",):
         harness_result = _harness_model_list_result(engine)
         harness_results[engine] = harness_result
         for row in harness_result.get("records") or []:
@@ -36909,6 +37024,287 @@ def _resolve_hermes_bin():
     }
 
 
+_ENGINE_UPDATE_STATE_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.json"
+_ENGINE_UPDATE_LOCK_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.lock"
+_ENGINE_UPDATE_INTERVAL_SEC = 60 * 60
+_ENGINE_UPDATE_TIMEOUT_SEC = 5 * 60
+_ENGINE_UPDATE_MUTEX = threading.Lock()
+_ENGINE_UPDATE_START_LOCK = threading.Lock()
+_ENGINE_UPDATE_RUNNING = False
+_ENGINE_UPDATE_THREAD_ACTIVE = False
+
+
+def _engine_update_specs():
+    """Return only CLIs with a confirmed, non-interactive update command."""
+    return [
+        {
+            "id": "claude",
+            "label": "Claude Code",
+            "resolver": _resolve_claude_bin,
+            "args": ("update",),
+            "install": "curl -fsSL https://claude.ai/install.sh | bash",
+        },
+        {
+            "id": "codex",
+            "label": "Codex",
+            "resolver": _resolve_codex_bin,
+            "args": ("update",),
+            "install": "npm install -g @openai/codex@latest",
+        },
+        {
+            "id": "cursor",
+            "label": "Cursor Agent",
+            "resolver": _resolve_cursor_bin,
+            "args": ("update",),
+            "install": "curl https://cursor.com/install -fsS | bash",
+        },
+        {
+            "id": "antigravity",
+            "label": "Antigravity",
+            "resolver": _resolve_antigravity_bin,
+            "args": ("update",),
+            "install": "Install the AGY CLI, then restart CCC.",
+        },
+        {
+            "id": "hermes",
+            "label": "Hermes",
+            "resolver": _resolve_hermes_bin,
+            "args": ("update", "--yes"),
+            "install": "Install Hermes Agent, then restart CCC.",
+        },
+    ]
+
+
+def _read_engine_update_state():
+    try:
+        data = json.loads(_ENGINE_UPDATE_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_engine_update_state(data):
+    try:
+        _ENGINE_UPDATE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _ENGINE_UPDATE_STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, _ENGINE_UPDATE_STATE_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def _engine_cli_version(bin_path):
+    try:
+        proc = subprocess.run(
+            [bin_path, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=6,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    output = (proc.stdout or proc.stderr or "").strip()
+    return output.splitlines()[0][:160] if output else ""
+
+
+def _engine_update_status():
+    state = _read_engine_update_state()
+    engines = state.get("engines")
+    if not isinstance(engines, dict):
+        engines = {}
+    for spec in _engine_update_specs():
+        engines.setdefault(spec["id"], {
+            "label": spec["label"],
+            "status": "pending",
+            "install": spec["install"],
+        })
+    return {
+        "ok": True,
+        "automatic": True,
+        "interval_seconds": _ENGINE_UPDATE_INTERVAL_SEC,
+        "running": bool(_ENGINE_UPDATE_RUNNING),
+        "last_started_at": state.get("last_started_at"),
+        "last_finished_at": state.get("last_finished_at"),
+        "engines": engines,
+    }
+
+
+def _engine_update_message(proc):
+    output = "\n".join(
+        part.strip() for part in (proc.stdout or "", proc.stderr or "") if part.strip()
+    )
+    return output[-800:] if output else ""
+
+
+def _run_engine_updates_once():
+    """Update every supported installed CLI without blocking CCC requests."""
+    global _ENGINE_UPDATE_RUNNING
+    if not _ENGINE_UPDATE_MUTEX.acquire(blocking=False):
+        status = _engine_update_status()
+        status["busy"] = True
+        status["running"] = True
+        return status
+
+    lock_file = None
+    _ENGINE_UPDATE_RUNNING = True
+    try:
+        _ENGINE_UPDATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = open(_ENGINE_UPDATE_LOCK_FILE, "a+", encoding="utf-8")
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            status = _engine_update_status()
+            status["busy"] = True
+            status["running"] = True
+            return status
+
+        started_at = datetime.now(tz=timezone.utc).isoformat()
+        results = {}
+        for spec in _engine_update_specs():
+            engine = spec["id"]
+            base = {
+                "label": spec["label"],
+                "install": spec["install"],
+                "checked_at": datetime.now(tz=timezone.utc).isoformat(),
+            }
+            try:
+                info = spec["resolver"]()
+            except Exception as exc:
+                results[engine] = {
+                    **base,
+                    "status": "failed",
+                    "message": f"Could not locate CLI: {exc}",
+                }
+                continue
+            if not info.get("available") or not info.get("bin"):
+                results[engine] = {
+                    **base,
+                    "status": "missing",
+                    "message": info.get("reason") or "CLI is not installed.",
+                }
+                continue
+            bin_path = info["bin"]
+            if info.get("source") == "bundle":
+                results[engine] = {
+                    **base,
+                    "status": "managed",
+                    "message": "Managed by its desktop application.",
+                }
+                continue
+            version_before = _engine_cli_version(bin_path)
+            cmd = [bin_path, *spec["args"]]
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=_ENGINE_UPDATE_TIMEOUT_SEC,
+                )
+            except subprocess.TimeoutExpired:
+                results[engine] = {
+                    **base,
+                    "status": "failed",
+                    "version_before": version_before,
+                    "message": "Update timed out.",
+                }
+                continue
+            except OSError as exc:
+                results[engine] = {
+                    **base,
+                    "status": "failed",
+                    "version_before": version_before,
+                    "message": str(exc)[:800],
+                }
+                continue
+            version_after = _engine_cli_version(bin_path)
+            message = _engine_update_message(proc)
+            if proc.returncode != 0:
+                status = "failed"
+                if not message:
+                    message = f"Update exited with status {proc.returncode}."
+            else:
+                status = (
+                    "updated"
+                    if version_before and version_after and version_before != version_after
+                    else "current"
+                )
+            results[engine] = {
+                **base,
+                "status": status,
+                "version_before": version_before,
+                "version_after": version_after,
+                "message": message,
+            }
+
+        state = {
+            "last_started_at": started_at,
+            "last_finished_at": datetime.now(tz=timezone.utc).isoformat(),
+            "engines": results,
+        }
+        _write_engine_update_state(state)
+        return {
+            "ok": True,
+            "automatic": True,
+            "interval_seconds": _ENGINE_UPDATE_INTERVAL_SEC,
+            "running": False,
+            **state,
+        }
+    finally:
+        _ENGINE_UPDATE_RUNNING = False
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            lock_file.close()
+        _ENGINE_UPDATE_MUTEX.release()
+
+
+def _engine_maintenance_once():
+    catalog_status = _refresh_claude_model_catalog()
+    update_status = _run_engine_updates_once()
+    return {"updates": update_status, "catalog": catalog_status}
+
+
+def _start_engine_update_pass():
+    """Start one asynchronous update/catalog refresh pass."""
+    global _ENGINE_UPDATE_THREAD_ACTIVE
+    with _ENGINE_UPDATE_START_LOCK:
+        if _ENGINE_UPDATE_THREAD_ACTIVE or _ENGINE_UPDATE_MUTEX.locked():
+            return {"ok": True, "started": False, "running": True}
+        _ENGINE_UPDATE_THREAD_ACTIVE = True
+
+    def run():
+        global _ENGINE_UPDATE_THREAD_ACTIVE
+        try:
+            _engine_maintenance_once()
+        finally:
+            with _ENGINE_UPDATE_START_LOCK:
+                _ENGINE_UPDATE_THREAD_ACTIVE = False
+
+    threading.Thread(
+        target=run,
+        daemon=True,
+        name="ccc-engine-updates",
+    ).start()
+    return {"ok": True, "started": True, "running": True}
+
+
+def _engine_maintenance_loop():
+    while True:
+        try:
+            _engine_maintenance_once()
+        except Exception:
+            pass
+        try:
+            time.sleep(_ENGINE_UPDATE_INTERVAL_SEC)
+        except Exception:
+            return
+
+
 def _hermes_epoch(value):
     if value is None or isinstance(value, bool):
         return 0.0
@@ -53539,11 +53935,12 @@ def extract_session_timeline(session_id):
 # models. UI surfaces this as "API list-price equivalent".
 #
 # Sources: Anthropic/OpenAI list pricing and AgentsView fallback pricing, last
-# checked 2026-06. If rates change, edit here. Rates are
+# checked 2026-07. If rates change, edit here. Rates are
 # (input_per_mtok, cache_write, cache_read, output_per_mtok).
 _MODEL_RATES = {
     "claude-fable-5": (10.00, 12.50, 1.00, 50.00),
     "claude-sonnet-5": (2.00, 2.50, 0.20, 10.00),
+    "claude-opus-5": (5.00, 6.25, 0.50, 25.00),
     "claude-opus-4-8": (5.00, 6.25, 0.50, 25.00),
     "claude-opus-4-7": (5.00, 6.25, 0.50, 25.00),
     "claude-opus-4-6": (5.00, 6.25, 0.50, 25.00),
@@ -62804,6 +63201,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # id-only shape for scripts; `catalog` is the richer UI contract
             # populated from curated fallbacks plus local harness/default state.
             self.send_json(_build_engine_model_catalog())
+        elif path == "/api/engines/update-status":
+            self.send_json(_engine_update_status())
         elif path == "/api/search-history":
             # Read window onto ~/.claude-index/index.db, populated by the
             # bundled _history_index indexer. Returns BM25-ranked matches
@@ -63914,6 +64313,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "stored": True,
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
             })
+            return
+        if path == "/api/engines/update-now":
+            self.send_json(_start_engine_update_pass(), 202)
             return
         if path == "/api/features/flag":
             # Toggle one preview flag for THIS machine (writes the override
@@ -69852,7 +70254,7 @@ def _get_onboarding_status():
                 "logged_in": claude_logged_in,
                 "email": claude_email,
                 "signup_url": "https://docs.claude.com/en/docs/claude-code",
-                "install_instruction": "npm install -g @anthropic-ai/claude-code",
+                "install_instruction": "curl -fsSL https://claude.ai/install.sh | bash",
                 "login_instruction": "claude auth login"
             },
             "antigravity": {
@@ -73736,6 +74138,14 @@ def main():
     # Chuck iMessage monitor: polls chat.db every 2 minutes, injects new
     # messages from +17035592946 into the CHUCK session via inject-input.
     threading.Thread(target=_chuck_imessage_poller, daemon=True).start()
+    # Keep installed harnesses and Anthropic's exact model catalog current.
+    # The first pass runs immediately in the daemon; failures are recorded for
+    # Settings and never delay server startup or request handling.
+    threading.Thread(
+        target=_engine_maintenance_loop,
+        daemon=True,
+        name="ccc-engine-maintenance",
+    ).start()
     # Anonymous opt-in telemetry — defaults OFF. The loop self-gates on
     # CCC_TELEMETRY_DISABLED and the per-user opt-in JSON; starting the
     # thread here is unconditional but no bytes leave the host unless the

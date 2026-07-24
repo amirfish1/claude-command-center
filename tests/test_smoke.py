@@ -2965,6 +2965,230 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("codex-cache", mini["sources"])
         self.assertEqual(mini["reasoning_efforts"], ["low"])
 
+    def test_anthropic_model_overview_parser_returns_exact_versioned_models(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        overview = """
+### Latest models comparison
+
+| Feature | Claude Fable 5 | Claude Opus 5 | Claude Sonnet 5 | Claude Haiku 4.5 |
+|:--|:--|:--|:--|:--|
+| **Claude API alias** | `claude-fable-5` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` |
+| **Context window** | 1M tokens | 1M tokens | 1M tokens | 200k tokens |
+
+### Previous models
+"""
+        records = server._parse_anthropic_model_overview(overview)
+
+        self.assertEqual(
+            [row["id"] for row in records],
+            ["fable-5", "opus-5", "sonnet-5", "haiku-4-5"],
+        )
+        self.assertEqual([row["oneM"] for row in records], [True, True, True, False])
+        self.assertTrue(all(row["source"] == "anthropic-models-overview" for row in records))
+
+    def test_claude_model_catalog_refresh_persists_authoritative_cache(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        overview = b"""
+### Latest models comparison
+| Feature | Claude Opus 5 |
+|:--|:--|
+| **Claude API alias** | `claude-opus-5` |
+| **Context window** | 1M tokens |
+"""
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = overview
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server._CLAUDE_MODEL_CATALOG_FILE
+            server._CLAUDE_MODEL_CATALOG_FILE = pathlib.Path(td) / "claude-models.json"
+            try:
+                with mock.patch.object(server.urllib.request, "urlopen", return_value=response) as urlopen:
+                    refreshed = server._refresh_claude_model_catalog()
+                cached = server._load_claude_model_catalog_records()
+            finally:
+                server._CLAUDE_MODEL_CATALOG_FILE = old_file
+
+        self.assertTrue(refreshed["ok"])
+        self.assertEqual(cached[0]["id"], "opus-5")
+        self.assertEqual(cached[0]["source"], "anthropic-models-overview")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, server._CLAUDE_MODELS_OVERVIEW_URL)
+
+    def test_claude_catalog_merges_remote_exact_models_without_cli_probe(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        try:
+            with mock.patch.object(server, "_load_claude_model_catalog_records", return_value=[
+                {
+                    "id": "opus-5",
+                    "label": "opus-5",
+                    "oneM": True,
+                    "source": "anthropic-models-overview",
+                },
+            ]), mock.patch.object(
+                server, "_harness_model_list_result", return_value={"available": False, "records": []}
+            ) as harness, mock.patch.object(
+                server, "_codex_models_cache_records", return_value=[]
+            ), mock.patch.object(
+                server, "_codex_configured_model", return_value=""
+            ), mock.patch.object(
+                server, "_antigravity_cli_configured_model", return_value=""
+            ):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        self.assertTrue(opus["oneM"])
+        self.assertIn("anthropic-models-overview", opus["sources"])
+        self.assertNotIn(mock.call("claude"), harness.call_args_list)
+
+    def test_claude_catalog_hides_rolling_aliases_and_deduplicates_exact_ids(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        observed = [
+            {"engine": "claude", "id": "opus", "label": "opus", "source": "session-override"},
+            {
+                "engine": "claude",
+                "id": "claude-opus-5",
+                "label": "claude-opus-5",
+                "source": "session-override",
+            },
+        ]
+        try:
+            with mock.patch.object(server, "_load_claude_model_catalog_records", return_value=[]), \
+                 mock.patch.object(server, "_observed_model_records", return_value=observed), \
+                 mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        ids = payload["engines"]["claude"]
+        self.assertNotIn("opus", ids)
+        self.assertNotIn("claude-opus-5", ids)
+        self.assertEqual(ids.count("opus-5"), 1)
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        self.assertIn("session-override", opus["sources"])
+
+    def test_engine_update_pass_runs_confirmed_noninteractive_command(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        spec = {
+            "id": "claude",
+            "label": "Claude Code",
+            "resolver": lambda: {
+                "available": True,
+                "bin": "/tmp/test-claude",
+                "source": "candidate",
+            },
+            "args": ("update",),
+            "install": "curl -fsSL https://claude.ai/install.sh | bash",
+        }
+        completed = subprocess.CompletedProcess(
+            ["/tmp/test-claude", "update"], 0, stdout="Already up to date\n", stderr=""
+        )
+        with tempfile.TemporaryDirectory() as td:
+            old_state = server._ENGINE_UPDATE_STATE_FILE
+            old_lock = server._ENGINE_UPDATE_LOCK_FILE
+            server._ENGINE_UPDATE_STATE_FILE = pathlib.Path(td) / "engine-updates.json"
+            server._ENGINE_UPDATE_LOCK_FILE = pathlib.Path(td) / "engine-updates.lock"
+            try:
+                with mock.patch.object(server, "_engine_update_specs", return_value=[spec]), \
+                     mock.patch.object(server, "_engine_cli_version", side_effect=["2.1.218", "2.1.219"]), \
+                     mock.patch.object(server.subprocess, "run", return_value=completed) as run:
+                    status = server._run_engine_updates_once()
+            finally:
+                server._ENGINE_UPDATE_STATE_FILE = old_state
+                server._ENGINE_UPDATE_LOCK_FILE = old_lock
+
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["/tmp/test-claude", "update"])
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(status["engines"]["claude"]["status"], "updated")
+        self.assertEqual(status["engines"]["claude"]["version_before"], "2.1.218")
+        self.assertEqual(status["engines"]["claude"]["version_after"], "2.1.219")
+
+    def test_engine_update_pass_skips_bundle_managed_and_missing_clis(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        specs = [
+            {
+                "id": "cursor",
+                "label": "Cursor Agent",
+                "resolver": lambda: {
+                    "available": True,
+                    "bin": "/Applications/Cursor.app/cursor-agent",
+                    "source": "bundle",
+                },
+                "args": ("update",),
+                "install": "Install Cursor Agent",
+            },
+            {
+                "id": "hermes",
+                "label": "Hermes",
+                "resolver": lambda: {"available": False, "bin": None, "reason": "not installed"},
+                "args": ("update", "--yes"),
+                "install": "Install Hermes",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            old_state = server._ENGINE_UPDATE_STATE_FILE
+            old_lock = server._ENGINE_UPDATE_LOCK_FILE
+            server._ENGINE_UPDATE_STATE_FILE = pathlib.Path(td) / "engine-updates.json"
+            server._ENGINE_UPDATE_LOCK_FILE = pathlib.Path(td) / "engine-updates.lock"
+            try:
+                with mock.patch.object(server, "_engine_update_specs", return_value=specs), \
+                     mock.patch.object(server.subprocess, "run") as run:
+                    status = server._run_engine_updates_once()
+            finally:
+                server._ENGINE_UPDATE_STATE_FILE = old_state
+                server._ENGINE_UPDATE_LOCK_FILE = old_lock
+
+        run.assert_not_called()
+        self.assertEqual(status["engines"]["cursor"]["status"], "managed")
+        self.assertEqual(status["engines"]["hermes"]["status"], "missing")
+        self.assertIn("Install Hermes", status["engines"]["hermes"]["install"])
+
+    def test_engine_maintenance_refreshes_models_before_slow_cli_updates(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        order = []
+        with mock.patch.object(
+            server,
+            "_refresh_claude_model_catalog",
+            side_effect=lambda: order.append("catalog") or {"ok": True},
+        ), mock.patch.object(
+            server,
+            "_run_engine_updates_once",
+            side_effect=lambda: order.append("updates") or {"ok": True},
+        ):
+            server._engine_maintenance_once()
+
+        self.assertEqual(order, ["catalog", "updates"])
+
     def test_observed_model_records_keep_each_cached_transcript_engine(self):
         """Transcript-derived models must not leak into Claude's picker."""
         for mod in ("server", "morning", "morning_store"):
@@ -3071,6 +3295,9 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 
         self.assertIn("fetch('/api/engines/models'", app_js)
+        self.assertIn("{ id: 'opus-5'", app_js)
+        self.assertIn("_gated('modelCatalog', loadEngineModelCatalog)", app_js)
+        self.assertIn("setInterval(refreshEngineModelCatalog", app_js)
         self.assertIn("function _modelAllowedForEngine", app_js)
         self.assertIn("gpt-5.6-sol", app_js)
         self.assertIn("gpt-5.6-terra", app_js)
@@ -3079,6 +3306,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_modelUnavailableReason", app_js)
         self.assertIn("if (_engineSupportsCustomModel(engine))", app_js)
         self.assertIn("ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom", app_js)
+
+    def test_engine_settings_exposes_automatic_updates(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+
+        self.assertIn("Automatic CLI updates", index_html)
+        self.assertIn("engineUpdateNowBtn", index_html)
+        self.assertIn("fetch('/api/engines/update-status'", app_js)
+        self.assertIn("fetch('/api/engines/update-now'", app_js)
+        self.assertIn('path == "/api/engines/update-status"', server_py)
+        self.assertIn('path == "/api/engines/update-now"', server_py)
 
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False
@@ -13618,15 +13857,17 @@ class TestModelPicker(unittest.TestCase):
             finally:
                 server.SESSION_OVERRIDES_FILE = orig
 
-    def test_sonnet_is_not_marked_as_one_m_context_in_model_picker(self):
-        """Sonnet is a 200k-context model; only Opus variants get the 1M badge."""
+    def test_latest_claude_models_are_marked_as_one_m_context_in_model_picker(self):
+        """Anthropic's latest Fable, Opus, and Sonnet models support 1M."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 
         self.assertIn("function claudeModelSupportsOneM(model)", js)
         self.assertIn("return n === 'opus-4-8' || n === 'opus-4-7';", js)
         self.assertIn("const modelSupportsOneM = engine === 'claude' && claudeModelSupportsOneM(displayModel);", js)
         self.assertIn("const isOneM = modelSupportsOneM && (", js)
-        self.assertIn("{ id: 'sonnet-5',  label: 'sonnet-5',  oneM: false }", js)
+        self.assertIn("{ id: 'fable-5',   label: 'fable-5',   oneM: true }", js)
+        self.assertIn("{ id: 'opus-5',    label: 'opus-5',    oneM: true }", js)
+        self.assertIn("{ id: 'sonnet-5',  label: 'sonnet-5',  oneM: true }", js)
         self.assertNotIn("{ id: 'sonnet-4-6'", js)  # removed in CCC-484
 
     def test_pinned_conversations_roundtrip_and_sort_first(self):
