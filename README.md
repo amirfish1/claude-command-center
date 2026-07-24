@@ -477,6 +477,9 @@ counts. **Pause dispatch** durably queues new owned work. **Restart dashboard**
 briefly drains dispatch, restarts only the HTTP/UI process, then resumes and
 replays provably unsent work. `GET /api/control-plane/work` and
 `GET /api/control-plane/graph?root_id=…` expose the durable work records.
+The header keeps the execution-worker state visible beside WatchTower, while
+Maintenance can start an offline worker and inspect, open, or restart the local
+WatchTower daemon/API.
 
 Session metadata still lives in JSON sidecar files under
 `~/.claude/command-center/`. Read APIs scan the engine session directories,

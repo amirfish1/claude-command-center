@@ -93,6 +93,7 @@ _PYTHON_STACK_DUMP_FILE = None
 _CONTROL_PLANE_CLIENT = ControlPlaneClient(timeout=1.5)
 _CONTROL_PLANE_ENGINE_CLIENT = ControlPlaneClient(timeout=45.0)
 _CONTROL_PLANE_REQUEST_CONTEXT = threading.local()
+_CONTROL_PLANE_START_LOCK = threading.Lock()
 
 
 def _set_control_plane_action_id(value):
@@ -182,6 +183,46 @@ def _dashboard_owned_active_executions():
             "pid": entry.get("pid"),
         })
     return active
+
+
+def _start_control_plane_worker():
+    """Start the persistent worker when Maintenance finds it unavailable."""
+    with _CONTROL_PLANE_START_LOCK:
+        current = _control_plane_request("health")
+        if current.get("ok"):
+            return current
+        logs_dir = COMMAND_CENTER_STATE_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with (
+                (logs_dir / "worker.out.log").open("a", encoding="utf-8") as out,
+                (logs_dir / "worker.err.log").open("a", encoding="utf-8") as err,
+            ):
+                process = subprocess.Popen(
+                    [sys.executable, str(CCC_ROOT / "ccc_worker.py")],
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=err,
+                    start_new_session=True,
+                    cwd=str(CCC_ROOT),
+                )
+        except OSError as exc:
+            return {"ok": False, "available": False, "error": str(exc)}
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            health = _control_plane_request("health")
+            if health.get("ok"):
+                health["started"] = True
+                health["started_pid"] = process.pid
+                return health
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
+        return {
+            "ok": False,
+            "available": False,
+            "error": "persistent worker did not become ready",
+        }
 
 
 def _install_python_stack_dump_handler(log_path=None):
@@ -419,6 +460,204 @@ def _wt_read_config():
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+_WT_SERVICE_ACTION_LOCK = threading.Lock()
+
+
+def _watchtower_daemon_pid_path():
+    return Path(
+        os.environ.get("WATCHTOWER_DAEMON_PID")
+        or (_WT_HOME / "daemon.pid")
+    )
+
+
+def _watchtower_process_argv(pid):
+    """Best-effort argv for the daemon, without trusting the pidfile alone."""
+    try:
+        raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+        if raw:
+            return [
+                part.decode("utf-8", "replace")
+                for part in raw.split(b"\0") if part
+            ]
+    except (OSError, ValueError):
+        pass
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True, text=True, timeout=2,
+        )
+        command = (proc.stdout or "").strip()
+        return shlex.split(command) if proc.returncode == 0 and command else []
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+
+
+def _watchtower_daemon_command(argv):
+    joined = " ".join(str(part) for part in (argv or ())).lower()
+    return (
+        ("watchtower.cli" in joined or any(
+            Path(str(part)).name == "wt" for part in (argv or ())
+        ))
+        and "start" in (argv or ())
+    )
+
+
+def _watchtower_endpoint_from_argv(argv):
+    host = os.environ.get("WATCHTOWER_HOST") or "127.0.0.1"
+    try:
+        port = int(os.environ.get("WATCHTOWER_PORT") or 8787)
+    except ValueError:
+        port = 8787
+    argv = list(argv or ())
+    for index, value in enumerate(argv):
+        if value == "--host" and index + 1 < len(argv):
+            host = str(argv[index + 1])
+        elif value == "--port" and index + 1 < len(argv):
+            try:
+                port = int(argv[index + 1])
+            except (TypeError, ValueError):
+                pass
+    if not 1 <= port <= 65535:
+        port = 8787
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
+    if ":" in probe_host and not probe_host.startswith("["):
+        probe_host = f"[{probe_host}]"
+    return host, port, f"http://{probe_host}:{port}"
+
+
+def _watchtower_api_up(base_url):
+    try:
+        request = urllib.request.Request(
+            base_url.rstrip("/") + "/api/status",
+            headers={"User-Agent": "CCC-WatchTower-health"},
+        )
+        with urllib.request.urlopen(request, timeout=0.8) as response:
+            payload = json.load(response)
+        return response.status == 200 and isinstance(payload, dict)
+    except (OSError, ValueError, urllib.error.URLError):
+        return False
+
+
+def _watchtower_service_status(*, probe_api=True):
+    pid = None
+    pid_alive = False
+    try:
+        pid = int(_watchtower_daemon_pid_path().read_text().strip())
+        os.kill(pid, 0)
+        pid_alive = True
+    except (OSError, ValueError, ProcessLookupError):
+        pid = None
+    argv = _watchtower_process_argv(pid) if pid_alive else []
+    command_verified = bool(pid_alive and _watchtower_daemon_command(argv))
+    # Some hardened hosts hide another process's argv. Report the live pid as
+    # running, but refuse restart unless its identity was actually verified.
+    running = bool(pid_alive and (command_verified or not argv))
+    host, port, base_url = _watchtower_endpoint_from_argv(argv)
+    api_ok = bool(running and probe_api and _watchtower_api_up(base_url))
+    return {
+        "ok": True,
+        "installed": bool(shutil.which("wt")),
+        "running": running,
+        "pid": pid if running else None,
+        "command_verified": command_verified,
+        "pid_reused": bool(pid_alive and argv and not command_verified),
+        "api_ok": api_ok,
+        "state": "online" if api_ok else ("degraded" if running else "stopped"),
+        "host": host,
+        "port": port,
+        "url": base_url,
+    }
+
+
+def _watchtower_restart_options(argv):
+    """Preserve safe daemon flags for manually supervised Linux installs."""
+    argv = list(argv or ())
+    options = []
+    value_flags = {"--interval", "--stuck-minutes", "--engine", "--host", "--port"}
+    index = 0
+    while index < len(argv):
+        value = argv[index]
+        if value == "--auto-spawn":
+            options.append(value)
+        elif value in value_flags and index + 1 < len(argv):
+            options.extend((value, str(argv[index + 1])))
+            index += 1
+        index += 1
+    return options
+
+
+def _watchtower_service_action(action):
+    """Start or restart the local WatchTower daemon through its public CLI."""
+    action = str(action or "").strip().lower()
+    if action not in ("start", "restart"):
+        return {"ok": False, "error": "action must be start or restart"}
+    wt_cli = shutil.which("wt")
+    if not wt_cli:
+        return {"ok": False, "error": "WatchTower CLI is not installed"}
+    with _WT_SERVICE_ACTION_LOCK:
+        before = _watchtower_service_status(probe_api=False)
+        old_argv = (
+            _watchtower_process_argv(before.get("pid"))
+            if before.get("pid") else []
+        )
+        if action == "restart" and before.get("running"):
+            if not before.get("command_verified"):
+                return {
+                    "ok": False,
+                    "error": "WatchTower process identity could not be verified",
+                }
+            try:
+                stopped = subprocess.run(
+                    [wt_cli, "stop"],
+                    capture_output=True, text=True, timeout=20,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return {"ok": False, "error": f"WatchTower stop failed: {exc}"}
+            if stopped.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": (
+                        (stopped.stderr or stopped.stdout or "").strip()
+                        or f"WatchTower stop exited {stopped.returncode}"
+                    ),
+                }
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if not _watchtower_service_status(probe_api=False).get("running"):
+                    break
+                time.sleep(0.1)
+        command = [wt_cli, "start"]
+        if platform.system() != "Darwin":
+            command.extend(_watchtower_restart_options(old_argv))
+        try:
+            started = subprocess.run(
+                command,
+                capture_output=True, text=True, timeout=25,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"ok": False, "error": f"WatchTower start failed: {exc}"}
+        if started.returncode != 0:
+            return {
+                "ok": False,
+                "error": (
+                    (started.stderr or started.stdout or "").strip()
+                    or f"WatchTower start exited {started.returncode}"
+                ),
+            }
+        deadline = time.time() + 8
+        current = _watchtower_service_status(probe_api=False)
+        while time.time() < deadline and not current.get("running"):
+            time.sleep(0.1)
+            current = _watchtower_service_status(probe_api=False)
+        current = _watchtower_service_status()
+        return {
+            **current,
+            "ok": bool(current.get("running")),
+            "action": action,
+            "previous_pid": before.get("pid"),
+        }
 
 
 _QUEUE_CONFIG_NAME_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
@@ -64215,6 +64454,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_html(_load_index_html())
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
+        elif path == "/api/watchtower/service/status":
+            self.send_json(_watchtower_service_status())
         elif path == "/api/control-plane/work":
             qs = urllib.parse.parse_qs(parsed.query)
             states = [
@@ -67015,6 +67256,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
                 return
             self.send_json({"error": "unknown objects endpoint"}, 404)
+            return
+
+        if path == "/api/control-plane/start":
+            result = _start_control_plane_worker()
+            self.send_json(result, 200 if result.get("ok") else 503)
+            return
+
+        if path == "/api/watchtower/service":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            result = _watchtower_service_action(payload.get("action"))
+            self.send_json(result, 200 if result.get("ok") else 409)
             return
 
         if path == "/api/ingest/gemini":

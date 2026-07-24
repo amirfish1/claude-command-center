@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.request
 import unittest
+from unittest import mock
 
 from ccc_worker import WorkerRuntime, WorkerServer
 from control_plane import ControlPlaneClient, WorkLedger
@@ -304,6 +305,149 @@ class TestWorkerServiceDefinition(unittest.TestCase):
             {"session_id": "legacy-session", "text": "continue"},
             idempotency_key="legacy-action",
         ))
+
+    def test_header_and_maintenance_expose_both_service_states(self):
+        html = pathlib.Path("static/index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path("static/app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="cccWorkerBadge"', html)
+        self.assertIn('id="watchtowerServiceStatus"', html)
+        self.assertIn('id="watchtowerServiceActionBtn"', html)
+        self.assertIn("openMaintenanceSettings", app_js)
+        self.assertIn("'/api/control-plane/start'", app_js)
+        self.assertIn("'/api/watchtower/service/status'", app_js)
+
+    def test_offline_worker_can_be_started_from_maintenance(self):
+        import server
+
+        unavailable = {"ok": False, "available": False}
+        healthy = {
+            "ok": True,
+            "worker": {
+                "pid": 77,
+                "capabilities": ["engine-execution-v1"],
+            },
+        }
+
+        class FakeProcess:
+            pid = 77
+
+            @staticmethod
+            def poll():
+                return None
+
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.object(
+            server, "COMMAND_CENTER_STATE_DIR", pathlib.Path(temp_dir)
+        ), mock.patch.object(
+            server, "_control_plane_request",
+            side_effect=[unavailable, healthy],
+        ), mock.patch.object(
+            server.subprocess, "Popen", return_value=FakeProcess()
+        ) as popen:
+            result = server._start_control_plane_worker()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["started"])
+        popen.assert_called_once()
+
+
+class TestWatchTowerServiceControl(unittest.TestCase):
+    def test_status_verifies_daemon_and_discovers_custom_api_port(self):
+        import server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_file = pathlib.Path(temp_dir, "daemon.pid")
+            pid_file.write_text(str(os.getpid()), encoding="utf-8")
+            argv = [
+                sys.executable, "-m", "watchtower.cli", "start",
+                "--foreground", "--host", "127.0.0.1", "--port", "8788",
+            ]
+            with mock.patch.object(
+                server, "_watchtower_daemon_pid_path", return_value=pid_file
+            ), mock.patch.object(
+                server, "_watchtower_process_argv", return_value=argv
+            ), mock.patch.object(
+                server, "_watchtower_api_up", return_value=True
+            ), mock.patch.object(
+                server.shutil, "which", return_value="/test/bin/wt"
+            ):
+                status = server._watchtower_service_status()
+
+        self.assertTrue(status["running"])
+        self.assertTrue(status["command_verified"])
+        self.assertTrue(status["api_ok"])
+        self.assertEqual(status["port"], 8788)
+        self.assertEqual(status["url"], "http://127.0.0.1:8788")
+
+    def test_status_rejects_reused_pid(self):
+        import server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_file = pathlib.Path(temp_dir, "daemon.pid")
+            pid_file.write_text(str(os.getpid()), encoding="utf-8")
+            with mock.patch.object(
+                server, "_watchtower_daemon_pid_path", return_value=pid_file
+            ), mock.patch.object(
+                server, "_watchtower_process_argv",
+                return_value=["/usr/bin/sleep", "100"],
+            ):
+                status = server._watchtower_service_status()
+
+        self.assertFalse(status["running"])
+        self.assertTrue(status["pid_reused"])
+
+    def test_restart_preserves_manual_daemon_options(self):
+        import server
+
+        before = {
+            "ok": True,
+            "installed": True,
+            "running": True,
+            "pid": 42,
+            "command_verified": True,
+        }
+        stopped = {"ok": True, "running": False}
+        online = {
+            "ok": True,
+            "installed": True,
+            "running": True,
+            "pid": 43,
+            "command_verified": True,
+            "api_ok": True,
+        }
+        argv = [
+            sys.executable, "-m", "watchtower.cli", "start", "--foreground",
+            "--interval", "30", "--engine", "claude", "--auto-spawn",
+            "--host", "127.0.0.1", "--port", "8788",
+        ]
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(
+            server, "_watchtower_service_status",
+            side_effect=[before, stopped, stopped, online, online],
+        ), mock.patch.object(
+            server, "_watchtower_process_argv", return_value=argv
+        ), mock.patch.object(
+            server.shutil, "which", return_value="/test/bin/wt"
+        ), mock.patch.object(
+            server.platform, "system", return_value="Linux"
+        ), mock.patch.object(
+            server.subprocess, "run", return_value=completed
+        ) as run:
+            result = server._watchtower_service_action("restart")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(run.call_args_list[0].args[0], ["/test/bin/wt", "stop"])
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            [
+                "/test/bin/wt", "start",
+                "--interval", "30",
+                "--engine", "claude",
+                "--auto-spawn",
+                "--host", "127.0.0.1",
+                "--port", "8788",
+            ],
+        )
 
 
 class TestEngineHost(unittest.TestCase):

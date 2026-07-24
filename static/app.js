@@ -51534,8 +51534,17 @@
   const $controlPlaneStatus = document.getElementById('controlPlaneStatus');
   const $controlPlaneDrainBtn = document.getElementById('controlPlaneDrainBtn');
   const $controlPlaneReconcileBtn = document.getElementById('controlPlaneReconcileBtn');
+  const $workerBadge = document.getElementById('cccWorkerBadge');
+  const $workerWord = document.getElementById('cccWorkerWord');
+  const $workerCount = document.getElementById('cccWorkerCount');
+  const $watchtowerServiceStatus = document.getElementById('watchtowerServiceStatus');
+  const $watchtowerServiceOpenBtn = document.getElementById('watchtowerServiceOpenBtn');
+  const $watchtowerServiceActionBtn = document.getElementById('watchtowerServiceActionBtn');
   let restartServerPort = '';
   let controlPlaneDraining = false;
+  let controlPlaneOnline = false;
+  let watchtowerServiceRunning = false;
+  let watchtowerServiceUrl = '';
 
   function restartServerSetPort(port) {
     const clean = String(port || '').replace(/[^\d]/g, '');
@@ -51572,13 +51581,68 @@
     } catch (_) { /* location.port fallback is good enough */ }
   }
 
+  function renderWorkerBadge(data) {
+    if (!$workerBadge) return;
+    $workerBadge.classList.remove(
+      'is-checking', 'is-offline', 'is-paused', 'is-update', 'is-uncertain'
+    );
+    let label = 'Worker';
+    let detail = 'Persistent execution worker online';
+    let attention = 0;
+    if (!data || !data.ok) {
+      $workerBadge.classList.add('is-offline');
+      label = 'Worker offline';
+      detail = 'Execution worker unavailable · open Maintenance';
+    } else {
+      const capabilities = (data.worker && data.worker.capabilities) || [];
+      if (!capabilities.includes('engine-execution-v1')) {
+        $workerBadge.classList.add('is-update');
+        label = 'Worker update';
+        detail = 'Execution worker update pending · open Maintenance';
+      } else {
+        const drain = data.drain || {};
+        const active = Number(data.active || 0);
+        const queued = Number(data.queued || 0);
+        const uncertain = Number(data.uncertain || 0);
+        attention = active + queued + uncertain;
+        if (uncertain) {
+          $workerBadge.classList.add('is-uncertain');
+          label = 'Worker check';
+        } else if (drain.enabled) {
+          $workerBadge.classList.add('is-paused');
+          label = 'Worker paused';
+        }
+        detail = [
+          'Execution worker online',
+          active + ' active',
+          queued + ' queued',
+          uncertain + ' uncertain',
+        ].join(' · ');
+      }
+    }
+    if ($workerWord) $workerWord.textContent = label;
+    if ($workerCount) {
+      $workerCount.textContent = String(attention);
+      $workerCount.hidden = attention === 0;
+    }
+    $workerBadge.title = detail;
+    $workerBadge.setAttribute(
+      'aria-label', detail + '; open Maintenance settings'
+    );
+  }
+
   function renderControlPlaneStatus(data) {
+    renderWorkerBadge(data);
+    controlPlaneOnline = false;
     if (!data || !data.ok) {
       if ($controlPlaneStatus) {
         $controlPlaneStatus.textContent =
           'Worker unavailable; active compatibility work may block dashboard restart.';
       }
-      if ($controlPlaneDrainBtn) $controlPlaneDrainBtn.disabled = true;
+      if ($controlPlaneDrainBtn) {
+        $controlPlaneDrainBtn.disabled = false;
+        $controlPlaneDrainBtn.textContent = 'Start worker';
+      }
       if ($controlPlaneReconcileBtn) {
         $controlPlaneReconcileBtn.hidden = true;
         $controlPlaneReconcileBtn.disabled = true;
@@ -51598,6 +51662,7 @@
       }
       return;
     }
+    controlPlaneOnline = true;
     const drain = data.drain || {};
     controlPlaneDraining = !!drain.enabled;
     const active = Number(data.active || 0);
@@ -51623,7 +51688,7 @@
   }
 
   async function refreshControlPlaneStatus() {
-    if (!$controlPlaneStatus) return;
+    if (!$controlPlaneStatus && !$workerBadge) return;
     try {
       const response = await fetch('/api/control-plane/status', {
         cache: 'no-store',
@@ -51632,6 +51697,60 @@
     } catch (_) {
       renderControlPlaneStatus(null);
     }
+  }
+
+  function renderWatchtowerServiceStatus(data) {
+    const installed = !!(data && data.installed);
+    watchtowerServiceRunning = !!(data && data.running);
+    watchtowerServiceUrl = String((data && data.url) || '');
+    if ($watchtowerServiceStatus) {
+      if (!data || !data.ok) {
+        $watchtowerServiceStatus.textContent = 'WatchTower status unavailable.';
+      } else if (!installed) {
+        $watchtowerServiceStatus.textContent = 'WatchTower CLI is not installed.';
+      } else if (data.api_ok) {
+        $watchtowerServiceStatus.textContent =
+          'Online · daemon PID ' + data.pid + ' · API :' + data.port;
+      } else if (watchtowerServiceRunning) {
+        $watchtowerServiceStatus.textContent =
+          'Daemon running · API unavailable on :' + data.port;
+      } else if (data.pid_reused) {
+        $watchtowerServiceStatus.textContent =
+          'Stopped · stale PID belongs to another process.';
+      } else {
+        $watchtowerServiceStatus.textContent = 'Stopped.';
+      }
+    }
+    if ($watchtowerServiceOpenBtn) {
+      $watchtowerServiceOpenBtn.disabled = !(data && data.api_ok && watchtowerServiceUrl);
+    }
+    if ($watchtowerServiceActionBtn) {
+      $watchtowerServiceActionBtn.disabled = !installed;
+      $watchtowerServiceActionBtn.textContent =
+        watchtowerServiceRunning ? 'Restart' : 'Start';
+    }
+  }
+
+  async function refreshWatchtowerServiceStatus() {
+    if (!$watchtowerServiceStatus) return;
+    try {
+      const response = await fetch('/api/watchtower/service/status', {
+        cache: 'no-store',
+      });
+      renderWatchtowerServiceStatus(await response.json());
+    } catch (_) {
+      renderWatchtowerServiceStatus(null);
+    }
+  }
+
+  function openMaintenanceSettings() {
+    const modal = document.getElementById('settingsModal');
+    const settingsButton = document.getElementById('settingsBtn');
+    const maintenanceTab = document.getElementById('settingsRailTab-maintenance');
+    if (settingsButton && (!modal || !modal.classList.contains('open'))) {
+      settingsButton.click();
+    }
+    if (maintenanceTab) maintenanceTab.click();
   }
 
   async function restartServerRun() {
@@ -51686,28 +51805,37 @@
     if (!READER_ONLY_POPOUT) {
       restartServerRefreshPort();
       refreshControlPlaneStatus();
+      refreshWatchtowerServiceStatus();
     }
     $restartServerBtn.addEventListener('click', restartServerRun);
+  }
+  if ($workerBadge) {
+    $workerBadge.addEventListener('click', openMaintenanceSettings);
   }
   if ($controlPlaneDrainBtn) {
     $controlPlaneDrainBtn.addEventListener('click', async () => {
       $controlPlaneDrainBtn.disabled = true;
       try {
-        const response = await fetch('/api/control-plane/drain', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            enabled: !controlPlaneDraining,
-            reason: controlPlaneDraining
-              ? 'operator resumed dispatch'
-              : 'operator paused dispatch',
-          }),
-        });
+        const starting = !controlPlaneOnline;
+        const response = await fetch(
+          starting ? '/api/control-plane/start' : '/api/control-plane/drain',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: starting ? '{}' : JSON.stringify({
+              enabled: !controlPlaneDraining,
+              reason: controlPlaneDraining
+                ? 'operator resumed dispatch'
+                : 'operator paused dispatch',
+            }),
+          }
+        );
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) {
           throw new Error(data.error || ('HTTP ' + response.status));
         }
         renderControlPlaneStatus(data);
+        if (starting) showOpToast('Execution worker started.', 'success');
       } catch (error) {
         showOpToast(
           'Worker control failed: ' + ((error && error.message) || error),
@@ -51745,6 +51873,57 @@
         refreshControlPlaneStatus();
       }
     });
+  }
+  if ($watchtowerServiceOpenBtn) {
+    $watchtowerServiceOpenBtn.addEventListener('click', () => {
+      if (watchtowerServiceUrl) {
+        window.open(watchtowerServiceUrl, '_blank', 'noopener');
+      }
+    });
+  }
+  if ($watchtowerServiceActionBtn) {
+    $watchtowerServiceActionBtn.addEventListener('click', async () => {
+      const action = watchtowerServiceRunning ? 'restart' : 'start';
+      if (
+        action === 'restart'
+        && !window.confirm(
+          'Restart the WatchTower server? Queue dispatch pauses briefly; running agent workers are not stopped.'
+        )
+      ) {
+        return;
+      }
+      $watchtowerServiceActionBtn.disabled = true;
+      try {
+        const response = await fetch('/api/watchtower/service', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        renderWatchtowerServiceStatus(data);
+        showOpToast(
+          action === 'restart'
+            ? 'WatchTower server restarted.'
+            : 'WatchTower server started.',
+          'success'
+        );
+      } catch (error) {
+        showOpToast(
+          'WatchTower control failed: ' + ((error && error.message) || error),
+          'error'
+        );
+        refreshWatchtowerServiceStatus();
+      }
+    });
+  }
+  if (!READER_ONLY_POPOUT && ($workerBadge || $watchtowerServiceStatus)) {
+    setInterval(() => {
+      refreshControlPlaneStatus();
+      refreshWatchtowerServiceStatus();
+    }, 20000);
   }
 
   // ── Sidebar refresh split-button ──────────────────────────────

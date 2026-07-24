@@ -14720,12 +14720,19 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
 .sidebar-header-brand {
   position: relative;
 }
+.sh-service-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 3px 0 1px;
+}
 .sh-wt-badge {
   --wt-cur: #35e7cf;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin: 3px 0 1px;
+  margin: 0;
   padding: 2px 8px 2px 6px;
   border: 1px solid rgba(53, 231, 207, 0.28);
   border-radius: 999px;
@@ -14793,6 +14800,62 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   font-weight: 800;
   line-height: 15px;
   animation: wtCountIn 0.22s ease-out;
+}
+
+.sh-worker-badge {
+  --worker-cur: #53d18b;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 2px 8px 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--worker-cur) 34%, transparent);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(24, 29, 38, 0.94), rgba(13, 17, 24, 0.94));
+  color: #d9e3f0;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
+}
+.sh-worker-badge:hover,
+.sh-worker-badge:focus-visible {
+  border-color: color-mix(in srgb, var(--worker-cur) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-cur) 12%, transparent);
+  outline: none;
+}
+.sh-worker-badge:active { transform: scale(0.97); }
+.sh-worker-badge.is-checking { --worker-cur: #7d8998; }
+.sh-worker-badge.is-offline { --worker-cur: #ff6b6b; }
+.sh-worker-badge.is-paused,
+.sh-worker-badge.is-update,
+.sh-worker-badge.is-uncertain { --worker-cur: #ffb443; }
+.worker-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--worker-cur);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--worker-cur) 75%, transparent);
+}
+.worker-word {
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--worker-cur) 62%, #fff);
+}
+.worker-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--worker-cur);
+  color: #10151b;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 15px;
 }
 @keyframes wtSweep { to { transform: rotate(360deg); } }
 @keyframes wtPulse {
