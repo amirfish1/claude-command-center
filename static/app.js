@@ -2035,7 +2035,7 @@
 
   function originalAskTextForEvent(ev, paneId) {
     const conv = convRowForPane(paneId) || {};
-    const canonical = (conv && conv.first_message) || '';
+    const canonical = (conv && (conv.original_ask || conv.first_message)) || '';
     const evText = ev.text || '';
     // The row's first_message is server-truncated (~200 chars, sometimes
     // whitespace-collapsed with a trailing "..."). It stays the anchor for
@@ -3155,6 +3155,9 @@
       }
       if (archiveLoaded && typeof _scheduleSidebarRender === 'function') {
         _scheduleSidebarRender();
+      }
+      if (typeof window.__cccRenderThroughputActivity === 'function') {
+        window.__cccRenderThroughputActivity();
       }
       return _liveSessionsActivityLast;
     } catch (_) { return _liveSessionsActivityLast; }
@@ -5574,23 +5577,47 @@
       const msg = liveStatus.needsApprovalMessage || liveStatus.sidecarFile || 'Codex is waiting for approval';
       const approvalItem = liveStatusMatchesOpenConv() ? liveStatus.codexAppServerActiveItem : null;
       const canApprove = !!(approvalItem && approvalItem.needs_approval && approvalItem.request_id && approvalItem.can_approve);
+      // Claude has no approval API — its prompt can only be answered by driving
+      // the TUI picker with a keystroke, which is macOS + live-TTY only. Offer
+      // Approve/Deny when the server reports that capability; on Linux/headless
+      // hosts there is no route, so point the user at the terminal instead.
+      const _isClaudeSess = !!(currentSession && isClaudeSource(currentSession.source));
+      const _caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
+      const canAnswerClaude = !canApprove && _isClaudeSess && !!_caps.answerPermission;
+      const claudeNoRoute = !canApprove && _isClaudeSess && !_caps.answerPermission;
+      const hasButtons = canApprove || canAnswerClaude;
+      let actionsHtml;
+      if (canApprove) {
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<button type="button" class="cl-approval-btn" data-decision="accept">Approve</button>'
+          + '<button type="button" class="cl-approval-btn" data-decision="acceptForSession">Approve session</button>'
+          + '<button type="button" class="cl-approval-btn is-negative" data-decision="decline">Deny</button>'
+          + '<button type="button" class="cl-approval-btn is-negative" data-decision="cancel">Cancel</button>'
+          + '</span>';
+      } else if (canAnswerClaude) {
+        // Drive the Claude picker: Approve sends Return (highlighted "Yes"),
+        // Deny sends Esc, both into the session's live terminal.
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<button type="button" class="cl-approval-btn" data-claude-decision="accept" title="Approve this once — sends Return to the session\'s terminal picker">Approve</button>'
+          + '<button type="button" class="cl-approval-btn is-negative" data-claude-decision="decline" title="Deny — sends Esc to the session\'s terminal picker">Deny</button>'
+          + '</span>';
+      } else if (claudeNoRoute) {
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<span class="cl-approval-note" title="Answering permission prompts from CCC is macOS-only today — approve or deny in the session\'s own terminal">Answer in terminal</span>'
+          + '</span>';
+      } else {
+        // Dead-zone escape hatch: a Codex approval owned by an external writer
+        // (mobile/desktop) with no app-server request id CCC can answer. Without
+        // a control here the thread is a true dead end, so offer Grab back —
+        // reclaim into CCC and deny the pending approval.
+        actionsHtml = '<span class="cl-approval-actions">'
+          + '<button type="button" class="ccs-grab-back" title="This approval is owned by another Codex writer and can\'t be answered from CCC - reclaim the thread and deny the pending approval">Grab back</button>'
+          + '</span>';
+      }
       inline.className = 'conv-live-tool-inline is-question';
       inline.innerHTML = '<span class="cl-pulse"></span><span class="cl-tool">Needs approval</span>'
-        + (msg ? '<span class="cl-file">' + escapeHtml(truncate(msg, canApprove ? 86 : 120)) + '</span>' : '')
-        + (canApprove
-          ? '<span class="cl-approval-actions">'
-            + '<button type="button" class="cl-approval-btn" data-decision="accept">Approve</button>'
-            + '<button type="button" class="cl-approval-btn" data-decision="acceptForSession">Approve session</button>'
-            + '<button type="button" class="cl-approval-btn is-negative" data-decision="decline">Deny</button>'
-            + '<button type="button" class="cl-approval-btn is-negative" data-decision="cancel">Cancel</button>'
-            + '</span>'
-          // Dead-zone escape hatch: this approval is owned by an external
-          // writer (mobile/desktop) and has no app-server request id CCC can
-          // answer. Without a control here the thread is a true dead end, so
-          // offer Grab back — reclaim into CCC and deny the pending approval.
-          : '<span class="cl-approval-actions">'
-            + '<button type="button" class="ccs-grab-back" title="This approval is owned by another Codex writer and can\'t be answered from CCC - reclaim the thread and deny the pending approval">Grab back</button>'
-            + '</span>');
+        + (msg ? '<span class="cl-file">' + escapeHtml(truncate(msg, hasButtons ? 86 : 120)) + '</span>' : '')
+        + actionsHtml;
       inline.title = msg;
       if (canApprove) {
         inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
@@ -5599,6 +5626,15 @@
             ev.stopPropagation();
             const sid = currentSession && currentSession.id;
             if (sid) respondCodexApproval(sid, btn.dataset.decision || 'accept', btn);
+          });
+        });
+      } else if (canAnswerClaude) {
+        inline.querySelectorAll('.cl-approval-btn').forEach(btn => {
+          btn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const sid = currentSession && currentSession.id;
+            if (sid) respondClaudePermission(sid, btn.dataset.claudeDecision || 'accept', btn);
           });
         });
       } else {
@@ -24048,6 +24084,35 @@
     }
   }
 
+  // Answer a Claude Code permission prompt from the dashboard. Claude has no
+  // approval API, so the server drives the interactive TUI picker with a
+  // keystroke (Return=approve once, Esc=deny) — macOS + live-TTY only.
+  async function respondClaudePermission(sessionId, decision, btnEl) {
+    if (!sessionId) return;
+    const originalText = btnEl ? btnEl.textContent : '';
+    if (btnEl) { btnEl.disabled = true; btnEl.textContent = '…'; }
+    try {
+      const res = await fetch('/api/claude/permission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, decision }),
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) { data = {}; }
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || ('HTTP ' + res.status));
+      }
+      showOpToast(decision === 'decline' ? 'Denied.' : 'Approved.');
+      touchSessionOptimistically(sessionId);
+      try { refreshLiveStatus(); } catch (_) {}
+      setTimeout(refreshConversationList, 700);
+      if (btnEl) { btnEl.textContent = '✓'; }
+    } catch (err) {
+      showOpToast('Approval failed: ' + (err.message || 'unknown'), 'error');
+      if (btnEl) { btnEl.disabled = false; btnEl.textContent = originalText; }
+    }
+  }
+
   // "Grab back" a Codex thread that drifted to an external writer (mobile /
   // desktop Codex opening the session flips it to interactive and stalls CCC
   // sends). POSTs the server-side recovery endpoint, which reapplies the
@@ -31055,6 +31120,16 @@
       else item.setAttribute('draggable', previousDraggable);
       if (save) {
         const newName = input.value.trim();
+        // Show a spinner beside the (now read-only) input until the save
+        // round-trips. The write-through to the session .jsonl can take a
+        // beat, and without feedback the rename looks like it hung.
+        input.readOnly = true;
+        input.classList.add('is-saving');
+        const spinner = document.createElement('span');
+        spinner.className = 'conv-rename-spinner';
+        spinner.setAttribute('role', 'status');
+        spinner.setAttribute('aria-label', 'Saving name…');
+        input.insertAdjacentElement('afterend', spinner);
         try {
           const res = await fetch('/api/conversations/' + item.dataset.id + '/rename', {
             method: 'POST',
@@ -31082,6 +31157,21 @@
               ac.name_overridden = !!newName;
             }
           }
+          // If this conversation is open in any pane, refresh its RHS header
+          // title now — the sidebar re-render below only repaints the list,
+          // not the open conversation's top-right title. Without this the
+          // rename appears in the row but the pane header stays stale until
+          // the conversation is reopened, which reads as "it didn't stick".
+          try {
+            splitState.panes.forEach(p => {
+              if (p && p.conversationId === item.dataset.id) {
+                const openRow = c
+                  || { id: item.dataset.id, session_id: item.dataset.sessionId,
+                       display_name: newName || null, name_overridden: !!newName };
+                updatePaneHeader(p.id, openRow);
+              }
+            });
+          } catch (_) {}
           // Brief toast on the item title
           const toast = document.createElement('div');
           toast.style.cssText = 'position:fixed;bottom:20px;left:20px;background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
@@ -31095,6 +31185,14 @@
           document.body.appendChild(toast);
           setTimeout(() => toast.remove(), 3500);
         } catch (err) { /* swallow */ }
+        finally {
+          // Drop the spinner and re-enable the input regardless of outcome.
+          // The input is swapped back to a title element just below, but on
+          // an error path (no swap forced) the row must not be left spinning.
+          spinner.remove();
+          input.readOnly = false;
+          input.classList.remove('is-saving');
+        }
       }
       // Swap the title element back in place BEFORE asking for a render.
       // The re-render below repaints the whole list anyway, but if it gets
@@ -48176,6 +48274,24 @@
   // ONLY mode; there is no repo picker / folder filter.
   let archiveData = [];
   let archiveLoaded = false;
+  window.__cccThroughputActivityRows = function () {
+    const source = Array.isArray(archiveData) && archiveData.length
+      ? archiveData : (Array.isArray(conversationsData) ? conversationsData : []);
+    const rows = new Map();
+    source.forEach((raw) => {
+      if (!raw) return;
+      const row = _applyLiveOverlayToRow(raw);
+      const sid = row.session_id || row.id;
+      if (sid && row.source !== 'backlog') rows.set(String(sid), row);
+    });
+    const live = (_liveSessionsActivityLast && _liveSessionsActivityLast.sessions) || {};
+    Object.keys(live).forEach((sid) => {
+      const merged = Object.assign({}, rows.get(sid) || {}, live[sid] || {});
+      merged.session_id = merged.session_id || sid;
+      rows.set(sid, merged);
+    });
+    return Array.from(rows.values());
+  };
   let _lastArchiveRenderFilter = null;
   let uxFixesQueueMeta = { total: 0, byClaimedSession: new Map() };
   let _uxFixesQueueMetaPromise = null;
@@ -48877,6 +48993,9 @@
         const convs = await loadArchiveAll({ staleOk: opts.staleOk !== false && !opts.force });
         archiveData = _mergeArchivePrSnapshot(convs, archiveData);
         archiveLoaded = true;
+        if (typeof window.__cccRenderThroughputActivity === 'function') {
+          window.__cccRenderThroughputActivity();
+        }
         // Re-poll COO escalated markers on each data refresh so newly-bounced
         // sessions surface their badge without a manual reload.
         loadCooEscalated({ force: true });
@@ -55346,6 +55465,128 @@
     if (input) input.focus();
   });
 
+  // ── In-browser folder picker ──
+  // Fallback for hosts with no native GUI chooser (headless Linux: no
+  // zenity/kdialog, no DISPLAY). Walks the server filesystem via the
+  // read-only GET /api/fs/list endpoint. Shared by every "Browse" affordance.
+  const folderPickerEls = {
+    backdrop: document.getElementById('folderPickerBackdrop'),
+    note: document.getElementById('folderPickerNote'),
+    up: document.getElementById('folderPickerUp'),
+    path: document.getElementById('folderPickerPath'),
+    list: document.getElementById('folderPickerList'),
+    error: document.getElementById('folderPickerError'),
+    cancel: document.getElementById('folderPickerCancel'),
+    select: document.getElementById('folderPickerSelect'),
+  };
+  let folderPickerOnPick = null;
+  let folderPickerKeyHandler = null;
+
+  function closeWebFolderPicker() {
+    if (folderPickerEls.backdrop) folderPickerEls.backdrop.classList.remove('visible');
+    folderPickerOnPick = null;
+    if (folderPickerKeyHandler) {
+      document.removeEventListener('keydown', folderPickerKeyHandler, true);
+      folderPickerKeyHandler = null;
+    }
+  }
+
+  function folderPickerShowError(msg) {
+    const el = folderPickerEls.error;
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('visible', !!msg);
+  }
+
+  async function folderPickerNavigate(path) {
+    folderPickerShowError('');
+    if (folderPickerEls.path) folderPickerEls.path.value = path || '';
+    if (folderPickerEls.list) folderPickerEls.list.innerHTML = '<div class="fp-empty">Loading…</div>';
+    let data = {};
+    try {
+      const r = await fetch('/api/fs/list?path=' + encodeURIComponent(path || ''));
+      data = await r.json().catch(() => ({}));
+    } catch (err) {
+      data = { ok: false, error: (err && err.message) || 'network error' };
+    }
+    if (!data.ok) {
+      if (folderPickerEls.list) folderPickerEls.list.innerHTML = '';
+      folderPickerShowError(data.error || 'could not list folder');
+      return;
+    }
+    if (folderPickerEls.path) folderPickerEls.path.value = data.path;
+    if (folderPickerEls.up) {
+      folderPickerEls.up.disabled = !data.parent;
+      folderPickerEls.up.dataset.parent = data.parent || '';
+    }
+    const list = folderPickerEls.list;
+    if (!list) return;
+    list.innerHTML = '';
+    if (!data.dirs || !data.dirs.length) {
+      list.innerHTML = '<div class="fp-empty">No subfolders — Select uses this one</div>';
+      return;
+    }
+    for (const d of data.dirs) {
+      const item = document.createElement('div');
+      item.className = 'fp-item';
+      item.textContent = d.name + '/';
+      item.title = d.path;
+      item.setAttribute('role', 'option');
+      item.addEventListener('click', () => folderPickerNavigate(d.path));
+      list.appendChild(item);
+    }
+  }
+
+  // The raw native-picker error ("install zenity or kdialog…") is ops jargon —
+  // log it for debugging but show the user what the fallback actually is.
+  function webPickerFallbackNote(picked) {
+    if (picked && picked.error) console.debug('[ccc] native folder picker:', picked.error);
+    return 'No desktop folder dialog on the server — browse its folders below.';
+  }
+
+  // opts: { startPath?, note?, onPick(absPath) }
+  function openWebFolderPicker(opts) {
+    opts = opts || {};
+    if (!folderPickerEls.backdrop) {
+      showOpToast(opts.note || 'Type a path instead', 'error');
+      return;
+    }
+    folderPickerOnPick = typeof opts.onPick === 'function' ? opts.onPick : null;
+    if (folderPickerEls.note) {
+      folderPickerEls.note.textContent = opts.note || '';
+      folderPickerEls.note.hidden = !opts.note;
+    }
+    folderPickerEls.backdrop.classList.add('visible');
+    folderPickerKeyHandler = (ev) => {
+      if (ev.key === 'Escape') { ev.stopPropagation(); closeWebFolderPicker(); }
+    };
+    document.addEventListener('keydown', folderPickerKeyHandler, true);
+    folderPickerNavigate(opts.startPath || '');
+  }
+
+  if (folderPickerEls.backdrop) {
+    folderPickerEls.backdrop.addEventListener('click', (ev) => {
+      if (ev.target === folderPickerEls.backdrop) closeWebFolderPicker();
+    });
+  }
+  if (folderPickerEls.cancel) folderPickerEls.cancel.addEventListener('click', closeWebFolderPicker);
+  if (folderPickerEls.up) folderPickerEls.up.addEventListener('click', () => {
+    const parent = folderPickerEls.up.dataset.parent;
+    if (parent) folderPickerNavigate(parent);
+  });
+  if (folderPickerEls.path) folderPickerEls.path.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      folderPickerNavigate(folderPickerEls.path.value);
+    }
+  });
+  if (folderPickerEls.select) folderPickerEls.select.addEventListener('click', () => {
+    const chosen = folderPickerEls.path ? folderPickerEls.path.value.trim() : '';
+    const cb = folderPickerOnPick;
+    closeWebFolderPicker();
+    if (chosen && cb) cb(chosen);
+  });
+
   async function chooseSpawnCwdFolder() {
     const btn = document.getElementById('spawnCwdBrowseBtn');
     if (btn) btn.disabled = true;
@@ -55355,29 +55596,38 @@
       const picked = await r.json().catch(() => ({}));
       if (picked && picked.cancelled) return;
       if (!picked || !picked.ok || !picked.path) {
-        showOpToast('Folder picker failed: ' + ((picked && picked.error) || 'unknown'), 'error');
+        // No native chooser on this host (headless Linux) — walk the
+        // filesystem in-page instead of dead-ending on an error toast.
+        openWebFolderPicker({
+          startPath: getSpawnCwd(),
+          note: webPickerFallbackNote(picked),
+          onPick: (chosen) => { void useSpawnCwdSelection(chosen); },
+        });
         return;
       }
-      let selectedPath = picked.path;
-      try {
-        const addRes = await fetch('/api/repo/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: selectedPath }),
-        });
-        const addData = await addRes.json().catch(() => ({}));
-        if (addRes.ok && addData && addData.ok) {
-          selectedPath = addData.path || selectedPath;
-          if (Array.isArray(addData.repos)) repoListState.repos = addData.repos;
-          populateSpawnCwdPicker();
-        }
-      } catch (_) {}
-      setSpawnCwdInputValue(selectedPath);
+      await useSpawnCwdSelection(picked.path);
     } catch (err) {
       showOpToast('Folder picker failed: ' + ((err && err.message) || 'network'), 'error');
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  async function useSpawnCwdSelection(selectedPath) {
+    try {
+      const addRes = await fetch('/api/repo/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: selectedPath }),
+      });
+      const addData = await addRes.json().catch(() => ({}));
+      if (addRes.ok && addData && addData.ok) {
+        selectedPath = addData.path || selectedPath;
+        if (Array.isArray(addData.repos)) repoListState.repos = addData.repos;
+        populateSpawnCwdPicker();
+      }
+    } catch (_) {}
+    setSpawnCwdInputValue(selectedPath);
   }
 
   // CCC-128: click the "📁 cwd missing — set folder" pill to point a session at
@@ -55391,10 +55641,22 @@
       const picked = await r.json().catch(() => ({}));
       if (picked && picked.cancelled) return;
       if (!picked || !picked.ok || !picked.path) {
-        showOpToast('Folder picker failed: ' + ((picked && picked.error) || 'unknown'), 'error');
+        openWebFolderPicker({
+          note: webPickerFallbackNote(picked),
+          onPick: (chosen) => { void applySessionCwd(sid, chosen); },
+        });
         return;
       }
-      const chosen = picked.path;
+      await applySessionCwd(sid, picked.path);
+    } catch (err) {
+      showOpToast('Folder picker failed: ' + ((err && err.message) || 'network'), 'error');
+    } finally {
+      if (triggerEl) triggerEl.disabled = false;
+    }
+  }
+
+  async function applySessionCwd(sid, chosen) {
+    try {
       try {
         const addRes = await fetch('/api/repo/add', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -55418,8 +55680,6 @@
       if (typeof fetchSessionWorkspace === 'function') fetchSessionWorkspace(sid);
     } catch (err) {
       showOpToast('Could not set folder: ' + ((err && err.message) || 'network'), 'error');
-    } finally {
-      if (triggerEl) triggerEl.disabled = false;
     }
   }
   document.addEventListener('click', (ev) => {
@@ -58658,9 +58918,10 @@
 
 // ── Throughput strip (W87) ──────────────────────────────────────────────────
 // Compact "today's burn" strip pinned above the conversation list: sparkline
-// of today's hourly cache-adjusted tokens, total burn, active lanes in the
-// last hour, and pace vs yesterday at the same time. Click-through to the
-// full throughput dashboard; small link to yesterday's daily report.
+// of today's hourly cache-adjusted tokens, total burn, sessions working now
+// and active in the last 5/10 minutes, and pace vs yesterday at the same time.
+// Click-through to the full throughput dashboard; small link to yesterday's
+// daily report.
 // Data: /api/throughput/daily?date=today — the server coalesces recomputes
 // behind a 180s TTL + single-flight lock, so the 120s hidden-guarded poll
 // here never stacks work (and multiple tabs share one compute).
@@ -58736,7 +58997,7 @@
     ensureStyle();
     var strip = document.createElement('div');
     strip.id = 'cccThroughputStrip';
-    strip.title = 'Today’s token throughput — cache-adjusted burn, active lanes (last hour), pace vs yesterday at this time. Click to open the throughput dashboard.';
+    strip.title = 'Today’s token throughput — cache-adjusted burn, live and recently active sessions, pace vs yesterday at this time. Click to open the throughput dashboard.';
     strip.setAttribute('role', 'button');
     strip.innerHTML =
       '<span class="ts-spark"></span>' +
@@ -58750,6 +59011,7 @@
       window.open('/throughput.html', '_blank');
     });
     panel.insertBefore(strip, panel.firstChild);
+    renderActivity();
     return true;
   }
 
@@ -58758,8 +59020,7 @@
     if (!strip || !d || !d.ok) return;
     var tot = (d.totals && d.totals.cache_adjusted_tokens) || 0;
     strip.querySelector('.ts-burn').textContent = 'Today ' + fmtTok(tot);
-    var lanes = Number(d.active_sessions_last_hour) || 0;
-    strip.querySelector('.ts-lanes').textContent = lanes ? (lanes + ' lane' + (lanes === 1 ? '' : 's')) : '';
+    renderActivity();
     var paceEl = strip.querySelector('.ts-pace');
     var y = d.yesterday;
     if (y && y.cache_adjusted_tokens_to_same_time > 0) {
@@ -58773,6 +59034,41 @@
     }
     strip.querySelector('.ts-spark').innerHTML = sparkSvg(d.hourly);
   }
+
+  function renderActivity() {
+    var strip = document.getElementById('cccThroughputStrip');
+    if (!strip) return;
+    var now = Date.now() / 1000;
+    var working = 0, recent5 = 0, recent10 = 0;
+    var rows = typeof window.__cccThroughputActivityRows === 'function'
+      ? window.__cccThroughputActivityRows() : [];
+    rows.forEach(function (row) {
+      var sid = row.session_id || row.id;
+      var optimistic = !!(sid && typeof sessionIsOptimisticallySending === 'function'
+        && sessionIsOptimisticallySending(sid));
+      var isWorking = (typeof sessionIsActivelyWorking === 'function')
+        ? sessionIsActivelyWorking(row, optimistic)
+        : !!(row.state === 'working' || row.codex_state === 'working' || optimistic);
+      var activityAt = Math.max(
+        Number(row.sidecar_ts) || 0,
+        Number(row.codex_app_server_last_activity_at) || 0,
+        Number(row.last_interacted) || 0,
+        Number(row.last_activity) || 0,
+        Number(row.modified) || 0,
+        Number(row.mtime) || 0
+      );
+      if (isWorking) working += 1;
+      if (isWorking || activityAt >= now - 300) recent5 += 1;
+      if (isWorking || activityAt >= now - 600) recent10 += 1;
+    });
+    var el = strip.querySelector('.ts-lanes');
+    if (!el) return;
+    el.textContent = 'WIP ' + working + ' now · ' + recent5 + ' in 5m · ' + recent10 + ' in 10m';
+    el.title = working + ' working right now · ' + recent5
+      + ' active in the last 5 minutes · ' + recent10 + ' active in the last 10 minutes';
+  }
+
+  window.__cccRenderThroughputActivity = renderActivity;
 
   var busy = false;
   function refresh() {
@@ -58789,6 +59085,9 @@
     // The conv list panel exists in static markup, so mount is immediate;
     // the retry covers popout/embedded pages where it never appears.
     if (!mount()) { setTimeout(mount, 3000); }
+    if (typeof refreshLiveSessionsActivity === 'function') {
+      refreshLiveSessionsActivity();
+    }
     refresh();
     setInterval(refresh, 120000);
   }

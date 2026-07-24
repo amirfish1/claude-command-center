@@ -1,0 +1,1 @@
+- Added an in-browser folder picker: on hosts with no native GUI chooser (headless Linux), Browse now opens a web dialog that walks the server filesystem via the read-only `GET /api/fs/list` endpoint instead of failing.

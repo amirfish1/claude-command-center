@@ -6265,6 +6265,16 @@
     border-radius: 4px; padding: 4px 6px; outline: none;
     font-family: inherit;
   }
+  /* Shown while a rename is being saved (write-through to the .jsonl can take
+     a beat over the network). The input dims and a spinner sits beside it. */
+  .conv-item .conv-title-input.is-saving { opacity: 0.55; }
+  .conv-item .conv-rename-spinner {
+    flex: 0 0 auto; width: 14px; height: 14px; margin-left: 6px;
+    border: 2px solid rgba(88,166,255,0.25);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: ccc-spin 0.7s linear infinite;
+  }
   .conv-item .conv-last {
     font-size: 14px; color: var(--text-muted); margin: 4px 0 0 var(--conv-content-left);
     line-height: 1.3;
@@ -10363,6 +10373,15 @@
     background: color-mix(in srgb, #f85149 8%, transparent 92%);
     color: #ffb3ad;
   }
+  /* Non-actionable hint shown when a Claude permission prompt can't be answered
+     from CCC (Linux/headless host has no keystroke route) — point at the terminal. */
+  .conv-live-tool-inline .cl-approval-note {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--muted, #8b949e);
+    white-space: nowrap;
+    font-style: italic;
+  }
   /* Grab-back escape hatch shown in the approval strip when the approval is
      owned externally and can't be answered from CCC. Match the approval-button
      sizing so the dead-end always has one styled, actionable control. */
@@ -13140,6 +13159,37 @@
 .coord-modal .modal-start { padding:6px 14px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; font-weight:500; }
 .coord-modal .modal-error { font-size:12px; color:var(--red); display:none; }
 .coord-modal .modal-error.visible { display:block; }
+/* In-browser folder picker — fallback when no native GUI chooser exists
+   (headless Linux). Reuses the coord-modal visual language. */
+.folder-picker-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; align-items:center; justify-content:center; padding:16px; box-sizing:border-box; }
+.folder-picker-backdrop.visible { display:flex; }
+.folder-picker { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:20px; width:480px; max-width:100%; max-height:calc(100vh - 32px); box-shadow:0 8px 32px rgba(0,0,0,0.5); display:flex; flex-direction:column; gap:12px; box-sizing:border-box; }
+.folder-picker h3 { margin:0; font-size:14px; font-weight:600; color:var(--text); }
+.folder-picker .fp-note { font-size:11px; color:var(--text-muted); }
+.folder-picker .fp-path-row { display:flex; gap:6px; }
+.folder-picker .fp-up-btn { padding:6px 10px; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:4px; cursor:pointer; font-size:13px; line-height:1; flex-shrink:0; }
+.folder-picker .fp-up-btn:hover { background:var(--border); }
+.folder-picker .fp-up-btn:disabled { opacity:0.4; cursor:default; }
+.folder-picker input[type="text"] { flex:1; box-sizing:border-box; padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:13px; font-family:monospace; }
+.folder-picker .fp-list { display:flex; flex-direction:column; max-height:280px; min-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--bg); }
+.folder-picker .fp-item { padding:6px 10px; font-size:13px; color:var(--text); cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.folder-picker .fp-item:hover, .folder-picker .fp-item.active { background:var(--surface-2); }
+.folder-picker .fp-empty { padding:14px 10px; font-size:12px; color:var(--text-muted); text-align:center; }
+.folder-picker .modal-footer { display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
+.folder-picker .modal-cancel { padding:6px 14px; background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:4px; cursor:pointer; font-size:13px; }
+.folder-picker .modal-start { padding:6px 14px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; font-weight:500; }
+.folder-picker .modal-error { font-size:12px; color:var(--red); display:none; }
+.folder-picker .modal-error.visible { display:block; }
+/* Phone: near-full-width sheet, bigger touch targets, list sized to viewport. */
+@media (max-width: 720px) {
+  .folder-picker-backdrop { padding:10px; }
+  .folder-picker { padding:14px; width:100%; max-height:calc(100dvh - 20px); }
+  .folder-picker .fp-note { font-size:12px; }
+  .folder-picker .fp-list { max-height:42vh; }
+  .folder-picker .fp-item { padding:10px 12px; font-size:14px; }
+  .folder-picker .fp-up-btn { padding:8px 12px; }
+  .folder-picker .modal-cancel, .folder-picker .modal-start { padding:10px 16px; }
+}
 .gc-reader { display:flex; flex-direction:column; height:100%; overflow:hidden; position:relative; }
 .gc-reader-header { display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--border); flex-shrink:0; }
 .gc-reader-header .gc-topic { font-weight:600; font-size:13px; color:var(--text); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

@@ -1,0 +1,1 @@
+- Show working-now and five- and ten-minute session activity counts in the Today throughput strip.

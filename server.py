@@ -2844,6 +2844,97 @@ def _detect_session_engine_uncached(session_id):
     return "claude"
 
 
+_LINUX_PICKER_UNSET = object()
+_linux_picker_cmd_cache = _LINUX_PICKER_UNSET
+
+
+def _linux_folder_picker_cmd():
+    """Return an argv template for the first available Linux GUI folder picker,
+    or None on a headless box / when none of the known tools is installed.
+
+    `{prompt}` in the template is substituted with the dialog title. The result
+    is cached: capability flags are computed once, not per request, and tools
+    don't appear mid-run.
+    """
+    global _linux_picker_cmd_cache
+    if _linux_picker_cmd_cache is not _LINUX_PICKER_UNSET:
+        return _linux_picker_cmd_cache
+    cmd = None
+    if platform.system() == "Linux" and (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        if shutil.which("zenity"):
+            cmd = ["zenity", "--file-selection", "--directory", "--title={prompt}"]
+        elif shutil.which("kdialog"):
+            cmd = ["kdialog", "--title", "{prompt}", "--getexistingdirectory",
+                   str(Path.home())]
+        elif shutil.which("yad"):
+            cmd = ["yad", "--file-selection", "--directory", "--title={prompt}",
+                   "--separator="]
+    _linux_picker_cmd_cache = cmd
+    return cmd
+
+
+def _linux_pick_folder(prompt_text):
+    """Linux folder chooser via zenity/kdialog/yad. Same return contract as
+    _native_pick_folder. All three tools exit 1 on Cancel with empty stderr,
+    so any non-zero exit is treated as a cancel."""
+    cmd = _linux_folder_picker_cmd()
+    if not cmd:
+        return {"ok": False, "error": "no GUI folder picker found (install zenity or kdialog); type a path instead"}
+    argv = [a.replace("{prompt}", prompt_text) for a in cmd]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "folder picker timed out (10 min)"}
+    except OSError as e:
+        return {"ok": False, "error": f"folder picker failed to launch: {e}"}
+    if r.returncode == 0:
+        # yad/zenity print the path on stdout; take the first line in case a
+        # tool appends anything extra.
+        path = (r.stdout or "").strip().splitlines()
+        path = path[0].rstrip("/") if path else ""
+        if not path:
+            return {"ok": False, "error": "no path returned"}
+        return {"ok": True, "path": path}
+    return {"ok": False, "cancelled": True}
+
+
+def _list_dirs_for_picker(raw_path):
+    """List immediate subdirectories for the in-browser folder picker.
+
+    This is the headless-Linux fallback: when no native GUI chooser exists
+    (no zenity/kdialog and no display — the common remote-box case), the web
+    UI walks the filesystem through this read-only endpoint instead. Hidden
+    dirs are skipped and the listing is capped so a huge directory can't
+    stall the dashboard.
+    """
+    target = (raw_path or "").strip() or str(Path.home())
+    p = Path(target).expanduser()
+    try:
+        p = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return {"ok": False, "error": f"not a directory: {target}"}
+    if not p.is_dir():
+        return {"ok": False, "error": f"not a directory: {target}"}
+    dirs = []
+    try:
+        for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+            if child.name.startswith("."):
+                continue
+            try:
+                if child.is_dir():
+                    dirs.append({"name": child.name, "path": str(child)})
+            except OSError:
+                continue  # dangling symlink, race with unlink, ...
+    except PermissionError:
+        return {"ok": False, "error": f"permission denied: {p}"}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    parent = str(p.parent) if p.parent != p else None
+    return {"ok": True, "path": str(p), "parent": parent, "dirs": dirs[:500]}
+
+
 def _native_pick_folder(prompt_text="Pick a repo folder for Command Center"):
     """Open the OS-native folder chooser and return the selected absolute path.
 
@@ -2852,12 +2943,16 @@ def _native_pick_folder(prompt_text="Pick a repo folder for Command Center"):
       {"ok": False, "cancelled": True}                — user clicked Cancel
       {"ok": False, "error": "..."}                   — something else failed
 
-    macOS only today — shells out to osascript. Other platforms return an
-    error so the client can show an explanatory message instead of crashing.
+    macOS shells out to osascript; Linux uses zenity/kdialog/yad when one is
+    installed and a display is available. Anything else returns an error so
+    the client can show an explanatory message instead of crashing.
     """
-    if platform.system() != "Darwin":
+    system = platform.system()
+    if system == "Linux":
+        return _linux_pick_folder(prompt_text)
+    if system != "Darwin":
         _log_macos_only("folderPicker")
-        return {"ok": False, "error": "native folder picker is macOS-only today; type a path instead"}
+        return {"ok": False, "error": "native folder picker is not available on this platform; type a path instead"}
     # Two -e args: activate brings the chooser to front (otherwise it can
     # appear behind the browser on some setups). `with prompt` sets the title
     # of the dialog so the user knows what they're picking for.
@@ -13194,7 +13289,11 @@ def session_live_status(session_id, session_cwd):
         if resolved.get("available"):
             snap = _acp_session_snapshot("kimi", session_id) or {}
             result["live"] = True
-            result["status"] = "running" if snap.get("status") == "active" else "idle"
+            result["status"] = (
+                "running"
+                if snap.get("status") == "active" or _kimi_wire_turn_active(session_id)
+                else "idle"
+            )
             result["kind"] = "acp"
             result["cwd"] = snap.get("cwd") or session_cwd
             result["match_count"] = 1
@@ -14313,13 +14412,15 @@ def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
     }
 
 
-def interrupt_input_via_keystroke(tty, terminal_app):
-    """Focus the terminal tab for `tty`, then send Esc (key code 53) via System Events.
+def interrupt_input_via_keystroke(tty, terminal_app, key_code=53):
+    """Focus the terminal tab for `tty`, then send a single key via System Events.
 
-    Mirrors `inject_input_via_keystroke` but delivers an interrupt instead of
-    text — Claude Code's TUI treats Esc as cancel-the-current-stream when a
-    response is in flight, and as clear-input-buffer when one isn't. Same focus
-    + restore-prev-process dance so the user's browser doesn't stay buried.
+    Mirrors `inject_input_via_keystroke` but delivers a lone keypress instead of
+    text — with the default Esc (key code 53), Claude Code's TUI treats it as
+    cancel-the-current-stream when a response is in flight, and as
+    clear-input-buffer when one isn't. Callers can pass another `key_code` to
+    drive a picker (e.g. Return=36 to accept a permission prompt). Same focus +
+    restore-prev-process dance so the user's browser doesn't stay buried.
     """
     tty_short = tty.replace("/dev/", "")
     tty_full = "/dev/" + tty_short
@@ -14362,7 +14463,7 @@ def interrupt_input_via_keystroke(tty, terminal_app):
         delay 0.15
         tell application "System Events"
           tell process "iTerm2"
-            key code 53
+            key code {key_code}
           end tell
         end tell
         delay 0.08
@@ -14407,7 +14508,7 @@ def interrupt_input_via_keystroke(tty, terminal_app):
         delay 0.15
         tell application "System Events"
           tell process "Terminal"
-            key code 53
+            key code {key_code}
           end tell
         end tell
         delay 0.08
@@ -14443,6 +14544,87 @@ def interrupt_input_via_keystroke(tty, terminal_app):
     if result_str == "notfound":
         return {"ok": False, "error": f"No {terminal_app} tab found for {tty_short} - tab may be hidden, on another Space, or behind a fullscreen app"}
     return {"ok": True, "tty": tty}
+
+
+def respond_claude_permission(session_id, decision):
+    """Answer a pending Claude Code permission prompt from the dashboard.
+
+    Claude has no approval API the way Codex does — a permission prompt reaches
+    CCC only as the Notification-hook `_needs_approval` marker, and the only way
+    to answer it is to drive the interactive TUI picker. Claude highlights "Yes"
+    (option 1) by default, so a lone Return approves the tool call once and Esc
+    denies it. Delivered as a single System Events keystroke, so it is macOS +
+    live-TTY only (the keystroke route does not exist on Linux/headless hosts).
+
+    Guarded to a session that is (a) Claude — Codex/Kimi/etc. have their own
+    approval routes, (b) live on a real tty, and (c) actually parked on a
+    blocking permission prompt.
+    """
+    if not session_id:
+        return {"ok": False, "error": "missing session_id"}
+    decision = (decision or "accept").strip().lower()
+    if decision not in ("accept", "decline"):
+        return {"ok": False, "error": f"unknown decision: {decision}"}
+    if sys.platform != "darwin":
+        _log_macos_only("claudePermissionAnswer")
+        return {
+            "ok": False,
+            "code": "macos_only",
+            "error": (
+                "Answering a permission prompt from CCC is macOS-only today — "
+                "approve or deny it in the session's own terminal."
+            ),
+        }
+    if not isClaudeSource_backend(session_id):
+        return {
+            "ok": False,
+            "code": "not_claude",
+            "error": "This isn't a Claude session; use its own approval control.",
+        }
+    cwd = find_session_cwd(session_id)
+    status = session_live_status(session_id, cwd)
+    tty = status.get("tty")
+    if not status.get("live") or not _is_real_tty(tty):
+        return {
+            "ok": False,
+            "code": "not_live_tty",
+            "error": "No live terminal for this session to answer the prompt in.",
+        }
+    if not _notification_blocks_inject(session_id):
+        return {
+            "ok": False,
+            "code": "no_pending_prompt",
+            "error": "No permission prompt is pending for this session.",
+        }
+    # Return (36) accepts the highlighted "Yes"; Esc (53) denies.
+    key_code = 36 if decision == "accept" else 53
+    result = interrupt_input_via_keystroke(
+        tty, status.get("terminal_app") or "Terminal", key_code=key_code
+    )
+    if isinstance(result, dict) and result.get("ok"):
+        # The prompt has been answered — drop the stale marker so the strip
+        # stops showing "Needs approval" before the next hook event lands.
+        # PostToolUse (accept) or the resumed turn (deny) would clear it anyway.
+        try:
+            (SIDECAR_STATE_DIR / f"{session_id}_needs_approval.json").unlink()
+        except OSError:
+            pass
+        result["decision"] = decision
+    return result
+
+
+def isClaudeSource_backend(session_id):
+    """True when `session_id` is a Claude session (not Codex/Gemini/Cursor/
+    Kimi/Antigravity/Hermes). Mirrors the frontend `isClaudeSource` gate for
+    Claude-only server actions."""
+    return not (
+        _is_codex_session(session_id)
+        or _is_gemini_session(session_id)
+        or _is_cursor_session(session_id)
+        or _is_kimi_session(session_id)
+        or _is_antigravity_session(session_id)
+        or _is_hermes_session(session_id)
+    )
 
 
 def focus_terminal_by_tty(tty, terminal_app):
@@ -28366,12 +28548,16 @@ def _acp_message_event(state, speaker, text):
 def _acp_finalize_turn(harness, sid, response, pending_entry):
     """A session/prompt response arrived: the turn is over (end_turn,
     cancelled, or error). Fold accumulated text into conv events."""
+    requeue_text = None
+    requeue_front = False
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
         turn = state.get("active_turn")
         if turn is None or (pending_entry.get("is_active") is False and turn.get("req_id") != pending_entry.get("req_id")):
             turn = None
         error = response.get("error")
+        message = error.get("message") if isinstance(error, dict) else str(error or "")
+        remote_busy = harness == "kimi" and _acp_remote_turn_busy_error(message)
         stop_reason = ((response.get("result") or {}).get("stopReason")) if not error else None
         if turn is not None:
             # Flush tool rows not yet emitted (calls that never got rawInput,
@@ -28395,14 +28581,16 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
             state["active_turn"] = None
             state["status"] = "idle"
             state["stop_reason"] = stop_reason or ("error" if error else None)
-        if error:
-            message = error.get("message") if isinstance(error, dict) else str(error)
+            if remote_busy:
+                requeue_text = turn.get("prompt") or ""
+                requeue_front = bool(turn.get("from_queue"))
+        if error and not remote_busy:
             _acp_emit_event_unlocked(harness, sid, {
                 "type": "result", "subtype": "error",
                 "error": message or "ACP turn failed",
             }, save=True)
             _acp_emit_delta_unlocked(harness, sid, {"type": "result", "subtype": "error"})
-        else:
+        elif not error:
             # The wire tail may have folded this turn's step.end already —
             # don't emit a second identical result row.
             recent = list(state.get("events") or [])[-1:]
@@ -28415,6 +28603,15 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
                 "type": "result", "subtype": stop_reason or "end_turn",
             })
         _ACP_LOCK.notify_all()
+    # Kimi can reject a prompt when a turn started outside CCC after our
+    # preflight check. Preserve the user's action instead of surfacing a red
+    # concurrency error. The queue watcher waits on Kimi's wire state and
+    # retries after the external turn reaches its real end boundary.
+    if requeue_text:
+        if requeue_front:
+            _requeue_terminal_input_front(sid, requeue_text)
+        else:
+            _queue_terminal_input(sid, requeue_text, {"status": "running"})
 
 
 def _acp_reader(harness, conn):
@@ -28591,7 +28788,7 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
     }
 
 
-def _acp_prompt(harness, sid, text, mode="send"):
+def _acp_prompt(harness, sid, text, mode="send", from_queue=False):
     """Async session/prompt: ACK returns immediately; the turn streams via
     session/update notifications and finishes in _acp_finalize_turn."""
     if not text:
@@ -28601,6 +28798,12 @@ def _acp_prompt(harness, sid, text, mode="send"):
         state = _acp_session(harness, sid, create=True)
         if state.get("status") == "active" and mode != "steer":
             return {"ok": False, "error": "turn already in progress", "code": "busy"}
+    if (
+        harness == "kimi"
+        and mode != "steer"
+        and _kimi_wire_turn_active(sid)
+    ):
+        return {"ok": False, "error": "turn already in progress", "code": "busy"}
     attach_err = _acp_ensure_session_loaded(harness, sid)
     if attach_err is not None:
         return attach_err
@@ -28618,6 +28821,8 @@ def _acp_prompt(harness, sid, text, mode="send"):
             "req_id": req_id,
             "msg_id": f"acp-{harness}-{state['turn_seq']}",
             "text": "", "thought": "", "tools": {},
+            "prompt": text,
+            "from_queue": bool(from_queue),
             "started_at": time.time(),
         }
         state["status"] = "active"
@@ -28960,6 +29165,48 @@ def _acp_wire_path(harness, sid):
     if not session_dir:
         return None
     return Path(session_dir) / "agents" / "main" / "wire.jsonl"
+
+
+def _acp_remote_turn_busy_error(message):
+    """True for the Kimi ACP rejection emitted while another turn owns a session."""
+    text = str(message or "").lower()
+    return "cannot launch a new turn while another turn" in text and "active" in text
+
+
+def _kimi_wire_turn_active(sid):
+    """Read Kimi's latest durable step boundary.
+
+    CCC's ACP state only knows about turns CCC launched. A Kimi TUI or another
+    client can own the same session, so the wire is the authoritative pre-send
+    guard for those external turns.
+    """
+    path = _acp_wire_path("kimi", sid)
+    if path is None:
+        return False
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - (4 * 1024 * 1024)))
+            raw = fh.read()
+    except OSError:
+        return False
+    for line in reversed(raw.decode("utf-8", "replace").splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "context.append_loop_event":
+            continue
+        loop = event.get("event") or {}
+        kind = loop.get("type")
+        if kind == "step.begin":
+            return True
+        if kind == "step.end":
+            # tool_use is an intermediate model step; Kimi still owns the
+            # enclosing turn while it runs the tool and starts the next step.
+            return str(loop.get("finishReason") or "") == "tool_use"
+    return False
 
 
 def _acp_wire_recent_texts(state, limit=_ACP_WIRE_DEDUP_WINDOW):
@@ -29607,10 +29854,8 @@ def find_kimi_conversations(
             continue
         title = _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
         last_prompt = _strip_ccc_session_state_instruction(str(meta.get("lastPrompt") or "")).strip()
-        first_message = last_prompt
         wire_info = _kimi_wire_head(idx.get("session_dir"))
-        if not first_message:
-            first_message = wire_info["first_prompt"]
+        first_message = wire_info["first_prompt"] or last_prompt
         wire_path = wire_info["wire_path"]
         display_name = (
             name_overrides.get(sid)
@@ -29644,6 +29889,7 @@ def find_kimi_conversations(
             "branch": "",
             "git_branch": "",
             "first_message": first_message[:200],
+            "original_ask": first_message,
             "display_name": display_name,
             "ai_title": title or None,
             "name_overridden": bool(name_overrides.get(sid)),
@@ -47520,7 +47766,16 @@ def _inject_text_into_session(
     if is_codex:
         return resume_session_codex(session_id, text)
     if _is_kimi_session(session_id):
-        result = _acp_prompt("kimi", session_id, text, mode=mode)
+        if (
+            not _from_terminal_queue
+            and mode != "steer"
+            and _terminal_input_queue_has_pending(session_id)
+        ):
+            return _queue_terminal_input(session_id, text, {"status": "running"})
+        result = _acp_prompt(
+            "kimi", session_id, text, mode=mode,
+            from_queue=_from_terminal_queue,
+        )
         if (
             result.get("code") == "busy"
             and not _from_terminal_queue
@@ -60657,6 +60912,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/voice-focus":
             # Current remote-focus target (set via POST). O(1) in-memory poll.
             self.send_json(dict(_VOICE_FOCUS))
+        elif path == "/api/fs/list":
+            # Read-only subdirectory listing for the in-browser folder picker
+            # (the headless-Linux fallback when no native GUI chooser exists).
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(_list_dirs_for_picker(qs.get("path", [""])[0]))
         elif path == "/api/car-mode/status":
             # Car Mode running state + capability mode + which keys are set
             # (booleans only — never the key values). O(1).
@@ -67128,6 +67388,33 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             elif result.get("code") == "codex_app_server_unavailable":
                 status_code = 503
             self.send_json(result, status_code)
+        elif path == "/api/claude/permission":
+            # Answer a pending Claude Code permission prompt by driving the
+            # interactive TUI picker (Return=approve once, Esc=deny). macOS +
+            # live-TTY only; see respond_claude_permission for the guards.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            sid = (payload.get("session_id") or "").strip()
+            decision = (payload.get("decision") or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            if not decision:
+                self.send_json({"ok": False, "error": "missing decision"}, 400)
+                return
+            _record_interaction(sid)
+            result = respond_claude_permission(sid, decision)
+            status_code = 200 if result.get("ok") else 409
+            if result.get("code") == "macos_only":
+                status_code = 501
+            self.send_json(result, status_code)
         elif path == "/api/acp/approval":
             # Answer a pending ACP session/request_permission (kimi and any
             # future ACP harness). option_id omitted/null = cancel the prompt.
@@ -68966,9 +69253,11 @@ def _platform_capabilities():
     """Report platform-specific UI capabilities.
 
     Page annotations are browser-native and can save URL / selector / text
-    anchors on any platform. Native desktop helpers remain macOS-only; the
-    frontend hides those controls when their flags are false so users never
-    see buttons that only return a stub.
+    anchors on any platform. The folder picker also works on Linux when
+    zenity/kdialog/yad is installed (see _linux_folder_picker_cmd). Other
+    native desktop helpers remain macOS-only; the frontend hides those
+    controls when their flags are false so users never see buttons that only
+    return a stub.
     """
     is_mac = platform.system() == "Darwin"
     return {
@@ -68977,7 +69266,8 @@ def _platform_capabilities():
         "annotate": True,             # browser-page DOM picker
         "terminalJump": is_mac,       # bring the session's terminal to front
         "launchTerminal": is_mac,     # open a session in a visible terminal
-        "folderPicker": is_mac,       # native GUI folder chooser
+        "answerPermission": is_mac,   # approve/deny a Claude permission prompt via keystroke
+        "folderPicker": is_mac or _linux_folder_picker_cmd() is not None,
         "desktopDeepLinks": is_mac,   # open in Claude / Codex desktop apps
         "revealFile": is_mac,         # reveal a file in Finder
         "openBrowser": is_mac,        # open a URL via the OS `open` command

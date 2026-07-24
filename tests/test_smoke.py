@@ -4487,10 +4487,16 @@ class TestServerImports(unittest.TestCase):
         the rendered event IS that message, the full event text wins (CCC-456)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
-        self.assertIn("const canonical = (conv && conv.first_message) || '';", app_js)
+        self.assertIn(
+            "const canonical = (conv && (conv.original_ask || conv.first_message)) || '';",
+            app_js,
+        )
         self.assertIn("if (canonPrefix && norm(evText).startsWith(canonPrefix)) return evText;", app_js)
         self.assertIn("return canonical || evText;", app_js)
-        self.assertIn("cleanIssuePrompt(originalAskTextForEvent(ev, paneId))", app_js)
+        self.assertIn(
+            "const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));",
+            app_js,
+        )
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):
         """The right rail keeps activity in Metadata, with Files and Queue as
@@ -6070,7 +6076,10 @@ class TestLinuxCapabilities(unittest.TestCase):
 
     def test_capabilities_hide_native_desktop_features_on_linux(self):
         server = self._server()
-        with mock.patch.object(server.platform, "system", return_value="Linux"):
+        # Patch the picker detection so the result doesn't depend on whether
+        # the test host happens to have zenity/kdialog and a display.
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             caps = server._platform_capabilities()
         self.assertEqual(caps["platform"], "linux")
         self.assertTrue(caps["annotate"], "page annotations should be cross-platform")
@@ -6078,6 +6087,16 @@ class TestLinuxCapabilities(unittest.TestCase):
                     "folderPicker", "desktopDeepLinks", "revealFile",
                     "openBrowser", "notifications"):
             self.assertFalse(caps[key], f"{key} should be False on Linux")
+
+    def test_capabilities_folder_picker_on_linux_with_zenity(self):
+        """On a Linux desktop with zenity/kdialog/yad present the folder
+        picker flag flips to True so the UI can offer Browse."""
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd",
+                               return_value=["zenity", "--file-selection"]):
+            caps = server._platform_capabilities()
+        self.assertTrue(caps["folderPicker"])
 
     def test_app_config_exposes_capabilities(self):
         server = self._server()
@@ -6092,8 +6111,13 @@ class TestLinuxCapabilities(unittest.TestCase):
         """Each gated entry point returns a structured no-op on non-Darwin
         instead of raising or shelling out to a missing macOS tool."""
         server = self._server()
+        # _linux_folder_picker_cmd is patched to None so the folder picker
+        # takes its graceful "no tool installed" path even on a test host
+        # that has zenity and a display — otherwise this test would pop a
+        # real dialog and block for 10 minutes.
         with mock.patch.object(server.platform, "system", return_value="Linux"), \
-             mock.patch.object(server.sys, "platform", "linux"):
+             mock.patch.object(server.sys, "platform", "linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             for result in (
                 server._native_pick_folder(),
                 server._capture_screenshot_native(),
@@ -6104,6 +6128,47 @@ class TestLinuxCapabilities(unittest.TestCase):
                 self.assertIsInstance(result, dict)
                 self.assertFalse(result.get("ok", False))
                 self.assertIn("error", result)
+
+    def test_linux_pick_folder_uses_zenity(self):
+        """With a picker tool available, a zero exit yields the picked path
+        and a non-zero exit (Cancel) yields the cancelled marker."""
+        server = self._server()
+        zenity = ["zenity", "--file-selection", "--directory", "--title={prompt}"]
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=zenity):
+            with mock.patch.object(server.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess(zenity, 0, stdout="/tmp/repo\n", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": True, "path": "/tmp/repo"})
+                # {prompt} substitution reached argv
+                self.assertIn("--title=Pick a repo folder for Command Center",
+                              run.call_args[0][0])
+                run.return_value = subprocess.CompletedProcess(zenity, 1, stdout="", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": False, "cancelled": True})
+
+    def test_list_dirs_for_picker(self):
+        """The in-browser picker fallback lists visible subdirectories with a
+        parent link, skips dotdirs, and errors cleanly on non-directories."""
+        server = self._server()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            (base / "alpha").mkdir()
+            (base / "Beta").mkdir()
+            (base / ".hidden").mkdir()
+            (base / "a-file.txt").write_text("x")
+            result = server._list_dirs_for_picker(str(base))
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["path"], str(base.resolve()))
+            self.assertEqual(result["parent"], str(base.resolve().parent))
+            self.assertEqual([d["name"] for d in result["dirs"]], ["alpha", "Beta"])
+            root = server._list_dirs_for_picker("/")
+            self.assertTrue(root["ok"])
+            self.assertIsNone(root["parent"])
+            bad = server._list_dirs_for_picker(str(base / "a-file.txt"))
+            self.assertFalse(bad["ok"])
+            self.assertIn("error", bad)
+            missing = server._list_dirs_for_picker(str(base / "nope"))
+            self.assertFalse(missing["ok"])
+            self.assertIn("error", missing)
 
     def test_sys_memory_and_cpu_work_on_linux(self):
         """The system-monitor stats must not go blank on Linux: memory comes
@@ -17184,11 +17249,116 @@ class TestAcpKimiEngine(unittest.TestCase):
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('"/api/sessions/spawn-kimi"', server_py)
         self.assertIn('"/api/acp/approval"', server_py)
-        self.assertIn('if _is_kimi_session(session_id):\n        result = _acp_prompt', server_py)
+        self.assertIn('if _is_kimi_session(session_id):', server_py)
+        self.assertIn('result = _acp_prompt(', server_py)
         self.assertIn('result.get("code") == "busy"', server_py)
         self.assertIn('return _queue_terminal_input(session_id, text, {"status": "running"})', server_py)
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
+
+    def test_kimi_original_ask_uses_first_wire_prompt(self):
+        server = self.server
+        sid = "session_original_ask"
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = pathlib.Path(tmp, sid)
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            (session_dir / "state.json").write_text(json.dumps({
+                "title": "Session title",
+                "lastPrompt": "Continue",
+                "workDir": tmp,
+                "createdAt": "2026-07-23T00:00:00Z",
+            }))
+            (wire_dir / "wire.jsonl").write_text(json.dumps({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "The actual original request"}],
+            }) + "\n")
+            with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                 mock.patch.object(server, "_ACP_STATE_LOADED", {"kimi"}), \
+                 mock.patch.object(server, "_kimi_session_index", return_value={
+                     sid: {"session_dir": str(session_dir), "work_dir": tmp},
+                 }), \
+                 mock.patch.object(server, "_load_repo_pins", return_value={}), \
+                 mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+                 mock.patch.object(
+                     server, "_load_conversation_lifecycle_sets",
+                     return_value=(set(), set()),
+                 ), \
+                 mock.patch.object(server, "_load_verified_conversations", return_value=[]):
+                rows = server.find_kimi_conversations(
+                    repo_only=False, include_old=True,
+                )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["first_message"], "The actual original request")
+        self.assertEqual(rows[0]["original_ask"], "The actual original request")
+        self.assertEqual(rows[0]["last_prompt"], "Continue")
+
+    def test_kimi_wire_state_prevents_early_prompt(self):
+        server = self.server
+        sid = "session_external_turn"
+        with tempfile.TemporaryDirectory() as tmp:
+            wire = pathlib.Path(tmp, "wire.jsonl")
+
+            def write_boundary(kind, finish_reason=None):
+                event = {"type": kind}
+                if finish_reason:
+                    event["finishReason"] = finish_reason
+                wire.write_text(json.dumps({
+                    "type": "context.append_loop_event",
+                    "event": event,
+                }) + "\n")
+
+            with mock.patch.object(server, "_acp_wire_path", return_value=wire):
+                write_boundary("step.begin")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "tool_use")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "end_turn")
+                self.assertFalse(server._kimi_wire_turn_active(sid))
+
+                write_boundary("step.begin")
+                with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                     mock.patch.object(server, "_kimi_wire_turn_active", return_value=True), \
+                     mock.patch.object(server, "_acp_ensure_session_loaded") as attach:
+                    result = server._acp_prompt("kimi", sid, "too early")
+                self.assertEqual(result.get("code"), "busy")
+                attach.assert_not_called()
+
+    def test_kimi_remote_busy_error_requeues_without_red_result(self):
+        server = self.server
+        sid = "session_remote_busy"
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(server, "_ACP_TRANSCRIPT_DIR", pathlib.Path(tmp)), \
+             mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+             mock.patch.object(server, "_queue_terminal_input") as queue:
+            with server._ACP_LOCK:
+                state = server._acp_session("kimi", sid, create=True)
+                state["status"] = "active"
+                state["active_turn"] = {
+                    "req_id": 7,
+                    "msg_id": "m7",
+                    "text": "",
+                    "thought": "",
+                    "tools": {},
+                    "prompt": "Continue",
+                    "from_queue": False,
+                }
+            server._acp_finalize_turn("kimi", sid, {
+                "error": {
+                    "message": (
+                        "Invalid request: Cannot launch a new turn while "
+                        "another turn (ID 7) is active"
+                    ),
+                },
+            }, {"req_id": 7, "is_active": True})
+            with server._ACP_LOCK:
+                events = list(server._acp_session("kimi", sid)["events"])
+            queue.assert_called_once_with(sid, "Continue", {"status": "running"})
+            self.assertFalse(any(
+                event.get("type") == "result"
+                and event.get("subtype") == "error"
+                for event in events
+            ))
 
     def test_acp_wire_fold_dedupes_and_folds_new_turns(self):
         """TUI-originated wire.jsonl records fold into the conv stream, but a

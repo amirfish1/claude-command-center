@@ -1,0 +1,1 @@
+- Queue Kimi actions until the active remote turn finishes, and show the true first request in the mobile Original ask toolbar.

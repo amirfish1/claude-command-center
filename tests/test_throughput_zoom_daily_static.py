@@ -60,3 +60,11 @@ def test_main_view_strip_is_wired():
     assert "/api/throughput/daily?date=today" in app_js
     assert "setInterval(refresh, 120000)" in app_js
     assert "document.hidden" in app_js
+    # The old last-hour lane count was replaced by live/recent session counts.
+    assert "function renderActivity()" in app_js
+    assert "sessionIsActivelyWorking(row, optimistic)" in app_js
+    assert "'WIP ' + working + ' now" in app_js
+    assert "recent5 + ' in 5m" in app_js
+    assert "recent10 + ' in 10m" in app_js
+    assert "window.__cccThroughputActivityRows = function" in app_js
+    assert "window.__cccRenderThroughputActivity = renderActivity" in app_js
