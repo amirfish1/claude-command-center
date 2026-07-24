@@ -21009,13 +21009,38 @@ body.ccc-mobile-redesign button.mobile-copy-btn[aria-pressed="true"] {
 /* ---- Presentation toolbar: mobile plain-language view buttons ---- */
 body.ccc-mobile-redesign .conv-presentation-segment { display: none !important; }
 body.ccc-mobile-redesign .conv-presentation-toolbar-label { display: none !important; }
+.mobile-view-toggle { display: none; }
+body.ccc-mobile-redesign button.mobile-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  color: var(--text-muted);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  min-height: 32px;
+}
+body.ccc-mobile-redesign button.mobile-view-toggle[aria-pressed="true"] {
+  background: rgba(63,185,80,0.10);
+  border-color: var(--green);
+  color: var(--green);
+}
+/* Collapsed by default — the picker previously stayed permanently open,
+   eating the top of the conversation screen on every session. */
 .conv-presentation-mobile-list { display: none; }
 body.ccc-mobile-redesign .conv-presentation-mobile-list {
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 6px;
   width: 100%;
+  margin-top: 8px;
 }
+body.ccc-mobile-redesign .conv-presentation-mobile-list.is-open { display: flex; }
 body.ccc-mobile-redesign button.mobile-view-btn {
   display: block;
   width: 100%;
@@ -21096,4 +21121,46 @@ body.ccc-mobile-redesign .mobile-more-menu > * {
   width: 100%;
   min-height: 40px;
   justify-content: flex-start;
+}
+
+/* ---- Main session list (renderConversationList _renderRow): mobile
+   status line + Details, same pattern as the kanban card. The desktop
+   fragments (rowMetaHtml/hoverMetaRowHtml/etc.) are still built and
+   inserted in JS unchanged — these rules just hide the originals and let
+   the new mobile-status-line / mobile-details-panel (which contain the
+   SAME html, copied not recomputed) stand in for them. ---- */
+body.ccc-mobile-redesign .conv-item > .mobile-status-line {
+  margin: 4px 8px 6px;
+}
+body.ccc-mobile-redesign .conv-item .conv-row-meta,
+body.ccc-mobile-redesign .conv-item .conv-hover-meta-row,
+body.ccc-mobile-redesign .conv-item .coo-status,
+body.ccc-mobile-redesign .conv-item .coo-escalated,
+body.ccc-mobile-redesign .conv-item .conv-history-badge,
+body.ccc-mobile-redesign .conv-item .conv-pct-badge,
+body.ccc-mobile-redesign .conv-item .conv-qc-badge,
+body.ccc-mobile-redesign .conv-item .conv-goal,
+body.ccc-mobile-redesign .conv-item .conv-goal-icon-only {
+  display: none !important;
+}
+body.ccc-mobile-redesign .conv-item .mobile-details-toggle {
+  margin: 2px 8px 6px;
+}
+body.ccc-mobile-redesign .conv-item .mobile-details-panel {
+  margin: 0 8px 8px;
+}
+/* Inside the Details panel, the same chip/badge fragments should read as
+   plain stacked text/chips again (not hidden by the blanket rule above,
+   which only targets the always-visible main-row copies). */
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-row-meta,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-hover-meta-row,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .coo-status,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .coo-escalated,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-history-badge,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-pct-badge,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-qc-badge,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal,
+body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal-icon-only {
+  display: inline-flex !important;
+  margin: 2px 4px 2px 0;
 }

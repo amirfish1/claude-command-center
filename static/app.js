@@ -22341,6 +22341,32 @@
       + '</div>';
   }
 
+  // Row-list equivalent of deriveMobileCardStatus, for the main session
+  // list (renderConversationList's _renderRow). That closure already
+  // computes a more careful "is this actually running" signal per-engine
+  // (_isAgentRunning/_isWaitingForUser/_hasStaleToolCall) than the kanban
+  // board does — reuse those exact locals instead of re-deriving.
+  function deriveMobileRowStatus(c, isAgentRunning, isWaitingForUser, hasStaleToolCall, knownTool) {
+    if (!c.is_live) {
+      return { state: 'offline', word: 'Offline', detail: '' };
+    }
+    if (hasStaleToolCall) {
+      const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts)
+        : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
+      return { state: 'stuck', word: 'Stuck', detail: liveActivityToolLabel(knownTool || 'tool') + (staleAge ? ' for ' + staleAge : '') };
+    }
+    if (isWaitingForUser) {
+      const msg = c.question_text || c.needs_approval_message || c.sidecar_file || '';
+      const label = (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion')) ? 'has a question' : 'needs approval';
+      return { state: 'idle', word: 'Idle', detail: label + (msg ? ' — ' + (msg.length <= 60 ? msg : msg.slice(0, 57) + '...') : '') };
+    }
+    if (isAgentRunning) {
+      const detail = knownTool ? liveActivityToolLabel(knownTool) : '';
+      return { state: 'working', word: 'Working', detail: detail };
+    }
+    return { state: 'idle', word: 'Idle', detail: '' };
+  }
+
   // Delegated once at parse time (not per-render) since clicks bubble from
   // any card's Details button, present or future.
   document.addEventListener('click', (ev) => {
@@ -25521,8 +25547,31 @@
         + '</div>'
         : '';
 
+      // Mobile redesign: one status line replaces the badge cluster below
+      // (context %, quality, COO status, history match, goal chip, git-state
+      // signals) — all of it still exists in a collapsed Details panel.
+      // CSS hides the originals under body.ccc-mobile-redesign; this reuses
+      // the exact same already-built HTML fragments rather than re-deriving
+      // or deleting them, so desktop's rendering of those fragments is
+      // completely untouched.
+      let mobileStatusHtml = '';
+      let mobileDetailsHtml = '';
+      if (isMobileRedesign()) {
+        const _mStatus = deriveMobileRowStatus(c, _isAgentRunning, _isWaitingForUser, _hasStaleToolCall, _knownActivityTool);
+        mobileStatusHtml = mobileCardStatusLineHtml(_mStatus);
+        const _detailInner = rowMetaHtml + hoverMetaRowHtml + cooStatusHtml + cooEscalatedHtml
+          + historyBadgeHtml + repoBadgeHtml + pctBadgeHtml + qcBadgeHtml
+          + (opts.evergreenAgent ? '' : evergreenGoalHtml)
+          + (goalIconOnly ? goalIconHtml : '');
+        if (_detailInner) {
+          mobileDetailsHtml = '<button type="button" class="mobile-details-toggle" aria-pressed="false">Details</button>'
+            + '<div class="mobile-details-panel" hidden>' + _detailInner + '</div>';
+        }
+      }
+
       return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
+        + mobileStatusHtml
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row">'
             + sessionIconHtml
@@ -25560,6 +25609,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
+        + mobileDetailsHtml
         // Hover-revealed extras wrapped in one container so the current-sessions
         // panel can float the whole stack out of flow on hover (no row reflow,
         // no skipped rows). display:contents by default → transparent in every
@@ -42375,6 +42425,13 @@
     if (cost) cost.textContent = mode === '3' ? 'agent-authored deck' : '0 extra tokens';
     const progress = toolbar.querySelector('[data-role="presentation-progress"]');
     if (progress) progress.hidden = mode === 'off' || !hasAnswers;
+    // Mobile: reflect the active mode in the collapsed toggle's label so
+    // it's readable without opening the picker.
+    const mobileToggle = toolbar.querySelector('[data-role="mobile-view-toggle"]');
+    if (mobileToggle) {
+      const label = mode === '2' ? 'Slides' : (mode === '3' ? 'Slides, agent-designed' : 'Chat');
+      mobileToggle.textContent = 'View: ' + label;
+    }
   }
 
   function ensurePresentationStage(view) {
@@ -43031,6 +43088,18 @@
   }
 
   document.addEventListener('click', (ev) => {
+    const mobileToggle = ev.target && ev.target.closest
+      && ev.target.closest('[data-role="mobile-view-toggle"]');
+    if (mobileToggle) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const list = mobileToggle.nextElementSibling;
+      const open = list && list.classList.contains('is-open');
+      if (list) list.classList.toggle('is-open', !open);
+      mobileToggle.setAttribute('aria-pressed', open ? 'false' : 'true');
+      mobileToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+      return;
+    }
     const modeButton = ev.target && ev.target.closest
       && ev.target.closest('.conv-presentation-mode[data-presentation-mode]');
     if (modeButton) {
@@ -43040,6 +43109,18 @@
       const paneId = pane ? pane.dataset.paneId : activePaneId();
       if (paneId !== activePaneId()) setActivePaneById(paneId);
       setPresentationMode(paneId, modeButton.dataset.presentationMode);
+      // Mobile: collapse the picker back down after a choice, same as the
+      // toggle's own open/close — the toolbar shouldn't stay open once a
+      // decision is made.
+      if (modeButton.classList.contains('mobile-view-btn')) {
+        const list = modeButton.closest('.conv-presentation-mobile-list');
+        const toggle = list && list.previousElementSibling;
+        if (list) list.classList.remove('is-open');
+        if (toggle && toggle.matches('[data-role="mobile-view-toggle"]')) {
+          toggle.setAttribute('aria-pressed', 'false');
+          toggle.setAttribute('aria-expanded', 'false');
+        }
+      }
       return;
     }
     const navButton = ev.target && ev.target.closest && ev.target.closest('[data-presentation-nav]');

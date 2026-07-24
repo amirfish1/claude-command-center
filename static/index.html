@@ -729,7 +729,10 @@
                values, so the existing delegated click handler and
                syncPresentationToolbar() (both querySelectorAll-scoped, not
                id-scoped) wire and sync these automatically — no JS changes
-               needed for the wiring itself. -->
+               needed for the wiring itself. Collapsed by default behind
+               #convPresentationMobileToggle — the picker was eating the
+               top of the screen permanently on every conversation. -->
+          <button type="button" class="mobile-view-toggle" data-role="mobile-view-toggle" aria-pressed="false" aria-expanded="false">View: Chat</button>
           <div class="conv-presentation-mobile-list" role="group" aria-label="Conversation presentation mode">
             <button type="button" class="conv-presentation-mode mobile-view-btn" data-presentation-mode="off" aria-pressed="true">
               <span class="mobile-view-name">Chat</span>
