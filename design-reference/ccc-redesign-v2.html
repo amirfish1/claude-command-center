@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCC — simple redesign</title>
+<style>
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:28px 16px 60px;
+    background:#0c0e11; color:#e7e9ec;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap{max-width:480px; margin:0 auto;}
+  h1{font-size:19px; font-weight:650; margin:0 0 6px;}
+  p.sub{color:#868d99; font-size:13px; line-height:1.6; margin:0 0 36px;}
+
+  .section{margin-bottom:40px;}
+  .section h2{font-size:13px; font-weight:650; color:#868d99; text-transform:uppercase; letter-spacing:0.05em; margin:0 0 12px;}
+
+  .card{
+    background:#14171b; border:1px solid #262b32; border-radius:10px; padding:16px;
+  }
+
+  /* toggle button base */
+  button{
+    font-family:inherit; cursor:pointer; border:1px solid #262b32; background:#1a1e23;
+    color:#868d99; border-radius:7px; font-size:12.5px; padding:7px 12px;
+  }
+  button[aria-pressed="true"]{
+    background:#1e2a24; border-color:#35c98c; color:#35c98c; font-weight:600;
+  }
+  .btn-row{display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;}
+
+  /* status card */
+  .status-line{display:flex; align-items:center; gap:8px; margin-bottom:10px;}
+  .dot{width:9px; height:9px; border-radius:50%; background:#5a6270; flex-shrink:0;}
+  .dot.working{background:#35c98c;}
+  .dot.stuck{background:#e0a23e;}
+  .status-word{font-size:14px; font-weight:650; color:#e7e9ec;}
+  .status-word.working{color:#35c98c;}
+  .status-word.stuck{color:#e0a23e;}
+  .status-detail{font-size:12px; color:#868d99;}
+  .title{font-size:13.5px; font-weight:500; margin-bottom:10px;}
+
+  .details-panel{
+    margin-top:10px; padding-top:10px; border-top:1px solid #262b32;
+    font-family:"SF Mono",SFMono-Regular,Consolas,monospace; font-size:10.5px;
+    color:#565c66; line-height:1.8; display:none;
+  }
+  .details-panel.open{display:block;}
+
+  /* session id card */
+  .id-row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .id-left{display:flex; flex-direction:column; gap:2px;}
+  .id-label{font-size:10.5px; color:#868d99; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;}
+  .id-value{font-family:"SF Mono",SFMono-Regular,Consolas,monospace; font-size:13.5px;}
+  .copy-btn[aria-pressed="true"]{background:#1e2a24; border-color:#35c98c; color:#35c98c;}
+
+  /* view mode card */
+  .view-btn{width:100%; text-align:left; margin-bottom:6px; display:block; padding:10px 12px;}
+  .view-btn .vname{font-size:13px; font-weight:650; display:block; margin-bottom:2px;}
+  .view-btn .vdesc{font-size:11.5px; color:#868d99; font-weight:400; display:block; line-height:1.5;}
+  .view-btn[aria-pressed="true"] .vdesc{color:#8fe0bb;}
+
+  .note{font-size:11px; color:#565c66; margin-top:10px; line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>CCC, simplified</h1>
+  <p class="sub">Every interactive piece below is a plain toggle button. Tap one to see the state change.</p>
+
+  <!-- 1: working status -->
+  <div class="section">
+    <h2>01 · Is it working?</h2>
+    <div class="btn-row">
+      <button id="btnWorking" aria-pressed="true" onclick="setStatus('working')">Working</button>
+      <button id="btnIdle" aria-pressed="false" onclick="setStatus('idle')">Idle</button>
+      <button id="btnStuck" aria-pressed="false" onclick="setStatus('stuck')">Stuck</button>
+    </div>
+    <div class="card">
+      <div class="status-line">
+        <span class="dot working" id="statusDot"></span>
+        <span class="status-word working" id="statusWord">Working</span>
+        <span class="status-detail" id="statusDetail">— editing auth.py</span>
+      </div>
+      <div class="title">Fix the auth redirect loop</div>
+      <button id="detailsBtn" aria-pressed="false" onclick="toggleDetails()">Details</button>
+      <div class="details-panel" id="detailsPanel">
+        linked: GH #194 · engine: Claude Code · tool: Edit · running 12s
+      </div>
+    </div>
+  </div>
+
+  <!-- 2: session id -->
+  <div class="section">
+    <h2>02 · Session ID</h2>
+    <div class="card">
+      <div class="id-row">
+        <div class="id-left">
+          <span class="id-label">Session</span>
+          <span class="id-value">a1b2c3d4</span>
+        </div>
+        <button class="copy-btn" id="copyBtn" aria-pressed="false" onclick="doCopy()">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3: view modes -->
+  <div class="section">
+    <h2>03 · View mode</h2>
+    <div class="card">
+      <button class="view-btn" id="view0" aria-pressed="true" onclick="setView(0)">
+        <span class="vname">Chat</span>
+        <span class="vdesc">The normal back-and-forth transcript.</span>
+      </button>
+      <button class="view-btn" id="view1" aria-pressed="false" onclick="setView(1)">
+        <span class="vname">Slides</span>
+        <span class="vdesc">Turns each answer into a slide instantly. No extra cost.</span>
+      </button>
+      <button class="view-btn" id="view2" aria-pressed="false" onclick="setView(2)">
+        <span class="vname">Slides, agent-designed</span>
+        <span class="vdesc">Asks the working agent to lay out a proper deck. Uses extra tokens.</span>
+      </button>
+    </div>
+    <div class="note">Replaces the old "Off / Present / Mode 3" segmented control.</div>
+  </div>
+
+</div>
+
+<script>
+  function setStatus(s){
+    ['btnWorking','btnIdle','btnStuck'].forEach(function(id){
+      document.getElementById(id).setAttribute('aria-pressed', 'false');
+    });
+    var dot = document.getElementById('statusDot');
+    var word = document.getElementById('statusWord');
+    var detail = document.getElementById('statusDetail');
+    dot.className = 'dot';
+    word.className = 'status-word';
+    if(s === 'working'){
+      document.getElementById('btnWorking').setAttribute('aria-pressed','true');
+      dot.classList.add('working'); word.classList.add('working');
+      word.textContent = 'Working'; detail.textContent = '— editing auth.py';
+    } else if(s === 'idle'){
+      document.getElementById('btnIdle').setAttribute('aria-pressed','true');
+      word.textContent = 'Idle'; detail.textContent = '— waiting for you';
+    } else {
+      document.getElementById('btnStuck').setAttribute('aria-pressed','true');
+      dot.classList.add('stuck'); word.classList.add('stuck');
+      word.textContent = 'Stuck'; detail.textContent = '— no response for 6m';
+    }
+  }
+
+  function toggleDetails(){
+    var btn = document.getElementById('detailsBtn');
+    var panel = document.getElementById('detailsPanel');
+    var open = btn.getAttribute('aria-pressed') === 'true';
+    btn.setAttribute('aria-pressed', open ? 'false' : 'true');
+    if(open){ panel.classList.remove('open'); } else { panel.classList.add('open'); }
+  }
+
+  function doCopy(){
+    var btn = document.getElementById('copyBtn');
+    try{
+      var ta = document.createElement('textarea');
+      ta.value = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }catch(e){}
+    btn.textContent = 'Copied';
+    btn.setAttribute('aria-pressed', 'true');
+    setTimeout(function(){
+      btn.textContent = 'Copy';
+      btn.setAttribute('aria-pressed', 'false');
+    }, 1500);
+  }
+
+  function setView(i){
+    for(var n=0; n<3; n++){
+      document.getElementById('view'+n).setAttribute('aria-pressed', n === i ? 'true' : 'false');
+    }
+  }
+</script>
+</body>
+</html>
