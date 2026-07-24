@@ -13348,6 +13348,18 @@ def session_live_status(session_id, session_cwd):
                 if not result.get("needs_approval"):
                     result.update(_kimi_stale_tool_fields(
                         tail_meta, acp_active=(snap.get("status") == "active")))
+                # Durable mid-turn busy signal. The 10s wire-freshness window
+                # above only catches turns actively emitting output — long
+                # model-thinking pauses write nothing, so status flapped to
+                # "idle" and the pane's Working… indicator vanished mid-turn.
+                # The wire tail knows the turn never closed (no step.end /
+                # turn.cancel); treat that as running until the stale-tool
+                # threshold flips the pane to the stuck card instead (same
+                # contract as _codex_row_state's working window).
+                if (result["status"] != "running"
+                        and tail_meta.get("mid_turn")
+                        and not result.get("stale_tool_call")):
+                    result["status"] = "running"
             except Exception:
                 pass
         return result
