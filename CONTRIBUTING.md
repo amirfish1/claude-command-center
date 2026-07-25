@@ -8,6 +8,10 @@ This is a tool I use daily on a single-founder SaaS workflow. I'll merge fixes
 and small features that keep the scope tight. I'm intentionally slow to accept
 architectural rewrites — the simplicity (two files, stdlib only) is load-bearing.
 
+Private plans, strategy notes, and working documents are maintained outside
+this public repository. Contributions should include only public-safe source,
+documentation, and assets.
+
 ## Running locally
 
 ```bash
@@ -102,10 +106,26 @@ IIFE — state is private. Key functions:
 
 ## Testing
 
-There's no test suite today. If you add one, pytest + stdlib is fine; don't
-introduce a test framework with its own toolchain. Focus on the session
-classification logic (`classifyKanbanColumn`, `session_live_status`) — that's
-where subtle bugs hurt.
+`tests/` has the suite (pytest + stdlib only — don't introduce a test
+framework with its own toolchain). Run it with a python3 that actually has
+pytest installed; bare `python3` on macOS often resolves to a system stub
+(Xcode CLT) without it:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install pytest  # one-time setup
+.venv/bin/python3 -m pytest tests/
+```
+
+To exercise a specific interpreter such as Python 3.12 without replacing an
+existing `.venv`, give that interpreter its own local environment:
+
+```bash
+python3.12 -m venv .venv-py312 && .venv-py312/bin/pip install pytest
+.venv-py312/bin/python -m pytest tests/
+```
+
+Focus on the session classification logic (`classifyKanbanColumn`,
+`session_live_status`) — that's where subtle bugs hurt.
 
 ## Scope I'll push back on
 

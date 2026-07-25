@@ -33,8 +33,18 @@ class TestSearchUiStatic(unittest.TestCase):
             app_js,
         )
         self.assertIn(
-            "const _currentSessions = _ipSearchActive\n"
+            "const _currentSessionWindowed = _ipSearchActive\n"
             "        ? _currentSessionSource",
+            app_js,
+        )
+        self.assertIn(
+            "const _currentSessionLineage = _ipSearchActive\n"
+            "        ? { rows: _currentSessionWindowed, openAsks: [] }",
+            app_js,
+        )
+        self.assertIn(
+            "const _currentSessions = _ipSearchActive\n"
+            "        ? _currentSessionLineage.rows",
             app_js,
         )
         self.assertIn(
@@ -62,17 +72,44 @@ class TestSearchUiStatic(unittest.TestCase):
         )
         self.assertIn("modified: _historyTsSeconds(hit.ts),", app_js)
 
-    def test_throughput_boot_renders_initial_snapshot_before_refresh(self):
+    def test_archive_search_keeps_name_matches_above_recall_results(self):
+        """A late Total Recall repaint must preserve the search-result bands."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        start = app_js.index("function renderArchiveList(filter, opts) {")
+        end = app_js.index("async function setArchiveMode", start)
+        body = app_js[start:end]
+
+        self.assertIn(
+            "_prioritizeSearchResultBands(applyConvSort(_applyOptimisticTouches(rowsForRender), { persist: true }), q)",
+            body,
+        )
+
+    def test_add_queue_action_is_after_queue_health_rows_not_tickets(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        health_start = app_js.index("async function _renderQueueHealthStrip")
+        health_end = app_js.index("// Repo-basename", health_start)
+        health_body = app_js[health_start:health_end]
+        panel_start = app_js.index("function _renderQueuePanel(options)")
+        panel_end = app_js.index("// Jump the conversation pane", panel_start)
+        panel_body = app_js[panel_start:panel_end]
+
+        self.assertIn('id="filesQueueConfigure"', health_body)
+        self.assertNotIn('id="filesQueueConfigure"', panel_body)
+
+    def test_throughput_boot_renders_complete_browser_snapshot_before_network(self):
         html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 
         self.assertIn("/api/throughput/initial", html)
-        self.assertIn("loadInitialAggregate(_aggDefault)", html)
-        self.assertIn("refreshAggregateInBackground(_aggDefault)", html)
+        self.assertIn("readThroughputBootstrap", html)
+        self.assertIn("applyThroughputBootstrap", html)
+        self.assertNotIn("refreshAggregateInBackground", html)
 
-        load_start = html.index("async function loadInitialAggregate")
-        render_idx = html.index("renderDashboard(_aggDefault, data)", load_start)
-        refresh_idx = html.index("refreshAggregateInBackground(_aggDefault)", load_start)
-        self.assertLess(render_idx, refresh_idx)
+        boot_start = html.index("function bootThroughputPage")
+        read_idx = html.index("readActiveThroughputBootstrap", boot_start)
+        apply_idx = html.index("applyThroughputBootstrap", boot_start)
+        network_idx = html.index("loadServerBootstrapThenRefresh", boot_start)
+        self.assertLess(read_idx, apply_idx)
+        self.assertLess(apply_idx, network_idx)
 
 
 if __name__ == "__main__":

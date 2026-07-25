@@ -1,0 +1,42 @@
+title: "[Setup] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Show the rest of us how you actually work. Screenshots welcome. The best
+        posts here are specific: what you were doing, how CCC fit in, and what
+        changed. No polish required.
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: What are you showing?
+      description: One or two lines on the workflow. How many sessions, which engines, what the job was.
+      placeholder: "Four Claude Code sessions and one Codex, arranged on a Flow board by repo, cleared a review backlog in an afternoon."
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: How does it work?
+      description: The part worth copying. A template prompt, a worktree init script, a queue config, a pinning scheme.
+      placeholder: "Pinned the strategy session at the top, let it spawn sub-sessions that nest underneath, and steered them all from one input bar."
+    validations:
+      required: false
+
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshot or clip
+      description: Drag an image or video in here. A picture of the board carries most of the story.
+    validations:
+      required: false
+
+  - type: input
+    id: engines
+    attributes:
+      label: Engines in the shot
+      placeholder: "Claude Code, Codex"
+    validations:
+      required: false

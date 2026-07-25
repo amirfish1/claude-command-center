@@ -81,6 +81,16 @@
       };
       show('openTotalRecallBtn', f.total_recall);
       show('openTokenOptimizerBtn', f.token_optimizer);
+      // Preview flags: stash resolved state + registry so ff() and the
+      // Settings Experimental section can read them. `?ff=name` in the URL
+      // force-enables a flag for this page load without persisting.
+      window.__CCC_FLAGS__ = f.preview || {};
+      window.__CCC_FLAGS_META__ = f.preview_meta || [];
+      try {
+        const forced = new URLSearchParams(window.location.search || '').getAll('ff');
+        forced.forEach(n => { if (n) window.__CCC_FLAGS__[n] = true; });
+      } catch (_) {}
+      window.dispatchEvent(new CustomEvent('ccc:flags'));
     }).catch(() => {});
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
@@ -345,41 +355,27 @@
               '<div class="ccc-loading-detail">Scanning Claude Code transcripts across every folder. Faster on subsequent loads.</div>';
           }
         }
-        // Status-position class restore — has to run before first paint so
-        // the layout doesn't flash from "top strip" to "right rail".
-        // Persisted as `ccc-status-pos` ('top' | 'right'); default 'right'
-        // for fresh installs because the right rail (Original ask /
-        // Session activity / Files) reads better than a wide top strip.
-        // Users who explicitly chose 'top' via the toggle keep that
-        // preference — only an unset key promotes to the new default.
+        // Desktop uses the status rail; responsive CSS and JS automatically
+        // switch its content to the top layout on mobile before it can crowd
+        // the conversation pane.
         try {
-          const pos = localStorage.getItem('ccc-status-pos');
           const railWidth = parseInt(localStorage.getItem('ccc-status-rail-width') || '0', 10);
           if (railWidth >= 220 && railWidth <= 520) {
             document.documentElement.style.setProperty('--status-rail-width', railWidth + 'px');
           }
-          if (pos === 'right' || pos === null) {
-            document.body.classList.add('status-pos-right');
-            // Mobile default: the status rail (Original ask / Activity /
-            // Files) eats too much of a phone's viewport, so collapse it
-            // unless the user has explicitly opened it on this device.
-            // The 950px threshold mirrors the JS _mobileMQ + the mobile
-            // @media block in app.css. localStorage='0' means user
-            // explicitly opened it → respect that on mobile too.
-            const _isMobileViewport = (typeof window.matchMedia === 'function')
-              && window.matchMedia('(max-width: 950px)').matches;
-            const _railStored = localStorage.getItem('ccc-status-rail-collapsed');
-            if (_railStored === '1' || (_isMobileViewport && _railStored !== '0')) {
-              document.body.classList.add('status-rail-collapsed');
-            }
+          document.body.classList.add('status-pos-right');
+          const _railStored = localStorage.getItem('ccc-status-rail-collapsed');
+          if (_railStored === '1') {
+            document.body.classList.add('status-rail-collapsed');
           }
         } catch (_) {}
         // Chip color mode — same FOIT-guard reasoning. Persisted as
-        // `ccc-chips-mode` ('color' default, 'level', or 'muted').
+        // `ccc-chips-mode` ('muted' default, 'color', or 'level').
         try {
           const m = localStorage.getItem('ccc-chips-mode');
-          if (m === 'muted') document.body.classList.add('chips-muted');
+          if (m === 'color') { /* explicit colorful preference */ }
           else if (m === 'level') document.body.classList.add('chips-level');
+          else document.body.classList.add('chips-muted');
         } catch (_) {}
         // Conversation-list collapse (CCC-132). Desktop only — on mobile the
         // list IS the screen, so never hide it there. Restored before paint to
@@ -400,8 +396,34 @@
       <div class="sidebar-header-brand">
         <div class="sh-title-row">
           <img class="sh-app-icon" src="/static/icon.svg" alt="" aria-hidden="true">
-          <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity — open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
+          <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
+        </div>
+        <div class="sh-service-badges">
+          <button type="button" class="sh-wt-badge" id="cccWtBadge" data-tour="watchtower" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
+            <span class="wt-beacon" aria-hidden="true">
+              <svg viewBox="0 0 32 32" width="14" height="14">
+                <circle class="wt-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="1.5"/>
+                <g class="wt-sweep"><path d="M16 16 L16 2.2 A13.8 13.8 0 0 1 27.1 9.1 Z"/></g>
+                <circle class="wt-core" cx="16" cy="16" r="2.8"/>
+              </svg>
+            </span>
+            <span class="wt-word">WatchTower</span>
+            <span class="wt-count" id="cccWtCount" hidden>0</span>
+          </button>
+          <button type="button" class="sh-worker-badge is-checking" id="cccWorkerBadge" title="Checking execution worker…" aria-label="Execution worker status; open Maintenance settings">
+            <span class="worker-status-dot" aria-hidden="true"></span>
+            <span class="worker-word" id="cccWorkerWord">Worker</span>
+            <span class="worker-count" id="cccWorkerCount" hidden>0</span>
+          </button>
+        </div>
+        <div class="wt-pop" id="cccWtPop" role="dialog" aria-label="WatchTower queue health" hidden>
+          <div class="wt-pop-head">
+            <span class="wt-pop-title">WatchTower</span>
+            <span class="wt-pop-sub" id="cccWtPopSub">watching…</span>
+          </div>
+          <div class="wt-pop-list" id="cccWtPopList"></div>
+          <button type="button" class="wt-pop-cta" id="cccWtPopCta">Open queue list <span aria-hidden="true">&#8595;</span></button>
         </div>
         <span class="sh-meta-row">
           Last updated <span id="cccLastUpdated">…</span>
@@ -427,14 +449,8 @@
         </span>
         <button id="historyBtn" class="sh-btn" title="Search past Claude Code conversations across every project on this Mac (powered by the local claude-index). Shortcut: /" aria-label="Search past conversations"><span aria-hidden="true">&#128269;</span><span class="sh-action-label">History</span></button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Switch session view" aria-label="Switch session view"><span aria-hidden="true">&#9783;</span><span class="sh-action-label">Board</span></button>
-        <!-- Status position toggle. Two states: top (status strip above the
-             input — default) and right (status moved into a resizable right
-             rail beside the conversation pane). Persisted under
-             `ccc-status-pos`; the body class is restored on page load
-             before first paint to avoid a layout flash. -->
-        <button id="statusPosToggle" class="sh-btn" title="Move status (branch / context / cost / model) between the strip above the input and a right-side rail" aria-label="Toggle status position"><span aria-hidden="true" id="statusPosIcon">&#9707;</span></button>
-        <!-- Folder chip color toggle. Three states: color (per-folder hue —
-             default), level (shared object/repo hierarchy colors), and muted
+        <!-- Folder chip color toggle. Three states: muted (uniform neutral —
+             default), color (per-folder hue), and level (shared hierarchy colors),
              (uniform neutral). Persisted under `ccc-chips-mode`; body classes
              flip the palette via CSS so no chip needs to re-render. -->
         <button id="chipsColorToggle" class="sh-btn" title="Toggle folder chip color mode" aria-label="Toggle folder chip color mode"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
@@ -443,19 +459,19 @@
 
     <div class="new-session-panel">
       <div class="new-session-primary-row">
-        <button class="new-session-btn" id="sidebarNewBtn" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
+        <button class="new-session-btn" id="sidebarNewBtn" data-tour="new-session" title="Spawn a new Claude session" aria-label="New session"><span class="plus" aria-hidden="true">+</span> New session</button>
         <div class="search-wrap">
-          <input type="text" id="convSearch" class="conv-search-input" placeholder="Search..." autocomplete="off" list="convSearchHistoryList">
+          <input type="text" id="convSearch" class="conv-search-input" data-tour="search" placeholder="Search..." autocomplete="off" list="convSearchHistoryList">
           <datalist id="convSearchHistoryList"></datalist>
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
         <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
       </div>
       <div class="new-session-secondary-row">
-        <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" title="Create a new empty group chat — drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
+        <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" data-tour="group-chat" title="Create a new empty group chat - drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view"><span aria-hidden="true">&#9654;</span></button>
-        <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarManageGroupChatsBtn" title="Manage existing group chats — pause / unpause orchestration" aria-label="Manage group chats">&#8801;</button>
-        <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarCarModeBtn" title="Car Mode — drive your agents hands-free by voice" aria-label="Car Mode"><span aria-hidden="true">🚗</span></button>
+        <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarManageGroupChatsBtn" title="Manage existing group chats - pause / unpause orchestration" aria-label="Manage group chats">&#8801;</button>
+        <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarCarModeBtn" title="Car Mode - drive your agents hands-free by voice" aria-label="Car Mode"><span aria-hidden="true">🚗</span></button>
       </div>
     </div>
     <div id="convSearchStatus" class="conv-search-status" data-role="conv-search-status" hidden aria-live="polite">SEARCHING...</div>
@@ -480,7 +496,7 @@
         </div>
         <div class="today-tray-body" id="todayTrayBody"></div>
       </div>
-      <div class="log-list" id="convList" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
+      <div class="log-list" id="convList" data-tour="session-list" style="overflow-y:auto;flex:1;min-height:0;max-height:none;">
         <div class="empty-state" style="height:auto;padding:20px;font-size:13px;">Loading...</div>
       </div>
       <div class="coord-toolbar" id="coordToolbar">
@@ -512,77 +528,15 @@
       <!-- Active group-chat coordinations pill. Lives bottom-left so it's
            glanceable from anywhere without crowding the topbar. JS toggles
            display + textContent in updateGcActiveBtn(). -->
-      <button id="gcActiveBtn" class="sidebar-footer-pill" style="display:none;" title="Active group-chat coordinations — click to open the most recent one" aria-label="Active group chats"></button>
+      <button id="gcActiveBtn" class="sidebar-footer-pill" style="display:none;" title="Active group-chat coordinations - click to open the most recent one" aria-label="Active group chats"></button>
       <div class="sidebar-footer-spacer"></div>
       <div style="position:relative;">
-        <button type="button" class="sidebar-footer-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
+        <button type="button" class="sidebar-footer-btn" id="settingsBtn" data-tour="settings" title="Settings" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
         </button>
-        <div class="desktop-popover" id="settingsPopover" role="menu" aria-label="Settings menu" style="bottom:calc(100% + 6px);right:0;">
-          <div id="appearancePopover" role="group" aria-label="Appearance options">
-            <details class="pop-submenu">
-              <summary class="pop-item"><span class="pop-icon">&#9680;</span><span>Theme</span><span class="pop-chevron">&#8250;</span></summary>
-              <div class="pop-submenu-panel">
-                <button class="pop-item" type="button" data-theme="light" role="menuitemradio"><span class="pop-check" data-check-theme="light"></span><span>Light</span></button>
-                <button class="pop-item" type="button" data-theme="dark" role="menuitemradio"><span class="pop-check" data-check-theme="dark"></span><span>Dark</span></button>
-                <button class="pop-item" type="button" data-theme="system" role="menuitemradio"><span class="pop-check" data-check-theme="system"></span><span>Match system</span></button>
-              </div>
-            </details>
-            <details class="pop-submenu">
-              <summary class="pop-item"><span class="pop-icon">Aa</span><span>Font</span><span class="pop-chevron">&#8250;</span></summary>
-              <div class="pop-submenu-panel">
-                <button class="pop-item" type="button" data-font="system" role="menuitemradio"><span class="pop-check" data-check-font="system"></span><span>System</span></button>
-                <button class="pop-item" type="button" data-font="mono" role="menuitemradio"><span class="pop-check" data-check-font="mono"></span><span>Mono</span></button>
-              </div>
-            </details>
-            <details class="pop-submenu">
-              <summary class="pop-item"><span class="pop-icon">&#128065;</span><span>View</span><span class="pop-chevron">&#8250;</span></summary>
-              <div class="pop-submenu-panel">
-                <button class="pop-item" id="btnShowGhIssues" type="button" data-view-gh="show" role="menuitem"><span>Show GH issues</span></button>
-                <button class="pop-item" id="btnHideGhIssues" type="button" data-view-gh="hide" role="menuitem"><span>Hide GH issues</span></button>
-                <button class="pop-item" id="btnShowFleetPulse" type="button" data-hero-open role="menuitem"><span>Show Fleet Pulse</span></button>
-                <button class="pop-item" id="btnToggleLiveVariant" type="button" data-live-variant-toggle role="menuitemcheckbox"><span class="pop-check" data-check-live-variant></span><span>Show live updates on left (Variant B)</span></button>
-              </div>
-            </details>
-          </div>
-          <div class="pop-divider"></div>
-          <!-- CCC-511: these used to be ~15 flat first-level items (Terminal,
-               History, Worktrees, Stats, Today, Notes, COO, Font A/B, Run
-               onboarding, Spawn defaults, Network access, Restart server, two
-               dashboard launchers, Get help) dumped straight into the gear
-               menu. Grouped into two submenus, same pattern as Theme/Font/View
-               above, so the top level stays scannable. -->
-          <details class="pop-submenu">
-            <summary class="pop-item"><span class="pop-icon">&#129520;</span><span>Tools</span><span class="pop-chevron">&#8250;</span></summary>
-            <div class="pop-submenu-panel">
-              <!-- Slot for app-level actions moved out of the conv toolbar
-                   (Terminal panel toggle, History indexing status, Worktrees,
-                   Stats, Today, Notes, COO, Font A-/A+). Populated at boot by
-                   JS; the items get the .pop-item style via the menu wrapper. -->
-              <div class="settings-menu-slot" id="settingsMenuSlot" data-role="settings-menu-slot"></div>
-            </div>
-          </details>
-          <details class="pop-submenu">
-            <summary class="pop-item"><span class="pop-icon">&#9881;</span><span>Advanced</span><span class="pop-chevron">&#8250;</span></summary>
-            <div class="pop-submenu-panel">
-              <button class="pop-item" type="button" id="runOnboardingBtn"><span class="pop-icon">🚀</span><span>Run onboarding</span></button>
-              <button class="pop-item" type="button" id="spawnDefaultsBtn"><span class="pop-icon">&#9673;</span><span>Spawn defaults…</span></button>
-              <button class="pop-item" type="button" id="networkAccessBtn"><span class="pop-icon">⇄</span><span>Network access…</span></button>
-              <button class="pop-item" type="button" id="federationPeersBtn"><span class="pop-icon">&#128279;</span><span>Nodes &amp; peers…</span></button>
-              <button class="pop-item" type="button" id="carModeMenuBtn"><span class="pop-icon">🚗</span><span>Car Mode…</span></button>
-              <button class="pop-item" type="button" id="restartServerBtn"><span class="pop-icon">&#8635;</span><span id="restartServerLabel">Restart server</span></button>
-              <!-- Launchers for third-party plugin dashboards. Hidden by
-                   default; shown only when /api/features confirms the plugin
-                   is installed (see the feature-flag fetch below). -->
-              <a class="pop-item" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#129504;</span><span>Total Recall dashboard</span></a>
-              <a class="pop-item" id="openTokenOptimizerBtn" href="http://localhost:24842/token-optimizer" target="_blank" rel="noopener" style="display:none;"><span class="pop-icon">&#128202;</span><span>Token Optimizer dashboard</span></a>
-            </div>
-          </details>
-          <a class="pop-item" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener"><span class="pop-icon">?</span><span>Get help</span></a>
-        </div>
       </div>
     </div>
   </div>
@@ -597,7 +551,7 @@
          See server.py `_telemetry_*` and docs/telemetry.md. -->
     <div class="telemetry-bar" id="telemetryOptInBar" hidden role="region" aria-label="Anonymous opt-in telemetry">
       <span class="telemetry-bar__text">
-        Send an anonymous daily ping? <strong>5 fields</strong> — version, OS, engines you have. <strong>Zero</strong> paths, prompts, or content. Lets us know CCC is actually being used.
+        Send an anonymous daily ping? <strong>5 fields</strong> - version, OS, engines you have. <strong>Zero</strong> paths, prompts, or content. Lets us know CCC is actually being used.
       </span>
       <div class="telemetry-bar__actions">
         <button type="button" id="telemetryEnableBtn" class="telemetry-bar__btn telemetry-bar__btn--primary">Send daily ping</button>
@@ -607,9 +561,15 @@
     </div>
     <div class="toolbar" id="convToolbar">
       <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592;<span class="mb-label"> Back</span></button>
+      <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
+              aria-expanded="false" title="Show the full original ask" hidden>
+        <span class="mobile-original-ask__label">Original ask</span>
+        <span class="mobile-original-ask__text" id="mobileOriginalAskText"></span>
+        <span class="mobile-original-ask__chevron" aria-hidden="true">&#9662;</span>
+      </button>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
       <button class="conv-replay-launch-btn" id="convReplayBtn" style="display:none;" title="Replay this conversation message by message">&#9654; Replay</button>
-      <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature — ships and broadcasts to every studio">Close &amp; announce</button>
+      <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature - ships and broadcasts to every studio">Close &amp; announce</button>
       <button class="jump-btn" id="jumpBtnConv" style="display:none;" title="Bring the terminal running this session to the front">
         <span class="jump-icon">&#8599;</span>
         <span class="jump-label">Jump to terminal</span>
@@ -641,11 +601,11 @@
           <span class="upd-pill-dot"></span>
           <span id="updPillText">Update available</span>
         </button>
-        <button type="button" id="todayToggleBtn" class="bug-link today-toggle-btn" title="Toggle the Today's projects tray — a lightweight list of the sessions you're working on today." aria-label="Toggle Today's projects" aria-pressed="false">
+        <button type="button" id="todayToggleBtn" class="bug-link today-toggle-btn" title="Toggle the Today's projects tray - a lightweight list of the sessions you're working on today." aria-label="Toggle Today's projects" aria-pressed="false">
           <span aria-hidden="true">&#9788;</span><span class="sh-action-label">Today</span>
         </button>
         <button type="button" id="bugReportLink" class="bug-link" title="Report a bug or request a feature. Files a GitHub issue against amirfish1/claude-command-center." aria-label="Report a bug">
-          <span aria-hidden="true">&#9873;</span><span class="sh-action-label">Report a bug</span>
+          <span aria-hidden="true">&#128027;</span><span class="sh-action-label">Report a bug</span>
         </button>
         <!-- Topbar TTS control: visible whenever TTS is playing or paused,
              regardless of which conversation is focused. Left of Annotate.
@@ -683,10 +643,10 @@
           Notes
         </button>
         <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
-        <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
-        <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top). Shortcut: ⌘2." aria-label="Toggle terminal panel">&#9000; Terminal</button>
-        <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
-        <span class="localhost-wrap"><a class="topbar-btn sh-btn-deploy" id="localhostPill" target="_blank" rel="noopener" title="localhost dev server — loading…" aria-label="Local Next.js dev server"><span class="deploy-dot" id="localhostDot"></span><span class="deploy-label" id="localhostLabel">localhost</span></a><button type="button" id="localhostCaret" class="topbar-btn localhost-caret" title="Dev server actions" aria-label="Dev server actions" aria-haspopup="menu" aria-expanded="false">&#9662;</button><div class="localhost-menu" id="localhostMenu" role="menu" style="display:none;"><button type="button" class="localhost-menu-item" id="localhostRestartItem" role="menuitem" title="Stop and re-run the dev server in the resolved repo">Restart dev server</button><button type="button" class="localhost-menu-item" id="localhostOpenItem" role="menuitem" title="Open the running dev server in a new tab">Open in browser</button></div></span>
+        <button id="statsBtn" class="topbar-btn" title="Usage stats - sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
+        <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel - run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top). Shortcut: ⌘2." aria-label="Toggle terminal panel">&#9000; Terminal</button>
+        <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy - loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
+        <span class="localhost-wrap"><a class="topbar-btn sh-btn-deploy" id="localhostPill" target="_blank" rel="noopener" title="localhost dev server - loading…" aria-label="Local Next.js dev server"><span class="deploy-dot" id="localhostDot"></span><span class="deploy-label" id="localhostLabel">localhost</span></a><button type="button" id="localhostCaret" class="topbar-btn localhost-caret" title="Dev server actions" aria-label="Dev server actions" aria-haspopup="menu" aria-expanded="false">&#9662;</button><div class="localhost-menu" id="localhostMenu" role="menu" style="display:none;"><button type="button" class="localhost-menu-item" id="localhostRestartItem" role="menuitem" title="Stop and re-run the dev server in the resolved repo">Restart dev server</button><button type="button" class="localhost-menu-item" id="localhostOpenItem" role="menuitem" title="Open the running dev server in a new tab">Open in browser</button></div></span>
         <div id="historyStatusPill" class="topbar-btn hi-status-pill" style="display:none;" title="" role="button" tabindex="0">
           <span class="hi-pill-icon" id="hiPillIcon">&#128218;</span>
           <span class="hi-pill-label" id="hiPillLabel">History</span>
@@ -707,6 +667,11 @@
     <div class="issues-view" id="issuesView" style="display:none;">
       <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
     </div>
+    <!-- Q-FIRST (W88): queue-first main-view surface. Hidden unless the
+         queue-first mode is active (body.qf-active). Rendered entirely by
+         the _qf* section in app.js: queue cards, then a full-room ticket
+         list per queue, then a full-room ticket detail panel. -->
+    <div class="qfirst-view" id="qfirstView" aria-label="Queue-first workspace" hidden></div>
     <div class="conv-split" id="convSplit" data-orientation="">
       <div class="conv-pane" data-pane-id="p1">
         <div class="conv-pane-header" data-role="pane-header">
@@ -739,6 +704,23 @@
           </span>
           <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
         </div>
+        <!-- Client-only transcript presentation. Clone-safe data attributes
+             keep the control independent in every split/popout pane; JS
+             reveals it only after the pane has an assistant answer. -->
+        <div class="conv-presentation-toolbar" data-role="presentation-toolbar" hidden>
+          <span class="conv-presentation-toolbar-label">Present</span>
+          <div class="conv-presentation-segment" role="group" aria-label="Conversation presentation mode">
+            <button type="button" class="conv-presentation-mode" data-presentation-mode="off" aria-pressed="true" title="Normal transcript view">Off</button>
+            <button type="button" class="conv-presentation-mode" data-presentation-mode="2" aria-pressed="false" title="Present assistant answers as semantic slides with complete live updates">Present</button>
+            <button type="button" class="conv-presentation-mode" data-presentation-mode="3" aria-pressed="false" title="Ask the working agent to design a structured slide deck alongside each answer">Mode 3</button>
+          </div>
+          <div class="conv-presentation-progress" data-role="presentation-progress" hidden>
+            <span class="conv-presentation-answer-label"></span>
+            <span class="conv-presentation-dots" aria-hidden="true"></span>
+            <span class="conv-presentation-overall"></span>
+          </div>
+          <span class="conv-presentation-zero-cost" data-role="presentation-cost" title="Present is local; Mode 3 asks the working agent to author slides">0 extra tokens</span>
+        </div>
         <div class="conversations-view" id="conversationsView">
           <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
         </div>
@@ -751,7 +733,7 @@
                populateSpawnCwdPicker(); read by spawnFromInlineInput()
                so the spawn lands in the user-chosen folder. -->
           <span class="spawn-cwd-row">
-            <span class="spawn-cwd-label" title="The repo / folder the new session will start in — pick a recent one from the chips or browse.">Folder</span>
+            <span class="spawn-cwd-label" title="The repo / folder the new session will start in - pick a recent one from the chips or browse.">Folder</span>
             <span class="spawn-cwd-combo">
               <input id="spawnCwdPicker" class="spawn-cwd-picker"
                      title="Folder the new session will be spawned in"
@@ -849,24 +831,40 @@
               </div>
             </div>
             <div class="status-rail-pane" id="statusRailQueuePane" role="tabpanel" data-rail-pane="queue">
-              <div class="files-panel files-queue-panel" id="queuePanel">
-                <div class="fq-health" id="queueHealthStrip" aria-label="Queue health by project"></div>
-                <div class="fq-health-resize-handle" id="queueHealthResizeHandle" title="Drag to resize the queue list · double-click to reset" role="separator" aria-orientation="horizontal" aria-label="Resize queue health list"></div>
-                <div class="files-header">
-                  <span class="files-title-label">Queue</span>
-                  <select class="fq-scope-select" id="queueScopeSelect" aria-label="Queue scope for this session" title="Which queue this session shows"></select>
-                  <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
-                  <div class="fq-filter" id="queueFilterToggle" role="group" aria-label="Filter queue by status">
-                    <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
-                    <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
+              <div class="shared-queue-host shared-queue-host-rail" id="statusRailQueueHost">
+                <div class="files-panel files-queue-panel" id="queuePanel">
+                  <div class="fq-health" id="queueHealthStrip" aria-label="Queue health by project"></div>
+                  <div class="fq-health-resize-handle" id="queueHealthResizeHandle" title="Drag to resize the queue list · double-click to reset" role="separator" aria-orientation="horizontal" aria-label="Resize queue health list">
+                    <span class="fq-health-resize-grip" aria-hidden="true"></span>
+                    <button class="evergreen-log-btn" id="queueHealthLogBtn" data-role="evergreen-log-btn" type="button" title="Open Watchtower activity log">See log</button>
                   </div>
-                  <button class="fq-wrap-toggle" id="queueWrapToggle" type="button" title="Wrap queue issue titles" aria-label="Wrap queue issue titles" aria-pressed="false">Wrap</button>
-                  <span class="files-count" id="queueCount"></span>
+                  <div class="files-header">
+                    <span class="files-title-label">Queue</span>
+                    <select class="fq-scope-select" id="queueScopeSelect" aria-label="Queue scope for this session" title="Which queue this session shows"></select>
+                    <span class="fq-scope-busy" id="queueScopeBusy" role="status" aria-label="Loading selected queue"></span>
+                    <button class="files-queue-add" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">&#43;</button>
+                    <div class="fq-more-wrap">
+                      <button class="fq-more-btn" id="queueMoreBtn" type="button" title="More queue actions" aria-label="More queue actions" aria-haspopup="menu" aria-expanded="false">&hellip;</button>
+                      <div class="fq-more-menu" id="queueMoreMenu" role="menu" aria-hidden="true">
+                        <div id="queueBoardMenuSlot"></div>
+                        <button class="files-queue-import" id="queueImportDoc" type="button" title="Turn a plan document into queue tickets" role="menuitem" hidden>Import doc</button>
+                        <button class="fq-wrap-toggle" id="queueWrapToggle" type="button" role="menuitem" title="Wrap queue issue titles" aria-pressed="false">Wrap titles</button>
+                      </div>
+                    </div>
+                    <div class="fq-filter" id="queueFilterToggle" role="group" aria-label="Filter queue by status">
+                      <button class="fq-filter-btn" type="button" data-uxq-filter="all">All</button>
+                      <button class="fq-filter-btn" type="button" data-uxq-filter="open">Open</button>
+                    </div>
+                    <div class="fq-filter fq-type-filter" id="queueTypeFilterToggle" role="group" aria-label="Filter queue by ticket type">
+                      <button class="fq-filter-btn" type="button" data-uxq-type-filter="all">All</button>
+                      <button class="fq-filter-btn" type="button" data-uxq-type-filter="bug">Bugs</button>
+                      <button class="fq-filter-btn" type="button" data-uxq-type-filter="feature">Features</button>
+                    </div>
+                    <span class="files-count" id="queueCount"></span>
+                    <input type="text" id="queueSearchInput" class="fq-search-input" placeholder="Search issues…" aria-label="Search queue tickets">
+                  </div>
+                  <div class="files-queue-list" id="sidebarQueueList"></div>
                 </div>
-                <div class="fq-search-row">
-                  <input type="text" id="queueSearchInput" class="fq-search-input" placeholder="Search issues…" aria-label="Search queue tickets">
-                </div>
-                <div class="files-queue-list" id="sidebarQueueList"></div>
               </div>
             </div>
             <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
@@ -903,26 +901,48 @@
           </svg>
         </button>
         <div class="conv-goal-strip" data-role="conv-goal-strip" hidden></div>
-        <div class="conv-input-bar" id="convInputBar">
+        <div class="conv-input-bar" id="convInputBar" data-tour="spawn-bar">
+          <!-- Composer expand toggle — pinned to the bar's top-right corner. -->
+          <button class="expand-btn" id="convExpandBtn" title="Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)" aria-label="Expand composer" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+            </svg>
+          </button>
+          <!-- F2 cold-session composer. Both slots are hidden until
+               f2RenderComposer() decides the gate is hot (250k+ tokens AND
+               idle past the engine's cache-decay line). The rail needs only
+               the session row (tokens + mtime), so it paints the moment a
+               session is focused; the panel states the reload price and
+               offers one cheap alternative. Send stays the ordinary submit. -->
+          <div class="f2c-rail rail" data-role="conv-f2-rail" hidden></div>
           <div class="conv-input-row-top">
             <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true" enterkeyhint="send" inputmode="text"></textarea>
           </div>
+          <div class="f2c-panel" data-role="conv-f2-panel" hidden></div>
           <div class="conv-input-row-bottom">
             <div class="conv-input-selectors">
               <!-- Engine picker for new-session mode. Occupies the same slot as
                    the Esc button (mutually exclusive — Esc only appears for live
                    sessions, this only for `__new__`). updateInputBar() toggles
                    visibility. -->
-              <select id="convInputEngineSelect" class="engine-select" title="Engine that starts this new session — claude, codex, cursor, antigravity, kilo, or hermes" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+              <select id="convInputEngineSelect" class="engine-select" title="Engine that starts this new session - claude, codex, cursor, antigravity, kilo, hermes, or kimi" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <option value="claude">claude</option>
                 <option value="codex">codex</option>
                 <option value="cursor">cursor</option>
                 <option value="antigravity">antigravity</option>
                 <option value="kilo">kilo</option>
                 <option value="hermes">hermes</option>
+                <option value="kimi">kimi</option>
               </select>
               <select id="convInputModelSelect" class="model-select" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <!-- Populated dynamically via app.js -->
+              </select>
+              <select id="convInputEffortSelect" class="effort-select" title="Codex reasoning effort" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+                <option value="">Default effort</option>
+                <option value="low">Light</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra High</option>
               </select>
               <select id="convInputIssueAction" title="Action to take on this issue" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <option value="spawn">Fix (session)</option>
@@ -939,7 +959,7 @@
                    input is absent. (CCC-287) -->
             </div>
             <div class="conv-input-buttons">
-              <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal — cancels in-flight response (or kills a headless spawn)">Esc</button>
+              <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal - cancels in-flight response (or kills a headless spawn)">Esc</button>
               <button class="tts-btn" id="convTtsBtn" title="Read last message" aria-label="Read last message" aria-pressed="false">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M11 5 6 9H3v6h3l5 4V5Z"></path>
@@ -969,7 +989,7 @@
                   <path d="M13 2 4 14h7l-1 8 10-13h-7l1-7Z"></path>
                 </svg>
               </button>
-              <button class="compact-btn" id="convCompactBtn" title="Compact conversation context — summarize to free tokens" aria-label="Compact conversation context">
+              <button class="compact-btn" id="convCompactBtn" title="Compact conversation context - summarize to free tokens" aria-label="Compact conversation context">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M4 8 L4 5 L7 5 M20 8 L20 5 L17 5 M4 16 L4 19 L7 19 M20 16 L20 19 L17 19 M9 12 L15 12"></path>
                 </svg>
@@ -982,7 +1002,7 @@
               <!-- Submit+ : appends a "reply phone-style, short & conversational"
                    instruction to the message, sends it, then auto-reads the
                    reply aloud when it lands (summary block excluded). -->
-              <button class="submit-plus-btn" id="convSubmitPlusBtn" title="Submit+ — phone-mode reply (short, conversational, multi-turn) and auto-read it aloud" aria-label="Submit Plus — phone mode">
+              <button class="submit-plus-btn" id="convSubmitPlusBtn" title="Submit+ - phone-mode reply (short, conversational, multi-turn) and auto-read it aloud" aria-label="Submit Plus - phone mode">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4 6.2 2 2 0 0 1 5 4Z"></path>
                   <path d="M17 3v5M14.5 5.5h5"></path>
@@ -1012,13 +1032,14 @@
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
         <button id="kptRefreshBtn" title="Refresh data" aria-label="Refresh data">&#8634;</button>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
-        <select id="kptToolbarEngineSelect" title="Engine that starts the new session — claude, codex, cursor, antigravity, kilo, or hermes" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+        <select id="kptToolbarEngineSelect" title="Engine that starts the new session - claude, codex, cursor, antigravity, kilo, hermes, or kimi" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
           <option value="claude">claude</option>
           <option value="codex">codex</option>
           <option value="cursor">cursor</option>
           <option value="antigravity">antigravity</option>
           <option value="kilo">kilo</option>
           <option value="hermes">hermes</option>
+          <option value="kimi">kimi</option>
         </select>
         <button id="kptRunBtn" title="Run new session" aria-label="Run new session">Run</button>
         <button id="kptListViewBtn" title="Switch to list view" aria-label="Switch to list view">&#9783;</button>
@@ -1207,7 +1228,7 @@
             <span style="font-size:13px; line-height:1.5; color:var(--ink-dim, #8a96a8);">
               Send an anonymous daily ping so we can put real numbers on
               <a href="https://ccc.amirfish.ai/stats" target="_blank" rel="noopener" style="color:var(--accent, #ffd266);">ccc.amirfish.ai/stats</a>.
-              <strong>6 fields</strong> — version, OS, engines you have, sessions in last 24h.
+              <strong>6 fields</strong> - version, OS, engines you have, sessions in last 24h.
               <strong>Zero</strong> paths, prompts, or content.
               <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md" target="_blank" rel="noopener" style="color:var(--accent, #ffd266);">See the contract</a>.
             </span>
@@ -1348,7 +1369,7 @@
           </button>
         </div>
         <div class="bug-shot-help">
-          Opens the macOS area-selector — draw a rectangle over what you want to share.
+          Opens the macOS area-selector - draw a rectangle over what you want to share.
           Screenshots are published to a public branch of the CCC repo, so include
           only what you're OK making public.
         </div>
@@ -1383,7 +1404,7 @@
     <div class="upd-dialog" style="width:min(560px,94vw);">
       <div class="upd-title" id="spawnDefaultsTitle">Spawn defaults</div>
       <div class="upd-versions">
-        Used by New session and by ccc-orchestration when engine or model is omitted.
+        Used by New session and by ccc-orchestration when engine, model, or effort is omitted.
       </div>
       <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
         <div>
@@ -1394,6 +1415,7 @@
             <option value="cursor">Cursor</option>
             <option value="antigravity">Antigravity</option>
             <option value="kilo">Kilo</option>
+            <option value="kimi">Kimi</option>
           </select>
         </div>
         <div>
@@ -1404,6 +1426,31 @@
             The New session model picker mirrors this value. Explicit API payloads still win.
           </div>
         </div>
+        <div>
+          <label class="bug-label" for="spawnDefaultsWorkerEngine">Worker engine</label>
+          <select id="spawnDefaultsWorkerEngine" class="bug-input">
+            <option value="">WatchTower default</option>
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+            <option value="kimi">Kimi</option>
+          </select>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).
+          </div>
+        </div>
+        <div id="spawnDefaultsEffortField" style="display:none;">
+          <label class="bug-label" for="spawnDefaultsEffort">Default reasoning effort</label>
+          <select id="spawnDefaultsEffort" class="bug-input">
+            <option value="">Engine default</option>
+            <option value="low">Light</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">Extra High</option>
+          </select>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            Used for Codex spawns unless a request chooses an explicit effort.
+          </div>
+        </div>
       </div>
       <div class="upd-error" id="spawnDefaultsError"></div>
       <div class="upd-actions">
@@ -1412,6 +1459,435 @@
       </div>
     </div>
   </div>
+
+  <!-- Settings modal (W93). Replaces the old gear-button popover menu
+       (removed) with a command-palette-style modal: search bar up top,
+       a left rail of 7 sections, a scrollable content
+       pane of rows. Every row is one of three affordances - setting
+       (inline control), action (bordered button), or launcher (Open /
+       Configure button) - never mixed on one row. See
+       out/W93-spec.md for the full design spec.
+
+       Opened by #settingsBtn (gear, bottom of sidebar) and Cmd/Ctrl+,.
+       Closed by #settingsModalClose, Escape, or backdrop click. All of
+       this is Slice B (app.js) - this slice only ships markup + CSS, so
+       the modal has no open/close behavior yet; it stays `hidden`.
+
+       IDs load-bearing for existing JS (verbatim, moved from the old
+       popover, do not rename): runOnboardingBtn, takeTourBtn,
+       spawnDefaultsBtn, networkAccessBtn, federationPeersBtn,
+       fleetViewBtn, carModeMenuBtn, restartServerBtn/restartServerLabel,
+       openTotalRecallBtn, openTokenOptimizerBtn. `#appearancePopover` is
+       kept as the Appearance section's container id for the same reason
+       (existing `$appearancePopover.querySelectorAll(...)` lookups). -->
+  <div id="settingsModal" class="settings-modal-overlay" hidden role="dialog" aria-modal="true" aria-label="Settings">
+    <div class="settings-modal-backdrop" id="settingsModalBackdrop"></div>
+    <div class="settings-modal">
+      <div class="settings-modal-header">
+        <div class="settings-search-wrap">
+          <svg class="settings-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"/>
+            <path d="M21 21l-4.3-4.3"/>
+          </svg>
+          <input type="text" id="settingsSearchInput" class="settings-search-input" placeholder="Search settings…" autocomplete="off" aria-label="Search settings">
+        </div>
+        <span class="settings-esc-hint">esc to close</span>
+        <button type="button" class="settings-modal-close" id="settingsModalClose" title="Close" aria-label="Close settings">&times;</button>
+      </div>
+      <div class="settings-modal-body">
+        <div class="settings-rail" id="settingsRail" role="tablist" aria-label="Settings sections">
+          <button type="button" class="settings-rail-item is-active" id="settingsRailTab-appearance" data-section-target="appearance" role="tab" aria-selected="true" aria-controls="appearancePopover">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+            <span>Appearance</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-layout" data-section-target="layout" role="tab" aria-selected="false" aria-controls="settingsSection-layout">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <span>Layout &amp; View</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-sessions" data-section-target="sessions" role="tab" aria-selected="false" aria-controls="settingsSection-sessions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+            <span>Sessions &amp; Spawning</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-network" data-section-target="network" role="tab" aria-selected="false" aria-controls="settingsSection-network">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
+            <span>Fleet &amp; Network</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-engines" data-section-target="engines" role="tab" aria-selected="false" aria-controls="settingsSection-engines">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            <span>Engines</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-tools" data-section-target="tools" role="tab" aria-selected="false" aria-controls="settingsSection-tools">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
+            <span>Tools</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-experimental" data-section-target="experimental" role="tab" aria-selected="false" aria-controls="settingsSection-experimental" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v5.5L5.5 17a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 8.5V3"/></svg>
+            <span>Experimental</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-maintenance" data-section-target="maintenance" role="tab" aria-selected="false" aria-controls="settingsSection-maintenance">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 7.5a4.5 4.5 0 0 1-6.2 4.16L7 19.5 4.5 17l7.84-7.8A4.5 4.5 0 0 1 18 3l-3 3 1 1 3-3a4.5 4.5 0 0 1 2 3.5z"/></svg>
+            <span>Maintenance</span>
+          </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-help" data-section-target="help" role="tab" aria-selected="false" aria-controls="settingsSection-help">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.5 2.5 0 1 1 3.7 2.2c-.8.45-1.2 1-1.2 1.9v.3"/><line x1="12" y1="16.7" x2="12" y2="16.71"/></svg>
+            <span>Help &amp; Onboarding</span>
+          </button>
+        </div>
+        <div class="settings-pane" id="settingsPane">
+
+          <section class="settings-section" id="appearancePopover" data-section-id="appearance" role="tabpanel" aria-labelledby="settingsRailTab-appearance">
+            <div class="settings-section-eyebrow">Appearance</div>
+
+            <div class="settings-row" data-keywords="theme color scheme dark light system mode appearance">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Theme</div>
+                <div class="settings-row-desc">Dashboard color scheme.</div>
+              </div>
+              <div class="settings-row-control">
+                <div class="settings-segmented" data-segmented-group="theme" role="group" aria-label="Theme">
+                  <button type="button" class="settings-segment" data-theme="light" role="radio" aria-checked="false">Light</button>
+                  <button type="button" class="settings-segment" data-theme="dark" role="radio" aria-checked="false">Dark</button>
+                  <button type="button" class="settings-segment" data-theme="system" role="radio" aria-checked="false">System</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="font typeface ui mono system monospace">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Font</div>
+                <div class="settings-row-desc">UI typeface used across the dashboard.</div>
+              </div>
+              <div class="settings-row-control">
+                <div class="settings-segmented" data-segmented-group="font" role="group" aria-label="Font">
+                  <button type="button" class="settings-segment" data-font="system" role="radio" aria-checked="false">System</button>
+                  <button type="button" class="settings-segment" data-font="mono" role="radio" aria-checked="false">Mono</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="conversation text size reader font scale zoom message a- a+">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Conversation text size</div>
+                <div class="settings-row-desc">Reader font scale for message text.</div>
+              </div>
+              <div class="settings-row-control">
+                <!-- Slice B moves the existing `.font-size-controls` (A-/A+
+                     stepper, id-less, drives ccc-conv-font-scale) here. -->
+                <div id="settingsModalFontSlot" class="settings-modal-font-slot"></div>
+              </div>
+            </div>
+
+            <div class="settings-reset-row">
+              <button type="button" class="settings-reset-btn" id="settingsResetAppearance">Reset Appearance to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-layout" data-section-id="layout" role="tabpanel" aria-labelledby="settingsRailTab-layout">
+            <div class="settings-section-eyebrow">Layout &amp; View</div>
+
+            <div class="settings-row" data-keywords="github issues show hide gh view conversation list">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Show GitHub issues</div>
+                <div class="settings-row-desc">Show GitHub issues alongside sessions in the conversation list.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsGhIssuesToggle" data-view-gh-toggle role="switch" aria-checked="false" aria-label="Show GitHub issues">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="open ask show hide unanswered ended session conversation list">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Show Open ask</div>
+                <div class="settings-row-desc">Show recently ended sessions that are still waiting for your reply.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsOpenAskToggle" data-view-openask-toggle role="switch" aria-checked="false" aria-label="Show Open ask">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="live updates left variant hero position session list">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Live updates on left</div>
+                <div class="settings-row-desc">Move live session updates to the left side of the hero strip.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsLiveVariantToggle" data-live-variant-toggle role="switch" aria-checked="false" aria-label="Live updates on left">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="queue first mode q-first board main view">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Queue-first mode</div>
+                <div class="settings-row-desc">Open the main view straight into the queue board instead of the session list.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsQfirstToggle" data-qfirst-toggle role="switch" aria-checked="false" aria-label="Queue-first mode">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="fleet pulse hero health strip repos nodes show">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Fleet Pulse</div>
+                <div class="settings-row-desc">A live health strip summarizing every repo and node at a glance.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="settingsFleetPulseBtn" data-hero-open>Show</button>
+              </div>
+            </div>
+
+            <div class="settings-reset-row">
+              <button type="button" class="settings-reset-btn" id="settingsResetLayout">Reset Layout &amp; View to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-sessions" data-section-id="sessions" role="tabpanel" aria-labelledby="settingsRailTab-sessions">
+            <div class="settings-section-eyebrow">Sessions &amp; Spawning</div>
+
+            <div class="settings-row" data-keywords="spawn defaults engine model effort new session codex claude">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Spawn defaults</div>
+                <div class="settings-row-desc">Default engine, model, and effort used when you spawn a new session.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-row-value" id="settingsSpawnEngineValue">Not set</span>
+                <button type="button" class="settings-action-btn" id="spawnDefaultsBtn">Configure…</button>
+              </div>
+            </div>
+
+            <div class="settings-reset-row">
+              <button type="button" class="settings-reset-btn" id="settingsResetSessions">Reset Sessions &amp; Spawning to defaults</button>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-engines" data-section-id="engines" role="tabpanel" aria-labelledby="settingsRailTab-engines">
+            <div class="settings-section-eyebrow">Engines</div>
+
+            <div class="settings-row" data-keywords="engine cli automatic updates versions install latest claude codex cursor antigravity hermes">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Automatic CLI updates</div>
+                <div class="settings-row-desc engine-update-summary" id="engineUpdateStatusDesc">Checking installed engines…</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-row-value" id="engineUpdateLastRun">Always on</span>
+                <button type="button" class="settings-action-btn" id="engineUpdateNowBtn">Update now</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="kimi engine acp setup install moonshot membership">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Kimi (ACP)</div>
+                <div class="settings-row-desc" id="kimiSetupDesc">Checking setup…</div>
+              </div>
+              <div class="settings-row-control kimi-setup-control">
+                <span class="settings-row-value kimi-setup-version" id="kimiSetupVersion"></span>
+                <button type="button" class="settings-action-btn" id="kimiSetupVerifyBtn">Verify setup</button>
+                <button type="button" class="settings-action-btn" id="kimiSetupRecheckBtn">Recheck</button>
+              </div>
+            </div>
+
+            <div class="settings-row" id="kimiSetupStepsRow" hidden data-keywords="kimi install login guide steps">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Get started with Kimi</div>
+                <div class="settings-row-desc kimi-setup-steps" id="kimiSetupSteps"></div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="kimi docs membership third party setup guide">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Kimi documentation</div>
+                <div class="settings-row-desc">Membership plans and the official third-party agent setup guide.</div>
+              </div>
+              <div class="settings-row-control kimi-setup-links">
+                <a class="settings-action-btn" id="kimiDocsMembership" href="https://www.kimi.com/code/docs/en/kimi-code/membership.html" target="_blank" rel="noopener noreferrer">Membership</a>
+                <a class="settings-action-btn" id="kimiDocsSetup" href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-network" data-section-id="network" role="tabpanel" aria-labelledby="settingsRailTab-network">
+            <div class="settings-section-eyebrow">Fleet &amp; Network</div>
+
+            <div class="settings-row" data-keywords="network access tailnet remote phone device bind">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Network access</div>
+                <div class="settings-row-desc">Let another device on your trusted network reach this dashboard.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="networkAccessBtn">Configure…</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="nodes peers pair federation ssh loopback">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Nodes &amp; peers</div>
+                <div class="settings-row-desc">Pair this machine with another node to browse and route work across them.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="federationPeersBtn">Open…</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="fleet view matrix repos worktrees branches prs deployments">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Fleet</div>
+                <div class="settings-row-desc">See every repo across every paired node in one matrix.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="fleetViewBtn">Open page ↗</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="car mode voice hands free drive agents">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Car Mode</div>
+                <div class="settings-row-desc">Drive your agents hands-free by voice.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="carModeMenuBtn">Open…</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-tools" data-section-id="tools" role="tabpanel" aria-labelledby="settingsRailTab-tools">
+            <div class="settings-section-eyebrow">Tools</div>
+
+            <!-- Slice B retargets the boot-time `_moveToHome` calls to drop
+                 Terminal, History, Worktrees, Stats, Today, Notes, and COO
+                 launchers here, restyled as launcher rows via the
+                 #settingsModalToolsSlot child-styling rules in app.css. -->
+            <div id="settingsModalToolsSlot" class="settings-modal-tools-slot" data-role="settings-modal-tools-slot"></div>
+
+            <!-- Resurrected (W93): the ⌘K session-search handler has existed
+                 in app.js since before the modal rewrite, but no markup ever
+                 pointed at #settingsCmdkBtn — it was dead since a refactor.
+                 Slice B re-adds a launcher row so it's reachable again. -->
+            <div class="settings-row" data-keywords="session search find cmd k transcript sessions">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Session search</div>
+                <div class="settings-row-desc">Find any session or transcript (Cmd+K).</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="settingsCmdkBtn">Open</button>
+              </div>
+            </div>
+
+            <a class="settings-row settings-row-link" id="openTotalRecallBtn" href="http://localhost:24824/total-recall" target="_blank" rel="noopener" style="display:none;" data-keywords="total recall dashboard memory sessions">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Total Recall dashboard</div>
+                <div class="settings-row-desc">Open the Total Recall memory dashboard in a new tab.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
+              </div>
+            </a>
+
+            <a class="settings-row settings-row-link" id="openTokenOptimizerBtn" href="http://localhost:24842/token-optimizer" target="_blank" rel="noopener" style="display:none;" data-keywords="token optimizer dashboard usage context">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Token Optimizer dashboard</div>
+                <div class="settings-row-desc">Open the Token Optimizer dashboard in a new tab.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
+              </div>
+            </a>
+          </section>
+
+          <section class="settings-section" id="settingsSection-experimental" data-section-id="experimental" role="tabpanel" aria-labelledby="settingsRailTab-experimental" hidden>
+            <div class="settings-section-eyebrow">Experimental</div>
+            <div class="settings-section-note">Preview features shipped but off by default. Enabling one affects only this machine. Reload to apply.</div>
+            <!-- Rows rendered from /api/features preview_meta by
+                 renderExperimentalFlags() in app.js. Each row carries
+                 data-keywords for settings search. -->
+            <div id="settingsExperimentalSlot" class="settings-experimental-slot"></div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-maintenance" data-section-id="maintenance" role="tabpanel" aria-labelledby="settingsRailTab-maintenance">
+            <div class="settings-section-eyebrow">Maintenance</div>
+
+            <div class="settings-row" data-keywords="restart server 8090 reboot reload">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Restart dashboard</div>
+                <div class="settings-row-desc">Restart the web dashboard while the execution worker keeps agent turns alive.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn danger" id="restartServerBtn"><span id="restartServerLabel">Restart dashboard</span></button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="worker execution pause drain queue control plane">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Execution worker</div>
+                <div class="settings-row-desc" id="controlPlaneStatus">Checking persistent worker…</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="controlPlaneReconcileBtn" hidden>Reconcile</button>
+                <button type="button" class="settings-action-btn" id="controlPlaneDrainBtn" disabled>Pause dispatch</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="watchtower server daemon api restart start service">
+              <div class="settings-row-main">
+                <div class="settings-row-label">WatchTower server</div>
+                <div class="settings-row-desc" id="watchtowerServiceStatus">Checking WatchTower daemon…</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="watchtowerServiceOpenBtn" disabled>Open</button>
+                <button type="button" class="settings-action-btn" id="watchtowerServiceActionBtn" disabled>Start</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-help" data-section-id="help" role="tabpanel" aria-labelledby="settingsRailTab-help">
+            <div class="settings-section-eyebrow">Help &amp; Onboarding</div>
+
+            <div class="settings-row" data-keywords="run onboarding setup first run replay">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Run onboarding</div>
+                <div class="settings-row-desc">Replay the first-run setup flow.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="runOnboardingBtn">Run</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="take the tour guided tour spotlight">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Take the tour</div>
+                <div class="settings-row-desc">Replay the guided tour of the dashboard.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="takeTourBtn">Start</button>
+              </div>
+            </div>
+
+            <a class="settings-row settings-row-link" href="https://github.com/amirfish1/claude-command-center#readme" target="_blank" rel="noopener" data-keywords="get help readme docs documentation support">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Get help</div>
+                <div class="settings-row-desc">Open the README for setup help and documentation.</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-launcher-btn">Open&nbsp;<span class="settings-launcher-arrow" aria-hidden="true">&#8599;</span></span>
+              </div>
+            </a>
+          </section>
+
+          <div class="settings-empty-state" id="settingsEmptyState" hidden>
+            <div class="settings-empty-state-text">No settings match "<span id="settingsEmptyQuery"></span>"</div>
+            <div class="settings-empty-state-hint">Press esc to clear the search</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 
   <!-- Network-access modal. Opened from the settings popover.
        Lets the user opt in to reachability over their tailnet without
@@ -1424,7 +1900,7 @@
       <div class="upd-title" id="networkTitle">Network access</div>
       <div class="upd-versions">
         Lets a phone or other device on your trusted network reach the UI.
-        CCC has no auth — every origin trusted here can run commands as
+        CCC has no auth - every origin trusted here can run commands as
         you. See <a href="https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.
       </div>
       <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
@@ -1475,7 +1951,7 @@
     <div class="upd-dialog" style="width:min(700px,94vw);max-height:86vh;overflow-y:auto;">
       <div class="upd-title" id="fedPeersTitle">Nodes &amp; peers</div>
       <div class="upd-versions">
-        Pair this CCC with another node — over SSH or a local port — to browse
+        Pair this CCC with another node - over SSH or a local port - to browse
         and route work across machines. Peers only ever talk to each other's
         loopback API; nothing here opens a network listener.
       </div>
@@ -1531,6 +2007,45 @@
     </div>
   </div>
 
+  <!-- "Continue on…" session handoff. Opened from the conversation overflow
+       (⋯) menu via openHandoffModal(sessionId, displayName). Picks a paired
+       peer, previews the git/plan/blocker preflight, then POSTs the handoff.
+       Reuses the .upd-* modal shell and the fed- section primitives. -->
+  <div id="handoffModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="handoffTitle">
+    <div class="upd-backdrop" id="handoffBackdrop"></div>
+    <div class="upd-dialog" style="width:min(620px,94vw);max-height:88vh;overflow-y:auto;">
+      <div class="upd-title" id="handoffTitle">Continue on another node</div>
+      <div class="upd-versions" id="handoffSubtitle">
+        Move this session to a paired node - its git state and working copy
+        travel with it.
+      </div>
+
+      <div class="fed-section">
+        <div class="fed-section-title">Destination</div>
+        <div class="fed-add-row">
+          <select id="handoffDest" class="bug-input" style="flex:1;min-width:160px;" aria-label="Destination node"></select>
+          <button type="button" class="upd-btn fed-btn" id="handoffPreflightBtn">Preflight</button>
+        </div>
+        <div class="handoff-no-peers" id="handoffNoPeers" hidden>
+          No paired nodes - <button type="button" class="handoff-link" id="handoffOpenPeers">set one up in Nodes &amp; peers…</button>
+        </div>
+      </div>
+
+      <div class="handoff-plan" id="handoffPlan" hidden></div>
+
+      <div class="upd-error" id="handoffError"></div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn" id="handoffCloseBtn">Close</button>
+        <button type="button" class="upd-btn fed-btn" id="handoffRecheckBtn" hidden>Re-check</button>
+        <button type="button" class="upd-btn upd-primary fed-btn" id="handoffConfirmBtn" hidden disabled>Hand off</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The Fleet view and its "Resolve all" plan modal moved to their own page
+       (static/fleet.html + static/fleet.js). A fleet scan touches every repo
+       on every paired node, so it must not run behind a dashboard overlay. -->
+
   <!-- Car Mode: hands-free voice operator. Explains the feature + cost, lets the
        user store optional API keys, and starts/stops the ccc-voice agent. Keys
        POST to /api/car-mode/config (localhost-only); start/stop/status hit
@@ -1538,7 +2053,7 @@
   <div id="carModeModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="carModeTitle">
     <div class="upd-backdrop" id="carModeBackdrop"></div>
     <div class="upd-dialog" style="width:min(640px,94vw);">
-      <div class="upd-title" id="carModeTitle">🚗 Car Mode — drive your agents by voice</div>
+      <div class="upd-title" id="carModeTitle">🚗 Car Mode - drive your agents by voice</div>
       <div class="upd-versions">
         A hands-free voice operator for CCC. A dispatcher reads you your fleet,
         you say <em>"take me into the ads session"</em> to talk to that agent, then
@@ -1551,11 +2066,11 @@
 
       <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
         <div>
-          <label class="bug-label" for="carModeAnthropicKey">Anthropic API key <span style="color:var(--text-muted);font-weight:400;">(required — the dispatcher brain)</span></label>
+          <label class="bug-label" for="carModeAnthropicKey">Anthropic API key <span style="color:var(--text-muted);font-weight:400;">(required - the dispatcher brain)</span></label>
           <input type="password" id="carModeAnthropicKey" class="bug-input" autocomplete="off" placeholder="sk-ant-…  (leave blank to keep the stored one)">
         </div>
         <div>
-          <label class="bug-label" for="carModeDeepgramKey">Deepgram API key <span style="color:var(--text-muted);font-weight:400;">(optional — enables speech in + out)</span></label>
+          <label class="bug-label" for="carModeDeepgramKey">Deepgram API key <span style="color:var(--text-muted);font-weight:400;">(optional - enables speech in + out)</span></label>
           <input type="password" id="carModeDeepgramKey" class="bug-input" autocomplete="off" placeholder="leave blank to keep the stored one">
         </div>
         <div style="color:var(--text-muted);font-size:12px;">
@@ -1569,7 +2084,7 @@
           <strong>What it costs</strong>
           <div style="margin-top:4px;">
             About <strong>$0.35/hr</strong> to run: routing agent on Claude Haiku 4.5
-            (~$0.10/hr), Deepgram speech-to-text (~$0.08–0.10/hr) and text-to-speech
+            (~$0.10/hr), Deepgram speech-to-text (~$0.08-0.10/hr) and text-to-speech
             (~$0.15/hr). Near-free if you skip Deepgram and use your Mac's built-in
             speech. Your CCC sessions bill separately as usual.
           </div>
@@ -1577,7 +2092,7 @@
 
         <!-- Graceful-degradation notice. -->
         <div id="carModeDegradeNotice" class="car-mode-degrade">
-          <strong>If a key is missing</strong> — Car Mode degrades instead of breaking:
+          <strong>If a key is missing</strong> - Car Mode degrades instead of breaking:
           <ul style="margin:6px 0 0 18px;padding:0;">
             <li>No Deepgram key → hands-free voice is off, but CCC's built-in browser
               mic and read-aloud (free, no key) still let you work by voice in the UI.</li>
@@ -1694,6 +2209,56 @@
     <div class="modal-footer">
       <button class="modal-cancel" id="coordModalCancel">Cancel</button>
       <button class="modal-start" id="coordModalStart" type="button">Start coordination</button>
+    </div>
+  </div>
+</div>
+<!-- Shared engine bridge recovery. Opened by the Codex app-server / Kimi ACP
+     process pill in the conversation breadcrumb. -->
+<div class="bridge-recovery-backdrop" id="bridgeRecoveryBackdrop">
+  <div class="bridge-recovery-modal" role="dialog" aria-modal="true"
+       aria-labelledby="bridgeRecoveryTitle">
+    <div class="bridge-recovery-heading">
+      <div>
+        <h3 id="bridgeRecoveryTitle">Recover engine bridge</h3>
+        <div class="bridge-recovery-subtitle" id="bridgeRecoverySubtitle"></div>
+      </div>
+      <button type="button" class="bridge-recovery-close" id="bridgeRecoveryClose"
+              title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="bridge-recovery-status" id="bridgeRecoveryStatus" role="status">
+      Checking bridge safety…
+    </div>
+    <fieldset class="bridge-recovery-queue" id="bridgeRecoveryQueue">
+      <legend>Queued message to retry</legend>
+      <div class="bridge-recovery-empty">Loading queued messages…</div>
+    </fieldset>
+    <div class="bridge-recovery-note">
+      CCC checks for other active sessions before restarting this shared
+      process. Other queued messages remain untouched.
+    </div>
+    <div class="modal-error" id="bridgeRecoveryError"></div>
+    <div class="modal-footer">
+      <button class="modal-cancel" id="bridgeRecoveryCancel" type="button">Cancel</button>
+      <button class="modal-start" id="bridgeRecoveryStart" type="button" disabled>
+        Restart bridge
+      </button>
+    </div>
+  </div>
+</div>
+<div class="folder-picker-backdrop" id="folderPickerBackdrop">
+  <div class="folder-picker" role="dialog" aria-modal="true" aria-labelledby="folderPickerTitle">
+    <h3 id="folderPickerTitle">Choose a folder</h3>
+    <div class="fp-note" id="folderPickerNote" hidden></div>
+    <div class="fp-path-row">
+      <button id="folderPickerUp" class="fp-up-btn" type="button" title="Up one level" aria-label="Up one level">&#8593;</button>
+      <input type="text" id="folderPickerPath" autocomplete="off" spellcheck="false"
+             placeholder="/path/to/folder" aria-label="Folder path">
+    </div>
+    <div class="fp-list" id="folderPickerList" role="listbox" aria-label="Subfolders"></div>
+    <div class="modal-error" id="folderPickerError"></div>
+    <div class="modal-footer">
+      <button class="modal-cancel" id="folderPickerCancel">Cancel</button>
+      <button class="modal-start" id="folderPickerSelect" type="button">Select this folder</button>
     </div>
   </div>
 </div>
@@ -1841,7 +2406,7 @@
   <div class="term-log" id="termLog" tabindex="0"></div>
   <div class="term-input-row">
     <span class="term-prompt" id="termPrompt">repo</span>
-    <input type="text" class="term-input" id="termInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="run a command (no vim/top — use --yes for interactive scripts)">
+    <input type="text" class="term-input" id="termInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="run a command (no vim/top - use --yes for interactive scripts)">
   </div>
 </div>
 
@@ -1949,7 +2514,7 @@
     $prompt.textContent = label;
     const isPlaceholder = (rel === 'No conversation open');
     $cwdLabel.title = isPlaceholder
-      ? 'The terminal runs in the open conversation’s repo — open a conversation first'
+      ? 'The terminal runs in the open conversation’s repo - open a conversation first'
       : (cwd || shown);
   }
   // Re-poll cwd when the open conversation changes (app.js dispatches
@@ -1994,7 +2559,7 @@
     while ((m = re.exec(input)) !== null) {
       flush(m.index);
       last = re.lastIndex;
-      if (m[1] === undefined) continue; // non-SGR escape — drop
+      if (m[1] === undefined) continue; // non-SGR escape - drop
       const codes = m[1].split(';').filter(s => s !== '').map(Number);
       if (codes.length === 0) { classes = []; continue; }
       for (const c of codes) {
@@ -2059,7 +2624,7 @@
     if (running) return;  // ignore Enter while running (per design)
     const repoPath = terminalRepoPath();
     if (!repoPath) {
-      appendOutput('[no repo — the terminal runs in the open conversation\'s repo; open a conversation first]\n', 'err');
+      appendOutput('[no repo - the terminal runs in the open conversation\'s repo; open a conversation first]\n', 'err');
       return;
     }
     appendOutput((($prompt.textContent || 'repo')) + ' $ ' + cmd + '\n', 'cmd');
@@ -2239,7 +2804,7 @@
 // ============================================================================
 (function () {
   const $overlay = document.getElementById('hsdOverlay');
-  if (!$overlay) return;  // markup not present — feature disabled in this build
+  if (!$overlay) return;  // markup not present - feature disabled in this build
   const $btn      = document.getElementById('historyBtn');
   const $closeBtn = document.getElementById('hsdCloseBtn');
   const $input    = document.getElementById('hsdInput');
@@ -2249,7 +2814,7 @@
   const $results  = document.getElementById('hsdResults');
   const $detail   = document.getElementById('hsdDetail');
 
-  let _searchSeq = 0;     // monotonic — guards against out-of-order responses
+  let _searchSeq = 0;     // monotonic - guards against out-of-order responses
   let _debounceT = null;
   let _selectedUuid = null;
 
@@ -2369,7 +2934,7 @@
       json = await r.json();
     } catch (e) {
       if (seq !== _searchSeq) return;
-      setStatus('Network error — see console.', true);
+      setStatus('Network error - see console.', true);
       console.error(e);
       return;
     }
@@ -2527,7 +3092,7 @@
   const isChromiumLike = /Chrome|CriOS|Edg/.test(ua) && !isSafari;
 
   if (isIOS) {
-    $body.innerHTML = 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>. CCC opens in its own window — no tab bar, native feel.';
+    $body.innerHTML = 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>. CCC opens in its own window - no tab bar, native feel.';
   } else if (isSafari) {
     $body.innerHTML = 'In Safari\'s menu bar, choose <strong>File → Add to Dock…</strong> CCC opens in its own window with no browser chrome.';
     // Safari has no install API; turn the button into a "Show me" link
@@ -2535,7 +3100,7 @@
     $btn.hidden = false;
     $btn.textContent = 'How to install';
   } else if (isChromiumLike) {
-    $body.innerHTML = 'Install CCC as a focused dashboard window — no browser chrome, dock icon, faster context switches.';
+    $body.innerHTML = 'Install CCC as a focused dashboard window - no browser chrome, dock icon, faster context switches.';
     // Show the button immediately so the banner always has a click target,
     // even before `beforeinstallprompt` fires (it can take a few seconds,
     // or never fire if the engagement heuristic isn't met). Click handler
@@ -2544,7 +3109,7 @@
     $btn.hidden = false;
     $btn.textContent = 'Install';
   } else {
-    $body.innerHTML = 'Look for "Install app" in your browser menu — CCC will open in its own window.';
+    $body.innerHTML = 'Look for "Install app" in your browser menu - CCC will open in its own window.';
     $btn.hidden = false;
     $btn.textContent = 'How to install';
   }

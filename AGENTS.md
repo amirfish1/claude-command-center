@@ -10,6 +10,14 @@ Repo lives at `github.com/amirfish1/claude-command-center`. Every commit, commen
 - No secrets — not even placeholder tokens that "look like" real ones. Use obvious fakes (`sk-ant-test-XXXX`).
 - No references to private internal systems. If a feature exists for one user, either generalize it or gitignore it (see the Morning view for the pattern).
 
+## Private documentation boundary
+
+This checkout is public. Keep non-public plans, specs, product-story source,
+backlog notes, and agent working documents in the separate private
+`CCC-private-docs` repository. Do not recreate `docs/superpowers/`, commit
+private-document copies here, or add a private-repository submodule or
+symlink. Publish only explicitly reviewed, public-safe exports.
+
 ## Commits
 
 **Conventional Commits.** Scan `git log` for existing scopes — match them. Common types in this repo:
@@ -83,6 +91,11 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 
 - `server.py` is stdlib-only on purpose — no pip dependencies at runtime. Don't import `requests`, `pydantic`, `fastapi`, etc. `urllib` + `http.server` + `json` cover it.
 - `static/index.html` is a single-file app by design (no bundler, no npm). Inline CSS/JS is expected. Don't split it into modules without a strong reason.
+- In zsh, lowercase `path` is a special array tied directly to `PATH`. Never use
+  `path` as a scratch, local, or loop variable in shell diagnostics; use a
+  descriptive name such as `target_path` or `candidate_path`. If commands seem
+  to disappear after a probe, check `typeset -p path PATH` before changing the
+  machine's global environment.
 - Flow workspace work (`#flowBoard`, `static/app.js`, `static/app.css`) has
   maintainer notes in `.claude/rules/flow-workspace.md`.
 - `hooks/` scripts run inside agent hook pipelines — they must exit fast and never prompt.
@@ -95,6 +108,12 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 ### Browser / UI verification
 
 To verify UI changes visually, use this repo's **puppeteer** harness: `node snapshot.js` launches headless Chrome, loads `http://127.0.0.1:8090`, and writes `snapshot.png`. Puppeteer's browser lives in `~/.cache/puppeteer`.
+
+CCC uses Puppeteer 25, which no longer exposes `page.waitForTimeout()`. For a
+short delay in an ad-hoc verification script, use
+`await new Promise((resolve) => setTimeout(resolve, ms))`; prefer
+`page.waitForSelector()`, `page.waitForFunction()`, or `page.waitForNetworkIdle()`
+when a specific condition is available.
 
 **Do not use the Codex in-app browser (`iab`) backend or Playwright for this.** `iab` is unavailable outside a desktop app context, and Playwright is not a CCC dependency — "iab browser not available" / "cannot import playwright" means wrong tool, not a breakage. Use `node snapshot.js` (Chromium is sufficient; no WebKit/Firefox needed).
 

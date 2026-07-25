@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CCC mark: a board of agent sessions, one flagged for attention">
+  <title>CCC mark</title>
+  <desc>A dark board holding a grid of agent-session tiles. Three are calm slate-blue; the top-right tile is amber, the one that needs you.</desc>
+
+  <!-- Board tile -->
+  <rect x="2" y="2" width="508" height="508" rx="114" fill="#161b22" stroke="#30363d" stroke-width="4"/>
+
+  <!-- Calm sessions (slate-blue) with two content lines each -->
+  <g>
+    <!-- top-left -->
+    <rect x="96"  y="96"  width="144" height="144" rx="30" fill="#6e8caf"/>
+    <rect x="118" y="146" width="80"  height="13"  rx="6.5" fill="#0d1117" opacity="0.28"/>
+    <rect x="118" y="176" width="54"  height="13"  rx="6.5" fill="#0d1117" opacity="0.28"/>
+    <!-- bottom-left -->
+    <rect x="96"  y="272" width="144" height="144" rx="30" fill="#6e8caf"/>
+    <rect x="118" y="322" width="80"  height="13"  rx="6.5" fill="#0d1117" opacity="0.28"/>
+    <rect x="118" y="352" width="54"  height="13"  rx="6.5" fill="#0d1117" opacity="0.28"/>
+    <!-- bottom-right -->
+    <rect x="272" y="272" width="144" height="144" rx="30" fill="#6e8caf"/>
+    <rect x="294" y="322" width="80"  height="13"  rx="6.5" fill="#0d1117" opacity="0.28"/>
+    <rect x="294" y="352" width="54"  height="13"  rx="6.5" fill="#0d1117" opacity="0.28"/>
+  </g>
+
+  <!-- The one that needs you (amber) with an attention dot -->
+  <g>
+    <rect x="272" y="96"  width="144" height="144" rx="30" fill="#f5a623"/>
+    <rect x="294" y="146" width="80"  height="13"  rx="6.5" fill="#0d1117" opacity="0.30"/>
+    <rect x="294" y="176" width="54"  height="13"  rx="6.5" fill="#0d1117" opacity="0.30"/>
+    <circle cx="386" cy="126" r="15" fill="#0d1117"/>
+  </g>
+</svg>

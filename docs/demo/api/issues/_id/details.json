@@ -2,8 +2,8 @@
   "ok": true,
   "issue": {
     "number": 0,
-    "title": "Demo issue — what real GH issue detail looks like in CCC",
-    "body": "This is a static fixture stand-in for `/api/issues/<n>/details`. In the real dashboard, CCC fetches the live GitHub issue (body, labels, comments, state) on-demand via `gh issue view` so you can read the full context next to the session that's working on it — and act (close as completed / not planned / duplicate, reply, mark needs-attention) without leaving the page.\n\nIn this demo, every issue card resolves to this same generic detail page because the static GH Pages build can't talk to GitHub's API. Install CCC locally and connect it to your repo to see your actual issues here.\n\n### What you'd see in real use\n\n- The original issue body, rendered as markdown.\n- All comments, in chronological order, with author + timestamp.\n- Inline `Close as completed / not planned / duplicate` buttons in the right rail.\n- A `Commit & resolve` shortcut that prompts the linked session to commit + push + close the issue in one flow.\n- A `Reply` button that drafts a comment without context-switching to GitHub.\n\n### Try it locally\n\nClone `amirfish1/claude-command-center`, run `./run.sh`, point it at one of your repos with open issues, and click any GH issue card.",
+    "title": "Demo issue - what real GH issue detail looks like in CCC",
+    "body": "This is a static fixture stand-in for `/api/issues/<n>/details`. In the real dashboard, CCC fetches the live GitHub issue (body, labels, comments, state) on-demand via `gh issue view` so you can read the full context next to the session that's working on it - and act (close as completed / not planned / duplicate, reply, mark needs-attention) without leaving the page.\n\nIn this demo, every issue card resolves to this same generic detail page because the static GH Pages build can't talk to GitHub's API. Install CCC locally and connect it to your repo to see your actual issues here.\n\n### What you'd see in real use\n\n- The original issue body, rendered as markdown.\n- All comments, in chronological order, with author + timestamp.\n- Inline `Close as completed / not planned / duplicate` buttons in the right rail.\n- A `Commit & resolve` shortcut that prompts the linked session to commit + push + close the issue in one flow.\n- A `Reply` button that drafts a comment without context-switching to GitHub.\n\n### Try it locally\n\nClone `amirfish1/claude-command-center`, run `./run.sh`, point it at one of your repos with open issues, and click any GH issue card.",
     "url": "https://github.com/demo/widgets-api/issues/0",
     "state": "OPEN",
     "stateReason": null,
@@ -23,12 +23,12 @@
       {
         "author": { "login": "amirfish1" },
         "createdAt": "2026-05-17T13:40:00Z",
-        "body": "Spawned a CCC session against this — it'll edit `app/views/admin_list.py` and align the two counts. Should be a 5-line fix plus a regression test."
+        "body": "Spawned a CCC session against this - it'll edit `app/views/admin_list.py` and align the two counts. Should be a 5-line fix plus a regression test."
       },
       {
         "author": { "login": "demo-user" },
         "createdAt": "2026-05-18T09:14:00Z",
-        "body": "Confirmed — PR is in. Closing once it lands on main."
+        "body": "Confirmed - PR is in. Closing once it lands on main."
       }
     ]
   }

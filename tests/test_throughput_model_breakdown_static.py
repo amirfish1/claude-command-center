@@ -9,8 +9,9 @@ def test_model_breakdown_shows_weekly_limit_contribution():
 
     assert "function formatModelWeeklyPct" in throughput_html
     assert "const modelRows = summary.per_model || []" in throughput_html
-    assert "renderModelBreakdown(modelRows, {" in throughput_html
-    assert "claudePctPerToken: ppt" in throughput_html
+    assert "renderModelBreakdown(modelRows, modelBreakdownContext(modelRows))" in throughput_html
+    assert "claudeWeeklyPct" in throughput_html
+    assert "claudeWeeklyTotalTokens" in throughput_html
     assert "codexWeeklyPct" in throughput_html
     assert '<div class="model-cell">% Weekly</div>' in throughput_html
     assert "model-weekly-cell" in throughput_html

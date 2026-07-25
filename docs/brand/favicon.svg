@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CCC">
+  <title>CCC favicon</title>
+  <!-- Simplified from ccc-mark.svg for 16px legibility: solid tiles, no inner
+       lines, no attention dot. The one amber corner still reads at favicon size. -->
+  <rect x="2" y="2" width="508" height="508" rx="120" fill="#161b22" stroke="#30363d" stroke-width="4"/>
+  <rect x="88"  y="88"  width="153" height="153" rx="34" fill="#6e8caf"/>
+  <rect x="271" y="88"  width="153" height="153" rx="34" fill="#f5a623"/>
+  <rect x="88"  y="271" width="153" height="153" rx="34" fill="#6e8caf"/>
+  <rect x="271" y="271" width="153" height="153" rx="34" fill="#6e8caf"/>
+</svg>

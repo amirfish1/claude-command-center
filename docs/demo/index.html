@@ -30,7 +30,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
-<title>CCC demo — Claude Command Center</title>
+<title>CCC demo - Claude Command Center</title>
 <!-- Demo-mode flag. Picked up by static/app.js's installDemoMode() block,
      which rewires `fetch('/api/...')` to ./api/<path>.json. Setting this
      here (rather than relying on ?demo=1) lets the demo URL stay clean. -->
@@ -68,7 +68,7 @@
        layout so it's always visible. The dashboard's own body padding is
        large enough to absorb the 32px without overlap on typical screens. -->
   <div id="__ccc_demo_strip__" style="position:fixed;top:0;left:0;right:0;height:32px;background:linear-gradient(90deg,#1f2430,#2a1f1a);color:#e6edf3;font:12px/32px -apple-system,Inter,Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;gap:10px;z-index:9998;border-bottom:1px solid #d97757;text-align:center;padding:0 12px;">
-    <span><strong>CCC demo</strong> — read-only, all data is fake. Every action shows a banner instead of running.</span>
+    <span><strong>CCC demo</strong> - read-only, all data is fake. Every action shows a banner instead of running.</span>
     <a href="https://github.com/amirfish1/claude-command-center#quickstart" target="_blank" rel="noopener" style="color:#d97757;text-decoration:underline;font-weight:600;">Install CCC</a>
     <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" style="color:#8b949e;text-decoration:none;">View source</a>
   </div>
@@ -307,7 +307,7 @@
 
   <div class="sidebar">
     <div class="sidebar-header">
-      <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center — open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
+      <a href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Claude Command Center - open the README on GitHub" style="color:inherit;text-decoration:none;">Claude Command Center</a>
       <!-- Top-left alerts strip. Hosts always-visible app-level signals
            (Update pill, History-stale alert if indexing >24h behind, etc.)
            Items are populated at boot by JS that re-parents nodes from
@@ -356,7 +356,7 @@
       <div class="attention-header">
         <span class="att-title-label">Needs your attention</span>
         <span class="att-count" id="attentionCount"></span>
-        <button id="attentionRefreshBtn" title="Force refresh — busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
+        <button id="attentionRefreshBtn" title="Force refresh - busts GH state cache and re-queries" style="margin-left:auto;font-size:13px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;line-height:1;">&#8634;</button>
         <button id="attentionSeeAllBtn" title="Show every candidate, including stale ones" style="font-size:11px;padding:2px 8px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;">See all</button>
         <button class="att-toggle" id="attentionToggle" title="Collapse / expand" aria-label="Toggle Needs Your Attention panel">&#9662;</button>
       </div>
@@ -416,7 +416,7 @@
     <div class="toolbar" id="convToolbar">
       <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592; Back</button>
       <button class="pkood-kill-btn" id="pkoodKillBtn" style="display:none;" title="Kill this pkood agent">Kill</button>
-      <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature — ships and broadcasts to every studio">Close &amp; announce</button>
+      <button class="announce-btn-conv" id="announceBtnConv" style="display:none;" title="Run /announce-feature - ships and broadcasts to every studio">Close &amp; announce</button>
       <button class="jump-btn" id="jumpBtnConv" style="display:none;" title="Bring the terminal running this session to the front">
         <span class="jump-icon">&#8599;</span>
         <span class="jump-label">Jump to terminal</span>
@@ -445,11 +445,11 @@
           &#9873; Report a bug
         </button>
         <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
-        <button id="statsBtn" class="topbar-btn" title="Usage stats — sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
-        <button id="gcActiveBtn" class="topbar-btn" style="display:none;" title="Active group-chat coordinations — click to open the most recent one" aria-label="Active group chats"></button>
-        <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel — run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
-        <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy — loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
-        <a class="topbar-btn sh-btn-deploy" id="localhostPill" target="_blank" rel="noopener" title="localhost dev server — loading…" aria-label="Local Next.js dev server"><span class="deploy-dot" id="localhostDot"></span><span class="deploy-label" id="localhostLabel">localhost</span></a>
+        <button id="statsBtn" class="topbar-btn" title="Usage stats - sessions, messages, tokens, streaks across every Claude Code transcript on this machine." aria-label="Show usage stats">&#128202; Stats</button>
+        <button id="gcActiveBtn" class="topbar-btn" style="display:none;" title="Active group-chat coordinations - click to open the most recent one" aria-label="Active group chats"></button>
+        <button id="termToggleBtn" class="topbar-btn" title="Open the in-UI terminal panel - run quick shell commands (git status, npm test, ./script.sh) without leaving the page. One-shot per command, no interactive TTY (no vim/top)." aria-label="Toggle terminal panel">&#9000; Terminal</button>
+        <a class="topbar-btn sh-btn-deploy" id="deployPill" target="_blank" rel="noopener" title="Vercel deploy - loading…" aria-label="Vercel deploy status"><span class="deploy-dot" id="deployDot"></span><span class="deploy-label" id="deployStateLabel">Vercel</span></a>
+        <a class="topbar-btn sh-btn-deploy" id="localhostPill" target="_blank" rel="noopener" title="localhost dev server - loading…" aria-label="Local Next.js dev server"><span class="deploy-dot" id="localhostDot"></span><span class="deploy-label" id="localhostLabel">localhost</span></a>
         <div id="historyStatusPill" class="topbar-btn hi-status-pill" style="display:none;" title="" role="button" tabindex="0">
           <span class="hi-pill-icon" id="hiPillIcon">&#128218;</span>
           <span class="hi-pill-label" id="hiPillLabel">History</span>
@@ -535,7 +535,7 @@
                the Esc button (mutually exclusive — Esc only appears for live
                sessions, this only for `__new__`). updateInputBar() toggles
                visibility. -->
-          <select id="convInputEngineSelect" class="engine-select" title="Engine that spawns this new session — claude, codex, or antigravity" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+          <select id="convInputEngineSelect" class="engine-select" title="Engine that spawns this new session - claude, codex, or antigravity" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
             <option value="claude">claude</option>
             <option value="codex">codex</option>
             <option value="antigravity">antigravity</option>
@@ -548,7 +548,7 @@
             <option value="not_planned">Close: not planned</option>
             <option value="duplicate">Close: duplicate #</option>
           </select>
-          <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal — cancels in-flight response (or kills a headless spawn)">Esc</button>
+          <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal - cancels in-flight response (or kills a headless spawn)">Esc</button>
           <button class="send-btn" id="convSendBtn" title="Send to terminal" aria-label="Send to terminal">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 19 L12 5 M6 11 L12 5 L18 11"></path>
@@ -580,7 +580,7 @@
         <input type="text" class="kpt-search" id="kptSearch" placeholder="Search sessions...">
         <button id="kptRefreshBtn" title="Refresh data" aria-label="Refresh data">&#8634;</button>
         <input type="text" class="kpt-new-session" id="kptNewSession" placeholder="New session prompt...">
-        <select id="kptToolbarEngineSelect" title="Engine that spawns the new session — claude, codex, or antigravity" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+        <select id="kptToolbarEngineSelect" title="Engine that spawns the new session - claude, codex, or antigravity" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
           <option value="claude">claude</option>
           <option value="codex">codex</option>
           <option value="antigravity">antigravity</option>
@@ -693,7 +693,7 @@
            when the gallery is empty or fails to load (graceful fallback to
            the blank-prompt experience). -->
       <div id="nsmGallery" class="nsm-gallery" style="display:none;" aria-label="Session templates"></div>
-      <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title — you can rename later or hit ✨ to AI-generate one)"></textarea>
+      <textarea id="nsmBody" placeholder="What should this session do? (the first sentence becomes the card title - you can rename later or hit ✨ to AI-generate one)"></textarea>
       <div class="nsm-actions">
         <label class="nsm-engine" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);">
           Engine
@@ -789,7 +789,7 @@
           </button>
         </div>
         <div class="bug-shot-help">
-          Opens the macOS area-selector — draw a rectangle over what you want to share.
+          Opens the macOS area-selector - draw a rectangle over what you want to share.
           Screenshots are published to a public branch of the CCC repo, so include
           only what you're OK making public.
         </div>
@@ -827,7 +827,7 @@
       <div class="upd-title" id="networkTitle">Network access</div>
       <div class="upd-versions">
         Lets a phone or other device on your trusted network reach the UI.
-        CCC has no auth — every origin trusted here can run commands as
+        CCC has no auth - every origin trusted here can run commands as
         you. See <a href="https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.
       </div>
       <div style="display:flex;flex-direction:column;gap:14px;font-size:13px;">
@@ -1094,7 +1094,7 @@
   <div class="term-log" id="termLog" tabindex="0"></div>
   <div class="term-input-row">
     <span class="term-prompt" id="termPrompt">repo</span>
-    <input type="text" class="term-input" id="termInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="run a command (no vim/top — use --yes for interactive scripts)">
+    <input type="text" class="term-input" id="termInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="run a command (no vim/top - use --yes for interactive scripts)">
   </div>
 </div>
 
@@ -1231,7 +1231,7 @@
     while ((m = re.exec(input)) !== null) {
       flush(m.index);
       last = re.lastIndex;
-      if (m[1] === undefined) continue; // non-SGR escape — drop
+      if (m[1] === undefined) continue; // non-SGR escape - drop
       const codes = m[1].split(';').filter(s => s !== '').map(Number);
       if (codes.length === 0) { classes = []; continue; }
       for (const c of codes) {
@@ -1453,7 +1453,7 @@
 // ============================================================================
 (function () {
   const $overlay = document.getElementById('hsdOverlay');
-  if (!$overlay) return;  // markup not present — feature disabled in this build
+  if (!$overlay) return;  // markup not present - feature disabled in this build
   const $btn      = document.getElementById('historyBtn');
   const $closeBtn = document.getElementById('hsdCloseBtn');
   const $input    = document.getElementById('hsdInput');
@@ -1463,7 +1463,7 @@
   const $results  = document.getElementById('hsdResults');
   const $detail   = document.getElementById('hsdDetail');
 
-  let _searchSeq = 0;     // monotonic — guards against out-of-order responses
+  let _searchSeq = 0;     // monotonic - guards against out-of-order responses
   let _debounceT = null;
   let _selectedUuid = null;
 
@@ -1592,7 +1592,7 @@
       json = await r.json();
     } catch (e) {
       if (seq !== _searchSeq) return;
-      setStatus('Network error — see console.', true);
+      setStatus('Network error - see console.', true);
       console.error(e);
       return;
     }
@@ -1749,7 +1749,7 @@
   const isChromiumLike = /Chrome|CriOS|Edg/.test(ua) && !isSafari;
 
   if (isIOS) {
-    $body.innerHTML = 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>. CCC opens in its own window — no tab bar, native feel.';
+    $body.innerHTML = 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>. CCC opens in its own window - no tab bar, native feel.';
   } else if (isSafari) {
     $body.innerHTML = 'In Safari\'s menu bar, choose <strong>File → Add to Dock…</strong> CCC opens in its own window with no browser chrome.';
     // Safari has no install API; turn the button into a "Show me" link
@@ -1757,7 +1757,7 @@
     $btn.hidden = false;
     $btn.textContent = 'How to install';
   } else if (isChromiumLike) {
-    $body.innerHTML = 'Install CCC as a focused dashboard window — no browser chrome, dock icon, faster context switches.';
+    $body.innerHTML = 'Install CCC as a focused dashboard window - no browser chrome, dock icon, faster context switches.';
     // Show the button immediately so the banner always has a click target,
     // even before `beforeinstallprompt` fires (it can take a few seconds,
     // or never fire if the engagement heuristic isn't met). Click handler
@@ -1766,7 +1766,7 @@
     $btn.hidden = false;
     $btn.textContent = 'Install';
   } else {
-    $body.innerHTML = 'Look for "Install app" in your browser menu — CCC will open in its own window.';
+    $body.innerHTML = 'Look for "Install app" in your browser menu - CCC will open in its own window.';
     $btn.hidden = false;
     $btn.textContent = 'How to install';
   }

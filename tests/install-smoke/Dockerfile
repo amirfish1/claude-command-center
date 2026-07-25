@@ -11,16 +11,11 @@
 # fails CI when the installer regresses.
 #
 # Caveats vs. a real macOS install:
-#   - The installer is macOS-only (require_macos / warn_if_no_claude_cli /
-#     git clone of a public URL). We stub uname to report Darwin, stub
-#     `claude` as a no-op so warn_if_no_claude_cli stays silent, and stub `git` so
-#     `git pull --ff-only` against the pre-staged checkout is a no-op
-#     (we already COPYed the repo in, so there's nothing to fetch).
-#   - This means we exercise everything in scripts/install.sh that runs
-#     AFTER the prereq checks: channel parsing/persistence, repo path
-#     wiring, and the launch handoff to run.sh. The clone/pull step is
-#     bypassed by design — see the "no network" hard constraint in the
-#     test spec.
+#   - We stub uname to report Darwin and stub `claude` as a no-op so the
+#     test follows the macOS path without requiring the Claude CLI.
+#   - The repository URL is a real local Git checkout created inside the
+#     image. That keeps the test offline while exercising the same clone,
+#     atomic publish, pull, and launch path as a public-URL installation.
 
 FROM debian:stable-slim
 
@@ -51,19 +46,15 @@ ENV HOME=/root
 COPY . /repo
 
 # ---------------------------------------------------------------------------
-# Stubs for macOS-only / network-dependent bits of the installer.
+# Stubs for macOS-only bits of the installer.
 # ---------------------------------------------------------------------------
 # Each stub lives in /usr/local/sbin (earlier on PATH than /usr/bin) so it
 # wins over the real binary inside the installer's environment.
 #
-# 1. uname -> always returns "Darwin" for `uname -s`. The installer's
-#    require_macos check is `[ "$uname_s" != "Darwin" ] && exit 2`.
+# 1. uname -> always returns "Darwin" for `uname -s` so the installer
+#    exercises its macOS branch inside the Linux container.
 # 2. claude -> no-op. warn_if_no_claude_cli probes `command -v claude`; the
 #    stub just has to exist + be executable so the warn line stays silent.
-# 3. git -> wrapper that intercepts `pull` and `clone` (the only network
-#    calls in scripts/install.sh) and no-ops them. Everything else falls
-#    through to the real /usr/bin/git so any future installer logic that
-#    needs real git (e.g. `git -C ... rev-parse`) keeps working.
 RUN set -eux; \
     mkdir -p /usr/local/sbin; \
     { \
@@ -78,40 +69,19 @@ RUN set -eux; \
       echo '# Test stub: no-op claude CLI so install.sh warn_if_no_claude_cli stays silent.'; \
       echo 'exit 0'; \
     } > /usr/local/sbin/claude; \
-    chmod +x /usr/local/sbin/claude; \
-    { \
-      echo '#!/usr/bin/env bash'; \
-      echo '# Test stub: short-circuits network-touching git subcommands so'; \
-      echo '# the install layer can run with no internet access. Anything'; \
-      echo '# else falls through to the real /usr/bin/git.'; \
-      echo '#'; \
-      echo '# install.sh calls `git clone URL DIR` and `git -C DIR pull ...`,'; \
-      echo '# so the subcommand can be $1 or $3 (after `-C DIR`).'; \
-      echo 'skip_next=0'; \
-      echo 'for arg in "$@"; do'; \
-      echo '  if [ "$skip_next" = 1 ]; then skip_next=0; continue; fi'; \
-      echo '  case "$arg" in'; \
-      echo '    clone|pull|fetch) exit 0 ;;'; \
-      echo '    -C) skip_next=1 ;;'; \
-      echo '    -*) ;;'; \
-      echo '    *) break ;;'; \
-      echo '  esac'; \
-      echo 'done'; \
-      echo 'exec /usr/bin/git "$@"'; \
-    } > /usr/local/sbin/git; \
-    chmod +x /usr/local/sbin/git
+    chmod +x /usr/local/sbin/claude
 
 # Put the stubs ahead of the real binaries.
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Pre-stage the repo at $HOME/.ccc/claude-command-center — install.sh
-# clones to that exact path. Pre-staging means the stubbed `git pull`
-# is what runs (vs. `git clone`), and the post-clone working tree the
-# installer hands off to run.sh is the one we COPYed in above.
-RUN mkdir -p /root/.ccc \
- && cp -r /repo /root/.ccc/claude-command-center \
- && chmod +x /root/.ccc/claude-command-center/run.sh \
- && chmod +x /root/.ccc/claude-command-center/scripts/install.sh
+# Turn the copied working tree into a real local remote. The final install
+# destination intentionally does not exist before install.sh runs.
+RUN cp -a /repo /repo-source \
+ && git init -q /repo-source \
+ && git -C /repo-source config user.email test@example.invalid \
+ && git -C /repo-source config user.name "CCC Install Smoke" \
+ && git -C /repo-source add -A \
+ && git -C /repo-source commit -qm "install smoke fixture"
 
 # ---------------------------------------------------------------------------
 # The actual test: pipe install.sh into bash, then probe the server.
@@ -129,7 +99,7 @@ RUN mkdir -p /root/.ccc \
 RUN set -eux; \
     # Pipe the installer in exactly the way the README shows. Backgrounding
     # the whole pipeline lets us probe the server it eventually launches.
-    ( cat /repo/scripts/install.sh | CCC_FROM=readme PORT=8090 bash ) >/tmp/install.log 2>&1 & \
+    ( cat /repo/scripts/install.sh | CCC_FROM=readme CCC_REPO_URL=/repo-source PORT=8090 bash ) >/tmp/install.log 2>&1 & \
     INSTALL_PID=$!; \
     # Wait up to 60s for the port to bind.
     for i in $(seq 1 60); do \
@@ -157,7 +127,14 @@ RUN set -eux; \
     # 2. Static asset: templates.json parses as JSON.
     curl -fsS http://127.0.0.1:8090/static/templates.json | python3 -c 'import json,sys; json.load(sys.stdin)' \
       || { echo "/static/templates.json is not valid JSON"; exit 1; }; \
-    # 3. Channel persistence: install.sh wrote the attribution file.
+    # 3. The clean install is a real clone with the expected local origin.
+    test -d /root/.ccc/claude-command-center/.git \
+      || { echo "installed checkout is missing .git"; exit 1; }; \
+    test "$(git -C /root/.ccc/claude-command-center remote get-url origin)" = /repo-source \
+      || { echo "installed checkout has the wrong origin"; exit 1; }; \
+    test -z "$(find /root/.ccc -maxdepth 1 -name 'claude-command-center.installing.*' -print -quit)" \
+      || { echo "installer left a staging directory behind"; exit 1; }; \
+    # 4. Channel persistence: install.sh wrote the attribution file.
     test -f /root/.claude/command-center/install-source \
       || { echo "install-source file missing"; exit 1; }; \
     grep -qx readme /root/.claude/command-center/install-source \

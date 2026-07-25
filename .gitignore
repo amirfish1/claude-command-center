@@ -6,7 +6,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.venv/
+.venv*/
 venv/
 
 # Editors / OS
@@ -46,11 +46,12 @@ CLAUDE.local.md
 .claude/pasted-images/
 .claude/annotations/
 .claude/snapshots/
-snapshot.png
-snapshot2.png
-snapshot3.png
+snapshot*.png
 throughput_*.png
-*.wt-answer-inline.png
+# Root-level WatchTower/worktree captures and temporary helpers are local-only.
+.wt-*
+.wk-*
+.tmp-*
 .claude/screenshots/
 .claude/scheduled_tasks.lock
 .claude/.cozempic-init.lock
@@ -136,3 +137,14 @@ throughput_*.png
 
 # COO board personal sidecar (curated session list/analysis) — local only
 /static/coo-notes.json
+
+# Session scratch artifacts (ad-hoc verification output, not project files)
+/f2_snapshot_tmp.js
+/out/
+/worktrees/
+/queue-status-verified.png
+/unresolved-amber.png
+/docs/product-story/pain-feature-proof copy.md
+
+# Product-story proof videos ship with the GitHub Pages site (exception to *.mp4)
+!docs/product-story/assets/video/*.mp4

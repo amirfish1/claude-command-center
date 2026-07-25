@@ -1,9 +1,9 @@
 [project]
 name = "claude-command-center"
-version = "5.7.0"
+version = "5.11.1"
 description = "A local command center for Claude Code that doesn't care how your agents were launched."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = { file = "LICENSE" }
 authors = [
     { name = "Amir Fish" },
@@ -63,6 +63,7 @@ claude-command-center = "server:main"
 # server.py. Deselected by default so `pytest tests/` stays a single clean
 # process; opt in with `pytest -o addopts="" tests/test_cloud_relay_e2e.py`.
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "cloud_relay_e2e: cloud-relay e2e test that boots the real ccc-cloud service in-process (requires CCC_CLOUD_REPO; excluded from the default run, see tests/cloud_relay_harness.py)",
 ]

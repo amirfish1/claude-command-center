@@ -4,14 +4,14 @@
       "type": "user_text",
       "line": 1,
       "ts": "2026-05-19T06:42:00Z",
-      "text": "The marketing-site deploy has been flaky for three days — about every fourth Vercel build fails with `EBUSY: resource busy or locked, open '.next/cache/...'` and then the next build succeeds with no code change. Investigate. Read-only — don't push fixes, just diagnose so I know what we're dealing with before I open an issue."
+      "text": "The marketing-site deploy has been flaky for three days - about every fourth Vercel build fails with `EBUSY: resource busy or locked, open '.next/cache/...'` and then the next build succeeds with no code change. Investigate. Read-only - don't push fixes, just diagnose so I know what we're dealing with before I open an issue."
     },
     {
       "type": "assistant",
       "line": 2,
       "ts": "2026-05-19T06:42:12Z",
       "blocks": [
-        { "kind": "text", "text": "Read-only diagnosis. The `EBUSY` on `.next/cache` during a Vercel build almost always means two build steps are racing on the cache directory — usually a parallel postinstall script or a turbo task fanning out before the cache is fully restored. Let me gather evidence before I commit to a theory.\n\nPlan:\n1. Pull the last ~20 Vercel deploy logs and look at which step EBUSYs.\n2. Inspect the build script + any parallel tasks (turbo, npm-run-all, concurrently).\n3. Check if anything in the repo writes to `.next/cache` outside the Next.js build itself.\n4. Look at recent commits that touched build config or scripts." }
+        { "kind": "text", "text": "Read-only diagnosis. The `EBUSY` on `.next/cache` during a Vercel build almost always means two build steps are racing on the cache directory - usually a parallel postinstall script or a turbo task fanning out before the cache is fully restored. Let me gather evidence before I commit to a theory.\n\nPlan:\n1. Pull the last ~20 Vercel deploy logs and look at which step EBUSYs.\n2. Inspect the build script + any parallel tasks (turbo, npm-run-all, concurrently).\n3. Check if anything in the repo writes to `.next/cache` outside the Next.js build itself.\n4. Look at recent commits that touched build config or scripts." }
       ]
     },
     {
@@ -33,7 +33,7 @@
       "line": 5,
       "ts": "2026-05-19T06:42:27Z",
       "blocks": [
-        { "kind": "text", "text": "Three relevant commits in the window. `chore: enable turbo for build pipeline` is the smoking-gun candidate — turbo parallelizes tasks by default. Let me look at it." }
+        { "kind": "text", "text": "Three relevant commits in the window. `chore: enable turbo for build pipeline` is the smoking-gun candidate - turbo parallelizes tasks by default. Let me look at it." }
       ]
     },
     {
@@ -71,7 +71,7 @@
       "line": 10,
       "ts": "2026-05-19T06:42:54Z",
       "blocks": [
-        { "kind": "text", "text": "Found it — pretty sure. In `turbo.json`:\n\n```json\n{\n  \"pipeline\": {\n    \"build\": { \"dependsOn\": [\"^build\", \"images:optimize\"], \"outputs\": [\".next/**\"] },\n    \"images:optimize\": { \"outputs\": [\".next/cache/images/**\"] }\n  }\n}\n```\n\nBoth `build` and `images:optimize` declare overlapping outputs under `.next/`. Turbo runs them in parallel because `images:optimize` doesn't `dependsOn` build. When the image optimizer is mid-write to `.next/cache/images/*` and the Next build also touches `.next/cache/*` (e.g., the webpack cache restoration), you get EBUSY on the cache directory.\n\nThe 1-in-4 frequency matches a race condition: it depends on which task finishes hashing first. Let me verify by checking the failing deploy logs." }
+        { "kind": "text", "text": "Found it - pretty sure. In `turbo.json`:\n\n```json\n{\n  \"pipeline\": {\n    \"build\": { \"dependsOn\": [\"^build\", \"images:optimize\"], \"outputs\": [\".next/**\"] },\n    \"images:optimize\": { \"outputs\": [\".next/cache/images/**\"] }\n  }\n}\n```\n\nBoth `build` and `images:optimize` declare overlapping outputs under `.next/`. Turbo runs them in parallel because `images:optimize` doesn't `dependsOn` build. When the image optimizer is mid-write to `.next/cache/images/*` and the Next build also touches `.next/cache/*` (e.g., the webpack cache restoration), you get EBUSY on the cache directory.\n\nThe 1-in-4 frequency matches a race condition: it depends on which task finishes hashing first. Let me verify by checking the failing deploy logs." }
       ]
     },
     {
@@ -93,7 +93,7 @@
       "line": 13,
       "ts": "2026-05-19T06:43:24Z",
       "blocks": [
-        { "kind": "text", "text": "Confirmed — both tasks start at the same second on every build. When they finish close enough together (within a second or two), EBUSY. When they're more spread out (the 18.1s success above), no collision. Pure race." }
+        { "kind": "text", "text": "Confirmed - both tasks start at the same second on every build. When they finish close enough together (within a second or two), EBUSY. When they're more spread out (the 18.1s success above), no collision. Pure race." }
       ]
     },
     {
@@ -145,28 +145,28 @@
       "line": 20,
       "ts": "2026-05-19T06:43:59Z",
       "blocks": [
-        { "kind": "text", "text": "Husky only — benign. The race is squarely between `build` and `images:optimize`." }
+        { "kind": "text", "text": "Husky only - benign. The race is squarely between `build` and `images:optimize`." }
       ]
     },
     {
       "type": "user_text",
       "line": 21,
       "ts": "2026-05-19T06:44:32Z",
-      "text": "Got it. So how do you actually fix it? I'm not going to commit anything tonight — just want to know the option space so I can pick before I file the issue."
+      "text": "Got it. So how do you actually fix it? I'm not going to commit anything tonight - just want to know the option space so I can pick before I file the issue."
     },
     {
       "type": "assistant",
       "line": 22,
       "ts": "2026-05-19T06:44:38Z",
       "blocks": [
-        { "kind": "text", "text": "Three viable options, ranked by my preference:\n\n**Option A (cleanest, 1-line):** add `\"dependsOn\": [\"^build\"]` from `build` to `images:optimize` in `turbo.json`. This serializes them — image optimization runs first, finishes, then Next build starts. Cost: build wall time goes up by ~13-17s (whatever `images:optimize` takes). Cache directory becomes exclusively-owned by whichever task is running.\n\n**Option B (no wall-time hit):** move the image-optimization output OUT of `.next/cache/`. Have `optimize-images.mjs` write to `public/_optimized/` instead, then have Next's `<Image>` component point at that. No shared directory, no race. Cost: small refactor in 4-5 component files and one config change.\n\n**Option C (kludge):** wrap `next build` in a `flock` (Linux file lock) on `.next/cache/`. Works but trades a real fix for a band-aid; future cache-using tasks will hit the same race.\n\nMy recommendation: A for the immediate fix tonight (one-line PR, lands in 5 minutes, builds become deterministic), and B as the follow-up issue so wall-time stops being affected. C is only worth it if you can't touch turbo.json for some reason." }
+        { "kind": "text", "text": "Three viable options, ranked by my preference:\n\n**Option A (cleanest, 1-line):** add `\"dependsOn\": [\"^build\"]` from `build` to `images:optimize` in `turbo.json`. This serializes them - image optimization runs first, finishes, then Next build starts. Cost: build wall time goes up by ~13-17s (whatever `images:optimize` takes). Cache directory becomes exclusively-owned by whichever task is running.\n\n**Option B (no wall-time hit):** move the image-optimization output OUT of `.next/cache/`. Have `optimize-images.mjs` write to `public/_optimized/` instead, then have Next's `<Image>` component point at that. No shared directory, no race. Cost: small refactor in 4-5 component files and one config change.\n\n**Option C (kludge):** wrap `next build` in a `flock` (Linux file lock) on `.next/cache/`. Works but trades a real fix for a band-aid; future cache-using tasks will hit the same race.\n\nMy recommendation: A for the immediate fix tonight (one-line PR, lands in 5 minutes, builds become deterministic), and B as the follow-up issue so wall-time stops being affected. C is only worth it if you can't touch turbo.json for some reason." }
       ]
     },
     {
       "type": "user_text",
       "line": 23,
       "ts": "2026-05-19T06:45:14Z",
-      "text": "Perfect — that's the option space I wanted. One last thing: is there any chance Vercel's own cache restoration is part of the race?"
+      "text": "Perfect - that's the option space I wanted. One last thing: is there any chance Vercel's own cache restoration is part of the race?"
     },
     {
       "type": "assistant",
@@ -187,7 +187,7 @@
       "line": 26,
       "ts": "2026-05-19T06:45:36Z",
       "blocks": [
-        { "kind": "text", "text": "Cache restore finishes ~13s before either task starts — clean separation. Vercel is innocent. The race is 100% inside turbo.\n\nOne more useful signal: if you check the failing deploys' EBUSY frequency, it correlates with the image catalog size. The bigger `images:optimize` gets, the longer it spends in `.next/cache/`, the higher the chance of overlap with Next's webpack-cache writes. That's also why this started 3 days ago — `7b8e2dd feat: add image-optimization prebuild step` is the same week the bug appeared, but the EBUSY only became visible after the catalog grew past some threshold." }
+        { "kind": "text", "text": "Cache restore finishes ~13s before either task starts - clean separation. Vercel is innocent. The race is 100% inside turbo.\n\nOne more useful signal: if you check the failing deploys' EBUSY frequency, it correlates with the image catalog size. The bigger `images:optimize` gets, the longer it spends in `.next/cache/`, the higher the chance of overlap with Next's webpack-cache writes. That's also why this started 3 days ago - `7b8e2dd feat: add image-optimization prebuild step` is the same week the bug appeared, but the EBUSY only became visible after the catalog grew past some threshold." }
       ]
     },
     {
@@ -209,7 +209,7 @@
       "line": 29,
       "ts": "2026-05-19T06:45:48Z",
       "blocks": [
-        { "kind": "text", "text": "Working tree clean — read-only session honored. Nothing to commit, nothing to push. The diagnosis is in this transcript.\n\n<session-state>\nDID: Diagnosed the intermittent Vercel `EBUSY` builds as a turbo task race between `build` and `images:optimize` — both declare overlapping outputs under `.next/cache/` and turbo runs them in parallel because there's no `dependsOn` edge between them. 1-in-4 failure rate matches the close-finish-time pattern in the deploy logs.\nINSIGHT: The bug existed since the turbo migration, but stayed hidden until the image catalog grew past ~10 MB — the more time `images:optimize` spends touching `.next/cache/`, the higher the collision probability with Next's webpack cache writes.\nNEXT_STEP_USER: File the issue. Recommended fix: one-line `\"dependsOn\": [\"^build\"]` edge in `turbo.json` to serialize the two tasks tonight, then a follow-up to move `optimize-images.mjs` output out of `.next/cache/` entirely so the shared directory goes away.\n</session-state>" }
+        { "kind": "text", "text": "Working tree clean - read-only session honored. Nothing to commit, nothing to push. The diagnosis is in this transcript.\n\n<session-state>\nDID: Diagnosed the intermittent Vercel `EBUSY` builds as a turbo task race between `build` and `images:optimize` - both declare overlapping outputs under `.next/cache/` and turbo runs them in parallel because there's no `dependsOn` edge between them. 1-in-4 failure rate matches the close-finish-time pattern in the deploy logs.\nINSIGHT: The bug existed since the turbo migration, but stayed hidden until the image catalog grew past ~10 MB - the more time `images:optimize` spends touching `.next/cache/`, the higher the collision probability with Next's webpack cache writes.\nNEXT_STEP_USER: File the issue. Recommended fix: one-line `\"dependsOn\": [\"^build\"]` edge in `turbo.json` to serialize the two tasks tonight, then a follow-up to move `optimize-images.mjs` output out of `.next/cache/` entirely so the shared directory goes away.\n</session-state>" }
       ]
     },
     {

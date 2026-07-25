@@ -10,6 +10,14 @@ Repo lives at `github.com/amirfish1/claude-command-center`. Every commit, commen
 - No secrets — not even placeholder tokens that "look like" real ones. Use obvious fakes (`sk-ant-test-XXXX`).
 - No references to private internal systems. If a feature exists for one user, either generalize it or gitignore it (see the Morning view for the pattern).
 
+## Private documentation boundary
+
+This checkout is public. Keep non-public plans, specs, product-story source,
+backlog notes, and agent working documents in the separate private
+`CCC-private-docs` repository. Do not recreate `docs/superpowers/`, commit
+private-document copies here, or add a private-repository submodule or
+symlink. Publish only explicitly reviewed, public-safe exports.
+
 ## Commits
 
 **Conventional Commits.** Scan `git log` for existing scopes — match them. Common types in this repo:
@@ -125,6 +133,28 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 - `hooks/` scripts run inside Claude Code's hook pipeline — they must exit fast and never prompt.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
 
+## Never block a turn on a polling loop
+
+Don't wait for something by holding a foreground Bash call open:
+
+```bash
+# WRONG — holds the turn open for hours
+while true; do wt ls -q QUEUE ...; sleep 120; done
+```
+
+A foreground tool child keeps the turn alive, and CCC treats a live turn as
+"input will land at the next boundary". A loop that polls for minutes or hours
+means that boundary never arrives, so every message queued to that session sits
+on "sending…" for as long as the loop runs. Three of these in one session held
+its queue for over four hours.
+
+Use `run_in_background: true`, or the `Monitor` tool, or just end the turn and
+check on the next one. If a loop genuinely must run in the foreground, bound it
+to minutes — never hours.
+
+(`_tool_child_blocks_inject` now force-delivers after 10 minutes, so this
+degrades instead of wedging. Don't rely on it: it's a backstop, not a licence.)
+
 ## Testing
 
 `tests/test_smoke.py` imports `server.py` and checks nothing explodes. CI is minimal by design. If you add a feature, a smoke-level assertion is nice-to-have but not required — the bar is "doesn't break the import."
@@ -134,6 +164,12 @@ Don't mock external systems (`gh`, `claude`, `pkood`) in the smoke test. The smo
 ### Browser / UI verification
 
 To verify UI changes visually, this repo uses **puppeteer** (dependency `puppeteer`), via `snapshot.js` — `node snapshot.js` launches headless Chrome, loads `http://127.0.0.1:8090`, and writes `snapshot.png`. Puppeteer's browser lives in `~/.cache/puppeteer` (separate from any Playwright cache). The `chrome-devtools` MCP also works (drives real Chrome) for interactive checks.
+
+CCC uses Puppeteer 25, which no longer exposes `page.waitForTimeout()`. For a
+short delay in an ad-hoc verification script, use
+`await new Promise((resolve) => setTimeout(resolve, ms))`; prefer
+`page.waitForSelector()`, `page.waitForFunction()`, or `page.waitForNetworkIdle()`
+when a specific condition is available.
 
 **Do not reach for Playwright.** It is *not* a CCC dependency — "cannot import playwright" / "Playwright browser executable missing" means you picked the wrong tool, not that something is broken. Use `snapshot.js` or chrome-devtools. **Chromium is sufficient**; no WebKit/Firefox needed.
 

@@ -15,7 +15,7 @@ if [ ! -f tests/test_perf_budget.py ]; then
 fi
 
 PY=""
-for candidate in "$REPO_ROOT/.venv/bin/python3" $(command -v -a python3 2>/dev/null); do
+for candidate in "$REPO_ROOT/.venv/bin/python3" $(type -aP python3 2>/dev/null); do
   [ -x "$candidate" ] || continue
   if "$candidate" -c "import pytest" >/dev/null 2>&1; then
     PY="$candidate"

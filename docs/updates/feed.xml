@@ -1,0 +1,66 @@
+<?xml version="1.0" ?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>CCC Updates</title>
+  <subtitle>Each release, told as the pain it removed.</subtitle>
+  <id>https://ccc.amirfish.ai/updates/</id>
+  <link href="https://ccc.amirfish.ai/updates/feed.xml" rel="self"/>
+  <link href="https://ccc.amirfish.ai/updates/" rel="alternate"/>
+  <updated>2026-07-10T00:00:00Z</updated>
+  <author>
+    <name>CCC</name>
+  </author>
+  <entry>
+    <id>https://ccc.amirfish.ai/updates/one-board-every-session.html</id>
+    <title>Every coding-agent session on your machine, on one board</title>
+    <link href="https://ccc.amirfish.ai/updates/one-board-every-session.html" rel="alternate"/>
+    <published>2026-07-10T00:00:00Z</published>
+    <updated>2026-07-10T00:00:00Z</updated>
+    <summary>Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.</summary>
+    <category term="see-everything" label="See everything"/>
+    <author>
+      <name>CCC</name>
+    </author>
+    <content type="html">&lt;h2&gt;The pain&lt;/h2&gt;
+&lt;p&gt;You know the mid-afternoon moment: nine terminal tabs open, several coding agents running, and no quick way to tell which tab is which session. One finished an hour ago. One is waiting on you. You cannot see the fleet, so you cycle through tabs hoping to land on the one that matters.&lt;/p&gt;
+&lt;h2&gt;Why workarounds fail&lt;/h2&gt;
+&lt;p&gt;More tabs, more tmux panes, more discipline: each buys you a little, then stops. A terminal shows you one session at a time, and the tools that do hand you a dashboard usually own the sessions they launched. Resume one by hand, or start one in a plain terminal, and their board goes blind to it.&lt;/p&gt;
+&lt;h2&gt;What CCC does&lt;/h2&gt;
+&lt;p&gt;CCC attaches instead of owning. It reads each engine's on-disk state as the source of truth, so every session shows up on one local board no matter how you launched it, hand-started terminals included. Claude Code is first-class; Codex, Cursor, Antigravity, and Kilo Code spawn and appear too, each with a documented gap, so it is one board for several engines rather than identical support across all of them.&lt;/p&gt;
+&lt;h2&gt;Proof&lt;/h2&gt;
+&lt;p&gt;The capture is the CCC board running on seeded demo data. Columns carry GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live transcript open on the right and a header that reads "for Claude, Codex, Cursor, and Anti-Gravity." Every row is fake seeded data, nothing real, but it is the actual dashboard chrome: the whole operation on one screen.&lt;/p&gt;
+&lt;div class="u-media"&gt;&lt;figure class="u-figure"&gt;&lt;img src="https://ccc.amirfish.ai/product-story/assets/shots/S-OVR.png" alt="The CCC board on seeded demo data: columns for GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live session transcript open in a right-hand pane and a header reading 'for Claude, Codex, Cursor, and Anti-Gravity.'" loading="lazy"&gt;&lt;figcaption&gt;The whole operation on one local board. All data is seeded and fake.&lt;/figcaption&gt;&lt;/figure&gt;&lt;/div&gt;
+&lt;h2&gt;How to try&lt;/h2&gt;
+&lt;p&gt;Open the live demo, no install required, and scan the board: issues waiting, sessions in progress, the one flagged for your attention. Running CCC already? Every coding-agent session on the machine appears automatically, including ones you started from a plain terminal. Nothing to wire up.&lt;/p&gt;
+&lt;h2&gt;Limitations&lt;/h2&gt;
+&lt;p&gt;The board is a lens over state the engines already write, not a runtime: it does not run your agents and does not replace your terminal. Multi-engine support is real but uneven, Claude Code is deepest and some engines are fire-and-forget, so read the README matrix before you lean on a specific one. Desktop notifications and terminal focus are macOS-only.&lt;/p&gt;
+&lt;h2&gt;Related&lt;/h2&gt;
+&lt;p&gt;Pairs with attention detection, which tells you which of these sessions is waiting on you, and with the kanban and project-tree views when you want to organize the fleet instead of just seeing it.&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <id>https://ccc.amirfish.ai/updates/project-tree-by-objects.html</id>
+    <title>Group your agent sessions the way you think about the work</title>
+    <link href="https://ccc.amirfish.ai/updates/project-tree-by-objects.html" rel="alternate"/>
+    <published>2026-06-25T00:00:00Z</published>
+    <updated>2026-06-25T00:00:00Z</updated>
+    <summary>A flat list of sessions stops meaning anything past a dozen. The project tree groups them under nestable objects, so strategy stays above the churn.</summary>
+    <category term="organize" label="Organize"/>
+    <author>
+      <name>CCC</name>
+    </author>
+    <content type="html">&lt;h2&gt;The pain&lt;/h2&gt;
+&lt;p&gt;You started with three sessions and a flat list was fine. Now there are thirty. Two of them are the strategy sessions that decide everything, and they have sunk to the bottom under a pile of one-off execution runs you will archive by tonight. The list is technically complete and completely unreadable.&lt;/p&gt;
+&lt;h2&gt;Why workarounds fail&lt;/h2&gt;
+&lt;p&gt;You can rename sessions, or keep the important ones open in their own terminals, or just remember which is which. None of that survives a busy afternoon. A flat list has exactly one axis, time, and the work in your head has several: this project, that feature, the throwaway spikes off to the side.&lt;/p&gt;
+&lt;h2&gt;What CCC does&lt;/h2&gt;
+&lt;p&gt;The project tree groups your sessions under named objects you define, and those objects nest. Pin a strategy object at the top, fan its execution sessions out underneath, and file the throwaway work somewhere else entirely. The board now matches the shape of the work instead of flattening it into one column.&lt;/p&gt;
+&lt;h2&gt;Proof&lt;/h2&gt;
+&lt;p&gt;The capture above is the CCC board. The left sidebar carries the session list with the by project, by time, and by objects controls sitting right above it, so one click regroups the whole fleet by the axis you care about at that moment. The sessions are real rows in the seeded demo, each with its live status.&lt;/p&gt;
+&lt;div class="u-media"&gt;&lt;figure class="u-figure"&gt;&lt;img src="https://ccc.amirfish.ai/images/demo.png" alt="The CCC dashboard: the left sidebar lists sessions grouped in progress, with by project, by time, and by objects controls at the top." loading="lazy"&gt;&lt;figcaption&gt;The board, with the by project / by time / by objects grouping controls above the session list.&lt;/figcaption&gt;&lt;/figure&gt;&lt;/div&gt;
+&lt;h2&gt;How to try&lt;/h2&gt;
+&lt;p&gt;Update to 5.4.0 or later, then in the sidebar switch the grouping control to &lt;strong&gt;by objects&lt;/strong&gt;. Use &lt;strong&gt;+ object&lt;/strong&gt; to create a group, drag sessions into it (hold Cmd or Shift to move several at once), and nest objects inside objects for sub-projects. &lt;strong&gt;Expand all&lt;/strong&gt; and &lt;strong&gt;Collapse all&lt;/strong&gt; fold the whole tree when you just want the headlines.&lt;/p&gt;
+&lt;h2&gt;Limitations&lt;/h2&gt;
+&lt;p&gt;By objects is a grouping over your session list, not automatic filing. You decide what the objects are and what goes in them. CCC will not guess a taxonomy for you. If you want the fleet laid out spatially instead of as a tree, the Flow canvas is the same sessions arranged freely on a board.&lt;/p&gt;
+&lt;h2&gt;Related&lt;/h2&gt;
+&lt;p&gt;Pairs with the kanban board when you want state (Working, Review, Verified) instead of hierarchy, and with the Flow canvas when you want to arrange the whole operation like a whiteboard.&lt;/p&gt;</content>
+  </entry>
+</feed>

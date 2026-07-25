@@ -97,6 +97,46 @@ def _build_filters(
     return where, params
 
 
+def _title_row_hits(
+    conn: sqlite3.Connection,
+    fts_query: str,
+    filter_where: list[str],
+    filter_params: list[Any],
+    cap: int = 50,
+) -> list[sqlite3.Row]:
+    """Rows that are the FIRST user message of their session (the display-title
+    proxy) and match the FTS query.
+
+    A session whose title is about the topic belongs on the first page even
+    when hundreds of other sessions merely mention it in passing — the
+    bare-content BM25 rank buries exactly those (CCC-615: a session titled
+    'fix the twilio campaign' ranked #340 for query 'twilio').
+    """
+    where = ["messages_fts MATCH ?"] + filter_where
+    params = [fts_query] + filter_params
+    sql = f"""
+        SELECT
+            m.id, m.uuid, m.session_id, m.type, m.cwd, m.project_dir, m.git_branch,
+            m.timestamp, m.ts_unix, m.slug, m.source_file, m.source_line,
+            snippet(messages_fts, 0, '«', '»', '…', 12) AS snippet,
+            bm25(messages_fts) AS score
+        FROM messages_fts
+        JOIN messages m ON m.id = messages_fts.rowid
+        WHERE {' AND '.join(where)}
+          AND m.id IN (
+              SELECT id FROM (
+                  SELECT id, MIN(ts_unix) FROM messages
+                  WHERE type = 'user' AND LTRIM(content) NOT LIKE '<%'
+                  GROUP BY session_id
+              )
+          )
+        ORDER BY score
+        LIMIT ?
+    """
+    params.append(cap)
+    return list(conn.execute(sql, params))
+
+
 def _bm25_hits(
     conn: sqlite3.Connection,
     query: str,
@@ -108,9 +148,9 @@ def _bm25_hits(
     role: Optional[str],
 ) -> list[sqlite3.Row]:
     fts_query = query if raw else rewrite_query(query)
-    where, params = _build_filters(cwd_like, project_like, since, role)
-    where = ["messages_fts MATCH ?"] + where
-    params = [fts_query] + params
+    filter_where, filter_params = _build_filters(cwd_like, project_like, since, role)
+    where = ["messages_fts MATCH ?"] + filter_where
+    params = [fts_query] + filter_params
     sql = f"""
         SELECT
             m.id, m.uuid, m.session_id, m.type, m.cwd, m.project_dir, m.git_branch,
@@ -123,8 +163,21 @@ def _bm25_hits(
         ORDER BY score
         LIMIT ?
     """
-    params.append(limit)
-    return list(conn.execute(sql, params))
+    rows = list(conn.execute(sql, [*params, limit]))
+    # Title boost: sessions whose first user message matches are ABOUT the
+    # topic — promote them (ranked by score among themselves) above the
+    # incidental content hits, preserving the content hits after.
+    title_rows = _title_row_hits(conn, fts_query, filter_where, filter_params)
+    if title_rows:
+        title_ids = {r["id"] for r in title_rows}
+        merged = {r["id"]: r for r in rows}
+        for r in title_rows:
+            merged[r["id"]] = r
+        rows = sorted(
+            merged.values(),
+            key=lambda r: (0 if r["id"] in title_ids else 1, r["score"]),
+        )[:limit]
+    return rows
 
 
 def _vec_hits(

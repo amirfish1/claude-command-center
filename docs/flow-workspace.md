@@ -590,7 +590,7 @@ Those can follow once the file contract and inspector feel right.
 ## Verification checklist
 
 - `python3 -m py_compile server.py`
-- `python3 -m pytest tests/test_smoke.py`
+- `.venv/bin/python3 -m pytest tests/test_smoke.py` (bare `python3` may lack pytest — see CONTRIBUTING.md § Testing)
 - Manual browser check:
   - Normal dashboard: repo click opens inspector.
   - Flow popout with reader pane: repo/object click opens inspector on right.

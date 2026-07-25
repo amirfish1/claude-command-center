@@ -68,6 +68,14 @@ class CCCNode:
     # -- lifecycle ----------------------------------------------------------
 
     def start(self, extra_env=None):
+        # Fleet isolation: never auto-map the host machine's repos (the
+        # server's own install dir counts as a known repo) — harness nodes
+        # only see repos explicitly mapped by the test.
+        state_dir = self.home / ".claude" / "command-center"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        fleet_cfg = state_dir / "fleet.json"
+        if not fleet_cfg.exists():
+            fleet_cfg.write_text('{"automap": false}\n')
         env = {
             **os.environ,
             "HOME": str(self.home),
@@ -234,6 +242,30 @@ class TwoNodeFleet:
             repo.parent.mkdir(parents=True, exist_ok=True)
             git(self.base, "clone", "-q", str(self.origin), str(repo))
         return self.origin
+
+    def make_extra_repo(self, name: str):
+        """A second origin + per-node clones, for multi-repo fleet scenarios.
+        Returns (origin, clone_a, clone_b)."""
+        origin = self.base / f"{name}.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)],
+                       check=True, capture_output=True,
+                       env={**os.environ, **GIT_ENV})
+        git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+        seed = self.base / f"seed-{name}"
+        seed.mkdir()
+        git(self.base, "clone", "-q", str(origin), str(seed))
+        (seed / "README.md").write_text(f"# {name}\n")
+        git(seed, "add", "README.md")
+        git(seed, "commit", "-q", "-m", "init: seed")
+        git(seed, "branch", "-M", "main")
+        git(seed, "push", "-q", "origin", "main")
+        shutil.rmtree(seed)
+        clone_a = self.node_a.home / "repos" / name
+        clone_b = self.node_b.home / "repos" / name
+        for clone in (clone_a, clone_b):
+            clone.parent.mkdir(parents=True, exist_ok=True)
+            git(self.base, "clone", "-q", str(origin), str(clone))
+        return origin, clone_a, clone_b
 
     def commit_on(self, repo: Path, filename: str, content: str, message: str,
                   push: bool = False):

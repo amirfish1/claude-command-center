@@ -21,8 +21,10 @@ window honest: one key, defaulting to 'all'.
 """
 import os
 import re
+import inspect
 
 import pytest
+import server
 
 APP_JS = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")
 
@@ -89,6 +91,22 @@ def test_all_tab_cross_repo_ready_to_merge_respects_window(app_js):
     )
 
 
+def test_cross_repo_ready_to_merge_preserves_unknown_local_pr_rows(app_js):
+    """A transient unknown GitHub PR state must not make a local session vanish.
+
+    The normal partition has already classified a session with a recorded PR
+    into ``_readyToMergeConvs``.  The cross-repo enrichment only knows how to
+    add rows whose state is confirmed OPEN; it must merge those additions,
+    never clear the local bucket when its status lookup has not completed.
+    """
+    start = app_js.index("if (Array.isArray(archiveData) && archiveData.length) {")
+    end = app_js.index("// Ready to merge section:", start)
+    block = app_js[start:end]
+
+    assert "_readyToMergeConvs.push(..._crossRepoRtm);" in block
+    assert "_readyToMergeConvs.length = 0;" not in block
+
+
 def test_all_tab_archived_group_chats_respect_window(app_js):
     """Archived group-chat trash rows are not part of archiveRows, so they need
     their own 1d/7d window filter before rendering in the All tab."""
@@ -102,3 +120,15 @@ def test_all_tab_archived_group_chats_respect_window(app_js):
         "Archived group chats bypass archiveRows. They must be filtered with "
         "_archiveWindowAllowsRow() so the All tab's 1d/7d/All control is honest."
     )
+
+
+def test_sidebar_uses_additive_list_endpoint_and_search_widens_history(app_js):
+    source = inspect.getsource(server.CommandCenterHandler.do_GET)
+
+    assert 'path == "/api/conversations/list"' in source
+    assert 'path == "/api/conversations/all"' in source
+    assert "_archive_all_rows_cached(cache_options)" in source
+    assert "'/api/conversations/list'" in app_js
+    assert "let archiveDataWindow = null;" in app_js
+    assert "function _refreshArchiveWindow(value)" in app_js
+    assert "refreshArchiveData({ staleOk: true, window: 'all' })" in app_js

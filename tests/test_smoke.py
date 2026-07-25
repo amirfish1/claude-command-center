@@ -31,7 +31,229 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 
+class TestWebuiPaneRegressionGuards(unittest.TestCase):
+    """Regression guards for the kimi/codex webui-pane bug fixes."""
+
+    def test_codex_busy_turn_error_is_queued_not_exec_fallback(self):
+        """"Cannot launch a new turn while another turn is active" must take
+        the durable-queue fallback — the exec fallback spawned a second writer
+        per queue-pump retry, littering the transcript with duplicate user
+        bubbles and identical error banners."""
+        server = importlib.import_module("server")
+        busy = {"error": {"message": "Invalid request: Cannot launch a new turn while another turn (ID 7) is active"}}
+        self.assertTrue(server._codex_error_is_not_steerable(busy))
+        self.assertTrue(server._codex_error_is_not_steerable({"error": {"message": "activeTurnNotSteerable"}}))
+        # Unrelated failures still take the exec fallback.
+        self.assertFalse(server._codex_error_is_not_steerable({"error": {"message": "connection refused"}}))
+
+    def test_wire_fold_assistant_dedupe_is_containment_not_equality(self):
+        """The finalized ACP turn text can be a truncated tail or multi-step
+        concatenation of a wire part; exact-match dedupe let the same reply
+        render twice (partial + full). Long blocks dedupe by containment."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server._acp_wire_fold)
+        self.assertIn("len(norm) >= 80", src)
+        self.assertIn("len(prev) >= 80", src)
+
+    def test_wire_fold_marks_unanswered_tool_calls_running(self):
+        """A wire-folded tool.call with no result in the batch is in flight,
+        not done — it must be emitted with tool_status running so the pane
+        shows the pulsing dot instead of a false checkmark."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server._acp_wire_fold)
+        self.assertIn('block["tool_status"] = "running"', src)
+
+    def test_kimi_status_includes_wire_activity_busy_signal(self):
+        """TUI-originated kimi turns never flip the ACP snapshot to active;
+        session_live_status must fall back to wire.jsonl mtime freshness."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.session_live_status)
+        self.assertIn("_acp_wire_path", src)
+
+
+class TestKimiStuckDetection(unittest.TestCase):
+    """Kimi stuck-mid-turn classification: wire-tail turn shape plus the
+    stale threshold must produce the same stale_tool_call contract codex
+    rows carry."""
+
+    def _wire_dir(self, events):
+        d = tempfile.mkdtemp(prefix="ccc-kimi-wire-")
+        self.addCleanup(shutil.rmtree, d, True)
+        wire = pathlib.Path(d) / "agents" / "main"
+        wire.mkdir(parents=True)
+        with (wire / "wire.jsonl").open("w") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+        return d, wire / "wire.jsonl"
+
+    def _loop(self, ltype, **kw):
+        ev = {"type": ltype}
+        ev.update(kw)
+        return {"type": "context.append_loop_event", "event": ev}
+
+    def test_completed_turn_reads_result_not_stuck(self):
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "hi"}]},
+            self._loop("step.begin"),
+            self._loop("content.part", part={"type": "text", "text": "done"}),
+            self._loop("step.end", finishReason="end_turn"),
+            {"type": "usage.record", "usage": {}},
+        ])
+        old = time.time() - 3600
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["last_event_type"], "result")
+        self.assertIsNone(meta["pending_tool"])
+        self.assertFalse(meta["mid_turn"])
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertFalse(fields["stale_tool_call"])
+
+    def test_dangling_tool_call_is_mid_turn(self):
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "run"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Bash"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["pending_tool"], "Bash")
+        self.assertTrue(meta["mid_turn"])
+        self.assertEqual(meta["last_event_type"], "assistant")
+
+    def test_step_end_tool_use_is_still_mid_turn(self):
+        """step.end with finishReason tool_use only closes a STEP — the agent
+        loop continues, so the session must not read as done."""
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("tool.call", toolCallId="t1", name="Read"),
+            self._loop("tool.result", toolCallId="t1", result={"output": "ok"}),
+            self._loop("step.end", finishReason="tool_use"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertTrue(meta["mid_turn"])
+        self.assertNotEqual(meta["last_event_type"], "result")
+
+    def test_turn_cancel_reads_result(self):
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            {"type": "turn.cancel"},
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertEqual(meta["last_event_type"], "result")
+        self.assertFalse(meta["mid_turn"])
+
+    def test_stale_mid_turn_flags_stuck_with_tool_name(self):
+        """Mid-turn + wire silent past the threshold => stale_tool_call, the
+        flag the row Stuck pill and pane stuck card bind to."""
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Edit"),
+        ])
+        old = time.time() - 1200
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertTrue(fields["stale_tool_call"])
+        self.assertGreaterEqual(fields["stale_tool_age_s"], 1200)
+
+    def test_fresh_mid_turn_is_not_stuck(self):
+        """Mid-turn but the wire was just written — a live turn, not stuck."""
+        server = importlib.import_module("server")
+        d, _ = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("tool.call", toolCallId="t1", name="Edit"),
+        ])
+        meta = server._kimi_wire_tail_meta(d)
+        fields = server._kimi_stale_tool_fields(meta, threshold_s=900)
+        self.assertFalse(fields["stale_tool_call"])
+        self.assertGreater(fields["stale_tool_age_s"], -1)
+
+    def test_acp_active_turn_with_silent_wire_is_stuck(self):
+        """CCC-driven turn: ACP snapshot active, wire silent past threshold —
+        the harness wedged mid-turn."""
+        server = importlib.import_module("server")
+        d, wire = self._wire_dir([
+            {"type": "turn.prompt", "input": [{"type": "text", "text": "go"}]},
+            self._loop("step.begin"),
+            self._loop("content.part", part={"type": "text", "text": "working"}),
+            self._loop("step.end", finishReason="end_turn"),
+        ])
+        old = time.time() - 2000
+        os.utime(wire, (old, old))
+        meta = server._kimi_wire_tail_meta(d)
+        self.assertFalse(meta["mid_turn"])  # wire tail alone reads finished
+        fields = server._kimi_stale_tool_fields(meta, acp_active=True, threshold_s=900)
+        self.assertTrue(fields["stale_tool_call"])
+
+    def test_row_builder_stamps_kimi_stale_fields(self):
+        """find_kimi_conversations must stamp the stale contract on rows so
+        the sidebar Stuck pill lights up with no client changes."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.find_kimi_conversations)
+        self.assertIn("_kimi_wire_tail_meta", src)
+        self.assertIn("_kimi_stale_tool_fields", src)
+
+    def test_session_status_emits_kimi_stale_fields(self):
+        """session_live_status must emit stale fields for kimi so the pane's
+        stuck card and the sidebar-row mirror pick them up."""
+        import inspect as _inspect
+        server = importlib.import_module("server")
+        src = _inspect.getsource(server.session_live_status)
+        self.assertIn("_kimi_stale_tool_fields", src)
+
+
 class TestServerImports(unittest.TestCase):
+    def test_codex_agent_task_labels_humanize_cleartext_paths(self):
+        server = importlib.import_module("server")
+        self.assertEqual(
+            server._codex_agent_task_label({"agent_path": "/root/ccc_588_review"}),
+            "CCC-588 review",
+        )
+        self.assertEqual(
+            server._codex_agent_task_label({"agent_path": "/root/trash_fix_review"}),
+            "Trash fix review",
+        )
+        source = json.dumps({
+            "subagent": {"thread_spawn": {"agent_path": "/root/api_audit"}},
+        })
+        self.assertEqual(server._codex_agent_task_label({"source": source}), "Api audit")
+        self.assertEqual(server._codex_agent_task_label({"source": "vscode"}), "")
+        for malformed in (
+            {"subagent": "bad"},
+            {"subagent": {"thread_spawn": []}},
+        ):
+            with self.subTest(source=malformed):
+                self.assertEqual(
+                    server._codex_agent_task_label({"source": json.dumps(malformed)}),
+                    "",
+                )
+
+    def test_codex_display_name_prefers_task_label_over_generated_nickname(self):
+        server = importlib.import_module("server")
+        row = {"agent_path": "/root/ccc_588_review", "agent_nickname": "Erdos"}
+        self.assertEqual(server._codex_display_name(row), "CCC-588 review")
+        self.assertEqual(
+            server._codex_display_name(row, first_message="Review pagination"),
+            "Review pagination",
+        )
+        self.assertEqual(
+            server._codex_display_name(row, title="Queue pagination review"),
+            "Queue pagination review",
+        )
+        self.assertEqual(server._codex_display_name(row, override="My reviewer"), "My reviewer")
+        self.assertEqual(server._codex_display_name({"agent_nickname": "Erdos"}), "Erdos")
+
     def test_server_imports_without_morning(self):
         """server.py must import cleanly even when the optional Morning
         plugin (morning.py, morning_store.py, etc.) isn't on disk. The
@@ -43,6 +265,63 @@ class TestServerImports(unittest.TestCase):
         self.assertTrue(hasattr(server, "__version__"))
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
+
+    def test_import_doc_parser_and_path_clamp(self):
+        """Plan-to-fleet (W51): the `wt import` stdout parser and the doc-path
+        clamp behave, and neither hard-depends on Watchtower being installed."""
+        server = importlib.import_module("server")
+        tickets, counts = server._parse_wt_import_output(
+            "WOULD FILE: [feature] Add a queue import (L12-L24)\n"
+            "EXISTS: [bug] Old ticket (L5)\n"
+            "IMPORT dry-run: candidates=2 new=1 existing=1; pass --apply to file\n"
+        )
+        self.assertEqual(counts, {"candidates": 2, "new": 1, "existing": 1})
+        self.assertEqual(tickets[0]["status"], "new")
+        self.assertEqual(tickets[0]["type"], "feature")
+        self.assertEqual(tickets[0]["title"], "Add a queue import")
+        self.assertEqual(tickets[0]["source_ref"], "L12-L24")
+        self.assertEqual(tickets[1]["status"], "exists")
+        # apply-mode FILED lines carry the assigned ref.
+        filed, _ = server._parse_wt_import_output("FILED: WT-42  Ship the thing\n")
+        self.assertEqual(filed[0]["ref"], "WT-42")
+        self.assertEqual(filed[0]["status"], "filed")
+
+        with tempfile.TemporaryDirectory() as d:
+            good = pathlib.Path(d) / "plan.md"
+            good.write_text("# plan\n")
+            self.assertEqual(server._resolve_import_doc_path(str(good)), good.resolve())
+            # A non-text extension and a missing file are both rejected.
+            binp = pathlib.Path(d) / "bin.sh"
+            binp.write_text("echo hi\n")
+            self.assertIsNone(server._resolve_import_doc_path(str(binp)))
+            self.assertIsNone(server._resolve_import_doc_path(str(pathlib.Path(d) / "nope.md")))
+            self.assertIsNone(server._resolve_import_doc_path(""))
+
+    def test_inject_routes_claude_subagent_reference_to_parent_session(self):
+        """Recall can surface bare Claude ``agent-*`` child session IDs."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        parent_sid = "11111111-2222-3333-4444-555555555555"
+        agent_sid = "agent-a473bdecd59d4f637"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            projects_root = pathlib.Path(tmp) / "projects"
+            child_path = projects_root / "-example-project" / parent_sid / "subagents" / f"{agent_sid}.jsonl"
+            child_path.parent.mkdir(parents=True)
+            child_path.write_text(json.dumps({"cwd": tmp}) + "\n", encoding="utf-8")
+            original_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = projects_root
+            server._session_cwd_cache.pop(agent_sid, None)
+            try:
+                with mock.patch.object(server, "session_live_status", return_value={"live": False}), \
+                     mock.patch.object(server, "resume_session_headless", return_value={"ok": True}) as resume:
+                    result = server._inject_text_into_session(agent_sid, "follow up")
+                self.assertTrue(result["ok"])
+                resume.assert_called_once_with(parent_sid, "follow up")
+            finally:
+                server._session_cwd_cache.pop(agent_sid, None)
+                server.PROJECTS_ROOT = original_root
 
     def test_native_usage_snapshots_feed_weekly_usage(self):
         """Native plan-usage snapshots persist compact history and replace the
@@ -428,6 +707,100 @@ class TestServerImports(unittest.TestCase):
                 server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
                 server._codex_usage_file_cache.clear()
 
+    def test_kimi_usage_persists_snapshot_and_surfaces_in_usage_current(self):
+        """Kimi /usages data is stored additively in native usage snapshots
+        and surfaces in /api/usage/current next to the Codex block."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+                kimi = server._kimi_usage_from_response({
+                    "user": {"membership": {"level": "LEVEL_ADVANCED"}},
+                    "usage": {
+                        "limit": "100",
+                        "used": "15",
+                        "remaining": "85",
+                        "resetTime": "2026-07-28T13:52:21.141644Z",
+                    },
+                    "limits": [{
+                        "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                        "detail": {
+                            "limit": "100",
+                            "remaining": "60",
+                            "resetTime": "2026-07-21T05:20:00Z",
+                        },
+                    }],
+                }, now_epoch=1_783_011_600)
+                self.assertEqual(kimi["plan_type"], "Advanced")
+                self.assertEqual(kimi["weekly"]["pct"], 15.0)
+                self.assertEqual(kimi["weekly"]["window_minutes"], 10080)
+                self.assertEqual(kimi["session"]["pct"], 40.0)
+                self.assertEqual(kimi["session"]["window_minutes"], 300)
+
+                snap = server._native_usage_snapshot_from_plan_usage(
+                    {"ok": True, "usage": {"five_hour": {}, "seven_day": {}, "seven_day_sonnet": {}}},
+                    kimi=kimi,
+                    now_epoch=1_783_011_600,
+                )
+                self.assertEqual(snap["kimi"]["weekly"]["pct"], 15.0)
+                self.assertTrue(server._append_native_usage_snapshot(snap, now_epoch=1_783_011_600))
+                current = server.usage_current_payload(now_epoch=1_783_011_600)
+                self.assertTrue(current["ok"])
+                self.assertEqual(current["kimi"]["weekly"]["pct"], 15.0)
+                self.assertEqual(current["kimi"]["session"]["pct"], 40.0)
+                self.assertEqual(current["kimi"]["plan_type"], "Advanced")
+                pace = server.kimi_usage_pace_payload(kimi=kimi, now_epoch=1_783_011_600)
+                self.assertTrue(pace["ok"])
+                self.assertEqual(pace["weekly_pct"], 15.0)
+                prev = {"ts": "2026-07-02T15:55:00Z", "kimi": {
+                    "session": {"pct": 30.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 40.0, "resets_at": "2026-07-09T07:00:00Z"},
+                }}
+                curr = {"ts": "2026-07-02T16:00:00Z", "kimi": {
+                    "session": {"pct": 2.0, "resets_at": "2026-07-02T20:00:00Z"},
+                    "weekly": {"pct": 39.0, "resets_at": "2026-07-10T07:00:00Z"},
+                }}
+                events = server._detect_usage_reset_events(prev, curr, now_epoch=1_783_008_000)
+                self.assertIn(("kimi_five_hour", "unscheduled"), {(e["window"], e["kind"]) for e in events})
+                self.assertIn(("kimi_weekly", "scheduled"), {(e["window"], e["kind"]) for e in events})
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
+
+    def test_codex_usage_pace_rejects_stale_persisted_snapshot(self):
+        """The weekly meter must not present an old Codex rollout as current."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_snapshot_file = server._USAGE_SNAPSHOTS_FILE
+            try:
+                server._USAGE_SNAPSHOTS_FILE = pathlib.Path(tmp) / "usage-snapshots.jsonl"
+                stale_at = 1_783_011_600
+                server._USAGE_SNAPSHOTS_FILE.write_text(json.dumps({
+                    "ts": server._usage_snapshot_iso(stale_at),
+                    "codex": {
+                        "snapshot_ts": server._usage_snapshot_iso(stale_at),
+                        "weekly": {
+                            "pct": 34.0,
+                            "resets_at": "2026-07-09T07:00:00Z",
+                            "window_minutes": 10080,
+                        },
+                    },
+                }) + "\n", encoding="utf-8")
+
+                pace = server.codex_usage_pace_payload(
+                    now_epoch=stale_at + server._USAGE_NATIVE_FRESH_SECS + 1,
+                )
+                self.assertFalse(pace["ok"])
+                self.assertTrue(pace["stale"])
+            finally:
+                server._USAGE_SNAPSHOTS_FILE = old_snapshot_file
+
     def test_open_session_in_claude_desktop_rejects_bad_input(self):
         """The helper exists and rejects empty / non-UUID session IDs
         without trying to spawn `open(1)`."""
@@ -481,8 +854,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_startShipPushAll", app_js)
         self.assertIn("function _isShipRepoPath", app_js)
         self.assertIn("(section === 'inprogress' || section === 'archived') && _isShipRepoPath(repoPath)", app_js)
-        self.assertIn("const archivedRepoPath = cards[0].folder_path || '';", app_js)
-        self.assertIn("_folderGroupHeaderHtml('archived', folder, cards.length, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
+        self.assertIn("const repoPath = nodeId.indexOf('repo:') === 0 ? nodeId.slice(5) : '';", app_js)
+        self.assertIn("_folderGroupHeaderHtml('inprogress', title, _count, hue, '', nodeId, attrs, repoPath, archiveObjectId, inlineMetaHtml, ordinal)", app_js)
+        self.assertIn("const archivedRepoPath = root.folder_path || '';", app_js)
+        self.assertIn("_folderGroupHeaderHtml('archived', folder, count, hue, orphan, collapseKey, '', archivedRepoPath)", app_js)
         self.assertIn("if (!_isShipRepoPath(repo)) return;", app_js)
         self.assertIn("/api/repo/ship/continue", app_js)
         self.assertIn("ship-waiting-summary", app_js)
@@ -548,6 +923,15 @@ class TestServerImports(unittest.TestCase):
             with server._ship_jobs_lock:
                 server._ship_jobs.clear()
                 server._ship_jobs.update(old_jobs)
+
+    def test_antigravity_turn_token_chips_show_cached_input(self):
+        """Per-turn chips should expose cache reads, not only raw in/out counts."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _formatAntigravityTokenChips(tIn, tOut, tThinking, tCached)", app_js)
+        self.assertIn("if (tCached) parts.push(_formatTokensAntigravity(tCached) + ' cached')", app_js)
+        self.assertIn("const chipCached = Number(ev.tokens_cached || (ev.token_usage && (ev.token_usage.cache_read_input_tokens || ev.token_usage.cached_input_tokens)) || 0);", app_js)
+        self.assertIn("_formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking, chipCached)", app_js)
+        self.assertIn("Cached input:    ' + chipCached.toLocaleString() + ' tokens", app_js)
 
     def test_system_health_gui_app_contract(self):
         """GUI app-server engines are visible but never reapable. Their only
@@ -831,7 +1215,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function ensureNewSessionDefaultObject()", app_js)
         self.assertIn("function assignSpawnedSessionToDefaultObject(data)", app_js)
         self.assertIn("function reconcilePendingNewSessionObjectAssignments()", app_js)
-        self.assertIn("const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log);", spawn_block)
+        self.assertIn("const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);", spawn_block)
         self.assertIn("assignSpawnedSessionToDefaultObject(data);", spawn_block)
         self.assertNotIn("assignSpawnedSessionToDefaultObject(data);", draft_block)
         self.assertIn("_objectsApiPost('assign', { session_node_id: flowNodeKey('session', sid), object_id: objectId })", app_js)
@@ -900,25 +1284,27 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("['archived', 'All'", tab_block)
         all_pos = tab_block.index("['archived', 'All'")
         issues_pos = tab_block.index("['issues', 'Issues'")
-        merge_pos = tab_block.index("['merge', 'Merge'")
+        queues_pos = tab_block.index("['queues', 'Queues'")
         self.assertLess(active_pos, all_pos)
         self.assertLess(all_pos, issues_pos)
-        self.assertLess(issues_pos, merge_pos)
+        self.assertLess(issues_pos, queues_pos)
 
     def test_sidebar_all_tab_contains_active_and_archived_sessions(self):
         """The All tab should replay every session, not only archived rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const _allTabConvs = ", app_js)
-        # CCC-468: archived rows still replay in the All tab, but demoted to a
-        # collapsed "Trash" section at the bottom instead of interleaving with
-        # live rows (pinned archived rows stay in the main flow).
+        # All shows active and archived rows in its main flow. Only rows with
+        # the explicit trashed state belong in the bottom Trash bucket; pin and
+        # lane placement never change lifecycle membership.
         all_start = app_js.index("const _allTabConvs = ")
         all_block = app_js[all_start:app_js.index("const _arcHasFolderChips", all_start)]
-        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _pinnedArchived)", all_block)
-        self.assertIn("const _trashConvs = _archivedConvs.filter(c => !c.pinned);", app_js)
+        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs)", all_block)
+        self.assertIn("const _trashConvs = _archivedConvs.filter(c => !!c.trashed);", app_js)
+        self.assertIn("const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);", app_js)
         self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);", app_js)
-        self.assertIn("for (const c of _allTabMainConvs)", app_js)
+        self.assertIn("const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);", app_js)
+        self.assertIn("for (const cluster of _allTabClusters)", app_js)
         self.assertIn('data-role="trash-section"', app_js)
         self.assertIn('data-role="trash-toggle"', app_js)
         archived_markup = app_js[app_js.index("_archivedHtml ="):app_js.index("// Tabs", app_js.index("_archivedHtml ="))]
@@ -928,6 +1314,41 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-role="archived-tools"', archived_markup)
         self.assertIn('<div class="conv-archived-list">', archived_markup)
         self.assertIn("_sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))", app_js)
+
+    def test_archived_sessions_have_visible_restore_action(self):
+        """Archived session rows should have an explicit restore path back to Active."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('conv-archive-btn is-restore', app_js)
+        self.assertIn('title="Move to Active" aria-label="Move to Active"', app_js)
+        self.assertIn('data-archived="false"', app_js)
+        self.assertIn('data-role="trash" title="Move to Trash"', app_js)
+        self.assertNotIn("archivedRestoreRestHtml", app_js)
+        self.assertIn("(c.archived ? ' is-archived-row' : '')", app_js)
+        self.assertIn("payload.archived = archived;", app_js)
+        self.assertIn("const nextArchived = btn.dataset.archived === 'true';", app_js)
+        self.assertIn("archivePayloadForRow(c || { repo_path: repoPath }, sessionId, nextArchived)", app_js)
+        self.assertIn("Restored to Active", app_js)
+        self.assertIn(".conv-item .conv-archive-btn.is-restore", app_css)
+        self.assertIn(".conv-item.is-archived-row .conv-row-end { min-width: 76px; }", app_css)
+
+    def test_sidebar_tab_is_initialized_before_rows_use_it(self):
+        """Archive rendering must not hit the sidebar-tab temporal dead zone."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        sidebar_tab = app_js.index("const _sidebarTab = (() => {")
+        archive_action = app_js.index("const lifecycleContext = opts.lifecycleContext")
+        self.assertLess(sidebar_tab, archive_action)
+
+    def test_all_tab_archive_action_uses_explicit_button_intent(self):
+        """Archive transitions must not be inferred from stale cache or DOM state."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const nextArchived = btn.dataset.archived === 'true';", app_js)
+        self.assertIn('data-role="archive" data-archived="true"', app_js)
+        self.assertIn('data-role="archive" data-archived="false"', app_js)
+        self.assertNotIn("const currentlyArchived =", app_js)
 
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
         """When Hermes rows exist, All should expose Coding, Workers, and
@@ -941,15 +1362,116 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);", app_js)
         self.assertIn("_uxqHealthCache && _uxqHealthCache.worker_session_ids", app_js)
         self.assertIn("c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c)", app_js)
-        self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => !_isHermesAllRow(c) && !_isWatchTowerWorkerRow(c));", app_js)
-        self.assertIn("const _allTabWorkerConvs = _allTabHermesWorkerConvs.concat(_allTabWatchTowerWorkerConvs);", app_js)
-        self.assertIn("const _allTabHasHermesSplit = _allTabWorkerConvs.length > 0 || _allTabHermesMessageConvs.length > 0;", app_js)
+        self.assertIn("const _allTabLaneOverride = (c) => {", app_js)
+        self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
+        self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
+        self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
+        self.assertIn("const _savedAllTabView = (() => {", app_js)
+        self.assertIn("|| _allTabWorkerConvs.length > 0", app_js)
+        self.assertIn("|| _allTabHermesMessageConvs.length > 0", app_js)
+        self.assertIn("|| _savedAllTabView !== 'coding';", app_js)
         self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
         self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
         self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
         self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
+        self.assertIn("/all-lane", app_js)
         self.assertIn(".conv-all-hermes-tabs", app_css)
+        self.assertIn(".conv-all-hermes-tab.is-drop-target", app_css)
+
+    def test_all_view_nests_subagents_and_inherits_parent_lane(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        all_view = app_js[
+            app_js.index("let _archivedHtml = '';"):
+            app_js.index("// Trash section (CCC-468)")
+        ]
+
+        self.assertIn("const _allTabSessionId = (c) =>", all_view)
+        self.assertIn("const _allTabParentId = (c) =>", all_view)
+        self.assertIn("const _allTabTreeRowsFor = (rows) => {", all_view)
+        self.assertNotIn("_currentSessionId(", all_view)
+        self.assertNotIn("_currentSessionParentId(", all_view)
+        self.assertNotIn("_currentSessionsTreeRows(", all_view)
+        self.assertIn("const _allTabById = new Map();", app_js)
+        self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
+        self.assertIn("const parent = _allTabById.get(_allTabParentId(c));", app_js)
+        self.assertIn("if (parent) return _allTabLaneFor(parent, seen);", app_js)
+        self.assertIn("const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);", app_js)
+        self.assertIn("const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);", app_js)
+        self.assertIn("const _allTabClusterPinRank = (cluster) =>", app_js)
+        self.assertIn("clusters.sort((a, b) => {", app_js)
+        self.assertIn("const pinDelta = _allTabClusterPinRank(a) - _allTabClusterPinRank(b);", app_js)
+        self.assertIn("const root = cluster.rows[0].card;", app_js)
+        self.assertIn("_byFolder.get(key).push(cluster);", app_js)
+        self.assertIn("item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best", app_js)
+        self.assertIn("if (_ipSearchActive) {", app_js)
+        self.assertIn("_arcRows = _allTabMainConvs.map(c => _renderRow(c, {", app_js)
+        self.assertIn("currentChildDepth: entry.item.depth", app_js)
+        self.assertIn(".conv-archived-list .conv-item.is-current-child-row", app_css)
+
+    def test_subagent_clusters_collapse_active_rows_and_chip_completed_children(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const SUBAGENT_CLUSTERS_EXPANDED_KEY = 'ccc-subagent-clusters-expanded';", app_js)
+        self.assertIn("function _subagentClustersExpandedSet()", app_js)
+        self.assertIn("const _subagentClusterPresentation = (cluster) => {", app_js)
+        self.assertIn("const _renderSubagentCluster = (cluster, opts = {}) => {", app_js)
+        self.assertIn("const _subagentRowIsRecentBlocked = (c) => !!(c && c.ended_blocked", app_js)
+        self.assertIn("(c.modified || c.last_interacted || 0) >= _openAskCutoff", app_js)
+        active_classifier = app_js[
+            app_js.index("const _subagentRowIsActive = (c) => {"):
+            app_js.index("const _subagentRowNeedsAttention", app_js.index("const _subagentRowIsActive = (c) => {"))
+        ]
+        self.assertIn("_subagentRowIsRecentBlocked(c)", active_classifier)
+        self.assertNotIn("state === 'idle'", active_classifier)
+        self.assertIn("_subagentRowIsRecentBlocked(c) || c.needs_approval", app_js)
+        self.assertIn('data-role="subagent-cluster-toggle"', app_js)
+        self.assertIn("const _clusterNoun = _clusterTotal === 1 ? 'agent' : 'agents';", app_js)
+        row_action_selector = app_js[
+            app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["):
+            app_js.index("].join(',');", app_js.index("const CONVERSATION_ROW_ACTION_SELECTOR = ["))
+        ]
+        self.assertIn("'[data-role=\"subagent-cluster-toggle\"]'", row_action_selector)
+        self.assertIn("subagentCompact: true", app_js)
+        self.assertIn('class="conv-subagent-completed"', app_js)
+        self.assertIn("data-subagent-chip-sid", app_js)
+        self.assertIn("$convList._subagentClusterToggleWired", app_js)
+        self.assertIn("$convList._subagentChipWired", app_js)
+        self.assertIn(".conv-item.is-subagent-compact", app_css)
+        self.assertIn(".conv-subagent-completed-chip", app_css)
+        compact_css = app_css[
+            app_css.index(".conv-item.is-subagent-compact {"):
+            app_css.index(".conv-item.is-subagent-bridge", app_css.index(".conv-item.is-subagent-compact {"))
+        ]
+        self.assertIn(".conv-qc-badge", compact_css)
+        toggle_css = app_css[
+            app_css.index(".conv-subagent-cluster-toggle {"):
+            app_css.index(".conv-subagent-cluster-toggle:hover", app_css.index(".conv-subagent-cluster-toggle {"))
+        ]
+        self.assertIn("flex: 0 0 auto;", toggle_css)
+        self.assertIn("min-width: 58px;", toggle_css)
+
+    def test_blocked_subagents_stay_with_visible_active_parent_clusters(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        action_partition = app_js[
+            app_js.index("const _nowSec = Math.floor(Date.now() / 1000);"):
+            app_js.index("const _byRecencyDesc", app_js.index("const _nowSec = Math.floor(Date.now() / 1000);"))
+        ]
+
+        self.assertIn("const OPEN_ASK_RECENT_S = 48 * 3600;", app_js)
+        self.assertIn("function isRecentOpenAskRow(c, nowSec = Math.floor(Date.now() / 1000)) {", app_js)
+        self.assertIn("|| isRecentOpenAskRow(c) || _rowHasApprovalAsk(c))", app_js)
+        self.assertIn("const _isRecentOpenAsk = (c) =>", action_partition)
+        self.assertIn("const _isApprovalAsk = (c) =>", action_partition)
+        self.assertIn("const _openAskHasStableParent = (c, seen = new Set()) => {", action_partition)
+        self.assertIn("const parent = _actionSessionById.get(parentId);", action_partition)
+        self.assertIn("if (!_isRecentOpenAsk(parent)) return true;", action_partition)
+        self.assertIn("if (_isApprovalAsk(_c)", action_partition)
+        self.assertIn("|| (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c))) {", action_partition)
+        self.assertIn("state: c.state || '',", app_js)
+        self.assertIn("ended_blocked: !!c.ended_blocked,", app_js)
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
         """Cross-repo Ready to merge should not surface PRs from unknown repos."""
@@ -1073,7 +1595,7 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);", app_js)
         self.assertIn("!hasChildObjects", app_js)
-        self.assertIn("Empty — drag a session here, or use +.", app_js)
+        self.assertIn("Empty - drag a session here, or use +.", app_js)
 
     def test_assign_object_picker_renders_object_hierarchy(self):
         """The object assignment dialog should show nested objects as a tree."""
@@ -1099,6 +1621,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();", app_js)
         self.assertIn("const _objectHasVisibleDrafts = (node) =>", app_js)
         self.assertIn("if (_ipSearchActive && !_byObject.has(node) && !_objectHasVisibleDrafts(node)) continue;", app_js)
+
+    def test_archive_search_flag_is_scoped_for_all_render_branches(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        renderer = app_js[
+            app_js.index("function renderConversationList(convs) {"):
+            app_js.index("async function setArchiveMode()")
+        ]
+        declaration = (
+            "const _ipSearchActive = "
+            "!!(document.getElementById('convSearch')?.value || '').trim();"
+        )
+
+        self.assertEqual(renderer.count(declaration), 1)
+        self.assertLess(
+            renderer.index(declaration),
+            renderer.index("if (_shouldGroupByObjects) {")
+        )
 
     def test_object_group_rows_align_under_object_titles(self):
         """Rows inside object groups should start under the object title column."""
@@ -1501,12 +2040,18 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _twWorkersByQueue = new Map();", app_js)
         # Workers resolve to the EXISTING session row via their cloud session_id.
         self.assertIn("const card = sid ? _twCardById.get(sid) : null;", app_js)
-        self.assertIn("return _renderRow(enriched, { suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
+        self.assertIn("return _renderRow(enriched, { lifecycleContext: 'active', suppressFolderChip: !_ipRowChipsOn, elevateToObject: true, evergreenAgent: true, evergreenSingleLine: true });", app_js)
         self.assertIn("return _twFallbackRow(w);", app_js)
         self.assertIn("_twQueueHeaderHtml(q, workers.length)", app_js)
         self.assertIn("const _evergreenAgentsHtml = _evergreenAgentsBody", app_js)
         self.assertIn("+ _evergreenAgentsBody + '</div>'", app_js)
         self.assertIn('class="conv-evergreen-queue-header', app_js)
+        # An unattended auto-drain queue is waiting for a worker, rather than
+        # genuinely stuck. The sidebar must match the Queue health strip's
+        # less alarming terminology for this zero-worker state.
+        self.assertIn("const waiting = stuck && workers === 0;", app_js)
+        self.assertIn("stateLabel = 'Waiting';", app_js)
+        self.assertIn("Waiting means this auto-drain queue has claimable open tickets, but no WatchTower worker is currently assigned.", app_js)
         # The section must NOT read Flow-object state for its data.
         self.assertNotIn("const _renderEvergreenQueueGroup", app_js)
         self.assertNotIn("_evergreenRoots", app_js)
@@ -1606,7 +2151,10 @@ class TestServerImports(unittest.TestCase):
             "if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;" in app_js,
             "Current Sessions should exclude rows rendered in Triggered Workers.",
         )
-        self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionSource\n        : _currentSessionSource", app_js)
+        self.assertIn("const _currentSessionWindowed = _ipSearchActive", app_js)
+        self.assertIn("const _currentSessionLineage = _ipSearchActive", app_js)
+        self.assertIn(": _currentSessionsKeepClusteredDescendants(_currentSessionWindowed);", app_js)
+        self.assertIn("const _currentSessions = _ipSearchActive\n        ? _currentSessionLineage.rows\n        : _currentSessionLineage.rows", app_js)
 
     def test_current_sessions_respect_inprogress_window_filter(self):
         """Current sessions should use the same 1d/7d/All window as by-objects."""
@@ -1740,23 +2288,23 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)", app_js)
         self.assertIn("const _currentSessionRows = _ipSearchActive", app_js)
         self.assertIn("const _curShown = _currentSessionRows;", app_js)
-        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
+        self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
         self.assertIn("const currentChildRowClass = currentChildDepth > 0 ? ' is-current-child-row' : '';", app_js)
         self.assertIn("const currentChildStyle = currentChildDepth > 0", app_js)
-        self.assertIn(".conv-current-sessions-scroll .conv-item.is-current-child-row {", app_css)
+        self.assertIn(".conv-current-sessions-scroll .conv-item.is-current-child-row,", app_css)
         current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ============================================================", app_css.index(".conv-current-sessions-scroll {"))]
         self.assertIn("--current-child-indent: calc(var(--current-child-depth, 1) * 14px);", current_css)
         self.assertIn("--conv-icon-left: calc(10px + var(--current-child-indent));", current_css)
 
-    def test_current_sessions_hide_ended_spawned_child_rows(self):
-        """Ended spawned children should not flood the Current sessions band."""
+    def test_current_sessions_keep_ended_spawned_children_with_visible_parents(self):
+        """Completed children should become chips only inside a visible cluster."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertTrue(
             "const _currentSessionIsEndedSpawnChild = (c) => {" in app_js,
-            "Current Sessions should define the ended spawned-child filter.",
+            "Current Sessions should identify completed spawned children.",
         )
         self.assertTrue(
             "if (source === 'hermes' || engine === 'hermes') return false;" in app_js,
@@ -1764,12 +2312,32 @@ class TestServerImports(unittest.TestCase):
         )
         self.assertTrue(
             "if (c.is_live || c.pending_spawn || c.sidecar_in_flight || c.needs_approval || c.question_waiting) return false;" in app_js,
-            "Only genuinely live or waiting spawned children should stay in Current Sessions.",
+            "Genuinely live or waiting children must not be classified as completed.",
         )
-        self.assertTrue(
-            "if (_currentSessionIsEndedSpawnChild(c)) return false;" in app_js,
-            "Current Sessions should suppress ended spawned children outside search.",
-        )
+        self.assertIn("const _currentSessionsKeepClusteredDescendants = (rows) => {", app_js)
+        lineage_filter = app_js[
+            app_js.index("const _currentSessionsKeepClusteredDescendants = (rows) => {"):
+            app_js.index("const _currentSessionSource = _ipSearchActive", app_js.index("const _currentSessionsKeepClusteredDescendants = (rows) => {"))
+        ]
+        self.assertIn("if (!_currentSessionIsEndedSpawnChild(c)) return true;", lineage_filter)
+        self.assertIn("const parent = byId.get(_currentSessionParentId(c));", lineage_filter)
+        self.assertIn("return parent ? reachesVisibleRoot(parent, nextSeen) : false;", lineage_filter)
+        self.assertIn("const rehomedOpenAsks = [];", lineage_filter)
+        self.assertIn("if (_subagentRowIsRecentBlocked(c)) rehomedOpenAsks.push(c);", lineage_filter)
+        self.assertIn("return { rows: keptRows, openAsks: rehomedOpenAsks };", lineage_filter)
+        source_filter = app_js[
+            app_js.index("const _currentSessionSource = _ipSearchActive"):
+            app_js.index("const _currentSessions = _ipSearchActive", app_js.index("const _currentSessionSource = _ipSearchActive"))
+        ]
+        self.assertNotIn("_currentSessionIsEndedSpawnChild", source_filter)
+        self.assertIn("const _currentSessionLineage = _ipSearchActive", app_js)
+        self.assertIn(": _currentSessionsKeepClusteredDescendants(_currentSessionWindowed);", app_js)
+        self.assertIn("const _currentSessionVisibleIds = new Set(_currentSessionLineage.rows.map(_currentSessionId));", app_js)
+        self.assertIn("const _currentSessionRehomedOpenAsks = new Map();", app_js)
+        self.assertIn("_sessionConvs.forEach(c => {", app_js)
+        self.assertIn("if (!_isRecentOpenAsk(c) || _currentSessionVisibleIds.has(id) || _evergreenSessionIds.has(id)) return;", app_js)
+        self.assertIn("_openAskConvs.push(...Array.from(_currentSessionRehomedOpenAsks.values()));", app_js)
+        self.assertIn("? _currentSessionLineage.rows\n        : _currentSessionLineage.rows", app_js)
         self.assertTrue(
             "? (_visibleSessionConvs || []).slice()" in app_js,
             "Search should keep the full visible source list.",
@@ -1823,9 +2391,11 @@ class TestServerImports(unittest.TestCase):
         hover_meta_css = app_css[app_css.index(".conv-item .conv-hover-meta-row {"):app_css.index(".conv-item .conv-hover-meta-row > *", app_css.index(".conv-item .conv-hover-meta-row {"))]
         self.assertIn("margin: 4px 48px 0 var(--conv-content-left);", hover_meta_css)
         self.assertIn("max-width: calc(100% - var(--conv-content-left) - 70px);", hover_meta_css)
-        icon_pulse = app_css[app_css.index("@keyframes ccc-icon-pulse {"):app_css.index(".conv-session-icon.claude", app_css.index("@keyframes ccc-icon-pulse {"))]
-        self.assertIn("transform: translateY(-50%) scale(1);", icon_pulse)
-        self.assertIn("transform: translateY(-50%) scale(1.08);", icon_pulse)
+        self.assertNotIn("@keyframes ccc-icon-pulse", app_css)
+        self.assertNotIn(".conv-session-icon.is-live", app_css)
+        self.assertIn("@keyframes ccc-activity-dot-pulse", app_css)
+        self.assertNotIn(".session-cost-orbit", app_css)
+        self.assertIn(".session-tier-cost", app_css)
 
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always
@@ -1986,7 +2556,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalChipHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
@@ -2098,7 +2668,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
         self.assertIn("if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;", app_js)
         self.assertIn("if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';", app_js)
-        self.assertIn("html: cl.rows.map(item => _renderRow(item.card, { suppressFolderChip: false, quietTitleChrome: true, currentChildDepth: item.depth })).join(''),", app_js)
+        self.assertIn("html: _renderSubagentCluster(cl, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),", app_js)
         self.assertIn("? _currentSessionsByObjectGroupsHtml(_curShown)", app_js)
         self.assertIn(": _currentSessionsFlatRowsWithSeparators(_curShown, _gcItems);", app_js)
 
@@ -2214,6 +2784,7 @@ class TestServerImports(unittest.TestCase):
                 with mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
                     saved = server._save_spawn_defaults({
                         "engine": "codex",
+                        "reasoning_effort": "high",
                         "models": {
                             "claude": "sonnet-4-6",
                             "codex": "gpt-5-codex",
@@ -2222,10 +2793,20 @@ class TestServerImports(unittest.TestCase):
                         },
                     })
                     self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["reasoning_effort"], "high")
 
                     engine, model = server._spawn_request_engine_and_model({})
                     self.assertEqual(engine, "codex")
                     self.assertEqual(model, "gpt-5-codex")
+                    self.assertEqual(server._spawn_request_reasoning_effort({}, engine), "high")
+                    self.assertEqual(
+                        server._spawn_request_reasoning_effort({"reasoning_effort": "low"}, engine),
+                        "low",
+                    )
+                    self.assertEqual(
+                        server._spawn_request_reasoning_effort({"reasoning_effort": ""}, engine),
+                        "",
+                    )
 
                     engine, model = server._spawn_request_engine_and_model({"engine": "claude"})
                     self.assertEqual(engine, "claude")
@@ -2249,6 +2830,46 @@ class TestServerImports(unittest.TestCase):
                     engine, model = server._spawn_request_engine_and_model({"engine": "bogus"})
                     self.assertIsNone(engine)
                     self.assertIsNone(model)
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
+    def test_spawn_defaults_worker_engine_round_trips_and_validates(self):
+        """worker_engine is the WatchTower queue-worker default (WT reads this
+        key); it must persist, round-trip, stay blank by default, and reject
+        unknown engines."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                with mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                    defaults = server._load_spawn_defaults()
+                    self.assertEqual(defaults["worker_engine"], "")
+
+                    saved = server._save_spawn_defaults({"worker_engine": "kimi"})
+                    self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["worker_engine"], "kimi")
+                    on_disk = json.loads(server.SPAWN_DEFAULTS_FILE.read_text())
+                    self.assertEqual(on_disk["worker_engine"], "kimi")
+
+                    defaults = server._load_spawn_defaults()
+                    self.assertEqual(defaults["worker_engine"], "kimi")
+
+                    # A later save that omits worker_engine must not drop it.
+                    saved = server._save_spawn_defaults({"engine": "claude"})
+                    self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["worker_engine"], "kimi")
+
+                    # Blank clears back to WT's own fallback chain.
+                    saved = server._save_spawn_defaults({"worker_engine": ""})
+                    self.assertTrue(saved["ok"])
+                    self.assertEqual(saved["worker_engine"], "")
+
+                    rejected = server._save_spawn_defaults({"worker_engine": "bogus"})
+                    self.assertFalse(rejected["ok"])
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
@@ -2278,6 +2899,428 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
+    def test_engine_model_catalog_merges_local_codex_sources(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            codex_home = root / ".codex"
+            codex_home.mkdir()
+            (codex_home / "config.toml").write_text(
+                'model = "gpt-5.6-luna"\n',
+                encoding="utf-8",
+            )
+            (codex_home / "models_cache.json").write_text(json.dumps({
+                "models": [
+                    {
+                        "slug": "gpt-5.4-mini",
+                        "display_name": "GPT-5.4 Mini",
+                        "visibility": "list",
+                        "priority": 23,
+                        "supported_reasoning_levels": [{"effort": "low"}],
+                    },
+                    {
+                        "slug": "o3",
+                        "display_name": "O3",
+                        "visibility": "list",
+                    },
+                    {
+                        "slug": "codex-hidden-test",
+                        "display_name": "Hidden",
+                        "visibility": "hide",
+                    },
+                ],
+            }), encoding="utf-8")
+
+            old_file = server.SPAWN_DEFAULTS_FILE
+            old_cache = dict(server._MODEL_CATALOG_CACHE)
+            server.SPAWN_DEFAULTS_FILE = root / "spawn-defaults.json"
+            try:
+                with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False), \
+                     mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
+                     mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                    payload = server._build_engine_model_catalog(force_refresh=True)
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+                server._MODEL_CATALOG_CACHE.clear()
+                server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        codex_ids = payload["engines"]["codex"]
+        self.assertEqual(codex_ids, [
+            "gpt-5.5",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex-spark",
+        ])
+        self.assertNotIn("o3", codex_ids)
+        self.assertNotIn("codex-hidden-test", codex_ids)
+        self.assertEqual(payload["enforced"], [])
+        self.assertFalse(payload["catalog"]["codex"]["supports_custom"])
+        labels = [m["label"] for m in payload["catalog"]["codex"]["models"]]
+        self.assertEqual(labels[:4], ["5.5", "5.6 Sol", "5.6 Terra", "5.6 Luna"])
+        mini = next(m for m in payload["catalog"]["codex"]["models"] if m["id"] == "gpt-5.4-mini")
+        self.assertIn("codex-cache", mini["sources"])
+        self.assertEqual(mini["reasoning_efforts"], ["low"])
+
+    def test_anthropic_model_overview_parser_returns_exact_versioned_models(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        overview = """
+### Latest models comparison
+
+| Feature | Claude Fable 5 | Claude Opus 5 | Claude Sonnet 5 | Claude Haiku 4.5 |
+|:--|:--|:--|:--|:--|
+| **Claude API alias** | `claude-fable-5` | `claude-opus-5` | `claude-sonnet-5` | `claude-haiku-4-5` |
+| **Context window** | 1M tokens | 1M tokens | 1M tokens | 200k tokens |
+
+### Previous models
+"""
+        records = server._parse_anthropic_model_overview(overview)
+
+        self.assertEqual(
+            [row["id"] for row in records],
+            ["fable-5", "opus-5", "sonnet-5", "haiku-4-5"],
+        )
+        self.assertEqual([row["oneM"] for row in records], [True, True, True, False])
+        self.assertTrue(all(row["source"] == "anthropic-models-overview" for row in records))
+
+    def test_claude_model_catalog_refresh_persists_authoritative_cache(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        overview = b"""
+### Latest models comparison
+| Feature | Claude Opus 5 |
+|:--|:--|
+| **Claude API alias** | `claude-opus-5` |
+| **Context window** | 1M tokens |
+"""
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = overview
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server._CLAUDE_MODEL_CATALOG_FILE
+            server._CLAUDE_MODEL_CATALOG_FILE = pathlib.Path(td) / "claude-models.json"
+            try:
+                with mock.patch.object(server.urllib.request, "urlopen", return_value=response) as urlopen:
+                    refreshed = server._refresh_claude_model_catalog()
+                cached = server._load_claude_model_catalog_records()
+            finally:
+                server._CLAUDE_MODEL_CATALOG_FILE = old_file
+
+        self.assertTrue(refreshed["ok"])
+        self.assertEqual(cached[0]["id"], "opus-5")
+        self.assertEqual(cached[0]["source"], "anthropic-models-overview")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, server._CLAUDE_MODELS_OVERVIEW_URL)
+
+    def test_claude_catalog_merges_remote_exact_models_without_cli_probe(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        try:
+            with mock.patch.object(server, "_load_claude_model_catalog_records", return_value=[
+                {
+                    "id": "opus-5",
+                    "label": "opus-5",
+                    "oneM": True,
+                    "source": "anthropic-models-overview",
+                },
+            ]), mock.patch.object(
+                server, "_harness_model_list_result", return_value={"available": False, "records": []}
+            ) as harness, mock.patch.object(
+                server, "_codex_models_cache_records", return_value=[]
+            ), mock.patch.object(
+                server, "_codex_configured_model", return_value=""
+            ), mock.patch.object(
+                server, "_antigravity_cli_configured_model", return_value=""
+            ):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        self.assertTrue(opus["oneM"])
+        self.assertIn("anthropic-models-overview", opus["sources"])
+        self.assertNotIn(mock.call("claude"), harness.call_args_list)
+
+    def test_claude_catalog_hides_rolling_aliases_and_deduplicates_exact_ids(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        observed = [
+            {"engine": "claude", "id": "opus", "label": "opus", "source": "session-override"},
+            {
+                "engine": "claude",
+                "id": "claude-opus-5",
+                "label": "claude-opus-5",
+                "source": "session-override",
+            },
+        ]
+        try:
+            with mock.patch.object(server, "_load_claude_model_catalog_records", return_value=[]), \
+                 mock.patch.object(server, "_observed_model_records", return_value=observed), \
+                 mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        ids = payload["engines"]["claude"]
+        self.assertNotIn("opus", ids)
+        self.assertNotIn("claude-opus-5", ids)
+        self.assertEqual(ids.count("opus-5"), 1)
+        opus = next(row for row in payload["catalog"]["claude"]["models"] if row["id"] == "opus-5")
+        self.assertIn("session-override", opus["sources"])
+
+    def test_engine_update_pass_runs_confirmed_noninteractive_command(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        spec = {
+            "id": "claude",
+            "label": "Claude Code",
+            "resolver": lambda: {
+                "available": True,
+                "bin": "/tmp/test-claude",
+                "source": "candidate",
+            },
+            "args": ("update",),
+            "install": "curl -fsSL https://claude.ai/install.sh | bash",
+        }
+        completed = subprocess.CompletedProcess(
+            ["/tmp/test-claude", "update"], 0, stdout="Already up to date\n", stderr=""
+        )
+        with tempfile.TemporaryDirectory() as td:
+            old_state = server._ENGINE_UPDATE_STATE_FILE
+            old_lock = server._ENGINE_UPDATE_LOCK_FILE
+            server._ENGINE_UPDATE_STATE_FILE = pathlib.Path(td) / "engine-updates.json"
+            server._ENGINE_UPDATE_LOCK_FILE = pathlib.Path(td) / "engine-updates.lock"
+            try:
+                with mock.patch.object(server, "_engine_update_specs", return_value=[spec]), \
+                     mock.patch.object(server, "_engine_cli_version", side_effect=["2.1.218", "2.1.219"]), \
+                     mock.patch.object(server.subprocess, "run", return_value=completed) as run:
+                    status = server._run_engine_updates_once()
+            finally:
+                server._ENGINE_UPDATE_STATE_FILE = old_state
+                server._ENGINE_UPDATE_LOCK_FILE = old_lock
+
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["/tmp/test-claude", "update"])
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(status["engines"]["claude"]["status"], "updated")
+        self.assertEqual(status["engines"]["claude"]["version_before"], "2.1.218")
+        self.assertEqual(status["engines"]["claude"]["version_after"], "2.1.219")
+
+    def test_engine_update_pass_skips_bundle_managed_and_missing_clis(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        specs = [
+            {
+                "id": "cursor",
+                "label": "Cursor Agent",
+                "resolver": lambda: {
+                    "available": True,
+                    "bin": "/Applications/Cursor.app/cursor-agent",
+                    "source": "bundle",
+                },
+                "args": ("update",),
+                "install": "Install Cursor Agent",
+            },
+            {
+                "id": "hermes",
+                "label": "Hermes",
+                "resolver": lambda: {"available": False, "bin": None, "reason": "not installed"},
+                "args": ("update", "--yes"),
+                "install": "Install Hermes",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            old_state = server._ENGINE_UPDATE_STATE_FILE
+            old_lock = server._ENGINE_UPDATE_LOCK_FILE
+            server._ENGINE_UPDATE_STATE_FILE = pathlib.Path(td) / "engine-updates.json"
+            server._ENGINE_UPDATE_LOCK_FILE = pathlib.Path(td) / "engine-updates.lock"
+            try:
+                with mock.patch.object(server, "_engine_update_specs", return_value=specs), \
+                     mock.patch.object(server.subprocess, "run") as run:
+                    status = server._run_engine_updates_once()
+            finally:
+                server._ENGINE_UPDATE_STATE_FILE = old_state
+                server._ENGINE_UPDATE_LOCK_FILE = old_lock
+
+        run.assert_not_called()
+        self.assertEqual(status["engines"]["cursor"]["status"], "managed")
+        self.assertEqual(status["engines"]["hermes"]["status"], "missing")
+        self.assertIn("Install Hermes", status["engines"]["hermes"]["install"])
+
+    def test_engine_maintenance_refreshes_models_before_slow_cli_updates(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        order = []
+        with mock.patch.object(
+            server,
+            "_refresh_claude_model_catalog",
+            side_effect=lambda: order.append("catalog") or {"ok": True},
+        ), mock.patch.object(
+            server,
+            "_run_engine_updates_once",
+            side_effect=lambda: order.append("updates") or {"ok": True},
+        ):
+            server._engine_maintenance_once()
+
+        self.assertEqual(order, ["catalog", "updates"])
+
+    def test_observed_model_records_keep_each_cached_transcript_engine(self):
+        """Transcript-derived models must not leak into Claude's picker."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._conv_meta_cache)
+        try:
+            server._conv_meta_cache.clear()
+            server._conv_meta_cache.update({
+                "codex-session": {"engine": "codex", "model": "gpt-5.6-sol"},
+                "cursor-session": {"engine": "cursor", "model": "composer-2.5"},
+            })
+            with mock.patch.object(server, "_load_session_overrides", return_value={}), \
+                 mock.patch.object(server, "_load_spawn_registry", return_value=[]), \
+                 mock.patch.object(server, "_codex_thread_registry_entries", return_value={}), \
+                 mock.patch.object(server, "_spawned_sessions", []):
+                records = server._observed_model_records()
+        finally:
+            server._conv_meta_cache.clear()
+            server._conv_meta_cache.update(old_cache)
+
+        self.assertIn(
+            {"engine": "codex", "id": "gpt-5.6-sol", "label": "gpt-5.6-sol", "source": "transcript-cache"},
+            records,
+        )
+        self.assertIn(
+            {"engine": "cursor", "id": "composer-2.5", "label": "composer-2.5", "source": "transcript-cache"},
+            records,
+        )
+
+    def test_engine_model_catalog_filters_foreign_observed_models(self):
+        """A stale engine tag must not put a foreign model in another picker."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        observed = [
+            {"engine": "claude", "id": "gpt-5.6-sol", "label": "gpt-5.6-sol", "source": "session-override"},
+            {"engine": "cursor", "id": "composer-2.5", "label": "composer-2.5", "source": "transcript-cache"},
+        ]
+        try:
+            with mock.patch.object(server, "_observed_model_records", return_value=observed), \
+                 mock.patch.object(server, "_harness_model_list_result", return_value={"available": False, "records": []}), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+        self.assertNotIn("gpt-5.6-sol", payload["engines"]["claude"])
+        self.assertIn("composer-2.5", payload["engines"]["cursor"])
+
+    def test_codex_model_catalog_marks_missing_cli_models_unavailable(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        fake_debug_models = {
+            "available": True,
+            "records": [
+                {"id": "gpt-5.5", "label": "GPT-5.5", "source": "codex-cli"},
+                {"id": "gpt-5.4", "label": "GPT-5.4", "source": "codex-cli"},
+                {"id": "gpt-5.4-mini", "label": "GPT-5.4-Mini", "source": "codex-cli"},
+                {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3-Codex-Spark", "source": "codex-cli"},
+            ],
+            "command": ["codex", "debug", "models"],
+        }
+
+        old_cache = dict(server._MODEL_CATALOG_CACHE)
+        try:
+            with mock.patch.object(server, "_harness_model_list_result", return_value=fake_debug_models), \
+                 mock.patch.object(server, "_codex_models_cache_records", return_value=[]), \
+                 mock.patch.object(server, "_codex_configured_model", return_value=""), \
+                 mock.patch.object(server, "_antigravity_cli_configured_model", return_value=""):
+                payload = server._build_engine_model_catalog(force_refresh=True)
+                codex_models = payload["catalog"]["codex"]["models"]
+                luna = next(m for m in codex_models if m["id"] == "gpt-5.6-luna")
+                self.assertFalse(luna["available"])
+                self.assertIn("codex update", luna["availability_reason"])
+                self.assertTrue(next(m for m in codex_models if m["id"] == "gpt-5.5")["available"])
+                model, error = server._validate_codex_model("gpt-5.6-luna", require_available=True)
+                self.assertEqual(model, "gpt-5.6-luna")
+                self.assertIn("unavailable", error)
+        finally:
+            server._MODEL_CATALOG_CACHE.clear()
+            server._MODEL_CATALOG_CACHE.update(old_cache)
+
+    def test_codex_model_validation_enforces_picker_models(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        self.assertEqual(server._validate_codex_model("gpt-5.6-luna"), ("gpt-5.6-luna", None))
+        self.assertEqual(server._validate_codex_model("gpt-5.5-codex"), ("gpt-5.5", None))
+        model, error = server._validate_codex_model("gpt-5.6-preview")
+        self.assertEqual(model, "gpt-5.6-preview")
+        self.assertIn("unsupported codex model", error)
+
+    def test_static_model_picker_uses_server_catalog_and_codex_allowlist(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+
+        self.assertIn("fetch('/api/engines/models'", app_js)
+        self.assertIn("{ id: 'opus-5'", app_js)
+        self.assertIn("_gated('modelCatalog', loadEngineModelCatalog)", app_js)
+        self.assertIn("setInterval(refreshEngineModelCatalog", app_js)
+        self.assertIn("function _modelAllowedForEngine", app_js)
+        self.assertIn("gpt-5.6-sol", app_js)
+        self.assertIn("gpt-5.6-terra", app_js)
+        self.assertIn("gpt-5.6-luna", app_js)
+        self.assertIn("opt.disabled", app_js)
+        self.assertIn("_modelUnavailableReason", app_js)
+        self.assertIn("if (_engineSupportsCustomModel(engine))", app_js)
+        self.assertIn("ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom", app_js)
+
+    def test_engine_settings_exposes_automatic_updates(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+
+        self.assertIn("Automatic CLI updates", index_html)
+        self.assertIn("engineUpdateNowBtn", index_html)
+        self.assertIn("fetch('/api/engines/update-status'", app_js)
+        self.assertIn("fetch('/api/engines/update-now'", app_js)
+        self.assertIn('path == "/api/engines/update-status"', server_py)
+        self.assertIn('path == "/api/engines/update-now"', server_py)
+
     def test_morning_disabled_when_plugin_absent(self):
         """If morning.py isn't importable, MORNING_ENABLED must be False
         no matter what CCC_ENABLE_MORNING says."""
@@ -2290,6 +3333,16 @@ class TestServerImports(unittest.TestCase):
         if not server._MORNING_IMPORTABLE:
             self.assertFalse(server.MORNING_ENABLED,
                              "MORNING_ENABLED must be False when plugin missing")
+
+    def test_morning_session_ids_is_empty_when_plugin_disabled(self):
+        """Core conversation routes must not import the optional store."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with mock.patch.object(server, "MORNING_ENABLED", False), \
+             mock.patch.dict(sys.modules, {"morning_store": None}):
+            self.assertEqual(server._morning_session_ids(), {})
 
     def test_page_annotation_is_bounded_and_persisted(self):
         """Browser annotations should store local context without requiring
@@ -2569,7 +3622,10 @@ class TestServerImports(unittest.TestCase):
     def test_ux_fixes_queue_progress_badge_is_rendered_from_queue_api(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        self.assertIn("/api/ux-fixes/list", app_js)
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("/api/queue/list", app_js)
+        # Legacy alias stays served for compatibility.
+        self.assertIn('"/api/ux-fixes/list"', server_py)
         self.assertIn("claimed_by", app_js)
         self.assertIn("conv-ux-fix-progress", app_js)
         self.assertIn("function _uxFixesWorkerProjectForRow(c)", app_js)
@@ -2684,6 +3740,65 @@ class TestServerImports(unittest.TestCase):
         key_body = app_js[key_start:app_js.index("// True when item project", key_start)]
         self.assertIn("const _UXQ_PROJECT_ALIASES = { CC: 'CCC' };", app_js)
         self.assertIn("return _UXQ_PROJECT_ALIASES[key] || key;", key_body)
+
+    def test_queue_scope_key_survives_missing_open_row(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        key_start = app_js.index("function _uxqScopeKey()")
+        key_body = app_js[key_start:app_js.index("function _uxqLoadScopeMap()", key_start)]
+        self.assertIn("const rowKey = r && (r.id || r.session_id);", key_body)
+        self.assertIn("if (rowKey) return rowKey;", key_body)
+        self.assertIn("if (typeof currentConversation !== 'undefined' && currentConversation) return currentConversation;", key_body)
+        self.assertIn("return '__queue_global__';", key_body)
+
+    def test_explicit_queue_scope_survives_automatic_conversation_restore(self):
+        """A Queue scope picked by the user must not follow a restored session ID."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        get_start = app_js.index("function _uxqGetScopeOverride()")
+        get_body = app_js[get_start:app_js.index("function _uxqSetScopeOverride", get_start)]
+        set_body = app_js[app_js.index("function _uxqSetScopeOverride"):app_js.index("// Status filter", app_js.index("function _uxqSetScopeOverride"))]
+
+        self.assertIn("const _UXQ_SELECTED_SCOPE_LS = 'ccc-uxq-selected-scope';", app_js)
+        self.assertIn("const selected = _uxqProjectKey(localStorage.getItem(_UXQ_SELECTED_SCOPE_LS) || '');", get_body)
+        self.assertIn("return selected || sessionScope;", get_body)
+        self.assertIn("localStorage.setItem(_UXQ_SELECTED_SCOPE_LS, v);", set_body)
+        self.assertIn("localStorage.removeItem(_UXQ_SELECTED_SCOPE_LS);", set_body)
+
+    def test_queue_scope_switch_repaints_from_completed_caches(self):
+        """Scope changes keep responsive caches, with feedback until rows repaint."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        items_fetch = app_js[
+            app_js.index("async function _fetchUxqItems"):
+            app_js.index("// Per-project queue-health snapshot", app_js.index("async function _fetchUxqItems"))
+        ]
+        health_fetch = app_js[
+            app_js.index("async function _fetchUxqHealth"):
+            app_js.index("// Live WatchTower workers", app_js.index("async function _fetchUxqHealth"))
+        ]
+        loading_helper = app_js[
+            app_js.index("function _uxqSetScopeLoading(isLoading)"):
+            app_js.index("function _uxqEmptyHtml", app_js.index("function _uxqSetScopeLoading(isLoading)"))
+        ]
+        scope_handler = app_js[
+            app_js.index("// Queue scope picker:"):
+            app_js.index("const $queueAdd", app_js.index("// Queue scope picker:"))
+        ]
+
+        self.assertIn("async function _fetchUxqItems(allowStale)", items_fetch)
+        self.assertIn("allowStale && _uxqItemsCache.ts", items_fetch)
+        self.assertIn("async function _fetchUxqHealth(allowStale)", health_fetch)
+        self.assertIn("allowStale && _uxqHealthCache.ts", health_fetch)
+        self.assertIn("$scope.addEventListener('change', async () =>", scope_handler)
+        self.assertIn("$sel.disabled = !!isLoading;", loading_helper)
+        self.assertIn("$busy.classList.toggle('is-loading', !!isLoading);", loading_helper)
+        self.assertIn("await _renderQueuePanel({ allowStale: true });", scope_handler)
+        self.assertIn("_uxqSetScopeLoading(true);", scope_handler)
+        self.assertIn("_uxqSetScopeLoading(false);", scope_handler)
+        self.assertNotIn("_uxqItemsCache.ts = 0;", scope_handler)
+        self.assertNotIn("_uxqHealthCache.ts = 0;", scope_handler)
+        self.assertIn('id="queueScopeBusy"', app_html)
+        self.assertIn(".fq-scope-busy", app_css)
 
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -2905,20 +4020,54 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("mobile-show-main .conv-split[data-orientation=\"\"] .conv-pane > .conv-pane-header", app_css)
         self.assertNotIn("_captureRailEl(document.getElementById('mobileBackBtn'))", app_js)
 
-    def test_mobile_back_button_moves_into_visible_tab_strip(self):
-        """Mobile back should share the Master/Background tab row."""
+    def test_mobile_back_button_stays_in_stable_toolbar(self):
+        """Dynamic task-tab rendering must never own the only mobile exit."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("function syncMobileBackIntoTabStrip(strip, visible)", app_js)
-        self.assertIn("strip.insertBefore($mobileBackBtn, strip.firstChild);", app_js)
-        self.assertIn("toolbar.insertBefore($mobileBackBtn, toolbar.firstChild);", app_js)
-        self.assertIn("syncMobileBackIntoTabStrip(strip, true);", app_js)
-        self.assertIn("syncMobileBackIntoTabStrip(strip, false);", app_js)
-        self.assertIn(".conv-tab-strip.has-mobile-back", app_css)
-        self.assertIn(".conv-tab-strip.has-mobile-back #mobileBackBtn", app_css)
+        self.assertIn(
+            '<div class="toolbar" id="convToolbar">\n'
+            '      <button class="mobile-back-btn" id="mobileBackBtn"',
+            index_html,
+        )
+        self.assertNotIn("syncMobileBackIntoTabStrip", app_js)
+        self.assertNotIn("insertBefore($mobileBackBtn", app_js)
+        self.assertNotIn(".conv-tab-strip.has-mobile-back", app_css)
         self.assertIn("#convToolbar .font-size-controls { display: none !important; }", app_css)
         self.assertIn("order: -100;", app_css)
+
+    def test_mobile_conversation_follows_visual_viewport(self):
+        """The fixed conversation pane must remain inside the viewport after
+        iOS pans and shrinks it for the software keyboard, and its composer
+        must not trigger iOS focus zoom even when pointer detection is wrong."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "setProperty('--app-vv-top', vv.offsetTop + 'px')",
+            app_js,
+        )
+        self.assertIn("top: var(--app-vv-top, 0px); right: 0; bottom: auto; left: 0;", app_css)
+        self.assertIn("height: var(--app-vh, 100vh);", app_css)
+        self.assertIn("@media (pointer: coarse), (max-width: 1200px)", app_css)
+        self.assertIn(
+            "#convInput,\n  #cpInput {\n    font-size: 16px !important;",
+            app_css,
+        )
+
+    def test_mobile_original_ask_uses_toolbar_disclosure(self):
+        """Phones show one compact original-ask row in the stable toolbar
+        instead of the transcript's large sticky card."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="mobileOriginalAsk"', index_html)
+        self.assertIn("syncMobileOriginalAsk(mobileOriginalAskText)", app_js)
+        self.assertIn("body .conversations-view .conv-sticky-header {\n    display: none !important;", app_css)
+        self.assertIn("#mobileOriginalAsk:not([hidden])", app_css)
+        self.assertIn("#mobileOriginalAsk.is-expanded .mobile-original-ask__text", app_css)
 
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""
@@ -3037,9 +4186,33 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("out.dataset.resultLabel = ", app_js)
         self.assertIn("toolResultOutputLabel(last, ", app_js)
         self.assertIn("Command result", app_js)
-        self.assertIn("Command error", app_js)
+        self.assertIn("⚠ Command failed", app_js)
         self.assertIn(".tool-result-output::before", app_css)
         self.assertIn("content: attr(data-result-label);", app_css)
+
+    def test_tool_calls_render_complete_input_disclosure(self):
+        """Persisted tool payloads should load lazily behind an Input toggle."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function renderToolInputDisclosure(block, conversationId, line)", app_js)
+        self.assertIn("async function loadToolInputDisclosure(details)", app_js)
+        self.assertIn("<span>Input</span>", app_js)
+        self.assertIn("/tool-input?line=", app_js)
+        self.assertIn("tool_use_id=", app_js)
+        self.assertIn("const inputDisclosure = renderToolInputDisclosure(b,", app_js)
+        self.assertIn("+ inputDisclosure", app_js)
+        self.assertNotIn("escapeHtml(block.input)", app_js)
+
+    def test_recoverable_tool_failures_use_a_subdued_warning_treatment(self):
+        """A failed tool call should not look like a CCC or session failure."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("⚠ Command failed", app_js)
+        self.assertIn(".tool-result-output.is-error { border-left-color: var(--orange); color: var(--orange); }", app_css)
+        self.assertIn(".tool-result-output.is-error::before { color: var(--orange); }", app_css)
+        self.assertIn("const shouldRenderResult = !!text || _isErr;", app_js)
+        self.assertIn("No error details returned.", app_js)
 
     def test_organize_is_incremental_with_overlap_resolve(self):
         """Per user request: Organize must keep repos/objects where they
@@ -3242,6 +4415,36 @@ class TestServerImports(unittest.TestCase):
         # Bound to Cmd+` and Cmd+Shift+` in the Window menu.
         self.assertIn('keyEquivalent: "`"', macapp)
 
+    def test_macapp_first_launch_is_native_and_observable(self):
+        """DMG first launch must not depend on Terminal automation.
+
+        The app owns the bundled installer process, observes an early exit,
+        and gives the user recovery actions backed by the actual process log.
+        """
+        macapp = pathlib.Path(
+            PROJECT_ROOT, "scripts", "macapp", "main.swift"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("NSAppleScript", macapp)
+        self.assertNotIn('tell application "Terminal"', macapp)
+        self.assertNotIn("ccc-install-", macapp)
+        self.assertIn(
+            'proc.arguments = [installScript, "--from=dmg"]', macapp
+        )
+        self.assertIn('env["CCC_INSTALL_MODE"] = "app"', macapp)
+        self.assertIn("process.terminationStatus", macapp)
+        self.assertIn('alert.addButton(withTitle: "Retry")', macapp)
+        self.assertIn('alert.addButton(withTitle: "Open Log")', macapp)
+
+    def test_macapp_defers_sparkle_until_dashboard_loaded(self):
+        """Sparkle modal UI must not dismiss bootstrap recovery alerts."""
+        macapp = pathlib.Path(
+            PROJECT_ROOT, "scripts", "macapp", "main.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("startingUpdater: false", macapp)
+        self.assertIn("func startUpdaterAfterBootstrap()", macapp)
+        self.assertIn("updaterController.startUpdater()", macapp)
+        self.assertIn("appDelegate?.startUpdaterAfterBootstrap()", macapp)
+
     def test_macapp_does_not_quit_when_last_window_closes(self):
         """Closing a conversation pop-out (or the main window momentarily)
         must NOT terminate the app — that kills the server we spawned
@@ -3333,6 +4536,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const protoDesc = Object.getOwnPropertyDescriptor(proto, 'value');", app_js)
         self.assertIn("const desc = ownDesc || protoDesc;", app_js)
 
+    def test_composer_file_drop_uses_managed_attachments(self):
+        """Finder/browser drops must persist files before inserting a path token."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+
+        self.assertIn("function attachFileDrop(el)", app_js)
+        self.assertIn("ev.dataTransfer.files", app_js)
+        self.assertIn("uploadManagedAttachment(file)", app_js)
+        self.assertIn("/api/upload-attachment", app_js)
+        self.assertIn('path == "/api/upload-attachment"', server_py)
+        self.assertIn("100 * 1024 * 1024", server_py)
+        self.assertIn("COMMAND_CENTER_ATTACHMENTS_DIR", server_py)
+
     def test_composer_textarea_hides_native_scrollbar_chrome(self):
         """The composer textarea should not show WebKit scrollbar thumbs.
 
@@ -3344,14 +4560,14 @@ class TestServerImports(unittest.TestCase):
 
         textarea_css = app_css[
             app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"):
-            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"))
+            app_css.index("/* Native-app typing on mobile.", app_css.index(".conv-input-bar textarea {\n    /* Single-row by default;"))
         ]
         self.assertIn("overflow-x: hidden;", textarea_css)
         self.assertIn("scrollbar-width: none;", textarea_css)
         self.assertIn(".conv-input-bar textarea::-webkit-scrollbar", app_css)
         self.assertIn("display: none;", app_css[
             app_css.index(".conv-input-bar textarea::-webkit-scrollbar"):
-            app_css.index("/* Native-app typing on touch devices.", app_css.index(".conv-input-bar textarea::-webkit-scrollbar"))
+            app_css.index("/* Native-app typing on mobile.", app_css.index(".conv-input-bar textarea::-webkit-scrollbar"))
         ])
 
     def test_empty_composer_arrow_up_recalls_last_command(self):
@@ -3420,6 +4636,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("compactCommand && isCompactionCapableSource(currentSession.source)", app_js)
         self.assertNotIn("Codex sessions do not use Claude slash commands", app_js)
         self.assertIn("const failurePrefix = compactCommand ? '/compact failed'", app_js)
+
+    def test_kimi_sessions_do_not_offer_unsupported_slash_commands(self):
+        """Kimi ACP has no slash-command protocol, so its composer must not
+        offer Claude's fallback commands as though they were executable."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("if (source === 'kimi') return 'Slash commands are not wired for Kimi sessions';", app_js)
+        self.assertIn("(engine === 'claude' || engine === 'codex')", app_js)
 
     def test_slash_command_picker_selects_on_press(self):
         """Mouse/touch selection must commit on press, before focus refreshes
@@ -3505,10 +4728,16 @@ class TestServerImports(unittest.TestCase):
         the rendered event IS that message, the full event text wins (CCC-456)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
-        self.assertIn("const canonical = (conv && conv.first_message) || '';", app_js)
+        self.assertIn(
+            "const canonical = (conv && (conv.original_ask || conv.first_message)) || '';",
+            app_js,
+        )
         self.assertIn("if (canonPrefix && norm(evText).startsWith(canonPrefix)) return evText;", app_js)
         self.assertIn("return canonical || evText;", app_js)
-        self.assertIn("const cleaned = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));", app_js)
+        self.assertIn(
+            "const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));",
+            app_js,
+        )
 
     def test_right_rail_uses_metadata_files_and_queue_tabs(self):
         """The right rail keeps activity in Metadata, with Files and Queue as
@@ -3592,6 +4821,27 @@ class TestServerImports(unittest.TestCase):
             right_rail_css,
         )
 
+    def test_status_rail_automatically_uses_top_layout_on_mobile(self):
+        """The desktop rail is not manually toggled and yields to the top
+        layout whenever the responsive mobile breakpoint is active."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="statusPosToggle"', index_html)
+        self.assertNotIn("#statusPosToggle", app_css)
+        self.assertIn(
+            "const inRail = document.body.classList.contains('status-pos-right') && !isMobile();",
+            app_js,
+        )
+        self.assertIn("_applyStatusRailLayout();", app_js[app_js.index("function handleMobileBreakpointChange()"):app_js.index("const $cpMobileBackBtn")])
+        mobile_rail_css = app_css[app_css.rindex("/* The desktop status rail becomes the top status layout on mobile."):]
+        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail)", mobile_rail_css)
+        self.assertIn("body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail)", mobile_rail_css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", mobile_rail_css)
+        self.assertIn("body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail", mobile_rail_css)
+        self.assertIn("display: none;", mobile_rail_css)
+
     def test_queue_rows_open_item_detail_modal(self):
         """Queue row clicks should show the ticket payload/screenshot instead
         of trying to jump to a brittle transcript reference."""
@@ -3611,6 +4861,31 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".uxq-td-title", app_css)
         self.assertIn(".uxq-detail-meta", app_css)
 
+    def test_queue_all_history_renders_a_bounded_page_at_scale(self):
+        """All-history filtering may scan every ticket, but DOM work stays bounded."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        render_js = app_js[
+            app_js.index("function _renderQueuePanel"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel"))
+        ]
+
+        self.assertIn("const _UXQ_HISTORY_PAGE_SIZE = 80;", app_js)
+        self.assertIn(
+            "const visibleRows = historyOrder ? rows.slice(historyStart, historyEnd) : rows;",
+            render_js,
+        )
+        self.assertIn("const queueRowsHtml = visibleRows.map(it =>", render_js)
+        self.assertNotIn("const queueRowsHtml = rows.map(it =>", render_js)
+        self.assertIn("data-uxq-history-page=", render_js)
+        self.assertIn("_uxqHistoryPage += direction;", app_js)
+        scope_setter = app_js[
+            app_js.index("function _uxqSetScopeOverride"):
+            app_js.index("const _UXQ_FILTER_LS", app_js.index("function _uxqSetScopeOverride"))
+        ]
+        self.assertIn("_uxqResetHistoryPage();", scope_setter)
+        self.assertIn(".fq-history-pager", app_css)
+
     def test_queue_state_badges_explain_stuck(self):
         """Queue health badges should answer what each compact state means."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -3618,6 +4893,32 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Stuck means this auto-drain queue has claimable open tickets", app_js)
         self.assertIn('" aria-label="\' + escapeAttr(badgeTip)', app_js)
         self.assertIn('" aria-label="\' + escapeAttr(stateTip)', app_js)
+
+    def test_queue_drain_toggle_reports_parked_and_failed_updates(self):
+        """Turning on drain must explain why zero-claimable queues stay idle."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        toggle_js = app_js[
+            app_js.index("const toggleDrain = async (ev) =>"):
+            app_js.index("const cycleClaimTypes = async (ev) =>")
+        ]
+
+        self.assertIn("if (!res.ok || !data.ok)", toggle_js)
+        self.assertIn("has no runnable tickets", toggle_js)
+        self.assertIn("Auto-drain enabled for", toggle_js)
+        self.assertIn("Auto-drain disabled for", toggle_js)
+        self.assertIn("Auto-drain update failed", toggle_js)
+        self.assertIn("btn.classList.add('is-pending');", toggle_js)
+        self.assertIn("btn.setAttribute('aria-busy', 'true');", toggle_js)
+        self.assertIn("btn.classList.toggle('is-on', newVal);", toggle_js)
+        self.assertIn("drainVal.textContent = newVal ? 'on' : 'off';", toggle_js)
+        self.assertIn("btn.classList.remove('is-pending');", toggle_js)
+        self.assertIn("btn.removeAttribute('aria-busy');", toggle_js)
+        self.assertIn(".fq-health-drain-toggle.is-pending::after", app_css)
+        self.assertLess(
+            toggle_js.index("const queueHealth ="),
+            toggle_js.index("await fetch('/api/queue/drain'"),
+        )
 
     def test_queue_detail_uses_watchtower_timeline_contract(self):
         """Ticket detail should come from WT timeline, not CCC's old private
@@ -3640,7 +4941,38 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("item.answers", modal_js)
         self.assertNotIn("item.block_question) {", modal_js)
 
-    def test_queue_status_icons_are_large_and_in_progress_glows(self):
+    def test_blocked_queue_detail_says_the_agent_needs_input(self):
+        """A blocked ticket's live activity line must clearly ask the human
+        for input, rather than ambiguously saying it is waiting for an answer."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        modal_js = app_js[
+            app_js.index("function _uxqOpenItemModal(item)"):
+            app_js.index("function _renderQueuePanel", app_js.index("function _uxqOpenItemModal(item)"))
+        ]
+
+        self.assertIn("status === 'blocked' ? 'Agent needs your input' : 'Open'", modal_js)
+
+    def test_queue_item_payload_keeps_close_report_without_watchtower_import(self):
+        """CCC's stdlib-only queue fallback must still expose a worker's
+        close summary to the ticket-detail Activity timeline."""
+        server = importlib.import_module("server")
+        item = {
+            "status": "closed",
+            "history": [{
+                "event": "close",
+                "at": "2026-07-12T13:34:40Z",
+                "by": {"kind": "worker", "worker": "ccc-worker"},
+                "resolution": {"summary": "Restored the missing label"},
+            }],
+        }
+
+        with mock.patch.object(server, "_q", object()):
+            payload = server._uxq_item_payload(item)
+
+        self.assertEqual(payload["timeline"][0]["event"], "close")
+        self.assertEqual(payload["timeline"][0]["resolution"]["summary"], "Restored the missing label")
+
+    def test_queue_status_icons_are_large_and_follow_status_color_mapping(self):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         status_css = app_css[app_css.index(".fq-status {"):app_css.index(".fq-row.is-open .fq-status", app_css.index(".fq-status {"))]
@@ -3648,9 +4980,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("height: 14px;", status_css)
         self.assertIn("box-shadow:", status_css)
         self.assertIn("@keyframes fq-status-glow", app_css)
+        open_css = app_css[
+            app_css.index(".fq-row.is-open .fq-status {"):
+            app_css.index(".fq-row.is-in_progress .fq-status", app_css.index(".fq-row.is-open .fq-status {"))
+        ]
         in_progress_css = app_css[app_css.index(".fq-row.is-in_progress .fq-status {"):app_css.index(".fq-row.is-closed .fq-status", app_css.index(".fq-row.is-in_progress .fq-status {"))]
+        closed_css = app_css[
+            app_css.index(".fq-row.is-closed .fq-status {"):
+            app_css.index(".fq-row.is-closed .fq-note", app_css.index(".fq-row.is-closed .fq-status {"))
+        ]
+        self.assertIn("var(--text-muted, #8b949e)", open_css)
+        self.assertIn("var(--accent, #58a6ff)", in_progress_css)
+        self.assertIn("var(--green, #3fb950)", closed_css)
         self.assertIn("animation: fq-status-glow 1.5s ease-in-out infinite;", in_progress_css)
         self.assertIn("will-change: opacity, box-shadow;", in_progress_css)
+        self.assertIn("0 0 24px rgba(33,150,243,0.95)", app_css)
 
     def test_queue_header_can_toggle_wrapped_titles(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
@@ -3675,17 +5019,75 @@ class TestServerImports(unittest.TestCase):
     def test_queue_add_uses_large_composer(self):
         """Adding a queue item should use a multiline composer, not prompt()."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function openQueueTicketComposer()", app_js)
         self.assertIn("const note = await openQueueTicketComposer();", app_js)
         self.assertNotIn("window.prompt('New queue ticket", app_js)
+        self.assertIn('id="filesQueueAdd"', index_html)
+        self.assertIn('class="fq-add-row" id="filesQueueAdd"', app_js)
+        self.assertGreater(
+            app_js.index('class="fq-add-row" id="filesQueueAdd"'),
+            app_js.index("$queue.innerHTML = pendingAddsHtml + queueRowsHtml"),
+        )
         self.assertIn('class="fq-ticket-textarea"', app_js)
         self.assertIn('rows="7"', app_js)
         self.assertIn('data-fq-ticket-submit', app_js)
         self.assertIn(".fq-ticket-textarea", app_css)
         self.assertIn("min-height: 150px;", app_css)
         self.assertIn("resize: vertical;", app_css)
+
+    def test_queue_add_renders_a_pending_row_until_watchtower_confirms_it(self):
+        """A submitted add stays visible as a spinner row until the canonical item arrives."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        add_start = app_js.index("async function _addQueueTicket()")
+        add_body = app_js[add_start:app_js.index("// ── Q-FIRST", add_start)]
+
+        self.assertIn("const _uxqPendingQueueAdds = new Map();", app_js)
+        self.assertIn("fq-pending-add", app_js)
+        self.assertIn("_uxqPendingQueueAdds.set(pendingId", add_body)
+        self.assertIn("_renderQueuePanel({ allowStale: true });", add_body)
+        self.assertIn("_uxqPendingQueueAdds.delete(pendingId);", add_body)
+        self.assertIn("await _renderQueuePanel();", add_body)
+
+    def test_queue_add_clears_obscuring_state_and_reveals_the_new_ticket(self):
+        """A successful Add must leave its canonical row visible in its own queue."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("function _uxqPrepareNewTicketView(item, fallbackProject)", app_js)
+        helper_start = app_js.index("function _uxqPrepareNewTicketView(item, fallbackProject)")
+        helper_end = app_js.index("async function _addQueueTicket()", helper_start)
+        helper = app_js[helper_start:helper_end]
+        add_start = helper_end
+        add_body = app_js[add_start:app_js.index("// ── Q-FIRST", add_start)]
+
+        self.assertIn("_uxqSetScopeOverride(project);", helper)
+        self.assertIn("_uxqSetFilter('open');", helper)
+        self.assertIn("_uxqSetTypeFilter('all');", helper)
+        self.assertIn("$qSearch.value = '';", helper)
+        self.assertIn("_uxqResetHistoryPage();", helper)
+        self.assertIn("row.scrollIntoView({ block: 'center' });", helper)
+        self.assertIn("_uxqPrepareNewTicketView(data.item, targetProj);", add_body)
+        self.assertIn("_uxqRevealNewTicket(ref);", add_body)
+
+    def test_queue_manager_can_create_and_revise_full_watchtower_config(self):
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="filesQueueConfigure"', index_html)
+        self.assertIn("function openQueueManager", app_js)
+        self.assertIn("/api/queue/config-options", app_js)
+        self.assertIn("/api/queue/config", app_js)
+        self.assertIn('data-fq-config-queue', app_js)
+        self.assertIn('id="filesQueueConfigure"', app_js)
+        self.assertIn('name="fq-config-backend"', app_js)
+        self.assertIn('name="fq-config-claim-type"', app_js)
+        self.assertIn('id="fqConfigEffort"', app_js)
+        self.assertIn("effort: fields.effort.value", app_js)
+        self.assertIn("CCC spawn default", app_js)
+        self.assertIn("queue configuration", app_js)
+        self.assertIn(".fq-config-dialog", app_css)
 
     def test_toolbar_controls_move_to_settings_and_metadata_rail(self):
         """Right-rail mode should empty the crowded conversation topbar."""
@@ -3710,7 +5112,8 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("if (railTitleEl) railTitleEl.textContent = title || category || 'Session';", app_js)
+        self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
+        self.assertIn("if (railTitleEl) railTitleEl.textContent = railTitle;", app_js)
         self.assertIn(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {", app_css)
         self.assertIn("display: none;", app_css[
             app_css.index(".rail-actions #cccBreadcrumb .ccc-breadcrumb-title {"):
@@ -3737,6 +5140,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_setStatusRailWidth(fileViewerPreviousRailWidth * FILE_VIEWER_RAIL_EXPAND_FACTOR, false);", app_js)
         self.assertIn("_setStatusRailWidth(previousWidth, false);", app_js)
         self.assertIn("if (previousStoredWidth == null) localStorage.removeItem('ccc-status-rail-width');", app_js)
+
+    def test_status_rail_resizer_supports_tablet_pointer_drag(self):
+        """The right-rail divider must resize under touch/pen as well as mouse."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("$statusRailResizer.addEventListener('pointerdown'", app_js)
+        self.assertIn("$statusRailResizer.setPointerCapture(e.pointerId)", app_js)
+        self.assertIn("$statusRailResizer.addEventListener('pointermove'", app_js)
+        self.assertIn("$statusRailResizer.addEventListener('pointercancel', _railEnd)", app_js)
+        resizer_css = app_css[app_css.index(".status-rail-resizer {"):]
+        resizer_css = resizer_css[:resizer_css.index("}")]
+        self.assertIn("touch-action: none;", resizer_css)
 
     def test_done_result_can_copy_agent_answer(self):
         """Successful Done rows expose a small copy affordance for the last
@@ -3807,6 +5223,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("conversationDistanceFromBottom(view) <= CONV_LIVE_REVEAL_BOTTOM_EPSILON", app_js)
         self.assertIn("const shouldStick = _convShouldLiveRevealStickToBottom($view);", app_js)
         self.assertIn("if (ev.type === 'assistant') _convLiveRevealNewText(div, paneId, opts);", app_js)
+        self.assertIn("function _replayRevealRun(runEl)", app_js)
+        self.assertIn("data-replay-shell-first-run-id", app_js)
+        self.assertIn("const shellSelector = 'p, li, ul, ol, blockquote, table, thead, tbody, tr, th, td, h1, h2, h3, h4, h5, h6';", app_js)
+        self.assertIn("el.dataset.replayShellFirstRunId = firstRun.dataset.runId;", app_js)
+        self.assertIn("_replayRevealRun(wordSpan);", app_js)
+        self.assertIn("_replayRevealRun(span);", app_js)
+        self.assertIn("_replayRevealAllShells(container);", app_js)
         self.assertIn(".conv-live-word.gc-typing-shimmer", app_css)
 
     def test_codex_silent_result_is_labeled_as_no_visible_response(self):
@@ -3835,6 +5258,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("not a live stuck process", app_js)
         self.assertIn("Use the wake/follow-up box below", app_js)
 
+    def test_codex_silent_turn_log_lookup_scopes_to_its_thread_repo(self):
+        """Opening a silent Codex turn must not scan every recent Codex repo."""
+        server = importlib.import_module("server")
+        with mock.patch.object(
+            server, "_codex_thread_row", return_value={"cwd": "/work/repo/subdir"}
+        ), mock.patch.object(
+            server, "_git_toplevel_for_existing_dir", return_value="/work/repo"
+        ), mock.patch.object(
+            server, "_recent_codex_ccc_log_paths", return_value=[]
+        ) as recent_logs:
+            self.assertEqual(server._codex_logs_for_session("thread-123"), [])
+
+        self.assertEqual(recent_logs.call_args.kwargs["repo_paths"], ["/work/repo"])
+
     def test_stale_optimistic_thinking_settles_when_no_process_exists(self):
         """The optimistic Thinking pill should not tick forever after the
         status poll proves there is no live/headless/terminal process."""
@@ -3848,6 +5285,13 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("!liveStatus.live && !liveStatus.headlessPresent && !liveStatus.terminalPresent && !liveStatus.bgPresent", app_js)
         self.assertIn("settleStaleOptimisticAgentIndicator($view);", app_js)
         self.assertIn(".conv-live-tool-inline.is-stale-no-process", app_css)
+
+    def test_idle_process_pill_explains_that_the_session_can_resume(self):
+        """A dormant session remains usable even when no worker is attached."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("(waking ? 'waking…' : 'idle')", app_js)
+        self.assertIn("You can still send a message; CCC will resume the session.", app_js)
 
     def test_live_inline_indicator_is_singleton(self):
         """A refreshed live status tick should not leave stacked Generating rows."""
@@ -3871,6 +5315,36 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const hasWakeProgress = !!$view.querySelector('.conv-live-tool-inline.optimistic, .conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown');", app_js)
         self.assertIn("if (hasWakeProgress) {", app_js)
         self.assertIn("clearLiveGeneratingIndicator($view);", app_js)
+
+    def test_codex_wake_breakdown_starts_during_dormant_send(self):
+        """Dormant Codex sends should expose wake progress before inject-input returns."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+
+        self.assertIn("startCodexWakeBreakdown($wv, sid);", app_js)
+        self.assertIn("appendStageRow('Waiting for wake request', false, true);", app_js)
+        self.assertIn("waiting for server wake log", app_js)
+        self.assertIn("warning: ' + data.warning", app_js)
+        self.assertIn("detail: ' + data.outcome_detail", app_js)
+        self.assertIn("effort=reasoning_effort", server_py)
+        self.assertIn("overflow-wrap: anywhere;", app_css)
+
+    def test_codex_wake_progress_is_quiet_until_it_stalls(self):
+        """A normal Codex wake should not render an alarming diagnostic stack."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function _wakeStageQuietLabel", app_js)
+        self.assertIn("return 'Thinking… ' + model + effort;", app_js)
+        self.assertIn("const WAKE_STAGE_DETAIL_DELAY_MS = 1000;", app_js)
+        self.assertIn("el.classList.toggle('is-detailed', showDetails);", app_js)
+        self.assertIn(".wake-breakdown .wb-stage.is-done .wb-label { display: none; }", app_css)
+        self.assertNotIn("Waking up&hellip;", app_js)
+        self.assertNotIn("Waking up headless&hellip;", app_js)
+        self.assertNotIn("Waking the headless agent", app_js)
+        self.assertIn("const optimistic = $view.querySelector('.conv-live-tool-inline.optimistic');", app_js)
+        self.assertIn("if (optimistic) optimistic.remove();", app_js)
 
     def test_mobile_live_command_indicator_collapses_command_detail(self):
         """Mobile should show a compact Bash/tool pill instead of a multi-line
@@ -3901,6 +5375,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("clearSessionSending(sid);", app_js)
         self.assertIn("compact boundary proves the pending compact turn is over", app_js)
         self.assertIn("clearOptimisticAgentIndicator($view);", app_js)
+
+    def test_compact_request_has_a_hard_timeout(self):
+        """A stalled compact request must release the UI so the user can retry."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        compact_post = app_js[
+            app_js.index("async function postCompactSession(sessionId, terminalApp)"):
+            app_js.index("// Engines whose /compact", app_js.index("async function postCompactSession(sessionId, terminalApp)"))
+        ]
+        self.assertIn("const COMPACT_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;", compact_post)
+        self.assertIn("const controller = typeof AbortController === 'function' ? new AbortController() : null;", compact_post)
+        self.assertIn("setTimeout(() => controller.abort(), COMPACT_REQUEST_TIMEOUT_MS)", compact_post)
+        self.assertIn("signal: controller ? controller.signal : undefined", compact_post)
+        self.assertIn("finally { if (timer) clearTimeout(timer); }", compact_post)
 
     def test_compact_waits_for_pending_send_echoes(self):
         """Compaction must not run while a sent message is only an optimistic echo."""
@@ -3941,7 +5429,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("is-paused", goal_js)
         self.assertIn("is-blocked", goal_js)
         self.assertIn("function conversationGoalActionButtonsHtml(statusKey, source, isLive)", goal_js)
-        self.assertIn("const needsLiveTui = kind === 'codex' && a.action !== 'clear' && !isLive;", goal_js)
+        self.assertIn("const needsLiveTui = kind === 'codex' && a.action === 'edit' && !isLive;", goal_js)
+        self.assertIn("Clear/pause/resume are server-side goal-store", goal_js)
         self.assertIn('data-role="conv-goal-action"', goal_js)
         self.assertIn("function conversationGoalActionCommand(action)", goal_js)
         self.assertIn("return '/goal clear';", goal_js)
@@ -3962,6 +5451,51 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-goal-strip.is-blocked", app_css)
         self.assertIn(".conv-item .conv-goal.is-paused", app_css)
         self.assertIn(".conv-item .conv-goal.is-blocked", app_css)
+
+    def test_dormant_codex_goal_send_does_not_wait_for_transcript_echo(self):
+        """The direct goal-store path does not create a user_message event."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        branch = app_js[
+            app_js.index("renderConvWakeOutcome(getConvViewForPane"):
+            app_js.index("} else if (data.queued && data.cwd_missing)", app_js.index("renderConvWakeOutcome(getConvViewForPane"))
+        ]
+        self.assertIn("data.via === 'codex-goal-store'", branch)
+        self.assertIn("removePendingSendEcho(pendingSend);", branch)
+        self.assertIn("Goal updated.", branch)
+        self.assertIn("refreshConversationList", branch)
+
+    def test_codex_goal_store_update_mutates_sqlite(self):
+        """Dormant Codex /goal actions should update the native goal DB without
+        needing a live TUI or trusting a best-effort app-server RPC."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        old_candidates = server.CODEX_GOALS_DB_CANDIDATES
+        sid = "019f0000-test-goal"
+        with tempfile.TemporaryDirectory() as td:
+            db = pathlib.Path(td) / "goals_1.sqlite"
+            server.CODEX_GOALS_DB_CANDIDATES = (db,)
+            try:
+                set_res = server._codex_goal_store_update(sid, "set", objective="ship the thing")
+                self.assertTrue(set_res["ok"], set_res)
+                snap = server._codex_goals_snapshot()
+                self.assertEqual(snap[sid]["objective"], "ship the thing")
+                self.assertEqual(snap[sid]["status"], "active")
+
+                pause_res = server._codex_goal_store_update(sid, "pause")
+                self.assertTrue(pause_res["ok"], pause_res)
+                self.assertEqual(server._codex_goals_snapshot()[sid]["status"], "paused")
+
+                resume_res = server._codex_goal_store_update(sid, "resume")
+                self.assertTrue(resume_res["ok"], resume_res)
+                self.assertEqual(server._codex_goals_snapshot()[sid]["status"], "active")
+
+                clear_res = server._codex_goal_store_update(sid, "clear")
+                self.assertTrue(clear_res["ok"], clear_res)
+                self.assertNotIn(sid, server._codex_goals_snapshot())
+            finally:
+                server.CODEX_GOALS_DB_CANDIDATES = old_candidates
+                server._invalidate_codex_goals_cache()
 
     def test_claude_goal_command_stamps_goal_fields(self):
         """Claude slash-command goal state should be promoted to row fields,
@@ -4059,6 +5593,87 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-input-bar .steer-btn", app_css)
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
+        self.assertIn("function codexTurnSteerable()", app_js)
+        self.assertIn("(isCodex && codexTurnSteerable()) || isKimi || claudeSteerable", app_js)
+        self.assertIn("function codexSteerUnavailable(data)", app_js)
+        self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
+        send_handler = app_js[
+            app_js.index("async function sendToTerminal"):
+            app_js.index("function insertPendingSpawnCard")
+        ]
+        self.assertNotIn("postInjectInput(sid, text, 'send', { announcedFrom })", send_handler)
+
+    def test_claude_headless_steer_uses_interrupt_control_request(self):
+        """Steering a wedged Claude headless writes an `interrupt` control
+        request to its FIFO, so a turn stuck on a long tool child reaches a
+        boundary where queued input can land."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("def _write_stream_json_interrupt(", server_py)
+        self.assertIn('"type": "control_request"', server_py)
+        self.assertIn('"subtype": "interrupt"', server_py)
+        self.assertIn('"via": "claude-interrupt-steer"', server_py)
+        # The interrupt must be written BEFORE the follow-up text, or Claude
+        # reads the text into the turn the interrupt is about to abort.
+        interrupt_at = server_py.index('"via": "claude-interrupt-steer"')
+        branch = server_py[interrupt_at - 1200:interrupt_at]
+        self.assertLess(
+            branch.index("_write_stream_json_interrupt(spawn)"),
+            branch.index("_write_stream_json_user_message(spawn, text)"),
+        )
+        # Frontend no longer hard-blocks steer for non-Codex/Kimi sources.
+        self.assertNotIn("Steer is only available for Codex and Kimi sessions.", app_js)
+        self.assertIn("claudeSteerable", app_js)
+
+    def test_tool_child_stops_blocking_queued_input_after_cap(self):
+        """A tool child that outlives its turn must not hold queued input
+        forever — an agent-spawned poll loop once held one session's queue for
+        over four hours."""
+        server = importlib.import_module("server")
+        spawn = {"pid": 4242, "engine": "claude"}
+        original = server._spawn_entry_active_tool_child
+        try:
+            server._spawn_entry_active_tool_child = lambda entry: None
+            self.assertFalse(server._tool_child_blocks_inject(spawn))
+
+            now = 1_000_000.0
+            # Young child: still mid-turn, keep holding.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99, "command": "npm run build", "started_at": now - 30,
+            }
+            self.assertTrue(server._tool_child_blocks_inject(spawn, now=now))
+
+            # Past the cap: deliver rather than hold user text hostage.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99,
+                "command": "while true; do wt ls -q Q; sleep 120; done",
+                "started_at": now - (server._INJECT_TOOL_CHILD_MAX_HOLD_S + 1),
+            }
+            self.assertFalse(server._tool_child_blocks_inject(spawn, now=now))
+
+            # Unknown start time is not evidence of staleness — keep holding.
+            server._spawn_entry_active_tool_child = lambda entry: {
+                "pid": 99, "command": "x", "started_at": None,
+            }
+            self.assertTrue(server._tool_child_blocks_inject(spawn, now=now))
+        finally:
+            server._spawn_entry_active_tool_child = original
+
+    def test_steered_compact_interrupts_before_compacting(self):
+        """`mode` must be parsed before the /compact early return, or a steered
+        /compact drops the steer and queues behind the turn it should abort."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        fn = server_py[server_py.index("def _inject_text_into_session("):]
+        fn = fn[:fn.index("\ndef ", 10)]
+        self.assertLess(
+            fn.index('mode = mode_value if mode_value in ("answer", "steer")'),
+            fn.index("if compact_command and not is_codex:"),
+        )
+        compact_branch = fn[fn.index("if compact_command and not is_codex:"):]
+        compact_branch = compact_branch[:compact_branch.index("compact_session_context(")]
+        self.assertIn("_write_stream_json_interrupt(spawn)", compact_branch)
+        # The drain loop must use the age-capped gate, not the raw one.
+        self.assertIn("_tool_child_blocks_inject(spawn)", server_py)
 
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers
@@ -4082,7 +5697,17 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
         self.assertIn('data-steer-user-message', app_js)
         self.assertIn("postInjectInput(sid, text, 'steer')", app_js)
+        inline_handler = app_js[
+            app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"):
+            app_js.index("function setCurrentSession", app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"))
+        ]
+        self.assertNotIn("postInjectInput(sid, text, 'send')", inline_handler)
+        self.assertIn("syncUserMessageSteerButtons", app_js)
+        self.assertIn('hidden disabled aria-hidden="true"', app_js)
+        self.assertIn("btn.hidden = !steerable;", app_js)
         self.assertIn("Steered running Codex turn.", app_js)
+        self.assertIn("markPendingSendDelivered(pendingSend, data);", app_js)
+        self.assertIn("Steered into the running Codex turn.", app_js)
         self.assertIn("div.classList.add('has-user-steer')", app_js)
         self.assertIn(".conversations-view .event.user_text.has-user-steer .user-msg", app_css)
         self.assertIn(".user-message-steer", app_css)
@@ -4249,6 +5874,14 @@ class TestServerImports(unittest.TestCase):
         ):
             self.assertIn(field, body, f"filterConversations should search {field}")
 
+    def test_visible_search_results_keep_session_name_matches_first(self):
+        """The final sidebar render must not let UUID ranking bury a title hit."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        start = app_js.index("function renderConversationList(convs) {")
+        body = app_js[start:start + 900]
+        self.assertIn("convs = _prioritizeNameMatches(", body)
+        self.assertIn("_prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || '')", body)
+
     def test_archive_view_search_matches_hermes_platform_metadata(self):
         """The all-repos archive view (renderArchiveList) has its own inline
         search separate from filterConversations. It must also match Hermes
@@ -4407,6 +6040,73 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.user_text.send-delivered", app_js)
         self.assertIn(".event.user_text.not-acknowledged", app_js)
 
+    def test_queued_send_echo_renders_steer_before_cancel_immediately(self):
+        """The first queued paint must not wait for tray synchronization."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        branch = app_js[
+            app_js.index("function markPendingSendQueued"):
+            app_js.index("function markPendingSendDelivered")
+        ]
+
+        self.assertIn('data-steer-queued-message', branch)
+        self.assertIn('class="send-queued-steer"', branch)
+        self.assertLess(
+            branch.index('data-steer-queued-message'),
+            branch.index('data-cancel-queued-message'),
+        )
+        self.assertIn(".event.user_text.send-queued .send-queued-steer", app_css)
+
+    def test_queued_steer_candidates_stay_above_the_composer(self):
+        """Queued input is a steer candidate, not history that later events bury."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("function syncQueuedSteerTray", app_js)
+        self.assertIn("queued-steer-tray", app_js)
+        self.assertIn("inputBar.insertBefore(tray, inputBar.firstChild)", app_js)
+        self.assertIn("el.dataset.queuedSteerServer === 'true'", app_js)
+        self.assertIn("el.classList.contains('send-queued')", app_js)
+        self.assertIn("data-steer-queued-message", app_js)
+        self.assertIn("el.appendChild(steer)", app_js)
+        self.assertIn("data-cancel-queued-message", app_js)
+        self.assertIn("el.appendChild(cancel)", app_js)
+        cancel_handler = app_js[
+            app_js.index("const btn = ev.target.closest('[data-cancel-queued-message]')"):
+            app_js.index("const btn = ev.target.closest('[data-steer-queued-message]')")
+        ]
+        self.assertIn("'/api/pending-input/cancel'", cancel_handler)
+        self.assertIn("if (row && row._pendingRef) removePendingSendEcho(row._pendingRef)", cancel_handler)
+        self.assertIn("else if (row) row.remove()", cancel_handler)
+        queued_handler = app_js[
+            app_js.index("const btn = ev.target.closest('[data-steer-queued-message]')"):
+            app_js.index("const btn = ev.target.closest('[data-steer-user-message]')")
+        ]
+        self.assertIn("postInjectInput(sid, text, 'steer', { replaceQueued: true })", queued_handler)
+        self.assertNotIn("postInjectInput(sid, text, 'send')", queued_handler)
+        self.assertIn("if (data && data.queue_pump_started)", queued_handler)
+        self.assertIn("if (data && data.queued_preserved)", queued_handler)
+        self.assertLess(
+            queued_handler.index("if (data && data.queue_pump_started)"),
+            queued_handler.index("if (data && data.queued_preserved)"),
+        )
+        self.assertIn("if (!data.queued_consumed)", queued_handler)
+        self.assertGreater(
+            queued_handler.index("if (row && row._pendingRef) removePendingSendEcho(row._pendingRef)"),
+            queued_handler.index("if (!data.queued_consumed)"),
+        )
+        self.assertIn("tray.dataset.conversationId", app_js)
+        self.assertIn("replace_queued", app_js)
+        self.assertIn("is-queued-steer-duplicate", app_js)
+        self.assertIn(".event.user_text.is-queued-steer-duplicate", app_css)
+        self.assertIn(".queued-steer-tray .msg-image", app_css)
+        self.assertIn(".queued-steer-tray .send-queued-steer {", app_css)
+        self.assertIn(".queued-steer-tray .cancel-queued-message", app_css)
+        self.assertIn("position: absolute;", app_css)
+        self.assertIn("top: 6px;", app_css)
+        self.assertIn("right: 8px;", app_css)
+        self.assertIn(".queued-steer-tray .event.user_text {", app_css)
+        self.assertIn("background: rgba(63, 185, 80, 0.045);", app_css)
+
     def test_codex_app_queued_send_marks_pending_echo_queued(self):
         """Codex app-server queue ACKs must not leave the optimistic echo pending."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -4439,9 +6139,17 @@ class TestServerImports(unittest.TestCase):
     def test_spawn_adoption_accepts_spawn_id_without_pid(self):
         """App-server Codex spawns use synthetic spawn ids rather than OS pids."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log)", app_js)
+        self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id)", app_js)
         self.assertIn("const realSpawnId = data.spawn_id || data.pid;", app_js)
         self.assertIn("insertPendingSpawnCard(data.spawn_id || data.pid, subject", app_js)
+
+    def test_codex_spawn_placeholder_matches_returned_session_id(self):
+        """A real app-server row must replace its optimistic card without a duplicate flash."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("placeholder.expected_session_id = sessionId || ''", app_js)
+        self.assertIn("row.session_id && placeholder.expected_session_id", app_js)
+        self.assertIn("String(row.session_id) === String(placeholder.expected_session_id)", app_js)
+        self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id)", app_js)
 
     def test_slash_command_args_surface_in_user_text(self):
         """A /command user turn must render "/cmd <args>", not a bare "/cmd".
@@ -4559,6 +6267,16 @@ class TestRunScript(unittest.TestCase):
         self.assertIn("run.ps1", text)
 
 
+class TestQFirstBootRestore(unittest.TestCase):
+    def test_qfirst_url_mode_survives_boot_restore(self):
+        """?ccc_mode=queues must win over the boot conversation restore — the
+        board vanished ~1s after load because restoreLastConversation opened a
+        conversation, which always closes the board."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("QFIRST_URL_MODE && _qfBootRestore", app_js)
+        self.assertIn("_qfBootRestore = true;", app_js)
+
+
 class TestPlatformDocs(unittest.TestCase):
     def test_readme_documents_native_windows_and_wsl2_routes(self):
         readme = pathlib.Path(PROJECT_ROOT, "README.md").read_text(encoding="utf-8")
@@ -4612,7 +6330,10 @@ class TestLinuxCapabilities(unittest.TestCase):
 
     def test_capabilities_hide_native_desktop_features_on_linux(self):
         server = self._server()
-        with mock.patch.object(server.platform, "system", return_value="Linux"):
+        # Patch the picker detection so the result doesn't depend on whether
+        # the test host happens to have zenity/kdialog and a display.
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             caps = server._platform_capabilities()
         self.assertEqual(caps["platform"], "linux")
         self.assertTrue(caps["annotate"], "page annotations should be cross-platform")
@@ -4620,6 +6341,16 @@ class TestLinuxCapabilities(unittest.TestCase):
                     "folderPicker", "desktopDeepLinks", "revealFile",
                     "openBrowser", "notifications"):
             self.assertFalse(caps[key], f"{key} should be False on Linux")
+
+    def test_capabilities_folder_picker_on_linux_with_zenity(self):
+        """On a Linux desktop with zenity/kdialog/yad present the folder
+        picker flag flips to True so the UI can offer Browse."""
+        server = self._server()
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd",
+                               return_value=["zenity", "--file-selection"]):
+            caps = server._platform_capabilities()
+        self.assertTrue(caps["folderPicker"])
 
     def test_app_config_exposes_capabilities(self):
         server = self._server()
@@ -4634,8 +6365,13 @@ class TestLinuxCapabilities(unittest.TestCase):
         """Each gated entry point returns a structured no-op on non-Darwin
         instead of raising or shelling out to a missing macOS tool."""
         server = self._server()
+        # _linux_folder_picker_cmd is patched to None so the folder picker
+        # takes its graceful "no tool installed" path even on a test host
+        # that has zenity and a display — otherwise this test would pop a
+        # real dialog and block for 10 minutes.
         with mock.patch.object(server.platform, "system", return_value="Linux"), \
-             mock.patch.object(server.sys, "platform", "linux"):
+             mock.patch.object(server.sys, "platform", "linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=None):
             for result in (
                 server._native_pick_folder(),
                 server._capture_screenshot_native(),
@@ -4646,6 +6382,47 @@ class TestLinuxCapabilities(unittest.TestCase):
                 self.assertIsInstance(result, dict)
                 self.assertFalse(result.get("ok", False))
                 self.assertIn("error", result)
+
+    def test_linux_pick_folder_uses_zenity(self):
+        """With a picker tool available, a zero exit yields the picked path
+        and a non-zero exit (Cancel) yields the cancelled marker."""
+        server = self._server()
+        zenity = ["zenity", "--file-selection", "--directory", "--title={prompt}"]
+        with mock.patch.object(server.platform, "system", return_value="Linux"), \
+             mock.patch.object(server, "_linux_folder_picker_cmd", return_value=zenity):
+            with mock.patch.object(server.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess(zenity, 0, stdout="/tmp/repo\n", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": True, "path": "/tmp/repo"})
+                # {prompt} substitution reached argv
+                self.assertIn("--title=Pick a repo folder for Command Center",
+                              run.call_args[0][0])
+                run.return_value = subprocess.CompletedProcess(zenity, 1, stdout="", stderr="")
+                self.assertEqual(server._native_pick_folder(), {"ok": False, "cancelled": True})
+
+    def test_list_dirs_for_picker(self):
+        """The in-browser picker fallback lists visible subdirectories with a
+        parent link, skips dotdirs, and errors cleanly on non-directories."""
+        server = self._server()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = pathlib.Path(tmp)
+            (base / "alpha").mkdir()
+            (base / "Beta").mkdir()
+            (base / ".hidden").mkdir()
+            (base / "a-file.txt").write_text("x")
+            result = server._list_dirs_for_picker(str(base))
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["path"], str(base.resolve()))
+            self.assertEqual(result["parent"], str(base.resolve().parent))
+            self.assertEqual([d["name"] for d in result["dirs"]], ["alpha", "Beta"])
+            root = server._list_dirs_for_picker("/")
+            self.assertTrue(root["ok"])
+            self.assertIsNone(root["parent"])
+            bad = server._list_dirs_for_picker(str(base / "a-file.txt"))
+            self.assertFalse(bad["ok"])
+            self.assertIn("error", bad)
+            missing = server._list_dirs_for_picker(str(base / "nope"))
+            self.assertFalse(missing["ok"])
+            self.assertIn("error", missing)
 
     def test_sys_memory_and_cpu_work_on_linux(self):
         """The system-monitor stats must not go blank on Linux: memory comes
@@ -4737,6 +6514,248 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_valid_repo_path_is_accepted(self):
         self.assertEqual(self.server.resolve_repo_path(str(self.repo)), str(self.repo))
+
+    def test_queue_config_payload_has_safe_defaults_and_normalizes_fields(self):
+        """The Queue UI may create a config without requiring every advanced field."""
+        config = self.server._queue_config_from_payload({
+            "queue": " demo_queue ",
+            "auto_drain": True,
+            "workers": "3",
+            "claim_types": ["bug", "invalid", "feature"],
+            "engine": "codex",
+            "effort": "max",
+        })
+
+        self.assertEqual(config["queue"], "DEMO_QUEUE")
+        self.assertTrue(config["config"]["auto_drain"])
+        self.assertEqual(config["config"]["desired_workers"], 3)
+        self.assertEqual(config["config"]["claim_types"], ["bug", "feature"])
+        self.assertEqual(config["config"]["backend"], "file")
+        self.assertEqual(config["config"]["engine"], "codex")
+        self.assertEqual(config["config"]["effort"], "max")
+        self.assertNotIn("repo_path", config["config"])
+        cleared = self.server._queue_config_from_payload({"queue": "DEMO_QUEUE", "effort": ""})
+        self.assertNotIn("effort", cleared["config"])
+
+    def test_queue_config_can_defer_engine_and_model_to_ccc_spawn_defaults(self):
+        config = self.server._queue_config_from_payload({
+            "queue": "DEMO_QUEUE",
+            "engine": "",
+            "model": "",
+        })
+
+        self.assertNotIn("engine", config["config"])
+        self.assertNotIn("model", config["config"])
+
+    def test_queue_config_accepts_kimi_engine_and_model(self):
+        config = self.server._queue_config_from_payload({
+            "queue": "DEMO_QUEUE",
+            "engine": "kimi",
+            "model": "kimi-code/kimi-for-coding-highspeed",
+        })
+        self.assertEqual(config["config"]["engine"], "kimi")
+        self.assertEqual(config["config"]["model"], "kimi-code/kimi-for-coding-highspeed")
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "DEMO_QUEUE", "engine": "bogus"})
+
+    def test_queue_config_options_include_kimi_models(self):
+        options = self.server._queue_config_options()
+        kimi_models = (options.get("models_by_engine") or {}).get("kimi") or []
+        self.assertIn("kimi-code/kimi-for-coding-highspeed", kimi_models)
+        self.assertIn("kimi-code/k3", kimi_models)
+
+    def test_queue_config_payload_rejects_bad_queue_name_and_github_without_repo(self):
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "not valid!"})
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "DEMO", "backend": "github"})
+        with self.assertRaises(ValueError):
+            self.server._queue_config_from_payload({"queue": "DEMO", "effort": "ultra"})
+
+    def test_queue_config_api_creates_a_queue_and_returns_suggestions(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            request = urllib.request.Request(
+                base + "/api/queue/config",
+                data=json.dumps({"queue": "DEMO", "workers": 2}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                saved = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(saved["ok"])
+            self.assertEqual(saved["config"]["desired_workers"], 2)
+            request = urllib.request.Request(base + "/api/queue/config-options", data=b"{}", method="POST")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                options = json.loads(response.read().decode("utf-8"))
+            self.assertIn("DEMO", [row["queue"] for row in options["queues"]])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_queue_events_sse_emits_baseline_hello(self):
+        """The queue board's push channel must answer with an SSE baseline so a
+        fresh subscriber hydrates immediately (then change hints on store
+        mtime/size flips)."""
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with urllib.request.urlopen(base + "/api/queue/events", timeout=5) as response:
+                self.assertEqual(response.headers.get("Content-Type"), "text/event-stream")
+                first = None
+                deadline = time.time() + 5
+                while time.time() < deadline and first is None:
+                    line = response.readline()
+                    if line.startswith(b"data: "):
+                        first = json.loads(line[len(b"data: "):].decode("utf-8"))
+                self.assertIsNotNone(first, "no SSE baseline within 5s")
+                self.assertEqual(first.get("type"), "hello")
+                self.assertIn("ts", first)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_queue_store_path_resolution_order(self):
+        """$WATCHTOWER_STORE wins; then the watchtower resolver; else the legacy
+        CCC store when it exists, else ~/.watchtower/queues.json."""
+        import unittest.mock as _mock
+        with _mock.patch.dict(os.environ, {"WATCHTOWER_STORE": "/tmp/wt-store-x.json"}):
+            self.assertEqual(str(self.server._queue_store_path()), "/tmp/wt-store-x.json")
+        with _mock.patch.dict(os.environ, {}, clear=True):
+            # No env: the watchtower package resolver answers when importable.
+            p = self.server._queue_store_path()
+            self.assertTrue(str(p).endswith(".json"))
+            self.assertNotEqual(str(p), "")
+
+    def test_queue_config_options_offer_model_and_github_repo_choices(self):
+        """The queue manager has useful selectors before another queue saves them."""
+        config_path = self.server._wt_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps({
+            "GITHUB": {
+                "backend": "github",
+                "github_repo": "example-org/example-repo",
+                "engine": "codex",
+                "model": "custom-codex-model",
+            },
+        }), encoding="utf-8")
+
+        options = self.server._queue_config_options()
+
+        self.assertIn("example-org/example-repo", options["github_repos"])
+        self.assertIn("custom-codex-model", options["models_by_engine"]["codex"])
+        self.assertIn("gpt-5.5", options["models_by_engine"]["codex"])
+
+    def test_wt_live_worker_guard_reads_workers_file(self):
+        """Live WT-tracked workers (pid + session_id) are off-limits to CCC's
+        reapers; dead rows in workers.json don't guard anything."""
+        proc = subprocess.Popen(["/bin/sleep", "0"])
+        proc.wait()
+        dead_pid = proc.pid
+        workers_path = self.server._wt_workers_path()
+        workers_path.parent.mkdir(parents=True, exist_ok=True)
+        workers_path.write_text(json.dumps({"workers": [
+            {"worker_id": "demo-live", "pid": os.getpid(), "queue": "DEMO",
+             "session_id": "11111111-1111-1111-1111-111111111111"},
+            {"worker_id": "demo-dead", "pid": dead_pid, "queue": "DEMO",
+             "session_id": "22222222-2222-2222-2222-222222222222"},
+        ]}), encoding="utf-8")
+        pids, sids = self.server._wt_live_worker_guard()
+        self.assertIn(os.getpid(), pids)
+        self.assertIn("11111111-1111-1111-1111-111111111111", sids)
+        self.assertNotIn(dead_pid, pids)
+        self.assertNotIn("22222222-2222-2222-2222-222222222222", sids)
+
+    def test_watchtower_worker_ledger_marks_conversation_rows(self):
+        """A persisted WT worker is classified before the async queue poll."""
+        worker_sid = "11111111-1111-1111-1111-111111111111"
+        ledger_path = self.server._wt_worker_sessions_path()
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text(json.dumps({"session_ids": [worker_sid]}), encoding="utf-8")
+        rows = [{"session_id": worker_sid}, {"session_id": "ordinary-session"}]
+
+        self.server._apply_watchtower_worker_display_names(rows)
+
+        self.assertTrue(rows[0]["is_watchtower_worker"])
+        self.assertNotIn("is_watchtower_worker", rows[1])
+
+    def test_queue_drain_api_writes_via_watchtower_config(self):
+        """/api/queue/drain delegates to watchtower.config.set_auto_drain when
+        the package is importable. The desired_workers >= 1 restore on opt-in
+        is the discriminator: only the wt setter does that."""
+        if not self.server._WT_CONFIG_AVAILABLE:
+            self.skipTest("watchtower package not importable")
+        config_path = self.server._wt_config_path()
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps({"DEMO": {"desired_workers": 0}}), encoding="utf-8"
+        )
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            request = urllib.request.Request(
+                base + "/api/queue/drain",
+                data=json.dumps({"queue": "DEMO", "auto_drain": True}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(result["ok"])
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertTrue(saved["DEMO"]["auto_drain"])
+            self.assertGreaterEqual(saved["DEMO"]["desired_workers"], 1)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_spawn_worker_api_delegates_to_watchtower(self):
+        """/api/ux-fixes/spawn-worker spawns a WT-tracked drain worker (not a
+        CCC shadow session) when watchtower is importable. dry_run builds the
+        worker record without launching a process."""
+        if not self.server._WT_WORKERS_AVAILABLE:
+            self.skipTest("watchtower package not importable")
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0), self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            request = urllib.request.Request(
+                base + "/api/ux-fixes/spawn-worker",
+                data=json.dumps({
+                    "project": "DEMO",
+                    "repo_path": str(self.repo),
+                    "dry_run": True,
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["spawned_by"], "watchtower")
+            self.assertEqual(result["project"], "DEMO")
+            self.assertTrue(result["worker_id"])
+            self.assertFalse(result["pid"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
 
     def test_ux_fixes_queue_file_is_isolated_to_test_home(self):
         self.assertEqual(
@@ -5047,6 +7066,10 @@ class TestRepoContextHelpers(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertTrue(result["queued"])
+            self.assertEqual(
+                result["queued_reason"],
+                "the current turn is still running; your message will send next",
+            )
             self.assertEqual(result["status"], "busy")
             self.assertEqual(result["via"], "terminal-queued")
             write.assert_not_called()
@@ -5560,6 +7583,13 @@ class TestRepoContextHelpers(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_inject_input_accepts_slash_prefixed_worker_identity(self):
+        """Codex worker ids such as /root can report completion to a parent."""
+        self.assertEqual(
+            self.server._normalize_announced_from({"announced_from": "/root"}),
+            ("/root", None),
+        )
+
     def test_inject_input_accepts_answer_mode(self):
         sid = "00000000-0000-4000-8000-000000000022"
         httpd = self.server.http.server.ThreadingHTTPServer(
@@ -5740,6 +7770,97 @@ class TestRepoContextHelpers(unittest.TestCase):
         inject.assert_called_once_with("ttys009", "Terminal", "hello")
         resume.assert_not_called()
 
+    def test_codex_live_terminal_falls_back_to_resume_when_keystroke_fails(self):
+        # Regression: inject_input_via_keystroke is osascript-only, so it always
+        # fails on Linux (no AppleScript driver, terminal_app is None). A live
+        # Codex tty send must then fall back to resume delivery instead of
+        # returning the failure — otherwise the terminal-queue drain re-parks the
+        # message every 60s forever ("Queued: the session is busy").
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": True, "tty": "pts/2", "terminal_app": None},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "inject_input_via_keystroke",
+                 return_value={"ok": False, "via": "terminal-control", "error": "osascript not found"},
+             ) as inject, \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "via": "codex-resume"},
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid, "hello", _from_terminal_queue=True
+            )
+
+        self.assertTrue(result["ok"])
+        inject.assert_called_once()
+        resume.assert_called_once_with(sid, "hello")
+
+    def test_codex_writer_snapshot_trusts_idle_status_over_mtime(self):
+        # Regression for the false-busy/stuck saga: an idle thread whose rollout
+        # mtime is fresh (a mobile/desktop app merely OPENED it) must NOT be
+        # attributed to an active external writer once the daemon has reported
+        # status "idle" via thread/status/changed. Without this, CCC queued every
+        # send forever ("session is busy" that never clears).
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        now = 1_000_000.0
+        fresh_rollout = {"path": "/tmp/rollout.jsonl", "mtime_ns": int((now - 1) * 1e9)}
+        # Idle status present -> external_active must be False even with fresh mtime.
+        snap_idle = self.server._codex_thread_writer_snapshot(
+            sid, now=now, rollout=fresh_rollout,
+            app_state={"status": "idle"}, attached={}, exec_child=False,
+        )
+        self.assertFalse(snap_idle["external_active"])
+        self.assertIsNone(snap_idle["writer"])
+        # No status (thread we haven't heard from) -> mtime fallback still flags
+        # a busy turn, but does not invent an external owner.
+        snap_unknown = self.server._codex_thread_writer_snapshot(
+            sid, now=now, rollout=fresh_rollout,
+            app_state={}, attached={}, exec_child=False,
+        )
+        self.assertTrue(snap_unknown["external_active"])
+        self.assertEqual(snap_unknown["writer"], "unknown")
+
+    def test_codex_writer_snapshot_attributes_active_status_by_owner(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        old_rollout = {"path": "/tmp/rollout.jsonl", "mtime_ns": 1}
+        unknown = self.server._codex_thread_writer_snapshot(
+            sid,
+            now=1_000_000.0,
+            rollout=old_rollout,
+            app_state={
+                "status": "active",
+                "active_turn_id": "external-turn",
+                "active_writer": "external",
+            },
+            attached={},
+            exec_child=False,
+        )
+        self.assertTrue(unknown["external_active"])
+        self.assertEqual(unknown["writer"], "unknown")
+
+        ccc = self.server._codex_thread_writer_snapshot(
+            sid,
+            now=1_000_000.0,
+            rollout=old_rollout,
+            app_state={
+                "status": "active",
+                "active_turn_id": "ccc-turn",
+                "active_writer": "ccc",
+            },
+            attached={},
+            exec_child=False,
+        )
+        self.assertFalse(ccc["external_active"])
+        self.assertEqual(ccc["writer"], "ccc")
+
     def test_codex_slash_idle_terminal_submits_with_return(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
         with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
@@ -5871,6 +7992,89 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["via"], "codex-steer")
         resume.assert_called_once_with(sid, "hello", steer=True)
         inject.assert_not_called()
+
+    def test_codex_steer_unavailable_falls_back_to_send(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": False},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 side_effect=[
+                     {"ok": False, "code": "codex_steer_unavailable"},
+                     {"ok": True, "via": "codex-app-turn"},
+                 ],
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid, "continue", mode="steer"
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "codex-app-turn")
+        self.assertEqual(
+            resume.call_args_list,
+            [mock.call(sid, "continue", steer=True), mock.call(sid, "continue")],
+        )
+
+    def test_queued_codex_steer_unavailable_preserves_existing_queue(self):
+        """A Steer click on a durable row must not dequeue then append it."""
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": False},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={
+                     "ok": False,
+                     "code": "codex_steer_unavailable",
+                     "error": "another writer owns the turn",
+                 },
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid,
+                "continue",
+                mode="steer",
+                preserve_queued_steer=True,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["queued"])
+        self.assertTrue(result["queued_preserved"])
+        resume.assert_called_once_with(sid, "continue", steer=True)
+
+    def test_codex_steer_failed_does_not_retry_as_send(self):
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with mock.patch.object(self.server, "_is_codex_session", return_value=True), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value=str(self.repo)), \
+             mock.patch.object(
+                 self.server,
+                 "session_live_status",
+                 return_value={"live": False},
+             ), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": False, "code": "codex_steer_failed"},
+             ) as resume:
+            result = self.server._inject_text_into_session(
+                sid, "continue", mode="steer"
+            )
+
+        self.assertFalse(result["ok"])
+        resume.assert_called_once_with(sid, "continue", steer=True)
 
     def test_codex_without_live_tty_uses_resume(self):
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -6360,6 +8564,66 @@ class TestRepoContextHelpers(unittest.TestCase):
         rich = parsed["blocks"][0]["question"]["questions"][0]["options"]
         self.assertEqual(rich[0]["description"], "Run everything without checking back.")
 
+    def test_tool_use_marks_input_for_lazy_disclosure(self):
+        ev = {
+            "type": "assistant",
+            "timestamp": "2026-07-13T03:25:10Z",
+            "message": {
+                "id": "msg-tool-search",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu-tool-search",
+                    "name": "ToolSearch",
+                    "input": {
+                        "query": "select:PushNotification",
+                        "limit": 5,
+                    },
+                }],
+            },
+        }
+
+        parsed = self.server._parse_conversation_event(ev, 8)
+
+        block = parsed["blocks"][0]
+        self.assertEqual(block["detail"], "select:PushNotification")
+        self.assertTrue(block["has_input"])
+        self.assertNotIn("input", block)
+
+    def test_lazy_tool_input_is_complete_and_redacts_secrets(self):
+        secret = "sk-testabcdefghijklmnop"
+        ev = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu-lazy-input",
+                    "name": "ToolSearch",
+                    "input": {
+                        "query": "select:PushNotification",
+                        "note": "x" * 20000,
+                        "token": secret,
+                    },
+                }],
+            },
+        }
+
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps(ev) + "\n")
+            path = f.name
+        try:
+            payload = self.server._tool_input_at_jsonl_line(
+                pathlib.Path(path), 1, "toolu-lazy-input"
+            )
+        finally:
+            os.unlink(path)
+
+        self.assertIn('"query": "select:PushNotification"', payload)
+        self.assertIn("x" * 20000, payload)
+        self.assertNotIn(secret, payload)
+        self.assertIn("[redacted]", payload)
+
     def test_bash_tool_detail_strips_shell_wrapper(self):
         ev = {
             "type": "assistant",
@@ -6644,6 +8908,14 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result.get("code"), "claude_unavailable")
         self.assertIn(str(scratch), self.server._load_custom_repos())
         popen.assert_not_called()
+
+    def test_global_claude_home_is_not_a_project_marker(self):
+        pathlib.Path(self.tmp_home, ".claude").mkdir(exist_ok=True)
+
+        with self.assertRaises(self.server.RepoContextError) as ctx:
+            self.server.resolve_repo_path(self.tmp_home)
+
+        self.assertEqual(ctx.exception.code, "repo_not_allowed")
 
     def test_unknown_repo_path_is_rejected(self):
         unknown = pathlib.Path(self.tmp_home, "not-a-repo").resolve()
@@ -7107,6 +9379,43 @@ class TestRepoContextHelpers(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_conversations_endpoint_gates_old_transcripts_before_scanning(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        calls = []
+
+        def fake_find_conversations(repo_path, **kwargs):
+            calls.append((repo_path, kwargs))
+            return []
+
+        try:
+            with mock.patch.object(
+                self.server, "find_conversations", side_effect=fake_find_conversations
+            ):
+                for suffix, expected in (("", False), ("&include_old=1", True)):
+                    url = (
+                        base
+                        + "/api/conversations?repo_path="
+                        + urllib.parse.quote(str(self.repo))
+                        + suffix
+                    )
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(json.loads(response.read().decode("utf-8")), [])
+                    self.assertEqual(calls[-1], (
+                        str(self.repo),
+                        {"include_old": expected},
+                    ))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_sessions_all_endpoint_returns_archive_and_spawned_payload(self):
         httpd = self.server.http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0),
@@ -7149,7 +9458,11 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.server,
                 "spawn_session_codex",
                 return_value={"ok": True, "pid": 123, "name": "demo", "log": "/tmp/demo.log"},
-            ) as spawn_codex:
+            ) as spawn_codex, mock.patch.object(
+                self.server,
+                "_load_spawn_defaults",
+                return_value={"engine": "codex", "models": {"codex": "gpt-5.5"}, "reasoning_effort": "high"},
+            ):
                 req = urllib.request.Request(
                     base + "/api/sessions/spawn",
                     data=json.dumps({
@@ -7170,8 +9483,42 @@ class TestRepoContextHelpers(unittest.TestCase):
                 repo_path=None,
                 worktree=False,
                 model="gpt-5.5",
+                reasoning_effort="high",
                 parent_session_id=None,
             )
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_codex_spawn_endpoint_uses_default_reasoning_effort_when_omitted(self):
+        httpd = self.server.http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            self.server.CommandCenterHandler,
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with mock.patch.object(
+                self.server,
+                "spawn_session_codex",
+                return_value={"ok": True, "pid": 123, "name": "demo", "log": "/tmp/demo.log"},
+            ) as spawn_codex, mock.patch.object(
+                self.server,
+                "_load_spawn_defaults",
+                return_value={"engine": "codex", "models": {"codex": "gpt-5.5"}, "reasoning_effort": "xhigh"},
+            ):
+                req = urllib.request.Request(
+                    base + "/api/sessions/spawn-codex",
+                    data=json.dumps({"prompt": "do the thing", "model": "gpt-5.5"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as res:
+                    body = json.loads(res.read().decode("utf-8"))
+            self.assertTrue(body["ok"])
+            self.assertEqual(spawn_codex.call_args.kwargs.get("reasoning_effort"), "xhigh")
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -7353,7 +9700,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "reasoning_effort", "parent_session_id"])
 
     def test_spawn_session_gemini_exists(self):
         """`spawn_session_gemini` must exist alongside the other engines
@@ -7739,6 +10086,134 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertFalse(meta["has_commit"])
         self.assertFalse(meta["has_push"])
 
+    def test_codex_tail_meta_detects_custom_tool_approval(self):
+        server = self.server
+        event = {
+            "timestamp": "2026-07-11T03:12:48.336Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call_approval",
+                "status": "completed",
+                "input": (
+                    "const r = await tools.exec_command({\n"
+                    "  cmd: \"wt status -q CHUCK --json\",\n"
+                    "  workdir: \"/home/hermes/projects/chuck-realtor-web\",\n"
+                    "  sandbox_permissions: \"require_escalated\",\n"
+                    "  justification: \"Allow this read-only WatchTower status check?\"\n"
+                    "});\n"
+                ),
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "rollout.jsonl"
+            path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+            server._conv_meta_cache.clear()
+            server._codex_tail_resume.clear()
+            meta = server._extract_codex_tail_meta(path)
+
+            self.assertEqual(meta["pending_tool"], "Bash")
+            self.assertTrue(meta["needs_approval"])
+            self.assertEqual(
+                meta["needs_approval_message"],
+                "Allow this read-only WatchTower status check?",
+            )
+
+            output = {
+                "timestamp": "2026-07-11T03:12:50.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_approval",
+                    "output": "Script completed\nWall time 0.1 seconds\nOutput:\n{}",
+                },
+            }
+            path.write_text(
+                json.dumps(event) + "\n" + json.dumps(output) + "\n",
+                encoding="utf-8",
+            )
+            server._conv_meta_cache.clear()
+            server._codex_tail_resume.clear()
+            meta = server._extract_codex_tail_meta(path)
+
+        self.assertIsNone(meta["pending_tool"])
+        self.assertFalse(meta["needs_approval"])
+        self.assertEqual(meta["needs_approval_message"], "")
+
+    def test_parse_codex_event_renders_custom_tool_call(self):
+        event = {
+            "timestamp": "2026-07-11T03:12:48.336Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call_custom",
+                "input": (
+                    "const r = await tools.exec_command({\n"
+                    "  cmd: \"wt status -q CHUCK --json\",\n"
+                    "  sandbox_permissions: \"require_escalated\",\n"
+                    "  justification: \"Allow status?\"\n"
+                    "});\n"
+                ),
+            },
+        }
+
+        parsed = self.server._parse_codex_event(event, 12)
+
+        self.assertEqual(parsed["type"], "assistant")
+        block = parsed["blocks"][0]
+        self.assertEqual(block["name"], "Bash")
+        self.assertIn("wt status", block["detail"])
+        self.assertTrue(block["approval_required"])
+        self.assertEqual(block["approval_message"], "Allow status?")
+
+    def test_parse_codex_event_reads_json_style_custom_tool_arguments(self):
+        event = {
+            "timestamp": "2026-07-12T04:01:54.740Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call_json_style",
+                "input": (
+                    'const r = await tools.exec_command({"cmd":"kill -TERM 66784\\n'
+                    'printf \\"replacement listener\\\\n\\""});\n'
+                ),
+            },
+        }
+
+        parsed = self.server._parse_codex_event(event, 12)
+
+        block = parsed["blocks"][0]
+        self.assertEqual(block["name"], "Bash")
+        self.assertIn("kill -TERM 66784", block["detail"])
+        self.assertIn("kill -TERM 66784", block["command"])
+
+    def test_codex_app_activity_superseded_by_newer_tail(self):
+        app_activity = {
+            "sidecar_status": "active",
+            "sidecar_tool": "Bash",
+            "sidecar_ts": 100.0,
+        }
+        newer_tail = {
+            "last_meaningful_ts": 130.0,
+            "pending_tool": None,
+            "needs_approval": False,
+        }
+        current_tail = {
+            "last_meaningful_ts": 99.0,
+            "pending_tool": None,
+            "needs_approval": False,
+        }
+
+        self.assertTrue(
+            self.server._codex_app_activity_superseded_by_tail(app_activity, newer_tail)
+        )
+        self.assertFalse(
+            self.server._codex_app_activity_superseded_by_tail(app_activity, current_tail)
+        )
+
     def test_reattach_spawned_orphans_defaults_legacy_rows_to_claude(self):
         """A registry row written before the `engine` field existed
         must reattach as engine='claude' — not raise KeyError, not
@@ -8084,6 +10559,42 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("--image", cmd)
         self.assertEqual(cmd[cmd.index("--image") + 1], str(image))
 
+    def test_spawn_codex_attaches_managed_drop_images(self):
+        """Image drops use the same Codex --image delivery as image paste."""
+        server = self.server
+        attachment_dir = server.COMMAND_CENTER_ATTACHMENTS_DIR
+        attachment_dir.mkdir(parents=True)
+        image = attachment_dir / "attachment-123.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n")
+        proc = mock.Mock(pid=4242)
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_codex_bin",
+                return_value={"available": True, "bin": "/usr/bin/codex-test"},
+            ), mock.patch.dict(os.environ, {"CCC_CODEX_SPAWN_APP_SERVER": "0"}), \
+                 mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+                 mock.patch.object(server, "_record_spawn_to_registry"):
+                result = server.spawn_session_codex(
+                    f"inspect this screenshot {image}",
+                    name="dropped image prompt",
+                    repo_path=str(self.repo),
+                )
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        cmd = popen.call_args.args[0]
+        self.assertIn("--image", cmd)
+        self.assertEqual(cmd[cmd.index("--image") + 1], str(image))
+
     def test_spawn_session_codex_uses_app_server_when_available(self):
         """Fresh Codex sessions should prefer app-server thread/start."""
         server = self.server
@@ -8107,6 +10618,15 @@ class TestRepoContextHelpers(unittest.TestCase):
                     "jsonrpc": "2.0",
                     "method": "turn/started",
                     "params": {"threadId": sid, "turn": {"id": "turn-1"}},
+                })
+                server._codex_app_server_handle_message({
+                    "jsonrpc": "2.0",
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": sid,
+                        "turnId": "turn-1",
+                        "item": {"id": "user-1", "type": "userMessage", "text": "say ok"},
+                    },
                 })
                 return {"result": {"turn": {"id": "turn-1"}}}
             raise AssertionError(f"unexpected method: {method}")
@@ -8431,7 +10951,13 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["model"], "auto")
-        cmd = popen.call_args.args[0]
+        cursor_calls = [
+            call.args[0]
+            for call in popen.call_args_list
+            if call.args and "--resume" in call.args[0] and sid in call.args[0]
+        ]
+        self.assertEqual(len(cursor_calls), 1)
+        cmd = cursor_calls[0]
         self.assertEqual(cmd[cmd.index("--model") + 1], "auto")
 
     def test_resume_cursor_reports_immediate_usage_limit_failure(self):
@@ -8653,7 +11179,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 return_value={"available": True, "bin": "/usr/bin/codex-test"},
             ), mock.patch.object(server, "_codex_thread_row", return_value={"cwd": str(self.repo)}), \
                  mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
-                 mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request):
+                 mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_schedule_codex_queue_pump"):
                 result = server.resume_session_codex(sid, "keep this")
 
             self.assertTrue(result["ok"])
@@ -8662,6 +11189,44 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.assertEqual(calls, ["thread/resume"])
             with server._pending_resume_lock:
                 self.assertEqual(server._pending_resume_queue.get(sid), ["keep this"])
+        finally:
+            with server._pending_resume_lock:
+                server._pending_resume_queue.clear()
+                server._pending_resume_queue.update(original_queue)
+
+    def test_resume_codex_keeps_unconfirmed_app_server_input_durable(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._pending_resume_lock:
+            original_queue = dict(server._pending_resume_queue)
+            server._pending_resume_queue.clear()
+        try:
+            with mock.patch.object(
+                server,
+                "_resolve_codex_bin",
+                return_value={"available": True, "bin": "/usr/bin/codex-test"},
+            ), mock.patch.object(server, "_codex_thread_row", return_value={"cwd": str(self.repo)}), \
+                 mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
+                 mock.patch.object(
+                     server,
+                     "_codex_resume_or_steer_via_app_server",
+                     return_value={
+                         "ok": True,
+                         "accepted": True,
+                         "confirmed": False,
+                         "via": "codex-app-turn",
+                     },
+                 ), mock.patch.object(server, "_schedule_codex_queue_pump"):
+                result = server.resume_session_codex(sid, "must become visible")
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["queued"])
+            self.assertFalse(result["confirmed"])
+            with server._pending_resume_lock:
+                self.assertEqual(
+                    server._pending_resume_queue.get(sid),
+                    ["must become visible"],
+                )
         finally:
             with server._pending_resume_lock:
                 server._pending_resume_queue.clear()
@@ -8822,6 +11387,114 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(state["last_completed_turn_id"], "turn-active")
         self.assertNotIn("active_turn_id", state)
 
+    def test_codex_turn_completed_schedules_queue_pump(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        with mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
+            server._codex_app_server_handle_message({
+                "method": "turn/completed",
+                "params": {"threadId": sid, "turnId": "turn-1"},
+            })
+
+        schedule.assert_called_once_with(sid)
+
+    def test_codex_idle_status_schedules_queue_pump(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        with mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
+            server._codex_app_server_handle_message({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": sid,
+                    "status": {"type": "idle", "activeFlags": []},
+                },
+            })
+
+        schedule.assert_called_once_with(sid)
+
+    def test_codex_late_tool_output_does_not_resurrect_completed_turn(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turnId": "turn-done"},
+        })
+        server._codex_app_server_handle_message({
+            "method": "turn/completed",
+            "params": {"threadId": sid, "turnId": "turn-done"},
+        })
+        server._codex_app_server_handle_message({
+            "method": "item/commandExecution/outputDelta",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-done",
+                "itemId": "late-shell",
+                "delta": "late process output",
+            },
+        })
+
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertNotIn("active_turn_id", state)
+        self.assertNotIn("active_item", state)
+        self.assertIsNone(server._codex_app_server_activity_fields(sid)["sidecar_tool"])
+
+    def test_codex_app_server_turn_started_tracks_writer_ownership(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "ccc_turn_start_pending": True,
+            }
+
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "ccc-turn"}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_writer"], "ccc")
+
+        server._codex_app_server_handle_message({
+            "method": "turn/completed",
+            "params": {"threadId": sid, "turn": {"id": "ccc-turn"}},
+        })
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid].pop("ccc_turn_start_pending", None)
+        server._codex_app_server_handle_message({
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "external-turn"}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_writer"], "unknown")
+
+    def test_codex_app_server_turn_start_response_marks_ccc_owner(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+
+        response = {"result": {"turn": {"id": "ccc-turn"}}}
+        with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+             mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=response):
+            result = server._codex_app_server_request(
+                "turn/start", {"threadId": sid, "input": []}, timeout=1,
+            )
+
+        self.assertIs(result, response)
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["active_turn_id"], "ccc-turn")
+        self.assertEqual(state["active_writer"], "ccc")
+        self.assertNotIn("ccc_turn_start_pending", state)
+
     def test_codex_app_server_item_activity_feeds_live_ui_fields(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -8898,6 +11571,338 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertNotIn("active_item", state)
         self.assertIsNone(server._codex_app_server_activity_fields(sid)["sidecar_tool"])
 
+    def test_codex_app_server_approval_item_feeds_waiting_ui_fields(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-active"}},
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/started",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "startedAtMs": 1783600000000,
+                "item": {
+                    "id": "item-approval",
+                    "type": "commandExecution",
+                    "status": "waiting_for_approval",
+                    "command": "rm -rf /tmp/nope",
+                    "commandActions": [
+                        {"id": "approve", "label": "Approve"},
+                        {"id": "deny", "label": "Deny"},
+                    ],
+                    "approvalMessage": "Allow destructive command?",
+                },
+            },
+        })
+
+        state = server._codex_app_server_thread_state(sid)
+        self.assertTrue(state["active_item"]["needs_approval"])
+        self.assertEqual(state["active_item"]["approval_message"], "Allow destructive command?")
+        fields = server._codex_app_server_activity_fields(sid)
+        self.assertTrue(fields["needs_approval"])
+        self.assertEqual(fields["needs_approval_message"], "Allow destructive command?")
+        self.assertEqual(fields["sidecar_tool"], "Bash")
+        self.assertTrue(fields["sidecar_in_flight"])
+        state_fields = server._codex_state_fields(sid)
+        self.assertEqual(state_fields["codex_state"], "waiting")
+        self.assertEqual(state_fields["codex_state_reason"], "Allow destructive command?")
+        events = server._get_codex_app_server_item_events_for_session(sid)
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0]["needs_approval"])
+        self.assertIn("needs approval", events[0]["text"])
+
+    def test_codex_app_server_request_approval_is_actionable(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_RESPONSES.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "id": "approval-req-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "itemId": "item-shell",
+                "startedAtMs": 1783600000000,
+                "command": "rm -rf /tmp/nope",
+                "reason": "Allow destructive command?",
+                "availableDecisions": ["accept", "decline", "cancel"],
+            },
+        })
+
+        with server._CODEX_APP_SERVER_LOCK:
+            self.assertNotIn("approval-req-1", server._CODEX_APP_SERVER_RESPONSES)
+        state = server._codex_app_server_thread_state(sid)
+        pending = state["pending_approval_request"]
+        self.assertEqual(pending["request_id"], "approval-req-1")
+        self.assertEqual(pending["approval_method"], "item/commandExecution/requestApproval")
+        self.assertEqual(pending["tool"], "Bash")
+        self.assertTrue(pending["can_approve"])
+        self.assertTrue(state["thread_needs_approval"])
+        public = server._codex_app_server_thread_public_status(sid)
+        self.assertEqual(public["active_item"]["request_id"], "approval-req-1")
+        self.assertTrue(public["active_item"]["can_approve"])
+        self.assertTrue(public["active_item"]["needs_approval"])
+        fields = server._codex_app_server_activity_fields(sid)
+        self.assertTrue(fields["needs_approval"])
+        self.assertEqual(fields["needs_approval_message"], "Allow destructive command?")
+
+    def test_codex_app_server_resolve_approval_sends_json_rpc_response(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+
+        class FakeTransport:
+            kind = "managed-unix"
+
+            def __init__(self):
+                self.sent = []
+
+            def alive(self):
+                return True
+
+            def send_json(self, payload):
+                self.sent.append(payload)
+
+        fake = FakeTransport()
+        with server._CODEX_APP_SERVER_LOCK:
+            old_transport = server._CODEX_APP_SERVER_TRANSPORT
+            old_initialized = server._CODEX_APP_SERVER_INITIALIZED
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_RESPONSES.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+            server._CODEX_APP_SERVER_TRANSPORT = fake
+            server._CODEX_APP_SERVER_INITIALIZED = True
+            # FakeTransport doesn't implement close() or answer the
+            # liveness probe's "thread/list" round trip; seed the probe
+            # throttle so _ensure_codex_app_server treats it as recently
+            # verified instead of trying to probe/replace it.
+            server._CODEX_APP_SERVER_LAST_LIVE_CHECK = time.time()
+        try:
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "id": "approval-req-2",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-active",
+                    "itemId": "item-shell",
+                    "startedAtMs": 1783600000000,
+                    "command": "pytest -q",
+                    "reason": "Allow test command?",
+                },
+            })
+            result = server._codex_app_server_resolve_approval(sid, "acceptForSession")
+        finally:
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_TRANSPORT = old_transport
+                server._CODEX_APP_SERVER_INITIALIZED = old_initialized
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(fake.sent, [{
+            "jsonrpc": "2.0",
+            "id": "approval-req-2",
+            "result": {"decision": "acceptForSession"},
+        }])
+        state = server._codex_app_server_thread_state(sid)
+        self.assertNotIn("pending_approval_request", state)
+        self.assertFalse(state["thread_needs_approval"])
+        self.assertFalse(state["active_item"]["needs_approval"])
+
+    def test_codex_app_server_thread_waiting_on_approval_flag_feeds_ui_fields(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "thread/status/changed",
+            "params": {
+                "threadId": sid,
+                "status": {"type": "active", "activeFlags": ["waitingOnApproval"]},
+            },
+        })
+
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "active")
+        self.assertEqual(state["active_flags"], ["waitingOnApproval"])
+        self.assertTrue(state["thread_needs_approval"])
+        fields = server._codex_app_server_activity_fields(sid)
+        self.assertTrue(fields["needs_approval"])
+        self.assertEqual(fields["sidecar_status"], "active")
+        self.assertEqual(fields["sidecar_tool"], "Approval")
+        state_fields = server._codex_state_fields(sid)
+        self.assertEqual(state_fields["codex_state"], "waiting")
+        self.assertIn("approval", state_fields["codex_state_reason"].lower())
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "thread/status/changed",
+            "params": {"threadId": sid, "status": {"type": "idle", "activeFlags": []}},
+        })
+        state = server._codex_app_server_thread_state(sid)
+        self.assertFalse(state["thread_needs_approval"])
+        self.assertEqual(state["active_flags"], [])
+        self.assertFalse(server._codex_app_server_activity_fields(sid)["needs_approval"])
+
+    def test_codex_app_server_public_status_exposes_active_item_and_token_usage(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-active"}},
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/started",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "item": {
+                    "id": "item-shell",
+                    "type": "commandExecution",
+                    "status": "inProgress",
+                    "command": "python3 -m pytest tests/test_smoke.py -q",
+                },
+            },
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 144000,
+                        "cachedInputTokens": 5000,
+                        "outputTokens": 25,
+                        "reasoningOutputTokens": 0,
+                        "totalTokens": 144025,
+                    },
+                    "total": {
+                        "inputTokens": 152712,
+                        "cachedInputTokens": 5000,
+                        "outputTokens": 171,
+                        "reasoningOutputTokens": 106,
+                        "totalTokens": 152883,
+                    },
+                    "modelContextWindow": 258400,
+                },
+            },
+        })
+
+        public = server._codex_app_server_thread_public_status(sid)
+        self.assertEqual(public["active_item"]["tool"], "Bash")
+        self.assertIn("pytest", public["active_item"]["detail"])
+        self.assertEqual(public["last_item_id"], "item-shell")
+        usage = public["token_usage"]
+        self.assertEqual(usage["input_tokens"], 152712)
+        self.assertEqual(usage["cached_input_tokens"], 5000)
+        self.assertEqual(usage["output_tokens"], 171)
+        self.assertEqual(usage["reasoning_output_tokens"], 106)
+        self.assertEqual(usage["total_tokens"], 152883)
+        self.assertEqual(usage["context_limit"], 258400)
+        self.assertEqual(usage["used_percent"], 59.2)
+        self.assertEqual(usage["last"]["input_tokens"], 144000)
+
+    def test_codex_app_server_text_items_do_not_render_as_overlays(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        for item in (
+            {"id": "user-1", "type": "userMessage", "text": "hello"},
+            {"id": "agent-1", "type": "agentMessage", "text": "hi"},
+            {"id": "reason-1", "type": "reasoning", "summary": ["thinking"]},
+        ):
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-active",
+                    "completedAtMs": 1783600005000,
+                    "item": item,
+                },
+            })
+
+        self.assertEqual(server._get_codex_app_server_item_events_for_session(sid), [])
+
+    def test_codex_app_server_items_render_as_conversation_overlays(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/completed",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "completedAtMs": 1783600005000,
+                "item": {
+                    "id": "item-shell",
+                    "type": "commandExecution",
+                    "status": "completed",
+                    "command": "wt find CHUCK-51 --json",
+                    "exitCode": 0,
+                    "aggregatedOutput": "{\"ref\":\"CHUCK-51\"}",
+                },
+            },
+        })
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "item/completed",
+            "params": {
+                "threadId": sid,
+                "turnId": "turn-active",
+                "completedAtMs": 1783600006000,
+                "item": {"id": "empty-thinking", "type": "reasoning", "status": "completed"},
+            },
+        })
+
+        events = server._get_codex_app_server_item_events_for_session(sid)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["subtype"], "codex_app_server_item")
+        self.assertEqual(events[0]["tool"], "Bash")
+        self.assertIn("wt find", events[0]["detail"])
+        self.assertIn("CHUCK-51", events[0]["output"])
+
+        with mock.patch.object(server, "_detect_session_engine", return_value="codex"):
+            queued = server._get_queued_events_for_session(sid)
+        self.assertTrue(any(ev.get("subtype") == "codex_app_server_item" for ev in queued))
+
     def test_codex_app_server_wake_confirms_from_notification(self):
         server = self.server
         sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
@@ -8916,6 +11921,15 @@ class TestRepoContextHelpers(unittest.TestCase):
                     "jsonrpc": "2.0",
                     "method": "turn/started",
                     "params": {"threadId": sid, "turn": {"id": "turn-next"}},
+                })
+                server._codex_app_server_handle_message({
+                    "jsonrpc": "2.0",
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": sid,
+                        "turnId": "turn-next",
+                        "item": {"id": "user-next", "type": "userMessage", "text": "wake"},
+                    },
                 })
                 return {"result": {"turn": {"id": "turn-next"}}}
             raise AssertionError(f"unexpected method: {method}")
@@ -8951,6 +11965,82 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["warning"], "turn accepted but no app-server events observed")
+
+    def test_codex_turn_start_alone_does_not_confirm_input_delivery(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            server._CODEX_APP_SERVER_EVENT_SEQ = 0
+        server._codex_app_server_handle_message({
+            "jsonrpc": "2.0",
+            "method": "turn/started",
+            "params": {"threadId": sid, "turn": {"id": "turn-next"}},
+        })
+
+        result = server._codex_wait_for_turn_activity(
+            sid,
+            "turn-next",
+            baseline_state={"event_seq": 0},
+            baseline_rollout=None,
+            expected_text="report that must be durable",
+            timeout=0,
+        )
+
+        self.assertFalse(result["confirmed"])
+
+    def test_codex_user_message_notification_acknowledges_queued_copy(self):
+        server = self.server
+        sid = "queued-user-message"
+        with server._pending_resume_lock:
+            server._pending_resume_queue[sid] = ["delivered report", "later"]
+
+        with mock.patch.object(server, "_save_pending_inputs") as save:
+            server._codex_app_server_handle_message({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-next",
+                    "item": {
+                        "id": "user-1",
+                        "type": "userMessage",
+                        "text": "delivered report",
+                    },
+                },
+            })
+
+        with server._pending_resume_lock:
+            self.assertEqual(server._pending_resume_queue[sid], ["later"])
+        save.assert_called()
+
+    def test_codex_idle_resume_clears_phantom_unknown_writer(self):
+        server = self.server
+        sid = "phantom-writer"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "status": "active",
+                "active_turn_id": "ended-turn",
+                "active_writer": "unknown",
+            }
+
+        response = {
+            "result": {
+                "thread": {"id": sid, "status": {"type": "idle"}, "turns": []}
+            }
+        }
+        with mock.patch.object(server, "_codex_app_server_is_live", return_value=True), \
+             mock.patch.object(server, "_codex_app_server_request", return_value=response), \
+             mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
+            active = server._codex_app_server_thread_is_active(sid)
+
+        self.assertFalse(active)
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertNotIn("active_turn_id", state)
+        self.assertNotIn("active_writer", state)
+        schedule.assert_called_once_with(sid)
 
     def test_codex_app_server_notifications_persist_state_snapshot(self):
         server = self.server
@@ -9239,7 +12329,14 @@ class TestRepoContextHelpers(unittest.TestCase):
     def test_codex_managed_app_server_ui_label_is_present(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("managed app-server", app_js)
-        self.assertIn("codex_app_server_transport", pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8"))
+        self.assertIn("codex_app_server_event_seq", app_js)
+        self.assertIn("codex_app_server_item", app_js)
+        self.assertIn("/api/codex/approval", app_js)
+        self.assertIn("data-decision=\"acceptForSession\"", app_js)
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("codex_app_server_transport", server_py)
+        self.assertIn("_schedule_codex_managed_app_server_warmup()", server_py)
+        self.assertIn("name=\"codex-managed-app-server-warmup\"", server_py)
 
     def test_resume_codex_prefers_app_server_before_queued_cli_resume(self):
         server = self.server
@@ -9280,6 +12377,31 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["via"], "codex-app-queued")
         app_queue.assert_called_once()
         popen.assert_not_called()
+
+    def test_resume_codex_preserves_existing_queue_order(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363484"
+        with server._pending_resume_lock:
+            original_queue = dict(server._pending_resume_queue)
+            server._pending_resume_queue.clear()
+            server._pending_resume_queue[sid] = ["first"]
+        try:
+            with mock.patch.object(server, "_resolve_codex_bin") as resolve_bin, \
+                 mock.patch.object(server, "_codex_resume_or_steer_via_app_server") as app_send, \
+                 mock.patch.object(server, "_schedule_codex_queue_pump") as schedule:
+                result = server.resume_session_codex(sid, "second")
+        finally:
+            with server._pending_resume_lock:
+                queued = list(server._pending_resume_queue.get(sid, []))
+                server._pending_resume_queue.clear()
+                server._pending_resume_queue.update(original_queue)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queued"])
+        self.assertEqual(queued, ["first", "second"])
+        schedule.assert_called_once_with(sid)
+        resolve_bin.assert_not_called()
+        app_send.assert_not_called()
 
     def test_resume_antigravity_adds_pasted_image_dir(self):
         """AGY needs pasted-image folders in its repeatable --add-dir workspace."""
@@ -9595,6 +12717,20 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("/api/pasted-image?path=", js)
         self.assertIn("const imagesHtml = renderImageDescriptors(ev.images);", js)
         self.assertIn("h += imagesHtml;", js)
+
+    def test_markdown_attached_above_reference_is_not_rendered_as_a_url(self):
+        """UI-only image references must not leave a broken image icon."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("function isUnavailableMarkdownImageTarget", js)
+        self.assertIn("Image attachment unavailable in this transcript", js)
+        self.assertIn("if (isUnavailableMarkdownImageTarget(target))", js)
+
+    def test_codex_inline_visual_reference_renders_as_a_file_link(self):
+        """Codex visual markers should be useful links, not raw transcript syntax."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("CODEX_INLINE_VIS_RE", js)
+        self.assertIn("Visual: ", js)
+        self.assertIn("linkifyPath(filename)", js)
 
     def test_archive_search_refresh_preserves_scroll(self):
         """Periodic archive refreshes should not snap active search results."""
@@ -10403,6 +13539,292 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn(".conversations-view .gc-message-body.assistant-text", css)
         self.assertIn(".gc-reader-input-row .tts-btn", css)
 
+    # ── Codex desktop↔CCC single-writer coordination ────────────────────────
+    def test_parse_lsof_open_rollouts_maps_pids_and_filters(self):
+        """`lsof -Fpn` field output → {rollout path: pid}. Only paths under
+        `/sessions/` ending `.jsonl` survive; pids map to the paths opened
+        under them; garbage/pid-less lines are ignored."""
+        server = self.server
+        output = "\n".join([
+            "n/orphan/sessions/early.jsonl",           # no pid yet → dropped
+            "p100",
+            "n/home/.codex/sessions/thread-a.jsonl",   # kept → 100
+            "n/home/.codex/config.toml",               # no /sessions/ → dropped
+            "n/home/.codex/sessions/notes.txt",        # /sessions/ but not .jsonl → dropped
+            "xgarbage-line",                            # unknown tag → ignored
+            "p200",
+            "n/var/sessions/thread-b.jsonl",           # kept → 200
+            "p",                                        # empty pid → ValueError → pid None
+            "n/late/sessions/thread-c.jsonl",          # pid None → dropped
+        ])
+        self.assertEqual(
+            server._parse_lsof_open_rollouts(output),
+            {
+                "/home/.codex/sessions/thread-a.jsonl": 100,
+                "/var/sessions/thread-b.jsonl": 200,
+            },
+        )
+        self.assertEqual(server._parse_lsof_open_rollouts(""), {})
+
+    def test_codex_thread_writer_snapshot_attribution(self):
+        """Pure writer attribution via injection kwargs (no subprocess/RPC)."""
+        server = self.server
+        now = 1_800_000_000.0
+        path = "/home/.codex/sessions/thread.jsonl"
+        recent = {"path": path, "mtime_ns": int((now - 1) * 1e9)}
+        old = {"path": path, "mtime_ns": int((now - 300) * 1e9)}
+
+        # recent rollout + desktop-attached + quiet app-state → desktop writer
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent, app_state={},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "desktop")
+        self.assertTrue(snap["external_active"])
+        self.assertTrue(snap["desktop_attached"])
+
+        # same, but nothing attached to a desktop app-server → owner unknown
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent, app_state={},
+            attached={}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "unknown")
+        self.assertTrue(snap["external_active"])
+        self.assertFalse(snap["desktop_attached"])
+
+        # CCC owns an active turn → ccc writer, never external (even recent mtime)
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent,
+            app_state={"active_turn_id": "t1", "active_writer": "ccc"},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "ccc")
+        self.assertFalse(snap["external_active"])
+
+        # An authoritative active turn observed after reconnect is busy, but
+        # its owner is unknown unless CCC or desktop ownership is proven.
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent,
+            app_state={"status": "active", "active_turn_id": "t2", "active_writer": "unknown"},
+            attached={}, exec_child=False,
+        )
+        self.assertEqual(snap["writer"], "unknown")
+        self.assertTrue(snap["external_active"])
+
+        # a CCC-spawned `codex exec` child owns the thread → ccc writer
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent, app_state={},
+            attached={}, exec_child=True,
+        )
+        self.assertEqual(snap["writer"], "ccc")
+        self.assertFalse(snap["external_active"])
+
+        # recent rollout but CCC's own events are fresh → quiet, not external
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=recent,
+            app_state={"last_activity_at": now - 2},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertIsNone(snap["writer"])
+        self.assertFalse(snap["external_active"])
+
+        # stale rollout + desktop-attached → attached, but no active writer
+        snap = server._codex_thread_writer_snapshot(
+            "sid", now, rollout=old, app_state={},
+            attached={path: 4242}, exec_child=False,
+        )
+        self.assertIsNone(snap["writer"])
+        self.assertFalse(snap["external_active"])
+        self.assertTrue(snap["desktop_attached"])
+
+    def test_resume_or_steer_gate_blocks_external_desktop_writer(self):
+        """A desktop turn in flight gates the CCC send to fallback:queue and
+        never reaches the app-server RPC."""
+        server = self.server
+        sid = "test-sid-gate"
+        with mock.patch.object(
+            server, "_codex_thread_writer_snapshot",
+            return_value={"writer": "desktop", "desktop_attached": True, "external_active": True},
+        ), mock.patch.object(
+            server, "_codex_app_server_request",
+            side_effect=AssertionError("must not be called"),
+        ), mock.patch.object(server, "_resume_ledger_append"), \
+             mock.patch.object(server, "_codex_telemetry_append"), \
+             mock.patch.object(server, "_codex_coordination_event"):
+            result = server._codex_resume_or_steer_via_app_server(sid, "hello")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["fallback"], "queue")
+        self.assertEqual(result["stage"], "writer-gate")
+        self.assertEqual(result["writer"], "desktop")
+
+    def test_resume_or_steer_serializes_with_per_thread_mutex(self):
+        """Holding a thread's turn mutex forces a concurrent CCC send to
+        fallback:queue (writer attributed to ccc)."""
+        server = self.server
+        sid = "test-sid-lock"
+        lock = server._codex_thread_turn_lock(sid)
+        self.assertTrue(lock.acquire(blocking=False))
+        try:
+            with mock.patch.object(
+                server, "_codex_thread_writer_snapshot",
+                return_value={"writer": None, "external_active": False, "desktop_attached": False},
+            ), mock.patch.object(server, "_resume_ledger_append"), \
+                 mock.patch.object(server, "_codex_telemetry_append"), \
+                 mock.patch.object(server, "_codex_coordination_event"):
+                result = server._codex_resume_or_steer_via_app_server(sid, "hello")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["fallback"], "queue")
+            self.assertEqual(result["writer"], "ccc")
+        finally:
+            lock.release()
+
+    def test_resume_queue_engine_busy_short_circuits_on_external_writer(self):
+        """An external writer short-circuits busy=True without the app-server
+        activity RPC (the cheap stat+lsof path wins first)."""
+        server = self.server
+        sid = "test-sid-busy"
+        with mock.patch.object(server, "_is_codex_session", return_value=True), \
+             mock.patch.object(
+                 server, "_codex_thread_writer_snapshot",
+                 return_value={"writer": "desktop", "external_active": True, "desktop_attached": True},
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"), \
+             mock.patch.object(
+                 server, "_codex_app_server_thread_is_active",
+                 side_effect=AssertionError("must not be reached"),
+            ):
+            self.assertTrue(server._resume_queue_engine_busy(sid))
+
+    def test_resume_queue_engine_busy_revalidates_unknown_writer(self):
+        """Unknown ownership is reattached once instead of blocking forever."""
+        server = self.server
+        sid = "test-sid-phantom"
+        snapshots = [
+            {"writer": "unknown", "external_active": True, "desktop_attached": False},
+            {"writer": None, "external_active": False, "desktop_attached": False},
+        ]
+        with mock.patch.object(server, "_is_codex_session", return_value=True), \
+             mock.patch.object(
+                 server,
+                 "_codex_thread_writer_snapshot",
+                 side_effect=snapshots,
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"), \
+             mock.patch.object(
+                 server,
+                 "_codex_app_server_thread_is_active",
+                 return_value=False,
+             ) as active:
+            self.assertFalse(server._resume_queue_engine_busy(sid))
+
+        active.assert_called_once_with(sid, start_if_needed=True)
+
+    def test_coordination_events_are_durable_and_stable(self):
+        """A coordination event becomes a synthetic system/codex_coordination
+        conversation event with a STABLE line id (idempotent re-polls)."""
+        server = self.server
+        sid = "test-sid-coord"
+        prev_loaded = server._codex_coord_state_loaded
+        server._codex_coord_state_loaded = True  # skip disk load
+        try:
+            with mock.patch.object(server, "_save_codex_app_server_state_unlocked"):
+                server._codex_coordination_event(sid, "external_turn_started", writer="desktop")
+            events = server._get_codex_coordination_events_for_session(sid)
+            self.assertEqual(len(events), 1)
+            ev = events[0]
+            self.assertEqual(ev["type"], "system")
+            self.assertEqual(ev["subtype"], "codex_coordination")
+            self.assertTrue(ev["line"].startswith("coord-"))
+            self.assertTrue(ev["text"])
+            # re-poll must be idempotent: identical synthetic line ids
+            again = server._get_codex_coordination_events_for_session(sid)
+            self.assertEqual([e["line"] for e in events], [e["line"] for e in again])
+        finally:
+            server._codex_coord_state_loaded = prev_loaded
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
+
+    def test_coordination_events_do_not_claim_an_unproven_external_writer(self):
+        """Reconnect-era events describe the active turn without inventing a
+        second process or person."""
+        server = self.server
+        sid = "test-sid-unknown-writer-copy"
+        prev_loaded = server._codex_coord_state_loaded
+        server._codex_coord_state_loaded = True
+        try:
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                    "coordination_events": [
+                        {"ts": 1.0, "kind": "external_turn_started", "writer": "unknown"},
+                        {"ts": 2.0, "kind": "input_queued", "writer": "unknown"},
+                    ],
+                }
+            events = server._get_codex_coordination_events_for_session(sid)
+            self.assertEqual(
+                [event["text"] for event in events],
+                ["Active Codex turn detected", "Message queued behind the active turn"],
+            )
+        finally:
+            server._codex_coord_state_loaded = prev_loaded
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
+
+    def test_app_server_state_payload_includes_coordination_events(self):
+        """The persisted app-server payload surfaces a thread's durable
+        coordination_events."""
+        server = self.server
+        sid = "test-sid-payload"
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "coordination_events": [{"ts": 1.0, "kind": "input_queued"}],
+            }
+        try:
+            payload = server._codex_app_server_state_payload_unlocked()
+        finally:
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
+        thread = payload["threads"][sid]
+        self.assertIn("coordination_events", thread)
+        self.assertEqual(
+            thread["coordination_events"],
+            [{"ts": 1.0, "kind": "input_queued"}],
+        )
+
+    def test_codex_state_fields_external_desktop_overlay(self):
+        """With no CCC turn but a desktop writer active, the state chip reads
+        working/fresh and names the desktop writer."""
+        server = self.server
+        sid = "test-sid-state"
+        with mock.patch.object(server, "_codex_app_server_thread_state", return_value={}), \
+             mock.patch.object(
+                 server, "_codex_thread_writer_snapshot",
+                 return_value={"writer": "desktop", "desktop_attached": True, "external_active": True},
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"):
+            fields = server._codex_state_fields(sid)
+        self.assertEqual(fields["codex_state"], "working")
+        self.assertTrue(fields["codex_fresh"])
+        self.assertEqual(fields["codex_writer"], "desktop")
+        self.assertTrue(fields["codex_desktop_attached"])
+        self.assertIn("desktop", fields["codex_state_reason"])
+
+    def test_codex_state_fields_unknown_writer_uses_neutral_reason(self):
+        """An active turn with unproven ownership must not be presented as a
+        second Codex process."""
+        server = self.server
+        sid = "test-sid-unknown-state"
+        with mock.patch.object(server, "_codex_app_server_thread_state", return_value={}), \
+             mock.patch.object(
+                 server, "_codex_thread_writer_snapshot",
+                 return_value={"writer": "unknown", "desktop_attached": False, "external_active": True},
+             ), mock.patch.object(server, "_codex_note_external_writer_transition"):
+            fields = server._codex_state_fields(sid)
+        self.assertEqual(fields["codex_state"], "working")
+        self.assertEqual(fields["codex_writer"], "unknown")
+        self.assertEqual(fields["codex_state_reason"], "An active Codex turn is writing this thread")
+
+    def test_codex_unknown_writer_is_not_offered_steer(self):
+        """Unknown ownership remains queue-only until the active turn ends."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("writer !== 'unknown'", js)
+
 
 class TestModelPicker(unittest.TestCase):
     def test_short_model_alias_strips_claude_prefix_and_1m_suffix(self):
@@ -10456,15 +13878,17 @@ class TestModelPicker(unittest.TestCase):
             finally:
                 server.SESSION_OVERRIDES_FILE = orig
 
-    def test_sonnet_is_not_marked_as_one_m_context_in_model_picker(self):
-        """Sonnet is a 200k-context model; only Opus variants get the 1M badge."""
+    def test_latest_claude_models_are_marked_as_one_m_context_in_model_picker(self):
+        """Anthropic's latest Fable, Opus, and Sonnet models support 1M."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
 
         self.assertIn("function claudeModelSupportsOneM(model)", js)
         self.assertIn("return n === 'opus-4-8' || n === 'opus-4-7';", js)
         self.assertIn("const modelSupportsOneM = engine === 'claude' && claudeModelSupportsOneM(displayModel);", js)
         self.assertIn("const isOneM = modelSupportsOneM && (", js)
-        self.assertIn("{ id: 'sonnet-5',  label: 'sonnet-5',  oneM: false }", js)
+        self.assertIn("{ id: 'fable-5',   label: 'fable-5',   oneM: true }", js)
+        self.assertIn("{ id: 'opus-5',    label: 'opus-5',    oneM: true }", js)
+        self.assertIn("{ id: 'sonnet-5',  label: 'sonnet-5',  oneM: true }", js)
         self.assertNotIn("{ id: 'sonnet-4-6'", js)  # removed in CCC-484
 
     def test_pinned_conversations_roundtrip_and_sort_first(self):
@@ -10504,7 +13928,7 @@ class TestModelPicker(unittest.TestCase):
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
-        self.assertIn("mergeBtn + startBtn + pinBtn + archiveBtn", js)
+        self.assertIn("mergeBtn + startBtn + pinBtn + lifecycleButtons", js)
         self.assertIn("Pinned to top", js)
         self.assertIn("_minPinnedRank", js)
         self.assertNotIn("conv-pinned-section", js)
@@ -10534,6 +13958,23 @@ class TestModelPicker(unittest.TestCase):
         post_idx = src.find("def do_POST")
         self.assertGreater(post_idx, 0)
         self.assertIn("_check_same_origin", src[post_idx:post_idx + 200])
+
+    def test_kimi_model_switch_applies_live_through_acp(self):
+        """Kimi exposes model selection as a live ACP config option."""
+        for mod in ("server",):
+            sys.modules.pop(mod, None)
+        import server
+        with mock.patch.object(server, "_detect_session_engine", return_value="kimi"), \
+             mock.patch.object(server, "_set_session_override"), \
+             mock.patch.object(server, "_acp_set_config", return_value={"ok": True}) as set_config:
+            result = server._set_session_model("session-kimi-switch", "kimi-code/k3", False)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["applied"], "live")
+        self.assertEqual(result["via"], "kimi-acp-config")
+        set_config.assert_called_once_with(
+            "kimi", "session-kimi-switch", "model", "kimi-code/k3"
+        )
 
     def test_extract_session_slash_commands_from_init_event(self):
         for mod in ("server",):
@@ -10802,6 +14243,35 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("'calc'", js)
         self.assertIn("' · /ctx '", js)
 
+    def test_codex_model_picker_marks_current_reasoning_effort(self):
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        self.assertIn("const currentReasoningEffort = (ovr && ovr.reasoning_effort) || u.reasoning_effort || '';", js)
+        self.assertIn("const effortInner = currentReasoningEffort", js)
+        self.assertIn("wp-model-effort", js)
+        self.assertIn('data-reasoning="\' + escapeHtml(currentReasoningEffort) + \'"', js)
+        self.assertIn("const currentReasoning = btn.dataset.reasoning || '';", js)
+        self.assertIn("const isActive = lvl.id === currentReasoning;", js)
+
+    def test_new_codex_session_composer_sends_selected_reasoning_effort(self):
+        """New Codex sessions need an effort picker alongside their model picker."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+
+        self.assertIn('id="convInputEffortSelect"', html)
+        self.assertIn('id="spawnDefaultsEffort"', html)
+        self.assertIn("const $convInputEffortSelect", js)
+        self.assertIn("reasoning_effort: spawnDefaultsState.reasoning_effort", js)
+        self.assertIn("spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value", js)
+        self.assertIn("let spawnEffortChoiceDirty = false;", js)
+        self.assertIn("if (!spawnEffortChoiceDirty && $convInputEffortSelect)", js)
+        self.assertIn("spawnEffortChoiceDirty = true;", js)
+        self.assertIn("spawnEffortChoiceDirty = false;\n    syncSpawnEngineDependentUi();", js)
+        self.assertIn("($convInputEffortSelect.value || spawnEffortChoiceDirty)", js)
+        self.assertIn("spawnBody.reasoning_effort = $convInputEffortSelect.value", js)
+        self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", server_py)
+        self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', server_py)
+
     def test_context_footer_renders_token_optimizer_quality_score(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
@@ -10815,6 +14285,11 @@ class TestModelPicker(unittest.TestCase):
         self.assertNotIn("const label = 'Q ' +", footer_quality)
         self.assertLess(js.index("qualityPill + '<span class=\"' + cls"), js.index("+ sourceLabel + ' ' + _formatTokens(displayTokens)"))
         self.assertIn(".conv-input-context .wp-quality-pill", css)
+
+    def test_server_starts_token_optimizer_index_refresher_in_background(self):
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+        main_source = server_py[server_py.index("def main():"):]
+        self.assertIn("_start_token_optimizer_quality_index_refresher()", main_source)
 
     def test_extract_session_usage_includes_token_optimizer_quality_score(self):
         for mod in ("server",):
@@ -10843,14 +14318,18 @@ class TestModelPicker(unittest.TestCase):
             home = root / "home"
             quality_dir = home / ".claude" / "token-optimizer"
             quality_dir.mkdir(parents=True)
-            (quality_dir / f"quality-cache-{sid}.json").write_text(
+            (quality_dir / "quality-index.json").write_text(
                 json.dumps({
-                    "score": 79.2,
-                    "grade": "B",
-                    "timestamp": "2026-06-25T19:53:10.896627+00:00",
-                    "breakdown": {
-                        "context_fill_degradation": {"detail": "45% fill, peak zone"},
-                        "stale_reads": {"detail": "1 stale file read"},
+                    "version": 1,
+                    "records": {
+                        sid: {
+                            "score": 79.2,
+                            "grade": "B",
+                            "timestamp": "2026-06-25T19:53:10.896627+00:00",
+                            "summary": "45% fill, peak zone; 1 stale file read",
+                            "source_mtime": 10.0,
+                            "transcript_mtime": 9.0,
+                        },
                     },
                 }),
                 encoding="utf-8",
@@ -10862,12 +14341,15 @@ class TestModelPicker(unittest.TestCase):
             server.PROJECTS_ROOT = root / "projects"
             try:
                 with mock.patch.object(server.Path, "home", return_value=home), \
+                     mock.patch.object(server, "_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE", {}), \
+                     mock.patch.object(server, "_TOKEN_OPTIMIZER_QUALITY_INDEX", {}), \
                      mock.patch.object(server, "_is_codex_session", return_value=False), \
                      mock.patch.object(server, "_is_gemini_session", return_value=False), \
                      mock.patch.object(server, "_is_cursor_session", return_value=False), \
                      mock.patch.object(server, "_is_antigravity_session", return_value=False), \
                      mock.patch.object(server, "_is_kilo_session", return_value=False), \
                      mock.patch.object(server, "_load_desktop_app_metadata", return_value={}):
+                    server._refresh_token_optimizer_quality_index()
                     usage = server.extract_session_usage(sid)
             finally:
                 server.PROJECTS_ROOT = orig_root
@@ -10895,6 +14377,15 @@ class TestModelPicker(unittest.TestCase):
         clipped = server._truncate_session_name(long)
         self.assertLessEqual(len(clipped), server.SESSION_NAME_MAX_CHARS)
         self.assertTrue(clipped.endswith("…"))
+    def test_codex_rows_keep_a_full_title_for_the_status_rail(self):
+        """CCC-566: the rail should not inherit the sidebar's 120-char cap."""
+        server_text = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('status_rail_title = title if title and title != first_message else display_name', server_text)
+        self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
+        self.assertIn("addParam('status_rail_title', row.status_rail_title || '', 500);", app_js)
+
 
     def test_parse_conversation_surfaces_compact_boundary(self):
         """The transcript pane should show feedback when `/compact` finishes."""
@@ -11018,7 +14509,7 @@ class TestModelPicker(unittest.TestCase):
 
         usage_map = {
             13: {"in": 11200, "out": 2600, "thinking": 1000,
-                 "cache_read": 0, "cache_create": 0, "model": "agy-1"},
+                 "cache_read": 8400, "cache_create": 0, "model": "agy-1"},
         }
         ev_with_step = {
             "type": "PLANNER_RESPONSE",
@@ -11034,6 +14525,7 @@ class TestModelPicker(unittest.TestCase):
         self.assertEqual(out["tokens_in"], 11200)
         self.assertEqual(out["tokens_out"], 2600)
         self.assertEqual(out["tokens_thinking"], 1000)
+        self.assertEqual(out["tokens_cached"], 8400)
 
         # Step index with no matching trajectory entry → no token fields,
         # so the frontend falls back to the no-chip render path.
@@ -11134,6 +14626,45 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
             self.assertEqual(chats[0]["id"], chats[0]["uuid"])
             sidecar = json.loads((gcd / "demo.json").read_text(encoding="utf-8"))
             self.assertEqual(sidecar["uuid"], chats[0]["uuid"])
+
+    def test_list_active_group_chat_summaries_includes_path_and_id(self):
+        """CCC-508: the lightweight polling summary must still carry
+        id/uuid/path/path_tilde. The sidebar's "In Group Chat" row click
+        handler only opens the reader when one of those is present
+        (`if (path || chatId) openGroupChatReader(...)`); dropping them
+        silently turned every row unclickable."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as tmp:
+            gcd = pathlib.Path(tmp) / "group-chats"
+            gcd.mkdir()
+            (gcd / "demo.md").write_text("# Group Chat — Demo\n", encoding="utf-8")
+            (gcd / "demo.json").write_text(json.dumps({
+                "session_ids": [],
+                "topic": "Demo",
+                "mode": "topic",
+                "name_map": {},
+                "archived": False,
+                "last_message_at": time.time(),
+            }), encoding="utf-8")
+
+            orig_expanduser = server.os.path.expanduser
+
+            def fake_expanduser(path):
+                if path == "~/.claude/group-chats":
+                    return str(gcd)
+                return orig_expanduser(path)
+
+            with mock.patch.object(server.os.path, "expanduser", side_effect=fake_expanduser):
+                summaries = server._list_active_group_chat_summaries()
+
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(summaries[0]["state"], "active")
+            self.assertTrue(summaries[0]["id"])
+            self.assertEqual(summaries[0]["id"], summaries[0]["uuid"])
+            self.assertTrue(summaries[0]["path"].endswith("demo.md"))
+            self.assertEqual(summaries[0]["path_tilde"], "~/.claude/group-chats/demo.md")
 
     def test_group_chat_header_syncs_sidecar_topic_and_participants(self):
         """Reader refresh should repair stale markdown headers without
@@ -11471,6 +15002,552 @@ class TestHealthcheck(unittest.TestCase):
         self.assertGreater(len(result["checks"]), 0)
 
 
+class TestCodexCompactionRecovery(unittest.TestCase):
+    def setUp(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.tmp_dir = tempfile.mkdtemp(prefix="ccc-codex-recovery-")
+        self.server.CODEX_APP_SERVER_STATE_FILE = (
+            pathlib.Path(self.tmp_dir) / "codex-app-server-state.json"
+        )
+        with self.server._CODEX_APP_SERVER_LOCK:
+            self.server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            self.server._CODEX_APP_SERVER_TURN_THREAD.clear()
+            self.server._CODEX_APP_SERVER_EVENT_SEQ = 0
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue.clear()
+        self.server._codex_coord_state_loaded = True
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        with self.server._CODEX_APP_SERVER_LOCK:
+            self.server._CODEX_APP_SERVER_THREAD_STATE.clear()
+            self.server._CODEX_APP_SERVER_TURN_THREAD.clear()
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue.clear()
+
+    def _arm_via_notifications(self, sid="sid-recovery", now=None):
+        server = self.server
+        clock = mock.patch.object(server.time, "time", return_value=now or 100.0)
+        with clock:
+            server._codex_app_server_handle_message({
+                "method": "turn/started",
+                "params": {"threadId": sid, "turnId": "turn-compact"},
+            })
+            server._codex_app_server_handle_message({
+                "method": "item/started",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-compact",
+                    "item": {
+                        "id": "compact-1",
+                        "type": "contextCompaction",
+                        "status": "inProgress",
+                    },
+                },
+            })
+            server._codex_app_server_handle_message({
+                "method": "item/completed",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-compact",
+                    "item": {
+                        "id": "compact-1",
+                        "type": "contextCompaction",
+                        "status": "completed",
+                    },
+                },
+            })
+        return sid
+
+    def _armed_state(self, sid="sid-recovery", *, status="idle", now=100.0):
+        with self.server._CODEX_APP_SERVER_LOCK:
+            self.server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "status": status,
+                "last_event_at": now,
+                "last_activity_at": now,
+                "last_turn_id": "turn-compact",
+                "compaction_recovery": {
+                    "episode_id": "compact-1",
+                    "compaction_turn_id": "turn-compact",
+                    "compacted_at": now,
+                    "last_progress_at": now,
+                    "status": "waiting",
+                    "attempts": 0,
+                    "next_attempt_at": now,
+                    "reason": "Waiting for Codex to continue after compaction",
+                },
+            }
+        return sid
+
+    def test_codex_context_compaction_arms_recovery(self):
+        sid = self._arm_via_notifications()
+
+        state = self.server._codex_app_server_thread_state(sid)
+        recovery = state["compaction_recovery"]
+        self.assertEqual(recovery["episode_id"], "compact-1")
+        self.assertEqual(recovery["compaction_turn_id"], "turn-compact")
+        self.assertEqual(recovery["status"], "waiting")
+        self.assertEqual(recovery["attempts"], 0)
+        self.assertGreater(recovery["next_attempt_at"], recovery["compacted_at"])
+
+    def test_codex_post_compaction_final_output_disarms_recovery(self):
+        sid = self._arm_via_notifications()
+        server = self.server
+        with mock.patch.object(server.time, "time", return_value=105.0):
+            server._codex_app_server_handle_message({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-compact",
+                    "delta": "Finished the requested work.",
+                },
+            })
+            server._codex_app_server_handle_message({
+                "method": "turn/completed",
+                "params": {"threadId": sid, "turnId": "turn-compact"},
+            })
+
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "recovered")
+        self.assertEqual(recovery["reason"], "Codex produced a final reply after compaction")
+
+    def test_codex_recovery_waits_through_grace_and_active_tool(self):
+        sid = self._armed_state()
+        server = self.server
+        with mock.patch.object(server, "resume_session_codex") as resume:
+            grace = server._run_codex_compaction_recovery_once(sid, now=101.0)
+            with server._CODEX_APP_SERVER_LOCK:
+                state = server._CODEX_APP_SERVER_THREAD_STATE[sid]
+                state["compaction_recovery"]["next_attempt_at"] = 100.0
+                state["active_item"] = {
+                    "id": "tool-1",
+                    "type": "commandExecution",
+                    "tool": "Bash",
+                    "in_flight": True,
+                }
+            tool = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertEqual(grace["waiting"], "grace")
+        self.assertEqual(tool["waiting"], "active-tool")
+        resume.assert_not_called()
+
+    def test_codex_recovery_suppresses_legitimate_blockers(self):
+        server = self.server
+        cases = (
+            ("approval", {"thread_needs_approval": True}, {}, {}),
+            ("active-flag", {"active_flags": ["rateLimited"]}, {}, {}),
+            ("queued-user-input", {}, {"sid-recovery": ["user first"]}, {}),
+            ("goal-paused", {}, {}, {"sid-recovery": {"objective": "x", "status": "paused"}}),
+            ("goal-blocked", {}, {}, {"sid-recovery": {"objective": "x", "status": "blocked"}}),
+            ("goal-complete", {}, {}, {"sid-recovery": {"objective": "x", "status": "complete"}}),
+        )
+        for expected, state_updates, queue, goals in cases:
+            with self.subTest(expected=expected):
+                sid = self._armed_state()
+                with server._CODEX_APP_SERVER_LOCK:
+                    server._CODEX_APP_SERVER_THREAD_STATE[sid].update(state_updates)
+                with server._pending_resume_lock:
+                    server._pending_resume_queue.clear()
+                    server._pending_resume_queue.update(queue)
+                with mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+                     mock.patch.object(server, "resume_session_codex") as resume:
+                    result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+                self.assertEqual(result["suppressed"], expected)
+                recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+                self.assertEqual(recovery["status"], "suppressed")
+                resume.assert_not_called()
+
+    def test_codex_recovery_suppresses_request_user_input_flag(self):
+        sid = self._armed_state()
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid]["active_flags"] = [
+                "waitingOnUserInput"
+            ]
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertEqual(result["suppressed"], "active-flag")
+        self.assertEqual(
+            server._codex_app_server_thread_state(sid)["compaction_recovery"]["status"],
+            "suppressed",
+        )
+        resume.assert_not_called()
+
+    def test_codex_recovery_interrupts_active_turn_before_resume(self):
+        sid = self._armed_state(status="active")
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid]["active_turn_id"] = "turn-compact"
+        with mock.patch.object(
+            server,
+            "_codex_interrupt_via_app_server",
+            return_value={"ok": True, "turn_id": "turn-compact"},
+        ) as interrupt, mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertTrue(result["interrupted"])
+        interrupt.assert_called_once_with(sid)
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "interrupting")
+        self.assertEqual(recovery["attempts"], 0)
+
+    def test_codex_recovery_marks_interrupt_before_rpc_and_ignores_partial_output(self):
+        sid = self._armed_state(status="active")
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            state = server._CODEX_APP_SERVER_THREAD_STATE[sid]
+            state["active_turn_id"] = "turn-compact"
+            state["compaction_recovery"]["saw_agent_output"] = True
+
+        def interrupt_after_completion(session_id):
+            during = server._codex_app_server_thread_state(session_id)["compaction_recovery"]
+            self.assertEqual(during["status"], "interrupting")
+            self.assertFalse(during["saw_agent_output"])
+            server._codex_app_server_handle_message({
+                "method": "turn/completed",
+                "params": {
+                    "threadId": session_id,
+                    "turnId": "turn-compact",
+                    "turn": {"id": "turn-compact", "status": "interrupted"},
+                },
+            })
+            return {"ok": True, "turn_id": "turn-compact"}
+
+        with mock.patch.object(
+            server,
+            "_codex_interrupt_via_app_server",
+            side_effect=interrupt_after_completion,
+        ), mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertTrue(result["interrupted"])
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "waiting")
+        self.assertFalse(any(
+            event.get("kind") == "compaction_recovery_recovered"
+            for event in server._get_codex_coordination_events_for_session(sid)
+        ))
+
+    def test_codex_recovery_starts_goal_continuation_once(self):
+        sid = self._armed_state()
+        server = self.server
+        goals = {sid: {"objective": "finish watchdog", "status": "active"}}
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+             mock.patch.object(
+                 server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "turn_id": "turn-recovery"},
+             ) as resume:
+            first = server._run_codex_compaction_recovery_once(sid, now=120.0)
+            second = server._run_codex_compaction_recovery_once(sid, now=121.0)
+
+        self.assertTrue(first["started"])
+        self.assertEqual(second["waiting"], "recovery-in-flight")
+        resume.assert_called_once()
+        args, kwargs = resume.call_args
+        self.assertEqual(args[0], sid)
+        self.assertIn("active goal", args[1])
+        self.assertIn("do not repeat completed work", args[1])
+        self.assertTrue(kwargs["_from_queue"])
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "recovering")
+        self.assertEqual(recovery["attempts"], 1)
+        self.assertEqual(recovery["recovery_turn_id"], "turn-recovery")
+
+    def test_codex_recovery_turn_silence_is_interrupted(self):
+        sid = self._armed_state()
+        server = self.server
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "turn_id": "turn-recovery"},
+             ):
+            server._run_codex_compaction_recovery_once(sid, now=120.0)
+        with server._CODEX_APP_SERVER_LOCK:
+            state = server._CODEX_APP_SERVER_THREAD_STATE[sid]
+            state["status"] = "active"
+            state["active_turn_id"] = "turn-recovery"
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": True, "turn_id": "turn-recovery"},
+             ) as interrupt:
+            result = server._run_codex_compaction_recovery_once(sid, now=241.0)
+
+        self.assertTrue(result["interrupted"])
+        interrupt.assert_called_once_with(sid)
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "interrupting")
+        self.assertEqual(recovery["attempts"], 1)
+
+    def test_codex_recovery_final_reply_completes_episode(self):
+        sid = self._armed_state()
+        server = self.server
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "turn_id": "turn-recovery"},
+             ):
+            server._run_codex_compaction_recovery_once(sid, now=120.0)
+        with mock.patch.object(server.time, "time", return_value=125.0):
+            server._codex_app_server_handle_message({
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "threadId": sid,
+                    "turnId": "turn-recovery",
+                    "delta": "Recovered and finished.",
+                },
+            })
+            server._codex_app_server_handle_message({
+                "method": "turn/completed",
+                "params": {"threadId": sid, "turnId": "turn-recovery"},
+            })
+
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "recovered")
+        self.assertEqual(recovery["attempts"], 1)
+
+    def test_codex_recovery_retries_then_exhausts(self):
+        sid = self._armed_state()
+        server = self.server
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server,
+                 "resume_session_codex",
+                 return_value={"ok": False, "error": "temporary failure"},
+             ) as resume:
+            first = server._run_codex_compaction_recovery_once(sid, now=120.0)
+            with server._CODEX_APP_SERVER_LOCK:
+                server._CODEX_APP_SERVER_THREAD_STATE[sid]["compaction_recovery"]["next_attempt_at"] = 121.0
+            second = server._run_codex_compaction_recovery_once(sid, now=122.0)
+            third = server._run_codex_compaction_recovery_once(sid, now=123.0)
+
+        self.assertFalse(first["started"])
+        self.assertTrue(second["exhausted"])
+        self.assertEqual(third["waiting"], "terminal")
+        self.assertEqual(resume.call_count, 2)
+        self.assertIn(
+            "task that was interrupted",
+            resume.call_args_list[0].args[1],
+        )
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "exhausted")
+        self.assertEqual(recovery["attempts"], 2)
+
+    def test_codex_recovery_state_is_persisted_and_restored(self):
+        sid = self._armed_state()
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._save_codex_app_server_state_unlocked()
+            server._CODEX_APP_SERVER_THREAD_STATE.clear()
+        server._codex_coord_state_loaded = False
+
+        server._codex_load_coordination_state()
+
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["episode_id"], "compact-1")
+        self.assertEqual(recovery["status"], "waiting")
+        self.assertEqual(
+            server._codex_app_server_thread_state(sid)["last_activity_at"],
+            100.0,
+        )
+
+    def test_codex_recovery_status_is_visible(self):
+        sid = self._armed_state()
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            state = server._CODEX_APP_SERVER_THREAD_STATE[sid]
+            state["compaction_recovery"]["status"] = "recovering"
+            state["compaction_recovery"]["reason"] = "Recovering after compaction"
+            server._codex_coordination_event_unlocked(
+                state,
+                "compaction_recovery_started",
+                detail="Recovering after compaction",
+                now=120.0,
+            )
+
+        fields = server._codex_app_server_activity_fields(sid)
+        public = server._codex_app_server_thread_public_status(sid)
+        events = server._get_codex_coordination_events_for_session(sid)
+
+        self.assertEqual(fields["sidecar_tool"], "Recovery")
+        self.assertEqual(fields["sidecar_file"], "Recovering after compaction")
+        self.assertTrue(fields["sidecar_in_flight"])
+        self.assertFalse(server._codex_app_activity_superseded_by_tail(
+            fields,
+            {"last_meaningful_ts": 999.0, "pending_tool": "Thinking"},
+        ))
+        self.assertEqual(public["compaction_recovery"]["status"], "recovering")
+        self.assertTrue(any(e.get("kind") == "compaction_recovery_started" for e in events))
+
+    def test_watchdog_recovers_silent_active_goal_without_compaction(self):
+        sid = "sid-silent-goal"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "status": "active",
+                "active_turn_id": "turn-stalled",
+                "last_turn_id": "turn-stalled",
+                "last_event_at": 100.0,
+                "last_activity_at": 100.0,
+            }
+        goals = {sid: {"objective": "finish mode 3", "status": "active"}}
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+             mock.patch.object(
+                 server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": True, "turn_id": "turn-stalled"},
+             ) as interrupt, mock.patch.object(
+                 server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "turn_id": "turn-recovery"},
+             ) as resume:
+            first = server._run_codex_recovery_watchdog_once(now=1001.0)
+            second = server._run_codex_recovery_watchdog_once(now=1004.0)
+
+        self.assertTrue(first[0][1]["interrupted"])
+        self.assertTrue(second[0][1]["started"])
+        interrupt.assert_called_once_with(sid)
+        resume.assert_called_once()
+        self.assertIn("active goal", resume.call_args.args[1])
+        self.assertIn("turn went silent", resume.call_args.args[1])
+        self.assertNotIn("context compaction", resume.call_args.args[1])
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["trigger"], "silent-turn")
+        self.assertEqual(recovery["source_turn_id"], "turn-stalled")
+        activity = server._codex_app_server_activity_fields(sid)
+        self.assertEqual(activity["sidecar_tool"], "Recovery")
+        self.assertEqual(activity["sidecar_file"], "Recovering stalled Codex turn")
+        self.assertTrue(any(
+            event.get("kind") == "turn_recovery_armed"
+            for event in server._get_codex_coordination_events_for_session(sid)
+        ))
+
+    def test_watchdog_reconciles_silent_goal_turn_after_server_restart(self):
+        sid = "sid-restarted-goal"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "last_turn_id": "turn-stalled",
+                "last_event_at": 100.0,
+                "last_activity_at": 100.0,
+                "coordination_events": [],
+            }
+        goals = {sid: {"objective": "finish after restart", "status": "active"}}
+
+        def reconcile(session_id, *, start_if_needed=False):
+            self.assertEqual(session_id, sid)
+            self.assertTrue(start_if_needed)
+            with server._CODEX_APP_SERVER_LOCK:
+                server._codex_app_server_record_thread(session_id, {
+                    "id": session_id,
+                    "status": {"type": "active"},
+                    "turns": [{"id": "turn-stalled", "status": "inProgress"}],
+                })
+            return True
+
+        with mock.patch.object(server.time, "time", return_value=1001.0), \
+             mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+             mock.patch.object(
+                 server, "_codex_app_server_thread_is_active", side_effect=reconcile
+             ) as refresh, mock.patch.object(
+                 server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": True, "turn_id": "turn-stalled"},
+             ) as interrupt:
+            result = server._run_codex_recovery_watchdog_once(now=1001.0)
+
+        refresh.assert_called_once_with(sid, start_if_needed=True)
+        interrupt.assert_called_once_with(sid)
+        self.assertTrue(result[0][1]["interrupted"])
+        state = server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["compaction_recovery"]["trigger"], "silent-turn")
+
+    def test_watchdog_does_not_arm_silent_turn_without_recovery_intent(self):
+        server = self.server
+        cases = (
+            ("below-threshold", 100.0, 999.0, {"sid-silent": {"objective": "x", "status": "active"}}, None),
+            ("no-goal-or-queue", 100.0, 1001.0, {}, None),
+            ("active-tool", 100.0, 1001.0, {"sid-silent": {"objective": "x", "status": "active"}}, {
+                "id": "tool-1", "type": "commandExecution", "in_flight": True,
+            }),
+            ("waiting-on-user", 100.0, 1001.0, {"sid-silent": {"objective": "x", "status": "active"}}, None),
+        )
+        for name, last_activity, now, goals, active_item in cases:
+            with self.subTest(name=name):
+                with server._CODEX_APP_SERVER_LOCK:
+                    server._CODEX_APP_SERVER_THREAD_STATE.clear()
+                    server._CODEX_APP_SERVER_THREAD_STATE["sid-silent"] = {
+                        "thread_id": "sid-silent",
+                        "status": "active",
+                        "active_turn_id": "turn-stalled",
+                        "last_activity_at": last_activity,
+                    }
+                    if active_item:
+                        server._CODEX_APP_SERVER_THREAD_STATE["sid-silent"]["active_item"] = active_item
+                    if name == "waiting-on-user":
+                        server._CODEX_APP_SERVER_THREAD_STATE["sid-silent"]["active_flags"] = [
+                            "waitingOnUserInput"
+                        ]
+                with mock.patch.object(server, "_codex_goals_snapshot", return_value=goals), \
+                     mock.patch.object(server, "_codex_interrupt_via_app_server") as interrupt:
+                    result = server._run_codex_recovery_watchdog_once(now=now)
+
+                self.assertEqual(result, [])
+                self.assertNotIn(
+                    "compaction_recovery",
+                    server._codex_app_server_thread_state("sid-silent"),
+                )
+                interrupt.assert_not_called()
+
+    def test_silent_turn_with_queued_input_interrupts_then_hands_off_to_fifo(self):
+        sid = "sid-silent-queued"
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "thread_id": sid,
+                "status": "active",
+                "active_turn_id": "turn-stalled",
+                "last_activity_at": 100.0,
+            }
+        with server._pending_resume_lock:
+            server._pending_resume_queue[sid] = ["user message must go first"]
+        with mock.patch.object(server, "_codex_goals_snapshot", return_value={}), \
+             mock.patch.object(
+                 server,
+                 "_codex_interrupt_via_app_server",
+                 return_value={"ok": True, "turn_id": "turn-stalled"},
+             ) as interrupt, mock.patch.object(
+                 server, "_schedule_codex_queue_pump"
+             ) as schedule, mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_recovery_watchdog_once(now=1001.0)
+
+        self.assertTrue(result[0][1]["interrupted"])
+        self.assertTrue(result[0][1]["queue_handoff"])
+        interrupt.assert_called_once_with(sid)
+        schedule.assert_called_once_with(sid)
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "suppressed")
+        self.assertEqual(recovery["suppressed_reason"], "queued-user-input")
+
+    def test_resume_watcher_runs_compaction_recovery_scan(self):
+        source = inspect.getsource(self.server._start_resume_queue_watcher)
+        self.assertIn("_run_codex_recovery_watchdog_once()", source)
+
+
 class TestPendingInputs(unittest.TestCase):
     def setUp(self):
         for mod in ("server", "morning", "morning_store"):
@@ -11518,6 +15595,101 @@ class TestPendingInputs(unittest.TestCase):
         with self.server._pending_terminal_input_lock:
             self.assertEqual(self.server._pending_terminal_input_queue.get(sid), ["hello term"])
 
+    def test_pending_inputs_watcher_lock_rejects_another_process(self):
+        """Only one CCC server may drain a shared durable input queue."""
+        import fcntl
+
+        lock_path = pathlib.Path(self.tmp_dir) / "pending-inputs.watcher.lock"
+        with open(lock_path, "a+") as held:
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertIsNone(self.server._acquire_pending_inputs_watcher_lock(lock_path))
+
+    def test_pending_inputs_watcher_retries_when_another_server_owns_lock(self):
+        """A sibling server must wait for ownership rather than give up forever."""
+        source = inspect.getsource(self.server._start_resume_queue_watcher)
+        self.assertIn("while _pending_inputs_watcher_lock_file is None:", source)
+        self.assertIn("time.sleep(5)", source)
+
+    def test_queue_codex_resume_schedules_conversation_pump(self):
+        with mock.patch.object(self.server, "_schedule_codex_queue_pump") as schedule:
+            self.server._queue_codex_resume("sid-a", "first")
+
+        schedule.assert_called_once_with("sid-a")
+
+    def test_codex_queue_pump_delivers_and_removes_only_fifo_head(self):
+        sid = "sid-fifo"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["first", "second"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "accepted": True, "confirmed": True},
+             ) as resume:
+            result = self.server._pump_codex_resume_queue(sid)
+
+        self.assertTrue(result["delivered"])
+        resume.assert_called_once_with(sid, "first", _from_queue=True)
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["second"])
+
+    def test_codex_queue_pump_holds_while_turn_is_active(self):
+        sid = "sid-active"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["wait"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=True), \
+             mock.patch.object(self.server, "resume_session_codex") as resume:
+            result = self.server._pump_codex_resume_queue(sid)
+
+        self.assertEqual(result["waiting"], "busy")
+        resume.assert_not_called()
+
+    def test_codex_queue_pump_retains_head_after_delivery_failure(self):
+        sid = "sid-failure"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["keep"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(self.server, "resume_session_codex", return_value={"ok": False}):
+            self.server._pump_codex_resume_queue(sid)
+
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["keep"])
+
+    def test_codex_queue_pump_retains_head_until_delivery_is_confirmed(self):
+        sid = "sid-unconfirmed"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["keep until visible"]
+
+        with mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "accepted": True, "confirmed": False},
+             ):
+            result = self.server._pump_codex_resume_queue(sid)
+
+        self.assertFalse(result["delivered"])
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["keep until visible"])
+
+    def test_codex_queue_pump_suppresses_concurrent_delivery(self):
+        sid = "sid-concurrent"
+        lock = self.server._codex_queue_pump_lock(sid)
+        lock.acquire()
+        try:
+            result = self.server._pump_codex_resume_queue(sid)
+        finally:
+            lock.release()
+
+        self.assertEqual(result["waiting"], "already-pumping")
+
     def test_get_queued_events_for_session(self):
         sid = "test-session-id"
         with self.server._pending_resume_lock:
@@ -11533,8 +15705,146 @@ class TestPendingInputs(unittest.TestCase):
         self.assertEqual(events[2]["text"], "t1")
         self.assertTrue(events[2]["pending"])
 
+    def test_synthetic_events_merge_by_timestamp_instead_of_appending(self):
+        transcript = [
+            {"line": 1, "ts": "2026-07-12T10:00:00Z", "type": "assistant"},
+            {"line": 3, "ts": "2026-07-12T10:02:00Z", "type": "assistant"},
+        ]
+        synthetic = [
+            {"line": "coord-1", "ts": "2026-07-12T10:01:00Z", "type": "system"},
+            {"line": None, "ts": 1783857000.0, "type": "user_text", "pending": True},
+        ]
+
+        merged = self.server._merge_synthetic_conversation_events(transcript, synthetic)
+
+        self.assertEqual([event.get("line") for event in merged[:3]], [1, "coord-1", 3])
+        self.assertTrue(merged[-1]["pending"])
+
+    def test_consume_matching_pending_input_removes_only_one_copy(self):
+        sid = "test-session-id"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["repeat", "repeat", "keep"]
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[sid] = ["repeat"]
+
+        removed = self.server._consume_matching_pending_input(sid, " repeat ")
+
+        self.assertEqual(removed, 1)
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["repeat", "keep"])
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(self.server._pending_terminal_input_queue[sid], ["repeat"])
+
+    def test_consume_matching_pending_input_falls_back_to_terminal_queue(self):
+        sid = "test-session-id"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["keep"]
+        with self.server._pending_terminal_input_lock:
+            self.server._pending_terminal_input_queue[sid] = ["queued", "later"]
+
+        removed = self.server._consume_matching_pending_input(sid, "queued")
+
+        self.assertEqual(removed, 1)
+        with self.server._pending_resume_lock:
+            self.assertEqual(self.server._pending_resume_queue[sid], ["keep"])
+        with self.server._pending_terminal_input_lock:
+            self.assertEqual(self.server._pending_terminal_input_queue[sid], ["later"])
+
+    def test_consume_matching_pending_input_persists_cancel(self):
+        sid = "cancel-session"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["cancel me", "keep me"]
+
+        with mock.patch.object(self.server, "_save_pending_inputs") as save:
+            removed = self.server._consume_matching_pending_input(sid, "cancel me")
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(self.server._pending_resume_queue[sid], ["keep me"])
+        save.assert_called_once_with()
+
+    def test_pending_input_cancel_endpoint_is_wired(self):
+        source = inspect.getsource(self.server.CommandCenterHandler.do_POST)
+        self.assertIn('path == "/api/pending-input/cancel"', source)
+        self.assertIn("_consume_matching_pending_input(sid, text)", source)
+        self.assertIn('"cancelled": 1', source)
+
+    def test_queued_steer_is_consumed_only_after_confirmed_delivery(self):
+        source = inspect.getsource(self.server.CommandCenterHandler.do_POST)
+        branch = source[
+            source.index('elif path == "/api/inject-input"'):
+            source.index('elif path == "/api/session/compact"')
+        ]
+        inject_pos = branch.index("_inject_text_into_session(")
+        finalize_pos = branch.index("_finalize_queued_steer_result(sid, queued_text, result)")
+
+        self.assertLess(inject_pos, finalize_pos)
+        self.assertIn('inject_options["preserve_queued_steer"] = True', branch)
+
+    def test_finalize_queued_steer_preserves_fifo_on_failure(self):
+        sid = "queued-steer-failure"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["first", "target", "last"]
+
+        result = self.server._finalize_queued_steer_result(
+            sid,
+            "target",
+            {"ok": False, "code": "codex_steer_unavailable"},
+        )
+
+        self.assertTrue(result["queued"])
+        self.assertTrue(result["queued_preserved"])
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue[sid],
+                ["first", "target", "last"],
+            )
+
+    def test_finalize_queued_steer_without_active_turn_pumps_fifo(self):
+        sid = "queued-steer-idle"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["first", "target", "last"]
+
+        with mock.patch.object(self.server, "_schedule_codex_queue_pump") as schedule:
+            result = self.server._finalize_queued_steer_result(
+                sid,
+                "target",
+                {
+                    "ok": False,
+                    "code": "codex_no_active_turn",
+                    "error": "No running Codex turn to steer",
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["queue_pump_started"])
+        self.assertTrue(result["queued_preserved"])
+        schedule.assert_called_once_with(sid)
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue[sid],
+                ["first", "target", "last"],
+            )
+
+    def test_finalize_queued_steer_consumes_one_copy_on_success(self):
+        sid = "queued-steer-success"
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["target", "target", "last"]
+
+        result = self.server._finalize_queued_steer_result(
+            sid,
+            "target",
+            {"ok": True, "via": "codex-steer"},
+        )
+
+        self.assertEqual(result["queued_consumed"], 1)
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue[sid],
+                ["target", "last"],
+            )
+
     def test_conv_bytes_cache_misses_when_pending_input_queued(self):
-        """Pre-serialized /api/conversations bodies must not hide queued injects."""
+        """Pre-serialized /api/conversations bodies must not hide dynamic overlays."""
         sid = "cache-pending-test-session"
         # Mock PROJECTS_ROOT to a tmp dir so the test fixture doesn't leak
         # into the user's real `~/.claude/projects` and surface as a ghost
@@ -11563,9 +15873,100 @@ class TestPendingInputs(unittest.TestCase):
             self.assertIsNone(self.server._conv_response_bytes_get(sid, 0))
             with self.server._pending_terminal_input_lock:
                 self.server._pending_terminal_input_queue.clear()
+            self.server._conv_response_bytes_put(sid, 0, raw, None)
+            self.assertIsNotNone(self.server._conv_response_bytes_get(sid, 0))
+            with self.server._CODEX_APP_SERVER_LOCK:
+                self.server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                    "recent_items": [{
+                        "id": "item-shell",
+                        "type": "commandExecution",
+                        "tool": "Bash",
+                        "detail": "wt find CHUCK-51 --json",
+                        "status": "completed",
+                        "ts": 1783600005.0,
+                        "updated_at": 1783600005.0,
+                    }]
+                }
+            self.assertIsNone(self.server._conv_response_bytes_get(sid, 0))
+            with self.server._CODEX_APP_SERVER_LOCK:
+                self.server._CODEX_APP_SERVER_THREAD_STATE.pop(sid, None)
         finally:
             self.server.PROJECTS_ROOT = prev_projects_root
             shutil.rmtree(tmp_projects, ignore_errors=True)
+
+
+class TestKimiUsageExtraction(unittest.TestCase):
+    """Kimi sessions report usage from wire.jsonl: context.update_token_count
+    drives latest/peak, usage.record drives totals, config.update the model.
+    (KIMI-FIXES-10 — the composer's context ring for kimi sessions.)"""
+
+    def setUp(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.tmp = tempfile.mkdtemp(prefix="ccc-kimi-usage-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_wire(self, events):
+        session_dir = pathlib.Path(self.tmp) / "session_kimi-test-1"
+        wire_dir = session_dir / "agents" / "main"
+        wire_dir.mkdir(parents=True, exist_ok=True)
+        with (wire_dir / "wire.jsonl").open("w", encoding="utf-8") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+        return str(session_dir)
+
+    def test_kimi_usage_from_wire_jsonl(self):
+        server = self.server
+        sid = "session_kimi-test-1"
+        session_dir = self._write_wire([
+            {"type": "config.update", "modelAlias": "kimi-code/k3"},
+            {"type": "context.update_token_count", "tokenCount": 50000},
+            {"type": "usage.record", "model": "kimi-code/k3",
+             "usage": {"inputOther": 1000, "output": 50,
+                       "inputCacheRead": 5000, "inputCacheCreation": 10}},
+            {"type": "context.update_token_count", "tokenCount": 80000},
+            {"type": "context.append_loop_event", "event": {
+                "type": "step.end",
+                "usage": {"inputOther": 300, "output": 12,
+                          "inputCacheRead": 7000, "inputCacheCreation": 0}}},
+            {"type": "usage.record", "model": "kimi-code/k3",
+             "usage": {"inputOther": 2000, "output": 80,
+                       "inputCacheRead": 9000, "inputCacheCreation": 0}},
+        ])
+        with mock.patch.object(
+            server, "_kimi_session_index",
+            return_value={sid: {"session_dir": session_dir}},
+        ):
+            usage = server.extract_session_usage(sid)
+        self.assertEqual(usage["engine"], "kimi")
+        self.assertEqual(usage["model"], "kimi-code/k3")
+        self.assertEqual(usage["latest_input_tokens"], 80000)
+        self.assertEqual(usage["peak_input_tokens"], 80000)
+        self.assertEqual(usage["total_input_tokens"], 3000)
+        self.assertEqual(usage["total_cache_read_tokens"], 14000)
+        self.assertEqual(usage["total_cache_creation_tokens"], 10)
+        self.assertEqual(usage["total_output_tokens"], 130)
+        self.assertEqual(usage["context_limit"], 256000)
+
+    def test_kimi_usage_falls_back_to_step_usage_without_token_count(self):
+        server = self.server
+        sid = "session_kimi-test-2"
+        session_dir = self._write_wire([
+            {"type": "context.append_loop_event", "event": {
+                "type": "step.end",
+                "usage": {"inputOther": 4000, "output": 20,
+                          "inputCacheRead": 6000, "inputCacheCreation": 100}}},
+        ])
+        with mock.patch.object(
+            server, "_kimi_session_index",
+            return_value={sid: {"session_dir": session_dir}},
+        ):
+            usage = server.extract_session_usage(sid)
+        self.assertEqual(usage["latest_input_tokens"], 10100)
+        self.assertEqual(usage["peak_input_tokens"], 10100)
 
 
 class TestSessionUsageDedup(unittest.TestCase):
@@ -11881,6 +16282,48 @@ class TestThroughputCacheAdjusted(unittest.TestCase):
         self.assertEqual(summary["total_effective_input_tokens"], 570)
         self.assertGreater(summary["cost_usd"], 0)
 
+    def test_codex_usage_extracts_reasoning_effort(self):
+        sid = "codex-usage-effort-session"
+        path = pathlib.Path(self.tmp) / "rollout-codex-effort.jsonl"
+        events = [
+            {
+                "type": "turn_context",
+                "timestamp": "2026-07-11T03:00:00.000Z",
+                "payload": {"model": "gpt-5.6-sol", "effort": "high"},
+            },
+            {
+                "type": "event_msg",
+                "timestamp": "2026-07-11T03:00:01.000Z",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "model_context_window": 353_000,
+                        "last_token_usage": {
+                            "input_tokens": 61_000,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 120,
+                        },
+                        "total_token_usage": {
+                            "input_tokens": 61_000,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 120,
+                        },
+                    },
+                },
+            },
+        ]
+        with path.open("w", encoding="utf-8") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+
+        with mock.patch.object(self.server, "_resolve_codex_rollout_path", return_value=path), \
+             mock.patch.object(self.server, "_codex_thread_row", return_value={}), \
+             mock.patch.object(self.server, "_get_session_override", return_value=None):
+            usage = self.server._extract_codex_usage(sid)
+
+        self.assertEqual(usage["model"], "gpt-5.6-sol")
+        self.assertEqual(usage["reasoning_effort"], "high")
+
     def test_claude_throughput_dedupes_message_snapshots(self):
         sid = "00000000-0000-4000-8000-000000000abf"
         usage = {
@@ -11992,6 +16435,64 @@ class TestCodexEsc(unittest.TestCase):
             res = self.server._interrupt_session("some-codex-session-id")
             self.assertFalse(res["ok"])
             self.assertEqual(res["error"], "Codex session is not live — nothing to interrupt")
+
+    def test_no_active_turn_interrupt_clears_phantom_writer_and_pumps_queue(self):
+        sid = "phantom-interrupt-session"
+        with self.server._CODEX_APP_SERVER_LOCK:
+            self.server._CODEX_APP_SERVER_THREAD_STATE[sid] = {
+                "status": "active",
+                "active_turn_id": "ended-turn",
+                "active_writer": "unknown",
+                "active_item": {
+                    "id": "stale-bash-call",
+                    "tool": "Bash",
+                    "type": "commandExecution",
+                    "in_flight": True,
+                },
+            }
+        with self.server._pending_resume_lock:
+            self.server._pending_resume_queue[sid] = ["wake and continue"]
+        resumed = {
+            "result": {
+                "thread": {"id": sid, "status": {"type": "idle"}, "turns": []}
+            }
+        }
+
+        with mock.patch.object(self.server, "_codex_app_server_is_live", return_value=True), \
+             mock.patch.object(self.server, "_codex_app_server_request", return_value=resumed), \
+             mock.patch.object(self.server, "_resume_queue_engine_busy", return_value=False), \
+             mock.patch.object(self.server, "_pending_resume_retry_due", return_value=True), \
+             mock.patch.object(
+                 self.server,
+                 "resume_session_codex",
+                 return_value={"ok": True, "accepted": True, "confirmed": True},
+             ) as resume, \
+             mock.patch.object(self.server, "_save_pending_inputs"), \
+             mock.patch.object(
+                 self.server,
+                 "_schedule_codex_queue_pump",
+                 side_effect=self.server._pump_codex_resume_queue,
+             ) as schedule:
+            result = self.server._codex_interrupt_via_app_server(sid)
+
+        self.assertEqual(result["code"], "codex_no_active_turn")
+        state = self.server._codex_app_server_thread_state(sid)
+        self.assertEqual(state["status"], "idle")
+        self.assertNotIn("active_turn_id", state)
+        self.assertNotIn("active_writer", state)
+        self.assertNotIn("active_item", state)
+        ended = [
+            event for event in state.get("coordination_events", [])
+            if event.get("kind") == "external_turn_ended"
+        ]
+        self.assertEqual(len(ended), 1)
+        self.assertIn("writer=unknown", ended[0]["detail"])
+        self.assertIn("turn=ended-turn", ended[0]["detail"])
+        self.assertIn("stale item=Bash", ended[0]["detail"])
+        schedule.assert_called_once_with(sid)
+        resume.assert_called_once_with(sid, "wake and continue", _from_queue=True)
+        with self.server._pending_resume_lock:
+            self.assertNotIn(sid, self.server._pending_resume_queue)
 
     def test_interrupt_codex_app_server_turn(self):
         calls = []
@@ -12194,8 +16695,9 @@ class TestQuestionRelay(unittest.TestCase):
                 if "command-center/hooks/" in h.get("command", "")
             ]
             self.assertEqual(len(commands), 4)
+            expected_python = "/usr/bin/python3" if self.server.sys.platform == "darwin" else "/opt/ccc-test/python3"
             for command in commands:
-                self.assertTrue(command.startswith("/opt/ccc-test/python3 "), command)
+                self.assertTrue(command.startswith(expected_python + " "), command)
                 self.assertNotIn("python3 ", command[:8])
 
 
@@ -12891,12 +17393,558 @@ class TestTerminalQueueDrainSafety(unittest.TestCase):
         self.assertIn("_verify_terminal_drain_receipts()", server_py)
 
 
+class TestAcpGlmHarness(unittest.TestCase):
+    """ACP harness #2 (KIMI-FIXES-7): the generic layer must drive a second
+    ACP-speaking agent with a registry entry only — no harness-specific code.
+    Live test against glm-acp-agent (Z.AI/Zhipu GLM) when installed: the
+    handshake and the structured error/answer surfacing are asserted; turns
+    need ZAI_API_KEY and are out of scope here."""
+
+    HARNESS = "glm"
+
+    def setUp(self):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        self.server = importlib.import_module("server")
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        server = self.server
+        conn = server._ACP_CONNS.pop(self.HARNESS, None)
+        if conn and conn.get("transport"):
+            conn["transport"].close()
+        server._ACP_PENDING.pop(self.HARNESS, None)
+        server._ACP_SESSION_STATE.pop(self.HARNESS, None)
+        server._ACP_STATE_LOADED.discard(self.HARNESS)
+        server._ACP_ENSURE_ERROR.pop(self.HARNESS, None)
+
+    def test_registry_and_resolution(self):
+        server = self.server
+        cfg = server._ACP_HARNESSES[self.HARNESS]
+        self.assertEqual(cfg["acp_args"], ())
+        self.assertEqual(cfg["bin_names"], ("glm-acp-agent",))
+        self.assertTrue(server._acp_harness_enabled(self.HARNESS))
+        with mock.patch.dict(os.environ, {cfg["kill_env"]: "0"}):
+            self.assertFalse(server._acp_harness_enabled(self.HARNESS))
+        if shutil.which("glm-acp-agent"):
+            resolved = server._acp_resolve_bin(self.HARNESS)
+            self.assertTrue(resolved["available"], resolved)
+
+    def test_live_handshake_and_session_new_shape(self):
+        server = self.server
+        if not shutil.which("glm-acp-agent"):
+            self.skipTest("glm-acp-agent not installed")
+        conn = server._acp_ensure(self.HARNESS)
+        self.assertIsNotNone(conn, server._acp_conn_error(self.HARNESS))
+        self.assertTrue(conn.get("initialized"))
+        self.assertEqual((conn.get("agent_info") or {}).get("name"), "glm-acp-agent")
+        # GLM speaks the newer ACP session-state shape: models.currentModelId
+        # + modes.currentModeId instead of kimi's configOptions select list.
+        # The generic layer must capture the model regardless of vocabulary.
+        resp = server._acp_session_new(self.HARNESS, "/tmp")
+        self.assertIsInstance(resp, dict)
+        self.assertIn("ok", resp)
+        if resp["ok"]:
+            sid = resp["session_id"]
+            with server._ACP_LOCK:
+                state = server._acp_session(self.HARNESS, sid) or {}
+            self.assertTrue(state.get("model"), "models.currentModelId not captured")
+
+
+class TestAcpKimiEngine(unittest.TestCase):
+    """Kimi/ACP engine: registry shape, negative session probe, and a live
+    end-to-end pass over the generic ACP client using a fake stdio agent
+    (tests/fake_acp_agent.py) — no external systems involved."""
+
+    FAKE_HARNESS = "fake-acp-test"
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._cleanup_state()
+        self.addCleanup(self._cleanup_state)
+
+    def _cleanup_state(self):
+        server = self.server
+        conn = server._ACP_CONNS.pop(self.FAKE_HARNESS, None)
+        if conn and conn.get("transport"):
+            conn["transport"].close()
+        server._ACP_HARNESSES.pop(self.FAKE_HARNESS, None)
+        server._ACP_PENDING.pop(self.FAKE_HARNESS, None)
+        server._ACP_SESSION_STATE.pop(self.FAKE_HARNESS, None)
+        server._ACP_STATE_LOADED.discard(self.FAKE_HARNESS)
+        shutil.rmtree(
+            pathlib.Path(server._ACP_TRANSCRIPT_DIR, self.FAKE_HARNESS),
+            ignore_errors=True,
+        )
+        try:
+            pathlib.Path(server._acp_state_file(self.FAKE_HARNESS)).unlink()
+        except OSError:
+            pass
+
+    def _register_fake_harness(self):
+        agent = pathlib.Path(PROJECT_ROOT, "tests", "fake_acp_agent.py")
+        self.server._ACP_HARNESSES[self.FAKE_HARNESS] = {
+            "label": "Fake",
+            "bin_env": "",
+            "bin_names": (),
+            "acp_args": (str(agent),),
+            "kill_env": "",
+        }
+
+    def test_registry_shape(self):
+        kimi = self.server._ACP_HARNESSES.get("kimi") or {}
+        for key in ("label", "bin_env", "bin_names", "acp_args", "kill_env"):
+            self.assertIn(key, kimi)
+        self.assertEqual(kimi["acp_args"], ("acp",))
+        self.assertTrue(self.server._acp_harness_enabled("kimi"))
+        with mock.patch.dict(os.environ, {kimi["kill_env"]: "0"}):
+            self.assertFalse(self.server._acp_harness_enabled("kimi"))
+
+    def test_is_kimi_session_negative(self):
+        self.assertFalse(
+            self.server._is_kimi_session("00000000-0000-0000-0000-000000000000")
+        )
+        self.assertFalse(self.server._is_kimi_session(""))
+
+    def test_engine_registration_pins(self):
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('"/api/sessions/spawn-kimi"', server_py)
+        self.assertIn('"/api/acp/approval"', server_py)
+        self.assertIn('if _is_kimi_session(session_id):', server_py)
+        self.assertIn('result = _acp_prompt(', server_py)
+        self.assertIn('result.get("code") == "busy"', server_py)
+        self.assertIn('return _queue_terminal_input(session_id, text, {"status": "running"})', server_py)
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
+
+    def test_kimi_original_ask_uses_first_wire_prompt(self):
+        server = self.server
+        sid = "session_original_ask"
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = pathlib.Path(tmp, sid)
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            (session_dir / "state.json").write_text(json.dumps({
+                "title": "Session title",
+                "lastPrompt": "Continue",
+                "workDir": tmp,
+                "createdAt": "2026-07-23T00:00:00Z",
+            }))
+            (wire_dir / "wire.jsonl").write_text(json.dumps({
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "The actual original request"}],
+            }) + "\n")
+            with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                 mock.patch.object(server, "_ACP_STATE_LOADED", {"kimi"}), \
+                 mock.patch.object(server, "_kimi_session_index", return_value={
+                     sid: {"session_dir": str(session_dir), "work_dir": tmp},
+                 }), \
+                 mock.patch.object(server, "_load_repo_pins", return_value={}), \
+                 mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+                 mock.patch.object(
+                     server, "_load_conversation_lifecycle_sets",
+                     return_value=(set(), set()),
+                 ), \
+                 mock.patch.object(server, "_load_verified_conversations", return_value=[]):
+                rows = server.find_kimi_conversations(
+                    repo_only=False, include_old=True,
+                )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["first_message"], "The actual original request")
+        self.assertEqual(rows[0]["original_ask"], "The actual original request")
+        self.assertEqual(rows[0]["last_prompt"], "Continue")
+
+    def test_kimi_wire_state_prevents_early_prompt(self):
+        server = self.server
+        sid = "session_external_turn"
+        with tempfile.TemporaryDirectory() as tmp:
+            wire = pathlib.Path(tmp, "wire.jsonl")
+
+            def write_boundary(kind, finish_reason=None):
+                event = {"type": kind}
+                if finish_reason:
+                    event["finishReason"] = finish_reason
+                wire.write_text(json.dumps({
+                    "type": "context.append_loop_event",
+                    "event": event,
+                }) + "\n")
+
+            with mock.patch.object(server, "_acp_wire_path", return_value=wire):
+                write_boundary("step.begin")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "tool_use")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                write_boundary("step.end", "end_turn")
+                self.assertFalse(server._kimi_wire_turn_active(sid))
+
+                write_boundary("step.begin")
+                with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                     mock.patch.object(server, "_kimi_wire_turn_active", return_value=True), \
+                     mock.patch.object(server, "_acp_ensure_session_loaded") as attach:
+                    result = server._acp_prompt("kimi", sid, "too early")
+                self.assertEqual(result.get("code"), "busy")
+                attach.assert_not_called()
+
+    def test_kimi_remote_busy_error_requeues_without_red_result(self):
+        server = self.server
+        sid = "session_remote_busy"
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(server, "_ACP_TRANSCRIPT_DIR", pathlib.Path(tmp)), \
+             mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+             mock.patch.object(server, "_queue_terminal_input") as queue:
+            with server._ACP_LOCK:
+                state = server._acp_session("kimi", sid, create=True)
+                state["status"] = "active"
+                state["active_turn"] = {
+                    "req_id": 7,
+                    "msg_id": "m7",
+                    "text": "",
+                    "thought": "",
+                    "tools": {},
+                    "prompt": "Continue",
+                    "from_queue": False,
+                }
+            server._acp_finalize_turn("kimi", sid, {
+                "error": {
+                    "message": (
+                        "Invalid request: Cannot launch a new turn while "
+                        "another turn (ID 7) is active"
+                    ),
+                },
+            }, {"req_id": 7, "is_active": True})
+            with server._ACP_LOCK:
+                events = list(server._acp_session("kimi", sid)["events"])
+            queue.assert_called_once_with(sid, "Continue", {"status": "running"})
+            self.assertFalse(any(
+                event.get("type") == "result"
+                and event.get("subtype") == "error"
+                for event in events
+            ))
+
+    def test_acp_wire_fold_dedupes_and_folds_new_turns(self):
+        """TUI-originated wire.jsonl records fold into the conv stream, but a
+        CCC-driven turn's own wire records must not duplicate (KIMI-FIXES-3)."""
+        server = self.server
+        harness = self.FAKE_HARNESS
+        sid = "session_wirefoldtest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid, create=True, cwd="/tmp")
+            st["wire_watch"] = True
+            st["attached"] = True
+            # CCC already emitted this prompt via the ACP stream.
+            server._acp_emit_event_unlocked(
+                harness, sid, {"type": "user_text", "text": "from CCC"})
+        batch = [
+            # Duplicate of the CCC-driven prompt (same text) -> dropped.
+            {"type": "context.append_message", "message": {
+                "role": "user", "origin": {"kind": "user"},
+                "content": [{"type": "text", "text": "from CCC"}]}},
+            # Harness-injected reminder -> dropped.
+            {"type": "context.append_message", "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "<system-reminder>x</system-reminder>"}]}},
+            # New TUI-originated prompt -> folded.
+            {"type": "context.append_message", "message": {
+                "role": "user", "origin": {"kind": "user"},
+                "content": [{"type": "text", "text": "from TUI"}]}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "content.part", "part": {"type": "think", "think": "hmm"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "content.part", "part": {"type": "text", "text": "TUI reply"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "t1", "name": "Bash",
+                "args": {"command": "ls"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "step.end", "finishReason": "end_turn"}},
+            # Unknown kinds are skipped, never fatal.
+            {"type": "llm.request", "model": "k3"},
+        ]
+        server._acp_wire_fold(harness, sid, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid) or {}).get("events") or [])
+        kinds = [e.get("type") for e in events]
+        self.assertEqual(
+            kinds,
+            ["user_text", "user_text", "assistant", "assistant", "assistant", "result"],
+        )
+        self.assertEqual(events[1].get("text"), "from TUI")
+        self.assertEqual(events[1].get("via"), "wire-tail")
+        block_kinds = [b.get("kind") for e in events[2:5] for b in e.get("blocks", [])]
+        self.assertEqual(block_kinds, ["thinking", "text", "tool_use"])
+        self.assertEqual(events[-1].get("subtype"), "end_turn")
+        # Re-folding the same batch is a no-op (dedup across batches).
+        server._acp_wire_fold(harness, sid, batch)
+        with server._ACP_LOCK:
+            self.assertEqual(
+                len((server._acp_session(harness, sid) or {}).get("events") or []), 6)
+        # While a turn is active (or a replay is in flight) the fold pauses.
+        with server._ACP_LOCK:
+            server._acp_session(harness, sid)["status"] = "active"
+        server._acp_wire_fold(harness, sid, [{
+            "type": "context.append_message", "message": {
+                "role": "user", "origin": {"kind": "user"},
+                "content": [{"type": "text", "text": "during"}]}}])
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid)
+            texts = [e.get("text") for e in (st.get("events") or [])
+                     if e.get("type") == "user_text"]
+        self.assertNotIn("during", texts)
+
+    def test_acp_plan_update_folds_and_dedupes(self):
+        """ACP plan updates (kimi TodoList) persist as plan blocks; identical
+        snapshots are not re-emitted (KIMI-FIXES-4)."""
+        server = self.server
+        harness = self.FAKE_HARNESS
+        sid = "session_planfoldtest"
+        entries = [
+            {"content": "do a", "status": "in_progress", "priority": "medium"},
+            {"content": "do b", "status": "pending", "priority": "medium"},
+        ]
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "plan", "entries": entries})
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "plan", "entries": entries})
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid)
+            events = list(st.get("events") or [])
+            plan_state = st.get("plan")
+        plan_events = [e for e in events
+                       if any(b.get("kind") == "plan" for b in e.get("blocks", []))]
+        self.assertEqual(len(plan_events), 1, "identical plan snapshots must dedupe")
+        block = [b for e in plan_events for b in e["blocks"] if b["kind"] == "plan"][0]
+        self.assertEqual(block["entries"][0]["status"], "in_progress")
+        self.assertEqual(plan_state[1]["content"], "do b")
+        # A changed snapshot emits a fresh block.
+        changed = [dict(entries[0], status="completed"), entries[1]]
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "plan", "entries": changed})
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid) or {}).get("events") or [])
+        plan_events = [e for e in events
+                       if any(b.get("kind") == "plan" for b in e.get("blocks", []))]
+        self.assertEqual(len(plan_events), 2)
+
+    def test_acp_tool_detail_diff_and_wire_result(self):
+        """Kimi tool rows carry real detail (rawInput on the CREATE for
+        non-streamed calls), a full-input disclosure, diff blocks, and wire
+        tool.result output — plus replay control-text filtering."""
+        server = self.server
+        harness = self.FAKE_HARNESS
+        sid = "session_tooldetailtest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid, create=True, cwd="/tmp")
+            st["active_turn"] = {"msg_id": "m1", "text": "", "thought": ""}
+        # rawInput on the CREATE (non-streamed call) must seed the detail —
+        # previously it was ignored and the row froze at kind-only ("execute").
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "tool_call", "toolCallId": "1:t1",
+            "title": "Bash", "kind": "execute", "status": "in_progress",
+            "rawInput": {"command": "ls -la"}})
+        # Terminal update for a second call: kimi arg keys (path) + diff block.
+        server._acp_handle_session_update(harness, sid, {
+            "sessionUpdate": "tool_call_update", "toolCallId": "1:t2",
+            "title": "Edit", "status": "completed",
+            "rawInput": {"path": "/tmp/a.py", "oldText": "x", "newText": "y"},
+            "content": [
+                {"type": "diff", "path": "/tmp/a.py",
+                 "oldText": "old-full", "newText": "new-full"},
+                {"type": "content", "content": {"type": "text", "text": "done"}}]})
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid) or {}
+            events = list(st.get("events") or [])
+            t1 = (st.get("active_turn") or {}).get("tools", {}).get("1:t1") or {}
+        self.assertEqual(t1.get("detail"), "ls -la")
+        self.assertIn("ls -la", t1.get("input") or "")
+        tool_blocks = [b for e in events for b in e.get("blocks", [])
+                       if b.get("kind") == "tool_use"]
+        self.assertEqual(len(tool_blocks), 1)
+        block = tool_blocks[0]
+        self.assertEqual(block["detail"], "/tmp/a.py")
+        self.assertEqual(block["tool_status"], "completed")
+        self.assertEqual(block["output_preview"], "done")
+        self.assertTrue(block["has_input"])
+        self.assertIn("/tmp/a.py", block["input"])
+        self.assertEqual(block["diff"], {
+            "path": "/tmp/a.py", "oldText": "old-full", "newText": "new-full"})
+        # Replay control text is filtered like the Claude transcript path.
+        fake_state = {"sid": sid, "next_line": 1}
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "user",
+            '<kimi-skill-loaded name="x">BODY\nARGUMENTS: y</kimi-skill-loaded>'))
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "assistant", "<system-reminder>note</system-reminder>"))
+        self.assertIsNone(server._acp_message_event(fake_state, "user", "  "))
+        ev = server._acp_message_event(fake_state, "user", "hello")
+        self.assertEqual(ev, {"type": "user_text", "text": "hello"})
+        # Control XML embedded after real prose (Kimi ACP appends injected
+        # reminders to the user turn) is stripped, not leaked into the event.
+        ev = server._acp_message_event(
+            fake_state, "user",
+            "real question?<system-reminder>\nAuto permission mode…\n</system-reminder>")
+        self.assertEqual(ev, {"type": "user_text", "text": "real question?"})
+        self.assertIsNone(server._acp_message_event(
+            fake_state, "user",
+            '<kimi-skill-loaded name="x">BODY</kimi-skill-loaded>'
+            "<system-reminder>note</system-reminder>"))
+        # Wire tool.result attaches to its call; orphans emit tool_result rows.
+        sid2 = "session_wireresulttest"
+        with server._ACP_LOCK:
+            st = server._acp_session(harness, sid2, create=True, cwd="/tmp")
+            st["wire_watch"] = True
+        batch = [
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.call", "toolCallId": "w1", "name": "Bash",
+                "args": {"command": "make test"}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "w1",
+                "result": {"output": "all ok", "isError": False}}},
+            {"type": "context.append_loop_event", "event": {
+                "type": "tool.result", "toolCallId": "w-orphan",
+                "result": {"output": "boom", "isError": True}}},
+        ]
+        server._acp_wire_fold(harness, sid2, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid2) or {}).get("events") or [])
+        block = [b for e in events for b in e.get("blocks", [])
+                 if b.get("kind") == "tool_use"][0]
+        self.assertEqual(block["detail"], "make test")
+        self.assertEqual(block["output_preview"], "all ok")
+        self.assertEqual(block["tool_status"], "completed")
+        orphans = [e for e in events if e.get("type") == "tool_result"]
+        self.assertEqual(len(orphans), 1)
+        self.assertEqual(orphans[0]["tool_use_id"], "w-orphan")
+        self.assertEqual(orphans[0]["text"], "boom")
+        self.assertTrue(orphans[0]["is_error"])
+        # Re-folding the same batch must not duplicate the orphan row.
+        server._acp_wire_fold(harness, sid2, batch)
+        with server._ACP_LOCK:
+            events = list((server._acp_session(harness, sid2) or {}).get("events") or [])
+        self.assertEqual(
+            len([e for e in events if e.get("type") == "tool_result"]), 1)
+
+    def test_kimi_setup_status_and_verify(self):
+        """'Add Kimi engine' guided flow: setup-status reports install state +
+        version; verify proves it with one ACP session/new (WEBINAR-DEMO-23)."""
+        server = self.server
+        avail = {"available": True, "bin": "/fake/kimi", "source": "test"}
+        missing = {"available": False, "bin": None, "reason": "kimi CLI not found on PATH"}
+        with mock.patch.object(server, "_acp_resolve_bin", return_value=avail), \
+             mock.patch.object(server, "_kimi_cli_version", return_value="9.9.9"):
+            server._KIMI_SETUP_STATUS_MEMO["ts"] = 0.0
+            server._KIMI_SETUP_STATUS_MEMO["data"] = None
+            status = server._kimi_setup_status()
+            self.assertTrue(status["installed"])
+            self.assertEqual(status["bin"], "/fake/kimi")
+            self.assertEqual(status["version"], "9.9.9")
+            self.assertIn("membership", status["docs"])
+            self.assertIn("third_party_setup", status["docs"])
+
+            with mock.patch.object(
+                server, "_acp_session_new",
+                return_value={"ok": True, "session_id": "session_test-1", "via": "acp"},
+            ) as spawned:
+                out = server._kimi_setup_verify()
+            self.assertTrue(out["ok"])
+            self.assertTrue(out["verified"])
+            self.assertEqual(out["version"], "9.9.9")
+            spawned.assert_called_once()
+
+        with mock.patch.object(server, "_acp_resolve_bin", return_value=missing):
+            out = server._kimi_setup_verify()
+            self.assertFalse(out["ok"])
+            self.assertIn("not found", out["error"])
+
+    def test_acp_client_end_to_end(self):
+        server = self.server
+        self._register_fake_harness()
+        resolved = {"available": True, "bin": sys.executable, "source": "test"}
+        with mock.patch.object(
+            server, "_acp_resolve_bin",
+            side_effect=lambda h: resolved if h == self.FAKE_HARNESS else {"available": False},
+        ):
+            conn = server._acp_ensure(self.FAKE_HARNESS)
+            self.assertIsNotNone(conn)
+            self.assertTrue(conn.get("initialized"))
+
+            created = server._acp_session_new(self.FAKE_HARNESS, "/tmp")
+            self.assertTrue(created.get("ok"), created)
+            sid = created["session_id"]
+
+            sent = server._acp_prompt(self.FAKE_HARNESS, sid, "hello")
+            self.assertTrue(sent.get("ok"), sent)
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                snap = server._acp_session_snapshot(self.FAKE_HARNESS, sid) or {}
+                if snap.get("status") == "idle" and snap.get("turn_seq") == 1:
+                    break
+                time.sleep(0.05)
+            snap = server._acp_session_snapshot(self.FAKE_HARNESS, sid) or {}
+            self.assertEqual(snap.get("status"), "idle")
+            self.assertEqual(snap.get("turn_seq"), 1)
+
+            events = server._acp_transcript_events_after(self.FAKE_HARNESS, sid, 0)
+            kinds = [e.get("type") for e in events]
+            self.assertEqual(kinds, ["user_text", "assistant", "assistant", "result"])
+            texts = [
+                b.get("text")
+                for e in events if e.get("type") == "assistant"
+                for b in e.get("blocks", []) if b.get("kind") == "text"
+            ]
+            self.assertEqual(texts, ["Hello"])
+            # Rich tool rows: exactly one finalized event per call (deferred
+            # until rawInput arrives), carrying the command detail + status.
+            tool_blocks = [
+                b for e in events if e.get("type") == "assistant"
+                for b in e.get("blocks", []) if b.get("kind") == "tool_use"
+            ]
+            self.assertEqual(len(tool_blocks), 1)
+            self.assertEqual(tool_blocks[0].get("detail"), "echo TEST")
+            self.assertEqual(tool_blocks[0].get("tool_status"), "completed")
+            # Delta cursor: replay from a line beyond the tail is empty.
+            last_line = events[-1]["line"]
+            self.assertEqual(
+                server._acp_transcript_events_after(self.FAKE_HARNESS, sid, last_line),
+                [],
+            )
+
+            # Permission roundtrip: fake agent asks, CCC answers via the
+            # str-keyed pending map (UI sends ids back as strings).
+            sent = server._acp_prompt(self.FAKE_HARNESS, sid, "perm", mode="steer")
+            self.assertTrue(sent.get("ok"), sent)
+            req_key = None
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                state = server._acp_session(self.FAKE_HARNESS, sid)
+                if state["pending_permissions"]:
+                    req_key = next(iter(state["pending_permissions"]))
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(req_key, "no pending permission request arrived")
+            resolved_perm = server._acp_resolve_approval(
+                self.FAKE_HARNESS, sid, req_key, "allow"
+            )
+            self.assertTrue(resolved_perm.get("ok"), resolved_perm)
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if not server._acp_session(self.FAKE_HARNESS, sid)["pending_permissions"]:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(
+                server._acp_session(self.FAKE_HARNESS, sid)["pending_permissions"],
+                {},
+            )
+
+            server._acp_shutdown_all()
+
+
 def test_inject_input_honors_wt_origin_marker():
     """WT-78: a delegate POST from wt carries origin=wt; the inject route must
     thread that into _inject_text_into_session and skip the wt-send hook there,
     or a failed delivery recurses CCC -> wt -> CCC."""
     server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
-    assert 'wt_origin=(str(payload.get("origin") or "").lower() == "wt")' in server_py
+    assert '"wt_origin": (str(payload.get("origin") or "").lower() == "wt")' in server_py
+    assert "**inject_options" in server_py
     assert "if not wt_origin and not skip_wt:" in server_py
 
 
@@ -12909,7 +17957,8 @@ def test_wt_receipt_route_and_staged_send_feedback():
     assert '"--no-queue", "--json"' in server_py
     assert 'elif path.startswith("/api/wt/receipt/"):' in server_py
     assert '["wt", "receipts", "get", rid]' in server_py
-    assert 'skip_wt=bool(payload.get("skip_wt"))' in server_py
+    assert '"skip_wt": bool(payload.get("skip_wt"))' in server_py
+    assert "**inject_options" in server_py
     app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
     assert "function beginWtReceiptTracking(" in app_js
     assert "'/api/wt/receipt/'" in app_js
@@ -12921,6 +17970,34 @@ def test_throughput_initial_route_is_registered():
     server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
     assert 'elif path == "/api/throughput/initial":' in server_py
     assert "_throughput_initial_payload(" in server_py
+
+
+def test_throughput_refresh_routes_are_registered():
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/api/throughput/refresh/start":' in server_py
+    assert 'elif path == "/api/throughput/refresh/status":' in server_py
+    assert "_throughput_refresh_start(" in server_py
+    assert "_throughput_refresh_status(" in server_py
+
+
+def test_skills_ecosystem_route_and_inventory():
+    """W86: /api/skills returns an honest skill-pack inventory with CCC's own
+    bundled skills plus a de-duplicated pack list, mtime-cached."""
+    server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+    assert 'elif path == "/api/skills":' in server_py
+    assert "_build_skills_ecosystem(" in server_py
+    import server as _server
+    data = _server._build_skills_ecosystem()
+    assert data["ok"] is True
+    assert isinstance(data["ccc_bundled"], list) and data["ccc_bundled"]
+    assert isinstance(data["packs"], list)
+    # ccc-orchestration is always a bundled skill.
+    assert any(s["name"] == "ccc-orchestration" for s in data["ccc_bundled"])
+    # Known packs carry honest fleet-synergy flags only when present.
+    for pack in data["packs"]:
+        assert set(("name", "present", "kind")).issubset(pack)
+    # Cache returns the identical object on the second call (no dir change).
+    assert _server._build_skills_ecosystem() is data
 
 
 if __name__ == "__main__":

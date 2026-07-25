@@ -328,14 +328,12 @@ ln -s /Applications "$STAGING_DIR/Applications"
 # Drop a small README the user sees if they explore the DMG.
 # Wording depends on whether we signed with a real Developer ID — once
 # we're signed + notarized there's no right-click → Open dance to explain.
-if [ "${SIGNED:-0}" = "1" ]; then
+if [ $FAST_MODE -eq 0 ]; then
   GATEKEEPER_NOTE='Signed with a Developer ID and notarized by Apple — opens
 with a single double-click. No "unidentified developer" prompt.'
 else
-  GATEKEEPER_NOTE='First launch: macOS may say "CCC is from an unidentified
-developer". Right-click CCC.app in Applications → Open → Open. This only
-happens once. (Will be eliminated in the next release once Apple
-notarization is in place.)'
+  GATEKEEPER_NOTE='This local test build is ad-hoc signed and not notarized.
+Public release builds are signed with a Developer ID and notarized by Apple.'
 fi
 
 cat > "$STAGING_DIR/README.txt" <<EOF
@@ -349,9 +347,9 @@ One inbox for all your AI agents.
 
 ${GATEKEEPER_NOTE}
 
-First launch only: CCC needs to clone its source into ~/.ccc and
-verify the Claude Code CLI is installed. A short Terminal window
-appears for this; close it once the CCC window loads.
+First launch only: CCC installs its local source into ~/.ccc and starts
+the loopback dashboard server. Progress and recovery actions appear in
+the app itself; Terminal and macOS Automation permission are not needed.
 
 Curl and Homebrew install paths are also available — see
 https://github.com/amirfish1/claude-command-center

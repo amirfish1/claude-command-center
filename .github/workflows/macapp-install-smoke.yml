@@ -1,0 +1,32 @@
+name: macapp-install-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/macapp/**
+      - scripts/install.sh
+      - scripts/build-dmg.sh
+      - scripts/test-macapp-install.sh
+      - .github/workflows/macapp-install-smoke.yml
+  pull_request:
+    paths:
+      - scripts/macapp/**
+      - scripts/install.sh
+      - scripts/build-dmg.sh
+      - scripts/test-macapp-install.sh
+      - .github/workflows/macapp-install-smoke.yml
+
+concurrency:
+  group: macapp-install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: built DMG first launch
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build DMG and verify isolated first launch
+        run: ./scripts/test-macapp-install.sh

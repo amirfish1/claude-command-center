@@ -1520,6 +1520,35 @@ class TestCodexConversationAdapter(unittest.TestCase):
         user_event = next(ev for ev in parsed["events"] if ev["type"] == "user_text")
         self.assertEqual(user_event["text"], "please inspect app_node toast")
 
+    def test_codex_browser_context_is_separated_from_user_request(self):
+        """Ambient desktop state is context, not prose the user typed."""
+        parsed = self.server._parse_codex_event({
+            "timestamp": "2026-05-02T00:00:01.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": (
+                    '<in-app-browser-context source="ambient-ui-state">\n'
+                    "The user has the in-app browser open with 4 tabs.\n"
+                    "</in-app-browser-context>\n\n"
+                    "## My request for Codex:\nPlease inspect the current page."
+                ),
+            },
+        }, 7)
+
+        self.assertEqual(parsed["text"], "## My request for Codex:\nPlease inspect the current page.")
+        self.assertEqual(parsed["ambient_context"], {
+            "source": "ambient-ui-state",
+            "text": "The user has the in-app browser open with 4 tabs.",
+        })
+
+        app_js = Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("function ambientContextHtml(context)", app_js)
+        self.assertIn("ambientContextHtml(ev.ambient_context)", app_js)
+        self.assertIn("In-app browser context", app_js)
+        self.assertIn(".codex-ambient-context", app_css)
+
     def test_codex_rollout_parses_into_conversation_events(self):
         parsed = self.server.parse_conversation(CODEX_SESSION_ID)
         event_types = [ev["type"] for ev in parsed["events"]]

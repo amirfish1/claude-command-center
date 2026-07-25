@@ -6,6 +6,26 @@ on:
   pull_request:
 
 jobs:
+  # The public checkout must not grow private planning archives or generated
+  # working-tree captures again.
+  public-docs-boundary:
+    name: public docs boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject private-doc artifacts and archive links
+        shell: bash
+        run: |
+          if git ls-files | grep -Eq '(^|/)(\.wt-|\.wk-|\.tmp-|cache/projects\.json|PARKING_LOT\.md)$'; then
+            echo "private or generated artifact tracked in public checkout" >&2
+            exit 1
+          fi
+          if git grep -n -E 'docs/superpowers/|finish-report-2026-07-16\.md' -- \
+            ':!.github/workflows/ci.yml' ':!AGENTS.md' ':!CLAUDE.md'; then
+            echo "stale private-document reference in public checkout" >&2
+            exit 1
+          fi
+
   # Sanity: every Python file in the repo must byte-compile. Catches syntax
   # errors without needing to install or run anything.
   py-compile:
@@ -15,7 +35,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12", "3.13"]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,3 +96,35 @@ jobs:
           # or background tasks that would only surface in the maintainer's setup.
           ! grep -i "morning" /tmp/server.log
           kill $SERVER_PID
+
+  python39-smoke:
+    name: python 3.9 import + boot
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Import and boot with Python 3.9
+        run: |
+          python -c 'import server; print(server.__version__)'
+          PORT=18091 CCC_BIND_HOST=127.0.0.1 python server.py >/tmp/ccc-python39.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18091/api/version && break
+            sleep 1
+          done
+          ps -p "$SERVER_PID" >/dev/null
+          curl -fsS http://127.0.0.1:18091/api/features >/dev/null
+
+  telemetry-worker:
+    name: telemetry-worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test telemetry Worker
+        run: npm test --prefix infra/telemetry-worker

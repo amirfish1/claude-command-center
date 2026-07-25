@@ -7,12 +7,15 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 import model_advisor as ma
+import server
 
 
 def _u(text):
@@ -182,6 +185,119 @@ class LogTest(unittest.TestCase):
         self.assertEqual(s["total"], 2)
         self.assertEqual(s["applied"], 1)
         self.assertEqual(s["pending"], 1)
+
+
+class ReportCacheTest(unittest.TestCase):
+    def test_cached_read_never_builds(self):
+        cache = ma.AdvisorReportCache()
+
+        report = cache.get_cached()
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["live"], [])
+        self.assertEqual(report["scanned"], [])
+        self.assertIn("summary", report)
+
+    def test_concurrent_refreshes_share_one_build(self):
+        cache = ma.AdvisorReportCache(min_refresh_seconds=0)
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def build():
+            calls.append(True)
+            started.set()
+            release.wait(2)
+            return {"ok": True, "live": [{"id": "one"}]}
+
+        results = []
+        threads = [
+            threading.Thread(target=lambda: results.append(cache.refresh(build)))
+            for _ in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        self.assertTrue(started.wait(1))
+        time.sleep(0.05)
+        release.set()
+        for thread in threads:
+            thread.join(2)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(results, [{"ok": True, "live": [{"id": "one"}]}] * 2)
+
+    def test_normal_refresh_is_limited_but_forced_refresh_is_immediate(self):
+        now = [1000.0]
+        cache = ma.AdvisorReportCache(min_refresh_seconds=300, clock=lambda: now[0])
+        calls = []
+
+        def build():
+            calls.append(now[0])
+            return {"ok": True, "live": [], "generation": len(calls)}
+
+        self.assertEqual(cache.refresh(build)["generation"], 1)
+        now[0] += 299
+        self.assertEqual(cache.refresh(build)["generation"], 1)
+        self.assertEqual(calls, [1000.0])
+        self.assertEqual(cache.refresh(build, force=True)["generation"], 2)
+
+    def test_failed_refresh_preserves_last_report_and_can_retry(self):
+        cache = ma.AdvisorReportCache(min_refresh_seconds=300, clock=lambda: 1000.0)
+        first = cache.refresh(lambda: {"ok": True, "generation": 1})
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            cache.refresh(
+                lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+                force=True,
+            )
+
+        self.assertEqual(cache.get_cached(), first)
+        second = cache.refresh(
+            lambda: {"ok": True, "generation": 2},
+            force=True,
+        )
+        self.assertEqual(second["generation"], 2)
+
+
+class ServerReportAccessTest(unittest.TestCase):
+    def setUp(self):
+        self.original_cache = server._model_advisor_report_cache
+        server._model_advisor_report_cache = ma.AdvisorReportCache(
+            min_refresh_seconds=300
+        )
+        self.addCleanup(
+            setattr,
+            server,
+            "_model_advisor_report_cache",
+            self.original_cache,
+        )
+
+    def test_default_access_returns_cache_without_scanning(self):
+        original = server.build_model_advisor_report
+        server.build_model_advisor_report = lambda: self.fail(
+            "cached read started a scan"
+        )
+        self.addCleanup(setattr, server, "build_model_advisor_report", original)
+
+        report = server.get_model_advisor_report()
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["live"], [])
+
+    def test_fresh_and_force_modes_delegate_to_cache(self):
+        calls = []
+        original = server.build_model_advisor_report
+        server.build_model_advisor_report = lambda: calls.append(True) or {
+            "ok": True,
+            "live": [],
+            "scanned": [],
+            "generation": len(calls),
+        }
+        self.addCleanup(setattr, server, "build_model_advisor_report", original)
+
+        self.assertEqual(server.get_model_advisor_report("1")["generation"], 1)
+        self.assertEqual(server.get_model_advisor_report("1")["generation"], 1)
+        self.assertEqual(server.get_model_advisor_report("force")["generation"], 2)
 
 
 if __name__ == "__main__":

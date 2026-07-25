@@ -1,8 +1,8 @@
-// Telemetry Worker — receives two anonymous endpoints from CCC's server.py.
+// Telemetry Worker — receives bounded app and landing-page events.
 //
 // Contract lives in /docs/telemetry.md; this file is the only code path
 // that touches the wire. Four rules every handler must honor:
-//   1. Drop the source IP before persistence (read-only check, never logged).
+//   1. Never persist a raw source IP (the download handler never reads it).
 //   2. Drop unknown fields silently (forward-compat with old clients).
 //   3. Reject mistyped or missing-required fields with 400 (never crash).
 //   4. Return 204 on success; never echo state back to the caller.
@@ -13,9 +13,12 @@
 //   POST /v1/open  — anonymous open beacon, fires once per server boot,
 //                    not gated on opt-in. THREE FIELDS ONLY: schema_version,
 //                    version, platform. No install_id, no identity.
+//   POST /v1/download — empty landing-page click event. The handler receives
+//                       no request object and binds three fixed/bounded values.
+//   GET  /v1/stats — aggregate counts only; never returns event rows.
 //
 // Bound resources at deploy time (see ../README.md):
-//   env.DB — Cloudflare D1 database with `pings` AND `opens` tables.
+//   env.DB — Cloudflare D1 database with `pings`, `opens`, and `downloads`.
 //
 // The Worker is intentionally tiny — adding behaviour here is a privacy
 // surface change and should be reviewed alongside the public contract.
@@ -172,6 +175,21 @@ async function handleOpen(request, env) {
   return new Response(null, { status: 204 });
 }
 
+async function handleDownload(env) {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO downloads (received_at, artifact, source) VALUES (?, ?, ?)"
+    ).bind(
+      new Date().toISOString(),
+      "ccc.dmg",
+      "landing-hero",
+    ).run();
+  } catch (_) {
+    // Counting never exposes storage health or enters the download path.
+  }
+  return new Response(null, { status: 204 });
+}
+
 // Public read-only stats endpoint. Returns aggregates only — never
 // per-install rows, never raw timestamps. Cached at the edge for 5
 // minutes so the docs/stats/ page can be hammered without hitting D1.
@@ -188,7 +206,8 @@ async function handleStats(_request, env) {
       "SELECT " +
       "  (SELECT COUNT(*) FROM opens) AS total_opens, " +
       "  (SELECT COUNT(*) FROM pings WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%') AS total_pings, " +
-      "  (SELECT COUNT(DISTINCT install_id) FROM pings WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%') AS distinct_installs"
+      "  (SELECT COUNT(DISTINCT install_id) FROM pings WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%') AS distinct_installs, " +
+      "  (SELECT COUNT(*) FROM downloads) AS total_downloads"
     ).first();
 
     const opensByDay = (await env.DB.prepare(
@@ -202,6 +221,11 @@ async function handleStats(_request, env) {
       "SELECT substr(received_at, 1, 10) AS day, COUNT(DISTINCT install_id) AS active_installs " +
       "FROM pings WHERE install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%' " +
       "GROUP BY day ORDER BY day DESC LIMIT 30"
+    ).all()).results;
+
+    const downloadsByDay = (await env.DB.prepare(
+      "SELECT substr(received_at, 1, 10) AS day, COUNT(*) AS download_clicks " +
+      "FROM downloads GROUP BY day ORDER BY day DESC LIMIT 30"
     ).all()).results;
 
     const versions = (await env.DB.prepare(
@@ -231,6 +255,7 @@ async function handleStats(_request, env) {
       totals,
       opens_by_day: opensByDay,
       pings_by_day: pingsByDay,
+      downloads_by_day: downloadsByDay,
       versions,
       platforms,
       sessions_today_per_install: sessionsToday.map(r => ({
@@ -260,6 +285,7 @@ export default {
     }
     if (url.pathname === "/v1/ping") return handlePing(request, env);
     if (url.pathname === "/v1/open") return handleOpen(request, env);
+    if (url.pathname === "/v1/download") return handleDownload(env);
     return new Response("not found", { status: 404 });
   },
 };

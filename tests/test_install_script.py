@@ -6,15 +6,22 @@ end-to-end (it clones a repo and launches a server), but we do exercise
 ``parse_channel`` directly so attribution wiring can't silently regress —
 see the `CCC_FROM` / `--from=<channel>` resolution tests below.
 """
+import glob
 import os
 import shutil
 import stat
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALL_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "install.sh")
+PRE_PUSH_SCRIPT = os.path.join(PROJECT_ROOT, "scripts", "pre-push.sh")
+INSTALL_SMOKE_DOCKERFILE = os.path.join(
+    PROJECT_ROOT, "tests", "install-smoke", "Dockerfile"
+)
 
 
 def _run_parse_channel(env_extra=None, args=()):
@@ -54,8 +61,11 @@ def _run_parse_channel(env_extra=None, args=()):
     return result.stdout.strip()
 
 
-def _run_install_script_function(function_call, prelude=""):
+def _run_install_script_function(function_call, prelude="", env_extra=None):
     """Source install.sh and invoke one function without running main."""
+    env = os.environ.copy()
+    if env_extra:
+        env.update(env_extra)
     bash_program = (
         f'{prelude}\n'
         f'source "{INSTALL_SCRIPT}"; '
@@ -65,6 +75,7 @@ def _run_install_script_function(function_call, prelude=""):
         ["bash", "-c", bash_program],
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -91,6 +102,13 @@ class TestInstallScript(unittest.TestCase):
             f"unexpected shebang: {first_line!r}",
         )
 
+    def test_python_gate_accepts_39_and_honors_override(self):
+        script = Path(INSTALL_SCRIPT).read_text(encoding="utf-8")
+
+        self.assertIn('PYTHON3="${CCC_PYTHON:-python3}"', script)
+        self.assertIn("sys.version_info >= (3, 9)", script)
+        self.assertIn("requires Python 3.9+", script)
+
     def test_install_script_passes_shellcheck_when_available(self):
         if shutil.which("shellcheck") is None:
             self.skipTest("shellcheck not installed; skipping lint check")
@@ -103,6 +121,21 @@ class TestInstallScript(unittest.TestCase):
             result.returncode,
             0,
             f"shellcheck failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}",
+        )
+
+    def test_install_smoke_uses_real_local_clone_into_empty_destination(self):
+        with open(INSTALL_SMOKE_DOCKERFILE, encoding="utf-8") as fh:
+            dockerfile = fh.read()
+
+        self.assertIn("git init -q /repo-source", dockerfile)
+        self.assertIn("CCC_REPO_URL=/repo-source", dockerfile)
+        self.assertNotIn(
+            "cp -r /repo /root/.ccc/claude-command-center",
+            dockerfile,
+        )
+        self.assertNotIn(
+            "> /usr/local/sbin/git",
+            dockerfile,
         )
 
     def test_platform_gate_allows_macos_and_linux(self):
@@ -126,6 +159,168 @@ class TestInstallScript(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("macOS or Linux", result.stderr)
+
+
+class TestInstallBehavior(unittest.TestCase):
+    PUBLIC_REPO_URL = "https://github.com/amirfish1/claude-command-center"
+
+    def test_app_mode_is_explicit(self):
+        result = _run_install_script_function(
+            "is_app_install",
+            env_extra={"CCC_INSTALL_MODE": "app"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_default_mode_is_not_app(self):
+        result = _run_install_script_function("is_app_install")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_environment_overrides_install_location_and_repository(self):
+        result = _run_install_script_function(
+            'printf "%s\\n%s" "$INSTALL_DIR" "$REPO_URL"',
+            env_extra={
+                "CCC_INSTALL_DIR": "/tmp/ccc-test-install",
+                "CCC_REPO_URL": "/tmp/ccc-test-repository",
+            },
+        )
+        self.assertEqual(
+            result.stdout,
+            "/tmp/ccc-test-install\n/tmp/ccc-test-repository",
+        )
+
+    def _create_repository(self, root):
+        repo = os.path.join(root, "source")
+        os.mkdir(repo)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                repo,
+                "config",
+                "user.email",
+                "test@example.invalid",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", repo, "config", "user.name", "CCC Test"],
+            check=True,
+        )
+        with open(
+            os.path.join(repo, "sentinel.txt"), "w", encoding="utf-8"
+        ) as fh:
+            fh.write("installed\n")
+        subprocess.run(
+            ["git", "-C", repo, "add", "sentinel.txt"], check=True
+        )
+        subprocess.run(
+            ["git", "-C", repo, "commit", "-qm", "test fixture"],
+            check=True,
+        )
+        return repo
+
+    def _isolated_git_env(self, root, fallback_repo):
+        """Keep pre-override RED runs away from the real home and network."""
+        return {
+            "HOME": root,
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"url.{fallback_repo}.insteadOf",
+            "GIT_CONFIG_VALUE_0": self.PUBLIC_REPO_URL,
+        }
+
+    def test_new_clone_is_published_only_after_git_succeeds(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = self._create_repository(root)
+            destination = os.path.join(root, "installed", "ccc")
+            env = self._isolated_git_env(root, repo)
+            env.update(
+                {"CCC_INSTALL_DIR": destination, "CCC_REPO_URL": repo}
+            )
+            result = _run_install_script_function(
+                "sync_repo",
+                env_extra=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(os.path.isdir(os.path.join(destination, ".git")))
+            with open(
+                os.path.join(destination, "sentinel.txt"), encoding="utf-8"
+            ) as fh:
+                self.assertEqual(fh.read(), "installed\n")
+            self.assertEqual(glob.glob(destination + ".installing.*"), [])
+
+    def test_failed_clone_leaves_no_partial_destination(self):
+        with tempfile.TemporaryDirectory() as root:
+            fallback_repo = self._create_repository(root)
+            destination = os.path.join(root, "installed", "ccc")
+            env = self._isolated_git_env(root, fallback_repo)
+            env.update(
+                {
+                    "CCC_INSTALL_DIR": destination,
+                    "CCC_REPO_URL": os.path.join(root, "missing-repository"),
+                }
+            )
+            result = _run_install_script_function(
+                "sync_repo",
+                env_extra=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(os.path.exists(destination))
+            self.assertEqual(glob.glob(destination + ".installing.*"), [])
+
+    def test_non_git_destination_is_preserved(self):
+        with tempfile.TemporaryDirectory() as root:
+            fallback_repo = self._create_repository(root)
+            destination = os.path.join(root, "installed", "ccc")
+            os.makedirs(destination)
+            sentinel = os.path.join(destination, "keep-me.txt")
+            with open(sentinel, "w", encoding="utf-8") as fh:
+                fh.write("preserve\n")
+            env = self._isolated_git_env(root, fallback_repo)
+            env.update(
+                {
+                    "CCC_INSTALL_DIR": destination,
+                    "CCC_REPO_URL": os.path.join(root, "unused"),
+                }
+            )
+            result = _run_install_script_function(
+                "sync_repo",
+                env_extra=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            with open(sentinel, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "preserve\n")
+class TestPrePushScript(unittest.TestCase):
+    def test_discovers_a_pytest_capable_python3_in_bash(self):
+        """The Bash gate must not use zsh-only `command -v -a` lookup."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script_dir = root / "scripts"
+            tests_dir = root / "tests"
+            bin_dir = root / "bin"
+            script_dir.mkdir()
+            tests_dir.mkdir()
+            bin_dir.mkdir()
+            shutil.copy2(PRE_PUSH_SCRIPT, script_dir / "pre-push.sh")
+            (tests_dir / "test_perf_budget.py").write_text("# stub\n")
+            python3 = bin_dir / "python3"
+            python3.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [ \"$1\" = \"-c\" ]; then exit 0; fi\n"
+                "if [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then exit 0; fi\n"
+                "exit 1\n"
+            )
+            python3.chmod(0o755)
+            env = os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+            result = subprocess.run(
+                ["bash", str(script_dir / "pre-push.sh")],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("pre-push: running perf-budget gate", result.stdout)
+        self.assertIn("pre-push: perf gate passed", result.stdout)
 
 
 class TestParseChannel(unittest.TestCase):

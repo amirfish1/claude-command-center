@@ -32,6 +32,5 @@ class TestSplitPaneIsolationStatic(unittest.TestCase):
         self.assertIn("removeSplitPaneSingletonChrome(clone);", build_fn)
         self.assertIn("mountStatusRailForActivePane();", active_fn)
 
-
 if __name__ == "__main__":
     unittest.main()

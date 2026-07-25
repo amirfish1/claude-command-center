@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CCC avatar">
+  <title>CCC social avatar</title>
+  <desc>The CCC board mark centered on the brand near-black background. The grid sits inside the safe circle so it survives a circular crop at small sizes.</desc>
+  <!-- Full-bleed background; platforms circle-crop this square. -->
+  <rect width="512" height="512" fill="#0d1117"/>
+  <!-- Grid kept inside radius ~181 from center so a 48px circle crop is safe. -->
+  <rect x="128" y="128" width="114" height="114" rx="26" fill="#6e8caf"/>
+  <rect x="270" y="128" width="114" height="114" rx="26" fill="#f5a623"/>
+  <rect x="128" y="270" width="114" height="114" rx="26" fill="#6e8caf"/>
+  <rect x="270" y="270" width="114" height="114" rx="26" fill="#6e8caf"/>
+  <circle cx="358" cy="152" r="12" fill="#0d1117"/>
+</svg>

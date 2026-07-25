@@ -45,6 +45,73 @@ _TIER = {"haiku": 1, "sonnet": 2, "opus": 3, "fable": 4}
 _DEFAULT_PRICES = {"opus": 75.0, "fable": 75.0, "sonnet": 15.0, "haiku": 4.0}
 
 
+def empty_report():
+    """Return the stable public report shape before the first advisor scan."""
+    return {
+        "ok": True,
+        "live": [],
+        "scanned": [],
+        "scan_window_hours": 2,
+        "scanned_at": "",
+        "log": [],
+        "summary": {
+            "total": 0,
+            "pending": 0,
+            "applied": 0,
+            "dismissed": 0,
+            "expired": 0,
+            "realized_savings_usd": 0.0,
+            "missed_savings_usd": 0.0,
+        },
+    }
+
+
+class AdvisorReportCache:
+    """Lock-protected cached report with coalesced, rate-limited refreshes."""
+
+    def __init__(self, min_refresh_seconds=300, clock=time.monotonic):
+        self.min_refresh_seconds = min_refresh_seconds
+        self._clock = clock
+        self._condition = threading.Condition()
+        self._report = empty_report()
+        self._last_refresh = None
+        self._refreshing = False
+
+    def get_cached(self):
+        """Read the last report without invoking a builder or waiting on a scan."""
+        with self._condition:
+            return self._report
+
+    def refresh(self, builder, force=False):
+        """Build once across concurrent callers; normal builds honor cooldown."""
+        with self._condition:
+            if self._refreshing:
+                while self._refreshing:
+                    self._condition.wait()
+                return self._report
+            now = self._clock()
+            if (
+                not force
+                and self._last_refresh is not None
+                and now - self._last_refresh < self.min_refresh_seconds
+            ):
+                return self._report
+            self._refreshing = True
+        try:
+            report = builder()
+        except Exception:
+            with self._condition:
+                self._refreshing = False
+                self._condition.notify_all()
+            raise
+        with self._condition:
+            self._report = report
+            self._last_refresh = self._clock()
+            self._refreshing = False
+            self._condition.notify_all()
+            return self._report
+
+
 def _prices():
     raw = os.environ.get("CCC_MODEL_PRICES")
     if raw:

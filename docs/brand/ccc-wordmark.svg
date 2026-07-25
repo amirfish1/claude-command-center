@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 180" role="img" aria-label="CCC">
+  <title>CCC wordmark</title>
+  <desc>The letters C C C drawn as three geometric arcs. The middle C is amber, echoing the one session that needs you. Dark-first: intended for dark backgrounds. Transparent background.</desc>
+  <g fill="none" stroke-width="40" stroke-linecap="round">
+    <path d="M 123.25 47.45 A 54 54 0 1 0 123.25 132.55" stroke="#6e8caf"/>
+    <path d="M 283.25 47.45 A 54 54 0 1 0 283.25 132.55" stroke="#f5a623"/>
+    <path d="M 443.25 47.45 A 54 54 0 1 0 443.25 132.55" stroke="#6e8caf"/>
+  </g>
+</svg>

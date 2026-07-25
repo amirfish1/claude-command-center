@@ -6,9 +6,6 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
 <meta name="theme-color" content="#0d1117">
 <title>CCC — Token Throughput Analyzer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0b0d11;
@@ -29,9 +26,9 @@
     --orange: #e3b341;
     --red: #f85149;
     
-    --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   }
   
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -97,6 +94,56 @@
     gap: 12px;
   }
 
+  .throughput-refresh-panel {
+    display: grid;
+    grid-template-columns: 10px minmax(210px, 1fr);
+    column-gap: 8px;
+    align-items: center;
+    max-width: 390px;
+    min-width: 250px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.025);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .refresh-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.12);
+    grid-row: 1 / span 2;
+  }
+
+  .refresh-dot.fetching {
+    background: var(--orange);
+    box-shadow: 0 0 0 3px rgba(227, 179, 65, 0.13);
+    animation: refresh-pulse 1.2s ease-in-out infinite;
+  }
+
+  .refresh-dot.failed {
+    background: var(--red);
+    box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.12);
+  }
+
+  @keyframes refresh-pulse { 50% { opacity: 0.45; transform: scale(0.82); } }
+
+  .refresh-primary {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .refresh-secondary {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.35;
+    white-space: normal;
+  }
+
   .engine-tabs {
     display: inline-flex;
     align-items: center;
@@ -122,6 +169,12 @@
   .engine-tab.active {
     background: var(--accent);
     color: #0d1117;
+  }
+
+  .engine-switch-row {
+    display: flex;
+    justify-content: center;
+    margin: -4px 0 14px;
   }
   
   .btn {
@@ -328,10 +381,14 @@
     .weekly-banner { margin-bottom: 12px; }
     .session-title { max-width: none; }
     .workspace { padding: 16px; }
-    .weekly-banner { flex-wrap: wrap; gap: 10px; }
+    .weekly-banner { grid-template-columns: minmax(0, 1fr); gap: 10px; }
     .weekly-meters { flex-direction: column; width: 100%; }
     .weekly-meter { width: 100%; }
     .weekly-sub { margin-left: 0; text-align: left; width: 100%; }
+    .weekly-actions { justify-content: flex-start; }
+    .topbar { align-items: flex-start; gap: 10px; padding: 12px; }
+    .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }
+    .throughput-refresh-panel { order: 3; width: 100%; max-width: none; min-width: 0; }
 
     /* Pull the chart to the top so the graph is the first thing visible after
        the header — otherwise it's buried under the metric cards and an
@@ -421,32 +478,35 @@
 
   /* Weekly usage banner — apples-to-apples with the macOS menu bar. */
   .weekly-banner {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(460px, 1fr) minmax(240px, 340px) auto;
     align-items: center;
-    gap: 16px;
-    padding: 14px 18px;
-    margin-bottom: 18px;
+    gap: 20px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
     background: linear-gradient(135deg, rgba(57,210,192,0.10), rgba(123,151,255,0.06));
     border: 1px solid rgba(57,210,192,0.25);
     border-radius: 12px;
   }
   .weekly-meters {
-    flex: 1 1 540px;
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 18px;
     min-width: 0;
   }
   .weekly-meter {
     flex: 1 1 0;
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas: "main main" "gauge gauge";
     align-items: center;
-    gap: 12px;
-    min-width: 220px;
+    gap: 4px 8px;
+    min-width: 0;
   }
   .weekly-gauge {
-    flex: 0 0 112px;
-    height: 8px;
+    grid-area: gauge;
+    width: 100%;
+    height: 6px;
     border-radius: 6px;
     background: rgba(255,255,255,0.10);
     overflow: hidden;
@@ -458,29 +518,42 @@
     background: linear-gradient(90deg, var(--accent), var(--blue));
     transition: width 0.4s ease, background 0.4s ease;
   }
-  .weekly-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .weekly-main { grid-area: main; display: flex; align-items: baseline; gap: 6px; min-width: 0; }
   .weekly-pct {
     font-family: var(--font-display);
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 700;
     color: var(--text);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  .weekly-label { font-size: 13px; color: var(--text-muted); min-width: 0; }
+  .weekly-label { font-size: 12px; color: var(--text-muted); min-width: 0; }
   .weekly-sub {
-    flex: 0 1 300px;
     font-size: 12px;
     color: var(--text-muted);
-    text-align: right;
-    line-height: 1.5;
-    min-width: 220px;
+    text-align: left;
+    line-height: 1.45;
+    min-width: 0;
   }
+  .weekly-sub-line { overflow-wrap: anywhere; }
+  .weekly-sub-line + .weekly-sub-line { margin-top: 2px; color: var(--text); }
+  .weekly-reset-schedule {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 18px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .weekly-reset-schedule strong { color: var(--text); font-weight: 600; }
   .weekly-actions {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .weekly-actions input {
     background: rgba(255,255,255,0.06);
@@ -502,6 +575,10 @@
     cursor: pointer;
   }
   .weekly-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  @media (max-width: 1200px) {
+    .weekly-banner { grid-template-columns: minmax(0, 1fr) auto; }
+    .weekly-meters { grid-column: 1 / -1; }
+  }
 
   /* Dashboard Grid */
   .dashboard-header {
@@ -528,6 +605,13 @@
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 16px;
     margin-bottom: 24px;
+  }
+
+  .metrics-grid.aggregate {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  @media (max-width: 768px) {
+    .metrics-grid.aggregate { grid-template-columns: 1fr; }
   }
   
   .metric-card {
@@ -1064,16 +1148,19 @@
       <span class="badge-engine" id="active-engine-badge">Engine: Auto</span>
     </div>
     <div class="topbar-actions">
-      <div class="engine-tabs" id="throughput-engine-tabs" role="tablist" aria-label="Throughput engine">
-        <button type="button" class="engine-tab active" id="engine-tab-claude" role="tab" aria-selected="true" onclick="setThroughputEngine('claude')">Claude</button>
-        <button type="button" class="engine-tab" id="engine-tab-codex" role="tab" aria-selected="false" onclick="setThroughputEngine('codex')">Codex</button>
-      </div>
-      <div class="refresh-indicator" id="refresh-indicator">
+      <a class="btn" href="/throughput-daily.html?date=yesterday" title="Open yesterday's daily throughput report">
+        <span>📄</span> Yesterday's report
+      </a>
+      <a class="btn" href="/productivity.html" title="Open the Productivity dashboard">
+        <span>✓</span> Productivity
+      </a>
+      <div class="throughput-refresh-panel" id="throughput-refresh-panel" role="status" aria-live="polite" aria-atomic="true">
         <span class="refresh-dot" id="refresh-dot"></span>
-        <span id="refresh-status-text">Status: Idle</span>
+        <span class="refresh-primary" id="refresh-primary">Preparing cached view…</span>
+        <span class="refresh-secondary" id="refresh-secondary">No refresh started</span>
       </div>
-      <button class="btn btn-primary" onclick="loadSessions()">
-        <span>🔄</span> Refresh Sessions
+      <button class="btn btn-primary" onclick="refreshThroughput()">
+        <span>↻</span> Refresh Data
       </button>
       <button class="btn" id="annotate-btn" onclick="openAnnotate()" title="File a bug or note to the THROUGHPUT queue">
         <span>📝</span> Annotate
@@ -1168,7 +1255,7 @@
             </div>
             <div class="weekly-main">
               <div class="weekly-pct" id="weekly-pct">–%</div>
-              <div class="weekly-label" id="weekly-label">Claude weekly limit</div>
+              <div class="weekly-label" id="weekly-label" aria-label="Claude weekly limit">Claude</div>
             </div>
           </div>
           <div class="weekly-meter weekly-meter-fable" id="weekly-fable-meter" style="display: none;">
@@ -1177,7 +1264,7 @@
             </div>
             <div class="weekly-main">
               <div class="weekly-pct" id="weekly-fable-pct">–%</div>
-              <div class="weekly-label">Fable weekly limit</div>
+              <div class="weekly-label" aria-label="Fable weekly limit">Fable</div>
             </div>
           </div>
           <div class="weekly-meter weekly-meter-codex" id="weekly-codex-meter" style="display: none;">
@@ -1186,14 +1273,40 @@
             </div>
             <div class="weekly-main">
               <div class="weekly-pct" id="weekly-codex-pct">–%</div>
-              <div class="weekly-label">Codex weekly</div>
+              <div class="weekly-label">Codex</div>
+            </div>
+          </div>
+          <div class="weekly-meter weekly-meter-kimi" id="weekly-kimi-meter" style="display: none;">
+            <div class="weekly-gauge">
+              <div class="weekly-gauge-fill" id="weekly-kimi-fill"></div>
+            </div>
+            <div class="weekly-main">
+              <div class="weekly-pct" id="weekly-kimi-pct">–%</div>
+              <div class="weekly-label">Kimi</div>
             </div>
           </div>
         </div>
-        <div class="weekly-sub" id="weekly-sub"></div>
+        <div class="weekly-sub" id="weekly-sub">
+          <div class="weekly-sub-line" id="weekly-sync-line"></div>
+          <div class="weekly-sub-line" id="weekly-reset-line"></div>
+        </div>
         <div class="weekly-actions">
           <input type="datetime-local" id="reset-event-input">
-          <button type="button" id="record-reset-btn" onclick="recordLimitReset()">Record limit reset…</button>
+          <button type="button" id="record-reset-btn" onclick="recordLimitReset()" title="Record limit reset">Record reset</button>
+        </div>
+        <div class="weekly-reset-schedule" aria-label="Next weekly resets">
+          <span id="claude-next-reset"><strong>Claude next reset:</strong> —</span>
+          <span id="codex-next-reset"><strong>Codex next reset:</strong> —</span>
+          <span id="kimi-next-reset"><strong>Kimi next reset:</strong> —</span>
+        </div>
+      </div>
+
+      <div class="engine-switch-row">
+        <div class="engine-tabs" id="throughput-engine-tabs" role="tablist" aria-label="Throughput engine">
+          <button type="button" class="engine-tab" id="engine-tab-combined" role="tab" aria-selected="false" onclick="setThroughputEngine('combined')">Combined</button>
+          <button type="button" class="engine-tab active" id="engine-tab-claude" role="tab" aria-selected="true" onclick="setThroughputEngine('claude')">Claude</button>
+          <button type="button" class="engine-tab" id="engine-tab-codex" role="tab" aria-selected="false" onclick="setThroughputEngine('codex')">Codex</button>
+          <button type="button" class="engine-tab" id="engine-tab-kimi" role="tab" aria-selected="false" onclick="setThroughputEngine('kimi')">Kimi</button>
         </div>
       </div>
 
@@ -1223,22 +1336,22 @@
         
         <!-- Metrics Cards -->
         <div class="metrics-grid">
-          <div class="metric-card">
-            <div class="metric-label" id="lbl-card1">% QUOTA USED</div>
+          <div class="metric-card" id="metric-card-1">
+            <div class="metric-label" id="lbl-card1">CALLS</div>
             <div class="metric-value" id="val-active-duration">—</div>
             <div class="metric-subtext" id="val-total-duration"></div>
           </div>
-          <div class="metric-card">
-            <div class="metric-label" id="lbl-card2">DAILY BURN</div>
+          <div class="metric-card" id="metric-card-2">
+            <div class="metric-label" id="lbl-card2">CACHE-ADJUSTED TOKENS / DAY</div>
             <div class="metric-value" id="val-total-tokens">—</div>
             <div class="metric-subtext" id="val-token-split"></div>
           </div>
-          <div class="metric-card">
-            <div class="metric-label" id="lbl-card3">CACHE SAVINGS</div>
+          <div class="metric-card" id="metric-card-3">
+            <div class="metric-label" id="lbl-card3">CACHE HIT RATE</div>
             <div class="metric-value" id="val-in-throughput">—</div>
             <div class="metric-subtext" id="val-in-tps"></div>
           </div>
-          <div class="metric-card">
+          <div class="metric-card" id="metric-card-4">
             <div class="metric-label" id="lbl-card4">IF OPUS ONLY</div>
             <div class="metric-value" id="val-out-throughput">—</div>
             <div class="metric-subtext" id="val-out-tps"></div>
@@ -1266,13 +1379,20 @@
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px solid #f59e0b;background:transparent;"></span>
                   <span style="color:#f59e0b;">Cumulative weekly %</span>
                 </div>
-                <div class="legend-item" id="previous-week-legend" style="display:none;">
-                  <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #94a3b8;background:transparent;"></span>
-                  <span style="color:#94a3b8;">Last week</span>
+                <div class="legend-item" id="quota-context-legend" style="display:none;">
+                  <span style="color:var(--text-muted);">Quota context unavailable</span>
                 </div>
                 <div class="legend-item" id="fable-contribution-legend" style="display:none;">
                   <span class="legend-color" style="height:2px;border-radius:0;border-top:2px dashed #f5c842;background:transparent;"></span>
                   <span style="color:#f5c842;">Fable % of weekly</span>
+                </div>
+                <div class="legend-item" id="kimi-overlay-legend" style="display:none;">
+                  <span class="legend-color" style="height:2px;border-radius:0;border-top:2px solid #c084fc;background:transparent;"></span>
+                  <span style="color:#c084fc;">Kimi weekly %</span>
+                </div>
+                <div class="legend-item" id="account-usage-legend" style="display:none;">
+                  <span class="legend-color" style="height:5px;border-radius:1px;background:#60a5fa;"></span>
+                  <span style="color:#60a5fa;">Codex account daily total</span>
                 </div>
               </div>
             </div>
@@ -1334,11 +1454,18 @@
     let chartZoomLastHours = false;
     let activeResetEvent = null;
     let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
+    const THROUGHPUT_BOOTSTRAP_SCHEMA = 1;
+    let visibleBootstrap = null;
+    let refreshStatus = null;
+    let refreshPollTimer = null;
+    let refreshElapsedTimer = null;
     const aggregateSessions = [
       { session_id: 'all_7_days', display_name: 'Claude Total (Last 7 Days)', engine: 'claude', meta: '7d window' },
     ];
 
     function throughputEngineLabel() {
+      if (activeThroughputEngine === 'combined') return 'Combined';
+      if (activeThroughputEngine === 'kimi') return 'Kimi';
       return activeThroughputEngine === 'codex' ? 'Codex' : 'Claude';
     }
 
@@ -1357,10 +1484,367 @@
       return aggregateSessions[0];
     }
 
+    function throughputBootstrapKey(sessionId, engine) {
+      return `ccc-throughput-bootstrap:v${THROUGHPUT_BOOTSTRAP_SCHEMA}:${engine}:${sessionId}`;
+    }
+
+    function validateThroughputBootstrap(model, sessionId, engine) {
+      if (!model || typeof model !== 'object') return false;
+      if (model.schema !== THROUGHPUT_BOOTSTRAP_SCHEMA) return false;
+      if (model.session_id !== sessionId || model.engine !== engine) return false;
+      if (!Number.isFinite(Number(model.generated_at))) return false;
+      if (!model.weekly || typeof model.weekly !== 'object') return false;
+      if (!Array.isArray(model.reset_events)) return false;
+      if (!model.refresh || typeof model.refresh !== 'object') return false;
+      const throughput = model.throughput;
+      if (!throughput || throughput.ok !== true || throughput.session_id !== sessionId) return false;
+      if (!throughput.scope || throughput.scope.aggregate !== true) return false;
+      if ((throughput.scope.engine || 'claude') !== engine) return false;
+      return !!(throughput.summary && typeof throughput.summary === 'object');
+    }
+
+    function readThroughputBootstrap(sessionId, engine) {
+      const key = throughputBootstrapKey(sessionId, engine);
+      try {
+        const model = JSON.parse(localStorage.getItem(key) || 'null');
+        if (validateThroughputBootstrap(model, sessionId, engine)) return model;
+        localStorage.removeItem(key);
+      } catch (_error) {
+        localStorage.removeItem(key);
+      }
+      return null;
+    }
+
+    const COMBINED_SUM_FIELDS = [
+      'total_turns', 'turns_with_tokens', 'total_active_duration_sec',
+      'total_input_tokens', 'total_output_tokens', 'total_tokens',
+      'total_raw_context_tokens', 'total_fresh_input_tokens',
+      'total_cache_read_tokens', 'total_cache_write_tokens',
+      'total_effective_input_tokens', 'cost_usd', 'unpriced_turns'
+    ];
+
+    const COMBINED_BUCKET_FIELDS = [
+      'turns', 'active_duration_sec', 'raw_context_tokens', 'fresh_input_tokens',
+      'cache_read_tokens', 'cache_write_tokens', 'effective_input_tokens',
+      'output_tokens', 'total_tokens', 'cost_usd', 'unpriced_turns'
+    ];
+
+    function mergeSummaryRows(leftRows, rightRows, keyField) {
+      const rows = new Map();
+      [leftRows || [], rightRows || []].forEach(group => group.forEach(row => {
+        const key = row && (row[keyField] || row.hour || row.day);
+        if (!key) return;
+        const merged = rows.get(key) || { [keyField]: key };
+        if (row.hour) merged.hour = row.hour;
+        if (row.day) merged.day = row.day;
+        COMBINED_BUCKET_FIELDS.forEach(field => {
+          merged[field] = Number(merged[field] || 0) + Number(row[field] || 0);
+        });
+        rows.set(key, merged);
+      }));
+      return Array.from(rows.values()).sort((a, b) =>
+        String(a[keyField] || a.hour || '').localeCompare(String(b[keyField] || b.hour || ''))
+      );
+    }
+
+    function mergeThroughputSummaries(claudeSummary, codexSummary) {
+      const claude = claudeSummary || {};
+      const codex = codexSummary || {};
+      const merged = {};
+      COMBINED_SUM_FIELDS.forEach(field => {
+        merged[field] = Number(claude[field] || 0) + Number(codex[field] || 0);
+      });
+      merged.cache_hit_ratio = merged.total_raw_context_tokens > 0
+        ? merged.total_cache_read_tokens / merged.total_raw_context_tokens
+        : 0;
+      merged.hourly = mergeSummaryRows(claude.hourly, codex.hourly, 'hour');
+      merged.daily = mergeSummaryRows(claude.daily, codex.daily, 'day');
+      merged.per_model = [
+        ...(claude.per_model || []).map(row => ({ ...row, engine: row.engine || 'claude' })),
+        ...(codex.per_model || []).map(row => ({ ...row, engine: row.engine || 'codex' })),
+      ];
+      if (codex.account_usage) merged.account_usage = codex.account_usage;
+      merged.components = { claude, codex };
+      return merged;
+    }
+
+    function combineRefreshStatuses(statuses) {
+      const list = (statuses || []).filter(Boolean);
+      const states = list.map(status => status.state);
+      return {
+        state: states.includes('failed') ? 'failed' : states.every(state => state === 'complete') ? 'complete' : 'refreshing',
+        phase: list.find(status => status.state === 'refreshing')?.phase || '',
+        started_at: Math.min(...list.map(status => Number(status.started_at || Date.now() / 1000))),
+        elapsed_ms: Math.max(0, ...list.map(status => Number(status.elapsed_ms || 0))),
+        expected_ms: Math.max(0, ...list.map(status => Number(status.expected_ms || 0))),
+        sessions_discovered: list.reduce((sum, status) => sum + Number(status.sessions_discovered || 0), 0),
+        sessions_read: list.reduce((sum, status) => sum + Number(status.sessions_read || 0), 0),
+        cache_hits: list.reduce((sum, status) => sum + Number(status.cache_hits || 0), 0),
+        parsed: list.reduce((sum, status) => sum + Number(status.parsed || 0), 0),
+        last_refreshed_at: Math.min(...list.map(status => Number(status.last_refreshed_at || Infinity))),
+      };
+    }
+
+    function composeCombinedBootstrap(claudeModel, codexModel) {
+      if (!validateThroughputBootstrap(claudeModel, 'all_7_days', 'claude') ||
+          !validateThroughputBootstrap(codexModel, 'all_7_days', 'codex')) return null;
+      const generatedAt = Math.min(Number(claudeModel.generated_at), Number(codexModel.generated_at));
+      return {
+        schema: THROUGHPUT_BOOTSTRAP_SCHEMA,
+        session_id: 'all_7_days',
+        engine: 'combined',
+        generated_at: generatedAt,
+        weekly: claudeModel.weekly,
+        reset_events: [...claudeModel.reset_events, ...codexModel.reset_events].filter((event, index, all) => {
+          const key = event.id || `${event.window}:${event.kind}:${event.detected_at}`;
+          return index === all.findIndex(candidate =>
+            (candidate.id || `${candidate.window}:${candidate.kind}:${candidate.detected_at}`) === key
+          );
+        }),
+        refresh: combineRefreshStatuses([claudeModel.refresh, codexModel.refresh]),
+        throughput: {
+          ok: true,
+          session_id: 'all_7_days',
+          scope: { aggregate: true, engine: 'combined', range: 'Last 7 Days' },
+          summary: mergeThroughputSummaries(
+            claudeModel.throughput.summary,
+            codexModel.throughput.summary
+          ),
+          turns: [],
+          components: {
+            claude: claudeModel.throughput,
+            codex: codexModel.throughput,
+          },
+        },
+      };
+    }
+
+    function readActiveThroughputBootstrap(sessionId, engine) {
+      if (engine !== 'combined') return readThroughputBootstrap(sessionId, engine);
+      return composeCombinedBootstrap(
+        readThroughputBootstrap(sessionId, 'claude'),
+        readThroughputBootstrap(sessionId, 'codex')
+      );
+    }
+
+    function compactThroughputHourlyRows(rows) {
+      if (!Array.isArray(rows) || rows.length < 2) return Array.isArray(rows) ? rows : [];
+      const bucketMs = 3 * 60 * 60 * 1000;
+      const buckets = new Map();
+      rows.forEach(row => {
+        const time = Date.parse(row && row.hour);
+        if (!Number.isFinite(time)) return;
+        const bucketTime = Math.floor(time / bucketMs) * bucketMs;
+        let bucket = buckets.get(bucketTime);
+        if (!bucket) {
+          bucket = { hour: new Date(bucketTime).toISOString() };
+          buckets.set(bucketTime, bucket);
+        }
+        Object.entries(row).forEach(([key, value]) => {
+          if (key !== 'hour' && typeof value === 'number' && Number.isFinite(value)) {
+            bucket[key] = Number(bucket[key] || 0) + value;
+          }
+        });
+      });
+      return Array.from(buckets.values()).sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
+    }
+
+    function writeThroughputBootstrap(model) {
+      if (!validateThroughputBootstrap(model, model && model.session_id, model && model.engine)) return false;
+      try {
+        // Aggregate turns are not rendered; omit them to keep localStorage fast
+        // and comfortably below browser quota on large histories.
+        const stored = JSON.parse(JSON.stringify(model));
+        stored.throughput.turns = [];
+        stored.throughput.summary.hourly = compactThroughputHourlyRows(
+          stored.throughput.summary.hourly
+        );
+        localStorage.setItem(
+          throughputBootstrapKey(stored.session_id, stored.engine),
+          JSON.stringify(stored)
+        );
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function isNewerThroughputBootstrap(candidate, current) {
+      if (!current) return true;
+      return Number(candidate && candidate.generated_at || 0) > Number(current.generated_at || 0);
+    }
+
+    function applyThroughputBootstrap(model, source) {
+      const applyStarted = performance.now();
+      const session = currentAggregateSession();
+      if (!validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
+      visibleBootstrap = model;
+      activeSessionId = session.session_id;
+      weeklyData = model.weekly;
+      weeklyDataLoaded = true;
+      resetEvents = model.reset_events;
+      renderWeeklyUsage(model.weekly);
+      renderDashboard(session, model.throughput, { deferSecondary: true });
+      const cachedRefresh = Object.assign({}, model.refresh, {
+        state: model.refresh.state === 'refreshing' ? 'stale' : (model.refresh.state || 'stale'),
+        last_refreshed_at: model.refresh.last_refreshed_at || model.generated_at,
+      });
+      renderRefreshPanel(cachedRefresh);
+      performance.mark('throughput-bootstrap-rendered');
+      window.__throughputBootstrapRenderMs = performance.now();
+      window.__throughputBootstrapApplyMs = performance.now() - applyStarted;
+      window.__throughputBootstrapSource = source;
+      requestAnimationFrame(() => {
+        if (activeSessionId === session.session_id) {
+          const summary = model.throughput.summary || {};
+          const modelRows = summary.per_model || [];
+          renderModelBreakdown(modelRows, modelBreakdownContext(modelRows));
+          renderTopSessions();
+          loadCachedAuxiliaryPanels();
+        }
+      });
+      return true;
+    }
+
+    function showFirstSnapshotShell(session) {
+      activeSessionId = session.session_id;
+      hideLoader();
+      document.getElementById('empty-state').style.display = 'none';
+      document.getElementById('dashboard-content').style.display = 'block';
+      document.getElementById('weekly-banner').style.display = 'none';
+      document.getElementById('session-title-label').textContent = session.display_name;
+      document.getElementById('session-id-label').textContent = session.session_id;
+      ['val-active-duration', 'val-total-tokens', 'val-in-throughput', 'val-out-throughput']
+        .forEach(id => { document.getElementById(id).textContent = '—'; });
+      ['val-total-duration', 'val-token-split', 'val-in-tps', 'val-out-tps']
+        .forEach(id => { document.getElementById(id).textContent = ''; });
+      document.getElementById('chart-title-label').textContent = '3-Hour Cache-Adjusted Burn';
+      document.getElementById('chart-legend-label').textContent = 'Cache-adj tokens / 3h';
+      const svg = document.getElementById('throughput-chart');
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 300;
+      svg.innerHTML = '';
+      renderRefreshPanel({ state: 'preparing', phase: 'discovering', window_days: 14, expected_ms: 35000 });
+    }
+
+    function renderFirstSnapshotProgress(status) {
+      if (visibleBootstrap) return;
+      const svg = document.getElementById('throughput-chart');
+      if (!svg) return;
+      const width = svg.clientWidth || 800;
+      const height = svg.clientHeight || 300;
+      const phase = status && status.phase || 'discovering';
+      const discovered = Number(status && status.sessions_discovered || 0);
+      const read = Number(status && status.sessions_read || 0);
+      const cacheHits = Number(status && status.cache_hits || 0);
+      const parsed = Number(status && status.parsed || 0);
+      const folders = Number(status && status.folders_scanned || 0);
+      const elapsed = formatRefreshDuration(status && status.elapsed_ms);
+      const expected = formatRefreshDuration(status && status.expected_ms || 35000);
+      const titleByPhase = {
+        discovering: 'Finding recent conversations…',
+        reading: 'Reading conversations…',
+        finalizing: 'Summarizing throughput…',
+        weekly_context: 'Calculating weekly context…',
+        publishing: 'Publishing fresh snapshot…',
+      };
+      const title = titleByPhase[phase] || 'Preparing first snapshot…';
+      let countLine = `Scanning the last 14 days · ${discovered} sessions found`;
+      if (phase !== 'discovering') {
+        countLine = `Reading ${read} of ${discovered || '…'} conversations`;
+      }
+      const workLine = phase === 'discovering'
+        ? `${folders} folders checked · ${elapsed} / ~${expected}`
+        : `${cacheHits} cached · ${parsed} parsed · ${elapsed} / ~${expected}`;
+      svg.innerHTML = `
+        <text x="${width/2}" y="${height/2 - 28}" fill="var(--text)" text-anchor="middle" font-size="16" font-weight="600">${title}</text>
+        <text x="${width/2}" y="${height/2 + 2}" fill="var(--text-muted)" text-anchor="middle" font-size="13">${countLine}</text>
+        <text x="${width/2}" y="${height/2 + 28}" fill="var(--accent)" text-anchor="middle" font-size="12">${workLine}</text>`;
+    }
+
+    async function fetchInitialBootstrapForEngine(engine, session, generation) {
+      const suffix = generation ? `&generation=${encodeURIComponent(generation)}` : '';
+      const response = await fetch(
+        `/api/throughput/initial?session_id=${encodeURIComponent(session.session_id)}&engine=${encodeURIComponent(engine)}${suffix}`,
+        { cache: 'no-store' }
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      const model = data && data.bootstrap;
+      return validateThroughputBootstrap(model, session.session_id, engine) ? model : null;
+    }
+
+    async function loadCombinedServerBootstrapThenRefresh(session) {
+      const engineAtStart = activeThroughputEngine;
+      try {
+        const [claudeModel, codexModel] = await Promise.all([
+          fetchInitialBootstrapForEngine('claude', session),
+          fetchInitialBootstrapForEngine('codex', session),
+        ]);
+        if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return null;
+        if (claudeModel) writeThroughputBootstrap(claudeModel);
+        if (codexModel) writeThroughputBootstrap(codexModel);
+        const combined = composeCombinedBootstrap(claudeModel, codexModel);
+        if (combined && isNewerThroughputBootstrap(combined, visibleBootstrap)) {
+          applyThroughputBootstrap(combined, 'server');
+        }
+        return combined;
+      } catch (_error) {
+        return null;
+      } finally {
+        if (engineAtStart === 'combined' && activeThroughputEngine === 'combined') {
+          startCombinedRefreshStatusPolling(session);
+        }
+      }
+    }
+
+    async function loadServerBootstrapThenRefresh(session) {
+      if (activeThroughputEngine === 'combined') {
+        return loadCombinedServerBootstrapThenRefresh(session);
+      }
+      const engineAtStart = activeThroughputEngine;
+      try {
+        const response = await fetch(throughputFetchUrl('/api/throughput/initial', session.session_id), { cache: 'no-store' });
+        if (!response.ok) return null;
+        const data = await response.json();
+        const model = data && data.bootstrap;
+        if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return null;
+        if (validateThroughputBootstrap(model, session.session_id, engineAtStart) &&
+            isNewerThroughputBootstrap(model, visibleBootstrap)) {
+          writeThroughputBootstrap(model);
+          applyThroughputBootstrap(model, 'server');
+        }
+        return model;
+      } catch (_error) {
+        return null;
+      } finally {
+        if (engineAtStart === activeThroughputEngine && activeSessionId === session.session_id) {
+          startRefreshStatusPolling(session);
+        }
+      }
+    }
+
+    function bootThroughputPage() {
+      window.__throughputBootStartedMs = performance.now();
+      updateThroughputEngineUi();
+      const session = currentAggregateSession();
+      activeSessionId = session.session_id;
+      toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
+      const cached = readActiveThroughputBootstrap(session.session_id, activeThroughputEngine);
+      if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(session);
+      queueMicrotask(() => loadServerBootstrapThenRefresh(session));
+    }
+
     function updateThroughputEngineUi() {
       currentAggregateSession();
+      const combined = document.getElementById('engine-tab-combined');
       const claude = document.getElementById('engine-tab-claude');
       const codex = document.getElementById('engine-tab-codex');
+      const kimi = document.getElementById('engine-tab-kimi');
+      if (combined) {
+        combined.classList.toggle('active', activeThroughputEngine === 'combined');
+        combined.setAttribute('aria-selected', activeThroughputEngine === 'combined' ? 'true' : 'false');
+      }
       if (claude) {
         claude.classList.toggle('active', activeThroughputEngine === 'claude');
         claude.setAttribute('aria-selected', activeThroughputEngine === 'claude' ? 'true' : 'false');
@@ -1369,12 +1853,16 @@
         codex.classList.toggle('active', activeThroughputEngine === 'codex');
         codex.setAttribute('aria-selected', activeThroughputEngine === 'codex' ? 'true' : 'false');
       }
+      if (kimi) {
+        kimi.classList.toggle('active', activeThroughputEngine === 'kimi');
+        kimi.setAttribute('aria-selected', activeThroughputEngine === 'kimi' ? 'true' : 'false');
+      }
       const badge = document.getElementById('active-engine-badge');
       if (badge) badge.textContent = `Engine: ${throughputEngineLabel()}`;
     }
 
     async function setThroughputEngine(engine) {
-      const next = engine === 'codex' ? 'codex' : 'claude';
+      const next = ['combined', 'codex', 'kimi'].includes(engine) ? engine : 'claude';
       if (next === activeThroughputEngine) return;
       activeThroughputEngine = next;
       activeSessionId = null;
@@ -1386,8 +1874,10 @@
       updateThroughputEngineUi();
       renderSessionList();
       const agg = currentAggregateSession();
-      await loadInitialAggregate(agg);
-      await loadSessions();
+      activeSessionId = agg.session_id;
+      const cached = readActiveThroughputBootstrap(agg.session_id, activeThroughputEngine);
+      if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(agg);
+      queueMicrotask(() => loadServerBootstrapThenRefresh(agg));
     }
 
     // Format relative time (mtime age)
@@ -1445,15 +1935,229 @@
     // Refresh status indicator helper
     function setStatus(text, fetching = false) {
       const dot = document.getElementById('refresh-dot');
-      const label = document.getElementById('refresh-status-text');
-      label.textContent = `Status: ${text}`;
+      const label = document.getElementById('refresh-primary');
+      const detail = document.getElementById('refresh-secondary');
+      if (label) label.textContent = text;
+      if (detail) detail.textContent = '';
       if (fetching) {
         dot.classList.add('fetching');
+        dot.classList.remove('failed');
         dot.style.background = 'var(--orange)';
       } else {
         dot.classList.remove('fetching');
+        dot.classList.remove('failed');
         dot.style.background = 'var(--green)';
       }
+    }
+
+    function formatRefreshDuration(ms) {
+      const value = Math.max(0, Number(ms || 0));
+      return value < 1000 ? `${Math.round(value)}ms` : `${(value / 1000).toFixed(1)}s`;
+    }
+
+    function formatRefreshAge(epochSeconds) {
+      if (!epochSeconds) return 'Never refreshed';
+      const ageSeconds = Math.max(0, Math.floor(Date.now() / 1000 - Number(epochSeconds)));
+      if (ageSeconds < 5) return 'Updated just now';
+      if (ageSeconds < 60) return `Updated ${ageSeconds}s ago`;
+      if (ageSeconds < 3600) return `Updated ${Math.floor(ageSeconds / 60)}m ago`;
+      if (ageSeconds < 86400) return `Updated ${Math.floor(ageSeconds / 3600)}h ago`;
+      return `Updated ${Math.floor(ageSeconds / 86400)}d ago`;
+    }
+
+    function renderRefreshPanel(status) {
+      refreshStatus = Object.assign({}, status || {});
+      const panel = document.getElementById('throughput-refresh-panel');
+      const dot = document.getElementById('refresh-dot');
+      const primary = document.getElementById('refresh-primary');
+      const secondary = document.getElementById('refresh-secondary');
+      if (!panel || !dot || !primary || !secondary) return;
+      dot.classList.toggle('fetching', refreshStatus.state === 'refreshing');
+      dot.classList.toggle('failed', refreshStatus.state === 'failed');
+
+      const elapsed = formatRefreshDuration(refreshStatus.elapsed_ms);
+      const expected = formatRefreshDuration(refreshStatus.expected_ms || 35000);
+      const read = Number(refreshStatus.sessions_read || 0);
+      const discovered = Number(refreshStatus.sessions_discovered || 0);
+      const cacheHits = Number(refreshStatus.cache_hits || 0);
+      const parsed = Number(refreshStatus.parsed || 0);
+      const last = refreshStatus.last_refreshed_at;
+      const phase = refreshStatus.phase || '';
+      const phaseLabels = {
+        discovering: 'Finding conversations',
+        reading: 'Reading conversations',
+        finalizing: 'Summarizing throughput',
+        weekly_context: 'Calculating weekly context',
+        publishing: 'Publishing snapshot',
+      };
+
+      if (refreshStatus.state === 'refreshing') {
+        primary.textContent = `${phaseLabels[phase] || 'Refreshing'} · ${elapsed} / ~${expected}`;
+        secondary.textContent = phase === 'discovering'
+          ? `${discovered} recent sessions · last 14 days · ${Number(refreshStatus.folders_scanned || 0)} folders`
+          : `Reading ${read} / ${discovered || '…'} sessions · ${cacheHits} cached · ${parsed} parsed`;
+      } else if (refreshStatus.state === 'failed') {
+        primary.textContent = 'Refresh failed · showing cached data';
+        secondary.textContent = `${formatRefreshAge(last)} · attempted ${elapsed}`;
+      } else if (refreshStatus.state === 'preparing') {
+        primary.textContent = 'Preparing first snapshot…';
+        secondary.textContent = `Expected about ${expected}`;
+      } else {
+        primary.textContent = formatRefreshAge(last);
+        secondary.textContent = `Last refresh ${elapsed || '—'} · ${read || discovered} sessions · ${cacheHits} cached · ${parsed} parsed`;
+      }
+      panel.title = last
+        ? `Last refreshed ${new Date(Number(last) * 1000).toLocaleString()}`
+        : 'No successful refresh yet';
+      renderFirstSnapshotProgress(refreshStatus);
+    }
+
+    function stopRefreshStatusPolling() {
+      clearInterval(refreshPollTimer);
+      clearInterval(refreshElapsedTimer);
+      refreshPollTimer = null;
+      refreshElapsedTimer = null;
+    }
+
+    async function loadCompletedThroughputBootstrap(session, status) {
+      const engineAtStart = activeThroughputEngine;
+      const url = `${throughputFetchUrl('/api/throughput/initial', session.session_id)}&generation=${encodeURIComponent(status.last_refreshed_at || Date.now())}`;
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) return false;
+      const data = await response.json();
+      const model = data && data.bootstrap;
+      if (engineAtStart !== activeThroughputEngine || activeSessionId !== session.session_id) return false;
+      if (!validateThroughputBootstrap(model, session.session_id, engineAtStart)) return false;
+      writeThroughputBootstrap(model);
+      applyThroughputBootstrap(model, 'refresh');
+      renderRefreshPanel(status);
+      fetchWeekRankings();
+      loadWeeklyHistory();
+      loadSessions({ selectDefault: false });
+      return true;
+    }
+
+    async function loadCombinedCompletedBootstrap(session, statuses) {
+      const [claudeModel, codexModel] = await Promise.all([
+        fetchInitialBootstrapForEngine('claude', session, statuses.claude && statuses.claude.last_refreshed_at),
+        fetchInitialBootstrapForEngine('codex', session, statuses.codex && statuses.codex.last_refreshed_at),
+      ]);
+      if (activeThroughputEngine !== 'combined') return false;
+      if (claudeModel) writeThroughputBootstrap(claudeModel);
+      if (codexModel) writeThroughputBootstrap(codexModel);
+      const combined = composeCombinedBootstrap(claudeModel, codexModel);
+      if (!combined) return false;
+      applyThroughputBootstrap(combined, 'refresh');
+      renderRefreshPanel(combineRefreshStatuses(Object.values(statuses)));
+      return true;
+    }
+
+    async function startCombinedRefreshStatusPolling(session) {
+      stopRefreshStatusPolling();
+      const engines = ['claude', 'codex'];
+      const engineAtStart = activeThroughputEngine;
+      const statuses = {};
+      const starts = await Promise.all(engines.map(async engine => {
+        const response = await fetch(
+          `/api/throughput/refresh/start?session_id=${encodeURIComponent(session.session_id)}&engine=${engine}`,
+          { cache: 'no-store' }
+        );
+        statuses[engine] = response.ok ? await response.json() : { state: 'failed' };
+      }));
+      void starts;
+      if (engineAtStart !== 'combined' || activeThroughputEngine !== 'combined') return;
+      refreshStatus = combineRefreshStatuses(Object.values(statuses));
+      renderRefreshPanel(refreshStatus);
+
+      refreshElapsedTimer = setInterval(() => {
+        if (activeThroughputEngine !== 'combined') return;
+        Object.values(statuses).forEach(status => {
+          if (status.state === 'refreshing') {
+            status.elapsed_ms = Math.max(0, Date.now() - Number(status.started_at || 0) * 1000);
+          }
+        });
+        renderRefreshPanel(combineRefreshStatuses(Object.values(statuses)));
+      }, 100);
+
+      const poll = async () => {
+        if (activeThroughputEngine !== 'combined') return;
+        await Promise.all(engines.map(async engine => {
+          if (statuses[engine] && ['complete', 'failed'].includes(statuses[engine].state)) return;
+          const response = await fetch(
+            `/api/throughput/refresh/status?session_id=${encodeURIComponent(session.session_id)}&engine=${engine}`,
+            { cache: 'no-store' }
+          );
+          if (response.ok) statuses[engine] = await response.json();
+        }));
+        refreshStatus = combineRefreshStatuses(Object.values(statuses));
+        renderRefreshPanel(refreshStatus);
+        if (refreshStatus.state === 'complete') {
+          stopRefreshStatusPolling();
+          await loadCombinedCompletedBootstrap(session, statuses);
+        } else if (refreshStatus.state === 'failed') {
+          stopRefreshStatusPolling();
+        }
+      };
+      refreshPollTimer = setInterval(poll, 500);
+      poll();
+    }
+
+    async function startRefreshStatusPolling(session) {
+      if (!session) return;
+      stopRefreshStatusPolling();
+      const engineAtStart = activeThroughputEngine;
+      const startResponse = await fetch(
+        throughputFetchUrl('/api/throughput/refresh/start', session.session_id),
+        { cache: 'no-store' }
+      );
+      if (!startResponse.ok) {
+        renderRefreshPanel({
+          state: 'failed',
+          last_refreshed_at: visibleBootstrap && visibleBootstrap.generated_at,
+          expected_ms: 35000,
+        });
+        loadSessions({ selectDefault: false });
+        return;
+      }
+      refreshStatus = await startResponse.json();
+      renderRefreshPanel(refreshStatus);
+
+      const renderElapsed = () => {
+        if (!refreshStatus || refreshStatus.state !== 'refreshing') return;
+        refreshStatus.elapsed_ms = Math.max(0, Date.now() - Number(refreshStatus.started_at || 0) * 1000);
+        renderRefreshPanel(refreshStatus);
+      };
+      refreshElapsedTimer = setInterval(renderElapsed, 100);
+
+      const poll = async () => {
+        try {
+          const response = await fetch(
+            throughputFetchUrl('/api/throughput/refresh/status', session.session_id),
+            { cache: 'no-store' }
+          );
+          if (!response.ok || engineAtStart !== activeThroughputEngine) return;
+          refreshStatus = await response.json();
+          renderRefreshPanel(refreshStatus);
+          if (refreshStatus.state === 'complete') {
+            stopRefreshStatusPolling();
+            await loadCompletedThroughputBootstrap(session, refreshStatus);
+          } else if (refreshStatus.state === 'failed') {
+            stopRefreshStatusPolling();
+            loadSessions({ selectDefault: false });
+          }
+        } catch (_error) {
+          // A transient status poll must not disturb the stale dashboard.
+        }
+      };
+      refreshPollTimer = setInterval(poll, 500);
+      poll();
+    }
+
+    function refreshThroughput() {
+      const session = currentAggregateSession();
+      activeSessionId = session.session_id;
+      if (activeThroughputEngine === 'combined') startCombinedRefreshStatusPolling(session);
+      else startRefreshStatusPolling(session);
     }
 
     // Load session list from /api/conversations?all=true
@@ -1491,24 +2195,29 @@
       }
     }
 
-    async function loadSessions() {
-      setStatus('Loading sessions...', true);
+    async function loadSessions({ selectDefault = true } = {}) {
+      if (activeThroughputEngine === 'combined') {
+        allSessions = [];
+        renderSessionList();
+        return;
+      }
+      if (selectDefault) setStatus('Loading sessions...', true);
       try {
         const convRes = await fetch(`/api/conversations?all=1&${throughputEngineParam()}`);
         if (!convRes.ok) throw new Error('API failed');
         const data = await convRes.json();
         allSessions = data.conversations || data.sessions || [];
         renderSessionList();
-        fetchWeekRankings(); // non-blocking: re-sorts when rankings arrive
+        if (selectDefault) fetchWeekRankings();
         const defaultSession = currentAggregateSession();
-        if (!activeSessionId && defaultSession) {
+        if (selectDefault && !activeSessionId && defaultSession) {
           await selectSession(defaultSession);
         } else if (!defaultSession) {
           setStatus('Idle');
         }
       } catch (err) {
         console.error(err);
-        setStatus('Error loading sessions');
+        if (selectDefault) setStatus('Error loading sessions');
       }
     }
 
@@ -1691,8 +2400,69 @@
       }
     }
 
+    function weeklyQuotaForEngine(engine) {
+      if (!weeklyData) return null;
+      if (engine === 'codex') {
+        const codex = weeklyData.codex;
+        if (!codex || !codex.ok || codex.weekly_pct == null) return null;
+        return { pct: Number(codex.weekly_pct), start: codex.week_start, resetAt: codex.weekly_resets_at };
+      }
+      if (engine === 'kimi') {
+        const kimi = weeklyData.kimi;
+        if (!kimi || !kimi.ok || kimi.weekly_pct == null) return null;
+        return { pct: Number(kimi.weekly_pct), start: kimi.week_start, resetAt: kimi.weekly_resets_at };
+      }
+      if (weeklyData.display_pct == null) return null;
+      return { pct: Number(weeklyData.display_pct), start: weeklyData.week_start, resetAt: weeklyData.weekly_resets_at };
+    }
+
+    function weeklyRatePerDay(engine) {
+      const quota = weeklyQuotaForEngine(engine);
+      if (!quota || !quota.start) return null;
+      const elapsedDays = Math.max(1 / 24, (Date.now() - new Date(quota.start).getTime()) / 86400000);
+      return { pctPerDay: quota.pct / elapsedDays, pct: quota.pct, elapsedDays };
+    }
+
+    function renderAggregateMetrics(summary, data) {
+      const metrics = document.querySelector('.metrics-grid');
+      metrics.className = 'metrics-grid aggregate';
+      document.getElementById('metric-card-4').style.display = 'none';
+
+      const calls = summary.total_turns || (data.scope && data.scope.total_turns) || 0;
+      const adjustedTokens = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
+      const freshTokens = summary.total_fresh_input_tokens || 0;
+      const cacheHitPct = Math.round((summary.cache_hit_ratio || 0) * 100);
+      const rate = activeThroughputEngine === 'combined' ? null : weeklyRatePerDay(activeThroughputEngine);
+      const claudeRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('claude') : null;
+      const codexRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('codex') : null;
+      const kimiRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('kimi') : null;
+
+      document.getElementById('lbl-card1').textContent = 'CALLS';
+      document.getElementById('val-active-duration').textContent = Math.round(calls).toLocaleString();
+      document.getElementById('val-total-duration').textContent = 'Last 7 days';
+
+      document.getElementById('lbl-card2').textContent = 'USAGE RATE';
+      const combinedRates = [claudeRate && `C ${claudeRate.pctPerDay.toFixed(1)}%`,
+        codexRate && `X ${codexRate.pctPerDay.toFixed(1)}%`,
+        kimiRate && `K ${kimiRate.pctPerDay.toFixed(1)}%`].filter(Boolean);
+      const combinedSoFar = [claudeRate && `Claude ${claudeRate.pct.toFixed(0)}%`,
+        codexRate && `Codex ${codexRate.pct.toFixed(0)}%`,
+        kimiRate && `Kimi ${kimiRate.pct.toFixed(0)}%`].filter(Boolean);
+      document.getElementById('val-total-tokens').textContent = rate
+        ? `${rate.pctPerDay.toFixed(1)}% / day`
+        : (combinedRates.length ? `${combinedRates.join(' · ')} / day` : '—');
+      document.getElementById('val-token-split').textContent = rate
+        ? `${rate.pct.toFixed(0)}% so far · ${rate.elapsedDays.toFixed(1)} days elapsed`
+        : (combinedSoFar.length ? `${combinedSoFar.join(' · ')} so far` : 'Weekly quota unavailable');
+
+      document.getElementById('lbl-card3').textContent = 'CACHE HIT RATE';
+      document.getElementById('val-in-throughput').textContent = `${cacheHitPct}%`;
+      document.getElementById('val-in-tps').textContent =
+        `${formatCompactTokens(freshTokens)} non-cached · ${formatCompactTokens(adjustedTokens)} cache-adjusted total`;
+    }
+
     // Populate dashboard details
-    function renderDashboard(session, data) {
+    function renderDashboard(session, data, { deferSecondary = false } = {}) {
       chartWeekOffset = 0; // reset week navigation on session switch
       chartZoomLastHours = false;
       document.getElementById('empty-state').style.display = 'none';
@@ -1704,17 +2474,12 @@
       
       const summary = data.summary;
       const isAggregate = !!(data.scope && data.scope.aggregate);
+      document.querySelector('.dashboard-header').style.display = isAggregate ? 'none' : '';
       const isClaudeMode = activeThroughputEngine === 'claude';
-      const engineLabel = throughputEngineLabel();
       
       // Cards — all values in % of weekly quota where possible.
       // ppt calibrated as real_pct / (raw_context + output) — use that same basis throughout.
       const ppt = isClaudeMode && weeklyData && weeklyData.pct_per_token;
-
-      // 7-day rolling totals (for daily burn rate card)
-      const rollingRawTok = (summary.total_raw_context_tokens || 0) + (summary.total_output_tokens || 0);
-      const rollingEffTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
-      const rollingPct = ppt ? rollingRawTok * ppt : null;
 
       // Billing-period totals: filter hourly to same window the chart uses
       // (resetAt - 7d  →  resetAt), so card 1 matches the "right now" cumulative.
@@ -1726,67 +2491,17 @@
         : hourlySlots;
       const billingRawTok = billingSlots.reduce((s, h) => s + (h.raw_context_tokens||0) + (h.output_tokens||0), 0);
       const billingEffTok = billingSlots.reduce((s, h) => s + (h.effective_input_tokens||0) + (h.output_tokens||0), 0);
-      const billingCost  = billingSlots.reduce((s, h) => s + (h.cost_usd||0), 0);
 
-      // Card 1 / 3 / 4 use billing-period window; card 2 uses 7-day rolling rate
       const rawTok = billingRawTok;
       const effectiveTok = billingEffTok;
-      const periodCost = billingCost || summary.cost_usd || 0;
       const actualPct = ppt ? rawTok * ppt : null; // same basis and window as chart cumulative
 
       if (isAggregate) {
-        // ── Card 1: % quota used (billing period — matches chart) ─────────
-        document.getElementById('lbl-card1').textContent = isClaudeMode ? '% QUOTA USED' : 'CODEX TOKENS';
-        document.getElementById('val-active-duration').textContent =
-          actualPct != null ? `${actualPct.toFixed(2)}%` : fmtNum(rawTok);
-        const totalCalls = summary.total_turns || (data.scope && data.scope.total_turns);
-        document.getElementById('val-total-duration').textContent =
-          `${totalCalls.toLocaleString()} ${engineLabel} calls · ${fmtCost(periodCost)}`;
-
-        // ── Card 2: daily burn (7-day rolling avg) + days to reset ───────
-        document.getElementById('lbl-card2').textContent = isClaudeMode ? 'DAILY BURN (7d avg)' : 'TOKEN BURN (7d avg)';
-        const daysLeft2 = resetAt2 ? Math.max(0, (resetAt2.getTime() - Date.now()) / 86400000) : 0;
-        const dailyPct = rollingPct != null ? rollingPct / 7 : null;
-        document.getElementById('val-total-tokens').textContent =
-          dailyPct != null ? `${dailyPct.toFixed(2)}% / day` : `${fmtNum(rollingRawTok / 7)} / day`;
-        document.getElementById('val-token-split').textContent =
-          resetAt2 ? `${daysLeft2.toFixed(1)}d until reset · ${totalCalls.toLocaleString()} calls` : `${totalCalls.toLocaleString()} calls`;
-
-        // ── Card 3: cache savings (billing period, in cost $) ─────────────
-        document.getElementById('lbl-card3').textContent = 'CACHE SAVINGS';
-        const cacheHitPct = Math.round((summary.cache_hit_ratio || 0) * 100);
-        const cacheRatio = effectiveTok > 0 ? rawTok / effectiveTok : 1;
-        const uncachedCost = periodCost * cacheRatio;
-        const savedCost = uncachedCost - periodCost;
-        document.getElementById('val-in-throughput').textContent =
-          savedCost > 0 ? `$${savedCost.toFixed(0)} saved` : `${cacheHitPct}% hit`;
-        document.getElementById('val-in-tps').textContent =
-          savedCost > 0
-            ? `${cacheHitPct}% cache hit · $${periodCost.toFixed(0)} actual vs $${uncachedCost.toFixed(0)} uncached`
-            : '';
-
-        // ── Card 4: opus-only hypothetical (7-day ratio, billing-period base) ──
-        document.getElementById('lbl-card4').textContent = isClaudeMode ? 'IF OPUS ONLY' : 'COST';
-        const opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
-        const opusTok = opusRow ? (opusRow.effective_input_tokens || 0) + (opusRow.output_tokens || 0) : 0;
-        const opusCost = opusRow ? (opusRow.cost_usd || 0) : 0;
-        const opusCostPerTok = (opusTok > 0 && opusCost > 0) ? opusCost / opusTok : null;
-        const totalCost = summary.cost_usd || 0;
-        const blendedCostPerTok = (rollingEffTok > 0 && totalCost > 0) ? totalCost / rollingEffTok : null;
-        const opusRatio = (opusCostPerTok && blendedCostPerTok) ? opusCostPerTok / blendedCostPerTok : null;
-        const opusOnlyPct = (actualPct != null && opusRatio) ? actualPct * opusRatio : null;
-        document.getElementById('val-out-throughput').textContent =
-          isClaudeMode
-            ? (opusOnlyPct != null ? `${opusOnlyPct.toFixed(1)}%` : '—')
-            : fmtCost(periodCost);
-        document.getElementById('val-out-tps').textContent =
-          !isClaudeMode
-            ? `${fmtNum(effectiveTok)} cache-adj tokens`
-            : opusRatio != null
-            ? `${opusRatio.toFixed(1)}× vs actual · actual ${(actualPct||0).toFixed(2)}%`
-            : 'no opus data in range';
+        renderAggregateMetrics(summary, data);
 
       } else {
+        document.querySelector('.metrics-grid').className = 'metrics-grid';
+        document.getElementById('metric-card-4').style.display = '';
         // ── Per-session cards ─────────────────────────────────────────────
         document.getElementById('lbl-card1').textContent = '% QUOTA USED';
         document.getElementById('val-active-duration').textContent =
@@ -1824,36 +2539,23 @@
       // Cache the rendered state so a window resize can redraw the chart from
       // memory instead of re-fetching + re-parsing the whole range.
       lastRender = { turns: data.turns, summary, isAggregate: chartIsAggregate, bucketMode, showCumulative: hasHourly, session, data };
-      if (shouldDeferAggregateChart(chartIsAggregate, bucketMode)) {
-        renderChartWaitingForWeeklyContext();
-      } else {
-        drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
-      }
+      drawChart(data.turns, summary, chartIsAggregate, bucketMode, hasHourly);
 
       // Model comparison table
       const modelRows = summary.per_model || [];
-      const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
-        ? weeklyData.codex.weekly_pct
-        : null;
-      const codexWeeklyTotalTokens = modelRows.reduce((sum, model) => {
-        return sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0);
-      }, 0);
-      renderModelBreakdown(modelRows, {
-        claudePctPerToken: ppt,
-        codexWeeklyPct,
-        codexWeeklyTotalTokens,
-        engine: activeThroughputEngine
-      });
+      if (!deferSecondary) {
+        renderModelBreakdown(modelRows, modelBreakdownContext(modelRows));
+      }
 
       // Weekly history chart (aggregate only, lazy-loaded)
       const histSection = document.getElementById('weekly-history-section');
       if (histSection) histSection.style.display = isAggregate ? '' : 'none';
-      if (isAggregate) loadWeeklyHistory();
+      if (isAggregate && !deferSecondary) loadWeeklyHistory();
 
       // Top sessions table (aggregate only)
       const topSessSection = document.getElementById('top-sessions-section');
       if (topSessSection) topSessSection.style.display = isAggregate ? '' : 'none';
-      if (isAggregate) renderTopSessions();
+      if (isAggregate && !deferSecondary) renderTopSessions();
 
       // Turns section: only useful for per-session drill-down
       const turnsSection = document.getElementById('turns-section');
@@ -1866,18 +2568,32 @@
     // ── Weekly history chart ───────────────────────────────────────────────
     let _weeklyHistoryData = null;   // cached so resize can redraw without re-fetch
 
+    function hideAuxiliarySection(id) {
+      const section = document.getElementById(id);
+      if (section) section.style.display = 'none';
+    }
+
+    function loadCachedAuxiliaryPanels() {
+      loadWeeklyHistory();
+    }
+
     async function loadWeeklyHistory() {
       if (_weeklyHistoryData) { drawWeeklyHistory(_weeklyHistoryData); return; }
       try {
-        const res = await fetch('/api/throughput/history');
-        if (!res.ok) return;
+        const res = await fetch('/api/throughput/history?cache_only=1');
+        if (!res.ok) {
+          hideAuxiliarySection('weekly-history-section');
+          return;
+        }
         const d = await res.json();
-        if (!d.ok || !d.daily || !d.daily.length) return;
+        if (!d.ok || !d.daily || !d.daily.length) {
+          hideAuxiliarySection('weekly-history-section');
+          return;
+        }
         _weeklyHistoryData = d.daily;
         drawWeeklyHistory(d.daily);
       } catch (e) {
-        const el = document.getElementById('weekly-history-loading');
-        if (el) el.textContent = 'History unavailable.';
+        hideAuxiliarySection('weekly-history-section');
       }
     }
 
@@ -1886,7 +2602,10 @@
       if (!container) return;
       const ppt = weeklyData && weeklyData.pct_per_token;
       const resetAt = weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
-      if (!ppt || !resetAt) { return; }
+      if (!ppt || !resetAt) {
+        hideAuxiliarySection('weekly-history-section');
+        return;
+      }
 
       // Group daily rows into 7-day billing-period buckets.
       // Use LOCAL calendar dates (midnight) so Jun 26 = first day of current
@@ -1920,7 +2639,10 @@
 
       // Filter out weeks with zero data (before history started)
       const filled = weeks.filter(w => w.days > 0 || w.wStart >= new Date(resetAt.getTime() - 7 * 86400000));
-      if (!filled.length) return;
+      if (!filled.length) {
+        hideAuxiliarySection('weekly-history-section');
+        return;
+      }
 
       const pcts = filled.map(w => w.raw * ppt);
       const maxPct = Math.max(130, Math.ceil(Math.max(...pcts) / 10) * 10 + 10);
@@ -2026,6 +2748,11 @@
       const withTokens = allSessions
         .filter(s => (s._week_tokens || 0) > 0)
         .sort((a, b) => (b._week_tokens || 0) - (a._week_tokens || 0));
+      if (!withTokens.length) {
+        hideAuxiliarySection('top-sessions-section');
+        return;
+      }
+      document.getElementById('top-sessions-section').style.display = '';
       const top = withTokens.slice(0, 20);
       const rest = withTokens.slice(20);
       const maxTok = top[0] ? top[0]._week_tokens : 1;
@@ -2088,10 +2815,39 @@
       return (model.raw_context_tokens || 0) + (model.output_tokens || 0);
     }
 
+    function modelBreakdownContext(models) {
+      const rows = models || [];
+      const claudeWeeklyPct = weeklyData && weeklyData.display_pct;
+      const codexWeeklyPct = weeklyData && weeklyData.codex && weeklyData.codex.ok
+        ? weeklyData.codex.weekly_pct
+        : null;
+      const kimiWeeklyPct = weeklyData && weeklyData.kimi && weeklyData.kimi.ok
+        ? weeklyData.kimi.weekly_pct
+        : null;
+      return {
+        claudeWeeklyPct,
+        claudeWeeklyTotalTokens: rows.reduce((sum, model) =>
+          sum + ((isCodexModelRow(model) || isKimiModelRow(model)) ? 0 : modelWeeklyBasisTokens(model)), 0),
+        codexWeeklyPct,
+        codexWeeklyTotalTokens: rows.reduce((sum, model) =>
+          sum + (isCodexModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
+        kimiWeeklyPct,
+        kimiWeeklyTotalTokens: rows.reduce((sum, model) =>
+          sum + (isKimiModelRow(model) ? modelWeeklyBasisTokens(model) : 0), 0),
+        engine: activeThroughputEngine,
+      };
+    }
+
     function isCodexModelRow(model, fallbackEngine) {
       const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
       const label = String((model && (model.model || model.engine)) || '').toLowerCase();
       return engine === 'codex' || label.startsWith('gpt-') || label.includes('codex');
+    }
+
+    function isKimiModelRow(model, fallbackEngine) {
+      const engine = String((model && model.engine) || fallbackEngine || '').toLowerCase();
+      const label = String((model && (model.model || model.engine)) || '').toLowerCase();
+      return engine === 'kimi' || label.startsWith('kimi');
     }
 
     function formatModelWeeklyPct(model, context) {
@@ -2104,9 +2860,16 @@
         if (!(total > 0) || !Number.isFinite(pct)) return '—';
         return `${((tokens / total) * pct).toFixed(2)}%`;
       }
-      const ppt = Number(ctx.claudePctPerToken);
-      if (!Number.isFinite(ppt) || !(ppt > 0)) return '—';
-      return `${(tokens * ppt).toFixed(2)}%`;
+      if (isKimiModelRow(model, ctx.engine)) {
+        const total = Number(ctx.kimiWeeklyTotalTokens || 0);
+        const pct = Number(ctx.kimiWeeklyPct);
+        if (!(total > 0) || !Number.isFinite(pct)) return '—';
+        return `${((tokens / total) * pct).toFixed(2)}%`;
+      }
+      const total = Number(ctx.claudeWeeklyTotalTokens || 0);
+      const pct = Number(ctx.claudeWeeklyPct);
+      if (!(total > 0) || !Number.isFinite(pct)) return '—';
+      return `${((tokens / total) * pct).toFixed(2)}%`;
     }
 
     function renderModelBreakdown(models, context) {
@@ -2157,11 +2920,10 @@
 
     function shouldRenderResetMarker(event, resetMarkerWindow) {
       if (!resetMarkerWindow) return true;
-      if (resetMarkerWindow === 'codex') return String(event.window || '').startsWith('codex_');
-      return (event && event.window) === resetMarkerWindow;
+      return !!event && event.window === resetMarkerWindow;
     }
 
-    function renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow = null) {
+    function renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow = null, resetPeriodStart = null) {
       if (!svg || !Array.isArray(resetEvents) || !resetEvents.length || !Array.isArray(sourceRows) || !sourceRows.length) return;
       const rows = sourceRows
         .map((row, i) => ({ i, d: _resetMarkerRowDate(row) }))
@@ -2169,9 +2931,21 @@
       if (!rows.length) return;
       const first = rows[0].d.getTime();
       const last = rows[rows.length - 1].d.getTime();
+      let visibleResetEvents = resetEvents.filter(event => shouldRenderResetMarker(event, resetMarkerWindow));
+      if (resetMarkerWindow === 'codex_weekly' || resetMarkerWindow === 'kimi_weekly') {
+        if (Number.isFinite(resetPeriodStart)) {
+          const automatic = visibleResetEvents.filter(event => event.kind !== 'manual');
+          const nearestResetEvent = automatic.reduce((nearest, event) => {
+            const distance = Math.abs(new Date(event.detected_at).getTime() - resetPeriodStart);
+            if (!Number.isFinite(distance)) return nearest;
+            return !nearest || distance < nearest.distance ? { event, distance } : nearest;
+          }, null);
+          visibleResetEvents = visibleResetEvents.filter(event => event.kind === 'manual');
+          if (nearestResetEvent) visibleResetEvents.unshift(nearestResetEvent.event);
+        }
+      }
       let markerLabelCount = 0;
-      resetEvents.forEach(event => {
-        if (!shouldRenderResetMarker(event, resetMarkerWindow)) return;
+      visibleResetEvents.forEach(event => {
         const d = new Date(event.detected_at || '');
         const ts = d.getTime();
         if (Number.isNaN(ts) || ts < first || ts > last + 86400000) return;
@@ -2248,6 +3022,16 @@
       return null;
     }
 
+    // Throughput summary hours are server-local wall-clock buckets. Keep them
+    // in that timezone when matching quota events to the UTC chart slots.
+    function throughputSummaryRowTimeMs(row) {
+      if (!row || !row.hour) return chartRowTimeMs(row);
+      const summaryHour = String(row.hour).trim();
+      const normalized = summaryHour.includes('T') ? summaryHour : summaryHour.replace(' ', 'T');
+      const ms = new Date(normalized).getTime();
+      return Number.isNaN(ms) ? null : ms;
+    }
+
     function updateChartZoomButton(zoomable) {
       const btn = document.getElementById('chart-zoom-btn');
       if (!btn) return;
@@ -2259,16 +3043,15 @@
       btn.title = label;
     }
 
-    function applyChartZoomRows(sourceRows, alignedRows) {
+    function applyChartZoomRows(sourceRows) {
       const rows = Array.isArray(sourceRows) ? sourceRows : [];
-      const aligned = Array.isArray(alignedRows) ? alignedRows : null;
       const displayTimedRows = rows
         .map((row, index) => ({ row, index, ms: chartRowTimeMs(row) }))
         .filter(item => item.ms != null);
       const focusTimedRows = displayTimedRows.filter(item => !(item.row && item.row._projected));
       if (displayTimedRows.length < 2 || focusTimedRows.length < 2) {
         if (chartZoomLastHours) chartZoomLastHours = false;
-        return { rows, alignedRows: aligned, zoomable: false };
+        return { rows, zoomable: false };
       }
       const minMs = Math.min(...displayTimedRows.map(item => item.ms));
       const maxMs = Math.max(...displayTimedRows.map(item => item.ms));
@@ -2280,12 +3063,11 @@
       const zoomable = maxMs - minMs > CHART_ZOOM_HOURS * 3600000 && zoomIndexes.length >= 2 && zoomIndexes.length < rows.length;
       if (!zoomable) {
         if (chartZoomLastHours) chartZoomLastHours = false;
-        return { rows, alignedRows: aligned, zoomable: false };
+        return { rows, zoomable: false };
       }
-      if (!chartZoomLastHours) return { rows, alignedRows: aligned, zoomable: true };
+      if (!chartZoomLastHours) return { rows, zoomable: true };
       return {
         rows: zoomIndexes.map(index => rows[index]).filter(Boolean),
-        alignedRows: aligned ? zoomIndexes.map(index => aligned[index] || null) : aligned,
         zoomable: true,
       };
     }
@@ -2300,33 +3082,245 @@
       });
     }
 
-    function shouldDeferAggregateChart(isAggregate, bucketMode) {
-      return activeThroughputEngine === 'claude' && isAggregate && bucketMode === 'sixhourly' && !weeklyDataLoaded;
+    const PREVIOUS_CYCLE_DAYS = 2;
+    const FORECAST_WIDTH_RATIO = 0.45;
+
+    function forecastCrossingAt100(pct, weekStart, resetAt) {
+      const now = Date.now();
+      const start = new Date(weekStart || '').getTime();
+      const reset = new Date(resetAt || '').getTime();
+      if (!Number.isFinite(start) || !Number.isFinite(reset) || !(pct > 0)) return reset;
+      const elapsed = Math.max(3600000, now - start);
+      const remainingMs = Math.max(0, (100 - pct) * elapsed / pct);
+      return Math.min(reset, now + remainingMs);
     }
 
-    function renderChartWaitingForWeeklyContext() {
-      const svg = document.getElementById('throughput-chart');
-      if (!svg) return;
-      svg.innerHTML = '';
-      document.getElementById('chart-title-label').textContent = '3-Hour Cache-Adjusted Burn';
-      document.getElementById('chart-legend-label').textContent = 'Cache-adj tokens / 3h';
-      const nav = document.getElementById('chart-week-nav');
-      if (nav) nav.style.display = 'none';
-      const overlayLegend = document.getElementById('weekly-overlay-legend');
-      if (overlayLegend) overlayLegend.style.display = 'none';
-      const previousWeekLegend = document.getElementById('previous-week-legend');
-      if (previousWeekLegend) previousWeekLegend.style.display = 'none';
-      updateChartZoomButton(false);
-      const width = svg.clientWidth || 800;
-      const height = svg.clientHeight || 300;
-      svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="var(--text-muted)" text-anchor="middle" font-size="13px">waiting for weekly context…</text>`;
+    function compactForecastEnd() {
+      if (chartWeekOffset !== 0 || !weeklyData) return null;
+      const crossings = [];
+      if ((activeThroughputEngine === 'claude' || activeThroughputEngine === 'combined') &&
+          weeklyData.display_pct != null && weeklyData.week_start && weeklyData.weekly_resets_at) {
+        crossings.push(forecastCrossingAt100(
+          Number(weeklyData.display_pct), weeklyData.week_start, weeklyData.weekly_resets_at
+        ));
+      }
+      const codex = weeklyData.codex;
+      if ((activeThroughputEngine === 'codex' || activeThroughputEngine === 'combined') &&
+          codex && codex.weekly_pct != null && codex.week_start && codex.weekly_resets_at) {
+        crossings.push(forecastCrossingAt100(
+          Number(codex.weekly_pct), codex.week_start, codex.weekly_resets_at
+        ));
+      }
+      const kimi = weeklyData.kimi;
+      if ((activeThroughputEngine === 'kimi' || activeThroughputEngine === 'combined') &&
+          kimi && kimi.weekly_pct != null && kimi.week_start && kimi.weekly_resets_at) {
+        crossings.push(forecastCrossingAt100(
+          Number(kimi.weekly_pct), kimi.week_start, kimi.weekly_resets_at
+        ));
+      }
+      return crossings.filter(Number.isFinite).length ? Math.min(...crossings.filter(Number.isFinite)) : null;
     }
 
-    function quotaScaleMax(...values) {
-      const finite = values.filter(v => Number.isFinite(v) && v > 0);
-      const visibleMax = Math.max(10, ...finite);
-      const step = visibleMax <= 50 ? 5 : 10;
-      return Math.ceil((visibleMax * 1.08) / step) * step;
+    function weeklyChartContext(summary) {
+      if (activeThroughputEngine === 'claude') {
+        if (!weeklyData || weeklyData.pct_per_token == null || !weeklyData.weekly_resets_at) return null;
+        return { pctPerToken: weeklyData.pct_per_token, resetAt: weeklyData.weekly_resets_at };
+      }
+      // Codex and Kimi derive their own pct-per-token: the provider's weekly %
+      // over this period's locally-counted tokens (same math, per engine).
+      const quota = weeklyData && (activeThroughputEngine === 'kimi' ? weeklyData.kimi : weeklyData.codex);
+      if (!quota || !quota.ok || quota.weekly_pct == null || !quota.weekly_resets_at) return null;
+      const resetAt = new Date(quota.weekly_resets_at);
+      const periodStart = new Date(resetAt.getTime() - 7 * 86400000);
+      const periodTokens = ((summary && summary.hourly) || []).reduce((total, row) => {
+        const at = new Date(row.hour || '');
+        if (Number.isNaN(at.getTime()) || at < periodStart || at >= resetAt) return total;
+        return total + (row.raw_context_tokens || 0) + (row.output_tokens || 0);
+      }, 0);
+      if (periodTokens <= 0) return null;
+      return { pctPerToken: quota.weekly_pct / periodTokens, resetAt: quota.weekly_resets_at };
+    }
+
+    function quotaTokenEvents(componentSummary, weekStart) {
+      const start = new Date(weekStart || '').getTime();
+      return ((componentSummary && componentSummary.hourly) || []).map(row => ({
+        at: throughputSummaryRowTimeMs(row),
+        tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
+      })).filter(event => event.at != null && event.at >= start && event.at <= Date.now());
+    }
+
+    function buildQuotaSeries(componentSummary, weekStart, sourceRows, pctPerToken, authoritativePct) {
+      const start = new Date(weekStart || '').getTime();
+      const events = quotaTokenEvents(componentSummary, weekStart);
+      let running = 0;
+      let actualCount = 0;
+      const actual = sourceRows.map(row => {
+        const at = chartRowTimeMs(row);
+        if (row._prePeriod || row._projected || at == null || at < start) return null;
+        running = events.filter(event => event.at < at + 3 * 3600000)
+          .reduce((sum, event) => sum + event.tokens, 0);
+        actualCount += 1;
+        return running * pctPerToken;
+      });
+      const elapsedThreeHourSlots = Number.isFinite(start)
+        ? Math.max(1, (Date.now() - start) / (3 * 3600000))
+        : actualCount;
+      const burnPerSlot = elapsedThreeHourSlots > 0
+        ? Number(authoritativePct || 0) / elapsedThreeHourSlots
+        : 0;
+      const elapsedMs = Number.isFinite(start) ? Math.max(3600000, Date.now() - start) : 0;
+      const pctPerMs = elapsedMs > 0 ? Number(authoritativePct || 0) / elapsedMs : 0;
+      const values = actual.map((value, index) => {
+        if (value != null) return value;
+        if (!sourceRows[index] || !sourceRows[index]._projected || actualCount === 0) return null;
+        const projectedAt = chartRowTimeMs(sourceRows[index]);
+        const projectedElapsedMs = projectedAt == null ? 0 : Math.max(0, projectedAt + 3 * 3600000 - Date.now());
+        return Math.min(100, Number(authoritativePct || 0) + pctPerMs * projectedElapsedMs);
+      });
+      return {
+        actual,
+        values,
+        currentPct: Number(authoritativePct || 0),
+        burnPerSlot,
+        lastActualIndex: actual.reduce((last, value, index) => value != null ? index : last, -1),
+        projectedEnd: values.reduce((last, value) => value != null ? value : last, Number(authoritativePct || 0)),
+      };
+    }
+
+    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken) {
+      const firstPreResetRow = sourceRows.find(row => row && row._prePeriod && !row._projected);
+      const start = firstPreResetRow ? chartRowTimeMs(firstPreResetRow) : null;
+      if (start == null) return null;
+      const events = ((componentSummary && componentSummary.hourly) || []).map(row => ({
+        at: throughputSummaryRowTimeMs(row),
+        tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
+      })).filter(event => event.at != null && event.at >= start);
+      let lastPreResetIndex = -1;
+      const values = sourceRows.map((row, index) => {
+        const at = chartRowTimeMs(row);
+        if (!row || !row._prePeriod || row._projected || at == null) return null;
+        lastPreResetIndex = index;
+        return events.filter(event => event.at < at + 3 * 3600000)
+          .reduce((sum, event) => sum + event.tokens, 0) * pctPerToken;
+      });
+      if (lastPreResetIndex < 0) return null;
+      return {
+        actual: values,
+        values,
+        currentPct: values[lastPreResetIndex] || 0,
+        lastActualIndex: lastPreResetIndex,
+        projectedEnd: values[lastPreResetIndex] || 0,
+        startAtZero: true,
+      };
+    }
+
+    function drawQuotaSeries(svg, series, xScale, yPct, color, label, labelOffset = 0, opacity = 1) {
+      if (!series || series.lastActualIndex < 0) return;
+      let actualPath = '';
+      let projectedPath = '';
+      series.values.forEach((value, index) => {
+        if (value == null) return;
+        const point = `${xScale(index + 1)} ${yPct(value)}`;
+        if (index <= series.lastActualIndex) {
+          if (!actualPath && series.startAtZero) actualPath = `M ${xScale(index + 1)} ${yPct(0)} `;
+          actualPath += actualPath ? `L ${point} ` : `M ${point} `;
+        }
+        if (index >= series.lastActualIndex) projectedPath += projectedPath ? `L ${point} ` : `M ${point} `;
+      });
+      [[actualPath, 'none', '2.5'], [projectedPath, '7,4', '1.8']].forEach(([path, dash, width]) => {
+        if (!path) return;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        line.setAttribute('d', path); line.setAttribute('fill', 'none');
+        line.setAttribute('stroke', color); line.setAttribute('stroke-width', width);
+        line.setAttribute('opacity', String(opacity));
+        if (dash !== 'none') line.setAttribute('stroke-dasharray', dash);
+        svg.appendChild(line);
+      });
+      const x = xScale(series.lastActualIndex + 1);
+      const y = yPct(series.currentPct);
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '4'); dot.setAttribute('fill', color);
+      dot.setAttribute('opacity', String(opacity));
+      svg.appendChild(dot);
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', x + 7); text.setAttribute('y', y - 5 + labelOffset);
+      text.setAttribute('fill', color); text.setAttribute('font-size', '10px'); text.setAttribute('font-weight', 'bold');
+      text.setAttribute('font-family', 'var(--font-mono)');
+      text.setAttribute('opacity', String(opacity));
+      text.textContent = `${label} ${series.currentPct.toFixed(1)}%`;
+      svg.appendChild(text);
+    }
+
+    function renderAccountUsageStrip(svg, sourceRows, xScale, slotW, padding, summary) {
+      const accountUsage = summary && summary.account_usage;
+      const daily = accountUsage && Array.isArray(accountUsage.daily) ? accountUsage.daily : [];
+      if (!daily.length || !Array.isArray(sourceRows) || !sourceRows.length) return false;
+
+      const accountByDay = new Map(daily.map(row => [row.day, Number(row.tokens || 0)]));
+      const detailSummary = summary && summary.components && summary.components.codex
+        ? summary.components.codex
+        : summary;
+      const localByDay = new Map(((detailSummary && detailSummary.daily) || []).map(row => [
+        row.day,
+        Number(row.raw_context_tokens || 0) + Number(row.output_tokens || 0),
+      ]));
+      const spans = new Map();
+      sourceRows.forEach((row, index) => {
+        const day = row && row.day;
+        if (!day || !accountByDay.has(day)) return;
+        const span = spans.get(day) || { first: index, last: index };
+        span.last = index;
+        spans.set(day, span);
+      });
+      if (!spans.size) return false;
+
+      const stripY = Math.max(4, padding.top - 24);
+      spans.forEach((span, day) => {
+        const accountTokens = accountByDay.get(day) || 0;
+        const localTokens = localByDay.get(day) || 0;
+        const unattributed = Math.max(0, accountTokens - localTokens);
+        const left = Math.max(padding.left, xScale(span.first + 1) - slotW / 2);
+        const right = xScale(span.last + 1) + slotW / 2;
+        const width = Math.max(2, right - left - 2);
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', left + 1);
+        rect.setAttribute('y', stripY);
+        rect.setAttribute('width', width);
+        rect.setAttribute('height', 14);
+        rect.setAttribute('rx', '3');
+        rect.setAttribute('fill', 'rgba(96,165,250,0.20)');
+        rect.setAttribute('stroke', 'rgba(96,165,250,0.65)');
+        rect.setAttribute('data-role', 'account-usage-day');
+        rect.style.cursor = 'pointer';
+        rect.addEventListener('mouseover', event => {
+          rect.setAttribute('fill', 'rgba(96,165,250,0.38)');
+          showTooltip(event, [
+            `${dayLabel(day)} account usage`,
+            `Account: <strong>${fmtNum(accountTokens)} tokens</strong>`,
+            `Local detail: ${fmtNum(localTokens)} tokens`,
+            `Unattributed: ${fmtNum(unattributed)} tokens`,
+          ].join('<br>'));
+        });
+        rect.addEventListener('mouseout', () => {
+          rect.setAttribute('fill', 'rgba(96,165,250,0.20)');
+          hideTooltip();
+        });
+        svg.appendChild(rect);
+
+        if (width >= 62) {
+          const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          label.setAttribute('x', left + width / 2);
+          label.setAttribute('y', stripY + 10);
+          label.setAttribute('fill', 'rgba(191,219,254,0.9)');
+          label.setAttribute('font-size', '9px');
+          label.setAttribute('text-anchor', 'middle');
+          label.setAttribute('font-family', 'var(--font-mono)');
+          label.setAttribute('pointer-events', 'none');
+          label.textContent = `${formatCompactTokens(accountTokens)} acct`;
+          svg.appendChild(label);
+        }
+      });
+      return true;
     }
 
     function drawChart(turns, summary, isAggregate = false, bucketMode = 'hourly', showCumulative = false) {
@@ -2343,13 +3337,24 @@
         : 'Cache-adj tokens';
 
       // Determine whether the weekly % overlay is available for this view.
-      const showWeeklyOverlay = activeThroughputEngine === 'claude' && (daily || sixhourly) && weeklyData && weeklyData.pct_per_token != null;
+      const weeklyChart = (daily || sixhourly) ? weeklyChartContext(summary) : null;
+      const showWeeklyOverlay = !!weeklyChart;
+      const accountUsage = sixhourly && activeThroughputEngine !== 'claude'
+        ? summary && summary.account_usage
+        : null;
+      const showAccountUsage = !!(
+        accountUsage && Array.isArray(accountUsage.daily) && accountUsage.daily.length
+      );
       const overlayLegend = document.getElementById('weekly-overlay-legend');
       if (overlayLegend) overlayLegend.style.display = showWeeklyOverlay ? 'flex' : 'none';
-      const previousWeekLegend = document.getElementById('previous-week-legend');
-      if (previousWeekLegend) previousWeekLegend.style.display = 'none';
+      const quotaContextLegend = document.getElementById('quota-context-legend');
+      if (quotaContextLegend) quotaContextLegend.style.display = isAggregate && sixhourly && !showWeeklyOverlay ? 'flex' : 'none';
+      const kimiLegend = document.getElementById('kimi-overlay-legend');
+      if (kimiLegend) kimiLegend.style.display = showWeeklyOverlay && activeThroughputEngine === 'kimi' ? 'flex' : 'none';
+      const accountLegend = document.getElementById('account-usage-legend');
+      if (accountLegend) accountLegend.style.display = showAccountUsage ? 'flex' : 'none';
       // Hide week nav when not in sixhourly aggregate mode
-      if (!sixhourly) {
+      if (!sixhourly || !showWeeklyOverlay) {
         const _nav = document.getElementById('chart-week-nav');
         if (_nav) _nav.style.display = 'none';
       }
@@ -2359,11 +3364,11 @@
       const height = svg.clientHeight || 300;
       // Extra right padding when either secondary axis needs room.
       const rightPad = (showWeeklyOverlay || showCumulative) ? 52 : 30;
-      const padding = { top: 20, right: rightPad, bottom: 54, left: 60 };
+      const padding = { top: showAccountUsage ? 44 : 20, right: rightPad, bottom: 54, left: 60 };
 
       // Build sourceRows — aggregate hourly data into 3h buckets scoped to billing period.
       let buckets;
-      let selPeriodStart = null, selPeriodEnd = null, prevPeriodRows = [];
+      let selPeriodStart = null, selPeriodEnd = null, hasPreviousPeriodData = false;
       if (sixhourly) {
         const hourly = (summary && summary.hourly) || [];
         // Aggregate all hourly → 3h slot map (keys in UTC to match slot generator)
@@ -2392,21 +3397,26 @@
 
         if (showWeeklyOverlay) {
           // Period-scoped 56-slot view (current or past billing period)
-          const resetAt = new Date(weeklyData.weekly_resets_at);
+          const resetAt = new Date(weeklyChart.resetAt);
           selPeriodEnd = new Date(resetAt.getTime() + chartWeekOffset * 7 * 86400000);
           selPeriodStart = new Date(selPeriodEnd.getTime() - 7 * 86400000);
           const nowTs = Date.now();
-          const slotBase = new Date(selPeriodStart);
+          const forecastEnd = compactForecastEnd();
+          const displayEnd = chartWeekOffset === 0 && Number.isFinite(forecastEnd)
+            ? new Date(Math.max(nowTs + 3 * 3600000, forecastEnd))
+            : selPeriodEnd;
+          const slotBase = new Date(selPeriodStart.getTime() - (chartWeekOffset === 0 ? PREVIOUS_CYCLE_DAYS * 86400000 : 0));
           slotBase.setUTCHours(Math.floor(slotBase.getUTCHours() / 3) * 3, 0, 0, 0);
           const slots = [];
           // Night-slot carry: accumulate data from skipped UTC slots (local 00–06)
           // so no activity is silently dropped from the cumulative line.
           let carry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
                         cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-          for (let dt = new Date(slotBase); dt < selPeriodEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
+          for (let dt = new Date(slotBase); dt < displayEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
             const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
             const actual = allGroups.get(ks);
-            if (dt.getHours() < 6) {
+            const isProj = chartWeekOffset === 0 && dt.getTime() > nowTs;
+            if (dt.getHours() < 6 && !isProj) {
               // Night slot: roll its data into the carry bucket
               if (actual) {
                 carry.raw_context_tokens   += actual.raw_context_tokens   || 0;
@@ -2419,12 +3429,13 @@
               }
               continue;
             }
-            const isProj = chartWeekOffset === 0 && dt.getTime() > nowTs;
+            const isPrePeriod = dt < selPeriodStart;
             const base = actual
               ? {...actual, _projected: false}
               : { hour: ks, day: ks.substring(0,10), raw_context_tokens: 0, effective_input_tokens: 0,
                   output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
                   turns: 0, cost_usd: 0, active_duration_sec: 0, _projected: isProj };
+            base._prePeriod = isPrePeriod;
             // Absorb carry from preceding night slots
             base.raw_context_tokens    = (base.raw_context_tokens    || 0) + carry.raw_context_tokens;
             base.effective_input_tokens = (base.effective_input_tokens || 0) + carry.effective_input_tokens;
@@ -2438,63 +3449,18 @@
             slots.push(base);
           }
           buckets = slots;
-          // Previous period rows (position-aligned) for the faded overlay — same carry logic
+          // Keep historical navigation available when the preceding period has data.
           const prevEnd = selPeriodStart;
           const prevStart = new Date(prevEnd.getTime() - 7 * 86400000);
-          const prevBase = new Date(prevStart);
-          prevBase.setUTCHours(Math.floor(prevBase.getUTCHours() / 3) * 3, 0, 0, 0);
-          let prevCarry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
-                            cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-          for (let dt = new Date(prevBase); dt < prevEnd; dt = new Date(dt.getTime() + 3 * 3600000)) {
-            const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
-            const actual = allGroups.get(ks);
-            if (dt.getHours() < 6) {
-              if (actual) {
-                prevCarry.raw_context_tokens    += actual.raw_context_tokens    || 0;
-                prevCarry.effective_input_tokens += actual.effective_input_tokens || 0;
-                prevCarry.output_tokens         += actual.output_tokens         || 0;
-                prevCarry.cache_read_tokens     += actual.cache_read_tokens     || 0;
-                prevCarry.cache_write_tokens    += actual.cache_write_tokens    || 0;
-                prevCarry.turns                 += actual.turns                 || 0;
-                prevCarry.cost_usd              += actual.cost_usd              || 0;
-              }
-              continue;
-            }
-            const base = actual
-              ? {...actual}
-              : { hour: ks, raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
-                  cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-            base.raw_context_tokens    = (base.raw_context_tokens    || 0) + prevCarry.raw_context_tokens;
-            base.effective_input_tokens = (base.effective_input_tokens || 0) + prevCarry.effective_input_tokens;
-            base.output_tokens         = (base.output_tokens         || 0) + prevCarry.output_tokens;
-            base.cache_read_tokens     = (base.cache_read_tokens     || 0) + prevCarry.cache_read_tokens;
-            base.cache_write_tokens    = (base.cache_write_tokens    || 0) + prevCarry.cache_write_tokens;
-            base.turns                 = (base.turns                 || 0) + prevCarry.turns;
-            base.cost_usd              = (base.cost_usd              || 0) + prevCarry.cost_usd;
-            prevCarry = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
-                          cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0 };
-            prevPeriodRows.push(base);
-          }
+          hasPreviousPeriodData = [...allGroups.values()].some(row => {
+            const rowMs = new Date(row.hour).getTime();
+            return rowMs >= prevStart.getTime() && rowMs < prevEnd.getTime() &&
+              ((row.turns || 0) > 0 || (row.raw_context_tokens || 0) > 0 || (row.output_tokens || 0) > 0);
+          });
         } else {
-          // Fallback: all available 3h data (no period context)
-          const firstH = hourly.length > 0 ? new Date(hourly[0].hour) : null;
-          const lastH  = hourly.length > 0 ? new Date(hourly[hourly.length - 1].hour) : null;
-          if (firstH && lastH) {
-            firstH.setUTCHours(Math.floor(firstH.getUTCHours() / 3) * 3, 0, 0, 0);
-            lastH.setUTCHours(Math.floor(lastH.getUTCHours() / 3) * 3, 0, 0, 0);
-            const slots = [];
-            for (let dt = new Date(firstH); dt <= lastH; dt = new Date(dt.getTime() + 3 * 3600000)) {
-              const ks = `${dt.toISOString().substring(0,10)}T${String(dt.getUTCHours()).padStart(2,'0')}:00:00`;
-              slots.push(allGroups.get(ks) || {
-                hour: ks, day: ks.substring(0,10), raw_context_tokens: 0, effective_input_tokens: 0,
-                output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
-                turns: 0, cost_usd: 0, active_duration_sec: 0
-              });
-            }
-            buckets = slots;
-          } else {
-            buckets = [];
-          }
+          // Without quota context, preserve the local 3-hour history and omit
+          // only the quota overlay and its secondary axis.
+          buckets = [...allGroups.values()].sort((a, b) => new Date(a.hour) - new Date(b.hour));
         }
       } else if (isAggregate) {
         buckets = daily ? (summary && summary.daily) || [] : (summary && summary.hourly) || [];
@@ -2502,12 +3468,8 @@
         buckets = turns;
       }
       let sourceRows = buckets;
-      const zoomState = applyChartZoomRows(sourceRows, prevPeriodRows);
+      const zoomState = applyChartZoomRows(sourceRows);
       sourceRows = zoomState.rows;
-      if (Array.isArray(zoomState.alignedRows)) prevPeriodRows = zoomState.alignedRows;
-      if (previousWeekLegend) {
-        previousWeekLegend.style.display = showWeeklyOverlay && sixhourly && prevPeriodRows.some(r => r != null) ? 'flex' : 'none';
-      }
       updateChartZoomButton(zoomState.zoomable);
 
       // Label helper for 6h slots: show day name at midnight, "HH:00" otherwise.
@@ -2556,21 +3518,45 @@
       }
       
       const chartW = width - padding.left - padding.right;
-      const slotW = chartW / Math.max(1, data.length);
+      const firstProjectedIndex = sourceRows.findIndex(row => row && row._projected);
+      const actualSlotCount = firstProjectedIndex >= 0 ? firstProjectedIndex : data.length;
+      const projectedSlotCount = Math.max(0, data.length - actualSlotCount);
+      const effectiveSlotCount = Math.max(1, actualSlotCount + projectedSlotCount * FORECAST_WIDTH_RATIO);
+      const slotW = chartW / effectiveSlotCount;
       const barW = Math.max(2, slotW * 0.72);
       const xScale = sixhourly
-        ? (index) => padding.left + (index - 0.5) * slotW
+        ? (index) => {
+            const zeroIndex = index - 1;
+            const units = zeroIndex < actualSlotCount
+              ? zeroIndex + 0.5
+              : actualSlotCount + (zeroIndex - actualSlotCount + 0.5) * FORECAST_WIDTH_RATIO;
+            return padding.left + units * slotW;
+          }
         : (index) => {
             if (data.length <= 1) return padding.left + chartW / 2;
             return padding.left + ((index - 1) / (data.length - 1)) * chartW;
           };
+
+      if (sixhourly && firstProjectedIndex >= 0) {
+        const forecastX = xScale(firstProjectedIndex + 1) - slotW * FORECAST_WIDTH_RATIO / 2;
+        const separator = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        separator.setAttribute('x1', forecastX); separator.setAttribute('x2', forecastX);
+        separator.setAttribute('y1', padding.top); separator.setAttribute('y2', height - padding.bottom);
+        separator.setAttribute('stroke', 'rgba(148,163,184,0.45)');
+        separator.setAttribute('stroke-dasharray', '2,4');
+        svg.appendChild(separator);
+        const caption = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        caption.setAttribute('x', forecastX + 6); caption.setAttribute('y', padding.top + 12);
+        caption.setAttribute('fill', 'var(--text-muted)'); caption.setAttribute('font-size', '9px');
+        caption.setAttribute('font-family', 'var(--font-mono)');
+        caption.textContent = 'forecast · compressed';
+        svg.appendChild(caption);
+      }
       
       const yScale = (tpm) => {
         const rawY = height - padding.bottom - (tpm / (maxTpm * 1.1)) * (height - padding.top - padding.bottom);
         return Math.max(padding.top - 8, Math.min(height - padding.bottom, rawY));
       };
-      const tokenAxisPctPerToken = showWeeklyOverlay ? weeklyData.pct_per_token : null;
-      
       // Draw grid lines
       const gridSteps = 5;
       for (let i = 0; i <= gridSteps; i++) {
@@ -2595,7 +3581,7 @@
         text.setAttribute('font-size', '10px');
         text.setAttribute('text-anchor', 'end');
         text.setAttribute('font-family', 'var(--font-mono)');
-        text.textContent = formatTokenAxisLabel(val, tokenAxisPctPerToken);
+        text.textContent = formatTokenAxisLabel(val, null);
         svg.appendChild(text);
       }
       
@@ -2608,6 +3594,10 @@
         </linearGradient>
       `;
       svg.appendChild(defs);
+
+      if (showAccountUsage) {
+        renderAccountUsageStrip(svg, sourceRows, xScale, slotW, padding, summary);
+      }
       
       if (sixhourly) {
         // Column bars for the 3h aggregate view
@@ -2642,6 +3632,14 @@
             rect.setAttribute('opacity', '0.65');
             hideTooltip();
           });
+          // W87 zoom ladder: click a 3h bar to zoom into a 1h view around it
+          // (aggregate views only; the handler lives in the zoom script below).
+          if (isAggregate && row && row.hour) {
+            rect.setAttribute('data-tz', '1');
+            rect.addEventListener('click', () => {
+              if (window.enterTputZoom) { hideTooltip(); window.enterTputZoom(row); }
+            });
+          }
           svg.appendChild(rect);
         });
       } else {
@@ -2709,7 +3707,19 @@
       
       // Render X labels — at most ~16, evenly spaced (see MAX_POINTS note).
       const labelStride = Math.max(1, Math.ceil(data.length / 16));
-      data.filter((_, i) => i % labelStride === 0).forEach(d => {
+      const isCalendarDayStart = (i) => {
+        if (!sixhourly || !sourceRows[i] || !sourceRows[i].hour) return false;
+        if (i === 0 || !sourceRows[i - 1] || !sourceRows[i - 1].hour) return true;
+        const currentDay = new Date(sourceRows[i].hour + 'Z').toLocaleDateString();
+        const previousDay = new Date(sourceRows[i - 1].hour + 'Z').toLocaleDateString();
+        return currentDay !== previousDay;
+      };
+      data.filter((_, i) =>
+        i % labelStride === 0 &&
+        !isCalendarDayStart(i) &&
+        !isCalendarDayStart(i - 1) &&
+        !isCalendarDayStart(i + 1)
+      ).forEach(d => {
         const x = xScale(d.index);
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.setAttribute('x', x);
@@ -2731,7 +3741,7 @@
           const d = new Date(row.hour + 'Z');
           const prev = i > 0 ? sourceRows[i - 1] : null;
           const prevLocal = prev && prev.hour ? new Date(prev.hour + 'Z').toLocaleDateString() : null;
-          if (prevLocal !== d.toLocaleDateString()) {
+          if (isCalendarDayStart(i) || prevLocal !== d.toLocaleDateString()) {
             dayStarts.push({ i, x: xScale(i + 1), d });
           }
         });
@@ -2745,6 +3755,17 @@
           vl.setAttribute('x2', ds.x); vl.setAttribute('y2', height - padding.bottom + 6);
           vl.setAttribute('stroke', 'rgba(148,163,184,0.3)'); vl.setAttribute('stroke-width', '1');
           svg.appendChild(vl);
+          if (j > 0) {
+            const midnightLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            midnightLabel.setAttribute('x', ds.x);
+            midnightLabel.setAttribute('y', height - padding.bottom + 18);
+            midnightLabel.setAttribute('fill', 'var(--text-muted)');
+            midnightLabel.setAttribute('font-size', '10px');
+            midnightLabel.setAttribute('text-anchor', 'middle');
+            midnightLabel.setAttribute('font-family', 'var(--font-mono)');
+            midnightLabel.textContent = '00:00';
+            svg.appendChild(midnightLabel);
+          }
           // Day label centered over the day's span
           const wday = ds.d.toLocaleDateString([], { weekday: 'short' });
           const mday = ds.d.toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -2761,34 +3782,72 @@
       }
 
       const resetMarkerWindow = activeThroughputEngine === 'codex'
-        ? 'codex'
-        : (activeThroughputEngine === 'claude' && (showWeeklyOverlay || showCumulative)) ? 'seven_day' : null;
-      renderResetMarkers(svg, sourceRows, xScale, padding, height, resetMarkerWindow);
+        ? 'codex_weekly'
+        : activeThroughputEngine === 'kimi'
+          ? 'kimi_weekly'
+          : (activeThroughputEngine === 'claude' && (showWeeklyOverlay || showCumulative)) ? 'seven_day' : null;
+      if (activeThroughputEngine === 'combined') {
+        renderResetMarkers(svg, sourceRows, xScale, padding, height, 'seven_day', selPeriodStart && selPeriodStart.getTime());
+        const codexStart = weeklyData && weeklyData.codex && weeklyData.codex.week_start;
+        renderResetMarkers(svg, sourceRows, xScale, padding, height, 'codex_weekly', new Date(codexStart || '').getTime());
+      } else {
+        renderResetMarkers(
+          svg,
+          sourceRows,
+          xScale,
+          padding,
+          height,
+          resetMarkerWindow,
+          selPeriodStart ? selPeriodStart.getTime() : null,
+        );
+      }
 
       // ── Weekly % overlay: 3-hour view (projection + prev period overlay) ──────
       if (showWeeklyOverlay && sixhourly) {
-        const ppt = weeklyData.pct_per_token;
+        const componentSummaries = summary.components || {};
+        const claudeComponent = componentSummaries.claude || (activeThroughputEngine === 'claude' ? summary : null);
+        const codexComponent = componentSummaries.codex || (activeThroughputEngine === 'codex' ? summary : null);
+        const kimiComponent = componentSummaries.kimi || (activeThroughputEngine === 'kimi' ? summary : null);
+        const kimiWeekly = weeklyData.kimi || {};
+        const claudeEvents = quotaTokenEvents(claudeComponent, weeklyData.week_start);
+        const codexEvents = quotaTokenEvents(codexComponent, weeklyData.codex && weeklyData.codex.week_start);
+        const kimiEvents = quotaTokenEvents(kimiComponent, kimiWeekly.week_start);
+        const claudeCurrentTokens = claudeEvents.reduce((sum, event) => sum + event.tokens, 0);
+        const codexCurrentTokens = codexEvents.reduce((sum, event) => sum + event.tokens, 0);
+        const kimiCurrentTokens = kimiEvents.reduce((sum, event) => sum + event.tokens, 0);
+        const claudePpt = claudeCurrentTokens > 0 ? weeklyData.display_pct / claudeCurrentTokens : 0;
+        const codexPpt = codexCurrentTokens > 0 ? weeklyData.codex.weekly_pct / codexCurrentTokens : 0;
+        const kimiPpt = kimiCurrentTokens > 0 ? kimiWeekly.weekly_pct / kimiCurrentTokens : 0;
+        const claudeSeries = claudePpt > 0 ? buildQuotaSeries(
+          claudeComponent, weeklyData.week_start, sourceRows, claudePpt, weeklyData.display_pct
+        ) : null;
+        const codexSeries = codexPpt > 0 ? buildQuotaSeries(
+          codexComponent, weeklyData.codex.week_start, sourceRows, codexPpt, weeklyData.codex.weekly_pct
+        ) : null;
+        const kimiSeries = kimiPpt > 0 ? buildQuotaSeries(
+          kimiComponent, kimiWeekly.week_start, sourceRows, kimiPpt, kimiWeekly.weekly_pct
+        ) : null;
+        const primarySeries = activeThroughputEngine === 'codex' ? codexSeries
+          : (activeThroughputEngine === 'kimi' ? kimiSeries : claudeSeries);
+        if (!primarySeries) return;
+        const ppt = activeThroughputEngine === 'codex' ? codexPpt
+          : (activeThroughputEngine === 'kimi' ? kimiPpt : claudePpt);
+        const primaryComponent = activeThroughputEngine === 'codex' ? codexComponent
+          : (activeThroughputEngine === 'kimi' ? kimiComponent : claudeComponent);
+        // The current view includes a small lead-in from before the latest reset.
+        // Preserve its own zero-based progression without joining it to the new
+        // billing-period line, whose ending value must match the live meter.
+        const previousSeries = buildPreviousQuotaSeries(primaryComponent, sourceRows, ppt);
+        // Kimi's weekly line is purple so it never reads as the Claude meter.
+        const weeklyLineColor = activeThroughputEngine === 'kimi' ? '#c084fc' : '#f59e0b';
 
-        // 1. Cumulative actual %
-        let cumAct = 0;
-        const cumActVals = sourceRows.map(row => {
-          if (row._projected) return null;
-          cumAct += ((row.raw_context_tokens || 0) + (row.output_tokens || 0)) * ppt;
-          return cumAct;
-        });
-        const lastActIdx = cumActVals.reduce((last, v, i) => v != null ? i : last, -1);
-        const slotsElapsed = lastActIdx + 1;
-        const slotsRemaining = sourceRows.length - slotsElapsed;
-        const burnPerSlot = slotsElapsed > 0 ? cumAct / slotsElapsed : 0;
-        const projectedEnd = cumAct + burnPerSlot * slotsRemaining;
-
-        // 2. Previous period cumulative % (position-aligned)
-        let cumPrv = 0;
-        const cumPrvVals = prevPeriodRows.map(row => {
-          if (!row) return null;
-          cumPrv += ((row.raw_context_tokens || 0) + (row.output_tokens || 0)) * ppt;
-          return cumPrv;
-        });
+        // 1. Cumulative actual % — normalized to the authoritative meter.
+        const cumActVals = primarySeries.actual;
+        const cumAct = primarySeries.currentPct;
+        const lastActIdx = primarySeries.lastActualIndex;
+        const slotsRemaining = sourceRows.filter(row => row && row._projected).length;
+        const burnPerSlot = primarySeries.burnPerSlot;
+        const projectedEnd = primarySeries.projectedEnd;
 
         const _opusRow = (summary.per_model || []).find(m => (m.model || '').toLowerCase().includes('opus'));
         const _opusTok = _opusRow ? (_opusRow.effective_input_tokens || 0) + (_opusRow.output_tokens || 0) : 0;
@@ -2796,7 +3855,9 @@
         const _opusCPT = (_opusTok > 0 && _opusCost > 0) ? _opusCost / _opusTok : null;
         const _effTok = (summary.total_effective_input_tokens || 0) + (summary.total_output_tokens || 0);
         const _blendCPT = (_effTok > 0 && (summary.cost_usd || 0) > 0) ? (summary.cost_usd || 0) / _effTok : null;
-        const _opusRatio = (_opusCPT && _blendCPT) ? _opusCPT / _blendCPT : null;
+        const _opusRatio = activeThroughputEngine === 'claude' && _opusCPT && _blendCPT
+          ? _opusCPT / _blendCPT
+          : null;
         let lastOpusV = null, lastOpusI = -1;
         const cumOpusVals = _opusRatio ? cumActVals.map((v, i) => {
           if (v == null) return null;
@@ -2805,12 +3866,18 @@
           return lastOpusV;
         }) : [];
 
-        const maxCum = quotaScaleMax(projectedEnd, cumPrv, lastOpusV, cumAct);
-        const yPct = p => height - padding.bottom - (p / maxCum) * (height - padding.top - padding.bottom);
+        const WEEKLY_AXIS_MAX = 100;
+        const yPct = p => {
+          const clamped = Math.min(Math.max(p, 0), WEEKLY_AXIS_MAX);
+          return height - padding.bottom - (clamped / WEEKLY_AXIS_MAX) * (height - padding.top - padding.bottom);
+        };
+
+        if (previousSeries) {
+          drawQuotaSeries(svg, previousSeries, xScale, yPct, weeklyLineColor, 'Previous cycle', 0, 0.4);
+        }
 
         // 3. % gridlines (right axis)
         [0, 25, 50, 75, 100].forEach(p => {
-          if (p > maxCum) return;
           const y = yPct(p);
           const gl = document.createElementNS('http://www.w3.org/2000/svg', 'line');
           gl.setAttribute('x1', padding.left); gl.setAttribute('y1', y);
@@ -2824,32 +3891,6 @@
           t.textContent = `${p}%`; svg.appendChild(t);
         });
 
-        // 4. Previous period overlay — visible dashed slate line (reference)
-        if (cumPrvVals.some(v => v != null)) {
-          let pp = '', ppS = false;
-          let lastPrvX = 0, lastPrvY = 0, lastPrvV = 0;
-          cumPrvVals.forEach((v, i) => {
-            if (v == null) return;
-            const x = xScale(i + 1), y = yPct(v);
-            pp += ppS ? `L ${x} ${y} ` : `M ${x} ${y} `;
-            ppS = true; lastPrvX = x; lastPrvY = y; lastPrvV = v;
-          });
-          const ppLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          ppLine.setAttribute('d', pp); ppLine.setAttribute('fill', 'none');
-          ppLine.setAttribute('stroke', '#94a3b8'); ppLine.setAttribute('stroke-width', '2.0');
-          ppLine.setAttribute('stroke-dasharray', '5,3'); ppLine.setAttribute('opacity', '0.55');
-          svg.appendChild(ppLine);
-          // Label at end of prev period line
-          if (lastPrvV > 0) {
-            const pl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            pl.setAttribute('x', lastPrvX + 4); pl.setAttribute('y', lastPrvY + 4);
-            pl.setAttribute('fill', '#94a3b8'); pl.setAttribute('font-size', '10');
-            pl.setAttribute('font-family', 'monospace'); pl.setAttribute('opacity', '0.7');
-            pl.textContent = `prev ${lastPrvV.toFixed(0)}%`;
-            svg.appendChild(pl);
-          }
-        }
-
         // 5. Current period actual — thick solid orange (dominant)
         if (lastActIdx >= 0) {
           let ap = '', apS = false;
@@ -2861,21 +3902,21 @@
           });
           const actLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           actLine.setAttribute('d', ap); actLine.setAttribute('fill', 'none');
-          actLine.setAttribute('stroke', '#f59e0b'); actLine.setAttribute('stroke-width', '2.5');
+          actLine.setAttribute('stroke', weeklyLineColor); actLine.setAttribute('stroke-width', '2.5');
           actLine.setAttribute('stroke-linecap', 'round'); actLine.setAttribute('opacity', '1');
           svg.appendChild(actLine);
           // "Right now" dot + label at end of actual line
           const nx = xScale(lastActIdx + 1), ny = yPct(cumAct);
           const nowDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
           nowDot.setAttribute('cx', nx); nowDot.setAttribute('cy', ny);
-          nowDot.setAttribute('r', '5'); nowDot.setAttribute('fill', '#f59e0b');
+          nowDot.setAttribute('r', '5'); nowDot.setAttribute('fill', weeklyLineColor);
           svg.appendChild(nowDot);
           const nowLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           nowLbl.setAttribute('x', nx + 8); nowLbl.setAttribute('y', ny - 6);
-          nowLbl.setAttribute('fill', '#f59e0b'); nowLbl.setAttribute('font-size', '11px');
+          nowLbl.setAttribute('fill', weeklyLineColor); nowLbl.setAttribute('font-size', '11px');
           nowLbl.setAttribute('font-weight', 'bold'); nowLbl.setAttribute('text-anchor', 'start');
           nowLbl.setAttribute('font-family', 'var(--font-mono)');
-          nowLbl.textContent = `${cumAct.toFixed(1)}% · right now`;
+          nowLbl.textContent = `${activeThroughputEngine === 'combined' ? 'Claude ' : ''}${cumAct.toFixed(1)}% · right now`;
           svg.appendChild(nowLbl);
         }
 
@@ -2883,37 +3924,50 @@
         if (chartWeekOffset === 0 && slotsRemaining > 0 && burnPerSlot > 0 && lastActIdx >= 0) {
           const sx = xScale(lastActIdx + 1), sy = yPct(cumAct);
           let pp = `M ${sx} ${sy} `;
-          for (let i = slotsElapsed; i < sourceRows.length; i++) {
-            const proj = cumAct + burnPerSlot * (i - lastActIdx);
+          for (let i = lastActIdx + 1; i < sourceRows.length; i++) {
+            if (!sourceRows[i] || !sourceRows[i]._projected) continue;
+            const proj = primarySeries.values[i];
+            if (proj == null) continue;
             pp += `L ${xScale(i + 1)} ${yPct(proj)} `;
           }
           const projLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
           projLine.setAttribute('d', pp); projLine.setAttribute('fill', 'none');
-          projLine.setAttribute('stroke', '#f59e0b'); projLine.setAttribute('stroke-width', '1.8');
+          projLine.setAttribute('stroke', weeklyLineColor); projLine.setAttribute('stroke-width', '1.8');
           projLine.setAttribute('stroke-dasharray', '7,4'); projLine.setAttribute('opacity', '0.7');
           svg.appendChild(projLine);
           // End-of-period projected label — big number + subtitle
-          const projectedLabelAnchor = width - 4;
+          const projectedLabelAnchor = width - padding.right - 8;
           const plyBase = padding.top + 14;
           const bigNum = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           bigNum.setAttribute('x', projectedLabelAnchor); bigNum.setAttribute('y', plyBase);
-          bigNum.setAttribute('fill', '#f59e0b'); bigNum.setAttribute('font-size', '20px');
+          bigNum.setAttribute('fill', weeklyLineColor); bigNum.setAttribute('font-size', '20px');
           bigNum.setAttribute('font-weight', 'bold'); bigNum.setAttribute('text-anchor', 'end');
           bigNum.setAttribute('font-family', 'var(--font-mono)'); bigNum.setAttribute('opacity', '0.95');
-          bigNum.textContent = `${projectedEnd.toFixed(1)}%`;
+          const overflowSuffix = projectedEnd > WEEKLY_AXIS_MAX ? ' ↑' : '';
+          bigNum.textContent = `${projectedEnd.toFixed(1)}%${overflowSuffix}`;
           svg.appendChild(bigNum);
           const projWord = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           projWord.setAttribute('x', projectedLabelAnchor); projWord.setAttribute('y', plyBase + 15);
-          projWord.setAttribute('fill', '#f59e0b'); projWord.setAttribute('font-size', '11px');
+          projWord.setAttribute('fill', weeklyLineColor); projWord.setAttribute('font-size', '11px');
           projWord.setAttribute('font-weight', 'bold'); projWord.setAttribute('text-anchor', 'end');
           projWord.setAttribute('font-family', 'var(--font-mono)'); projWord.setAttribute('opacity', '0.75');
-          projWord.textContent = 'projected'; svg.appendChild(projWord);
+          projWord.textContent = 'expected 100%'; svg.appendChild(projWord);
           const rateNote = document.createElementNS('http://www.w3.org/2000/svg', 'text');
           rateNote.setAttribute('x', projectedLabelAnchor); rateNote.setAttribute('y', plyBase + 27);
-          rateNote.setAttribute('fill', '#f59e0b'); rateNote.setAttribute('font-size', '9px');
+          rateNote.setAttribute('fill', weeklyLineColor); rateNote.setAttribute('font-size', '9px');
           rateNote.setAttribute('text-anchor', 'end'); rateNote.setAttribute('opacity', '0.45');
           rateNote.setAttribute('font-family', 'var(--font-mono)');
-          rateNote.textContent = "at current week's rate"; svg.appendChild(rateNote);
+          const projectedRow = [...sourceRows].reverse().find(row => row && row._projected);
+          const projectedCrossingLabel = projectedRow && projectedRow.hour
+            ? new Date(`${projectedRow.hour}Z`).toLocaleString([], {
+                weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric'
+              })
+            : "at current week's rate";
+          rateNote.textContent = projectedCrossingLabel; svg.appendChild(rateNote);
+        }
+
+        if (activeThroughputEngine === 'combined' && codexSeries) {
+          drawQuotaSeries(svg, codexSeries, xScale, yPct, '#60a5fa', 'Codex', 13);
         }
 
         // 7. IF OPUS ONLY — red dashed line showing hypothetical all-Opus cumulative %
@@ -2950,7 +4004,7 @@
         // Fable rows even when the current period has none. Gate on weeklyData.fable_pct,
         // which IS scoped to the current period, so the line only appears when Fable is
         // actually active in this billing period.
-        const _fableActiveThisPeriod = weeklyData && weeklyData.fable_pct != null && weeklyData.fable_pct > 0;
+        const _fableActiveThisPeriod = activeThroughputEngine === 'claude' && weeklyData && weeklyData.fable_pct != null && weeklyData.fable_pct > 0;
         const _fableRows = (summary.per_model || []).filter(m => (m.model || m.engine || '').toLowerCase().includes('fable'));
         const _fableTok = _fableRows.reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
         const _totalModelTok = (summary.per_model || []).reduce((s, m) => s + (m.raw_context_tokens || 0) + (m.output_tokens || 0), 0);
@@ -3006,8 +4060,7 @@
             `${fmtD(selPeriodStart)} – ${fmtD(new Date(selPeriodEnd.getTime() - 1))}`;
           const prevBtn = document.getElementById('chart-week-prev');
           const nextBtn = document.getElementById('chart-week-next');
-          const hasPrevData = prevPeriodRows.some(r => r != null);
-          prevBtn.disabled = chartWeekOffset <= -1 || !hasPrevData;
+          prevBtn.disabled = chartWeekOffset <= -1 || !hasPreviousPeriodData;
           nextBtn.disabled = chartWeekOffset >= 0;
           prevBtn.onclick = () => {
             chartWeekOffset--;
@@ -3022,8 +4075,8 @@
 
       // ── Weekly % overlay (daily view) ────────────────────────────────────────
       if (showWeeklyOverlay && daily) {
-        const pctPerToken = weeklyData.pct_per_token;
-        const resetAt = weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
+        const pctPerToken = weeklyChart.pctPerToken;
+        const resetAt = new Date(weeklyChart.resetAt);
         const periodStart = resetAt ? new Date(resetAt.getTime() - 7 * 86400000) : null;
         const rowDt = (row) => row.hour ? new Date(row.hour) : (row.day ? new Date(row.day + 'T00:00:00') : null);
         let cumPrev = 0, cumCurr = 0;
@@ -3308,6 +4361,16 @@
       return days >= 1 ? `resets in ${days}d ${hrs}h` : `resets in ${hrs}h`;
     }
 
+    function formatNextReset(label, iso) {
+      if (!iso) return `<strong>${label} next reset:</strong> unavailable`;
+      const reset = new Date(iso);
+      if (Number.isNaN(reset.getTime())) return `<strong>${label} next reset:</strong> unavailable`;
+      const absolute = reset.toLocaleString([], {
+        weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+      });
+      return `<strong>${label} next reset:</strong> ${absolute} · ${fmtResetCountdown(iso)}`;
+    }
+
     function fmtResetStarted(iso) {
       if (!iso) return '';
       const d = new Date(iso);
@@ -3378,6 +4441,8 @@
       if (value === 'seven_day') return 'Weekly';
       if (value === 'codex_five_hour') return 'Codex 5-hour session';
       if (value === 'codex_weekly') return 'Codex weekly';
+      if (value === 'kimi_five_hour') return 'Kimi 5-hour session';
+      if (value === 'kimi_weekly') return 'Kimi weekly';
       return value || 'unknown';
     }
 
@@ -3481,48 +4546,40 @@
       } catch (_) { /* best effort */ }
     }
 
-    async function loadWeeklyUsage() {
-      try {
-        resetEventInputDefault();
-        const res = await fetch('/api/weekly_usage');
-        if (!res.ok) {
-          weeklyDataLoaded = true;
-          if (lastRender && lastRender.session && lastRender.data) {
-            renderDashboard(lastRender.session, lastRender.data);
-          }
-          return;
-        }
-        const d = await res.json();
-        // Stash for use by drawChart() — weekly % overlay on daily chart.
-        const hadWeeklyData = !!weeklyData;
-        weeklyData = (d && d.available && d.pct_per_token != null) ? d : null;
-        const shouldRefreshChart = !weeklyDataLoaded || (!hadWeeklyData && weeklyData);
-        weeklyDataLoaded = true;
-        // If the aggregate chart was waiting for weekly context, render the
-        // stable billing-period view once instead of flashing the fallback
-        // all-hours chart first.
-        if (shouldRefreshChart && lastRender) {
-          if (lastRender.session && lastRender.data) renderDashboard(lastRender.session, lastRender.data);
-          else drawChart(lastRender.turns, lastRender.summary, lastRender.isAggregate, lastRender.bucketMode, lastRender.showCumulative);
-        }
-        const banner = document.getElementById('weekly-banner');
-        if (!d || !d.available || d.display_pct == null) {
-          banner.style.display = 'none';
-          return;
-        }
+    function renderWeeklyUsage(d) {
+      resetEventInputDefault();
+      const banner = document.getElementById('weekly-banner');
+      if (!d || !d.available || d.display_pct == null) {
+        banner.style.display = 'none';
+        return;
+      }
         const pct = d.display_pct;
         setWeeklyPctText(document.getElementById('weekly-pct'), pct);
         setWeeklyFill(document.getElementById('weekly-gauge-fill'), pct);
         const bits = [];
-        if (d.real_pct != null) bits.push(`Claude ${Math.round(d.real_pct)}% last synced from claude.ai`);
-        if (d.est_pct != null) bits.push(`~${d.est_pct.toFixed(0)}% Claude live estimate`);
-        if (d.projected_pct != null) bits.push(`Claude projected ${Math.round(d.projected_pct)}% at reset`);
+        const syncBits = [];
+        const resetBits = [];
+        if (d.real_pct != null) {
+          const value = `Claude ${Math.round(d.real_pct)}% synced`;
+          syncBits.push(value);
+          bits.push(`${value} from claude.ai`);
+        }
+        if (d.est_pct != null) {
+          const value = `~${d.est_pct.toFixed(0)}% live`;
+          syncBits.push(value);
+          bits.push(`Claude ${value} estimate`);
+        }
+        if (d.projected_pct != null) {
+          const value = `Claude ${Math.round(d.projected_pct)}% projected`;
+          resetBits.push(value);
+          bits.push(`${value} at reset`);
+        }
         if (d.week_start && (d.week_start_source === 'event' || d.week_start_source === 'override')) {
           bits.push(`week started ${fmtResetStarted(d.week_start)} (reset detected)`);
         }
         const fableMeter = document.getElementById('weekly-fable-meter');
         if (fableMeter && d.fable_pct != null) {
-          fableMeter.style.display = 'flex';
+          fableMeter.style.display = 'grid';
           setWeeklyPctText(document.getElementById('weekly-fable-pct'), d.fable_pct);
           setWeeklyFill(document.getElementById('weekly-fable-fill'), d.fable_pct);
           bits.push(`Fable scoped ${Math.round(d.fable_pct)}%`);
@@ -3531,28 +4588,68 @@
         }
         const codexMeter = document.getElementById('weekly-codex-meter');
         if (d.codex && d.codex.ok && d.codex.weekly_pct != null) {
-          codexMeter.style.display = 'flex';
+          codexMeter.style.display = 'grid';
           setWeeklyPctText(document.getElementById('weekly-codex-pct'), d.codex.weekly_pct);
           setWeeklyFill(document.getElementById('weekly-codex-fill'), d.codex.weekly_pct);
           if (d.codex.plan_type) bits.push(`Codex plan ${d.codex.plan_type}`);
           const cProj = d.codex.projected_pct != null ? ` · projected ${Math.round(d.codex.projected_pct)}%` : '';
           bits.push(`Codex weekly ${Math.round(d.codex.weekly_pct)}%${cProj}`);
+          if (d.codex.projected_pct != null) resetBits.push(`Codex ${Math.round(d.codex.projected_pct)}% projected`);
           const cSession = d.codex.session;
           if (cSession && cSession.pct != null) bits.push(`Codex session ${Math.round(cSession.pct)}%`);
         } else if (codexMeter) {
           codexMeter.style.display = 'none';
         }
+        const kimiMeter = document.getElementById('weekly-kimi-meter');
+        if (d.kimi && d.kimi.ok && d.kimi.weekly_pct != null) {
+          kimiMeter.style.display = 'grid';
+          setWeeklyPctText(document.getElementById('weekly-kimi-pct'), d.kimi.weekly_pct);
+          setWeeklyFill(document.getElementById('weekly-kimi-fill'), d.kimi.weekly_pct);
+          if (d.kimi.plan_type) bits.push(`Kimi plan ${d.kimi.plan_type}`);
+          const kProj = d.kimi.projected_pct != null ? ` · projected ${Math.round(d.kimi.projected_pct)}%` : '';
+          bits.push(`Kimi weekly ${Math.round(d.kimi.weekly_pct)}%${kProj}`);
+          if (d.kimi.projected_pct != null) resetBits.push(`Kimi ${Math.round(d.kimi.projected_pct)}% projected`);
+          const kSession = d.kimi.session;
+          if (kSession && kSession.pct != null) bits.push(`Kimi session ${Math.round(kSession.pct)}%`);
+        } else if (kimiMeter) {
+          kimiMeter.style.display = 'none';
+        }
         const reset = fmtResetCountdown(d.weekly_resets_at);
-        if (reset) bits.push(reset);
+        if (reset) {
+          resetBits.unshift(reset);
+          bits.push(reset);
+        }
         const updated = fmtLastUpdated(d.fetched_at || d.calibrated_at);
-        if (updated) bits.push(`last updated ${updated}`);
-        document.getElementById('weekly-sub').innerHTML = bits.join('<br>');
-        banner.style.display = 'flex';
-      } catch (e) {
+        if (updated) {
+          syncBits.push(updated);
+          bits.push(`last updated ${updated}`);
+        }
+        document.getElementById('weekly-sync-line').textContent = syncBits.join(' · ');
+        document.getElementById('weekly-reset-line').textContent = resetBits.join(' · ');
+        document.getElementById('weekly-sub').title = bits.join(' · ');
+        document.getElementById('claude-next-reset').innerHTML = formatNextReset('Claude', d.weekly_resets_at);
+        document.getElementById('codex-next-reset').innerHTML = formatNextReset(
+          'Codex', d.codex && d.codex.weekly_resets_at
+        );
+        document.getElementById('kimi-next-reset').innerHTML = formatNextReset(
+          'Kimi', d.kimi && d.kimi.weekly_resets_at
+        );
+        banner.style.display = 'grid';
+    }
+
+    async function loadWeeklyUsage() {
+      try {
+        const res = await fetch('/api/weekly_usage');
+        if (!res.ok) return;
+        const d = await res.json();
+        weeklyData = d && typeof d === 'object' ? d : {};
         weeklyDataLoaded = true;
+        renderWeeklyUsage(weeklyData);
         if (lastRender && lastRender.session && lastRender.data) {
           renderDashboard(lastRender.session, lastRender.data);
         }
+      } catch (e) {
+        // Keep the complete visible bootstrap unchanged on an auxiliary error.
       }
     }
 
@@ -3722,58 +4819,279 @@
       }
     });
 
-    async function refreshAggregateInBackground(_aggDefault) {
-      if (!_aggDefault) return null;
-      const engineAtStart = activeThroughputEngine;
-      setStatus('Refreshing throughput data...', true);
-      try {
-        const res = await fetch(throughputFetchUrl('/api/throughput', _aggDefault.session_id));
-        if (!res.ok) throw new Error('API failed');
-        const data = await res.json();
-        if (data && data.ok && activeSessionId === _aggDefault.session_id && activeThroughputEngine === engineAtStart) {
-          renderDashboard(_aggDefault, data);
-          setStatus('Idle');
-        }
-        return data;
-      } catch (err) {
-        console.error(err);
-        setStatus('Refresh failed; showing cached throughput');
-        return null;
-      }
+    bootThroughputPage();
+  </script>
+  <script>
+  // ── W87 zoom ladder: 3h → 1h → per-session drill ─────────────────────────
+  // Level 1 re-renders the already-loaded `lastRender.summary.hourly` rows at
+  // 1h granularity for a 12h window around the clicked 3h bar (zero fetches).
+  // Level 2 calls /api/throughput/window (bounded, server-cached) for the
+  // per-session breakdown of one clicked hour; each session row clicks
+  // through to its conversation. Escape (or ‹ back) pops one level.
+  // Renders into an HTML overlay covering .chart-container, so the existing
+  // drawChart pipeline is untouched.
+  (function () {
+    'use strict';
+    let zoom = null; // null | {level:1,startMs,endMs} | {level:2,hourMs,l1:{startMs,endMs}}
+
+    // Bucket keys are local wall-clock strings ("YYYY-MM-DD HH:00" or
+    // "YYYY-MM-DDTHH:00:00"); parsing them without a zone suffix yields real
+    // local epochs — correct inputs for /api/throughput/window.
+    function keyToMs(key) {
+      const t = Date.parse(String(key || '').trim().replace(' ', 'T'));
+      return Number.isFinite(t) ? t : null;
+    }
+    function fmtTok(n) {
+      n = Number(n) || 0;
+      if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+      return String(Math.round(n));
+    }
+    function fmtUsd(n) { return '$' + (Number(n) || 0).toFixed(2); }
+    function hm(ms) {
+      const d = new Date(ms);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    function dayLabel(ms) {
+      return new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
     }
 
-    async function loadInitialAggregate(_aggDefault) {
-      if (!_aggDefault) return null;
-      const engineAtStart = activeThroughputEngine;
-      activeSessionId = _aggDefault.session_id;
-      try {
-        const res = await fetch(throughputFetchUrl('/api/throughput/initial', _aggDefault.session_id));
-        if (!res.ok) throw new Error('API failed');
-        const data = await res.json();
-        if (data && data.ok && activeSessionId === _aggDefault.session_id && activeThroughputEngine === engineAtStart) {
-          renderDashboard(_aggDefault, data);
-          setStatus(data.snapshot && data.snapshot.cached ? 'Showing cached throughput' : 'Showing initial throughput');
-        }
-        refreshAggregateInBackground(_aggDefault);
-        return data;
-      } catch (err) {
-        console.error(err);
-        refreshAggregateInBackground(_aggDefault);
-        return null;
+    function overlayEl() {
+      let el = document.getElementById('tput-zoom-overlay');
+      if (el) return el;
+      const container = document.querySelector('.chart-container');
+      if (!container) return null;
+      el = document.createElement('div');
+      el.id = 'tput-zoom-overlay';
+      container.appendChild(el);
+      if (!document.getElementById('tput-zoom-style')) {
+        const st = document.createElement('style');
+        st.id = 'tput-zoom-style';
+        st.textContent =
+          // left:-16px: the chart svg has overflow:visible and its y-axis
+          // labels render slightly left of the container box — cover them too.
+          '#tput-zoom-overlay{position:absolute;top:0;bottom:0;right:0;left:-16px;z-index:6;background:#10141c;' +
+            'display:flex;flex-direction:column;border-radius:inherit;overflow:hidden;}' +
+          '#tput-zoom-overlay .tz-head{display:flex;align-items:center;gap:10px;padding:8px 12px;' +
+            'border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:11px;color:var(--text-muted);flex-wrap:wrap;}' +
+          '#tput-zoom-overlay .tz-back{cursor:pointer;border:1px solid var(--border-active);border-radius:6px;' +
+            'background:transparent;color:var(--accent);font-family:var(--font-mono);font-size:11px;padding:3px 9px;}' +
+          '#tput-zoom-overlay .tz-back:hover{background:rgba(57,210,192,.08);}' +
+          '#tput-zoom-overlay .tz-title{color:var(--text);font-weight:600;}' +
+          '#tput-zoom-overlay .tz-hint{margin-left:auto;opacity:.7;}' +
+          '#tput-zoom-overlay .tz-body{flex:1;min-height:0;position:relative;overflow:auto;padding:4px 8px 8px;}' +
+          '#tput-zoom-overlay svg text{font-family:var(--font-mono);fill:var(--text-muted);}' +
+          '#tput-zoom-overlay .tz-table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11.5px;}' +
+          '#tput-zoom-overlay .tz-table th{position:sticky;top:0;background:#10141c;text-align:right;' +
+            'color:var(--text-muted);font-weight:500;padding:5px 8px;border-bottom:1px solid var(--border);}' +
+          '#tput-zoom-overlay .tz-table th:first-child,#tput-zoom-overlay .tz-table td:first-child{text-align:left;}' +
+          '#tput-zoom-overlay .tz-table td{padding:5px 8px;text-align:right;border-bottom:1px solid var(--border);color:var(--text);white-space:nowrap;}' +
+          '#tput-zoom-overlay .tz-table tr.tz-row{cursor:pointer;}' +
+          '#tput-zoom-overlay .tz-table tr.tz-row:hover td{background:rgba(57,210,192,.06);}' +
+          '#tput-zoom-overlay .tz-name{color:var(--accent);max-width:260px;overflow:hidden;text-overflow:ellipsis;}' +
+          '#tput-zoom-overlay .tz-eng{opacity:.65;font-size:10px;margin-left:6px;}' +
+          '#tput-zoom-overlay .tz-note{padding:14px;color:var(--text-muted);font-family:var(--font-mono);font-size:12px;}';
+        document.head.appendChild(st);
       }
+      return el;
     }
 
-    // Boot — render a cache-only default aggregate first, then refresh the
-    // expensive all_7_days aggregate without blocking the initial UI.
-    updateThroughputEngineUi();
-    const _aggDefault = currentAggregateSession();
-    loadInitialAggregate(_aggDefault);
-    toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
-    loadSessions();
-    loadResetEvents();
-    loadWeeklyUsage();
-    setInterval(loadWeeklyUsage, 120000);
-    setInterval(loadResetEvents, 120000);
+    function closeZoom() {
+      zoom = null;
+      const el = document.getElementById('tput-zoom-overlay');
+      if (el) el.remove();
+    }
+
+    function head(backLabel, title, hint) {
+      return '<div class="tz-head"><button type="button" class="tz-back">‹ ' + esc(backLabel) + '</button>' +
+        '<span class="tz-title">' + title + '</span>' +
+        '<span class="tz-hint">' + esc(hint) + ' · Esc backs out</span></div>';
+    }
+
+    // ── Level 1: 1h bars for a 12h window (client-side re-bucket) ──────────
+    function hourRowsInWindow(startMs, endMs) {
+      // `lastRender` is a top-level `let` in the main script — visible here
+      // through the global lexical scope, but NOT as a window property.
+      const lr = (typeof lastRender !== 'undefined') ? lastRender : null;
+      const hourly = (lr && lr.summary && lr.summary.hourly) || [];
+      const out = [];
+      hourly.forEach((row) => {
+        const ms = keyToMs(row.hour);
+        if (ms == null || ms < startMs || ms >= endMs) return;
+        out.push({
+          ms,
+          tokens: (Number(row.effective_input_tokens) || 0) + (Number(row.output_tokens) || 0),
+          turns: Number(row.turns) || 0,
+          cost: Number(row.cost_usd) || 0,
+          output: Number(row.output_tokens) || 0,
+        });
+      });
+      return out;
+    }
+
+    function renderL1() {
+      const el = overlayEl();
+      if (!el || !zoom) return;
+      const { startMs, endMs } = zoom;
+      const rows = hourRowsInWindow(startMs, endMs);
+      const byHour = {};
+      rows.forEach((r) => { byHour[r.ms] = r; });
+      const nHours = Math.round((endMs - startMs) / 3600e3);
+      const total = rows.reduce((a, r) => a + r.tokens, 0);
+      const title = dayLabel(startMs) + ' ' + hm(startMs) + '–' + hm(endMs - 1) +
+        ' · 1h buckets · ' + fmtTok(total) + ' cache-adj';
+      let html = head('3h view', esc(title), 'click an hour for its sessions');
+      const bodyW = Math.max(320, (el.clientWidth || 800) - 16);
+      const H = Math.max(160, (el.clientHeight || 300) - 70);
+      const padB = 22, padT = 12, padL = 8, padR = 8;
+      const slotW = (bodyW - padL - padR) / nHours;
+      const barW = Math.max(6, slotW * 0.66);
+      const max = Math.max(1, ...rows.map((r) => r.tokens));
+      let bars = '';
+      const nowMs = Date.now();
+      for (let i = 0; i < nHours; i++) {
+        const ms = startMs + i * 3600e3;
+        if (ms > nowMs) break;
+        const r = byHour[ms];
+        const v = r ? r.tokens : 0;
+        const bh = v > 0 ? Math.max(2, (v / max) * (H - padT - padB)) : 0;
+        const x = padL + i * slotW + (slotW - barW) / 2;
+        const label = hm(ms);
+        if (bh > 0) {
+          bars += '<rect class="tz-bar" data-ms="' + ms + '" x="' + x.toFixed(1) +
+            '" y="' + (H - padB - bh).toFixed(1) + '" width="' + barW.toFixed(1) +
+            '" height="' + bh.toFixed(1) + '" rx="2" fill="var(--accent)" opacity="0.5" style="cursor:pointer;">' +
+            '<title>' + label + ' — ' + fmtTok(v) + ' cache-adj tokens · ' + (r ? r.turns : 0) +
+            ' calls · ' + fmtUsd(r ? r.cost : 0) + '\nClick for per-session breakdown</title></rect>';
+        } else {
+          bars += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - 1) + '" width="' + barW.toFixed(1) +
+            '" height="1" fill="var(--border)" opacity="0.8"></rect>';
+        }
+        bars += '<text x="' + (padL + i * slotW + slotW / 2).toFixed(1) + '" y="' + (H - 6) +
+          '" text-anchor="middle" font-size="9">' + label.slice(0, 2) + '</text>';
+      }
+      html += '<div class="tz-body"><svg width="' + bodyW + '" height="' + H + '" viewBox="0 0 ' + bodyW + ' ' + H + '">' +
+        bars + '</svg></div>';
+      el.innerHTML = html;
+      el.querySelector('.tz-back').addEventListener('click', closeZoom);
+      el.querySelectorAll('.tz-bar').forEach((b) => {
+        b.addEventListener('click', () => enterDrill(Number(b.getAttribute('data-ms'))));
+      });
+    }
+
+    // ── Level 2: per-session drill for one hour (/api/throughput/window) ───
+    function enterDrill(hourMs) {
+      if (!zoom || !Number.isFinite(hourMs)) return;
+      zoom = { level: 2, hourMs, l1: { startMs: zoom.startMs, endMs: zoom.endMs } };
+      renderL2();
+    }
+
+    function renderL2() {
+      const el = overlayEl();
+      if (!el || !zoom || zoom.level !== 2) return;
+      const { hourMs } = zoom;
+      const title = dayLabel(hourMs) + ' ' + hm(hourMs) + '–' + hm(hourMs + 3600e3 - 1) + ' · sessions';
+      el.innerHTML = head('1h view', esc(title), 'click a session to open its conversation') +
+        '<div class="tz-body"><div class="tz-note">Loading sessions…</div></div>';
+      el.querySelector('.tz-back').addEventListener('click', () => {
+        zoom = { level: 1, startMs: zoom.l1.startMs, endMs: zoom.l1.endMs };
+        renderL1();
+      });
+      const engine = (typeof activeThroughputEngine === 'string' && (activeThroughputEngine === 'codex' || activeThroughputEngine === 'kimi')) ? activeThroughputEngine : 'claude';
+      const url = '/api/throughput/window?start=' + (hourMs / 1000) + '&end=' + ((hourMs + 3600e3) / 1000) +
+        '&engine=' + engine + '&limit=30';
+      fetch(url, { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!zoom || zoom.level !== 2 || zoom.hourMs !== hourMs) return;
+          const body = el.querySelector('.tz-body');
+          if (!d || !d.ok) {
+            body.innerHTML = '<div class="tz-note">Drill failed: ' + esc((d && d.error) || 'unknown error') + '</div>';
+            return;
+          }
+          const sessions = d.sessions || [];
+          if (!sessions.length) {
+            body.innerHTML = '<div class="tz-note">No session activity in this hour' +
+              (engine !== 'claude' ? ' (' + engine + ')' : '') + '.</div>';
+            return;
+          }
+          const tot = d.totals || {};
+          let rowsHtml = '';
+          sessions.forEach((s, i) => {
+            const name = s.session_name || (s.session_id || '').slice(0, 8) || '(unknown)';
+            const models = (s.models || []).map((m) => String(m).replace(/^claude-/, '')).join(', ');
+            rowsHtml += '<tr class="tz-row" data-sid="' + esc(s.session_id || '') + '" title="Open this conversation">' +
+              '<td><span class="tz-name">' + (i + 1) + '. ' + esc(name) + '</span>' +
+              '<span class="tz-eng">' + esc(s.engine || '') + (models ? ' · ' + esc(models) : '') + '</span></td>' +
+              '<td>' + (s.turns || 0) + '</td>' +
+              '<td><strong>' + fmtTok(s.cache_adjusted_tokens) + '</strong></td>' +
+              '<td>' + fmtTok(s.output_tokens) + '</td>' +
+              '<td>' + fmtUsd(s.cost_usd) + '</td></tr>';
+          });
+          body.innerHTML =
+            '<div class="tz-note" style="padding:6px 8px 8px;">' + sessions.length + ' session' +
+              (sessions.length === 1 ? '' : 's') +
+              (d.sessions_truncated ? ' (+' + d.sessions_truncated + ' more)' : '') +
+              ' · window total ' + fmtTok(tot.cache_adjusted_tokens) + ' cache-adj · ' + fmtUsd(tot.cost_usd) + '</div>' +
+            '<table class="tz-table"><thead><tr><th>session</th><th>calls</th><th>cache-adj</th><th>out</th><th>cost</th></tr></thead>' +
+            '<tbody>' + rowsHtml + '</tbody></table>';
+          body.querySelectorAll('.tz-row').forEach((tr) => {
+            tr.addEventListener('click', () => {
+              const sid = tr.getAttribute('data-sid');
+              if (sid) window.open('/?ccc_popout=conversation&conv=' + encodeURIComponent(sid), '_blank');
+            });
+          });
+        })
+        .catch((e) => {
+          const body = el.querySelector('.tz-body');
+          if (body) body.innerHTML = '<div class="tz-note">Drill failed: ' + esc(e && e.message) + '</div>';
+        });
+    }
+
+    // ── Entry, escape, and invalidation ────────────────────────────────────
+    window.enterTputZoom = function (row) {
+      const slotMs = keyToMs(row && row.hour);
+      if (slotMs == null) return;
+      // 12h window: 4h of context before the clicked 3h slot, 5h after.
+      let startMs = slotMs - 4 * 3600e3;
+      let endMs = startMs + 12 * 3600e3;
+      const nowCeil = (Math.floor(Date.now() / 3600e3) + 1) * 3600e3;
+      if (endMs > nowCeil) { endMs = nowCeil; startMs = endMs - 12 * 3600e3; }
+      zoom = { level: 1, startMs, endMs };
+      renderL1();
+    };
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !zoom) return;
+      e.stopImmediatePropagation();
+      if (zoom.level === 2) {
+        zoom = { level: 1, startMs: zoom.l1.startMs, endMs: zoom.l1.endMs };
+        renderL1();
+      } else {
+        closeZoom();
+      }
+    }, true);
+
+    // Session/engine switches repaint the chart beneath the overlay with new
+    // data — close the (now stale) zoom rather than showing the wrong window.
+    ['throughput-engine-tabs', 'session-list'].forEach((id) => {
+      const host = document.getElementById(id);
+      if (host) host.addEventListener('click', closeZoom, true);
+    });
+
+    let resizeT = null;
+    window.addEventListener('resize', () => {
+      if (!zoom || zoom.level !== 1) return;
+      clearTimeout(resizeT);
+      resizeT = setTimeout(renderL1, 220);
+    });
+  })();
   </script>
 </body>
 </html>

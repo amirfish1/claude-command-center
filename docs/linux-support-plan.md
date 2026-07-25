@@ -95,7 +95,7 @@ Linux, and ensure the matching UI control is hidden (see next section).
 | Site | Function | Capability | Dead UI control? | Decision |
 |------|----------|-----------|------------------|----------|
 | hooks/_notify.py | `notify` | Desktop notification | No (passive) | clean-stub: already a silent no-op when osascript absent. notify-send is a desktop-later one-liner. |
-| 1774 | `_native_pick_folder` (`/api/fs/pick-folder`) | GUI folder chooser | Yes: "Browse" affordance | clean-stub: already returns "type a path instead". Hide Browse, rely on text path input. |
+| 1774 | `_native_pick_folder` (`/api/fs/pick-folder`) | GUI folder chooser | Yes: "Browse" affordance | Done: native picker via zenity/kdialog/yad on Linux desktops; headless boxes fall back to the in-browser picker (`GET /api/fs/list` + folder-picker modal). |
 | 4955, 5503, 5574 | screenshot capture | Screenshot for bug report / annotation | Yes: "Add screenshot" | clean-stub. Hide the screenshot button on non-Darwin. |
 | 5441, 5653, 5693, 5473 | window id, minimize, restore, sips crop | Window-accurate capture helpers | No (internal to screenshot) | clean-stub with the parent feature. |
 | 5313 (`/api/reveal-file` 41163) | `_reveal_bug_screenshot`, reveal-file | Reveal file in Finder | Maybe: any "reveal" link | clean-stub. Optional desktop-later: `xdg-open` the parent dir. |

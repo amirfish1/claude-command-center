@@ -34,7 +34,7 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn("left: var(--conv-icon-left);", icon_css)
         self.assertIn("top: 50%;", icon_css)
         self.assertIn("transform: translateY(-50%);", icon_css)
-        self.assertIn("opacity: 0.5;", icon_css)
+        self.assertIn("opacity: 0.88;", icon_css)
         self.assertIn(
             ".conv-item:hover .conv-session-icon,\n"
             "  .conv-item:focus-within .conv-session-icon",
@@ -53,15 +53,69 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn("data-role=\"repeat-row-group\"", app_js)
         self.assertIn("data-role=\"repeat-row-group-toggle\"", app_js)
         self.assertIn("ccc-repeat-row-group-expanded:", app_js)
-        self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: true })", app_js)
-        self.assertIn("_renderRowsWithRepeatGroups(cards, { suppressFolderChip: false, quietTitleChrome: true })", app_js)
+        self.assertIn(
+            "_renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: true })",
+            app_js,
+        )
+        self.assertIn(
+            "_renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true })",
+            app_js,
+        )
         self.assertIn("_arcChunks.push(sep + _renderRowsWithRepeatGroups(", app_js)
         self.assertIn("type: 'session',\n          card: c,", app_js)
-        self.assertIn("quietTitleChrome: true,\n              elevateToObject: true", app_js)
+        self.assertIn("lifecycleContext: 'active',\n              suppressFolderChip: false", app_js)
 
         self.assertIn(".conv-repeat-group-header", app_css)
         self.assertIn(".conv-repeat-group.is-collapsed .conv-repeat-group-body", app_css)
         self.assertIn("display: none;", app_css)
+
+    def test_repeated_sidebar_group_uses_the_standard_engine_cost_icon(self):
+        """A repeated-row header matches a regular row's compact engine signal."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        group_start = app_js.index("const _renderRepeatGroup = (cards, opts, key) =>")
+        group_html = app_js[group_start:app_js.index("const _renderRowsWithRepeatGroups", group_start)]
+
+        self.assertIn("const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' });", group_html)
+        self.assertIn("+ groupIconHtml", group_html)
+        self.assertNotIn("conv-repeat-group-meta", group_html)
+        self.assertIn(".conv-repeat-group-toggle > .conv-session-icon", app_css)
+
+    def test_repeated_sidebar_rows_offer_confirmed_bulk_archive(self):
+        """A cluster header archives its exact session set only after confirmation."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-role="repeat-row-group-archive"', app_js)
+        self.assertIn('Archive ' + "' + cards.length + ' sessions", app_js)
+        self.assertIn("confirm('Archive ' + sessionIds.length +", app_js)
+        self.assertIn("ccPostJson('/api/conversations/archive-bulk', {", app_js)
+        self.assertIn("session_ids: sessionIds, archived: true", app_js)
+        self.assertIn("refreshArchiveData({ force: true })", app_js)
+
+    def test_group_chat_emoji_uses_the_session_icon_rail(self):
+        """A chat marker should align with model icons, not reserve a leading gutter."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        row_css = app_css[
+            app_css.index("#convList .conv-ingroupchat-row {"):
+            app_css.index("#convList .conv-ingroupchat-row.active", app_css.index("#convList .conv-ingroupchat-row {"))
+        ]
+        icon_css = app_css[
+            app_css.index("#convList .conv-ingroupchat-row-icon"):
+            app_css.index("/* Collapse chevron", app_css.index("#convList .conv-ingroupchat-row-icon"))
+        ]
+        collapse_css = app_css[
+            app_css.index("#convList .conv-ingroupchat-collapse-btn {"):
+            app_css.index("#convList .conv-ingroupchat-collapse-btn:hover", app_css.index("#convList .conv-ingroupchat-collapse-btn {"))
+        ]
+
+        self.assertIn("position: relative;", row_css)
+        self.assertIn("padding: 5px 14px 5px 63px;", row_css)
+        self.assertIn("position: absolute;", icon_css)
+        self.assertIn("left: 12px;", icon_css)
+        self.assertIn("position: absolute;", collapse_css)
+        self.assertIn("left: 36px;", collapse_css)
 
 
 if __name__ == "__main__":
