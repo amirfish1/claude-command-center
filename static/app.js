@@ -2281,6 +2281,9 @@
       && c.ended_blocked
       && _archiveWindowRowTs(c) >= nowSec - OPEN_ASK_RECENT_S);
   }
+  function isLiveApprovalAskRow(c) {
+    return !!(c && c.is_live && c.needs_approval);
+  }
   // In-progress "Details" toggle: when on, every In-progress row that has a
   // matching Needs-your-attention item renders that NYA block underneath it.
   // Persisted so the choice sticks across renders/reloads.
@@ -3143,6 +3146,12 @@
       }
     }
     return merged;
+  }
+
+  function _rowHasLiveApprovalOverlay(c) {
+    if (isLiveApprovalAskRow(c)) return true;
+    const sid = c && (c.session_id || c.id);
+    return !!(sid && isLiveApprovalAskRow(_sessionLiveOverlay.get(sid)));
   }
 
   let _liveSessionsActivityPromise = null;
@@ -24597,17 +24606,19 @@
     const _idSearchConvs = [];
     // State-based action sections (server-stamped `state` on every /api/sessions
     // row): "Needs you" = state==='waiting' (Claude is blocked on the human —
-    // question / permission), "Open ask" = a session that ENDED while still
-    // blocked on the human (state==='ended' && ended_blocked). Both are pulled
-    // OUT of the In-progress bucket below so the list answers "what needs me at
-    // a glance" with the action items pinned at the very top. The rest of the
-    // In-progress mass (working / idle / plain-ended) keeps its existing rich
-    // rendering (window filter, folder / object grouping, Push-all, group-chat
-    // interleave, hysteresis) untouched.
-    // CCC-182: the "Needs you" bucket is gone. Waiting sessions stay in their
-    // project group (with a blinking in-row marker) instead of being pulled
-    // into a top section that they kept jumping in and out of. Only "Open ask"
-    // (ended-while-blocked) is still partitioned out.
+    // "Open asks" includes a live session currently waiting on a tool approval,
+    // plus a session that ENDED while still blocked on the human
+    // (state==='ended' && ended_blocked). Both are pulled OUT of the
+    // In-progress bucket below so the list answers "what needs me at a glance"
+    // with action items pinned at the very top. The rest of the In-progress
+    // mass (working / idle / plain-ended) keeps its existing rich rendering
+    // (window filter, folder / object grouping, Push-all, group-chat interleave,
+    // hysteresis) untouched.
+    //
+    // General waiting/question sessions still stay in their project group to
+    // avoid row churn. Live approvals are the deliberate exception: they can
+    // block guarded shared-bridge recovery, so hiding them in a collapsed
+    // project or Evergreen worker group creates an invisible blocker.
     const _openAskConvs = [];
     const _qActive = (document.getElementById('convSearch')?.value || '').trim().toLowerCase();
     // Group-chat rows are navigation chrome, not conversation search hits.
@@ -24791,6 +24802,7 @@
       if (id) _actionSessionById.set(id, c);
     });
     const _isRecentOpenAsk = (c) => isRecentOpenAskRow(c, _nowSec);
+    const _isLiveApprovalAsk = (c) => isLiveApprovalAskRow(c);
     // A blocked descendant stays in the main list when its lineage reaches a
     // visible non-Open-Ask parent, where the cluster renderer can keep it as a
     // compact attention row. Standalone/orphaned Open Ask sessions retain the
@@ -24805,17 +24817,15 @@
       nextSeen.add(parentId);
       return _openAskHasStableParent(parent, nextSeen);
     };
-    // CCC-182: the "Needs you" SECTION is gone. Pulling every waiting session
-    // up into a top bucket made rows jump out of their project group and back
-    // the instant a turn paused/resumed — the constant churn the user called
-    // out. A waiting session now STAYS in its project group and surfaces a
-    // blinking in-row "needs you" marker instead (see _renderRow, gated on
-    // state==='waiting'). Only "Open ask" (ended-while-blocked, last 48h) is
-    // still pulled out — those are NOT live, so there's no flapping, and they
-    // would otherwise be buried in the archived tab.
+    // Pulling every waiting session into a top bucket made rows jump whenever a
+    // turn paused/resumed. Keep ordinary questions and other waiting states in
+    // their project groups, but promote formal live approval prompts: they are
+    // actionable and may block recovery of the process-shared engine bridge.
+    // Recent ended-while-blocked sessions retain their existing Open ask path.
     for (let _i = _sessionConvs.length - 1; _i >= 0; _i--) {
       const _c = _sessionConvs[_i];
-      if (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c)) {
+      if (_isLiveApprovalAsk(_c)
+          || (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c))) {
         _openAskConvs.push(_c);
         _sessionConvs.splice(_i, 1);
       }
@@ -27653,7 +27663,7 @@
         + '<div class="conv-readytomerge-list">' + _rtmRows + '</div>'
         + '</div>';
     }
-    // Action sections ("Needs you" / "Open ask"). Shared builder so both read
+    // Action sections ("Needs you" / "Open asks"). Shared builder so both read
     // the same way as Ready-to-merge: a collapsible header (caret +
     // label + count) over a flat, newest-first row list. Collapse state lives
     // in localStorage under the supplied key. Rendered only when non-empty.
@@ -27685,12 +27695,13 @@
         + '<div class="conv-' + kind + '-list">' + rows + '</div>'
         + '</div>';
     };
-    // CCC-182: "Needs you" section removed — waiting sessions now show a
-    // blinking in-row marker and stay in their project group (no jumping).
+    // General waiting sessions stay in their project group. Formal approval
+    // prompts also appear here because they require action and can block a
+    // guarded shared-bridge restart.
     const _openAskHtml = getOpenAskPref() === 'hide' ? '' : _renderActionSection(_openAskConvs, {
-      kind: 'openask', label: 'Open ask', collapseKey: 'ccc-openask-collapsed',
-      hint: 'A session that ENDED while still waiting on your answer (last 48h). '
-        + 'Open it and reply to pick the work back up.',
+      kind: 'openask', label: 'Open asks', collapseKey: 'ccc-openask-collapsed',
+      hint: 'A live session waiting for your approval, or a session that ended '
+        + 'while still waiting on your answer (last 48h). Open it to respond.',
     });
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
     // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
@@ -49409,7 +49420,8 @@
     // Without this, old Hermes chats silently vanish in the all-repos view and
     // the only window control lives in the Archived section header.
     const _windowed = (_arcWindowCutoff && !q)
-      ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff) || isRecentOpenAskRow(c))
+      ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff)
+        || isRecentOpenAskRow(c) || _rowHasLiveApprovalOverlay(c))
       : archiveRows;
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks

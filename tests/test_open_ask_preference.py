@@ -28,6 +28,18 @@ class TestOpenAskPreference(unittest.TestCase):
 
         self.assertIn("const _openAskHtml = getOpenAskPref() === 'hide' ? ''", app_js)
 
+    def test_live_approvals_are_promoted_into_open_asks(self):
+        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function isLiveApprovalAskRow(c)", app_js)
+        self.assertIn("return !!(c && c.is_live && c.needs_approval);", app_js)
+        self.assertIn("function _rowHasLiveApprovalOverlay(c)", app_js)
+        self.assertIn("|| isRecentOpenAskRow(c) || _rowHasLiveApprovalOverlay(c)", app_js)
+        self.assertIn("const _isLiveApprovalAsk = (c) => isLiveApprovalAskRow(c);", app_js)
+        self.assertIn("if (_isLiveApprovalAsk(_c)", app_js)
+        self.assertIn("kind: 'openask', label: 'Open asks'", app_js)
+        self.assertIn("A live session waiting for your approval", app_js)
+
     def test_original_ask_panel_can_be_dismissed_on_mobile(self):
         app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
         app_css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")

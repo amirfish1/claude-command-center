@@ -1462,12 +1462,14 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn("const OPEN_ASK_RECENT_S = 48 * 3600;", app_js)
         self.assertIn("function isRecentOpenAskRow(c, nowSec = Math.floor(Date.now() / 1000)) {", app_js)
-        self.assertIn("archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff) || isRecentOpenAskRow(c))", app_js)
+        self.assertIn("|| isRecentOpenAskRow(c) || _rowHasLiveApprovalOverlay(c))", app_js)
         self.assertIn("const _isRecentOpenAsk = (c) =>", action_partition)
+        self.assertIn("const _isLiveApprovalAsk = (c) =>", action_partition)
         self.assertIn("const _openAskHasStableParent = (c, seen = new Set()) => {", action_partition)
         self.assertIn("const parent = _actionSessionById.get(parentId);", action_partition)
         self.assertIn("if (!_isRecentOpenAsk(parent)) return true;", action_partition)
-        self.assertIn("if (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c)) {", action_partition)
+        self.assertIn("if (_isLiveApprovalAsk(_c)", action_partition)
+        self.assertIn("|| (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c))) {", action_partition)
         self.assertIn("state: c.state || '',", app_js)
         self.assertIn("ended_blocked: !!c.ended_blocked,", app_js)
 
