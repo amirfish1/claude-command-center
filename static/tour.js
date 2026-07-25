@@ -191,6 +191,13 @@
     '.fft-sample .fft-sample-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);margin-bottom:6px;}',
     '.fft-sample .fft-sample-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}',
     '.fft-sample .fft-sample-summary{font-size:12px;color:var(--text-muted);line-height:1.4;}',
+    '.fft-engines-caption{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px;}',
+    '.fft-engine-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 6px;}',
+    '.fft-engine-chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-muted);border:1px solid var(--border);border-radius:999px;padding:3px 9px;}',
+    '.fft-engine-chip .fft-engine-dot{width:7px;height:7px;border-radius:50%;display:inline-block;border:1px solid var(--text-muted);}',
+    '.fft-engine-chip.fft-on{color:var(--text);}',
+    '.fft-engine-chip.fft-on .fft-engine-dot{background:var(--green);border-color:var(--green);}',
+    '.fft-engine-chip.fft-off{opacity:.4;}',
     '@media (max-width:520px){.fft-card{left:0;right:0;bottom:0;top:auto !important;width:auto;border-radius:16px 16px 0 0;}}'
   ].join('\n');
 
@@ -446,6 +453,52 @@
   }
 
   // ---- Centered cards ----
+  // Installed-engine chips (welcome step only). Best-effort: any failure
+  // renders nothing extra — the tour must never break because of this.
+  function buildEngineChips(engines) {
+    const wrap = makeEl('div', 'fft-engines');
+    const caption = makeEl('div', 'fft-engines-caption');
+    caption.textContent = 'Detected on this machine';
+    wrap.appendChild(caption);
+    const row = makeEl('div', 'fft-engine-chips');
+    for (let i = 0; i < engines.length; i++) {
+      const eng = engines[i] || {};
+      const chip = makeEl(
+        'span',
+        'fft-engine-chip ' + (eng.installed ? 'fft-on' : 'fft-off')
+      );
+      if (eng.detail) chip.title = String(eng.detail);
+      chip.appendChild(makeEl('span', 'fft-engine-dot'));
+      const label = makeEl('span', null);
+      label.textContent = String(eng.label || eng.engine || '');
+      chip.appendChild(label);
+      row.appendChild(chip);
+    }
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  function loadEngineChips(slot) {
+    try {
+      fetch('/api/engines/installed')
+        .then(function (res) {
+          if (!res.ok) throw new Error('engines probe failed');
+          return res.json();
+        })
+        .then(function (data) {
+          if (!slot.isConnected) return;
+          const engines = data && data.engines;
+          if (!Array.isArray(engines) || !engines.length) return;
+          slot.appendChild(buildEngineChips(engines));
+        })
+        .catch(function () {
+          /* chips are decorative */
+        });
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
   function showWelcome() {
     clearNodes();
     state.currentAnchor = null;
@@ -467,6 +520,12 @@
     body.textContent = WELCOME.body;
     card.appendChild(body);
 
+    // Chips slot: filled asynchronously by /api/engines/installed; stays
+    // empty (invisible) when the probe fails. Fresh fetch per welcome
+    // render so replays from Settings reflect the current machine.
+    const enginesSlot = makeEl('div', null);
+    card.appendChild(enginesSlot);
+
     const row = makeEl('div', 'fft-btnrow');
     const spacer = makeEl('div', null);
     spacer.style.marginRight = 'auto';
@@ -484,6 +543,7 @@
     card.appendChild(row);
 
     document.body.appendChild(card);
+    loadEngineChips(enginesSlot);
   }
 
   function showFork() {

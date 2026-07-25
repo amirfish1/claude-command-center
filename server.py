@@ -40665,6 +40665,116 @@ def _is_copilotchat_session(session_id):
     return _copilotchat_session_file(session_id) is not None
 
 
+# ---------------------------------------------------------------------------
+# Installed-engines inventory (First Flight tour welcome chips).
+#
+# Backs GET /api/engines/installed: one cheap, never-throwing probe per
+# engine so the onboarding tour can show which engines already exist on this
+# machine. Spawnable engines reuse the exact bin resolvers behind the
+# spawn-<engine>/availability endpoints; read-only engines count as
+# installed when their session store exists on disk. Short TTL cache —
+# detection touches PATH + a handful of well-known dirs, and the tour may
+# replay several times in one sitting.
+# ---------------------------------------------------------------------------
+
+_ENGINES_INSTALLED_CACHE = {"ts": 0.0, "data": None}
+_ENGINES_INSTALLED_TTL_SEC = 60.0
+
+
+def _spawn_engine_installed(resolver):
+    """(installed, detail) from a spawn-bin resolver dict; never raises."""
+    try:
+        info = resolver() or {}
+        if info.get("available"):
+            return True, str(info.get("bin") or "")
+    except Exception:
+        pass
+    return False, ""
+
+
+def _readonly_store_installed(candidates):
+    """(installed, detail): True when any candidate path exists on disk."""
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return True, str(candidate)
+        except OSError:
+            continue
+    return False, ""
+
+
+def _detect_engines_installed():
+    """Uncached per-engine probes; _engines_installed adds the TTL cache."""
+    engines = []
+    for engine, label, resolver in (
+        ("claude", "Claude Code", _resolve_claude_bin),
+        ("codex", "Codex", _resolve_codex_bin),
+        ("gemini", "Gemini", _resolve_gemini_bin),
+        ("cursor", "Cursor", _resolve_cursor_bin),
+        ("antigravity", "Antigravity", _resolve_antigravity_bin),
+        ("kilo", "Kilo Code", _resolve_kilo_bin),
+        ("kimi", "Kimi Code", _resolve_kimi_bin),
+        ("hermes", "Hermes", _resolve_hermes_bin),
+    ):
+        installed, detail = _spawn_engine_installed(resolver)
+        engines.append({
+            "engine": engine,
+            "label": label,
+            "installed": installed,
+            "kind": "spawn",
+            "detail": detail,
+        })
+
+    readonly = []
+    try:
+        home = _copilot_home()
+        readonly.append((
+            "copilot", "Copilot",
+            _readonly_store_installed(
+                [home / "session-store.db", home / "session-state"]
+            ),
+        ))
+    except Exception:
+        readonly.append(("copilot", "Copilot", (False, "")))
+    try:
+        home = _grok_home()
+        readonly.append((
+            "grok", "Grok",
+            _readonly_store_installed([home / "grok.db", home / "sessions"]),
+        ))
+    except Exception:
+        readonly.append(("grok", "Grok", (False, "")))
+    try:
+        chat_dirs = _copilotchat_chat_dirs()
+        result = (True, str(chat_dirs[0])) if chat_dirs else (False, "")
+        readonly.append(("copilotchat", "Copilot Chat", result))
+    except Exception:
+        readonly.append(("copilotchat", "Copilot Chat", (False, "")))
+
+    for engine, label, (installed, detail) in readonly:
+        engines.append({
+            "engine": engine,
+            "label": label,
+            "installed": installed,
+            "kind": "readonly",
+            "detail": detail,
+        })
+    return {"engines": engines}
+
+
+def _engines_installed():
+    now = time.monotonic()
+    if (
+        _ENGINES_INSTALLED_CACHE["data"] is not None
+        and now - _ENGINES_INSTALLED_CACHE["ts"] < _ENGINES_INSTALLED_TTL_SEC
+    ):
+        return copy.deepcopy(_ENGINES_INSTALLED_CACHE["data"])
+    payload = _detect_engines_installed()
+    _ENGINES_INSTALLED_CACHE["ts"] = now
+    _ENGINES_INSTALLED_CACHE["data"] = payload
+    return copy.deepcopy(payload)
+
+
 def _copilotchat_workspace_cwd(chat_dir):
     """Workspace folder for a workspaceStorage chatSessions dir, decoded from
     the sibling workspace.json's file:// URI. "" for empty-window stores."""
@@ -65138,6 +65248,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # id-only shape for scripts; `catalog` is the richer UI contract
             # populated from curated fallbacks plus local harness/default state.
             self.send_json(_build_engine_model_catalog())
+        elif path == "/api/engines/installed":
+            # Cheap on-disk inventory of every engine CCC knows (spawnable
+            # bin resolvers + read-only session stores). Backs the First
+            # Flight tour welcome chips.
+            self.send_json(_engines_installed())
         elif path == "/api/engines/update-status":
             self.send_json(_engine_update_status())
         elif path == "/api/search-history":
