@@ -1,1 +1,0 @@
-- Add Kimi Code as a fourth throughput provider: its own engine tab, weekly/session quota meter fed by the Kimi `/usages` API (with snapshot fallback), weekly-% chart overlay, reset markers, and per-turn token throughput parsed from `~/.kimi-code` wire transcripts. `/api/usage/current` gains a `kimi` block alongside `codex`.

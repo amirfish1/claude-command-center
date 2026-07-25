@@ -1,1 +1,0 @@
-- Added an independently managed `ccc-worker` that owns CCC-launched Claude, Codex, and Kimi execution across dashboard restarts, with authenticated local IPC, idempotent dispatch, a durable SQLite parent/child work graph, conservative recovery, and safe pause/restart controls.

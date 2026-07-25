@@ -1,1 +1,0 @@
-- Add GitHub Copilot CLI as a read-only engine: sessions under `~/.copilot` (honoring `COPILOT_HOME`) now appear in the conversation list, kanban, and archive, with a transcript view parsed from `session-state/<uuid>/events.jsonl`. The `session-store.db` SQLite index is used as a fast path with automatic fallback to scanning the event logs. No spawn or follow-up support.

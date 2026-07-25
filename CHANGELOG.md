@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.11.0] - 2026-07-25
+
+### Added
+- Answer pending Claude Code permission prompts directly from the dashboard on macOS.
+- Add GitHub Copilot CLI as a read-only engine: sessions under `~/.copilot` (honoring `COPILOT_HOME`) now appear in the conversation list, kanban, and archive, with a transcript view parsed from `session-state/<uuid>/events.jsonl`. The `session-store.db` SQLite index is used as a fast path with automatic fallback to scanning the event logs. No spawn or follow-up support.
+- Added a guarded recovery dialog to Codex app-server and Kimi ACP status pills, with shared-session safety checks and optional retry of one selected queued message.
+- Discover exact versioned Claude models from Anthropic's public catalog, add Opus 5, and automatically keep supported engine CLIs updated.
+- Read-only Grok CLI engine: sessions from `~/.grok` (both the xAI "Grok Build" per-session dirs and the superagent-ai `grok.db` store) now appear in the conversation list, kanban, and archive, with a transcript view when opened.
+- Add Kimi Code as a fourth throughput provider: its own engine tab, weekly/session quota meter fed by the Kimi `/usages` API (with snapshot fallback), weekly-% chart overlay, reset markers, and per-turn token throughput parsed from `~/.kimi-code` wire transcripts. `/api/usage/current` gains a `kimi` block alongside `codex`.
+- Add a persistent Settings toggle to show or hide the Open ask session section.
+- Added an independently managed `ccc-worker` that owns CCC-launched Claude, Codex, and Kimi execution across dashboard restarts, with authenticated local IPC, idempotent dispatch, a durable SQLite parent/child work graph, conservative recovery, and safe pause/restart controls.
+- Added a compact execution-worker health badge beside WatchTower, plus Maintenance status and controls for both the persistent worker and the WatchTower daemon/API.
+- Kimi sessions now surface the same turn-state signals Codex has: a session that looks mid-turn (active ACP turn, dangling tool call, or unfinished wire tail) but whose `wire.jsonl` has had no output past `CCC_STALE_TOOL_SEC` (default 15m) gets the red **Stuck** pill in the session list and a persistent "Stuck — no output for Nm" card in the pane (click focuses the composer to nudge it). Kimi and Codex rows also show a muted **✓ done** chip for 15 minutes after a turn completes, then settle back to plain idle.
+- Show working-now and five- and ten-minute session activity counts in the Today throughput strip.
+- First Flight tour: the welcome step now shows a "Detected on this machine" row of engine chips — installed engines lit, missing ones dimmed — backed by a new `GET /api/engines/installed` endpoint covering all 11 engines (spawnable + read-only).
+- Added a read-only **Copilot Chat** engine: GitHub Copilot Chat sessions (VS Code chat panel / agent mode) now appear in the conversation list, kanban, and archive, with a working transcript view (flat `.json` sessions and the newer `.jsonl` operation journal, replayed defensively). No spawn/follow-up support.
+- Added an in-browser folder picker: on hosts with no native GUI chooser (headless Linux), Browse now opens a web dialog that walks the server filesystem via the read-only `GET /api/fs/list` endpoint instead of failing.
+
+### Changed
+- Codex sessions now render through the same Kimi Web-style conversation pane introduced for Kimi: assistant turns group into blocks, tool calls collapse into ToolGroup cards with per-kind icons and real command summaries, `update_plan` calls render as todo cards, reasoning summaries render as thinking teasers, and tool outputs fold into their rows with status dots. Claude and other engines keep their existing rendering.
+- Rebuilt the Kimi conversation pane to match the open-source Kimi Web UI: assistant turns merge into grouped blocks, consecutive tool calls collapse into ToolGroup cards ("N tool calls · running|failed|done") with per-kind icons, real arg summaries (Bash command, file path, grep pattern), status dots and expandable input/output bodies; thinking renders as a faint last-paragraph teaser with a live tail window while streaming; user messages keep right-aligned accent bubbles; plan entries use kimi-style ○/●/✓ glyphs; edit tool calls can render inline diffs. Under the hood, the ACP fold now captures rawInput details, diff content blocks, and wire.jsonl tool results, and strips `<system-reminder>` / `<kimi-skill-loaded>` control XML from replayed messages so it no longer leaks into the transcript.
+- Surface unresolved approval-waiting sessions in Open asks so shared engine-bridge blockers remain visible even when worker-owned processes are absent from the live-session scan.
+- Refresh the in-app What's New showcase with guarded bridge recovery, the persistent control-plane worker, browser-native Codex/Kimi sessions, and newly supported engines.
+
+### Fixed
+- Compact WatchTower activity-log metadata so message details remain readable.
+- Closing a queue ticket now updates its status immediately and ignores an older in-flight queue refresh.
+- Slimmed the sidebar archive fetch while preserving conversation lifecycle and placement state.
+- Fixed Kimi follow-ups being rejected while a turn is running; they now queue and send when the turn finishes.
+- Fixed Kimi sessions offering unsupported goal actions that sent `/goal` commands to ACP.
+- Prevented Kimi conversations from offering unsupported slash commands.
+- Kimi sessions no longer pop out of Trash back into the All list: the kimi session finder now stamps `archived`/`trashed`/`verified` lifecycle state on its rows like every other engine, so trashed kimi sessions stay in the Trash section after the next poll.
+- Queue Kimi actions until the active remote turn finishes, and show the true first request in the mobile Original ask toolbar.
+- Fixed the Kimi conversation pane's "Working…" indicator vanishing mid-turn: the busy signal previously depended on wire.jsonl writes within the last 10 seconds, so long model-thinking pauses read as idle. The pane now stays "Working…" for the whole unfinished turn (wire tail shows no closing step.end), flipping to the Stuck card only past the stale-output threshold — the same contract Codex rows already used.
+- Fixed the native folder picker on Linux: Browse now opens zenity, kdialog, or yad when one is installed and a display is available, instead of failing with a "macOS-only" error.
+- Prevent focus zoom, keep Back visible above the keyboard, and move the mobile Original ask into a compact expandable toolbar row.
+- Fixed the Original ask panel's close button failing to dismiss it in the mobile right-rail layout.
+- Queue Add now clears obscuring filters, selects the created ticket's queue, and brings the new highlighted row into view.
+- Keep queue search on the filter row in a 390px status rail.
+- Queued Codex injects now say when the session is blocked on an unanswered approval prompt (with the prompt text and a `pending_approval` response field) instead of the generic "queued behind an active turn".
+- Clarified that messages queued behind a busy agent turn will send next.
+- Repeated conversation groups now show the standard engine icon and cost tier instead of textual engine/model metadata.
+- The right-side status rail can now be resized reliably with touch or pen input
+on tablets, in addition to mouse and keyboard controls.
+- Webui (kimi/codex) panes: a message queued while a Codex turn is busy no longer spawns a doomed exec per retry (duplicate user bubbles + repeated "Cannot launch a new turn" banners); identical unanswered bubbles and identical error banners collapse to one; duplicated assistant text within a merged turn (partial + full copy) now merges kimi-web style; panes show a moon-phases "Working…" indicator and pulsing running-tool dots when the session is busy but no live deltas flow; popouts opened without a `source` param now pick the correct webui renderer from the server-detected engine.
+
 ## [5.10.0] - 2026-07-21
 
 ### Changed
@@ -2119,7 +2165,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.10.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.0...HEAD
+[5.11.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.0
 [5.10.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.10.0
 [5.9.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.9.0
 [5.8.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.8.1

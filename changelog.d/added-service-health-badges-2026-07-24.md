@@ -1,1 +1,0 @@
-- Added a compact execution-worker health badge beside WatchTower, plus Maintenance status and controls for both the persistent worker and the WatchTower daemon/API.

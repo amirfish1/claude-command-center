@@ -1,1 +1,0 @@
-- Prevented Kimi conversations from offering unsupported slash commands.

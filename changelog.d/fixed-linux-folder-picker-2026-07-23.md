@@ -1,1 +1,0 @@
-- Fixed the native folder picker on Linux: Browse now opens zenity, kdialog, or yad when one is installed and a display is available, instead of failing with a "macOS-only" error.
