@@ -77,6 +77,14 @@ def test_chart_draws_a_zero_based_pre_reset_quota_trace():
     assert "Previous cycle" in throughput_html
 
 
+def test_codex_quota_series_uses_local_summary_hour_boundaries():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function throughputSummaryRowTimeMs(row)" in throughput_html
+    assert "at: throughputSummaryRowTimeMs(row)" in throughput_html
+    assert "const summaryHour = String(row.hour).trim()" in throughput_html
+
+
 def test_combined_chart_draws_separate_normalized_quota_series():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 

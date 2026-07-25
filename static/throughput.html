@@ -3022,6 +3022,16 @@
       return null;
     }
 
+    // Throughput summary hours are server-local wall-clock buckets. Keep them
+    // in that timezone when matching quota events to the UTC chart slots.
+    function throughputSummaryRowTimeMs(row) {
+      if (!row || !row.hour) return chartRowTimeMs(row);
+      const summaryHour = String(row.hour).trim();
+      const normalized = summaryHour.includes('T') ? summaryHour : summaryHour.replace(' ', 'T');
+      const ms = new Date(normalized).getTime();
+      return Number.isNaN(ms) ? null : ms;
+    }
+
     function updateChartZoomButton(zoomable) {
       const btn = document.getElementById('chart-zoom-btn');
       if (!btn) return;
@@ -3134,7 +3144,7 @@
     function quotaTokenEvents(componentSummary, weekStart) {
       const start = new Date(weekStart || '').getTime();
       return ((componentSummary && componentSummary.hourly) || []).map(row => ({
-        at: chartRowTimeMs(row),
+        at: throughputSummaryRowTimeMs(row),
         tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
       })).filter(event => event.at != null && event.at >= start && event.at <= Date.now());
     }
@@ -3182,7 +3192,7 @@
       const start = firstPreResetRow ? chartRowTimeMs(firstPreResetRow) : null;
       if (start == null) return null;
       const events = ((componentSummary && componentSummary.hourly) || []).map(row => ({
-        at: chartRowTimeMs(row),
+        at: throughputSummaryRowTimeMs(row),
         tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
       })).filter(event => event.at != null && event.at >= start);
       let lastPreResetIndex = -1;
