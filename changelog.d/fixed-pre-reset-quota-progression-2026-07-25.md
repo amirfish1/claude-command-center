@@ -1,0 +1,1 @@
+- Restored the zero-based quota progression immediately before a throughput chart reset.
