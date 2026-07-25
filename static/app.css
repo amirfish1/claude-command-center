@@ -1569,14 +1569,16 @@
     --kw-warning: #d29922;
   }
 
-  /* Reading column ~760px centered; chat padding 22px 20px 26px. */
+  /* Let rendered turns use the complete reader column. The pane itself
+     supplies the horizontal padding, so a second centered 760px column
+     would strand available space whenever a user widens the pane. */
   .conv-pane.is-webui-session .conversations-view { padding: 22px 20px 26px; }
   .conv-pane.is-webui-session .conversations-view > .kimi-turn,
   .conv-pane.is-webui-session .conversations-view > .event.user_text,
   .conv-pane.is-webui-session .conversations-view > .event.result,
   .conv-pane.is-webui-session .conversations-view > .stream-bubble,
   .conv-pane.is-webui-session .conversations-view > .conv-live-tool-inline {
-    max-width: 760px; margin-left: auto; margin-right: auto;
+    width: 100%;
   }
   /* Turn gaps: 16px before a user turn, 10px before an assistant turn. */
   .conv-pane.is-webui-session .conversations-view > .kimi-turn { margin-top: 10px; margin-bottom: 0; }
@@ -1599,7 +1601,7 @@
      width, gradient, border, glow). */
   .conv-pane.is-webui-session .event.user_text {
     background: none; border: none; box-shadow: none;
-    width: auto; max-width: 760px;
+    width: 100%; max-width: none;
     padding: 0; border-radius: 0;
     display: flex; flex-direction: column; align-items: flex-end;
   }
