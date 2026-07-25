@@ -46,9 +46,7 @@ CLAUDE.local.md
 .claude/pasted-images/
 .claude/annotations/
 .claude/snapshots/
-snapshot.png
-snapshot2.png
-snapshot3.png
+snapshot*.png
 throughput_*.png
 # Root-level WatchTower/worktree captures and temporary helpers are local-only.
 .wt-*
