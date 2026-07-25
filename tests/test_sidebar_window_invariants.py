@@ -91,6 +91,22 @@ def test_all_tab_cross_repo_ready_to_merge_respects_window(app_js):
     )
 
 
+def test_cross_repo_ready_to_merge_preserves_unknown_local_pr_rows(app_js):
+    """A transient unknown GitHub PR state must not make a local session vanish.
+
+    The normal partition has already classified a session with a recorded PR
+    into ``_readyToMergeConvs``.  The cross-repo enrichment only knows how to
+    add rows whose state is confirmed OPEN; it must merge those additions,
+    never clear the local bucket when its status lookup has not completed.
+    """
+    start = app_js.index("if (Array.isArray(archiveData) && archiveData.length) {")
+    end = app_js.index("// Ready to merge section:", start)
+    block = app_js[start:end]
+
+    assert "_readyToMergeConvs.push(..._crossRepoRtm);" in block
+    assert "_readyToMergeConvs.length = 0;" not in block
+
+
 def test_all_tab_archived_group_chats_respect_window(app_js):
     """Archived group-chat trash rows are not part of archiveRows, so they need
     their own 1d/7d window filter before rendering in the All tab."""

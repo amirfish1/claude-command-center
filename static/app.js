@@ -27642,11 +27642,12 @@
     // scoped to the selected repo), so _readyToMergeConvs is single-repo.
     // archiveData (loaded from /api/conversations/all elsewhere) carries full
     // session rows for EVERY tracked repo, each with tail_pr_number / pr_state
-    // / modified / folder-chip fields. When it's loaded, REPLACE
-    // _readyToMergeConvs with its OPEN, PR-bearing, not-archived rows — those
-    // rows cover the current repo too (same precedence CCC-159 used), so
-    // replacing avoids duplicate rows. Before /api/conversations/all resolves
-    // (empty array) we leave the single-repo rows as a graceful fallback.
+    // / modified / folder-chip fields. Merge its confirmed-OPEN rows only
+    // when the local partition does not already represent that PR. A status
+    // lookup can temporarily be unknown; replacing local rows made those
+    // otherwise-visible sessions disappear (CCC-650). Before
+    // /api/conversations/all resolves (empty array), local rows are the
+    // graceful fallback.
     // This is a pure read of already-loaded state — no network/subprocess here.
     if (Array.isArray(archiveData) && archiveData.length) {
       const _rtmByPr = new Map();   // pr_num -> row (keep most-recently-modified)
@@ -27662,6 +27663,8 @@
           _rtmByPr.set(r.tail_pr_number, r);
         }
       }
+      const _readySessionIds = new Set(_readyToMergeConvs.map(r => r && (r.session_id || r.id)).filter(Boolean));
+      const _readyPrNumbers = new Set(_readyToMergeConvs.map(r => r && r.tail_pr_number).filter(Boolean));
       const _crossRepoRtm = Array.from(_rtmByPr.values())
         // CCC-187: archiveData rows are keyed by session_id and can lack `id`.
         // Without it _renderRow emits data-id="undefined", so clicking the row
@@ -27670,8 +27673,9 @@
         // "undefine". Normalize id to the session_id, matching how shaped
         // archive rows are keyed (id: c.session_id).
         .map(r => (r && !r.id && r.session_id) ? Object.assign({}, r, { id: r.session_id }) : r)
+        .filter(r => r && !_readySessionIds.has(r.session_id || r.id)
+          && !_readyPrNumbers.has(r.tail_pr_number))
         .sort((a, b) => (b.modified || 0) - (a.modified || 0));
-      _readyToMergeConvs.length = 0;
       _readyToMergeConvs.push(..._crossRepoRtm);
     }
     // Ready to merge section: sessions whose work has landed in a PR
