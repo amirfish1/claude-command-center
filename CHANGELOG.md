@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.11.1] - 2026-07-25
+
+### Fixed
+- Align Kimi follow-up regression coverage with the durable queue-routing call contract.
+
 ## [5.11.0] - 2026-07-25
 
 ### Added
@@ -2165,7 +2170,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.1...HEAD
+[5.11.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.1
 [5.11.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.0
 [5.10.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.10.0
 [5.9.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.9.0

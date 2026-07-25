@@ -1,1 +1,0 @@
-- Align Kimi follow-up regression coverage with the durable queue-routing call contract.
