@@ -208,10 +208,13 @@ and use the Linux instructions below.
 
 CCC runs on Linux as a headless service you reach from the browser on another
 machine. The core (kanban, `~/.claude` transcript ingestion, session spawn and
-drive) works the same as on macOS. The macOS-only desktop conveniences
-(screenshots, jump-to-terminal, open-in-desktop, native folder picker) are
-not available on Linux yet; the UI hides those controls automatically, so you
-never see a button that does nothing.
+drive) works the same as on macOS. The native folder picker works on Linux
+desktops too when `zenity`, `kdialog`, or `yad` is installed; on headless
+boxes the Browse buttons fall back to an in-browser picker that walks the
+server filesystem. The remaining macOS-only desktop conveniences
+(screenshots, jump-to-terminal, open-in-desktop) are not available on Linux
+yet; the UI hides those controls automatically, so you never see a button
+that does nothing.
 
 Windows users who want a systemd-managed service can use this Linux path under
 WSL2. Install Python 3, git, and your agent CLIs inside the WSL distro, then

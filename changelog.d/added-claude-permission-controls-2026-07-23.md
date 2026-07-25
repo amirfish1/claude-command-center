@@ -1,0 +1,1 @@
+- Answer pending Claude Code permission prompts directly from the dashboard on macOS.

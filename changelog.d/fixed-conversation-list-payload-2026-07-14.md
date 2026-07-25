@@ -1,0 +1,1 @@
+- Slimmed the sidebar archive fetch while preserving conversation lifecycle and placement state.
