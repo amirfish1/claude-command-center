@@ -535,7 +535,7 @@
     line-height: 1.45;
     min-width: 0;
   }
-  .weekly-sub-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .weekly-sub-line { overflow-wrap: anywhere; }
   .weekly-sub-line + .weekly-sub-line { margin-top: 2px; color: var(--text); }
   .weekly-reset-schedule {
     grid-column: 1 / -1;
@@ -2435,18 +2435,25 @@
       const rate = activeThroughputEngine === 'combined' ? null : weeklyRatePerDay(activeThroughputEngine);
       const claudeRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('claude') : null;
       const codexRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('codex') : null;
+      const kimiRate = activeThroughputEngine === 'combined' ? weeklyRatePerDay('kimi') : null;
 
       document.getElementById('lbl-card1').textContent = 'CALLS';
       document.getElementById('val-active-duration').textContent = Math.round(calls).toLocaleString();
       document.getElementById('val-total-duration').textContent = 'Last 7 days';
 
       document.getElementById('lbl-card2').textContent = 'USAGE RATE';
+      const combinedRates = [claudeRate && `C ${claudeRate.pctPerDay.toFixed(1)}%`,
+        codexRate && `X ${codexRate.pctPerDay.toFixed(1)}%`,
+        kimiRate && `K ${kimiRate.pctPerDay.toFixed(1)}%`].filter(Boolean);
+      const combinedSoFar = [claudeRate && `Claude ${claudeRate.pct.toFixed(0)}%`,
+        codexRate && `Codex ${codexRate.pct.toFixed(0)}%`,
+        kimiRate && `Kimi ${kimiRate.pct.toFixed(0)}%`].filter(Boolean);
       document.getElementById('val-total-tokens').textContent = rate
         ? `${rate.pctPerDay.toFixed(1)}% / day`
-        : (claudeRate && codexRate ? `C ${claudeRate.pctPerDay.toFixed(1)}% · X ${codexRate.pctPerDay.toFixed(1)}% / day` : '—');
+        : (combinedRates.length ? `${combinedRates.join(' · ')} / day` : '—');
       document.getElementById('val-token-split').textContent = rate
         ? `${rate.pct.toFixed(0)}% so far · ${rate.elapsedDays.toFixed(1)} days elapsed`
-        : (claudeRate && codexRate ? `Claude ${claudeRate.pct.toFixed(0)}% · Codex ${codexRate.pct.toFixed(0)}% so far` : 'Weekly quota unavailable');
+        : (combinedSoFar.length ? `${combinedSoFar.join(' · ')} so far` : 'Weekly quota unavailable');
 
       document.getElementById('lbl-card3').textContent = 'CACHE HIT RATE';
       document.getElementById('val-in-throughput').textContent = `${cacheHitPct}%`;
@@ -3081,7 +3088,8 @@
     function compactForecastEnd() {
       if (chartWeekOffset !== 0 || !weeklyData) return null;
       const crossings = [];
-      if (weeklyData.display_pct != null && weeklyData.week_start && weeklyData.weekly_resets_at) {
+      if ((activeThroughputEngine === 'claude' || activeThroughputEngine === 'combined') &&
+          weeklyData.display_pct != null && weeklyData.week_start && weeklyData.weekly_resets_at) {
         crossings.push(forecastCrossingAt100(
           Number(weeklyData.display_pct), weeklyData.week_start, weeklyData.weekly_resets_at
         ));
@@ -3094,7 +3102,7 @@
         ));
       }
       const kimi = weeklyData.kimi;
-      if (activeThroughputEngine === 'kimi' &&
+      if ((activeThroughputEngine === 'kimi' || activeThroughputEngine === 'combined') &&
           kimi && kimi.weekly_pct != null && kimi.week_start && kimi.weekly_resets_at) {
         crossings.push(forecastCrossingAt100(
           Number(kimi.weekly_pct), kimi.week_start, kimi.weekly_resets_at
