@@ -1,0 +1,1 @@
+- Refresh the in-app What's New showcase with guarded bridge recovery, the persistent control-plane worker, browser-native Codex/Kimi sessions, and newly supported engines.

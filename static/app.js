@@ -51616,6 +51616,38 @@
 
   const WHATS_NEW_FEATURES = [
     {
+      id: 'engine-bridge-recovery',
+      title: 'Guarded Engine Bridge Recovery',
+      date: 'Jul 25, 2026',
+      tag: 'Reliability',
+      desc: '<p>When a Codex app-server or Kimi ACP bridge gets stuck, click its transport pill to inspect and restart it without abandoning the conversation.</p><p>CCC refuses unsafe restarts while another session is active, shows those approval blockers in <strong>Open asks</strong>, and can retry one selected queued message after reattaching the same session.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><strong style="color:var(--text);">Recover engine bridge</strong><span style="color:var(--text-muted);">Codex app-server · stdio</span></div><div style="padding:8px 10px;border:1px solid rgba(61,214,140,.35);border-radius:6px;color:#3dd68c;background:rgba(61,214,140,.06);">Safe to restart · no other active sessions</div><div style="margin-top:9px;color:var(--text-muted);">Queued message to retry</div><div style="margin-top:5px;padding:7px 9px;border:1px solid var(--border);border-radius:5px;color:var(--text);">Continue from the last completed tool…</div><div style="display:flex;justify-content:flex-end;margin-top:10px;"><span style="padding:6px 10px;border-radius:5px;background:var(--accent,#58a6ff);color:white;">Restart and retry</span></div></div>'
+    },
+    {
+      id: 'persistent-control-plane',
+      title: 'Persistent Control-Plane Worker',
+      date: 'Jul 24, 2026',
+      tag: 'Architecture',
+      desc: '<p>Engine execution now lives in a persistent worker instead of the restartable dashboard process. Codex, Kimi, and Claude work survives dashboard refreshes with durable dispatch and explicit recovery for uncertain work.</p><p>New health and drain controls show what the worker owns, prevent duplicate replay, and make server upgrades much less disruptive.</p>',
+      mockup: '<div style="font-family:var(--mono,monospace);font-size:11px;line-height:1.7;color:#a6accd;padding:12px 14px;background:rgba(0,0,0,.25);border-radius:6px;border-left:3px solid #3dd68c;"><div>dashboard <span style="color:#3dd68c;">● online</span></div><div>&nbsp;&nbsp;↕ durable control plane</div><div>worker <span style="color:#3dd68c;">● persistent</span> · 3 engines</div><div>&nbsp;&nbsp;├─ Codex app-server</div><div>&nbsp;&nbsp;├─ Kimi ACP</div><div>&nbsp;&nbsp;└─ Claude headless</div></div>'
+    },
+    {
+      id: 'browser-engine-panes',
+      title: 'Browser-Native Codex & Kimi',
+      date: 'Jul 22, 2026',
+      tag: 'Conversation',
+      desc: '<p>Codex and Kimi sessions now run as first-class browser conversations with streamed output, tool rows, queued follow-ups, working/stuck indicators, goal controls, and reliable same-session resume.</p><p>The composer understands whether a turn is busy, so follow-ups steer or queue predictably instead of launching duplicate turns.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:7px;overflow:hidden;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;gap:6px;padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);"><span style="color:#3dd68c;">● Kimi ACP</span><span>working</span><span style="margin-left:auto;">same session</span></div><div style="padding:10px 12px;color:var(--text);"><div style="padding:7px 9px;border-left:2px solid var(--accent,#58a6ff);background:rgba(88,166,255,.05);">Reading the service code…</div><div style="margin-top:7px;padding:7px 9px;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);">Follow-up queued for this turn</div></div></div>'
+    },
+    {
+      id: 'expanded-engine-lineup',
+      title: 'More First-Class Engines',
+      date: 'Jul 24, 2026',
+      tag: 'Engines',
+      desc: '<p>CCC adds native discovery, transcript rendering, spawning, and lifecycle support for <strong>Grok, GitHub Copilot CLI, and VS Code Copilot Chat</strong>.</p><p>The model catalog now updates from installed engine capabilities, while onboarding and health badges make it clear which providers are available on this machine.</p>',
+      mockup: '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;font-size:11px;"><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Grok</div><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Copilot CLI</div><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Copilot Chat</div><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Auto model catalog</div></div>'
+    },
+    {
       id: 'fable-5',
       title: 'Claude Fable 5 Support',
       date: 'Jun 9, 2026',
