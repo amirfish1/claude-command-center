@@ -21279,3 +21279,74 @@ body.ccc-mobile-redesign.ccc-simple-mode #convTtsRateControl,
 body.ccc-mobile-redesign.ccc-simple-mode #convInputHint {
   display: none !important;
 }
+
+/* ---- Icon-first Simple mode: chrome communicates via icon+color+shape+
+   motion, not English words. Task content (titles, agent replies) is
+   untouched — this only affects UI chrome (nav, status, toggles). Text
+   stays present for screen readers via .mobile-sr-only (visually hidden,
+   not display:none, so assistive tech and text-to-speech still get it). */
+.mobile-sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+/* Bottom nav: icon-only, bigger glyphs, no English label required to read. */
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-nav-icon { font-size: 24px; }
+/* Status line: icon shape + color + motion carry meaning; the word itself
+   is screen-reader-only so a non-reading user never needs it, and someone
+   using VoiceOver/TalkBack still gets the plain word. */
+/* Visually hidden, not display:none — VoiceOver/TalkBack still announce
+   the real word even though a non-reading user never needs to see it. */
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-word,
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-detail {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line { gap: 8px; }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-dot {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+}
+/* Distinct SILHOUETTE per state, not just color, so colorblind users and
+   grayscale displays still tell states apart (WCAG: don't rely on color
+   alone). !important + the .is-X chain repeated on both the dot and its
+   ::before is needed to outrank the plain-color-fill rules above (an
+   earlier, less-specific pass that predates the icon-first version). */
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-working .mobile-status-dot,
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-idle .mobile-status-dot,
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-stuck .mobile-status-dot,
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-offline .mobile-status-dot {
+  background: transparent !important;
+  opacity: 1 !important;
+}
+/* Working keeps its pulsing ring (motion, the third signal channel
+   alongside icon shape and color) — just around a transparent-centered
+   glyph instead of a solid-filled dot now. */
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-working .mobile-status-dot {
+  animation: mobileStatusPulse 1.8s ease-in-out infinite;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-working .mobile-status-dot::before { content: '▶'; color: var(--green); }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-idle .mobile-status-dot::before { content: '⏳'; color: #d29922; }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-stuck .mobile-status-dot::before { content: '⚠'; color: #d29922; }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-status-line.is-offline .mobile-status-dot::before { content: '○'; color: var(--text-muted); }
+/* Toggles: icon-only. Text stays for screen readers via aria-label +
+   .mobile-sr-only span, not removed from the accessibility tree. */
+body.ccc-mobile-redesign.ccc-simple-mode button.mobile-details-toggle,
+body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-btn {
+  font-size: 16px;
+  min-width: 44px;
+  justify-content: center;
+  padding: 6px 10px;
+}

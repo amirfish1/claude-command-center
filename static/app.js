@@ -23056,7 +23056,7 @@
               detailBits.push((c.sidecar_in_flight ? 'running ' : '') + liveActivityToolLabel(c.sidecar_tool) + ' ' + _dur);
             }
           }
-          html += '<button type="button" class="mobile-details-toggle" aria-pressed="false">Details</button>'
+          html += '<button type="button" class="mobile-details-toggle" aria-pressed="false" aria-label="Details"><span aria-hidden="true">&#8942;</span><span class="mobile-sr-only">Details</span></button>'
             + '<div class="mobile-details-panel" hidden>'
             + escapeHtml(detailBits.filter(Boolean).join(' \u00b7 '))
             + (issueBadge ? '<div class="mobile-details-badges">' + issueBadge + '</div>' : '')
@@ -25760,7 +25760,7 @@
           + (opts.evergreenAgent ? '' : evergreenGoalHtml)
           + (goalIconOnly ? goalIconHtml : '');
         if (_detailInner) {
-          mobileDetailsHtml = '<button type="button" class="mobile-details-toggle" aria-pressed="false">Details</button>'
+          mobileDetailsHtml = '<button type="button" class="mobile-details-toggle" aria-pressed="false" aria-label="Details"><span aria-hidden="true">&#8942;</span><span class="mobile-sr-only">Details</span></button>'
             + '<div class="mobile-details-panel" hidden>' + _detailInner + '</div>';
         }
       }

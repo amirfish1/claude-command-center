@@ -114,21 +114,21 @@
        modal rather than introducing new screens/state — see app.js
        _wireMobileBottomNav(). Hidden everywhere else via inline style. -->
   <nav id="mobileBottomNav" class="mobile-bottom-nav" style="display:none;" aria-label="Main">
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="home" aria-current="page">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="home" aria-current="page" aria-label="Home">
       <span class="mobile-nav-icon" aria-hidden="true">&#8962;</span>
-      <span class="mobile-nav-label">Home</span>
+      <span class="mobile-nav-label mobile-sr-only">Home</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="tasks">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="tasks" aria-label="Tasks">
       <span class="mobile-nav-icon" aria-hidden="true">&#128203;</span>
-      <span class="mobile-nav-label">Tasks</span>
+      <span class="mobile-nav-label mobile-sr-only">Tasks</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="automations">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="automations" aria-label="Automations">
       <span class="mobile-nav-icon" aria-hidden="true">&#9889;</span>
-      <span class="mobile-nav-label">Automations</span>
+      <span class="mobile-nav-label mobile-sr-only">Automations</span>
     </button>
-    <button type="button" class="mobile-nav-btn" data-mobile-nav="more">
+    <button type="button" class="mobile-nav-btn" data-mobile-nav="more" aria-label="More">
       <span class="mobile-nav-icon" aria-hidden="true">&#8943;</span>
-      <span class="mobile-nav-label">More</span>
+      <span class="mobile-nav-label mobile-sr-only">More</span>
     </button>
   </nav>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar
@@ -698,12 +698,12 @@
            status rail's own Metadata tab (session id, branch, model,
            tokens) instead of duplicating that content here. -->
       <div class="mobile-actions-wrap">
-        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false">Actions</button>
+        <button type="button" class="mobile-actions-btn" id="convSimpleActionsBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Actions"><span aria-hidden="true">&#9881;</span></button>
         <div class="mobile-actions-menu" id="convSimpleActionsMenu" role="menu" hidden>
-          <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem">Rename task</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem">Move to project</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem">Change assistant/model</button>
-          <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem">Open technical details</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem"><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem"><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem"><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem"><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
         </div>
       </div>
       <div class="conv-overflow-wrap">
