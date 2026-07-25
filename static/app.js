@@ -25577,6 +25577,13 @@
         // tabindex -1 so rows don't grow a duplicate tab stop.
         pctBadgeRowActionHtml = _pctBadge(-1);
       }
+      // Context-fill level as a card class, reusing the pct badge's exact
+      // thresholds (>60 / >30). In Simple mode the numeric badge is hidden,
+      // so this drives a color spine on the card instead — the same
+      // low/mid/high signal, without a percentage to read.
+      const _ctxLevelClass = ctxPct
+        ? (ctxPct.pct > 60 ? ' ctx-high' : (ctxPct.pct > 30 ? ' ctx-mid' : ' ctx-low'))
+        : '';
       const qcBadgeHtml = pctBadgeHtml ? _convRowQualityBadge(c) : '';
       // Context-utilized % is rendered in the always-visible main row, just left
       // of the elapsed-time slot (see pctBadgeHtml placement below) — it's too
@@ -25834,7 +25841,7 @@
         }
       }
 
-      return '<div class="conv-item' + active + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + _ctxLevelClass + cooTrackedRowClass + needsYouRowClass + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-repo-path="' + rowRepoAttr + '">'
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
         + '<div class="conv-title-row">'

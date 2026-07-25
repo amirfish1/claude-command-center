@@ -21435,6 +21435,20 @@ body.ccc-mobile-redesign.ccc-simple-mode .conv-item {
   border-radius: 0;
   margin: 0;
 }
+/* Context-fill color spine — the numeric "24%" badge is hidden in Simple
+   mode, so each chat's fill level shows as a colored left edge instead,
+   reusing the original pct-badge palette exactly (low=accent, mid=#FBCA04,
+   high=--red). Painted with an inset shadow so it needs no extra layout
+   space and doesn't fight the card's own border-left (active state). */
+body.ccc-mobile-redesign.ccc-simple-mode .conv-item.ctx-low {
+  box-shadow: inset 5px 0 0 0 var(--accent);
+}
+body.ccc-mobile-redesign.ccc-simple-mode .conv-item.ctx-mid {
+  box-shadow: inset 5px 0 0 0 #FBCA04;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .conv-item.ctx-high {
+  box-shadow: inset 5px 0 0 0 var(--red);
+}
 body.ccc-mobile-redesign.ccc-simple-mode .conv-title {
   font-size: 15.5px;
   line-height: 1.35;
