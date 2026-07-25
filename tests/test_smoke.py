@@ -11164,7 +11164,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 return_value={"available": True, "bin": "/usr/bin/codex-test"},
             ), mock.patch.object(server, "_codex_thread_row", return_value={"cwd": str(self.repo)}), \
                  mock.patch.object(server, "_git_toplevel_for_existing_dir", return_value=str(self.repo)), \
-                 mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request):
+                 mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_schedule_codex_queue_pump"):
                 result = server.resume_session_codex(sid, "keep this")
 
             self.assertTrue(result["ok"])
@@ -11672,6 +11673,11 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._CODEX_APP_SERVER_EVENT_SEQ = 0
             server._CODEX_APP_SERVER_TRANSPORT = fake
             server._CODEX_APP_SERVER_INITIALIZED = True
+            # FakeTransport doesn't implement close() or answer the
+            # liveness probe's "thread/list" round trip; seed the probe
+            # throttle so _ensure_codex_app_server treats it as recently
+            # verified instead of trying to probe/replace it.
+            server._CODEX_APP_SERVER_LAST_LIVE_CHECK = time.time()
         try:
             server._codex_app_server_handle_message({
                 "jsonrpc": "2.0",

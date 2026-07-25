@@ -20862,6 +20862,9 @@ _CODEX_APP_SERVER_THREAD_STATE = {}
 _CODEX_APP_SERVER_TURN_THREAD = {}
 _CODEX_APP_SERVER_WARMUP_LOCK = threading.Lock()
 _CODEX_APP_SERVER_WARMUP_LAST = 0.0
+_CODEX_APP_SERVER_LIVENESS_INTERVAL = 5.0
+_CODEX_APP_SERVER_LIVENESS_TIMEOUT = 3.0
+_CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
 _CODEX_TELEMETRY_TURNS = {}
 _CODEX_APP_SERVER_RECENT_ITEM_MAX = 24
 _CODEX_APP_SERVER_ITEM_TEXT_MAX = 1200
@@ -22921,10 +22924,24 @@ def _codex_app_server_refresh_thread_status(session_id, *, max_age=2.0):
     return changed
 
 
+def _codex_app_server_transport_responsive(transport, timeout=_CODEX_APP_SERVER_LIVENESS_TIMEOUT):
+    """Round-trip probe distinguishing "process alive" from "process answers".
+
+    A wedged app-server (e.g. leaking pipe fds until it can no longer service
+    requests) still passes transport.alive() forever since that only polls the
+    OS process, so callers would keep reusing a transport that never replies.
+    A real reply always carries "jsonrpc"; the timeout/broken-pipe fallback in
+    _codex_app_server_request_to_transport does not.
+    """
+    response = _codex_app_server_request_to_transport(transport, "thread/list", {}, timeout=timeout)
+    return isinstance(response, dict) and "jsonrpc" in response
+
+
 def _ensure_codex_app_server(*, allow_stdio=True):
     """Start and initialize a persistent Codex app-server if needed."""
     global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT, _CODEX_APP_SERVER_READER
     global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
+    global _CODEX_APP_SERVER_LAST_LIVE_CHECK
     with _CODEX_APP_SERVER_LOCK:
         while _CODEX_APP_SERVER_INITIALIZING:
             _CODEX_APP_SERVER_LOCK.wait(0.5)
@@ -22935,13 +22952,22 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 break
         transport = _CODEX_APP_SERVER_TRANSPORT
         if transport is not None and transport.alive() and _CODEX_APP_SERVER_INITIALIZED:
-            return transport
+            now = time.time()
+            if now - _CODEX_APP_SERVER_LAST_LIVE_CHECK < _CODEX_APP_SERVER_LIVENESS_INTERVAL:
+                return transport
+            if _codex_app_server_transport_responsive(transport):
+                _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
+                return transport
+            # Alive but wedged (no reply within timeout) — fall through to
+            # close it below so the candidates loop starts a fresh process
+            # instead of every caller queuing against a dead-end transport.
         if transport is not None:
             transport.close()
         _CODEX_APP_SERVER_PROC = None
         _CODEX_APP_SERVER_TRANSPORT = None
         _CODEX_APP_SERVER_INITIALIZED = False
         _CODEX_APP_SERVER_INITIALIZING = True
+        _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
 
     candidates = []
     managed_path = _codex_managed_app_server_socket_path()
@@ -25829,10 +25855,21 @@ def _codex_agent_task_label(row):
 
 
 def _codex_display_name(row, override=None, title="", first_message=""):
+    # Conductor prepends a machine-only system wrapper to its first Codex
+    # prompt. It is useful transcript provenance but not a session name; keep
+    # the actual user ask that follows the closing tag.
+    def visible_prompt(value):
+        return re.sub(
+            r"^\s*<system_instruction>.*?</system_instruction>\s*",
+            "",
+            str(value or ""),
+            flags=re.DOTALL,
+        )
+
     return (
         _truncate_session_name(override)
-        or _truncate_session_name(title)
-        or _truncate_session_name(first_message)
+        or _truncate_session_name(visible_prompt(title))
+        or _truncate_session_name(visible_prompt(first_message))
         or _codex_agent_task_label(row)
         or _truncate_session_name((row or {}).get("agent_nickname"))
     )
