@@ -1,0 +1,1 @@
+- Queued Codex injects now say when the session is blocked on an unanswered approval prompt (with the prompt text and a `pending_approval` response field) instead of the generic "queued behind an active turn".
