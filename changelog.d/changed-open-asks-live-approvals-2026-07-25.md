@@ -1,1 +1,1 @@
-- Surface live approval-waiting sessions in Open asks so shared engine-bridge blockers are visible and actionable.
+- Surface unresolved approval-waiting sessions in Open asks so shared engine-bridge blockers remain visible even when worker-owned processes are absent from the live-session scan.

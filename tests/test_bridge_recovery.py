@@ -69,6 +69,66 @@ class BridgeRecoveryTests(unittest.TestCase):
         self.assertEqual(result["other_active_session_ids"], ["other"])
         cancel.assert_not_called()
 
+    def test_codex_status_describes_active_approval_sessions(self):
+        server = self.server
+        state = {
+            "approval-thread": {
+                "status": "active",
+                "thread_needs_approval": True,
+                "last_item": {"command": "git status"},
+            },
+            "working-thread": {"status": "active"},
+        }
+        with mock.patch.object(server, "_CODEX_APP_SERVER_THREAD_STATE", state), \
+             mock.patch.object(server, "_CODEX_APP_SERVER_TRANSPORT", None), \
+             mock.patch.object(server, "_CODEX_APP_SERVER_INITIALIZED", False):
+            status = server._engine_bridge_status_local("codex", "")
+
+        details = {
+            row["session_id"]: row for row in status["active_sessions"]
+        }
+        self.assertTrue(details["approval-thread"]["needs_approval"])
+        self.assertIn(
+            "git status",
+            details["approval-thread"]["needs_approval_message"],
+        )
+        self.assertFalse(details["working-thread"]["needs_approval"])
+
+    def test_approval_blockers_use_worker_bridge_state(self):
+        server = self.server
+
+        def routed(engine, operation, args, mutate=False):
+            self.assertEqual(operation, "bridge_status")
+            return {
+                "ok": True,
+                "engine": engine,
+                "active_sessions": (
+                    [{
+                        "session_id": "approval-thread",
+                        "needs_approval": True,
+                        "needs_approval_message": "Approve command?",
+                    }, {
+                        "session_id": "working-thread",
+                        "needs_approval": False,
+                    }] if engine == "codex" else []
+                ),
+            }
+
+        with mock.patch.object(
+            server, "_control_plane_engine_call", side_effect=routed,
+        ):
+            result = server._engine_bridge_approval_blockers()
+
+        self.assertEqual(result, {
+            "ok": True,
+            "sessions": [{
+                "session_id": "approval-thread",
+                "engine": "codex",
+                "needs_approval": True,
+                "needs_approval_message": "Approve command?",
+            }],
+        })
+
     def test_selected_queue_message_is_retried_without_touching_others(self):
         server = self.server
         sid = "session-target"
@@ -134,6 +194,7 @@ class BridgeRecoveryTests(unittest.TestCase):
         self.assertIn('id="bridgeRecoveryBackdrop"', html)
         self.assertIn("data-bridge-recovery", js)
         self.assertIn("/api/bridge-recovery/status", js)
+        self.assertIn("/api/bridge-recovery/blockers", js)
         self.assertIn("Restart and retry", js)
         self.assertIn(".bridge-recovery-modal", css)
 

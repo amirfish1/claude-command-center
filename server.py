@@ -51766,6 +51766,18 @@ def _engine_bridge_status_local(engine, session_id):
                 other_sid for other_sid, state in sessions.items()
                 if _bridge_state_is_active("codex", state)
             ]
+            active_sessions = []
+            for other_sid in active:
+                state = sessions.get(other_sid) or {}
+                needs_approval = _codex_app_server_thread_needs_approval(state)
+                active_sessions.append({
+                    "session_id": other_sid,
+                    "needs_approval": needs_approval,
+                    "needs_approval_message": (
+                        _codex_app_server_thread_approval_message(state)
+                        if needs_approval else ""
+                    ),
+                })
             proc = getattr(transport, "proc", None)
             pid = getattr(proc, "pid", None)
             live = bool(
@@ -51782,6 +51794,7 @@ def _engine_bridge_status_local(engine, session_id):
             "live": live,
             "pid": pid,
             "active_session_ids": active,
+            "active_sessions": active_sessions,
             "other_active_session_ids": [value for value in active if value != sid],
             "shared": True,
             # Managed transport is an external daemon: CCC can reconnect its
@@ -51832,6 +51845,34 @@ def _engine_bridge_status(session_id):
             "terminate the externally owned daemon."
         )
     return status
+
+
+def _engine_bridge_approval_blockers():
+    """Return formal approvals held by worker-owned shared engine bridges."""
+    blockers = []
+    for engine in ("codex", "kimi"):
+        routed = _control_plane_engine_call(
+            engine, "bridge_status", {"session_id": ""}, mutate=False,
+        )
+        status = routed if isinstance(routed, dict) and routed.get("engine") else None
+        if status is None:
+            status = _engine_bridge_status_local(engine, "")
+        for row in status.get("active_sessions") or []:
+            if not isinstance(row, dict) or not row.get("needs_approval"):
+                continue
+            sid = str(row.get("session_id") or "").strip()
+            if not sid:
+                continue
+            blockers.append({
+                "session_id": sid,
+                "engine": engine,
+                "needs_approval": True,
+                "needs_approval_message": str(
+                    row.get("needs_approval_message")
+                    or f"{engine.title()} is waiting for approval"
+                ),
+            })
+    return {"ok": True, "sessions": blockers}
 
 
 def _wait_then_kill_process(proc, timeout=2.0):
@@ -65309,6 +65350,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status,
                     200 if status.get("ok") else 400,
                 )
+        elif path == "/api/bridge-recovery/blockers":
+            self.send_json(_engine_bridge_approval_blockers())
         elif path == "/api/sessions/spawn-codex/availability":
             routed = _control_plane_engine_call(
                 "codex", "availability", {}, mutate=False,

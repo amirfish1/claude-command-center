@@ -2281,8 +2281,8 @@
       && c.ended_blocked
       && _archiveWindowRowTs(c) >= nowSec - OPEN_ASK_RECENT_S);
   }
-  function isLiveApprovalAskRow(c) {
-    return !!(c && c.is_live && c.needs_approval);
+  function isApprovalAskRow(c) {
+    return !!(c && c.needs_approval);
   }
   // In-progress "Details" toggle: when on, every In-progress row that has a
   // matching Needs-your-attention item renders that NYA block underneath it.
@@ -3148,10 +3148,10 @@
     return merged;
   }
 
-  function _rowHasLiveApprovalOverlay(c) {
-    if (isLiveApprovalAskRow(c)) return true;
+  function _rowHasApprovalAsk(c) {
+    if (isApprovalAskRow(c)) return true;
     const sid = c && (c.session_id || c.id);
-    return !!(sid && isLiveApprovalAskRow(_sessionLiveOverlay.get(sid)));
+    return !!(sid && isApprovalAskRow(_sessionLiveOverlay.get(sid)));
   }
 
   let _liveSessionsActivityPromise = null;
@@ -3166,14 +3166,36 @@
     if (_liveSessionsActivityPromise) return _liveSessionsActivityPromise;
     _liveSessionsActivityPromise = (async () => {
     try {
+      const blockerRequest = fetch('/api/bridge-recovery/blockers?_=' + Date.now())
+        .then(response => response.ok ? response.json() : { sessions: [] })
+        .catch(() => ({ sessions: [] }));
       const res = await fetch('/api/sessions/live-activity?_=' + Date.now());
       if (!res.ok) return _liveSessionsActivityLast;
       const data = await res.json();
+      const blockerData = await blockerRequest;
       _liveSessionsActivityLast = data || { sessions: {} };
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {
         _rememberLiveOverlay(sid, fields);
+      }
+      for (const blocker of (Array.isArray(blockerData.sessions) ? blockerData.sessions : [])) {
+        const sid = String((blocker && blocker.session_id) || '').trim();
+        if (!sid || !blocker.needs_approval) continue;
+        liveIds.add(sid);
+        _rememberLiveOverlay(sid, {
+          is_live: true,
+          state: 'waiting',
+          sidecar_status: 'active',
+          sidecar_tool: 'Approval',
+          sidecar_file: blocker.needs_approval_message || 'Agent is waiting for approval',
+          sidecar_in_flight: true,
+          needs_approval: true,
+          needs_approval_message: blocker.needs_approval_message || 'Agent is waiting for approval',
+          codex_state: blocker.engine === 'codex' ? 'waiting' : undefined,
+          codex_fresh: blocker.engine === 'codex' ? true : undefined,
+          codex_state_reason: blocker.needs_approval_message || '',
+        });
       }
       for (const sid of Array.from(_sessionLiveOverlay.keys())) {
         if (!liveIds.has(sid)) _sessionLiveOverlay.delete(sid);
@@ -24604,9 +24626,7 @@
     const _readyToMergeByPr = new Map();   // pr_num -> { idx, conv }
     const _archivedConvs = [];
     const _idSearchConvs = [];
-    // State-based action sections (server-stamped `state` on every /api/sessions
-    // row): "Needs you" = state==='waiting' (Claude is blocked on the human —
-    // "Open asks" includes a live session currently waiting on a tool approval,
+    // "Open asks" includes a session with a formal unresolved tool approval,
     // plus a session that ENDED while still blocked on the human
     // (state==='ended' && ended_blocked). Both are pulled OUT of the
     // In-progress bucket below so the list answers "what needs me at a glance"
@@ -24616,9 +24636,10 @@
     // hysteresis) untouched.
     //
     // General waiting/question sessions still stay in their project group to
-    // avoid row churn. Live approvals are the deliberate exception: they can
-    // block guarded shared-bridge recovery, so hiding them in a collapsed
-    // project or Evergreen worker group creates an invisible blocker.
+    // avoid row churn. Formal approvals are the deliberate exception: engine
+    // state can retain the active approval turn even when the dashboard's
+    // process-liveness scan cannot see the worker-owned app-server. Such turns
+    // can block guarded bridge recovery and must not become invisible.
     const _openAskConvs = [];
     const _qActive = (document.getElementById('convSearch')?.value || '').trim().toLowerCase();
     // Group-chat rows are navigation chrome, not conversation search hits.
@@ -24716,6 +24737,14 @@
         _idSearchConvs.push(c);
         continue;
       }
+      // An unresolved formal approval is actionable regardless of lifecycle
+      // classification. In particular, worker-owned Codex app-server turns can
+      // look ended to the dashboard process while still holding an approval
+      // turn open and blocking guarded bridge recovery.
+      if (isApprovalAskRow(c)) {
+        _openAskConvs.push(c);
+        continue;
+      }
       const col = classifyKanbanColumn(c);
       if (col === 'archived') { _archivedConvs.push(c); continue; }
       if (col === 'backlog') { _ghIssueConvs.push(c); continue; }
@@ -24802,7 +24831,7 @@
       if (id) _actionSessionById.set(id, c);
     });
     const _isRecentOpenAsk = (c) => isRecentOpenAskRow(c, _nowSec);
-    const _isLiveApprovalAsk = (c) => isLiveApprovalAskRow(c);
+    const _isApprovalAsk = (c) => isApprovalAskRow(c);
     // A blocked descendant stays in the main list when its lineage reaches a
     // visible non-Open-Ask parent, where the cluster renderer can keep it as a
     // compact attention row. Standalone/orphaned Open Ask sessions retain the
@@ -24819,12 +24848,13 @@
     };
     // Pulling every waiting session into a top bucket made rows jump whenever a
     // turn paused/resumed. Keep ordinary questions and other waiting states in
-    // their project groups, but promote formal live approval prompts: they are
-    // actionable and may block recovery of the process-shared engine bridge.
+    // their project groups, but promote formal unresolved approval prompts:
+    // they are actionable and may block recovery of the process-shared bridge,
+    // even when that worker-owned process is absent from live-activity.
     // Recent ended-while-blocked sessions retain their existing Open ask path.
     for (let _i = _sessionConvs.length - 1; _i >= 0; _i--) {
       const _c = _sessionConvs[_i];
-      if (_isLiveApprovalAsk(_c)
+      if (_isApprovalAsk(_c)
           || (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c))) {
         _openAskConvs.push(_c);
         _sessionConvs.splice(_i, 1);
@@ -25007,6 +25037,11 @@
         liveToolHtml = '<span class="conv-live-tool sending" title="Sending - waiting for the first response from the agent">'
           + '<span class="conv-live-name">● Sending&hellip;</span>'
           + '</span>';
+      } else if (c.needs_approval) {
+        const msg = c.needs_approval_message || c.sidecar_file || 'Agent is asking for approval';
+        liveToolHtml = '<span class="conv-live-tool is-question" title="' + escapeHtml(msg) + '">'
+          + '<span class="conv-live-name">Needs approval</span>'
+          + '</span>';
       } else if (c.stale_tool_call) {
         const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
         const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
@@ -25024,11 +25059,6 @@
         liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
           + '<span class="conv-live-name">Stuck</span>'
           + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(staleTool)) + '</span>'
-          + '</span>';
-      } else if (c.is_live && c.needs_approval) {
-        const msg = c.needs_approval_message || c.sidecar_file || 'Agent is asking for approval';
-        liveToolHtml = '<span class="conv-live-tool is-question" title="' + escapeHtml(msg) + '">'
-          + '<span class="conv-live-name">Needs approval</span>'
           + '</span>';
       } else if (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'))) {
         const q = c.sidecar_file || c.question_text || 'Claude is asking a question';
@@ -27700,7 +27730,7 @@
     // guarded shared-bridge restart.
     const _openAskHtml = getOpenAskPref() === 'hide' ? '' : _renderActionSection(_openAskConvs, {
       kind: 'openask', label: 'Open asks', collapseKey: 'ccc-openask-collapsed',
-      hint: 'A live session waiting for your approval, or a session that ended '
+      hint: 'A session waiting for your approval, or a session that ended '
         + 'while still waiting on your answer (last 48h). Open it to respond.',
     });
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
@@ -49306,6 +49336,11 @@
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
       archiveDataWindow = requestedWindow;
         archiveLoaded = true;
+        // The sidebar must learn worker-owned approval blockers even before a
+        // conversation is selected (startLiveStatusPolling begins on select).
+        // Await the cheap overlay here so the first full archive render can
+        // place those sessions in Open asks without a click or 5s poll.
+        await refreshLiveSessionsActivity();
         if (typeof window.__cccRenderThroughputActivity === 'function') {
           window.__cccRenderThroughputActivity();
         }
@@ -49430,7 +49465,7 @@
     // the only window control lives in the Archived section header.
     const _windowed = (_arcWindowCutoff && !q)
       ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff)
-        || isRecentOpenAskRow(c) || _rowHasLiveApprovalOverlay(c))
+        || isRecentOpenAskRow(c) || _rowHasApprovalAsk(c))
       : archiveRows;
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
