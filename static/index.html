@@ -2212,6 +2212,39 @@
     </div>
   </div>
 </div>
+<!-- Shared engine bridge recovery. Opened by the Codex app-server / Kimi ACP
+     process pill in the conversation breadcrumb. -->
+<div class="bridge-recovery-backdrop" id="bridgeRecoveryBackdrop">
+  <div class="bridge-recovery-modal" role="dialog" aria-modal="true"
+       aria-labelledby="bridgeRecoveryTitle">
+    <div class="bridge-recovery-heading">
+      <div>
+        <h3 id="bridgeRecoveryTitle">Recover engine bridge</h3>
+        <div class="bridge-recovery-subtitle" id="bridgeRecoverySubtitle"></div>
+      </div>
+      <button type="button" class="bridge-recovery-close" id="bridgeRecoveryClose"
+              title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="bridge-recovery-status" id="bridgeRecoveryStatus" role="status">
+      Checking bridge safety…
+    </div>
+    <fieldset class="bridge-recovery-queue" id="bridgeRecoveryQueue">
+      <legend>Queued message to retry</legend>
+      <div class="bridge-recovery-empty">Loading queued messages…</div>
+    </fieldset>
+    <div class="bridge-recovery-note">
+      CCC checks for other active sessions before restarting this shared
+      process. Other queued messages remain untouched.
+    </div>
+    <div class="modal-error" id="bridgeRecoveryError"></div>
+    <div class="modal-footer">
+      <button class="modal-cancel" id="bridgeRecoveryCancel" type="button">Cancel</button>
+      <button class="modal-start" id="bridgeRecoveryStart" type="button" disabled>
+        Restart bridge
+      </button>
+    </div>
+  </div>
+</div>
 <div class="folder-picker-backdrop" id="folderPickerBackdrop">
   <div class="folder-picker" role="dialog" aria-modal="true" aria-labelledby="folderPickerTitle">
     <h3 id="folderPickerTitle">Choose a folder</h3>

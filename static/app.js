@@ -11951,10 +11951,38 @@
         const res = await fetch('/api/session-status?' + params.toString(), { cache: 'no-store' });
         d = await res.json().catch(() => ({}));
       } catch (_) { return; }  // keep the last render on a transient failure
-      const pill = (on, warn, label, title) =>
+      const pill = (on, warn, label, title, recoverable) =>
         '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
+        + (recoverable
+            ? ' data-bridge-recovery role="button" tabindex="0" aria-label="Open bridge recovery"'
+            : '')
         + ' title="' + escapeHtml(title) + '"><span class="ccc-proc-dot"></span>'
         + escapeHtml(label) + '</span>';
+      if (src === 'codex') {
+        const appLive = !!d.codex_app_server;
+        const managed = d.codex_app_server_transport === 'managed'
+          || !!d.codex_managed_app_server;
+        slot.innerHTML = pill(
+          appLive,
+          false,
+          appLive ? (managed ? 'managed app-server' : 'app-server') : 'exec',
+          'Click to inspect or recover the Codex app-server safely.',
+          true,
+        );
+        return;
+      }
+      if (src === 'kimi') {
+        const acpLive = !!d.live && d.kind === 'acp';
+        const acpBusy = acpLive && (d.status === 'running' || d.status === 'busy');
+        slot.innerHTML = pill(
+          acpLive,
+          false,
+          acpBusy ? 'Kimi ACP · working' : 'Kimi ACP',
+          'Click to inspect or recover the shared Kimi ACP adapter safely.',
+          true,
+        );
+        return;
+      }
       const headOn = !!d.headless_present;
       const stale = headOn && !!d.headless_stale;
       const bgOn = !!d.bg_present;
@@ -23750,8 +23778,11 @@
     // the open conversation, render the engine pills as idle rather than painting
     // the new session with the PREVIOUS session's headless/terminal state.
     const ls = liveStatusMatchesOpenConv() ? (liveStatus || {}) : {};
-    const pill0 = (on, warn, label, title) =>
+    const pill0 = (on, warn, label, title, recoverable) =>
       '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
+      + (recoverable
+          ? ' data-bridge-recovery role="button" tabindex="0" aria-label="Open bridge recovery"'
+          : '')
       + ' title="' + escapeHtml(title) + '">'
       + '<span class="ccc-proc-dot"></span>' + escapeHtml(label) + '</span>';
     // Codex sessions reuse this breadcrumb slot for app-server/exec status
@@ -23766,7 +23797,19 @@
           ? (managed
               ? "CCC is driving this Codex session via Codex's managed app-server Unix socket."
               : 'CCC is driving this Codex session via its private app-server fallback.')
-          : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.');
+          : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.',
+        true);
+      return;
+    }
+    if (currentSession && currentSession.source === 'kimi') {
+      const acpLive = !!ls.live && ls.kind === 'acp';
+      const acpBusy = acpLive && (ls.status === 'running' || ls.status === 'busy');
+      const label = acpBusy ? 'Kimi ACP · working' : (acpLive ? 'Kimi ACP' : 'Kimi ACP · offline');
+      el.innerHTML = pill0(acpLive, false, label,
+        acpLive
+          ? 'Kimi sessions share this ACP adapter. Click to inspect or recover it safely.'
+          : 'Kimi ACP is not connected. Click to inspect or recover it.',
+        true);
       return;
     }
     // Antigravity is always headless — CCC resumes it per turn, no TTY. Surface
@@ -23862,6 +23905,184 @@
       } })
       .finally(() => { setTimeout(() => btn.classList.remove('is-spinning'), 350); });
   });
+
+  let _bridgeRecoveryState = null;
+
+  function closeBridgeRecoveryModal() {
+    const backdrop = document.getElementById('bridgeRecoveryBackdrop');
+    if (backdrop) backdrop.classList.remove('visible');
+    _bridgeRecoveryState = null;
+  }
+
+  function bridgeRecoveryError(message) {
+    const errorEl = document.getElementById('bridgeRecoveryError');
+    if (!errorEl) return;
+    errorEl.textContent = message || '';
+    errorEl.classList.toggle('visible', !!message);
+  }
+
+  function renderBridgeRecoveryStatus(data) {
+    const statusEl = document.getElementById('bridgeRecoveryStatus');
+    const queueEl = document.getElementById('bridgeRecoveryQueue');
+    const startBtn = document.getElementById('bridgeRecoveryStart');
+    const subtitle = document.getElementById('bridgeRecoverySubtitle');
+    if (!statusEl || !queueEl || !startBtn) return;
+    _bridgeRecoveryState = data;
+    const engine = data.engine === 'kimi' ? 'Kimi' : 'Codex';
+    if (subtitle) {
+      subtitle.textContent = (data.bridge || engine + ' bridge')
+        + (data.pid ? ' · pid ' + data.pid : '')
+        + (data.transport ? ' · ' + data.transport : '');
+    }
+    const others = Array.isArray(data.other_active_session_ids)
+      ? data.other_active_session_ids : [];
+    statusEl.classList.remove('is-safe', 'is-blocked');
+    if (others.length) {
+      statusEl.classList.add('is-blocked');
+      statusEl.textContent = 'Restart blocked: ' + others.length
+        + ' other active session' + (others.length === 1 ? '' : 's')
+        + ' use this shared bridge (' + others.map(id => String(id).slice(0, 12)).join(', ') + ').';
+    } else {
+      statusEl.classList.add('is-safe');
+      statusEl.textContent = data.restart_note
+        || 'Safe to restart: no other active sessions are using this shared bridge.';
+    }
+    const queued = Array.isArray(data.queued_messages) ? data.queued_messages : [];
+    if (queued.length) {
+      queueEl.innerHTML = '<legend>Queued message to retry</legend>'
+        + queued.map((row, index) => (
+          '<label class="bridge-recovery-message">'
+          + '<input type="radio" name="bridgeRecoveryMessage" value="' + escapeAttr(row.id || String(index)) + '"'
+          + (index === 0 ? ' checked' : '') + '>'
+          + '<span class="bridge-recovery-message-text">' + escapeHtml(row.text || '') + '</span>'
+          + '</label>'
+        )).join('');
+      startBtn.textContent = 'Restart and retry';
+    } else {
+      queueEl.innerHTML = '<legend>Queued message to retry</legend>'
+        + '<div class="bridge-recovery-empty">No queued messages. The bridge will restart and reattach without sending anything.</div>';
+      startBtn.textContent = 'Restart bridge';
+    }
+    startBtn.disabled = !data.can_restart;
+  }
+
+  async function openBridgeRecoveryModal() {
+    const sid = currentSession && currentSession.id;
+    if (!sid || !currentSession || !['codex', 'kimi'].includes(currentSession.source)) return;
+    const backdrop = document.getElementById('bridgeRecoveryBackdrop');
+    const statusEl = document.getElementById('bridgeRecoveryStatus');
+    const queueEl = document.getElementById('bridgeRecoveryQueue');
+    const startBtn = document.getElementById('bridgeRecoveryStart');
+    if (!backdrop || !statusEl || !queueEl || !startBtn) return;
+    _bridgeRecoveryState = null;
+    bridgeRecoveryError('');
+    statusEl.className = 'bridge-recovery-status';
+    statusEl.textContent = 'Checking bridge safety…';
+    queueEl.innerHTML = '<legend>Queued message to retry</legend>'
+      + '<div class="bridge-recovery-empty">Loading queued messages…</div>';
+    startBtn.disabled = true;
+    startBtn.textContent = 'Restart bridge';
+    backdrop.classList.add('visible');
+    try {
+      const response = await fetch('/api/bridge-recovery/status?session_id=' + encodeURIComponent(sid), {
+        cache: 'no-store',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+      if (!currentSession || currentSession.id !== sid) {
+        closeBridgeRecoveryModal();
+        return;
+      }
+      renderBridgeRecoveryStatus(data);
+    } catch (error) {
+      statusEl.classList.add('is-blocked');
+      statusEl.textContent = 'Could not inspect this bridge.';
+      bridgeRecoveryError((error && error.message) || 'Unknown error');
+    }
+  }
+
+  async function runBridgeRecovery() {
+    const data = _bridgeRecoveryState;
+    const sid = data && data.session_id;
+    const startBtn = document.getElementById('bridgeRecoveryStart');
+    if (!data || !sid || !startBtn || startBtn.disabled) return;
+    const selected = document.querySelector('input[name="bridgeRecoveryMessage"]:checked');
+    let text = '';
+    if (selected) {
+      const row = (data.queued_messages || []).find(item => item.id === selected.value);
+      text = row ? String(row.text || '') : '';
+    }
+    startBtn.disabled = true;
+    startBtn.textContent = text ? 'Restarting and retrying…' : 'Restarting…';
+    bridgeRecoveryError('');
+    try {
+      const key = (window.crypto && typeof window.crypto.randomUUID === 'function')
+        ? window.crypto.randomUUID()
+        : ('bridge-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+      const response = await fetch('/api/bridge-recovery', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          session_id: sid,
+          text,
+          idempotency_key: key,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        const other = Array.isArray(result.other_active_session_ids)
+          ? ' Active: ' + result.other_active_session_ids.map(id => String(id).slice(0, 12)).join(', ')
+          : '';
+        throw new Error((result.error || ('HTTP ' + response.status)) + other);
+      }
+      closeBridgeRecoveryModal();
+      showOpToast(result.retried
+        ? (result.queued ? 'Bridge restarted; selected message is queued on the fresh bridge.'
+          : 'Bridge restarted and selected message retried.')
+        : 'Bridge restarted and session reattached.', 'ok');
+      if (typeof refreshLiveStatus === 'function') setTimeout(refreshLiveStatus, 250);
+      if (typeof fetchConversationEvents === 'function') {
+        setTimeout(() => {
+          try { fetchConversationEvents(activePaneId()); } catch (_) {}
+        }, 500);
+      }
+    } catch (error) {
+      bridgeRecoveryError((error && error.message) || 'Recovery failed');
+      startBtn.disabled = false;
+      startBtn.textContent = text ? 'Restart and retry' : 'Restart bridge';
+    }
+  }
+
+  document.addEventListener('click', (ev) => {
+    const pill = ev.target && ev.target.closest && ev.target.closest('[data-bridge-recovery]');
+    if (!pill) return;
+    ev.preventDefault();
+    openBridgeRecoveryModal();
+  });
+  document.addEventListener('keydown', (ev) => {
+    const pill = ev.target && ev.target.closest && ev.target.closest('[data-bridge-recovery]');
+    if (pill && (ev.key === 'Enter' || ev.key === ' ')) {
+      ev.preventDefault();
+      openBridgeRecoveryModal();
+      return;
+    }
+    if (ev.key === 'Escape') {
+      const backdrop = document.getElementById('bridgeRecoveryBackdrop');
+      if (backdrop && backdrop.classList.contains('visible')) closeBridgeRecoveryModal();
+    }
+  });
+  const $bridgeRecoveryBackdrop = document.getElementById('bridgeRecoveryBackdrop');
+  const $bridgeRecoveryClose = document.getElementById('bridgeRecoveryClose');
+  const $bridgeRecoveryCancel = document.getElementById('bridgeRecoveryCancel');
+  const $bridgeRecoveryStart = document.getElementById('bridgeRecoveryStart');
+  if ($bridgeRecoveryBackdrop) {
+    $bridgeRecoveryBackdrop.addEventListener('click', (ev) => {
+      if (ev.target === $bridgeRecoveryBackdrop) closeBridgeRecoveryModal();
+    });
+  }
+  if ($bridgeRecoveryClose) $bridgeRecoveryClose.addEventListener('click', closeBridgeRecoveryModal);
+  if ($bridgeRecoveryCancel) $bridgeRecoveryCancel.addEventListener('click', closeBridgeRecoveryModal);
+  if ($bridgeRecoveryStart) $bridgeRecoveryStart.addEventListener('click', runBridgeRecovery);
 
   async function postRunCompactForSession(sessionId, source, terminalApp) {
     // Both Claude and Codex compact via /api/session/compact. (Codex used to

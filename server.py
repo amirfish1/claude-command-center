@@ -28639,6 +28639,12 @@ _ACP_PENDING = {}        # harness -> {req_id: {"event","response","method","sid
 _ACP_SESSION_STATE = {}  # harness -> {sid: session state dict}
 _ACP_STATE_LOADED = set()
 _ACP_ENSURE_ERROR = {}   # harness -> last ensure failure reason (diagnostics)
+_ACP_RECOVERY_LOCKS = {}
+# A recovered Kimi session can end with a durable ``step.begin`` but no
+# matching boundary when its old ACP process dies.  Briefly suppress that
+# stale wire-only busy signal after an operator-approved bridge restart; the
+# fresh ACP state becomes authoritative as soon as the retried prompt starts.
+_KIMI_WIRE_BUSY_SUPPRESS_UNTIL = {}
 
 
 def _acp_harness_enabled(harness):
@@ -30033,6 +30039,8 @@ def _kimi_wire_turn_active(sid):
     client can own the same session, so the wire is the authoritative pre-send
     guard for those external turns.
     """
+    if time.time() < float(_KIMI_WIRE_BUSY_SUPPRESS_UNTIL.get(sid, 0) or 0):
+        return False
     path = _acp_wire_path("kimi", sid)
     if path is None:
         return False
@@ -51684,6 +51692,362 @@ def _interrupt_session(session_id):
     return {"ok": False, "error": "session is not live — nothing to interrupt"}
 
 
+def _bridge_pending_inputs(session_id):
+    """Public-safe snapshot of durable messages eligible for recovery retry."""
+    rows = []
+    with _pending_resume_lock:
+        resume = list(_pending_resume_queue.get(session_id, []))
+    with _pending_terminal_input_lock:
+        terminal = list(_pending_terminal_input_queue.get(session_id, []))
+    for queue_name, values in (("resume", resume), ("terminal", terminal)):
+        for index, text in enumerate(values):
+            rows.append({
+                "id": f"{queue_name}:{index}",
+                "queue": queue_name,
+                "text": str(text or ""),
+            })
+    return rows
+
+
+def _bridge_state_is_active(engine, state):
+    if not isinstance(state, dict):
+        return False
+    if engine == "kimi":
+        return str(state.get("status") or "").lower() == "active"
+    status = str(state.get("status") or "").lower()
+    return bool(
+        state.get("active_turn_id")
+        or state.get("ccc_turn_start_pending")
+        or status == "active"
+    )
+
+
+def _engine_bridge_status_local(engine, session_id):
+    """Describe one process-shared engine bridge without starting it."""
+    engine = str(engine or "").strip().lower()
+    sid = str(session_id or "").strip()
+    if engine == "kimi":
+        with _ACP_LOCK:
+            _acp_load_state("kimi")
+            conn = _ACP_CONNS.get("kimi") or {}
+            transport = conn.get("transport")
+            sessions = dict(_ACP_SESSION_STATE.get("kimi") or {})
+            active = [
+                other_sid for other_sid, state in sessions.items()
+                if _bridge_state_is_active("kimi", state)
+            ]
+            proc = getattr(transport, "proc", None)
+            pid = getattr(proc, "pid", None)
+            live = bool(
+                conn.get("initialized")
+                and transport is not None
+                and transport.alive()
+            )
+        return {
+            "ok": True,
+            "engine": "kimi",
+            "bridge": "Kimi ACP",
+            "transport": "acp",
+            "live": live,
+            "pid": pid,
+            "active_session_ids": active,
+            "other_active_session_ids": [value for value in active if value != sid],
+            "shared": True,
+            "owned": True,
+        }
+    if engine == "codex":
+        # One thread/list call refreshes every thread known by the bridge.
+        if _codex_app_server_is_live() and sid:
+            _codex_app_server_refresh_thread_status(sid, max_age=0)
+        with _CODEX_APP_SERVER_LOCK:
+            transport = _CODEX_APP_SERVER_TRANSPORT
+            sessions = dict(_CODEX_APP_SERVER_THREAD_STATE)
+            active = [
+                other_sid for other_sid, state in sessions.items()
+                if _bridge_state_is_active("codex", state)
+            ]
+            proc = getattr(transport, "proc", None)
+            pid = getattr(proc, "pid", None)
+            live = bool(
+                transport is not None
+                and transport.alive()
+                and _CODEX_APP_SERVER_INITIALIZED
+            )
+            kind = _codex_app_server_transport_kind()
+        return {
+            "ok": True,
+            "engine": "codex",
+            "bridge": "Codex app-server",
+            "transport": kind or "exec",
+            "live": live,
+            "pid": pid,
+            "active_session_ids": active,
+            "other_active_session_ids": [value for value in active if value != sid],
+            "shared": True,
+            # Managed transport is an external daemon: CCC can reconnect its
+            # client but must not kill a process it does not own.
+            "owned": kind != "managed",
+        }
+    return {
+        "ok": False,
+        "code": "unsupported_engine",
+        "error": "Bridge recovery is available for Codex and Kimi sessions",
+    }
+
+
+def _engine_bridge_status(session_id):
+    sid = str(session_id or "").strip()
+    engine = _detect_session_engine(sid)
+    if engine not in ("codex", "kimi"):
+        return _engine_bridge_status_local(engine, sid)
+    routed = _control_plane_engine_call(
+        engine, "bridge_status", {"session_id": sid}, mutate=False,
+    )
+    if isinstance(routed, dict) and routed.get("engine"):
+        status = routed
+    elif isinstance(routed, dict) and (
+        routed.get("available") or routed.get("ambiguous")
+    ):
+        status = routed
+    else:
+        worker_health = _control_plane_request("health")
+        worker_caps = ((worker_health.get("worker") or {}).get("capabilities") or [])
+        if worker_health.get("ok") and "engine-execution-v1" in worker_caps:
+            status = {
+                "ok": False,
+                "code": "worker_upgrade_required",
+                "error": "The running CCC worker must be restarted before bridge recovery is available",
+            }
+        else:
+            status = _engine_bridge_status_local(engine, sid)
+    status = dict(status or {})
+    status["queued_messages"] = _bridge_pending_inputs(sid)
+    status["session_id"] = sid
+    status["can_restart"] = not bool(status.get("other_active_session_ids"))
+    if not status["can_restart"]:
+        status["blocked_reason"] = "Other sessions are actively using this shared bridge"
+    elif status.get("transport") == "managed":
+        status["restart_note"] = (
+            "CCC will reconnect to the managed Codex app-server; it will not "
+            "terminate the externally owned daemon."
+        )
+    return status
+
+
+def _wait_then_kill_process(proc, timeout=2.0):
+    """Wait for a bridge child to exit, then force only that known child."""
+    if proc is None:
+        return {"exited": True, "forced": False}
+    deadline = time.time() + max(0.0, float(timeout))
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.05)
+    forced = False
+    if proc.poll() is None:
+        forced = True
+        try:
+            proc.kill()
+        except OSError:
+            return {"exited": False, "forced": True}
+        try:
+            proc.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    return {"exited": proc.poll() is not None, "forced": forced}
+
+
+def _restart_engine_bridge_local(engine, session_id):
+    """Restart/reconnect one shared bridge after a same-process safety check."""
+    engine = str(engine or "").strip().lower()
+    sid = str(session_id or "").strip()
+    lock = _ACP_RECOVERY_LOCKS.setdefault(engine, threading.Lock())
+    if not lock.acquire(blocking=False):
+        return {
+            "ok": False,
+            "code": "recovery_in_progress",
+            "error": f"{engine} bridge recovery is already in progress",
+        }
+    try:
+        before = _engine_bridge_status_local(engine, sid)
+        other_active = list(before.get("other_active_session_ids") or [])
+        if other_active:
+            return {
+                "ok": False,
+                "code": "bridge_in_use",
+                "error": "Other sessions are actively using this shared bridge",
+                "other_active_session_ids": other_active,
+                "bridge": before.get("bridge"),
+            }
+        if engine == "kimi":
+            # Ask nicely first. The recovery path remains useful precisely when
+            # the notification is ignored, so process shutdown is still bounded.
+            _acp_cancel("kimi", sid)
+            with _ACP_LOCK:
+                conn = _ACP_CONNS.pop("kimi", None)
+                pending = _ACP_PENDING.pop("kimi", {})
+                target = (_ACP_SESSION_STATE.get("kimi") or {}).get(sid)
+                if target is not None:
+                    target["status"] = "idle"
+                    target["active_turn"] = None
+                    target["loaded_conn"] = None
+                    target["pending_permissions"] = {}
+                    _acp_save_state_unlocked("kimi")
+                for entry in pending.values():
+                    entry["response"] = {
+                        "error": {
+                            "code": -32003,
+                            "message": "Kimi ACP restarted by operator",
+                        },
+                    }
+                    entry["event"].set()
+                _ACP_LOCK.notify_all()
+            transport = (conn or {}).get("transport")
+            proc = getattr(transport, "proc", None)
+            if transport is not None:
+                transport.close()
+            stop = _wait_then_kill_process(proc)
+            forced = bool(stop.get("forced"))
+            old_reader = (conn or {}).get("reader")
+            if old_reader is not None and old_reader is not threading.current_thread():
+                old_reader.join(timeout=1)
+            _KIMI_WIRE_BUSY_SUPPRESS_UNTIL[sid] = time.time() + 60
+            if _acp_ensure("kimi") is None:
+                return {
+                    "ok": False,
+                    "code": "bridge_restart_failed",
+                    "error": _acp_conn_error("kimi"),
+                }
+            attach_error = _acp_ensure_session_loaded("kimi", sid)
+            if attach_error is not None:
+                return {
+                    "ok": False,
+                    "code": "bridge_reattach_failed",
+                    "error": attach_error.get("error") or "Could not reattach Kimi session",
+                }
+            after = _engine_bridge_status_local("kimi", sid)
+            return {
+                "ok": True,
+                "engine": "kimi",
+                "bridge": "Kimi ACP",
+                "restarted": True,
+                "reattached": True,
+                "old_pid": before.get("pid"),
+                "pid": after.get("pid"),
+                "forced": forced,
+                "transport": "acp",
+            }
+        if engine == "codex":
+            # Interrupt the selected thread before dropping our transport. This
+            # is especially important for the managed daemon, which CCC does
+            # not own and therefore only reconnects.
+            _codex_interrupt_via_app_server(sid)
+            with _CODEX_APP_SERVER_LOCK:
+                transport = _CODEX_APP_SERVER_TRANSPORT
+                proc = getattr(transport, "proc", None)
+            _codex_app_server_shutdown()
+            if proc is not None:
+                _wait_then_kill_process(proc)
+            if _ensure_codex_app_server() is None:
+                return {
+                    "ok": False,
+                    "code": "bridge_restart_failed",
+                    "error": "Codex app-server did not restart",
+                }
+            # Authoritative resume reconciles stale local active markers and
+            # reattaches this exact thread to the fresh client connection.
+            still_active = _codex_app_server_thread_is_active(
+                sid, start_if_needed=True,
+            )
+            after = _engine_bridge_status_local("codex", sid)
+            return {
+                "ok": True,
+                "engine": "codex",
+                "bridge": "Codex app-server",
+                "restarted": True,
+                "reattached": True,
+                "old_pid": before.get("pid"),
+                "pid": after.get("pid"),
+                "transport": after.get("transport"),
+                "reconnected": before.get("transport") == "managed",
+                "target_still_active": bool(still_active),
+            }
+        return before
+    finally:
+        lock.release()
+
+
+def _recover_engine_bridge(session_id, selected_text="", idempotency_key=None):
+    """Restart the owning bridge and optionally retry one durable queue row."""
+    sid = str(session_id or "").strip()
+    text = str(selected_text or "")
+    engine = _detect_session_engine(sid)
+    if engine not in ("codex", "kimi"):
+        return _engine_bridge_status_local(engine, sid)
+    if text and not any(row["text"] == text for row in _bridge_pending_inputs(sid)):
+        return {
+            "ok": False,
+            "code": "queued_message_missing",
+            "error": "The selected queued message no longer exists",
+        }
+    restarted = _control_plane_engine_call(
+        engine,
+        "bridge_restart",
+        {"session_id": sid},
+        idempotency_key=idempotency_key,
+    )
+    if not isinstance(restarted, dict) or not restarted.get("engine"):
+        if isinstance(restarted, dict) and (
+            restarted.get("available") or restarted.get("ambiguous")
+        ):
+            return restarted
+        worker_health = _control_plane_request("health")
+        worker_caps = ((worker_health.get("worker") or {}).get("capabilities") or [])
+        if worker_health.get("ok") and "engine-execution-v1" in worker_caps:
+            return {
+                "ok": False,
+                "code": "worker_upgrade_required",
+                "error": "Restart the CCC worker before using bridge recovery",
+            }
+        restarted = _restart_engine_bridge_local(engine, sid)
+    if not restarted.get("ok"):
+        return restarted
+    result = {
+        "ok": True,
+        "session_id": sid,
+        "engine": engine,
+        "restart": restarted,
+        "retried": False,
+    }
+    if not text:
+        return result
+    if not _consume_matching_pending_input(sid, text):
+        return {
+            "ok": False,
+            "code": "queued_message_missing",
+            "error": "The selected queued message was already consumed",
+            "restart": restarted,
+        }
+    _pending_terminal_retry_after.pop(sid, None)
+    retry = _inject_text_into_session(
+        sid,
+        text,
+        _from_terminal_queue=True,
+        skip_wt=True,
+    )
+    if not isinstance(retry, dict):
+        retry = {"ok": False, "error": "Retry returned no result"}
+    if not retry.get("ok") and not retry.get("queued"):
+        _requeue_terminal_input_front(sid, text)
+        _mark_terminal_queue_retry(sid, delay=5.0)
+        retry["requeued"] = True
+    result["retry"] = retry
+    result["retried"] = bool(retry.get("ok"))
+    result["queued"] = bool(retry.get("queued"))
+    if not retry.get("ok"):
+        result["ok"] = False
+        result["error"] = retry.get("error") or "Bridge restarted but message retry failed"
+    return result
+
+
 def _iso_to_epoch(ts):
     """Parse a Claude-style ISO-8601 timestamp ("2026-04-26T23:22:56.738Z")
     to an epoch float. Returns None on parse failure — callers treat that
@@ -64934,6 +65298,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                     except OSError:
                                         payload["debug_text"] = ""
                             self.send_json(payload)
+        elif path == "/api/bridge-recovery/status":
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = str((qs.get("session_id") or [""])[0] or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            else:
+                status = _engine_bridge_status(sid)
+                self.send_json(
+                    status,
+                    200 if status.get("ok") else 400,
+                )
         elif path == "/api/sessions/spawn-codex/availability":
             routed = _control_plane_engine_call(
                 "codex", "availability", {}, mutate=False,
@@ -71318,6 +71693,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status_code = 200 if result.get("ok") else 503
             if result.get("error") == "missing session_id":
                 status_code = 400
+            self.send_json(result, status_code)
+        elif path == "/api/bridge-recovery":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            sid = str(payload.get("session_id") or "").strip()
+            selected_text = str(payload.get("text") or "")
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            _record_interaction(sid)
+            result = _recover_engine_bridge(
+                sid,
+                selected_text=selected_text,
+                idempotency_key=str(payload.get("idempotency_key") or uuid.uuid4()),
+            )
+            status_code = 200 if result.get("ok") else 409
+            if result.get("code") in ("unsupported_engine", "queued_message_missing"):
+                status_code = 400 if result.get("code") == "unsupported_engine" else 409
             self.send_json(result, status_code)
         elif path == "/api/pending-input/cancel":
             length = int(self.headers.get("Content-Length", "0"))

@@ -1,0 +1,1 @@
+- Added a guarded recovery dialog to Codex app-server and Kimi ACP status pills, with shared-session safety checks and optional retry of one selected queued message.

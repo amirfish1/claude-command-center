@@ -2128,6 +2128,17 @@
     border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
     white-space: nowrap;
   }
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill[data-bridge-recovery] {
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, transform 0.05s;
+  }
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill[data-bridge-recovery]:hover {
+    border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  }
+  :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-pill[data-bridge-recovery]:active {
+    transform: translateY(1px);
+  }
   :is(.ccc-breadcrumb, .conv-pane-proc) .ccc-proc-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: currentColor;
@@ -13179,6 +13190,83 @@
 .coord-modal .modal-start { padding:6px 14px; background:var(--accent); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:13px; font-weight:500; }
 .coord-modal .modal-error { font-size:12px; color:var(--red); display:none; }
 .coord-modal .modal-error.visible { display:block; }
+/* Engine bridge recovery — opened from the transport pill. */
+.bridge-recovery-backdrop {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55);
+  z-index:1000; align-items:center; justify-content:center; padding:16px;
+  box-sizing:border-box;
+}
+.bridge-recovery-backdrop.visible { display:flex; }
+.bridge-recovery-modal {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:18px; width:440px; max-width:100%; max-height:calc(100dvh - 32px);
+  overflow:auto; box-shadow:0 8px 32px rgba(0,0,0,0.5);
+  display:flex; flex-direction:column; gap:13px; box-sizing:border-box;
+}
+.bridge-recovery-heading { display:flex; align-items:flex-start; gap:12px; }
+.bridge-recovery-heading > div { flex:1; min-width:0; }
+.bridge-recovery-modal h3 { margin:0; font-size:15px; color:var(--text); }
+.bridge-recovery-subtitle { margin-top:3px; font-size:12px; color:var(--text-muted); }
+.bridge-recovery-close {
+  border:0; background:transparent; color:var(--text-muted); cursor:pointer;
+  font-size:22px; line-height:1; padding:0 2px;
+}
+.bridge-recovery-status {
+  padding:10px 11px; border:1px solid var(--border); border-radius:7px;
+  background:var(--bg); color:var(--text-muted); font-size:12px; line-height:1.45;
+}
+.bridge-recovery-status.is-safe {
+  border-color:rgba(63,185,80,0.42); background:rgba(63,185,80,0.08);
+  color:var(--green);
+}
+.bridge-recovery-status.is-blocked {
+  border-color:rgba(248,81,73,0.48); background:rgba(248,81,73,0.09);
+  color:var(--red);
+}
+.bridge-recovery-queue {
+  margin:0; padding:9px; border:1px solid var(--border); border-radius:7px;
+  display:flex; flex-direction:column; gap:6px; min-width:0;
+}
+.bridge-recovery-queue legend { padding:0 5px; color:var(--text-muted); font-size:11px; }
+.bridge-recovery-message {
+  display:flex; gap:8px; align-items:flex-start; padding:8px;
+  border:1px solid transparent; border-radius:6px; cursor:pointer;
+}
+.bridge-recovery-message:hover { background:var(--surface-2); }
+.bridge-recovery-message:has(input:checked) {
+  border-color:rgba(88,166,255,0.45); background:rgba(88,166,255,0.08);
+}
+.bridge-recovery-message input { margin-top:2px; }
+.bridge-recovery-message-text {
+  min-width:0; color:var(--text); font-size:12px; line-height:1.35;
+  overflow:hidden; display:-webkit-box; -webkit-line-clamp:3;
+  -webkit-box-orient:vertical; white-space:pre-wrap;
+}
+.bridge-recovery-empty, .bridge-recovery-note {
+  color:var(--text-muted); font-size:11px; line-height:1.4;
+}
+.bridge-recovery-modal .modal-error { display:none; color:var(--red); font-size:12px; }
+.bridge-recovery-modal .modal-error.visible { display:block; }
+.bridge-recovery-modal .modal-footer {
+  display:flex; justify-content:flex-end; gap:8px; margin-top:2px;
+}
+.bridge-recovery-modal .modal-cancel,
+.bridge-recovery-modal .modal-start {
+  padding:7px 13px; border-radius:5px; cursor:pointer; font-size:13px;
+}
+.bridge-recovery-modal .modal-cancel {
+  background:transparent; border:1px solid var(--border); color:var(--text-muted);
+}
+.bridge-recovery-modal .modal-start {
+  border:0; background:var(--accent); color:#fff; font-weight:600;
+}
+.bridge-recovery-modal .modal-start:disabled { opacity:0.5; cursor:not-allowed; }
+@media (max-width: 720px) {
+  .bridge-recovery-backdrop { padding:10px; align-items:flex-end; }
+  .bridge-recovery-modal { width:100%; max-height:calc(100dvh - 20px); }
+  .bridge-recovery-modal .modal-cancel,
+  .bridge-recovery-modal .modal-start { padding:10px 14px; }
+}
 /* In-browser folder picker — fallback when no native GUI chooser exists
    (headless Linux). Reuses the coord-modal visual language. */
 .folder-picker-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; align-items:center; justify-content:center; padding:16px; box-sizing:border-box; }

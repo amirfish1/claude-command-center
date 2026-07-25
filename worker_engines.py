@@ -391,6 +391,14 @@ class EngineHost:
                     "kimi", args.get("session_id") or args.get("sid")
                 )
                 return {"ok": True, "snapshot": snap}
+            if operation == "bridge_status":
+                return legacy._engine_bridge_status_local(
+                    "kimi", args.get("session_id") or args.get("sid")
+                )
+            if operation == "bridge_restart":
+                return legacy._restart_engine_bridge_local(
+                    "kimi", args.get("session_id") or args.get("sid")
+                )
             if operation == "deltas":
                 sid = args.get("session_id") or args.get("sid")
                 after = int(args.get("after") or 0)
@@ -452,6 +460,14 @@ class EngineHost:
                         args.get("session_id")
                     ),
                 }
+            if operation == "bridge_status":
+                return legacy._engine_bridge_status_local(
+                    "codex", args.get("session_id")
+                )
+            if operation == "bridge_restart":
+                return legacy._restart_engine_bridge_local(
+                    "codex", args.get("session_id")
+                )
         if engine == "claude":
             if operation == "spawn":
                 return legacy.spawn_session(**args)
