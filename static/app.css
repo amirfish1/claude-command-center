@@ -21350,3 +21350,109 @@ body.ccc-mobile-redesign.ccc-simple-mode button.mobile-actions-btn {
   justify-content: center;
   padding: 6px 10px;
 }
+
+/* =========================================================================
+   ICON-FIRST SIMPLE MODE — FEED LAYOUT (Instagram-style)
+   Only under body.ccc-mobile-redesign.ccc-simple-mode. Structural: replaces
+   the two stacked dashboard headers with one slim bar, collapses the
+   competing tab/filter/metrics/footer strips so the session list reads as a
+   clean feed with the bottom nav as the sole navigation. Desktop + Advanced
+   untouched (guarded by the compound body class).
+   ========================================================================= */
+
+/* --- Slim header (shown only in simple mode) --- */
+.mobile-simple-header { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode .mobile-simple-header {
+  display: block;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+body.ccc-mobile-redesign.ccc-simple-mode .msh-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  padding: 0 14px;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .msh-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .msh-logo { width: 24px; height: 24px; flex-shrink: 0; }
+body.ccc-mobile-redesign.ccc-simple-mode .msh-wordmark {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .msh-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+body.ccc-mobile-redesign.ccc-simple-mode .msh-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px;
+  border: none; background: transparent; color: var(--text);
+  border-radius: 10px; cursor: pointer;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .msh-btn:active { background: var(--surface-2, var(--surface)); }
+body.ccc-mobile-redesign.ccc-simple-mode .msh-btn[aria-expanded="true"] { background: var(--surface-2, var(--surface)); }
+body.ccc-mobile-redesign.ccc-simple-mode .msh-search-bar {
+  padding: 8px 14px 12px;
+  border-top: 1px solid var(--border);
+}
+body.ccc-mobile-redesign.ccc-simple-mode .msh-search-bar[hidden] { display: none; }
+body.ccc-mobile-redesign.ccc-simple-mode .msh-search-bar .search-wrap { display: flex; width: 100%; }
+body.ccc-mobile-redesign.ccc-simple-mode .msh-search-bar .conv-search-input {
+  width: 100%; min-height: 40px; font-size: 15px;
+}
+
+/* --- Collapse the competing chrome (one nav = the bottom nav) --- */
+body.ccc-mobile-redesign.ccc-simple-mode .sidebar-header,
+body.ccc-mobile-redesign.ccc-simple-mode .new-session-panel,
+body.ccc-mobile-redesign.ccc-simple-mode #cccThroughputStrip,
+body.ccc-mobile-redesign.ccc-simple-mode .fleet-health-strip,
+body.ccc-mobile-redesign.ccc-simple-mode .conv-tab-bar,
+body.ccc-mobile-redesign.ccc-simple-mode .conv-inprogress-toolbar,
+body.ccc-mobile-redesign.ccc-simple-mode .conv-archived-tools,
+body.ccc-mobile-redesign.ccc-simple-mode .conv-gap-separator,
+body.ccc-mobile-redesign.ccc-simple-mode #pwaInstallBanner,
+body.ccc-mobile-redesign.ccc-simple-mode #pollerWrap {
+  display: none !important;
+}
+
+/* --- Feed cards: breathing room, one status glyph in the left gutter --- */
+body.ccc-mobile-redesign.ccc-simple-mode .conv-item {
+  position: relative;
+  padding: 15px 14px 15px 50px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  margin: 0;
+}
+body.ccc-mobile-redesign.ccc-simple-mode .conv-title {
+  font-size: 15.5px;
+  line-height: 1.35;
+}
+/* Status glyph sits in the left gutter, aligned with the title's first
+   line — a single dominant "is this OK" signal per card, feed-style. */
+body.ccc-mobile-redesign.ccc-simple-mode .conv-item > .mobile-status-line {
+  position: absolute;
+  left: 12px;
+  top: 15px;
+  margin: 0;
+}
+/* Tiny engine glyph, $$$ cost tier, and the boxed Details toggle are all
+   technical noise in a feed. Metadata now lives in the session view's
+   Actions -> Technical details, so the card face stays clean. */
+body.ccc-mobile-redesign.ccc-simple-mode .conv-session-icon,
+body.ccc-mobile-redesign.ccc-simple-mode .session-tier-cost,
+body.ccc-mobile-redesign.ccc-simple-mode .conv-item .mobile-details-toggle,
+body.ccc-mobile-redesign.ccc-simple-mode .conv-item .mobile-details-panel {
+  display: none !important;
+}

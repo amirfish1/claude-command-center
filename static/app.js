@@ -11043,6 +11043,7 @@
       toggle.setAttribute('aria-checked', String(on));
     }
     if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
+    if (typeof _syncMobileSimpleHeader === 'function') _syncMobileSimpleHeader();
   }
   _syncUiModeBodyClass();
   try {
@@ -11079,9 +11080,18 @@
     'INSIGHT': 'Key finding',
     'NEXT STEP USER': 'What I need from you',
   };
+  // Case-insensitive index so callers passing 'Current sessions' match a
+  // 'Current Sessions' map key — section headers and tab labels don't share
+  // one casing convention across the codebase.
+  const _SIMPLE_LABELS_CI = {};
+  for (const _k in SIMPLE_LABELS) {
+    if (Object.prototype.hasOwnProperty.call(SIMPLE_LABELS, _k)) _SIMPLE_LABELS_CI[_k.toLowerCase()] = SIMPLE_LABELS[_k];
+  }
   function simpleLabel(key) {
     if (!isSimpleMode()) return key;
-    return Object.prototype.hasOwnProperty.call(SIMPLE_LABELS, key) ? SIMPLE_LABELS[key] : key;
+    if (Object.prototype.hasOwnProperty.call(SIMPLE_LABELS, key)) return SIMPLE_LABELS[key];
+    const ci = _SIMPLE_LABELS_CI[String(key).toLowerCase()];
+    return ci !== undefined ? ci : key;
   }
 
   // ── Simple-mode mobile bottom nav ──
@@ -11140,6 +11150,65 @@
   }
   _wireMobileBottomNav();
   _syncMobileBottomNav();
+
+  // ── Simple-mode slim header ──
+  // The search button relocates the REAL .search-wrap (containing the
+  // wired #convSearch input) into the header's slide-down bar, so its
+  // existing handlers keep working — same node, not a clone. Restored to
+  // its original slot when Simple mode is left. The "+" forwards to the
+  // existing new-session button. `var` (not let) so the hoisted binding is
+  // safely `undefined` if _syncMobileSimpleHeader runs during early boot,
+  // before this line — avoids a temporal-dead-zone ReferenceError.
+  var _mshSearchHome = null; // { parent, nextSibling } snapshot
+  function _mshCloseSearch() {
+    const searchBtn = document.getElementById('mshSearchBtn');
+    const searchBar = document.getElementById('mshSearchBar');
+    const wrap = document.querySelector('#mshSearchBar .search-wrap');
+    if (wrap && _mshSearchHome && _mshSearchHome.parent) {
+      if (_mshSearchHome.nextSibling && _mshSearchHome.nextSibling.parentNode === _mshSearchHome.parent) {
+        _mshSearchHome.parent.insertBefore(wrap, _mshSearchHome.nextSibling);
+      } else {
+        _mshSearchHome.parent.appendChild(wrap);
+      }
+    }
+    if (searchBar) searchBar.hidden = true;
+    if (searchBtn) searchBtn.setAttribute('aria-expanded', 'false');
+  }
+  function _syncMobileSimpleHeader() {
+    // When Simple mode is off, make sure the search input is back in its
+    // real home so Advanced-mode search still works.
+    const simpleOn = isSimpleMode() && isMobileRedesign();
+    if (!simpleOn) _mshCloseSearch();
+  }
+  function _wireMobileSimpleHeader() {
+    const newBtn = document.getElementById('mshNewBtn');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => {
+        const real = document.getElementById('sidebarNewBtn');
+        if (real) real.click();
+      });
+    }
+    const searchBtn = document.getElementById('mshSearchBtn');
+    const searchBar = document.getElementById('mshSearchBar');
+    if (searchBtn && searchBar) {
+      searchBtn.addEventListener('click', () => {
+        if (!searchBar.hidden) {
+          _mshCloseSearch();
+          return;
+        }
+        const wrap = document.querySelector('.new-session-panel .search-wrap');
+        if (wrap) {
+          if (!_mshSearchHome) _mshSearchHome = { parent: wrap.parentNode, nextSibling: wrap.nextSibling };
+          searchBar.appendChild(wrap);
+        }
+        searchBar.hidden = false;
+        searchBtn.setAttribute('aria-expanded', 'true');
+        const input = document.getElementById('convSearch');
+        if (input) { try { input.focus(); } catch (_) {} }
+      });
+    }
+  }
+  _wireMobileSimpleHeader();
 
   // ── Simple-mode session Actions menu ──
   // Consolidates rename/move-to-project/change-model/technical-details into
@@ -27280,7 +27349,7 @@
       let _currentSessionsHeaderHtml = '';
       let _currentSessionsHtml = '';
       if (_currentSessions.length || (_gcItems && _gcItems.length)) {
-        const _currentSessionsLabel = _ipSearchActive ? 'Search results' : 'Current sessions';
+        const _currentSessionsLabel = _ipSearchActive ? 'Search results' : simpleLabel('Current sessions');
         const _currentSessionsSub = _ipSearchActive ? '' : '<span class="conv-objects-section-sub">' + _currentSessionsWindowLabel + '</span>';
         // Same first-gap-only separator as the flat/All-repos views (CCC-443)
         // — Current sessions is sorted newest-first same as those, so a real
@@ -27387,7 +27456,7 @@
           + '" data-role="project-tree-header" role="button" tabindex="0"'
           + ' title="Collapse / expand Project tree">'
           + '<span class="conv-section-collapse-chevron" data-role="project-tree-collapse" aria-hidden="true">' + _projectTreeChevron + '</span>'
-          + 'Project tree'
+          + escapeHtml(simpleLabel('Project tree'))
           + _addObjectBtnHtml
           + '</div>'
         : '';
@@ -27403,7 +27472,7 @@
           + '" data-role="evergreen-agents-header" role="button" tabindex="0"'
           + ' title="Collapse / expand Triggered Workers">'
           + '<span class="conv-section-collapse-chevron" data-role="evergreen-agents-collapse" aria-hidden="true">' + _evergreenChevron + '</span>'
-          + 'Triggered Workers'
+          + escapeHtml(simpleLabel('Triggered Workers'))
           + '<span class="evergreen-log-btn" data-role="evergreen-log-btn" role="button" tabindex="0" title="Open Watchtower activity log">See log</span>'
           + '</div>'
         : '';
@@ -27673,7 +27742,7 @@
         +   _hintAttr
         +   ' aria-expanded="' + (!collapsed) + '">'
         +   '<span class="conv-' + kind + '-arrow">' + arrow + '</span>'
-        +   '<span class="conv-' + kind + '-label">' + escapeHtml(label) + '</span>'
+        +   '<span class="conv-' + kind + '-label">' + escapeHtml(simpleLabel(label)) + '</span>'
         +   '<span class="conv-' + kind + '-count">' + cards.length + '</span>'
         +   _hintGlyph
         + '</button>'

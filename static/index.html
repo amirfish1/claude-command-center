@@ -414,6 +414,33 @@
   </script>
 
   <div class="sidebar">
+    <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
+         only). One clean bar — brand left, search + "+" right — replacing
+         the two stacked dashboard headers (brand/version/WatchTower/meta
+         row + New session/search/group/car row) that the CSS below hides
+         in Simple mode. Buttons forward to the EXISTING #convSearch and
+         #sidebarNewBtn via _wireMobileSimpleHeader(); no duplicated logic.
+         Hidden everywhere else via .mobile-simple-header base rule. -->
+    <header class="mobile-simple-header" id="mobileSimpleHeader">
+      <div class="msh-bar">
+        <span class="msh-brand">
+          <img class="msh-logo" src="/static/icon.svg" alt="" aria-hidden="true">
+          <span class="msh-wordmark">Command Center</span>
+        </span>
+        <div class="msh-actions">
+          <button type="button" class="msh-btn" id="mshSearchBtn" aria-label="Search" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          </button>
+          <button type="button" class="msh-btn msh-btn-primary" id="mshNewBtn" aria-label="Start a task">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+      </div>
+      <!-- Slide-down search bar (toggled by #mshSearchBtn). Hosts the REAL
+           #convSearch input relocated here in Simple mode, so its existing
+           wired handlers keep working. -->
+      <div class="msh-search-bar" id="mshSearchBar" hidden></div>
+    </header>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
         <div class="sh-title-row">
