@@ -1,0 +1,1 @@
+- Added a read-only **Copilot Chat** engine: GitHub Copilot Chat sessions (VS Code chat panel / agent mode) now appear in the conversation list, kanban, and archive, with a working transcript view (flat `.json` sessions and the newer `.jsonl` operation journal, replayed defensively). No spawn/follow-up support.

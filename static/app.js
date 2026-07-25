@@ -4516,6 +4516,9 @@
     if (values.includes('antigravity')) return 'antigravity';
     if (values.includes('hermes')) return 'hermes';
     if (values.includes('kimi')) return 'kimi';
+    if (values.includes('copilot')) return 'copilot';
+    if (values.includes('copilotchat')) return 'copilotchat';
+    if (values.includes('grok')) return 'grok';
     return 'claude';
   }
 
@@ -4566,6 +4569,7 @@
     const engineLabels = {
       claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
       antigravity: 'Antigravity', hermes: 'Hermes', kimi: 'Kimi',
+      copilot: 'Copilot', grok: 'Grok', copilotchat: 'Copilot Chat',
     };
     const tierLabels = {
       premium: 'Premium', high: 'High', medium: 'Medium', low: 'Low',
@@ -31168,6 +31172,9 @@
     if (source === 'antigravity') return 'antigravity';
     if (source === 'hermes') return 'hermes';
     if (source === 'kimi') return 'kimi';
+    if (source === 'copilot') return 'copilot';
+    if (source === 'copilotchat') return 'copilotchat';
+    if (source === 'grok') return 'grok';
     if (source === 'pkood') return 'pkood';
     if (source === 'backlog') return row && row.issue_number ? 'issue' : 'backlog';
     if (source === 'github_pr') return 'pull request';
@@ -31193,7 +31200,7 @@
     const named = {
       claude: 'Claude', codex: 'Codex', gemini: 'Gemini',
       cursor: 'Cursor', antigravity: 'Antigravity', hermes: 'Hermes',
-      kimi: 'Kimi',
+      kimi: 'Kimi', copilot: 'Copilot', grok: 'Grok', copilotchat: 'Copilot Chat',
     };
     const key = sourceLabelForPane(row);
     const label = named[key];
@@ -37771,6 +37778,26 @@
     if (engine === 'kimi') {
       return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor">'
         + '<path d="M20.4 13.1A8.9 8.9 0 1 1 10.9 3.6a.6.6 0 0 1 .8.8 7.1 7.1 0 0 0 8 8 .6.6 0 0 1 .7.7Z" />'
+        + '</svg>';
+    }
+    if (engine === 'copilot') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
+        + '<circle cx="12" cy="12" r="8.2" />'
+        + '<circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />'
+        + '<path d="M12 1.6v2.4M12 20v2.4M1.6 12H4M20 12h2.4" />'
+        + '</svg>';
+    }
+    if (engine === 'grok') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
+        + '<circle cx="12" cy="12" r="8.2" />'
+        + '<path d="M7 17 17 7" />'
+        + '<path d="M12.5 7H17v4.5" />'
+        + '</svg>';
+    }
+    if (engine === 'copilotchat') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M4 5.5h16v10.5H10l-4.5 4v-4H4V5.5Z" />'
+        + '<path d="M12 8l.9 2.1L15 11l-2.1.9L12 14l-.9-2.1L9 11l2.1-.9L12 8Z" fill="currentColor" stroke="none" />'
         + '</svg>';
     }
     return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'

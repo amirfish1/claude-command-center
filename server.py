@@ -1501,6 +1501,24 @@ def _session_load_begin(repo_path=None):
             "state": "pending",
             "detail": "Waiting.",
         },
+        "copilot": {
+            "key": "copilot",
+            "label": "Copilot sessions",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "grok": {
+            "key": "grok",
+            "label": "Grok sessions",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
+        "copilotchat": {
+            "key": "copilotchat",
+            "label": "Copilot Chat sessions",
+            "state": "pending",
+            "detail": "Waiting.",
+        },
         "agents": {
             "key": "agents",
             "label": "Pkood agents",
@@ -1754,6 +1772,9 @@ def _archive_load_begin():
         "kilo":        {"key": "kilo",        "label": "Kilo Code conversations",          "state": "pending", "detail": "Scanning ~/.local/share/kilo/kilo.db."},
         "hermes":      {"key": "hermes",      "label": "Hermes conversations",             "state": "pending", "detail": "Scanning ~/.hermes/state.db."},
         "kimi":        {"key": "kimi",        "label": "Kimi conversations",               "state": "pending", "detail": "Scanning ~/.kimi-code/sessions/."},
+        "copilot":     {"key": "copilot",     "label": "Copilot conversations",            "state": "pending", "detail": "Scanning ~/.copilot/."},
+        "grok":        {"key": "grok",        "label": "Grok conversations",               "state": "pending", "detail": "Scanning ~/.grok/."},
+        "copilotchat": {"key": "copilotchat", "label": "Copilot Chat conversations",       "state": "pending", "detail": "Scanning VS Code chatSessions stores."},
         "pr_states":   {"key": "pr_states",   "label": "Refreshing pull-request status",   "state": "pending", "detail": "gh pr view per known PR."},
         "issues":      {"key": "issues",      "label": "Refreshing GitHub issues",         "state": "pending", "detail": "gh issue list per repo."},
         "group_chats": {"key": "group_chats", "label": "Cross-repo group chats",           "state": "pending", "detail": "Reading sidecars."},
@@ -2841,6 +2862,12 @@ def _detect_session_engine_uncached(session_id):
         return "hermes"
     if _is_kimi_session(session_id):
         return "kimi"
+    if _is_copilot_session(session_id):
+        return "copilot"
+    if _is_grok_session(session_id):
+        return "grok"
+    if _is_copilotchat_session(session_id):
+        return "copilotchat"
     return "claude"
 
 
@@ -6955,6 +6982,43 @@ def find_all_conversations(
         ))
     except Exception:
         pass
+    # Add Copilot CLI sessions to the archive. They live under ~/.copilot
+    # (session-store.db + session-state/*/events.jsonl).
+    try:
+        out.extend(find_copilot_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
+    # Add Grok CLI sessions to the archive. They live under ~/.grok
+    # (sessions/<encoded-cwd>/<uuid>/ dirs and/or grok.db).
+    try:
+        out.extend(find_grok_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
+    # Add VS Code Copilot Chat sessions to the archive. They live in VS
+    # Code's user-data workspaceStorage/*/chatSessions stores (plus the
+    # empty-window store under globalStorage).
+    try:
+        out.extend(find_copilotchat_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
     try:
         out.extend(_find_remote_sessions(limit=limit_per_folder))
     except Exception:
@@ -7407,6 +7471,9 @@ def _archive_corpus_signature_parts():
         # granularity the archive needs.
         _kimi_code_home() / "sessions",
         _ACP_TRANSCRIPT_DIR / "kimi",
+        _copilot_home() / "session-state",
+        _grok_home() / "sessions",
+        _grok_home() / "grok.db",
     ):
         try:
             mt = os.stat(extra).st_mtime_ns
@@ -7414,6 +7481,16 @@ def _archive_corpus_signature_parts():
             continue
         parts.append(f"{extra}|{mt}")
         extras_map[str(extra)] = mt
+    # VS Code Copilot Chat stores: one chatSessions dir per workspace plus
+    # each app's empty-window store. Dir mtimes flip on session add/remove,
+    # which is exactly the granularity the archive needs.
+    for chat_dir in _copilotchat_chat_dirs():
+        try:
+            mt = os.stat(chat_dir).st_mtime_ns
+        except OSError:
+            continue
+        parts.append(f"{chat_dir}|{mt}")
+        extras_map[str(chat_dir)] = mt
     parts.sort()
     h = hashlib.sha1()
     for p in parts:
@@ -17992,6 +18069,51 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             progress("kimi", state="error", detail=f"Kimi session scan failed: {exc}")
 
     if progress:
+        progress("copilot", state="running", detail="Reading Copilot CLI sessions.")
+    try:
+        conversations.extend(find_copilot_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("copilot", state="done")
+    except Exception as exc:
+        if progress:
+            progress("copilot", state="error", detail=f"Copilot session scan failed: {exc}")
+
+    if progress:
+        progress("grok", state="running", detail="Reading Grok CLI sessions.")
+    try:
+        conversations.extend(find_grok_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("grok", state="done")
+    except Exception as exc:
+        if progress:
+            progress("grok", state="error", detail=f"Grok session scan failed: {exc}")
+
+    if progress:
+        progress("copilotchat", state="running", detail="Reading VS Code Copilot Chat sessions.")
+    try:
+        conversations.extend(find_copilotchat_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("copilotchat", state="done")
+    except Exception as exc:
+        if progress:
+            progress("copilotchat", state="error", detail=f"Copilot Chat session scan failed: {exc}")
+
+    if progress:
         progress("remote", state="running", detail="Reading remote sessions via SSH.")
     try:
         conversations.extend(_find_remote_sessions(repo_path=repo_path, progress=progress))
@@ -18543,6 +18665,24 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
             except (TypeError, ValueError):
                 continue
         return {"events": events, "last_line": last_line}
+    if engine == "copilot":
+        result = _parse_copilot_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "grok":
+        result = _parse_grok_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "copilotchat":
+        result = _parse_copilotchat_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
     filepath, parser = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
     if parser is _parse_conversation_event and not Path(filepath).is_file():
         stub = _registry_only_conversation_stub(conversation_id, after_line=after_line)
@@ -38904,6 +39044,2118 @@ def _parse_kilo_conversation(session_id, after_line=0):
         pass
     finally:
         con.close()
+    if after_line and after_line > 0:
+        visible = [e for e in events if e["line"] > after_line]
+    else:
+        visible = events
+    return {"events": visible, "last_line": line}
+
+
+# ---------------------------------------------------------------------------
+# Copilot CLI conversation ingestion (read-only).
+#
+# GitHub Copilot CLI keeps its store under ~/.copilot on every OS (overridable
+# via the COPILOT_HOME env var): a session-store.db SQLite index plus one
+# authoritative event log per session at session-state/<uuid>/events.jsonl.
+# The DB schema is not formally versioned, so CCC treats the DB as a fast path
+# only — column probes are defensive and a missing/unreadable/foreign DB falls
+# back to scanning the event logs directly. Listing + transcript view only;
+# no spawn / resume support.
+# ---------------------------------------------------------------------------
+
+COPILOT_LIVE_WINDOW_S = 180
+
+
+def _copilot_home():
+    raw = os.environ.get("COPILOT_HOME", "").strip()
+    if raw:
+        return Path(os.path.expanduser(raw))
+    return Path.home() / ".copilot"
+
+
+def _copilot_db_path():
+    p = _copilot_home() / "session-store.db"
+    try:
+        return p if p.exists() else None
+    except OSError:
+        return None
+
+
+def _copilot_connect():
+    db = _copilot_db_path()
+    if not db:
+        return None
+    try:
+        con = sqlite3.connect(str(db), timeout=0.5)
+        con.execute("PRAGMA query_only=1")
+        con.row_factory = sqlite3.Row
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def _copilot_epoch(value):
+    """Best-effort epoch seconds from a Copilot timestamp (epoch s/ms or ISO)."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        v = float(value)
+        return v / 1000.0 if v > 1e12 else v
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return 0.0
+        try:
+            v = float(s)
+            return v / 1000.0 if v > 1e12 else v
+        except ValueError:
+            pass
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        except (ValueError, OverflowError, OSError):
+            return 0.0
+    return 0.0
+
+
+def _copilot_first_col(cols, candidates):
+    for c in candidates:
+        if c in cols:
+            return c
+    return None
+
+
+def _copilot_events_path(session_id):
+    """Path to a session's events.jsonl, or None. Cheap probe — also used by
+    engine detection, so it must return fast for foreign session ids."""
+    sid = str(session_id or "").strip()
+    if not sid or "/" in sid or "\\" in sid or sid.startswith("."):
+        return None
+    p = _copilot_home() / "session-state" / sid / "events.jsonl"
+    try:
+        return p if p.is_file() else None
+    except OSError:
+        return None
+
+
+def _is_copilot_session(session_id):
+    return _copilot_events_path(session_id) is not None
+
+
+def _copilot_event_text(data):
+    """Pull message text out of an event's data payload, tolerating the
+    several shapes Copilot events have been observed/guessed to use."""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("message", "content", "text"):
+        v = data.get(key)
+        if isinstance(v, str) and v.strip():
+            return v
+        if isinstance(v, list):
+            parts = []
+            for item in v:
+                if isinstance(item, dict):
+                    t = item.get("text")
+                    if isinstance(t, str) and t.strip():
+                        parts.append(t)
+                elif isinstance(item, str) and item.strip():
+                    parts.append(item)
+            if parts:
+                return "\n".join(parts)
+        if isinstance(v, dict):  # e.g. message: {role, content}
+            nested = _copilot_event_text(v)
+            if nested:
+                return nested
+    return ""
+
+
+def _copilot_fetch_sessions(con, limit=None):
+    """One dict per row of Copilot's `sessions` table, newest first. Column
+    names are probed defensively — the schema is not formally versioned."""
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}
+    except sqlite3.Error:
+        return []
+    if "id" not in cols:
+        return []
+    order_col = _copilot_first_col(cols, (
+        "updated_at", "time_updated", "modified_at", "last_activity_at",
+        "created_at", "time_created", "created",
+    ))
+    sql = "SELECT * FROM sessions"
+    if order_col:
+        sql += f" ORDER BY {order_col} DESC"
+    if limit and limit > 0:
+        sql += f" LIMIT {int(limit)}"
+    title_col = _copilot_first_col(cols, ("title", "summary", "name"))
+    repo_col = _copilot_first_col(cols, ("repository", "repo"))
+    cwd_col = _copilot_first_col(cols, ("cwd", "directory", "working_directory", "workspace"))
+    branch_col = _copilot_first_col(cols, ("branch", "git_branch"))
+    model_col = _copilot_first_col(cols, ("model", "model_id"))
+    created_col = _copilot_first_col(cols, ("created_at", "time_created", "created"))
+    updated_col = _copilot_first_col(cols, ("updated_at", "time_updated", "modified_at", "last_activity_at", "updated"))
+    out = []
+    try:
+        for r in con.execute(sql):
+            d = dict(r)
+            sid = str(d.get("id") or "").strip()
+            if not sid:
+                continue
+            ev_path = _copilot_events_path(sid)
+            out.append({
+                "id": sid,
+                "cwd": str(d.get(cwd_col) or "") if cwd_col else "",
+                "title": str(d.get(title_col) or "").strip() if title_col else "",
+                "repository": str(d.get(repo_col) or "").strip() if repo_col else "",
+                "branch": str(d.get(branch_col) or "").strip() if branch_col else "",
+                "model": str(d.get(model_col) or "").strip() if model_col else "",
+                "created": _copilot_epoch(d.get(created_col)) if created_col else 0.0,
+                "updated": _copilot_epoch(d.get(updated_col)) if updated_col else 0.0,
+                "archived": False,
+                "jsonl_path": str(ev_path) if ev_path else "",
+            })
+    except sqlite3.Error:
+        return out
+    return out
+
+
+def _copilot_turn_texts(con, sid):
+    """(first_user_text, last_assistant_text) from the turns table;
+    ('', '') when the table/columns don't match this build of the CLI."""
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(turns)")}
+    except sqlite3.Error:
+        return "", ""
+    sid_col = _copilot_first_col(cols, ("session_id", "sessionId", "session"))
+    text_col = _copilot_first_col(cols, ("content", "text", "message"))
+    if not sid_col or not text_col:
+        return "", ""
+    role_col = "role" if "role" in cols else None
+    order_col = _copilot_first_col(cols, ("created_at", "time_created", "timestamp", "rowid", "id"))
+    sql = f"SELECT * FROM turns WHERE {sid_col}=?"
+    if order_col and order_col != "rowid":
+        sql += f" ORDER BY {order_col}"
+    first_user = ""
+    last_assistant = ""
+    try:
+        for r in con.execute(sql, (sid,)):
+            d = dict(r)
+            text = d.get(text_col)
+            if not isinstance(text, str) or not text.strip():
+                continue
+            role = str(d.get(role_col) or "").lower() if role_col else ""
+            if role == "user":
+                if not first_user:
+                    first_user = text.strip()
+            elif role == "assistant":
+                last_assistant = text.strip()
+    except sqlite3.Error:
+        pass
+    return first_user, last_assistant
+
+
+def _copilot_sessions_from_event_logs(limit=None):
+    """Fallback listing when session-store.db is missing/unreadable: scan
+    session-state/*/events.jsonl and mine session.start context + the first
+    user/assistant messages from the head of each log."""
+    root = _copilot_home() / "session-state"
+    try:
+        entries = list(root.iterdir()) if root.is_dir() else []
+    except OSError:
+        return []
+    out = []
+    for d in entries:
+        try:
+            if not d.is_dir():
+                continue
+        except OSError:
+            continue
+        ev_path = d / "events.jsonl"
+        try:
+            st = ev_path.stat()
+        except OSError:
+            continue
+        info = {
+            "id": d.name,
+            "cwd": "",
+            "title": "",
+            "repository": "",
+            "branch": "",
+            "model": "",
+            "created": 0.0,
+            "updated": float(st.st_mtime),
+            "archived": False,
+            "jsonl_path": str(ev_path),
+            "size": st.st_size,
+            "first_user": "",
+            "last_assistant": "",
+        }
+        try:
+            with open(ev_path, "r", encoding="utf-8", errors="replace") as f:
+                for i, raw in enumerate(f):
+                    if i >= 200:
+                        break
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(ev, dict):
+                        continue
+                    ts = _copilot_epoch(ev.get("timestamp") or ev.get("ts"))
+                    if ts:
+                        if not info["created"] or ts < info["created"]:
+                            info["created"] = ts
+                        if ts > info["updated"]:
+                            info["updated"] = ts
+                    etype = str(ev.get("type") or "").lower()
+                    data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+                    if etype == "session.start":
+                        ctx = data.get("context") if isinstance(data.get("context"), dict) else data
+                        info["repository"] = str(ctx.get("repository") or info["repository"] or "").strip()
+                        info["branch"] = str(ctx.get("branch") or info["branch"] or "").strip()
+                        cwd = str(ctx.get("cwd") or ctx.get("workingDirectory") or "").strip()
+                        if cwd:
+                            info["cwd"] = cwd
+                    elif "user" in etype and not info["first_user"]:
+                        info["first_user"] = _copilot_event_text(data).strip()
+                    elif "assistant" in etype:
+                        text = _copilot_event_text(data).strip()
+                        if text:
+                            info["last_assistant"] = text
+        except OSError:
+            continue
+        if not info["created"]:
+            info["created"] = info["updated"]
+        out.append(info)
+    out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
+    if limit and limit > 0:
+        out = out[: int(limit)]
+    return out
+
+
+def _copilot_repo_slug_matches(slug, repo_path):
+    """True when an owner/repo slug plausibly names the local repo directory
+    (basename match). Used only when the session recorded no local cwd."""
+    if not slug or not repo_path:
+        return False
+    name = str(slug).rstrip("/").split("/")[-1].strip().lower()
+    if name.endswith(".git"):
+        name = name[:-4]
+    try:
+        local = Path(repo_path).name.strip().lower()
+    except (TypeError, ValueError):
+        return False
+    return bool(name) and name == local
+
+
+def find_copilot_conversations(
+    repo_path=None,
+    include_old=True,
+    repo_only=True,
+    progress=None,
+    limit=None,
+    resolve_pr_states=True,
+    resolve_worktree_dirty=True,
+):
+    """Discover GitHub Copilot CLI sessions from ~/.copilot (COPILOT_HOME).
+
+    session-store.db is the fast path; a missing/unreadable/foreign DB falls
+    back to scanning session-state/*/events.jsonl. Store not found → []."""
+    sessions = None
+    con = _copilot_connect()
+    if con is not None:
+        sessions = _copilot_fetch_sessions(con, limit=limit)
+        if not sessions:
+            # DB exists but is empty or speaks an unknown schema — the event
+            # logs are authoritative, so still try them.
+            con.close()
+            con = None
+            sessions = None
+    if sessions is None:
+        sessions = _copilot_sessions_from_event_logs(limit=limit)
+    if not sessions:
+        if con is not None:
+            con.close()
+        return []
+    if repo_only:
+        repo_path = resolve_repo_path(repo_path)
+        repo_path_obj = Path(repo_path)
+    try:
+        repo_pins = _load_repo_pins()
+    except Exception:
+        repo_pins = {}
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
+    except Exception:
+        archived_set, trashed_set = set(), set()
+    try:
+        verified_set = set(_load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _load_last_interactions()
+    except Exception:
+        last_interactions = {}
+
+    cutoff = _session_scan_cutoff_ts(include_old)
+    max_rows = _session_scan_file_limit(include_old)
+    git_top_cache = {}
+    now = time.time()
+    out = []
+    for s in sessions:
+        sid = s.get("id")
+        if not sid:
+            continue
+        cwd = s.get("cwd") or ""
+        pinned = repo_pins.get(sid)
+        pinned_repo = False
+        if repo_only:
+            if pinned and pinned != repo_path:
+                continue
+            if pinned == repo_path:
+                pinned_repo = True
+            elif cwd and _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                pass
+            elif not cwd and _copilot_repo_slug_matches(s.get("repository"), repo_path):
+                pass
+            else:
+                continue
+        modified = s.get("updated") or s.get("created") or 0
+        freshness = max(modified, last_interactions.get(sid) or 0)
+        if not include_old and cutoff > 0 and freshness < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
+        title = _strip_ccc_session_state_instruction(s.get("title") or "").strip()
+        first_message = _strip_ccc_session_state_instruction(
+            s.get("first_user") or ""
+        ).strip()
+        last_assistant_text = s.get("last_assistant") or ""
+        if con is not None and not first_message and not last_assistant_text:
+            first_message, last_assistant_text = _copilot_turn_texts(con, sid)
+            first_message = _strip_ccc_session_state_instruction(first_message).strip()
+        display_name = (
+            name_overrides.get(sid)
+            or _truncate_session_name(title)
+            or (first_message[:80] if first_message else None)
+            or (title[:80] if title else "Copilot session")
+        )
+        effective_cwd = _first_existing_dir(cwd, pinned) or cwd
+        try:
+            cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        folder_path = pinned or cwd or effective_cwd or ""
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        elif s.get("repository"):
+            folder_label = s["repository"]
+        else:
+            folder_label = "Copilot"
+        _wt_worktree_label = None
+        _wt_idx = folder_label.find("-wt-")
+        if _wt_idx > 0:
+            _wt_worktree_label = folder_label[_wt_idx + 4:]
+            folder_label = folder_label[:_wt_idx]
+        branch = s.get("branch") or ""
+        is_live = (now - modified) < COPILOT_LIVE_WINDOW_S
+        out.append({
+            "id": sid,
+            "session_id": sid,
+            "source": "copilot",
+            "engine": "copilot",
+            "timestamp": "",
+            "branch": branch,
+            "git_branch": branch,
+            "first_message": first_message[:200],
+            "display_name": display_name,
+            "ai_title": title or None,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": first_message[:200],
+            "size": s.get("size") or 0,
+            "modified": modified,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+            "mtime": modified,
+            "jsonl_path": s.get("jsonl_path") or "",
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "worktree_label": _wt_worktree_label,
+            "session_cwd": effective_cwd,
+            "session_cwd_exists": cwd_exists,
+            "session_cwd_is_worktree": bool(
+                effective_cwd and (Path(effective_cwd) / ".git").is_file()
+            ),
+            "worktree_dirty": (
+                _worktree_dirty_cached(effective_cwd, modified)
+                if resolve_worktree_dirty and effective_cwd else False
+            ),
+            "effective_branch": None,
+            "effective_kind": None,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_edit_pos": 0,
+            "last_commit_pos": 0,
+            "last_push_pos": 0,
+            "last_event_type": None,
+            "pending_tool": None,
+            "pending_file": None,
+            "pending_tool_ts": 0,
+            "last_assistant_text": last_assistant_text,
+            "tail_issue_number": None,
+            "tail_pr_number": None,
+            "tail_pr_url": None,
+            "pr_state": None,
+            "session_state": _parse_session_state(last_assistant_text),
+            "archived": sid in archived_set or bool(s.get("archived")),
+            "trashed": sid in trashed_set,
+            "verified": sid in verified_set,
+            "pinned_repo": pinned_repo,
+            "last_interacted": last_interactions.get(sid),
+            "is_live": is_live,
+            "spawn_pid": None,
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "model": s.get("model") or "",
+            "reasoning_effort": "",
+        })
+    if con is not None:
+        con.close()
+    out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
+    return out
+
+
+def _parse_copilot_conversation(session_id, after_line=0):
+    """Build a CCC transcript event list from a Copilot session's
+    events.jsonl. Defensive by design: unknown event types are skipped and a
+    malformed line never aborts the parse."""
+    path = _copilot_events_path(session_id)
+    if path is None:
+        return {"events": [], "last_line": 0}
+    events = []
+    line = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                etype = str(ev.get("type") or "").lower()
+                ts = str(ev.get("timestamp") or ev.get("ts") or "")
+                data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+                if "user" in etype:
+                    text = _copilot_event_text(data).strip()
+                    if not text:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "user_text",
+                        "text": text, "images": [],
+                    })
+                elif "tool" in etype and ("start" in etype or "call" in etype):
+                    name = str(data.get("toolName") or data.get("name") or data.get("tool") or "")
+                    args = data.get("arguments") or data.get("input") or {}
+                    if isinstance(args, dict):
+                        detail = (
+                            args.get("command")
+                            or args.get("description")
+                            or (json.dumps(args)[:200] if args else "")
+                        )
+                        command = args.get("command")
+                    else:
+                        detail = str(args)[:200] if args else ""
+                        command = None
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"copilot-{line}",
+                        "blocks": [{
+                            "kind": "tool_use",
+                            "name": name,
+                            "detail": str(detail)[:200],
+                            "id": str(data.get("toolCallId") or data.get("id") or ""),
+                            "command": command,
+                            "command_kind": None,
+                        }],
+                    })
+                elif "tool" in etype and (
+                    "complete" in etype or "end" in etype
+                    or "result" in etype or "finish" in etype
+                ):
+                    result = data.get("result")
+                    if result is None:
+                        result = data.get("output")
+                    if result is None:
+                        result = data.get("error")
+                    if isinstance(result, (dict, list)):
+                        result = json.dumps(result)[:800]
+                    is_error = bool(data.get("error")) or data.get("success") is False
+                    if result is None and not is_error:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "tool_result",
+                        "text": str(result or "")[:800],
+                        "tool_use_id": str(data.get("toolCallId") or data.get("id") or ""),
+                        "is_error": is_error,
+                    })
+                elif "assistant" in etype or "message" in etype:
+                    text = _copilot_event_text(data).strip()
+                    if not text:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"copilot-{line}",
+                        "blocks": [{"kind": "text", "text": text}],
+                    })
+                # Anything else (session.start, checkpoints, metrics, unknown
+                # future types) carries no transcript text — skip, never crash.
+    except OSError:
+        pass
+    if after_line and after_line > 0:
+        visible = [e for e in events if e["line"] > after_line]
+    else:
+        visible = events
+    return {"events": visible, "last_line": line}
+
+
+# ---------------------------------------------------------------------------
+# Grok CLI conversation ingestion (read-only).
+#
+# Two different tools install a `grok` binary under ~/.grok (overridable via
+# the GROK_HOME env var) and overwrite each other:
+#   Variant A — xAI "Grok Build" (Rust): per-session dirs at
+#     sessions/<url-encoded-cwd>/<session-uuid>/ with a summary.json index
+#     record and an ACP session-update stream (updates.jsonl, falling back
+#     to chat_history.jsonl) as the authoritative transcript.
+#   Variant B — superagent-ai/grok-cli (npm): a single SQLite grok.db with
+#     workspaces / sessions / messages tables.
+# Both stores may coexist (one tool overwrote the other's binary while old
+# data remained), so both are scanned and their rows merged. Listing +
+# transcript view only; no spawn / resume support.
+# ---------------------------------------------------------------------------
+
+GROK_LIVE_WINDOW_S = 180
+
+
+def _grok_home():
+    raw = os.environ.get("GROK_HOME", "").strip()
+    if raw:
+        return Path(os.path.expanduser(raw))
+    return Path.home() / ".grok"
+
+
+def _grok_sid_ok(session_id):
+    sid = str(session_id or "").strip()
+    if not sid or "/" in sid or "\\" in sid or sid.startswith("."):
+        return ""
+    return sid
+
+
+def _grok_epoch(value):
+    """Best-effort epoch seconds from a Grok timestamp (epoch s/ms or ISO)."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        v = float(value)
+        return v / 1000.0 if v > 1e12 else v
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return 0.0
+        try:
+            v = float(s)
+            return v / 1000.0 if v > 1e12 else v
+        except ValueError:
+            pass
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        except (ValueError, OverflowError, OSError):
+            return 0.0
+    return 0.0
+
+
+def _grok_db_path():
+    p = _grok_home() / "grok.db"
+    try:
+        return p if p.exists() else None
+    except OSError:
+        return None
+
+
+def _grok_db_connect():
+    db = _grok_db_path()
+    if not db:
+        return None
+    try:
+        con = sqlite3.connect(str(db), timeout=0.5)
+        con.execute("PRAGMA query_only=1")
+        con.row_factory = sqlite3.Row
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def _grok_session_dir(session_id):
+    """Path to a variant-A session dir (sessions/<cwd-bucket>/<sid>/), or
+    None. Cheap probe — also used by engine detection, so it must return
+    fast for foreign session ids."""
+    sid = _grok_sid_ok(session_id)
+    if not sid:
+        return None
+    root = _grok_home() / "sessions"
+    try:
+        buckets = list(root.iterdir()) if root.is_dir() else []
+    except OSError:
+        return None
+    for bucket in buckets:
+        try:
+            cand = bucket / sid
+            if cand.is_dir():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def _is_grok_session(session_id):
+    if _grok_session_dir(session_id) is not None:
+        return True
+    sid = _grok_sid_ok(session_id)
+    if not sid:
+        return False
+    con = _grok_db_connect()
+    if con is None:
+        return False
+    try:
+        row = con.execute(
+            "SELECT 1 FROM sessions WHERE id=? LIMIT 1", (sid,)
+        ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+
+
+def _grok_content_text(content):
+    """Pull text out of a Grok/ACP content payload: a plain string, a
+    {type: "text", text: ...} part, a list of parts, or a nested message
+    dict. Shapes are guessed — anything unrecognized yields ""."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        t = content.get("text")
+        if isinstance(t, str) and t.strip():
+            return t
+        for key in ("content", "message"):
+            nested = _grok_content_text(content.get(key))
+            if nested:
+                return nested
+        return ""
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            t = _grok_content_text(item)
+            if t and t.strip():
+                parts.append(t)
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
+def _grok_event_role_text(ev):
+    """(role, text) for one line of a Grok ACP updates.jsonl or a raw
+    chat_history.jsonl — role is 'user' | 'assistant' | 'tool' | ''.
+    Unknown shapes return ('', '') and are skipped by callers."""
+    if not isinstance(ev, dict):
+        return "", ""
+    kind = str(ev.get("sessionUpdate") or "").lower()
+    if kind:
+        if "user" in kind:
+            return "user", _grok_content_text(ev.get("content"))
+        if "tool" in kind:
+            return "tool", ""
+        if "agent" in kind or "assistant" in kind:
+            return "assistant", _grok_content_text(ev.get("content"))
+        return "", ""
+    role = str(ev.get("role") or "").lower()
+    if role in ("user", "assistant"):
+        return role, _grok_content_text(ev.get("content"))
+    if role == "tool":
+        return "tool", ""
+    return "", ""
+
+
+def _grok_decode_bucket_cwd(bucket):
+    """Original cwd for a sessions/<bucket>/ dir: a `.cwd` sibling file
+    wins (slug+hash bucket names), else the URL-decoded bucket name when
+    it decodes to an absolute path."""
+    try:
+        cwd_file = bucket / ".cwd"
+        if cwd_file.is_file():
+            text = cwd_file.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                return text
+    except OSError:
+        pass
+    try:
+        decoded = urllib.parse.unquote(bucket.name)
+    except Exception:
+        return ""
+    return decoded if decoded.startswith("/") else ""
+
+
+def _grok_session_jsonl(session_dir):
+    """Transcript file for a variant-A session dir: updates.jsonl (ACP
+    stream) preferred, chat_history.jsonl (raw model messages) fallback."""
+    for name in ("updates.jsonl", "chat_history.jsonl"):
+        p = session_dir / name
+        try:
+            if p.is_file():
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def _grok_mine_jsonl_texts(jsonl_path):
+    """(first_user, last_assistant, created, updated) mined from the head
+    of a variant-A transcript file. Best-effort; all zeros when unreadable."""
+    first_user = ""
+    last_assistant = ""
+    created = 0.0
+    updated = 0.0
+    try:
+        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
+            for i, raw in enumerate(f):
+                if i >= 200:
+                    break
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                ts = _grok_epoch(
+                    ev.get("timestamp") or ev.get("ts") or ev.get("created_at")
+                )
+                if ts:
+                    if not created or ts < created:
+                        created = ts
+                    if ts > updated:
+                        updated = ts
+                role, text = _grok_event_role_text(ev)
+                text = text.strip()
+                if role == "user" and text and not first_user:
+                    first_user = text
+                elif role == "assistant" and text:
+                    last_assistant = text
+    except OSError:
+        pass
+    return first_user, last_assistant, created, updated
+
+
+def _grok_session_dir_info(session_dir, cwd):
+    """One listing dict for a variant-A session dir, or None when the dir
+    carries neither a summary.json nor a readable transcript file."""
+    summary = {}
+    sp = session_dir / "summary.json"
+    try:
+        if sp.is_file():
+            data = json.loads(sp.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(data, dict):
+                summary = data
+    except (OSError, json.JSONDecodeError):
+        summary = {}
+    jsonl = _grok_session_jsonl(session_dir)
+    if jsonl is None and not summary:
+        return None
+    title = str(
+        summary.get("title") or summary.get("summary") or summary.get("name") or ""
+    ).strip()
+    model = str(
+        summary.get("model") or summary.get("modelId") or summary.get("model_id") or ""
+    ).strip()
+    created = _grok_epoch(
+        summary.get("createdAt") or summary.get("created_at")
+        or summary.get("created") or summary.get("startedAt")
+    )
+    updated = _grok_epoch(
+        summary.get("updatedAt") or summary.get("updated_at")
+        or summary.get("lastActiveAt") or summary.get("last_activity_at")
+        or summary.get("modified")
+    )
+    size = 0
+    first_user = ""
+    last_assistant = ""
+    if jsonl is not None:
+        try:
+            st = jsonl.stat()
+            size = st.st_size
+            if not updated:
+                updated = float(st.st_mtime)
+        except OSError:
+            pass
+        first_user, last_assistant, j_created, j_updated = _grok_mine_jsonl_texts(jsonl)
+        if not created:
+            created = j_created
+        if j_updated and j_updated > updated:
+            updated = j_updated
+    if not created:
+        created = updated
+    if not updated:
+        updated = created
+    return {
+        "id": session_dir.name,
+        "cwd": cwd,
+        "title": title,
+        "model": model,
+        "created": created,
+        "updated": updated,
+        "archived": False,
+        "jsonl_path": str(jsonl) if jsonl else "",
+        "size": size,
+        "first_user": first_user,
+        "last_assistant": last_assistant,
+    }
+
+
+def _grok_sessions_from_dirs(limit=None):
+    """Variant-A listing: scan sessions/<cwd-bucket>/<sid>/ dirs under
+    GROK_HOME. Missing store → []."""
+    root = _grok_home() / "sessions"
+    try:
+        buckets = list(root.iterdir()) if root.is_dir() else []
+    except OSError:
+        return []
+    out = []
+    for bucket in buckets:
+        try:
+            if not bucket.is_dir():
+                continue
+            subs = list(bucket.iterdir())
+        except OSError:
+            continue
+        cwd = _grok_decode_bucket_cwd(bucket)
+        for d in subs:
+            try:
+                if not d.is_dir():
+                    continue
+            except OSError:
+                continue
+            info = _grok_session_dir_info(d, cwd)
+            if info:
+                out.append(info)
+    out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
+    if limit and limit > 0:
+        out = out[: int(limit)]
+    return out
+
+
+def _grok_db_message_text(raw):
+    """Text out of one grok.db messages.message_json value — usually a JSON
+    string holding {role, content}, but tolerate already-decoded shapes."""
+    if raw is None:
+        return ""
+    if isinstance(raw, (dict, list)):
+        return _grok_content_text(raw)
+    s = str(raw).strip()
+    if not s:
+        return ""
+    if s[:1] in ("{", "["):
+        try:
+            parsed = json.loads(s)
+        except json.JSONDecodeError:
+            parsed = None
+        if parsed is not None:
+            text = _grok_content_text(parsed)
+            if text:
+                return text
+    return s
+
+
+def _grok_db_sessions(con, limit=None):
+    """Variant-B listing: sessions ⋈ workspaces from grok.db. Column names
+    are probed defensively so a foreign/older DB degrades to []."""
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(sessions)")}
+    except sqlite3.Error:
+        return []
+    if "id" not in cols:
+        return []
+    try:
+        wcols = {r["name"] for r in con.execute("PRAGMA table_info(workspaces)")}
+    except sqlite3.Error:
+        wcols = set()
+    order_col = _copilot_first_col(cols, ("updated_at", "last_activity_at", "created_at"))
+    join = ""
+    select_extra = ""
+    if "workspace_id" in cols and "id" in wcols:
+        join = " LEFT JOIN workspaces w ON s.workspace_id = w.id"
+        if "canonical_path" in wcols:
+            select_extra += ", w.canonical_path AS ws_canonical_path"
+        if "display_name" in wcols:
+            select_extra += ", w.display_name AS ws_display_name"
+    sql = f"SELECT s.*{select_extra} FROM sessions s{join}"
+    if order_col:
+        sql += f" ORDER BY s.{order_col} DESC"
+    if limit and limit > 0:
+        sql += f" LIMIT {int(limit)}"
+    title_col = _copilot_first_col(cols, ("title", "recap_text", "summary", "name"))
+    cwd_col = _copilot_first_col(cols, ("cwd_at_start", "cwd_last", "cwd"))
+    model_col = _copilot_first_col(cols, ("model", "model_id"))
+    created_col = _copilot_first_col(cols, ("created_at", "created"))
+    updated_col = _copilot_first_col(cols, ("updated_at", "last_activity_at", "updated"))
+    status_col = "status" if cols and "status" in cols else None
+    out = []
+    try:
+        rows = list(con.execute(sql))
+    except sqlite3.Error:
+        return []
+    for r in rows:
+        d = dict(r)
+        sid = str(d.get("id") or "").strip()
+        if not sid:
+            continue
+        cwd = str(d.get(cwd_col) or "").strip() if cwd_col else ""
+        if not cwd:
+            cwd = str(d.get("ws_canonical_path") or "").strip()
+        title = str(d.get(title_col) or "").strip() if title_col else ""
+        status = str(d.get(status_col) or "").strip().lower() if status_col else ""
+        first_user, last_assistant = _grok_db_turn_texts(con, sid)
+        out.append({
+            "id": sid,
+            "cwd": cwd,
+            "title": title,
+            "model": str(d.get(model_col) or "").strip() if model_col else "",
+            "created": _grok_epoch(d.get(created_col)) if created_col else 0.0,
+            "updated": _grok_epoch(d.get(updated_col)) if updated_col else 0.0,
+            "archived": status in ("archived", "deleted"),
+            "jsonl_path": "",
+            "size": 0,
+            "first_user": first_user,
+            "last_assistant": last_assistant,
+        })
+    return out
+
+
+def _grok_db_turn_texts(con, sid):
+    """(first_user_text, last_assistant_text) from grok.db's messages table;
+    ('', '') when the table/columns don't match this build of the CLI."""
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(messages)")}
+    except sqlite3.Error:
+        return "", ""
+    sid_col = _copilot_first_col(cols, ("session_id", "sessionId", "session"))
+    body_col = _copilot_first_col(cols, ("message_json", "content", "text", "message"))
+    if not sid_col or not body_col:
+        return "", ""
+    role_col = "role" if "role" in cols else None
+    order_col = _copilot_first_col(cols, ("seq", "created_at", "rowid", "id"))
+    first_user = ""
+    last_assistant = ""
+    sql = f"SELECT * FROM messages WHERE {sid_col}=?"
+    if order_col and order_col != "rowid":
+        sql += f" ORDER BY {order_col}"
+    try:
+        for r in con.execute(sql, (sid,)):
+            d = dict(r)
+            text = _grok_db_message_text(d.get(body_col)).strip()
+            if not text:
+                continue
+            role = str(d.get(role_col) or "").lower() if role_col else ""
+            if role == "user":
+                if not first_user:
+                    first_user = text
+            elif role == "assistant":
+                last_assistant = text
+    except sqlite3.Error:
+        pass
+    return first_user, last_assistant
+
+
+def find_grok_conversations(
+    repo_path=None,
+    include_old=True,
+    repo_only=True,
+    progress=None,
+    limit=None,
+    resolve_pr_states=True,
+    resolve_worktree_dirty=True,
+):
+    """Discover Grok CLI sessions from ~/.grok (GROK_HOME).
+
+    Both on-disk variants are scanned and merged: variant A (xAI "Grok
+    Build") per-session dirs under sessions/<encoded-cwd>/<uuid>/, and
+    variant B (superagent-ai/grok-cli) rows in grok.db. No store → []."""
+    sessions = _grok_sessions_from_dirs(limit=limit)
+    con = _grok_db_connect()
+    if con is not None:
+        sessions.extend(_grok_db_sessions(con, limit=limit))
+        con.close()
+    if not sessions:
+        return []
+    if repo_only:
+        repo_path = resolve_repo_path(repo_path)
+        repo_path_obj = Path(repo_path)
+    try:
+        repo_pins = _load_repo_pins()
+    except Exception:
+        repo_pins = {}
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
+    except Exception:
+        archived_set, trashed_set = set(), set()
+    try:
+        verified_set = set(_load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _load_last_interactions()
+    except Exception:
+        last_interactions = {}
+
+    cutoff = _session_scan_cutoff_ts(include_old)
+    max_rows = _session_scan_file_limit(include_old)
+    git_top_cache = {}
+    now = time.time()
+    out = []
+    for s in sessions:
+        sid = s.get("id")
+        if not sid:
+            continue
+        cwd = s.get("cwd") or ""
+        pinned = repo_pins.get(sid)
+        pinned_repo = False
+        if repo_only:
+            if pinned and pinned != repo_path:
+                continue
+            if pinned == repo_path:
+                pinned_repo = True
+            elif cwd and _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                pass
+            else:
+                continue
+        modified = s.get("updated") or s.get("created") or 0
+        freshness = max(modified, last_interactions.get(sid) or 0)
+        if not include_old and cutoff > 0 and freshness < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
+        title = _strip_ccc_session_state_instruction(s.get("title") or "").strip()
+        first_message = _strip_ccc_session_state_instruction(
+            s.get("first_user") or ""
+        ).strip()
+        last_assistant_text = s.get("last_assistant") or ""
+        display_name = (
+            name_overrides.get(sid)
+            or _truncate_session_name(title)
+            or (first_message[:80] if first_message else None)
+            or (title[:80] if title else "Grok session")
+        )
+        effective_cwd = _first_existing_dir(cwd, pinned) or cwd
+        try:
+            cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        folder_path = pinned or cwd or effective_cwd or ""
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Grok"
+        _wt_worktree_label = None
+        _wt_idx = folder_label.find("-wt-")
+        if _wt_idx > 0:
+            _wt_worktree_label = folder_label[_wt_idx + 4:]
+            folder_label = folder_label[:_wt_idx]
+        is_live = (now - modified) < GROK_LIVE_WINDOW_S
+        out.append({
+            "id": sid,
+            "session_id": sid,
+            "source": "grok",
+            "engine": "grok",
+            "timestamp": "",
+            "branch": "",
+            "git_branch": "",
+            "first_message": first_message[:200],
+            "display_name": display_name,
+            "ai_title": title or None,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": first_message[:200],
+            "size": s.get("size") or 0,
+            "modified": modified,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+            "mtime": modified,
+            "jsonl_path": s.get("jsonl_path") or "",
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "worktree_label": _wt_worktree_label,
+            "session_cwd": effective_cwd,
+            "session_cwd_exists": cwd_exists,
+            "session_cwd_is_worktree": bool(
+                effective_cwd and (Path(effective_cwd) / ".git").is_file()
+            ),
+            "worktree_dirty": (
+                _worktree_dirty_cached(effective_cwd, modified)
+                if resolve_worktree_dirty and effective_cwd else False
+            ),
+            "effective_branch": None,
+            "effective_kind": None,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_edit_pos": 0,
+            "last_commit_pos": 0,
+            "last_push_pos": 0,
+            "last_event_type": None,
+            "pending_tool": None,
+            "pending_file": None,
+            "pending_tool_ts": 0,
+            "last_assistant_text": last_assistant_text,
+            "tail_issue_number": None,
+            "tail_pr_number": None,
+            "tail_pr_url": None,
+            "pr_state": None,
+            "session_state": _parse_session_state(last_assistant_text),
+            "archived": sid in archived_set or bool(s.get("archived")),
+            "trashed": sid in trashed_set,
+            "verified": sid in verified_set,
+            "pinned_repo": pinned_repo,
+            "last_interacted": last_interactions.get(sid),
+            "is_live": is_live,
+            "spawn_pid": None,
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "model": s.get("model") or "",
+            "reasoning_effort": "",
+        })
+    out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
+    return out
+
+
+def _parse_grok_updates_file(path):
+    """CCC transcript events from a variant-A updates.jsonl (ACP
+    session-update stream). Defensive by design: unknown update kinds are
+    skipped and a malformed line never aborts the parse."""
+    events = []
+    line = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                kind = str(ev.get("sessionUpdate") or ev.get("type") or "").lower()
+                ts = str(ev.get("timestamp") or ev.get("ts") or "")
+                if "user" in kind:
+                    text = _grok_content_text(ev.get("content")).strip()
+                    if not text:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "user_text",
+                        "text": text, "images": [],
+                    })
+                elif "tool" in kind and (
+                    "result" in kind or "update" in kind
+                    or "complete" in kind or "finish" in kind
+                ):
+                    result = ev.get("rawOutput")
+                    if result is None:
+                        result = ev.get("output")
+                    if result is None:
+                        result = ev.get("result")
+                    if result is None:
+                        result = ev.get("error")
+                    if isinstance(result, (dict, list)):
+                        result = json.dumps(result)[:800]
+                    is_error = bool(ev.get("error")) or str(
+                        ev.get("status") or ""
+                    ).lower() in ("failed", "error")
+                    if result is None and not is_error:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "tool_result",
+                        "text": str(result or "")[:800],
+                        "tool_use_id": str(
+                            ev.get("toolCallId") or ev.get("id") or ""
+                        ),
+                        "is_error": is_error,
+                    })
+                elif "tool" in kind:
+                    name = str(
+                        ev.get("title") or ev.get("name")
+                        or ev.get("toolName") or ev.get("kind") or ""
+                    )
+                    args = ev.get("rawInput") or ev.get("input") or ev.get("arguments") or {}
+                    if isinstance(args, dict):
+                        detail = (
+                            args.get("command")
+                            or args.get("description")
+                            or (json.dumps(args)[:200] if args else "")
+                        )
+                        command = args.get("command")
+                    else:
+                        detail = str(args)[:200] if args else ""
+                        command = None
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"grok-{line}",
+                        "blocks": [{
+                            "kind": "tool_use",
+                            "name": name,
+                            "detail": str(detail)[:200],
+                            "id": str(ev.get("toolCallId") or ev.get("id") or ""),
+                            "command": command,
+                            "command_kind": None,
+                        }],
+                    })
+                elif "agent" in kind or "assistant" in kind or "message" in kind:
+                    text = _grok_content_text(ev.get("content")).strip()
+                    if not text:
+                        continue
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"grok-{line}",
+                        "blocks": [{"kind": "text", "text": text}],
+                    })
+                # Anything else (plan updates, usage signals, unknown future
+                # kinds) carries no transcript text — skip, never crash.
+    except OSError:
+        pass
+    return events, line
+
+
+def _parse_grok_chat_history_file(path):
+    """CCC transcript events from a variant-A chat_history.jsonl fallback
+    ({role, content} raw model messages)."""
+    events = []
+    line = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                role, text = _grok_event_role_text(ev)
+                text = text.strip()
+                if not text:
+                    continue
+                ts = str(ev.get("timestamp") or ev.get("ts") or "")
+                if role == "user":
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "user_text",
+                        "text": text, "images": [],
+                    })
+                elif role == "assistant":
+                    line += 1
+                    events.append({
+                        "line": line, "ts": ts, "type": "assistant",
+                        "message_id": f"grok-{line}",
+                        "blocks": [{"kind": "text", "text": text}],
+                    })
+    except OSError:
+        pass
+    return events, line
+
+
+def _parse_grok_db_messages(session_id):
+    """CCC transcript events from variant-B grok.db messages, ordered by
+    seq. Defensive: unknown roles/columns degrade, never crash."""
+    con = _grok_db_connect()
+    if con is None:
+        return [], 0
+    events = []
+    line = 0
+    try:
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(messages)")}
+        sid_col = _copilot_first_col(cols, ("session_id", "sessionId", "session"))
+        body_col = _copilot_first_col(cols, ("message_json", "content", "text", "message"))
+        if not sid_col or not body_col:
+            return [], 0
+        role_col = "role" if "role" in cols else None
+        ts_col = _copilot_first_col(cols, ("created_at", "timestamp", "ts"))
+        order_col = _copilot_first_col(cols, ("seq", "created_at", "rowid", "id"))
+        sql = f"SELECT * FROM messages WHERE {sid_col}=?"
+        if order_col and order_col != "rowid":
+            sql += f" ORDER BY {order_col}"
+        for r in con.execute(sql, (session_id,)):
+            d = dict(r)
+            role = str(d.get(role_col) or "").lower() if role_col else ""
+            text = _grok_db_message_text(d.get(body_col)).strip()
+            if not text:
+                continue
+            ts = str(d.get(ts_col) or "") if ts_col else ""
+            if role == "user":
+                line += 1
+                events.append({
+                    "line": line, "ts": ts, "type": "user_text",
+                    "text": text, "images": [],
+                })
+            elif role == "assistant":
+                line += 1
+                events.append({
+                    "line": line, "ts": ts, "type": "assistant",
+                    "message_id": f"grok-{line}",
+                    "blocks": [{"kind": "text", "text": text}],
+                })
+            elif role == "tool":
+                line += 1
+                events.append({
+                    "line": line, "ts": ts, "type": "tool_result",
+                    "text": text[:800], "tool_use_id": "", "is_error": False,
+                })
+            # system / unknown roles carry no transcript text — skip.
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return events, line
+
+
+def _parse_grok_conversation(session_id, after_line=0):
+    """Build a CCC transcript event list for a Grok session: variant-A
+    session dir (updates.jsonl preferred, chat_history.jsonl fallback) or
+    variant-B grok.db messages."""
+    session_dir = _grok_session_dir(session_id)
+    if session_dir is not None:
+        jsonl = _grok_session_jsonl(session_dir)
+        if jsonl is None:
+            return {"events": [], "last_line": 0}
+        if jsonl.name == "updates.jsonl":
+            events, line = _parse_grok_updates_file(jsonl)
+        else:
+            events, line = _parse_grok_chat_history_file(jsonl)
+    else:
+        events, line = _parse_grok_db_messages(session_id)
+    if after_line and after_line > 0:
+        visible = [e for e in events if e["line"] > after_line]
+    else:
+        visible = events
+    return {"events": visible, "last_line": line}
+
+
+# ---------------------------------------------------------------------------
+# VS Code Copilot Chat conversation ingestion (read-only).
+#
+# GitHub Copilot Chat sessions (chat panel / agent mode) live inside VS
+# Code's user-data dir, per workspace:
+#   <User>/workspaceStorage/<workspace-hash>/chatSessions/<sessionId>.json
+#     — pre-1.109 flat ISerializableChatData, or
+#   <User>/workspaceStorage/<workspace-hash>/chatSessions/<sessionId>.jsonl
+#     — current append-only ChatSessionOperationLog journal. When both exist
+#     for one session the .jsonl wins (matches VS Code's own read order).
+#   <User>/workspaceStorage/<workspace-hash>/workspace.json — {"folder":
+#     "file:///abs/path"} gives the workspace association (session_cwd).
+#   <User>/globalStorage/emptyWindowChatSessions/ — empty-window sessions
+#     (same file formats, no workspace.json; session_cwd "").
+# <User> roots per OS: ~/Library/Application Support/<APP>/User (macOS),
+# ~/.config/<APP>/User (Linux), %APPDATA%/<APP>/User (Windows), with <APP>
+# in {"Code", "Code - Insiders", "VSCodium", "Code - OSS"}. The env var
+# CCC_VSCODE_USER_DIRS (os.pathsep-separated list of User dirs) replaces the
+# defaults entirely — it is also the test injection point.
+#
+# The state.vscdb chat.ChatSessionStore.index is deliberately NOT read: the
+# chatSessions files are the source of truth (the index can disagree), and
+# everything CCC needs — a title candidate from the first user message plus
+# timestamps — is mined from the files themselves, so skipping the SQLite
+# index removes a whole failure mode for no real gain.
+#
+# The JSONL journal op vocabulary is internal and churning, so replay is
+# defensive: snapshot records (carrying a `requests` list) replace state,
+# append-ish ops carrying a request extend it, unknown op shapes are
+# skipped, and corrupt input (BOM, missing base record, truncated final
+# line, empty-stub overwrite) degrades instead of crashing. A journal that
+# yields no requests falls back to treating each line's message-ish content
+# as best-effort turns; if even that fails the session still gets a row with
+# an empty transcript.
+#
+# Live-flush caveat: VS Code persists chat sessions on store/shutdown, so
+# rows are stale while VS Code is open — expected. Listing + transcript
+# view only; no spawn / resume support.
+# ---------------------------------------------------------------------------
+
+COPILOTCHAT_LIVE_WINDOW_S = 180
+
+_COPILOTCHAT_APP_NAMES = ("Code", "Code - Insiders", "VSCodium", "Code - OSS")
+_COPILOTCHAT_SID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+# Module-level cache for the session-file index so the engine-detection
+# probe (_is_copilotchat_session runs for every foreign sid on the claude
+# fallback path) stays a dict lookup instead of a workspaceStorage walk.
+_COPILOTCHAT_INDEX = None      # {session_id: Path}
+_COPILOTCHAT_INDEX_KEY = None  # dirs signature the index was built from
+_COPILOTCHAT_INDEX_TS = 0.0
+_COPILOTCHAT_INDEX_TTL_S = 30.0
+
+
+def _copilotchat_user_dirs():
+    """VS Code 'User' data dirs to scan. CCC_VSCODE_USER_DIRS overrides the
+    per-OS defaults entirely (tests point it at a tmp fixture dir)."""
+    raw = os.environ.get("CCC_VSCODE_USER_DIRS", "").strip()
+    if raw:
+        out = []
+        for piece in raw.split(os.pathsep):
+            piece = piece.strip()
+            if not piece:
+                continue
+            d = Path(os.path.expanduser(piece))
+            try:
+                if d.is_dir():
+                    out.append(d)
+            except OSError:
+                continue
+        return out
+    roots = []
+    system = platform.system()
+    if system == "Darwin":
+        roots.append(Path.home() / "Library" / "Application Support")
+    elif system == "Windows":
+        appdata = os.environ.get("APPDATA", "").strip()
+        if appdata:
+            roots.append(Path(appdata))
+    else:
+        roots.append(Path.home() / ".config")
+    out = []
+    for root in roots:
+        for app in _COPILOTCHAT_APP_NAMES:
+            d = root / app / "User"
+            try:
+                if d.is_dir():
+                    out.append(d)
+            except OSError:
+                continue
+    return out
+
+
+def _copilotchat_chat_dirs():
+    """All chatSessions dirs under the scanned User dirs: one per workspace
+    plus each app's empty-window store. Missing stores are skipped."""
+    dirs = []
+    for user_dir in _copilotchat_user_dirs():
+        ws_root = user_dir / "workspaceStorage"
+        try:
+            workspaces = list(ws_root.iterdir()) if ws_root.is_dir() else []
+        except OSError:
+            workspaces = []
+        for ws in workspaces:
+            try:
+                chat = ws / "chatSessions"
+                if chat.is_dir():
+                    dirs.append(chat)
+            except OSError:
+                continue
+        try:
+            empty = user_dir / "globalStorage" / "emptyWindowChatSessions"
+            if empty.is_dir():
+                dirs.append(empty)
+        except OSError:
+            pass
+    return dirs
+
+
+def _copilotchat_scan_dir(chat_dir):
+    """{session_id: file Path} for one chatSessions dir; the .jsonl journal
+    wins when both formats exist for a session (VS Code's read order)."""
+    found = {}
+    try:
+        entries = list(chat_dir.iterdir())
+    except OSError:
+        return found
+    for entry in entries:
+        name = entry.name
+        if name.endswith(".jsonl"):
+            sid = name[: -len(".jsonl")]
+        elif name.endswith(".json"):
+            sid = name[: -len(".json")]
+        else:
+            continue
+        if not sid:
+            continue
+        existing = found.get(sid)
+        if existing is None or (
+            existing.suffix != ".jsonl" and entry.suffix == ".jsonl"
+        ):
+            found[sid] = entry
+    return found
+
+
+def _copilotchat_session_index():
+    """Cached {session_id: Path} across every scanned chatSessions dir.
+    Rebuilt when the dir set changes or the short TTL expires."""
+    global _COPILOTCHAT_INDEX, _COPILOTCHAT_INDEX_KEY, _COPILOTCHAT_INDEX_TS
+    dirs = _copilotchat_chat_dirs()
+    key = tuple(str(d) for d in dirs)
+    now = time.time()
+    if (
+        _COPILOTCHAT_INDEX is not None
+        and _COPILOTCHAT_INDEX_KEY == key
+        and now - _COPILOTCHAT_INDEX_TS < _COPILOTCHAT_INDEX_TTL_S
+    ):
+        return _COPILOTCHAT_INDEX
+    index = {}
+    for chat_dir in dirs:
+        for sid, path in _copilotchat_scan_dir(chat_dir).items():
+            existing = index.get(sid)
+            if existing is None or (
+                existing.suffix != ".jsonl" and path.suffix == ".jsonl"
+            ):
+                index[sid] = path
+    _COPILOTCHAT_INDEX = index
+    _COPILOTCHAT_INDEX_KEY = key
+    _COPILOTCHAT_INDEX_TS = now
+    return index
+
+
+def _copilotchat_session_file(session_id):
+    """Path to a session's chatSessions file, or None. Cheap probe — also
+    used by engine detection, so it must return fast for foreign ids."""
+    sid = str(session_id or "").strip()
+    if not _COPILOTCHAT_SID_RE.match(sid):
+        return None
+    try:
+        return _copilotchat_session_index().get(sid)
+    except Exception:
+        return None
+
+
+def _is_copilotchat_session(session_id):
+    return _copilotchat_session_file(session_id) is not None
+
+
+def _copilotchat_workspace_cwd(chat_dir):
+    """Workspace folder for a workspaceStorage chatSessions dir, decoded from
+    the sibling workspace.json's file:// URI. "" for empty-window stores."""
+    ws_json = chat_dir.parent / "workspace.json"
+    try:
+        data = json.loads(ws_json.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    uri = str(data.get("folder") or "").strip()
+    if not uri:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(uri)
+        if parsed.scheme != "file":
+            return ""
+        return urllib.parse.unquote(parsed.path)
+    except Exception:
+        return ""
+
+
+def _copilotchat_epoch_ms(value):
+    """Epoch seconds from a VS Code timestamp (epoch ms, sometimes s)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    v = float(value)
+    if v <= 0:
+        return 0.0
+    return v / 1000.0 if v > 1e12 else v
+
+
+def _copilotchat_ts_label(value):
+    """ISO-8601 label for an epoch-ms request timestamp ("" when absent)."""
+    ts = _copilotchat_epoch_ms(value)
+    if not ts:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def _copilotchat_message_text(message):
+    """User text from a request's message: {text} or joined {parts} text."""
+    if not isinstance(message, dict):
+        return ""
+    text = message.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    parts = message.get("parts")
+    if isinstance(parts, list):
+        chunks = []
+        for part in parts:
+            if isinstance(part, str) and part.strip():
+                chunks.append(part.strip())
+            elif isinstance(part, dict):
+                t = part.get("text")
+                if not isinstance(t, str):
+                    t = part.get("value")
+                if isinstance(t, str) and t.strip():
+                    chunks.append(t.strip())
+        if chunks:
+            return "\n".join(chunks)
+    return ""
+
+
+def _copilotchat_response_texts(response):
+    """(assistant_text, tool_names) from a request's response part list.
+    MarkdownString-ish parts contribute text; tool-invocation-ish parts
+    contribute names. Shapes are guessed — anything unrecognized is skipped."""
+    texts = []
+    tools = []
+    if not isinstance(response, list):
+        return "", tools
+    for part in response:
+        if isinstance(part, str):
+            if part.strip():
+                texts.append(part)
+            continue
+        if not isinstance(part, dict):
+            continue
+        kind = str(part.get("kind") or "").lower()
+        tool_name = (
+            part.get("toolName") or part.get("toolId") or part.get("tool")
+        )
+        if "tool" in kind or tool_name:
+            if tool_name:
+                tools.append(str(tool_name))
+            elif part.get("name"):
+                tools.append(str(part["name"]))
+            continue
+        value = part.get("value")
+        if value is None:
+            value = part.get("content")
+        if isinstance(value, str) and value.strip():
+            texts.append(value)
+        elif isinstance(value, dict):  # nested MarkdownString-ish
+            nested = value.get("value")
+            if isinstance(nested, str) and nested.strip():
+                texts.append(nested)
+    return "\n".join(texts), tools
+
+
+def _copilotchat_tool_round_names(result):
+    """Tool names from result.metadata.toolCallRounds[].toolCalls[].name."""
+    names = []
+    if not isinstance(result, dict):
+        return names
+    metadata = result.get("metadata")
+    if not isinstance(metadata, dict):
+        return names
+    rounds = metadata.get("toolCallRounds")
+    if not isinstance(rounds, list):
+        return names
+    for rnd in rounds:
+        if not isinstance(rnd, dict):
+            continue
+        calls = rnd.get("toolCalls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if isinstance(call, dict):
+                name = call.get("name") or call.get("toolName")
+                if name:
+                    names.append(str(name))
+    return names
+
+
+def _copilotchat_flat_requests(path):
+    """(requests, creationDate) from a flat ISerializableChatData .json
+    file. utf-8-sig tolerates a BOM; anything unreadable yields ([], None)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return [], None
+    if not isinstance(data, dict):
+        return [], None
+    reqs = data.get("requests")
+    return (
+        [r for r in reqs if isinstance(r, dict)] if isinstance(reqs, list) else []
+    ), data.get("creationDate")
+
+
+def _copilotchat_journal_records(path):
+    """Parsed dict records from a .jsonl operation journal. A BOM, blank
+    lines, and a truncated final line are all tolerated; non-dict lines and
+    unparseable lines are skipped."""
+    records = []
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+            for raw in f:
+                raw = raw.strip().lstrip("\ufeff")
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict):
+                    records.append(rec)
+    except OSError:
+        pass
+    return records
+
+
+def _copilotchat_replay_journal(records):
+    """Replay a ChatSessionOperationLog journal into a request list.
+
+    Snapshot records (carrying a `requests` list) replace state; append-ish
+    ops carrying a single request-shaped object extend it. The op vocabulary
+    is internal and churning, so unknown shapes are skipped — never crash."""
+    requests = []
+    for rec in records:
+        reqs = rec.get("requests")
+        if isinstance(reqs, list):
+            requests = [r for r in reqs if isinstance(r, dict)]
+            continue
+        for key in ("request", "value", "data", "entry", "op"):
+            v = rec.get(key)
+            if isinstance(v, dict) and ("message" in v or "response" in v):
+                requests.append(v)
+                break
+            if isinstance(v, dict) and isinstance(v.get("requests"), list):
+                requests = [r for r in v["requests"] if isinstance(r, dict)]
+                break
+    return requests
+
+
+def _copilotchat_best_effort_requests(records):
+    """Last-ditch fallback when journal replay yields nothing: treat each
+    record carrying role + text-ish content as a bare turn."""
+    out = []
+    for rec in records:
+        role = str(rec.get("role") or "").lower()
+        text = ""
+        for key in ("text", "content", "message"):
+            v = rec.get(key)
+            if isinstance(v, str) and v.strip():
+                text = v.strip()
+                break
+        if not text:
+            continue
+        ts = rec.get("timestamp") or rec.get("creationDate")
+        if role == "user":
+            out.append({"message": {"text": text}, "timestamp": ts})
+        else:
+            out.append({"response": [{"value": text}], "timestamp": ts})
+    return out
+
+
+def _copilotchat_load_requests(path):
+    """(requests, creationDate) from either chatSessions file format."""
+    if path.suffix == ".jsonl":
+        records = _copilotchat_journal_records(path)
+        requests = _copilotchat_replay_journal(records)
+        if not requests:
+            requests = _copilotchat_best_effort_requests(records)
+        return requests, None
+    return _copilotchat_flat_requests(path)
+
+
+def _copilotchat_mine_texts(requests):
+    """(first_user_text, last_assistant_text) from a request list."""
+    first_user = ""
+    last_assistant = ""
+    for req in requests:
+        if not first_user:
+            t = _copilotchat_message_text(req.get("message"))
+            if t:
+                first_user = t
+        text, _tools = _copilotchat_response_texts(req.get("response"))
+        if text.strip():
+            last_assistant = text.strip()
+    return first_user, last_assistant
+
+
+def _copilotchat_sessions_from_files(limit=None):
+    """Listing dicts for every session found under the scanned User dirs.
+    No stores on disk → []."""
+    out = []
+    for chat_dir in _copilotchat_chat_dirs():
+        cwd = _copilotchat_workspace_cwd(chat_dir)
+        for sid, path in _copilotchat_scan_dir(chat_dir).items():
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            requests, creation = _copilotchat_load_requests(path)
+            created = _copilotchat_epoch_ms(creation)
+            updated = 0.0
+            for req in requests:
+                ts = _copilotchat_epoch_ms(req.get("timestamp"))
+                if ts:
+                    if not created or ts < created:
+                        created = ts
+                    if ts > updated:
+                        updated = ts
+            if not updated:
+                updated = float(st.st_mtime)
+            if not created:
+                created = updated
+            first_user, last_assistant = _copilotchat_mine_texts(requests)
+            out.append({
+                "id": sid,
+                "cwd": cwd,
+                "created": created,
+                "updated": updated,
+                "jsonl_path": str(path),
+                "size": st.st_size,
+                "first_user": first_user,
+                "last_assistant": last_assistant,
+            })
+    out.sort(key=lambda s: s.get("updated") or 0, reverse=True)
+    if limit and limit > 0:
+        out = out[: int(limit)]
+    return out
+
+
+def find_copilotchat_conversations(
+    repo_path=None,
+    include_old=True,
+    repo_only=True,
+    progress=None,
+    limit=None,
+    resolve_pr_states=True,
+    resolve_worktree_dirty=True,
+):
+    """Discover VS Code Copilot Chat sessions from the scanned User dirs.
+
+    chatSessions files are authoritative (the state.vscdb index is skipped —
+    it can disagree with the files). No VS Code user-data dir → []."""
+    sessions = _copilotchat_sessions_from_files(limit=limit)
+    if not sessions:
+        return []
+    if repo_only:
+        repo_path = resolve_repo_path(repo_path)
+        repo_path_obj = Path(repo_path)
+    try:
+        repo_pins = _load_repo_pins()
+    except Exception:
+        repo_pins = {}
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
+    except Exception:
+        archived_set, trashed_set = set(), set()
+    try:
+        verified_set = set(_load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _load_last_interactions()
+    except Exception:
+        last_interactions = {}
+
+    cutoff = _session_scan_cutoff_ts(include_old)
+    max_rows = _session_scan_file_limit(include_old)
+    git_top_cache = {}
+    now = time.time()
+    out = []
+    for s in sessions:
+        sid = s.get("id")
+        if not sid:
+            continue
+        cwd = s.get("cwd") or ""
+        pinned = repo_pins.get(sid)
+        pinned_repo = False
+        if repo_only:
+            if pinned and pinned != repo_path:
+                continue
+            if pinned == repo_path:
+                pinned_repo = True
+            elif cwd and _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                pass
+            else:
+                continue
+        modified = s.get("updated") or s.get("created") or 0
+        freshness = max(modified, last_interactions.get(sid) or 0)
+        if not include_old and cutoff > 0 and freshness < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
+        first_message = _strip_ccc_session_state_instruction(
+            s.get("first_user") or ""
+        ).strip()
+        last_assistant_text = s.get("last_assistant") or ""
+        display_name = (
+            name_overrides.get(sid)
+            or (first_message[:80] if first_message else None)
+            or "Copilot Chat session"
+        )
+        effective_cwd = _first_existing_dir(cwd, pinned) or cwd
+        try:
+            cwd_exists = bool(effective_cwd and Path(effective_cwd).is_dir())
+        except OSError:
+            cwd_exists = False
+        folder_path = pinned or cwd or effective_cwd or ""
+        if folder_path:
+            _git_root = _find_git_root(folder_path)
+            folder_label = _resolve_dir_case(_git_root or folder_path)
+        else:
+            folder_label = "Copilot Chat"
+        _wt_worktree_label = None
+        _wt_idx = folder_label.find("-wt-")
+        if _wt_idx > 0:
+            _wt_worktree_label = folder_label[_wt_idx + 4:]
+            folder_label = folder_label[:_wt_idx]
+        is_live = (now - modified) < COPILOTCHAT_LIVE_WINDOW_S
+        out.append({
+            "id": sid,
+            "session_id": sid,
+            "source": "copilotchat",
+            "engine": "copilotchat",
+            "timestamp": "",
+            "branch": "",
+            "git_branch": "",
+            "first_message": first_message[:200],
+            "display_name": display_name,
+            "ai_title": None,
+            "name_overridden": bool(name_overrides.get(sid)),
+            "last_prompt": first_message[:200],
+            "size": s.get("size") or 0,
+            "modified": modified,
+            "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
+            "mtime": modified,
+            "jsonl_path": s.get("jsonl_path") or "",
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "worktree_label": _wt_worktree_label,
+            "session_cwd": effective_cwd,
+            "session_cwd_exists": cwd_exists,
+            "session_cwd_is_worktree": bool(
+                effective_cwd and (Path(effective_cwd) / ".git").is_file()
+            ),
+            "worktree_dirty": (
+                _worktree_dirty_cached(effective_cwd, modified)
+                if resolve_worktree_dirty and effective_cwd else False
+            ),
+            "effective_branch": None,
+            "effective_kind": None,
+            "has_edit": False,
+            "has_commit": False,
+            "has_push": False,
+            "last_edit_pos": 0,
+            "last_commit_pos": 0,
+            "last_push_pos": 0,
+            "last_event_type": None,
+            "pending_tool": None,
+            "pending_file": None,
+            "pending_tool_ts": 0,
+            "last_assistant_text": last_assistant_text,
+            "tail_issue_number": None,
+            "tail_pr_number": None,
+            "tail_pr_url": None,
+            "pr_state": None,
+            "session_state": _parse_session_state(last_assistant_text),
+            "archived": sid in archived_set,
+            "trashed": sid in trashed_set,
+            "verified": sid in verified_set,
+            "pinned_repo": pinned_repo,
+            "last_interacted": last_interactions.get(sid),
+            "is_live": is_live,
+            "spawn_pid": None,
+            "needs_approval": False,
+            "needs_approval_message": "",
+            "model": "",
+            "reasoning_effort": "",
+        })
+    out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
+    return out
+
+
+def _copilotchat_events_from_file(path):
+    """CCC transcript events from one chatSessions file (flat .json or a
+    replayed .jsonl journal). Defensive by design: unrecognized part shapes
+    are skipped and a malformed file never aborts the parse."""
+    requests, _creation = _copilotchat_load_requests(path)
+    events = []
+    line = 0
+    for req in requests:
+        if not isinstance(req, dict):
+            continue
+        ts = _copilotchat_ts_label(req.get("timestamp"))
+        user_text = _copilotchat_message_text(req.get("message"))
+        if user_text:
+            line += 1
+            events.append({
+                "line": line, "ts": ts, "type": "user_text",
+                "text": user_text, "images": [],
+            })
+        blocks = []
+        text, part_tools = _copilotchat_response_texts(req.get("response"))
+        if text.strip():
+            blocks.append({"kind": "text", "text": text.strip()})
+        tool_names = list(part_tools)
+        for name in _copilotchat_tool_round_names(req.get("result")):
+            # toolCallRounds often repeats a tool already seen as a response
+            # part — don't render it twice.
+            if name not in tool_names:
+                tool_names.append(name)
+        for name in tool_names:
+            blocks.append({
+                "kind": "tool_use",
+                "name": name,
+                "detail": "",
+                "id": "",
+                "command": None,
+                "command_kind": None,
+            })
+        if blocks:
+            line += 1
+            events.append({
+                "line": line, "ts": ts, "type": "assistant",
+                "message_id": f"copilotchat-{line}", "blocks": blocks,
+            })
+    return events, line
+
+
+def _parse_copilotchat_conversation(session_id, after_line=0):
+    """Build a CCC transcript event list for a VS Code Copilot Chat session:
+    the flat .json snapshot or the replayed .jsonl operation journal. A
+    session whose file yields no requests returns an empty transcript — the
+    row still lists (title/timestamps came from the index/file metadata)."""
+    path = _copilotchat_session_file(session_id)
+    if path is None:
+        return {"events": [], "last_line": 0}
+    events, line = _copilotchat_events_from_file(path)
     if after_line and after_line > 0:
         visible = [e for e in events if e["line"] > after_line]
     else:

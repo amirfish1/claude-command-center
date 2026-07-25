@@ -1,0 +1,1 @@
+Read-only Grok CLI engine: sessions from `~/.grok` (both the xAI "Grok Build" per-session dirs and the superagent-ai `grok.db` store) now appear in the conversation list, kanban, and archive, with a transcript view when opened.
