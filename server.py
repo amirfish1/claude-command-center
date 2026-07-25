@@ -21834,6 +21834,34 @@ def _codex_app_server_thread_approval_message(state):
     return "Codex is waiting for approval"
 
 
+def _codex_pending_approval_hint(session_id):
+    """The pending approval prompt's text when this thread's live turn is
+    blocked on a Codex approval, else None.
+
+    A turn stuck on `waitingOnApproval` holds the writer-gate open, so every
+    queued inject sits behind it until someone answers the prompt (a
+    goal-continuation turn once hung an hour on a `wt claim` escalation while
+    wake messages piled up as generic "queued"). Never raises.
+    """
+    if not session_id:
+        return None
+    try:
+        state = _codex_app_server_thread_state(session_id)
+        if not _codex_app_server_thread_needs_approval(state):
+            return None
+        pending = _codex_app_server_pending_approval_item(state)
+        message = ""
+        if isinstance(pending, dict):
+            message = str(
+                pending.get("approval_message") or pending.get("command") or ""
+            ).strip()
+        if not message:
+            message = _codex_app_server_thread_approval_message(state)
+        return _codex_app_server_trim_text(message, 240)
+    except Exception:
+        return None
+
+
 def _codex_app_server_record_thread(thread_id, thread):
     if not thread_id or not isinstance(thread, dict):
         return
@@ -24242,6 +24270,13 @@ def _codex_writer_gate_response(session_id, snap, *, stage="writer-gate",
         reason = "Another CCC send is already running a turn on this thread - queued"
     else:
         reason = "An active Codex turn is writing this thread - queued until it finishes"
+    approval_hint = _codex_pending_approval_hint(session_id)
+    if approval_hint:
+        reason += (
+            f" — the turn is blocked on a Codex approval: {approval_hint}. "
+            "Answer it (approve button or POST /api/codex/approval) to "
+            "release the queue"
+        )
     _resume_ledger_append(
         "codex_wake_queued", sid=session_id, stage=stage, reason=reason,
     )
@@ -24267,6 +24302,8 @@ def _codex_writer_gate_response(session_id, snap, *, stage="writer-gate",
         "writer": writer,
         "desktop_attached": bool(snap.get("desktop_attached")),
     }
+    if approval_hint:
+        resp["pending_approval"] = approval_hint
     if extra:
         resp.update(extra)
     return resp
@@ -33568,6 +33605,17 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
         # show "Queued: <reason>" inline instead of a bare "Queued".
         payload["queued_reason"] = reason
         payload["error"] = reason
+    approval_hint = _codex_pending_approval_hint(session_id)
+    if approval_hint:
+        payload["pending_approval"] = approval_hint
+        if not reason or approval_hint not in reason:
+            blocked = (
+                f"blocked on a Codex approval: {approval_hint}. Answer it "
+                "(approve button or POST /api/codex/approval) to release "
+                "the queue"
+            )
+            payload["queued_reason"] = f"{reason} — {blocked}" if reason else blocked
+            payload["error"] = payload["queued_reason"]
     if pid is not None:
         payload["pid"] = pid
     return payload
