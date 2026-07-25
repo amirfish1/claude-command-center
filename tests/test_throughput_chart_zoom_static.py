@@ -66,6 +66,17 @@ def test_chart_keeps_two_prior_days_and_compresses_forecast_to_100():
     assert "expected 100%" in throughput_html
 
 
+def test_chart_draws_a_zero_based_pre_reset_quota_trace():
+    throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
+
+    assert "function buildPreviousQuotaSeries(" in throughput_html
+    assert "row._prePeriod" in throughput_html
+    assert "lastPreResetIndex" in throughput_html
+    assert "startAtZero: true" in throughput_html
+    assert "drawQuotaSeries(svg, previousSeries" in throughput_html
+    assert "Previous cycle" in throughput_html
+
+
 def test_combined_chart_draws_separate_normalized_quota_series():
     throughput_html = pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8")
 

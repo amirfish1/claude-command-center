@@ -3177,14 +3177,44 @@
       };
     }
 
-    function drawQuotaSeries(svg, series, xScale, yPct, color, label, labelOffset = 0) {
+    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken) {
+      const firstPreResetRow = sourceRows.find(row => row && row._prePeriod && !row._projected);
+      const start = firstPreResetRow ? chartRowTimeMs(firstPreResetRow) : null;
+      if (start == null) return null;
+      const events = ((componentSummary && componentSummary.hourly) || []).map(row => ({
+        at: chartRowTimeMs(row),
+        tokens: (row.raw_context_tokens || 0) + (row.output_tokens || 0),
+      })).filter(event => event.at != null && event.at >= start);
+      let lastPreResetIndex = -1;
+      const values = sourceRows.map((row, index) => {
+        const at = chartRowTimeMs(row);
+        if (!row || !row._prePeriod || row._projected || at == null) return null;
+        lastPreResetIndex = index;
+        return events.filter(event => event.at < at + 3 * 3600000)
+          .reduce((sum, event) => sum + event.tokens, 0) * pctPerToken;
+      });
+      if (lastPreResetIndex < 0) return null;
+      return {
+        actual: values,
+        values,
+        currentPct: values[lastPreResetIndex] || 0,
+        lastActualIndex: lastPreResetIndex,
+        projectedEnd: values[lastPreResetIndex] || 0,
+        startAtZero: true,
+      };
+    }
+
+    function drawQuotaSeries(svg, series, xScale, yPct, color, label, labelOffset = 0, opacity = 1) {
       if (!series || series.lastActualIndex < 0) return;
       let actualPath = '';
       let projectedPath = '';
       series.values.forEach((value, index) => {
         if (value == null) return;
         const point = `${xScale(index + 1)} ${yPct(value)}`;
-        if (index <= series.lastActualIndex) actualPath += actualPath ? `L ${point} ` : `M ${point} `;
+        if (index <= series.lastActualIndex) {
+          if (!actualPath && series.startAtZero) actualPath = `M ${xScale(index + 1)} ${yPct(0)} `;
+          actualPath += actualPath ? `L ${point} ` : `M ${point} `;
+        }
         if (index >= series.lastActualIndex) projectedPath += projectedPath ? `L ${point} ` : `M ${point} `;
       });
       [[actualPath, 'none', '2.5'], [projectedPath, '7,4', '1.8']].forEach(([path, dash, width]) => {
@@ -3192,6 +3222,7 @@
         const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         line.setAttribute('d', path); line.setAttribute('fill', 'none');
         line.setAttribute('stroke', color); line.setAttribute('stroke-width', width);
+        line.setAttribute('opacity', String(opacity));
         if (dash !== 'none') line.setAttribute('stroke-dasharray', dash);
         svg.appendChild(line);
       });
@@ -3199,11 +3230,13 @@
       const y = yPct(series.currentPct);
       const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       dot.setAttribute('cx', x); dot.setAttribute('cy', y); dot.setAttribute('r', '4'); dot.setAttribute('fill', color);
+      dot.setAttribute('opacity', String(opacity));
       svg.appendChild(dot);
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', x + 7); text.setAttribute('y', y - 5 + labelOffset);
       text.setAttribute('fill', color); text.setAttribute('font-size', '10px'); text.setAttribute('font-weight', 'bold');
       text.setAttribute('font-family', 'var(--font-mono)');
+      text.setAttribute('opacity', String(opacity));
       text.textContent = `${label} ${series.currentPct.toFixed(1)}%`;
       svg.appendChild(text);
     }
@@ -3789,6 +3822,12 @@
         if (!primarySeries) return;
         const ppt = activeThroughputEngine === 'codex' ? codexPpt
           : (activeThroughputEngine === 'kimi' ? kimiPpt : claudePpt);
+        const primaryComponent = activeThroughputEngine === 'codex' ? codexComponent
+          : (activeThroughputEngine === 'kimi' ? kimiComponent : claudeComponent);
+        // The current view includes a small lead-in from before the latest reset.
+        // Preserve its own zero-based progression without joining it to the new
+        // billing-period line, whose ending value must match the live meter.
+        const previousSeries = buildPreviousQuotaSeries(primaryComponent, sourceRows, ppt);
         // Kimi's weekly line is purple so it never reads as the Claude meter.
         const weeklyLineColor = activeThroughputEngine === 'kimi' ? '#c084fc' : '#f59e0b';
 
@@ -3822,6 +3861,10 @@
           const clamped = Math.min(Math.max(p, 0), WEEKLY_AXIS_MAX);
           return height - padding.bottom - (clamped / WEEKLY_AXIS_MAX) * (height - padding.top - padding.bottom);
         };
+
+        if (previousSeries) {
+          drawQuotaSeries(svg, previousSeries, xScale, yPct, weeklyLineColor, 'Previous cycle', 0, 0.4);
+        }
 
         // 3. % gridlines (right axis)
         [0, 25, 50, 75, 100].forEach(p => {
