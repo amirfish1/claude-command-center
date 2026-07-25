@@ -563,7 +563,18 @@ def _wt_ticket_context(item, limit=60):
         summary = res
     elif isinstance(res, dict):
         summary = str(res.get("summary") or "")
-    for value in (summary, item.get("title"), item.get("note"), item.get("text")):
+    # Annotation titles mirror the browser document title, which is usually a
+    # generic product name. Their note is the reporter's actual request and
+    # therefore makes a useful worker label. Ordinary WatchTower tickets keep
+    # their explicit title as the preferred context.
+    annotation_id = str(item.get("annotation_id") or item.get("id") or "")
+    is_annotation = annotation_id.startswith("ann-")
+    values = (
+        (summary, item.get("note"), item.get("title"), item.get("text"))
+        if is_annotation
+        else (summary, item.get("title"), item.get("note"), item.get("text"))
+    )
+    for value in values:
         text = _wt_clip_title(value, limit=limit)
         if text:
             return text
@@ -9752,10 +9763,14 @@ def enqueue_annotation_ux_fixes_queue(
     if not _repo_path and _src in ("", "ccc"):
         _repo_path = CCC_ROOT
     _url = str(meta.get("url") or "")
-    # An annotation's page title is often a generic browser label (for example
-    # "problem"). When it points at a GitHub Issue, prefer the issue's actual
-    # title so the WatchTower ticket is identifiable in CCC and its queue.
-    _title = github_issue_title(_url) or str(meta.get("title") or "")
+    # An annotation's page title is often the generic application title. Use
+    # the annotator's note for the queue name, unless a linked GitHub issue
+    # supplies an authoritative title.
+    _title = (
+        github_issue_title(_url)
+        or str(meta.get("note") or "").strip()
+        or str(meta.get("title") or "")
+    )
     _submission_key = _annotation_queue_submission_key(text, meta, project)
     with _ANNOTATION_QUEUE_SUBMISSIONS_LOCK:
         if _submission_key in _ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT:
