@@ -1,0 +1,1 @@
+- Repeated conversation groups now show the standard engine icon and cost tier instead of textual engine/model metadata.

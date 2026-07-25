@@ -25580,9 +25580,7 @@
       const expanded = _repeatGroupExpanded(key, cards);
       const latest = cards.reduce((best, c) => Math.max(best, c.modified || c.last_interacted || 0), 0);
       const title = _repeatGroupTitle(first);
-      const engine = String(first.engine || first.source || '').trim();
-      const model = String(first.model || '').trim();
-      const meta = [engine, model].filter(Boolean).join(' · ');
+      const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' });
       const rel = latest ? relativeTime(latest) : '';
       const keyAttr = escapeAttr(_repeatGroupStorageKey(key));
       const sessionIdsAttr = escapeAttr(JSON.stringify(cards.map(c => c.session_id || c.id).filter(Boolean)));
@@ -25597,7 +25595,7 @@
         + ' title="Expand repeated rows">'
         + '<span class="conv-repeat-group-arrow">' + (expanded ? '&#9662;' : '&#9656;') + '</span>'
         + '<span class="conv-repeat-group-title">' + escapeHtml(title) + '</span>'
-        + (meta ? '<span class="conv-repeat-group-meta">' + escapeHtml(meta) + '</span>' : '')
+        + groupIconHtml
         + '<span class="conv-repeat-group-count">' + cards.length + '</span>'
         + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
         + '</button>'

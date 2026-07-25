@@ -69,6 +69,19 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn(".conv-repeat-group.is-collapsed .conv-repeat-group-body", app_css)
         self.assertIn("display: none;", app_css)
 
+    def test_repeated_sidebar_group_uses_the_standard_engine_cost_icon(self):
+        """A repeated-row header matches a regular row's compact engine signal."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        group_start = app_js.index("const _renderRepeatGroup = (cards, opts, key) =>")
+        group_html = app_js[group_start:app_js.index("const _renderRowsWithRepeatGroups", group_start)]
+
+        self.assertIn("const groupIconHtml = sessionEngineIconHtml(first, { context: 'sidebar' });", group_html)
+        self.assertIn("+ groupIconHtml", group_html)
+        self.assertNotIn("conv-repeat-group-meta", group_html)
+        self.assertIn(".conv-repeat-group-toggle > .conv-session-icon", app_css)
+
     def test_repeated_sidebar_rows_offer_confirmed_bulk_archive(self):
         """A cluster header archives its exact session set only after confirmation."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

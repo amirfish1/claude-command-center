@@ -4528,18 +4528,20 @@
     font-weight: 500;
     color: var(--text);
   }
-  .conv-repeat-group-meta {
-    flex: 0 1 auto;
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--surface-2);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
+  .conv-repeat-group-toggle > .conv-session-icon {
+    position: relative;
+    flex: 0 0 34px;
+    width: 34px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    opacity: 0.88;
+    pointer-events: none;
+  }
+  .conv-repeat-group-toggle:hover > .conv-session-icon,
+  .conv-repeat-group-toggle:focus-visible > .conv-session-icon {
+    opacity: 1;
   }
   .conv-repeat-group-count {
     flex: 0 0 auto;
