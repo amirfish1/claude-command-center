@@ -2281,6 +2281,9 @@
       && c.ended_blocked
       && _archiveWindowRowTs(c) >= nowSec - OPEN_ASK_RECENT_S);
   }
+  function isApprovalAskRow(c) {
+    return !!(c && c.needs_approval);
+  }
   // In-progress "Details" toggle: when on, every In-progress row that has a
   // matching Needs-your-attention item renders that NYA block underneath it.
   // Persisted so the choice sticks across renders/reloads.
@@ -3145,6 +3148,12 @@
     return merged;
   }
 
+  function _rowHasApprovalAsk(c) {
+    if (isApprovalAskRow(c)) return true;
+    const sid = c && (c.session_id || c.id);
+    return !!(sid && isApprovalAskRow(_sessionLiveOverlay.get(sid)));
+  }
+
   let _liveSessionsActivityPromise = null;
   let _liveSessionsActivityLast = { sessions: {} };
   async function refreshLiveSessionsActivity() {
@@ -3157,14 +3166,36 @@
     if (_liveSessionsActivityPromise) return _liveSessionsActivityPromise;
     _liveSessionsActivityPromise = (async () => {
     try {
+      const blockerRequest = fetch('/api/bridge-recovery/blockers?_=' + Date.now())
+        .then(response => response.ok ? response.json() : { sessions: [] })
+        .catch(() => ({ sessions: [] }));
       const res = await fetch('/api/sessions/live-activity?_=' + Date.now());
       if (!res.ok) return _liveSessionsActivityLast;
       const data = await res.json();
+      const blockerData = await blockerRequest;
       _liveSessionsActivityLast = data || { sessions: {} };
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {
         _rememberLiveOverlay(sid, fields);
+      }
+      for (const blocker of (Array.isArray(blockerData.sessions) ? blockerData.sessions : [])) {
+        const sid = String((blocker && blocker.session_id) || '').trim();
+        if (!sid || !blocker.needs_approval) continue;
+        liveIds.add(sid);
+        _rememberLiveOverlay(sid, {
+          is_live: true,
+          state: 'waiting',
+          sidecar_status: 'active',
+          sidecar_tool: 'Approval',
+          sidecar_file: blocker.needs_approval_message || 'Agent is waiting for approval',
+          sidecar_in_flight: true,
+          needs_approval: true,
+          needs_approval_message: blocker.needs_approval_message || 'Agent is waiting for approval',
+          codex_state: blocker.engine === 'codex' ? 'waiting' : undefined,
+          codex_fresh: blocker.engine === 'codex' ? true : undefined,
+          codex_state_reason: blocker.needs_approval_message || '',
+        });
       }
       for (const sid of Array.from(_sessionLiveOverlay.keys())) {
         if (!liveIds.has(sid)) _sessionLiveOverlay.delete(sid);
@@ -8204,7 +8235,11 @@
         res = await fetch('/api/session/compact', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ session_id: sid, terminal_app: liveStatus && liveStatus.terminalApp }),
+          body: JSON.stringify({
+            session_id: sid,
+            terminal_app: liveStatus && liveStatus.terminalApp,
+            idempotency_key: durableActionId('compact'),
+          }),
         });
       } else if (clearCommand && isClaudeSource(currentSession.source) && !(liveStatus && liveStatus.terminalPresent)) {
         // /clear is a REPL-only command. Written to a headless stream-json stdin
@@ -8237,7 +8272,12 @@
         if ($actionBtn) $actionBtn.disabled = false;
         return;
       } else {
-        const payload = { session_id: sid, text, mode: injectMode };
+        const payload = {
+          session_id: sid,
+          text,
+          mode: injectMode,
+          idempotency_key: durableActionId('inject'),
+        };
         if (injectMode === 'send'
             && _paneEl
             && String(_paneEl.dataset.presentationMode || '').toLowerCase() === '3') {
@@ -11942,10 +11982,38 @@
         const res = await fetch('/api/session-status?' + params.toString(), { cache: 'no-store' });
         d = await res.json().catch(() => ({}));
       } catch (_) { return; }  // keep the last render on a transient failure
-      const pill = (on, warn, label, title) =>
+      const pill = (on, warn, label, title, recoverable) =>
         '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
+        + (recoverable
+            ? ' data-bridge-recovery role="button" tabindex="0" aria-label="Open bridge recovery"'
+            : '')
         + ' title="' + escapeHtml(title) + '"><span class="ccc-proc-dot"></span>'
         + escapeHtml(label) + '</span>';
+      if (src === 'codex') {
+        const appLive = !!d.codex_app_server;
+        const managed = d.codex_app_server_transport === 'managed'
+          || !!d.codex_managed_app_server;
+        slot.innerHTML = pill(
+          appLive,
+          false,
+          appLive ? (managed ? 'managed app-server' : 'app-server') : 'exec',
+          'Click to inspect or recover the Codex app-server safely.',
+          true,
+        );
+        return;
+      }
+      if (src === 'kimi') {
+        const acpLive = !!d.live && d.kind === 'acp';
+        const acpBusy = acpLive && (d.status === 'running' || d.status === 'busy');
+        slot.innerHTML = pill(
+          acpLive,
+          false,
+          acpBusy ? 'Kimi ACP · working' : 'Kimi ACP',
+          'Click to inspect or recover the shared Kimi ACP adapter safely.',
+          true,
+        );
+        return;
+      }
       const headOn = !!d.headless_present;
       const stale = headOn && !!d.headless_stale;
       const bgOn = !!d.bg_present;
@@ -23662,7 +23730,10 @@
   }
 
   async function postCompactSession(sessionId, terminalApp) {
-    const payload = { session_id: sessionId };
+    const payload = {
+      session_id: sessionId,
+      idempotency_key: durableActionId('compact'),
+    };
     if (terminalApp) payload.terminal_app = terminalApp;
     // The server usually completes Claude compaction within its own three
     // minute deadline. Do not leave the UI disabled forever if that request
@@ -23738,8 +23809,11 @@
     // the open conversation, render the engine pills as idle rather than painting
     // the new session with the PREVIOUS session's headless/terminal state.
     const ls = liveStatusMatchesOpenConv() ? (liveStatus || {}) : {};
-    const pill0 = (on, warn, label, title) =>
+    const pill0 = (on, warn, label, title, recoverable) =>
       '<span class="ccc-proc-pill ' + (on ? (warn ? 'is-stale' : 'is-on') : 'is-off') + '"'
+      + (recoverable
+          ? ' data-bridge-recovery role="button" tabindex="0" aria-label="Open bridge recovery"'
+          : '')
       + ' title="' + escapeHtml(title) + '">'
       + '<span class="ccc-proc-dot"></span>' + escapeHtml(label) + '</span>';
     // Codex sessions reuse this breadcrumb slot for app-server/exec status
@@ -23754,7 +23828,19 @@
           ? (managed
               ? "CCC is driving this Codex session via Codex's managed app-server Unix socket."
               : 'CCC is driving this Codex session via its private app-server fallback.')
-          : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.');
+          : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.',
+        true);
+      return;
+    }
+    if (currentSession && currentSession.source === 'kimi') {
+      const acpLive = !!ls.live && ls.kind === 'acp';
+      const acpBusy = acpLive && (ls.status === 'running' || ls.status === 'busy');
+      const label = acpBusy ? 'Kimi ACP · working' : (acpLive ? 'Kimi ACP' : 'Kimi ACP · offline');
+      el.innerHTML = pill0(acpLive, false, label,
+        acpLive
+          ? 'Kimi sessions share this ACP adapter. Click to inspect or recover it safely.'
+          : 'Kimi ACP is not connected. Click to inspect or recover it.',
+        true);
       return;
     }
     // Antigravity is always headless — CCC resumes it per turn, no TTY. Surface
@@ -23850,6 +23936,184 @@
       } })
       .finally(() => { setTimeout(() => btn.classList.remove('is-spinning'), 350); });
   });
+
+  let _bridgeRecoveryState = null;
+
+  function closeBridgeRecoveryModal() {
+    const backdrop = document.getElementById('bridgeRecoveryBackdrop');
+    if (backdrop) backdrop.classList.remove('visible');
+    _bridgeRecoveryState = null;
+  }
+
+  function bridgeRecoveryError(message) {
+    const errorEl = document.getElementById('bridgeRecoveryError');
+    if (!errorEl) return;
+    errorEl.textContent = message || '';
+    errorEl.classList.toggle('visible', !!message);
+  }
+
+  function renderBridgeRecoveryStatus(data) {
+    const statusEl = document.getElementById('bridgeRecoveryStatus');
+    const queueEl = document.getElementById('bridgeRecoveryQueue');
+    const startBtn = document.getElementById('bridgeRecoveryStart');
+    const subtitle = document.getElementById('bridgeRecoverySubtitle');
+    if (!statusEl || !queueEl || !startBtn) return;
+    _bridgeRecoveryState = data;
+    const engine = data.engine === 'kimi' ? 'Kimi' : 'Codex';
+    if (subtitle) {
+      subtitle.textContent = (data.bridge || engine + ' bridge')
+        + (data.pid ? ' · pid ' + data.pid : '')
+        + (data.transport ? ' · ' + data.transport : '');
+    }
+    const others = Array.isArray(data.other_active_session_ids)
+      ? data.other_active_session_ids : [];
+    statusEl.classList.remove('is-safe', 'is-blocked');
+    if (others.length) {
+      statusEl.classList.add('is-blocked');
+      statusEl.textContent = 'Restart blocked: ' + others.length
+        + ' other active session' + (others.length === 1 ? '' : 's')
+        + ' use this shared bridge (' + others.map(id => String(id).slice(0, 12)).join(', ') + ').';
+    } else {
+      statusEl.classList.add('is-safe');
+      statusEl.textContent = data.restart_note
+        || 'Safe to restart: no other active sessions are using this shared bridge.';
+    }
+    const queued = Array.isArray(data.queued_messages) ? data.queued_messages : [];
+    if (queued.length) {
+      queueEl.innerHTML = '<legend>Queued message to retry</legend>'
+        + queued.map((row, index) => (
+          '<label class="bridge-recovery-message">'
+          + '<input type="radio" name="bridgeRecoveryMessage" value="' + escapeAttr(row.id || String(index)) + '"'
+          + (index === 0 ? ' checked' : '') + '>'
+          + '<span class="bridge-recovery-message-text">' + escapeHtml(row.text || '') + '</span>'
+          + '</label>'
+        )).join('');
+      startBtn.textContent = 'Restart and retry';
+    } else {
+      queueEl.innerHTML = '<legend>Queued message to retry</legend>'
+        + '<div class="bridge-recovery-empty">No queued messages. The bridge will restart and reattach without sending anything.</div>';
+      startBtn.textContent = 'Restart bridge';
+    }
+    startBtn.disabled = !data.can_restart;
+  }
+
+  async function openBridgeRecoveryModal() {
+    const sid = currentSession && currentSession.id;
+    if (!sid || !currentSession || !['codex', 'kimi'].includes(currentSession.source)) return;
+    const backdrop = document.getElementById('bridgeRecoveryBackdrop');
+    const statusEl = document.getElementById('bridgeRecoveryStatus');
+    const queueEl = document.getElementById('bridgeRecoveryQueue');
+    const startBtn = document.getElementById('bridgeRecoveryStart');
+    if (!backdrop || !statusEl || !queueEl || !startBtn) return;
+    _bridgeRecoveryState = null;
+    bridgeRecoveryError('');
+    statusEl.className = 'bridge-recovery-status';
+    statusEl.textContent = 'Checking bridge safety…';
+    queueEl.innerHTML = '<legend>Queued message to retry</legend>'
+      + '<div class="bridge-recovery-empty">Loading queued messages…</div>';
+    startBtn.disabled = true;
+    startBtn.textContent = 'Restart bridge';
+    backdrop.classList.add('visible');
+    try {
+      const response = await fetch('/api/bridge-recovery/status?session_id=' + encodeURIComponent(sid), {
+        cache: 'no-store',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+      if (!currentSession || currentSession.id !== sid) {
+        closeBridgeRecoveryModal();
+        return;
+      }
+      renderBridgeRecoveryStatus(data);
+    } catch (error) {
+      statusEl.classList.add('is-blocked');
+      statusEl.textContent = 'Could not inspect this bridge.';
+      bridgeRecoveryError((error && error.message) || 'Unknown error');
+    }
+  }
+
+  async function runBridgeRecovery() {
+    const data = _bridgeRecoveryState;
+    const sid = data && data.session_id;
+    const startBtn = document.getElementById('bridgeRecoveryStart');
+    if (!data || !sid || !startBtn || startBtn.disabled) return;
+    const selected = document.querySelector('input[name="bridgeRecoveryMessage"]:checked');
+    let text = '';
+    if (selected) {
+      const row = (data.queued_messages || []).find(item => item.id === selected.value);
+      text = row ? String(row.text || '') : '';
+    }
+    startBtn.disabled = true;
+    startBtn.textContent = text ? 'Restarting and retrying…' : 'Restarting…';
+    bridgeRecoveryError('');
+    try {
+      const key = (window.crypto && typeof window.crypto.randomUUID === 'function')
+        ? window.crypto.randomUUID()
+        : ('bridge-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+      const response = await fetch('/api/bridge-recovery', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          session_id: sid,
+          text,
+          idempotency_key: key,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        const other = Array.isArray(result.other_active_session_ids)
+          ? ' Active: ' + result.other_active_session_ids.map(id => String(id).slice(0, 12)).join(', ')
+          : '';
+        throw new Error((result.error || ('HTTP ' + response.status)) + other);
+      }
+      closeBridgeRecoveryModal();
+      showOpToast(result.retried
+        ? (result.queued ? 'Bridge restarted; selected message is queued on the fresh bridge.'
+          : 'Bridge restarted and selected message retried.')
+        : 'Bridge restarted and session reattached.', 'ok');
+      if (typeof refreshLiveStatus === 'function') setTimeout(refreshLiveStatus, 250);
+      if (typeof fetchConversationEvents === 'function') {
+        setTimeout(() => {
+          try { fetchConversationEvents(activePaneId()); } catch (_) {}
+        }, 500);
+      }
+    } catch (error) {
+      bridgeRecoveryError((error && error.message) || 'Recovery failed');
+      startBtn.disabled = false;
+      startBtn.textContent = text ? 'Restart and retry' : 'Restart bridge';
+    }
+  }
+
+  document.addEventListener('click', (ev) => {
+    const pill = ev.target && ev.target.closest && ev.target.closest('[data-bridge-recovery]');
+    if (!pill) return;
+    ev.preventDefault();
+    openBridgeRecoveryModal();
+  });
+  document.addEventListener('keydown', (ev) => {
+    const pill = ev.target && ev.target.closest && ev.target.closest('[data-bridge-recovery]');
+    if (pill && (ev.key === 'Enter' || ev.key === ' ')) {
+      ev.preventDefault();
+      openBridgeRecoveryModal();
+      return;
+    }
+    if (ev.key === 'Escape') {
+      const backdrop = document.getElementById('bridgeRecoveryBackdrop');
+      if (backdrop && backdrop.classList.contains('visible')) closeBridgeRecoveryModal();
+    }
+  });
+  const $bridgeRecoveryBackdrop = document.getElementById('bridgeRecoveryBackdrop');
+  const $bridgeRecoveryClose = document.getElementById('bridgeRecoveryClose');
+  const $bridgeRecoveryCancel = document.getElementById('bridgeRecoveryCancel');
+  const $bridgeRecoveryStart = document.getElementById('bridgeRecoveryStart');
+  if ($bridgeRecoveryBackdrop) {
+    $bridgeRecoveryBackdrop.addEventListener('click', (ev) => {
+      if (ev.target === $bridgeRecoveryBackdrop) closeBridgeRecoveryModal();
+    });
+  }
+  if ($bridgeRecoveryClose) $bridgeRecoveryClose.addEventListener('click', closeBridgeRecoveryModal);
+  if ($bridgeRecoveryCancel) $bridgeRecoveryCancel.addEventListener('click', closeBridgeRecoveryModal);
+  if ($bridgeRecoveryStart) $bridgeRecoveryStart.addEventListener('click', runBridgeRecovery);
 
   async function postRunCompactForSession(sessionId, source, terminalApp) {
     // Both Claude and Codex compact via /api/session/compact. (Codex used to
@@ -24362,19 +24626,20 @@
     const _readyToMergeByPr = new Map();   // pr_num -> { idx, conv }
     const _archivedConvs = [];
     const _idSearchConvs = [];
-    // State-based action sections (server-stamped `state` on every /api/sessions
-    // row): "Needs you" = state==='waiting' (Claude is blocked on the human —
-    // question / permission), "Open ask" = a session that ENDED while still
-    // blocked on the human (state==='ended' && ended_blocked). Both are pulled
-    // OUT of the In-progress bucket below so the list answers "what needs me at
-    // a glance" with the action items pinned at the very top. The rest of the
-    // In-progress mass (working / idle / plain-ended) keeps its existing rich
-    // rendering (window filter, folder / object grouping, Push-all, group-chat
-    // interleave, hysteresis) untouched.
-    // CCC-182: the "Needs you" bucket is gone. Waiting sessions stay in their
-    // project group (with a blinking in-row marker) instead of being pulled
-    // into a top section that they kept jumping in and out of. Only "Open ask"
-    // (ended-while-blocked) is still partitioned out.
+    // "Open asks" includes a session with a formal unresolved tool approval,
+    // plus a session that ENDED while still blocked on the human
+    // (state==='ended' && ended_blocked). Both are pulled OUT of the
+    // In-progress bucket below so the list answers "what needs me at a glance"
+    // with action items pinned at the very top. The rest of the In-progress
+    // mass (working / idle / plain-ended) keeps its existing rich rendering
+    // (window filter, folder / object grouping, Push-all, group-chat interleave,
+    // hysteresis) untouched.
+    //
+    // General waiting/question sessions still stay in their project group to
+    // avoid row churn. Formal approvals are the deliberate exception: engine
+    // state can retain the active approval turn even when the dashboard's
+    // process-liveness scan cannot see the worker-owned app-server. Such turns
+    // can block guarded bridge recovery and must not become invisible.
     const _openAskConvs = [];
     const _qActive = (document.getElementById('convSearch')?.value || '').trim().toLowerCase();
     // Group-chat rows are navigation chrome, not conversation search hits.
@@ -24472,6 +24737,14 @@
         _idSearchConvs.push(c);
         continue;
       }
+      // An unresolved formal approval is actionable regardless of lifecycle
+      // classification. In particular, worker-owned Codex app-server turns can
+      // look ended to the dashboard process while still holding an approval
+      // turn open and blocking guarded bridge recovery.
+      if (isApprovalAskRow(c)) {
+        _openAskConvs.push(c);
+        continue;
+      }
       const col = classifyKanbanColumn(c);
       if (col === 'archived') { _archivedConvs.push(c); continue; }
       if (col === 'backlog') { _ghIssueConvs.push(c); continue; }
@@ -24558,6 +24831,7 @@
       if (id) _actionSessionById.set(id, c);
     });
     const _isRecentOpenAsk = (c) => isRecentOpenAskRow(c, _nowSec);
+    const _isApprovalAsk = (c) => isApprovalAskRow(c);
     // A blocked descendant stays in the main list when its lineage reaches a
     // visible non-Open-Ask parent, where the cluster renderer can keep it as a
     // compact attention row. Standalone/orphaned Open Ask sessions retain the
@@ -24572,17 +24846,16 @@
       nextSeen.add(parentId);
       return _openAskHasStableParent(parent, nextSeen);
     };
-    // CCC-182: the "Needs you" SECTION is gone. Pulling every waiting session
-    // up into a top bucket made rows jump out of their project group and back
-    // the instant a turn paused/resumed — the constant churn the user called
-    // out. A waiting session now STAYS in its project group and surfaces a
-    // blinking in-row "needs you" marker instead (see _renderRow, gated on
-    // state==='waiting'). Only "Open ask" (ended-while-blocked, last 48h) is
-    // still pulled out — those are NOT live, so there's no flapping, and they
-    // would otherwise be buried in the archived tab.
+    // Pulling every waiting session into a top bucket made rows jump whenever a
+    // turn paused/resumed. Keep ordinary questions and other waiting states in
+    // their project groups, but promote formal unresolved approval prompts:
+    // they are actionable and may block recovery of the process-shared bridge,
+    // even when that worker-owned process is absent from live-activity.
+    // Recent ended-while-blocked sessions retain their existing Open ask path.
     for (let _i = _sessionConvs.length - 1; _i >= 0; _i--) {
       const _c = _sessionConvs[_i];
-      if (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c)) {
+      if (_isApprovalAsk(_c)
+          || (_isRecentOpenAsk(_c) && !_openAskHasStableParent(_c))) {
         _openAskConvs.push(_c);
         _sessionConvs.splice(_i, 1);
       }
@@ -24764,6 +25037,11 @@
         liveToolHtml = '<span class="conv-live-tool sending" title="Sending - waiting for the first response from the agent">'
           + '<span class="conv-live-name">● Sending&hellip;</span>'
           + '</span>';
+      } else if (c.needs_approval) {
+        const msg = c.needs_approval_message || c.sidecar_file || 'Agent is asking for approval';
+        liveToolHtml = '<span class="conv-live-tool is-question" title="' + escapeHtml(msg) + '">'
+          + '<span class="conv-live-name">Needs approval</span>'
+          + '</span>';
       } else if (c.stale_tool_call) {
         const staleTool = c.pending_tool || c.sidecar_tool || 'tool';
         const staleAge = c.pending_tool_ts ? relativeTime(c.pending_tool_ts) : (c.stale_tool_age_s ? Math.floor(c.stale_tool_age_s / 60) + 'm' : '');
@@ -24781,11 +25059,6 @@
         liveToolHtml = '<span class="conv-live-tool stale" title="' + escapeAttr(staleTitle) + '">'
           + '<span class="conv-live-name">Stuck</span>'
           + '<span class="conv-live-file">' + escapeHtml(liveActivityCompactToolLabel(staleTool)) + '</span>'
-          + '</span>';
-      } else if (c.is_live && c.needs_approval) {
-        const msg = c.needs_approval_message || c.sidecar_file || 'Agent is asking for approval';
-        liveToolHtml = '<span class="conv-live-tool is-question" title="' + escapeHtml(msg) + '">'
-          + '<span class="conv-live-name">Needs approval</span>'
           + '</span>';
       } else if (c.is_live && (c.question_waiting || (c.sidecar_in_flight && c.sidecar_tool === 'AskUserQuestion'))) {
         const q = c.sidecar_file || c.question_text || 'Claude is asking a question';
@@ -27420,7 +27693,7 @@
         + '<div class="conv-readytomerge-list">' + _rtmRows + '</div>'
         + '</div>';
     }
-    // Action sections ("Needs you" / "Open ask"). Shared builder so both read
+    // Action sections ("Needs you" / "Open asks"). Shared builder so both read
     // the same way as Ready-to-merge: a collapsible header (caret +
     // label + count) over a flat, newest-first row list. Collapse state lives
     // in localStorage under the supplied key. Rendered only when non-empty.
@@ -27452,12 +27725,13 @@
         + '<div class="conv-' + kind + '-list">' + rows + '</div>'
         + '</div>';
     };
-    // CCC-182: "Needs you" section removed — waiting sessions now show a
-    // blinking in-row marker and stay in their project group (no jumping).
+    // General waiting sessions stay in their project group. Formal approval
+    // prompts also appear here because they require action and can block a
+    // guarded shared-bridge restart.
     const _openAskHtml = getOpenAskPref() === 'hide' ? '' : _renderActionSection(_openAskConvs, {
-      kind: 'openask', label: 'Open ask', collapseKey: 'ccc-openask-collapsed',
-      hint: 'A session that ENDED while still waiting on your answer (last 48h). '
-        + 'Open it and reply to pick the work back up.',
+      kind: 'openask', label: 'Open asks', collapseKey: 'ccc-openask-collapsed',
+      hint: 'A session waiting for your approval, or a session that ended '
+        + 'while still waiting on your answer (last 48h). Open it to respond.',
     });
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
     // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
@@ -45959,6 +46233,7 @@
       let railStartX = 0;
       let railStartWidth = STATUS_RAIL_DEFAULT_WIDTH;
       let railCollapseOnRelease = false;
+      let railPointerId = null;
       const _railShouldCollapse = (e, rawWidth) => {
         const pane = document.querySelector('.conv-pane.is-active')
           || document.querySelector('.conv-pane[data-pane-id="' + activePaneId() + '"]')
@@ -45973,11 +46248,12 @@
           _setStatusRailWidth(raw, false);
         }
       };
-      const _railUp = (e) => {
-        document.removeEventListener('mousemove', _railMove);
-        document.removeEventListener('mouseup', _railUp);
+      const _railEnd = (e) => {
+        if (railPointerId !== e.pointerId) return;
         $statusRailResizer.classList.remove('dragging');
         document.body.classList.remove('status-rail-resizing');
+        try { $statusRailResizer.releasePointerCapture(e.pointerId); } catch (_) {}
+        railPointerId = null;
         if (railCollapseOnRelease) {
           _setStatusRailCollapsed(true, true);
         } else {
@@ -45986,17 +46262,24 @@
           _setStatusRailCollapsed(false, true);
         }
       };
-      $statusRailResizer.addEventListener('mousedown', (e) => {
-        if (!document.body.classList.contains('status-pos-right')) return;
+      $statusRailResizer.addEventListener('pointerdown', (e) => {
+        if (!document.body.classList.contains('status-pos-right') || !e.isPrimary
+            || (e.pointerType !== 'touch' && e.button !== 0)) return;
         e.preventDefault();
+        railPointerId = e.pointerId;
         railStartX = e.clientX;
         railStartWidth = $statusRail.getBoundingClientRect().width || _savedStatusRailWidth();
         railCollapseOnRelease = false;
         $statusRailResizer.classList.add('dragging');
         document.body.classList.add('status-rail-resizing');
-        document.addEventListener('mousemove', _railMove);
-        document.addEventListener('mouseup', _railUp);
+        try { $statusRailResizer.setPointerCapture(e.pointerId); } catch (_) {}
       });
+      $statusRailResizer.addEventListener('pointermove', (e) => {
+        if (railPointerId !== e.pointerId) return;
+        _railMove(e);
+      });
+      $statusRailResizer.addEventListener('pointerup', _railEnd);
+      $statusRailResizer.addEventListener('pointercancel', _railEnd);
       $statusRailResizer.addEventListener('dblclick', (e) => {
         e.preventDefault();
         _setStatusRailCollapsed(false, true);
@@ -49053,6 +49336,11 @@
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
       archiveDataWindow = requestedWindow;
         archiveLoaded = true;
+        // The sidebar must learn worker-owned approval blockers even before a
+        // conversation is selected (startLiveStatusPolling begins on select).
+        // Await the cheap overlay here so the first full archive render can
+        // place those sessions in Open asks without a click or 5s poll.
+        await refreshLiveSessionsActivity();
         if (typeof window.__cccRenderThroughputActivity === 'function') {
           window.__cccRenderThroughputActivity();
         }
@@ -49176,7 +49464,8 @@
     // Without this, old Hermes chats silently vanish in the all-repos view and
     // the only window control lives in the Archived section header.
     const _windowed = (_arcWindowCutoff && !q)
-      ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff) || isRecentOpenAskRow(c))
+      ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff)
+        || isRecentOpenAskRow(c) || _rowHasApprovalAsk(c))
       : archiveRows;
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
@@ -49917,6 +50206,14 @@
     if (engine === 'kimi') return '/api/sessions/spawn-kimi';
     return '/api/sessions/spawn';
   }
+  function durableActionId(kind) {
+    const prefix = String(kind || 'action').replace(/[^a-z0-9_-]/gi, '-');
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return prefix + ':' + window.crypto.randomUUID();
+    }
+    return prefix + ':' + Date.now().toString(36) + ':'
+      + Math.random().toString(36).slice(2);
+  }
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
@@ -50440,6 +50737,7 @@
         const body = spawnSupportsWorktree(engine)
           ? { prompt, repo_path: repoPath, worktree: useWorktree, engine }
           : { prompt, repo_path: repoPath, engine };
+        body.idempotency_key = durableActionId('spawn');
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -50761,6 +51059,7 @@
         setTimeout(() => { $cpInput.style.borderColor = ''; }, 1500);
       };
       const pendingSend = appendPendingSendEcho(announcedInjectionPreview(text, announcedFrom), sid, activePaneId());
+      const idempotencyKey = durableActionId('inject');
       const draftConversation = currentConversation;
       $cpInput.value = '';
       clearInputDraftForConversation(draftConversation);
@@ -50777,6 +51076,7 @@
           });
         } else if (
           currentSession.spawnPid
+          && String(sid || '').startsWith('spawning-')
           && currentSession.source !== 'codex'
           && currentSession.source !== 'gemini'
           && currentSession.source !== 'cursor'
@@ -50791,7 +51091,11 @@
             body: JSON.stringify({ text }),
           });
         } else {
-          const payload = { session_id: sid, text };
+          const payload = {
+            session_id: sid,
+            text,
+            idempotency_key: idempotencyKey,
+          };
           if (announcedFrom) payload.announced_from = announcedFrom;
           res = await fetch('/api/inject-input', {
             method: 'POST',
@@ -51312,6 +51616,38 @@
 
   const WHATS_NEW_FEATURES = [
     {
+      id: 'engine-bridge-recovery',
+      title: 'Guarded Engine Bridge Recovery',
+      date: 'Jul 25, 2026',
+      tag: 'Reliability',
+      desc: '<p>When a Codex app-server or Kimi ACP bridge gets stuck, click its transport pill to inspect and restart it without abandoning the conversation.</p><p>CCC refuses unsafe restarts while another session is active, shows those approval blockers in <strong>Open asks</strong>, and can retry one selected queued message after reattaching the same session.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><strong style="color:var(--text);">Recover engine bridge</strong><span style="color:var(--text-muted);">Codex app-server · stdio</span></div><div style="padding:8px 10px;border:1px solid rgba(61,214,140,.35);border-radius:6px;color:#3dd68c;background:rgba(61,214,140,.06);">Safe to restart · no other active sessions</div><div style="margin-top:9px;color:var(--text-muted);">Queued message to retry</div><div style="margin-top:5px;padding:7px 9px;border:1px solid var(--border);border-radius:5px;color:var(--text);">Continue from the last completed tool…</div><div style="display:flex;justify-content:flex-end;margin-top:10px;"><span style="padding:6px 10px;border-radius:5px;background:var(--accent,#58a6ff);color:white;">Restart and retry</span></div></div>'
+    },
+    {
+      id: 'persistent-control-plane',
+      title: 'Persistent Control-Plane Worker',
+      date: 'Jul 24, 2026',
+      tag: 'Architecture',
+      desc: '<p>Engine execution now lives in a persistent worker instead of the restartable dashboard process. Codex, Kimi, and Claude work survives dashboard refreshes with durable dispatch and explicit recovery for uncertain work.</p><p>New health and drain controls show what the worker owns, prevent duplicate replay, and make server upgrades much less disruptive.</p>',
+      mockup: '<div style="font-family:var(--mono,monospace);font-size:11px;line-height:1.7;color:#a6accd;padding:12px 14px;background:rgba(0,0,0,.25);border-radius:6px;border-left:3px solid #3dd68c;"><div>dashboard <span style="color:#3dd68c;">● online</span></div><div>&nbsp;&nbsp;↕ durable control plane</div><div>worker <span style="color:#3dd68c;">● persistent</span> · 3 engines</div><div>&nbsp;&nbsp;├─ Codex app-server</div><div>&nbsp;&nbsp;├─ Kimi ACP</div><div>&nbsp;&nbsp;└─ Claude headless</div></div>'
+    },
+    {
+      id: 'browser-engine-panes',
+      title: 'Browser-Native Codex & Kimi',
+      date: 'Jul 22, 2026',
+      tag: 'Conversation',
+      desc: '<p>Codex and Kimi sessions now run as first-class browser conversations with streamed output, tool rows, queued follow-ups, working/stuck indicators, goal controls, and reliable same-session resume.</p><p>The composer understands whether a turn is busy, so follow-ups steer or queue predictably instead of launching duplicate turns.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:7px;overflow:hidden;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;gap:6px;padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);"><span style="color:#3dd68c;">● Kimi ACP</span><span>working</span><span style="margin-left:auto;">same session</span></div><div style="padding:10px 12px;color:var(--text);"><div style="padding:7px 9px;border-left:2px solid var(--accent,#58a6ff);background:rgba(88,166,255,.05);">Reading the service code…</div><div style="margin-top:7px;padding:7px 9px;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);">Follow-up queued for this turn</div></div></div>'
+    },
+    {
+      id: 'expanded-engine-lineup',
+      title: 'More First-Class Engines',
+      date: 'Jul 24, 2026',
+      tag: 'Engines',
+      desc: '<p>CCC adds native discovery, transcript rendering, spawning, and lifecycle support for <strong>Grok, GitHub Copilot CLI, and VS Code Copilot Chat</strong>.</p><p>The model catalog now updates from installed engine capabilities, while onboarding and health badges make it clear which providers are available on this machine.</p>',
+      mockup: '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;font-size:11px;"><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Grok</div><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Copilot CLI</div><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Copilot Chat</div><div style="padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);"><span style="color:#3dd68c;">●</span> Auto model catalog</div></div>'
+    },
+    {
       id: 'fable-5',
       title: 'Claude Fable 5 Support',
       date: 'Jun 9, 2026',
@@ -51504,18 +51840,31 @@
   // Settings menu → POST /api/restart → wait for the same port to answer.
   const $restartServerBtn = document.getElementById('restartServerBtn');
   const $restartServerLabel = document.getElementById('restartServerLabel');
+  const $controlPlaneStatus = document.getElementById('controlPlaneStatus');
+  const $controlPlaneDrainBtn = document.getElementById('controlPlaneDrainBtn');
+  const $controlPlaneReconcileBtn = document.getElementById('controlPlaneReconcileBtn');
+  const $workerBadge = document.getElementById('cccWorkerBadge');
+  const $workerWord = document.getElementById('cccWorkerWord');
+  const $workerCount = document.getElementById('cccWorkerCount');
+  const $watchtowerServiceStatus = document.getElementById('watchtowerServiceStatus');
+  const $watchtowerServiceOpenBtn = document.getElementById('watchtowerServiceOpenBtn');
+  const $watchtowerServiceActionBtn = document.getElementById('watchtowerServiceActionBtn');
   let restartServerPort = '';
+  let controlPlaneDraining = false;
+  let controlPlaneOnline = false;
+  let watchtowerServiceRunning = false;
+  let watchtowerServiceUrl = '';
 
   function restartServerSetPort(port) {
     const clean = String(port || '').replace(/[^\d]/g, '');
     restartServerPort = clean;
     if ($restartServerLabel) {
-      $restartServerLabel.textContent = 'Restart server' + (clean ? ' (:' + clean + ')' : '');
+      $restartServerLabel.textContent = 'Restart dashboard' + (clean ? ' (:' + clean + ')' : '');
     }
     if ($restartServerBtn) {
       $restartServerBtn.title = clean
-        ? 'Restart the Command Center server on :' + clean
-        : 'Restart the Command Center server';
+        ? 'Restart the Command Center dashboard on :' + clean
+        : 'Restart the Command Center dashboard';
     }
   }
 
@@ -51541,13 +51890,187 @@
     } catch (_) { /* location.port fallback is good enough */ }
   }
 
+  function renderWorkerBadge(data) {
+    if (!$workerBadge) return;
+    $workerBadge.classList.remove(
+      'is-checking', 'is-offline', 'is-paused', 'is-update', 'is-uncertain'
+    );
+    let label = 'Worker';
+    let detail = 'Persistent execution worker online';
+    let attention = 0;
+    if (!data || !data.ok) {
+      $workerBadge.classList.add('is-offline');
+      label = 'Worker offline';
+      detail = 'Execution worker unavailable · open Maintenance';
+    } else {
+      const capabilities = (data.worker && data.worker.capabilities) || [];
+      if (!capabilities.includes('engine-execution-v1')) {
+        $workerBadge.classList.add('is-update');
+        label = 'Worker update';
+        detail = 'Execution worker update pending · open Maintenance';
+      } else {
+        const drain = data.drain || {};
+        const active = Number(data.active || 0);
+        const queued = Number(data.queued || 0);
+        const uncertain = Number(data.uncertain || 0);
+        attention = active + queued + uncertain;
+        if (uncertain) {
+          $workerBadge.classList.add('is-uncertain');
+          label = 'Worker check';
+        } else if (drain.enabled) {
+          $workerBadge.classList.add('is-paused');
+          label = 'Worker paused';
+        }
+        detail = [
+          'Execution worker online',
+          active + ' active',
+          queued + ' queued',
+          uncertain + ' uncertain',
+        ].join(' · ');
+      }
+    }
+    if ($workerWord) $workerWord.textContent = label;
+    if ($workerCount) {
+      $workerCount.textContent = String(attention);
+      $workerCount.hidden = attention === 0;
+    }
+    $workerBadge.title = detail;
+    $workerBadge.setAttribute(
+      'aria-label', detail + '; open Maintenance settings'
+    );
+  }
+
+  function renderControlPlaneStatus(data) {
+    renderWorkerBadge(data);
+    controlPlaneOnline = false;
+    if (!data || !data.ok) {
+      if ($controlPlaneStatus) {
+        $controlPlaneStatus.textContent =
+          'Worker unavailable; active compatibility work may block dashboard restart.';
+      }
+      if ($controlPlaneDrainBtn) {
+        $controlPlaneDrainBtn.disabled = false;
+        $controlPlaneDrainBtn.textContent = 'Start worker';
+      }
+      if ($controlPlaneReconcileBtn) {
+        $controlPlaneReconcileBtn.hidden = true;
+        $controlPlaneReconcileBtn.disabled = true;
+      }
+      return;
+    }
+    const capabilities = (data.worker && data.worker.capabilities) || [];
+    if (!capabilities.includes('engine-execution-v1')) {
+      if ($controlPlaneStatus) {
+        $controlPlaneStatus.textContent =
+          'Worker update pending; compatibility execution remains active.';
+      }
+      if ($controlPlaneDrainBtn) $controlPlaneDrainBtn.disabled = true;
+      if ($controlPlaneReconcileBtn) {
+        $controlPlaneReconcileBtn.hidden = true;
+        $controlPlaneReconcileBtn.disabled = true;
+      }
+      return;
+    }
+    controlPlaneOnline = true;
+    const drain = data.drain || {};
+    controlPlaneDraining = !!drain.enabled;
+    const active = Number(data.active || 0);
+    const queued = Number(data.queued || 0);
+    const uncertain = Number(data.uncertain || 0);
+    const parts = [
+      'Persistent worker online',
+      active + ' active',
+      queued + ' queued',
+    ];
+    if (uncertain) parts.push(uncertain + ' need reconciliation');
+    if (controlPlaneDraining) parts.push('dispatch paused');
+    if ($controlPlaneStatus) $controlPlaneStatus.textContent = parts.join(' · ');
+    if ($controlPlaneDrainBtn) {
+      $controlPlaneDrainBtn.disabled = false;
+      $controlPlaneDrainBtn.textContent =
+        controlPlaneDraining ? 'Resume dispatch' : 'Pause dispatch';
+    }
+    if ($controlPlaneReconcileBtn) {
+      $controlPlaneReconcileBtn.hidden = uncertain === 0;
+      $controlPlaneReconcileBtn.disabled = false;
+    }
+  }
+
+  async function refreshControlPlaneStatus() {
+    if (!$controlPlaneStatus && !$workerBadge) return;
+    try {
+      const response = await fetch('/api/control-plane/status', {
+        cache: 'no-store',
+      });
+      renderControlPlaneStatus(await response.json());
+    } catch (_) {
+      renderControlPlaneStatus(null);
+    }
+  }
+
+  function renderWatchtowerServiceStatus(data) {
+    const installed = !!(data && data.installed);
+    watchtowerServiceRunning = !!(data && data.running);
+    watchtowerServiceUrl = String((data && data.url) || '');
+    if ($watchtowerServiceStatus) {
+      if (!data || !data.ok) {
+        $watchtowerServiceStatus.textContent = 'WatchTower status unavailable.';
+      } else if (!installed) {
+        $watchtowerServiceStatus.textContent = 'WatchTower CLI is not installed.';
+      } else if (data.api_ok) {
+        $watchtowerServiceStatus.textContent =
+          'Online · daemon PID ' + data.pid + ' · API :' + data.port;
+      } else if (watchtowerServiceRunning) {
+        $watchtowerServiceStatus.textContent =
+          'Daemon running · API unavailable on :' + data.port;
+      } else if (data.pid_reused) {
+        $watchtowerServiceStatus.textContent =
+          'Stopped · stale PID belongs to another process.';
+      } else {
+        $watchtowerServiceStatus.textContent = 'Stopped.';
+      }
+    }
+    if ($watchtowerServiceOpenBtn) {
+      $watchtowerServiceOpenBtn.disabled = !(data && data.api_ok && watchtowerServiceUrl);
+    }
+    if ($watchtowerServiceActionBtn) {
+      $watchtowerServiceActionBtn.disabled = !installed;
+      $watchtowerServiceActionBtn.textContent =
+        watchtowerServiceRunning ? 'Restart' : 'Start';
+    }
+  }
+
+  async function refreshWatchtowerServiceStatus() {
+    if (!$watchtowerServiceStatus) return;
+    try {
+      const response = await fetch('/api/watchtower/service/status', {
+        cache: 'no-store',
+      });
+      renderWatchtowerServiceStatus(await response.json());
+    } catch (_) {
+      renderWatchtowerServiceStatus(null);
+    }
+  }
+
+  function openMaintenanceSettings() {
+    const modal = document.getElementById('settingsModal');
+    const settingsButton = document.getElementById('settingsBtn');
+    const maintenanceTab = document.getElementById('settingsRailTab-maintenance');
+    if (settingsButton && (!modal || !modal.classList.contains('open'))) {
+      settingsButton.click();
+    }
+    if (maintenanceTab) maintenanceTab.click();
+  }
+
   async function restartServerRun() {
     if (!$restartServerBtn) return;
     closeSettingsModal();
     $restartServerBtn.disabled = true;
     restartServerShowOverlay(
       'Restarting&hellip;',
-      'Waiting for the server' + (restartServerPort ? ' on :' + restartServerPort : '') + ' to bind again.'
+      'Agent work stays in the persistent worker while the dashboard'
+        + (restartServerPort ? ' on :' + restartServerPort : '')
+        + ' comes back.'
     );
     try { sessionStorage.setItem('ccc-restarting', '1'); } catch (_) {}
 
@@ -51588,8 +52111,128 @@
   }
 
   if ($restartServerBtn) {
-    if (!READER_ONLY_POPOUT) restartServerRefreshPort();
+    if (!READER_ONLY_POPOUT) {
+      restartServerRefreshPort();
+      refreshControlPlaneStatus();
+      refreshWatchtowerServiceStatus();
+    }
     $restartServerBtn.addEventListener('click', restartServerRun);
+  }
+  if ($workerBadge) {
+    $workerBadge.addEventListener('click', openMaintenanceSettings);
+  }
+  if ($controlPlaneDrainBtn) {
+    $controlPlaneDrainBtn.addEventListener('click', async () => {
+      $controlPlaneDrainBtn.disabled = true;
+      try {
+        const starting = !controlPlaneOnline;
+        const response = await fetch(
+          starting ? '/api/control-plane/start' : '/api/control-plane/drain',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: starting ? '{}' : JSON.stringify({
+              enabled: !controlPlaneDraining,
+              reason: controlPlaneDraining
+                ? 'operator resumed dispatch'
+                : 'operator paused dispatch',
+            }),
+          }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        renderControlPlaneStatus(data);
+        if (starting) showOpToast('Execution worker started.', 'success');
+      } catch (error) {
+        showOpToast(
+          'Worker control failed: ' + ((error && error.message) || error),
+          'error'
+        );
+        refreshControlPlaneStatus();
+      }
+    });
+  }
+  if ($controlPlaneReconcileBtn) {
+    $controlPlaneReconcileBtn.addEventListener('click', async () => {
+      $controlPlaneReconcileBtn.disabled = true;
+      try {
+        const response = await fetch('/api/control-plane/reconcile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        renderControlPlaneStatus(data);
+        showOpToast(
+          data.reconciled
+            ? 'Reclaimed ' + data.reconciled + ' live work item(s).'
+            : 'No additional live work evidence found.',
+          data.reconciled ? 'success' : 'info'
+        );
+      } catch (error) {
+        showOpToast(
+          'Reconciliation failed: ' + ((error && error.message) || error),
+          'error'
+        );
+        refreshControlPlaneStatus();
+      }
+    });
+  }
+  if ($watchtowerServiceOpenBtn) {
+    $watchtowerServiceOpenBtn.addEventListener('click', () => {
+      if (watchtowerServiceUrl) {
+        window.open(watchtowerServiceUrl, '_blank', 'noopener');
+      }
+    });
+  }
+  if ($watchtowerServiceActionBtn) {
+    $watchtowerServiceActionBtn.addEventListener('click', async () => {
+      const action = watchtowerServiceRunning ? 'restart' : 'start';
+      if (
+        action === 'restart'
+        && !window.confirm(
+          'Restart the WatchTower server? Queue dispatch pauses briefly; running agent workers are not stopped.'
+        )
+      ) {
+        return;
+      }
+      $watchtowerServiceActionBtn.disabled = true;
+      try {
+        const response = await fetch('/api/watchtower/service', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        renderWatchtowerServiceStatus(data);
+        showOpToast(
+          action === 'restart'
+            ? 'WatchTower server restarted.'
+            : 'WatchTower server started.',
+          'success'
+        );
+      } catch (error) {
+        showOpToast(
+          'WatchTower control failed: ' + ((error && error.message) || error),
+          'error'
+        );
+        refreshWatchtowerServiceStatus();
+      }
+    });
+  }
+  if (!READER_ONLY_POPOUT && ($workerBadge || $watchtowerServiceStatus)) {
+    setInterval(() => {
+      refreshControlPlaneStatus();
+      refreshWatchtowerServiceStatus();
+    }, 20000);
   }
 
   // ── Sidebar refresh split-button ──────────────────────────────
@@ -55762,7 +56405,13 @@
       // accepting this tab's model value verbatim — producing exactly the
       // "unknown codex model" error for a model picked from the Claude list.
       // Always send the engine the UI actually shows so the two can't diverge.
-      const spawnBody = { prompt, name: subject, cwd: launchCwd, engine };
+      const spawnBody = {
+        prompt,
+        name: subject,
+        cwd: launchCwd,
+        engine,
+        idempotency_key: durableActionId('spawn'),
+      };
       if (repoPath) spawnBody.repo_path = repoPath;
       if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none' && $convInputModelSelect.value) {
         const pickedModel = $convInputModelSelect.value;

@@ -28,6 +28,23 @@ class TestOpenAskPreference(unittest.TestCase):
 
         self.assertIn("const _openAskHtml = getOpenAskPref() === 'hide' ? ''", app_js)
 
+    def test_unresolved_approvals_are_promoted_into_open_asks(self):
+        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function isApprovalAskRow(c)", app_js)
+        self.assertIn("return !!(c && c.needs_approval);", app_js)
+        self.assertIn("function _rowHasApprovalAsk(c)", app_js)
+        self.assertIn("|| isRecentOpenAskRow(c) || _rowHasApprovalAsk(c)", app_js)
+        self.assertIn("const _isApprovalAsk = (c) => isApprovalAskRow(c);", app_js)
+        self.assertIn("if (_isApprovalAsk(_c)", app_js)
+        self.assertIn("if (isApprovalAskRow(c)) {", app_js)
+        approval_branch = app_js.index("} else if (c.needs_approval) {")
+        stale_branch = app_js.index("} else if (c.stale_tool_call) {", approval_branch)
+        self.assertLess(approval_branch, stale_branch)
+        self.assertIn("kind: 'openask', label: 'Open asks'", app_js)
+        self.assertIn("A session waiting for your approval", app_js)
+        self.assertIn("await refreshLiveSessionsActivity();", app_js)
+
     def test_original_ask_panel_can_be_dismissed_on_mobile(self):
         app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
         app_css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")

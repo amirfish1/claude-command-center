@@ -1,1 +1,0 @@
-- Compact WatchTower activity-log metadata so message details remain readable.

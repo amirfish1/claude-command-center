@@ -1,1 +1,0 @@
-- Clarified that messages queued behind a busy agent turn will send next.

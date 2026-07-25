@@ -399,17 +399,24 @@
           <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
         </div>
-        <button type="button" class="sh-wt-badge" id="cccWtBadge" data-tour="watchtower" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
-          <span class="wt-beacon" aria-hidden="true">
-            <svg viewBox="0 0 32 32" width="14" height="14">
-              <circle class="wt-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="1.5"/>
-              <g class="wt-sweep"><path d="M16 16 L16 2.2 A13.8 13.8 0 0 1 27.1 9.1 Z"/></g>
-              <circle class="wt-core" cx="16" cy="16" r="2.8"/>
-            </svg>
-          </span>
-          <span class="wt-word">WatchTower</span>
-          <span class="wt-count" id="cccWtCount" hidden>0</span>
-        </button>
+        <div class="sh-service-badges">
+          <button type="button" class="sh-wt-badge" id="cccWtBadge" data-tour="watchtower" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
+            <span class="wt-beacon" aria-hidden="true">
+              <svg viewBox="0 0 32 32" width="14" height="14">
+                <circle class="wt-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="1.5"/>
+                <g class="wt-sweep"><path d="M16 16 L16 2.2 A13.8 13.8 0 0 1 27.1 9.1 Z"/></g>
+                <circle class="wt-core" cx="16" cy="16" r="2.8"/>
+              </svg>
+            </span>
+            <span class="wt-word">WatchTower</span>
+            <span class="wt-count" id="cccWtCount" hidden>0</span>
+          </button>
+          <button type="button" class="sh-worker-badge is-checking" id="cccWorkerBadge" title="Checking execution worker…" aria-label="Execution worker status; open Maintenance settings">
+            <span class="worker-status-dot" aria-hidden="true"></span>
+            <span class="worker-word" id="cccWorkerWord">Worker</span>
+            <span class="worker-count" id="cccWorkerCount" hidden>0</span>
+          </button>
+        </div>
         <div class="wt-pop" id="cccWtPop" role="dialog" aria-label="WatchTower queue health" hidden>
           <div class="wt-pop-head">
             <span class="wt-pop-title">WatchTower</span>
@@ -1807,11 +1814,33 @@
 
             <div class="settings-row" data-keywords="restart server 8090 reboot reload">
               <div class="settings-row-main">
-                <div class="settings-row-label">Restart server</div>
-                <div class="settings-row-desc">Restart the CCC server. Any open connections briefly drop.</div>
+                <div class="settings-row-label">Restart dashboard</div>
+                <div class="settings-row-desc">Restart the web dashboard while the execution worker keeps agent turns alive.</div>
               </div>
               <div class="settings-row-control">
-                <button type="button" class="settings-action-btn danger" id="restartServerBtn"><span id="restartServerLabel">Restart server</span></button>
+                <button type="button" class="settings-action-btn danger" id="restartServerBtn"><span id="restartServerLabel">Restart dashboard</span></button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="worker execution pause drain queue control plane">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Execution worker</div>
+                <div class="settings-row-desc" id="controlPlaneStatus">Checking persistent worker…</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="controlPlaneReconcileBtn" hidden>Reconcile</button>
+                <button type="button" class="settings-action-btn" id="controlPlaneDrainBtn" disabled>Pause dispatch</button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="watchtower server daemon api restart start service">
+              <div class="settings-row-main">
+                <div class="settings-row-label">WatchTower server</div>
+                <div class="settings-row-desc" id="watchtowerServiceStatus">Checking WatchTower daemon…</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="watchtowerServiceOpenBtn" disabled>Open</button>
+                <button type="button" class="settings-action-btn" id="watchtowerServiceActionBtn" disabled>Start</button>
               </div>
             </div>
           </section>
@@ -2180,6 +2209,39 @@
     <div class="modal-footer">
       <button class="modal-cancel" id="coordModalCancel">Cancel</button>
       <button class="modal-start" id="coordModalStart" type="button">Start coordination</button>
+    </div>
+  </div>
+</div>
+<!-- Shared engine bridge recovery. Opened by the Codex app-server / Kimi ACP
+     process pill in the conversation breadcrumb. -->
+<div class="bridge-recovery-backdrop" id="bridgeRecoveryBackdrop">
+  <div class="bridge-recovery-modal" role="dialog" aria-modal="true"
+       aria-labelledby="bridgeRecoveryTitle">
+    <div class="bridge-recovery-heading">
+      <div>
+        <h3 id="bridgeRecoveryTitle">Recover engine bridge</h3>
+        <div class="bridge-recovery-subtitle" id="bridgeRecoverySubtitle"></div>
+      </div>
+      <button type="button" class="bridge-recovery-close" id="bridgeRecoveryClose"
+              title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="bridge-recovery-status" id="bridgeRecoveryStatus" role="status">
+      Checking bridge safety…
+    </div>
+    <fieldset class="bridge-recovery-queue" id="bridgeRecoveryQueue">
+      <legend>Queued message to retry</legend>
+      <div class="bridge-recovery-empty">Loading queued messages…</div>
+    </fieldset>
+    <div class="bridge-recovery-note">
+      CCC checks for other active sessions before restarting this shared
+      process. Other queued messages remain untouched.
+    </div>
+    <div class="modal-error" id="bridgeRecoveryError"></div>
+    <div class="modal-footer">
+      <button class="modal-cancel" id="bridgeRecoveryCancel" type="button">Cancel</button>
+      <button class="modal-start" id="bridgeRecoveryStart" type="button" disabled>
+        Restart bridge
+      </button>
     </div>
   </div>
 </div>

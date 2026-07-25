@@ -13,7 +13,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.10.0"
+__version__ = "5.11.1"
 
 import ast
 import base64
@@ -65,6 +65,7 @@ import model_advisor
 # CCC federation (stdlib-only sibling module): stable node identity, paired
 # peers, and the transport for calling a peer CCC on its own loopback.
 import federation
+from control_plane import ControlPlaneClient
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
@@ -89,6 +90,139 @@ COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
 _PYTHON_STACK_DUMP_FILE = None
+_CONTROL_PLANE_CLIENT = ControlPlaneClient(timeout=1.5)
+_CONTROL_PLANE_ENGINE_CLIENT = ControlPlaneClient(timeout=45.0)
+_CONTROL_PLANE_REQUEST_CONTEXT = threading.local()
+_CONTROL_PLANE_START_LOCK = threading.Lock()
+
+
+def _set_control_plane_action_id(value):
+    _CONTROL_PLANE_REQUEST_CONTEXT.idempotency_key = str(value or "").strip()
+
+
+def _take_control_plane_action_id():
+    value = str(
+        getattr(_CONTROL_PLANE_REQUEST_CONTEXT, "idempotency_key", "") or ""
+    ).strip()
+    _CONTROL_PLANE_REQUEST_CONTEXT.idempotency_key = ""
+    return value or None
+
+
+def _control_plane_request(method, params=None, *, engine_timeout=False):
+    """Call the persistent worker without making dashboard availability depend on it."""
+    client = _CONTROL_PLANE_ENGINE_CLIENT if engine_timeout else _CONTROL_PLANE_CLIENT
+    response = client.request(method, params)
+    if not isinstance(response, dict):
+        return {"ok": False, "available": False, "error": "invalid worker response"}
+    return response
+
+
+def _control_plane_routes_engines():
+    return (
+        os.environ.get("CCC_WORKER_PROCESS") != "1"
+        and os.environ.get("CCC_CONTROL_PLANE_ENGINES", "1").lower()
+        not in ("0", "false", "no")
+    )
+
+
+def _control_plane_engine_call(
+    engine, operation, args, *, mutate=True, idempotency_key=None,
+    parent_work_id=None,
+):
+    """Return worker result, or None only when no worker accepted the request."""
+    if not _control_plane_routes_engines():
+        return None
+    method = "engine.execute" if mutate else "engine.query"
+    payload = {
+        "engine": engine,
+        "operation": operation,
+        "args": args if isinstance(args, dict) else {},
+    }
+    if mutate:
+        payload["idempotency_key"] = str(idempotency_key or uuid.uuid4())
+        if parent_work_id:
+            payload["parent_work_id"] = str(parent_work_id)
+    # Engine reads may lazily initialize a native transport too, so they need
+    # the same timeout budget as writes. The mutate flag controls durability,
+    # not how quickly an engine can answer.
+    response = _control_plane_request(method, payload, engine_timeout=True)
+    if response.get("code") == "method_not_found":
+        # Version skew during a rolling dashboard update: an older worker has
+        # definitively rejected (and therefore did not execute) the request.
+        # Falling back is safe until that idle worker is upgraded.
+        return None
+    # A connect failure proves the worker did not receive the request, so the
+    # mature in-process path remains a compatibility fallback. A timeout after
+    # send is ambiguous and MUST NOT fall back or it could duplicate effects.
+    if not response.get("available") and not response.get("ambiguous"):
+        return None
+    return response
+
+
+def _dashboard_owned_active_executions():
+    """Describe live execution still owned by this restartable process."""
+    active = []
+    with _ACP_LOCK:
+        for sid, state in (_ACP_SESSION_STATE.get("kimi") or {}).items():
+            if str((state or {}).get("status") or "").lower() == "active":
+                active.append({"engine": "kimi", "session_id": sid})
+    for entry in list(_spawned_sessions):
+        try:
+            running = _poll_spawn_entry(entry) is None
+        except Exception:
+            running = False
+        if not running:
+            continue
+        active.append({
+            "engine": str(entry.get("engine") or "claude"),
+            "session_id": (
+                entry.get("session_id")
+                or entry.get("resumed_sid")
+                or ""
+            ),
+            "pid": entry.get("pid"),
+        })
+    return active
+
+
+def _start_control_plane_worker():
+    """Start the persistent worker when Maintenance finds it unavailable."""
+    with _CONTROL_PLANE_START_LOCK:
+        current = _control_plane_request("health")
+        if current.get("ok"):
+            return current
+        logs_dir = COMMAND_CENTER_STATE_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with (
+                (logs_dir / "worker.out.log").open("a", encoding="utf-8") as out,
+                (logs_dir / "worker.err.log").open("a", encoding="utf-8") as err,
+            ):
+                process = subprocess.Popen(
+                    [sys.executable, str(CCC_ROOT / "ccc_worker.py")],
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=err,
+                    start_new_session=True,
+                    cwd=str(CCC_ROOT),
+                )
+        except OSError as exc:
+            return {"ok": False, "available": False, "error": str(exc)}
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            health = _control_plane_request("health")
+            if health.get("ok"):
+                health["started"] = True
+                health["started_pid"] = process.pid
+                return health
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
+        return {
+            "ok": False,
+            "available": False,
+            "error": "persistent worker did not become ready",
+        }
 
 
 def _install_python_stack_dump_handler(log_path=None):
@@ -326,6 +460,204 @@ def _wt_read_config():
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+_WT_SERVICE_ACTION_LOCK = threading.Lock()
+
+
+def _watchtower_daemon_pid_path():
+    return Path(
+        os.environ.get("WATCHTOWER_DAEMON_PID")
+        or (_WT_HOME / "daemon.pid")
+    )
+
+
+def _watchtower_process_argv(pid):
+    """Best-effort argv for the daemon, without trusting the pidfile alone."""
+    try:
+        raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+        if raw:
+            return [
+                part.decode("utf-8", "replace")
+                for part in raw.split(b"\0") if part
+            ]
+    except (OSError, ValueError):
+        pass
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True, text=True, timeout=2,
+        )
+        command = (proc.stdout or "").strip()
+        return shlex.split(command) if proc.returncode == 0 and command else []
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+
+
+def _watchtower_daemon_command(argv):
+    joined = " ".join(str(part) for part in (argv or ())).lower()
+    return (
+        ("watchtower.cli" in joined or any(
+            Path(str(part)).name == "wt" for part in (argv or ())
+        ))
+        and "start" in (argv or ())
+    )
+
+
+def _watchtower_endpoint_from_argv(argv):
+    host = os.environ.get("WATCHTOWER_HOST") or "127.0.0.1"
+    try:
+        port = int(os.environ.get("WATCHTOWER_PORT") or 8787)
+    except ValueError:
+        port = 8787
+    argv = list(argv or ())
+    for index, value in enumerate(argv):
+        if value == "--host" and index + 1 < len(argv):
+            host = str(argv[index + 1])
+        elif value == "--port" and index + 1 < len(argv):
+            try:
+                port = int(argv[index + 1])
+            except (TypeError, ValueError):
+                pass
+    if not 1 <= port <= 65535:
+        port = 8787
+    probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
+    if ":" in probe_host and not probe_host.startswith("["):
+        probe_host = f"[{probe_host}]"
+    return host, port, f"http://{probe_host}:{port}"
+
+
+def _watchtower_api_up(base_url):
+    try:
+        request = urllib.request.Request(
+            base_url.rstrip("/") + "/api/status",
+            headers={"User-Agent": "CCC-WatchTower-health"},
+        )
+        with urllib.request.urlopen(request, timeout=0.8) as response:
+            payload = json.load(response)
+        return response.status == 200 and isinstance(payload, dict)
+    except (OSError, ValueError, urllib.error.URLError):
+        return False
+
+
+def _watchtower_service_status(*, probe_api=True):
+    pid = None
+    pid_alive = False
+    try:
+        pid = int(_watchtower_daemon_pid_path().read_text().strip())
+        os.kill(pid, 0)
+        pid_alive = True
+    except (OSError, ValueError, ProcessLookupError):
+        pid = None
+    argv = _watchtower_process_argv(pid) if pid_alive else []
+    command_verified = bool(pid_alive and _watchtower_daemon_command(argv))
+    # Some hardened hosts hide another process's argv. Report the live pid as
+    # running, but refuse restart unless its identity was actually verified.
+    running = bool(pid_alive and (command_verified or not argv))
+    host, port, base_url = _watchtower_endpoint_from_argv(argv)
+    api_ok = bool(running and probe_api and _watchtower_api_up(base_url))
+    return {
+        "ok": True,
+        "installed": bool(shutil.which("wt")),
+        "running": running,
+        "pid": pid if running else None,
+        "command_verified": command_verified,
+        "pid_reused": bool(pid_alive and argv and not command_verified),
+        "api_ok": api_ok,
+        "state": "online" if api_ok else ("degraded" if running else "stopped"),
+        "host": host,
+        "port": port,
+        "url": base_url,
+    }
+
+
+def _watchtower_restart_options(argv):
+    """Preserve safe daemon flags for manually supervised Linux installs."""
+    argv = list(argv or ())
+    options = []
+    value_flags = {"--interval", "--stuck-minutes", "--engine", "--host", "--port"}
+    index = 0
+    while index < len(argv):
+        value = argv[index]
+        if value == "--auto-spawn":
+            options.append(value)
+        elif value in value_flags and index + 1 < len(argv):
+            options.extend((value, str(argv[index + 1])))
+            index += 1
+        index += 1
+    return options
+
+
+def _watchtower_service_action(action):
+    """Start or restart the local WatchTower daemon through its public CLI."""
+    action = str(action or "").strip().lower()
+    if action not in ("start", "restart"):
+        return {"ok": False, "error": "action must be start or restart"}
+    wt_cli = shutil.which("wt")
+    if not wt_cli:
+        return {"ok": False, "error": "WatchTower CLI is not installed"}
+    with _WT_SERVICE_ACTION_LOCK:
+        before = _watchtower_service_status(probe_api=False)
+        old_argv = (
+            _watchtower_process_argv(before.get("pid"))
+            if before.get("pid") else []
+        )
+        if action == "restart" and before.get("running"):
+            if not before.get("command_verified"):
+                return {
+                    "ok": False,
+                    "error": "WatchTower process identity could not be verified",
+                }
+            try:
+                stopped = subprocess.run(
+                    [wt_cli, "stop"],
+                    capture_output=True, text=True, timeout=20,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return {"ok": False, "error": f"WatchTower stop failed: {exc}"}
+            if stopped.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": (
+                        (stopped.stderr or stopped.stdout or "").strip()
+                        or f"WatchTower stop exited {stopped.returncode}"
+                    ),
+                }
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if not _watchtower_service_status(probe_api=False).get("running"):
+                    break
+                time.sleep(0.1)
+        command = [wt_cli, "start"]
+        if platform.system() != "Darwin":
+            command.extend(_watchtower_restart_options(old_argv))
+        try:
+            started = subprocess.run(
+                command,
+                capture_output=True, text=True, timeout=25,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"ok": False, "error": f"WatchTower start failed: {exc}"}
+        if started.returncode != 0:
+            return {
+                "ok": False,
+                "error": (
+                    (started.stderr or started.stdout or "").strip()
+                    or f"WatchTower start exited {started.returncode}"
+                ),
+            }
+        deadline = time.time() + 8
+        current = _watchtower_service_status(probe_api=False)
+        while time.time() < deadline and not current.get("running"):
+            time.sleep(0.1)
+            current = _watchtower_service_status(probe_api=False)
+        current = _watchtower_service_status()
+        return {
+            **current,
+            "ok": bool(current.get("running")),
+            "action": action,
+            "previous_pid": before.get("pid"),
+        }
 
 
 _QUEUE_CONFIG_NAME_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
@@ -21520,6 +21852,34 @@ def _codex_app_server_thread_approval_message(state):
     return "Codex is waiting for approval"
 
 
+def _codex_pending_approval_hint(session_id):
+    """The pending approval prompt's text when this thread's live turn is
+    blocked on a Codex approval, else None.
+
+    A turn stuck on `waitingOnApproval` holds the writer-gate open, so every
+    queued inject sits behind it until someone answers the prompt (a
+    goal-continuation turn once hung an hour on a `wt claim` escalation while
+    wake messages piled up as generic "queued"). Never raises.
+    """
+    if not session_id:
+        return None
+    try:
+        state = _codex_app_server_thread_state(session_id)
+        if not _codex_app_server_thread_needs_approval(state):
+            return None
+        pending = _codex_app_server_pending_approval_item(state)
+        message = ""
+        if isinstance(pending, dict):
+            message = str(
+                pending.get("approval_message") or pending.get("command") or ""
+            ).strip()
+        if not message:
+            message = _codex_app_server_thread_approval_message(state)
+        return _codex_app_server_trim_text(message, 240)
+    except Exception:
+        return None
+
+
 def _codex_app_server_record_thread(thread_id, thread):
     if not thread_id or not isinstance(thread, dict):
         return
@@ -22315,6 +22675,11 @@ def _codex_app_server_handle_server_request(request_id, method, params):
 
 
 def _codex_app_server_activity_fields(session_id):
+    routed = _control_plane_engine_call(
+        "codex", "activity", {"session_id": session_id}, mutate=False,
+    )
+    if routed is not None and isinstance(routed.get("activity"), dict):
+        return routed["activity"]
     fields = {
         "sidecar_status": None,
         "sidecar_has_writes": False,
@@ -22732,6 +23097,11 @@ def _codex_app_server_active_item_public(state):
 
 def _codex_app_server_thread_public_status(session_id):
     """Small status payload for UI polling; no transcript/file reads."""
+    routed = _control_plane_engine_call(
+        "codex", "status", {"session_id": session_id}, mutate=False,
+    )
+    if routed is not None:
+        return routed.get("status") or {}
     state = _codex_app_server_thread_state(session_id)
     if not state:
         return {
@@ -22863,6 +23233,40 @@ def _codex_app_server_request(method, params=None, timeout=20):
     a loaded thread; `codex exec resume` can only start a one-shot process.
     """
     params = params or {}
+    mutating = method in {
+        "turn/start",
+        "turn/steer",
+        "turn/interrupt",
+        "thread/start",
+        "thread/name/set",
+        "thread/settings/update",
+        "thread/compact/start",
+        "thread/goal/set",
+        "thread/goal/clear",
+        "item/tool/call/approve",
+        "item/file/change/approve",
+        "item/command/execution/approve",
+    }
+    routed = _control_plane_engine_call(
+        "codex", "rpc", {
+            "method": method,
+            "params": params,
+            "timeout": timeout,
+        },
+        mutate=mutating,
+        idempotency_key=(
+            _take_control_plane_action_id() if mutating else None
+        ),
+    )
+    if routed is not None:
+        response = routed.get("response")
+        if isinstance(response, dict):
+            return response
+        return {
+            "ok": False,
+            "error": routed.get("error") or "Codex worker returned no response",
+            "fallback": "exec",
+        }
     thread_id = _codex_app_server_request_thread_id(method, params)
     if method == "turn/start" and thread_id:
         with _CODEX_APP_SERVER_LOCK:
@@ -23360,6 +23764,15 @@ def _codex_app_server_thread_is_active(session_id, *, start_if_needed=False):
     pending-input watcher to avoid popping and requeueing Codex messages while a
     volatile app-server turn is still in progress.
     """
+    routed = _control_plane_engine_call(
+        "codex", "active", {
+            "session_id": session_id,
+            "start_if_needed": bool(start_if_needed),
+        },
+        mutate=False,
+    )
+    if routed is not None:
+        return bool(routed.get("active"))
     if not session_id:
         return False
     if not _codex_app_server_is_live():
@@ -23898,6 +24311,13 @@ def _codex_writer_gate_response(session_id, snap, *, stage="writer-gate",
         reason = "Another CCC send is already running a turn on this thread - queued"
     else:
         reason = "An active Codex turn is writing this thread - queued until it finishes"
+    approval_hint = _codex_pending_approval_hint(session_id)
+    if approval_hint:
+        reason += (
+            f" — the turn is blocked on a Codex approval: {approval_hint}. "
+            "Answer it (approve button or POST /api/codex/approval) to "
+            "release the queue"
+        )
     _resume_ledger_append(
         "codex_wake_queued", sid=session_id, stage=stage, reason=reason,
     )
@@ -23923,6 +24343,8 @@ def _codex_writer_gate_response(session_id, snap, *, stage="writer-gate",
         "writer": writer,
         "desktop_attached": bool(snap.get("desktop_attached")),
     }
+    if approval_hint:
+        resp["pending_approval"] = approval_hint
     if extra:
         resp.update(extra)
     return resp
@@ -24027,6 +24449,14 @@ def _codex_app_server_approval_result_payload(method, decision, pending):
 
 
 def _codex_app_server_resolve_approval(session_id, decision):
+    routed = _control_plane_engine_call(
+        "codex", "approval", {
+            "session_id": session_id,
+            "decision": decision,
+        },
+    )
+    if routed is not None:
+        return routed
     sid = str(session_id or "").strip()
     if not sid:
         return {"ok": False, "via": "codex-approval", "error": "missing session_id"}
@@ -28261,6 +28691,12 @@ _ACP_PENDING = {}        # harness -> {req_id: {"event","response","method","sid
 _ACP_SESSION_STATE = {}  # harness -> {sid: session state dict}
 _ACP_STATE_LOADED = set()
 _ACP_ENSURE_ERROR = {}   # harness -> last ensure failure reason (diagnostics)
+_ACP_RECOVERY_LOCKS = {}
+# A recovered Kimi session can end with a durable ``step.begin`` but no
+# matching boundary when its old ACP process dies.  Briefly suppress that
+# stale wire-only busy signal after an operator-approved bridge restart; the
+# fresh ACP state becomes authoritative as soon as the retried prompt starts.
+_KIMI_WIRE_BUSY_SUPPRESS_UNTIL = {}
 
 
 def _acp_harness_enabled(harness):
@@ -29201,9 +29637,23 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
     }
 
 
-def _acp_prompt(harness, sid, text, mode="send", from_queue=False):
+def _acp_prompt(
+    harness, sid, text, mode="send", from_queue=False, idempotency_key=None,
+):
     """Async session/prompt: ACK returns immediately; the turn streams via
     session/update notifications and finishes in _acp_finalize_turn."""
+    if harness == "kimi":
+        routed = _control_plane_engine_call(
+            "kimi", "prompt", {
+                "session_id": sid,
+                "text": text,
+                "mode": mode,
+                "from_queue": bool(from_queue),
+            },
+            idempotency_key=idempotency_key,
+        )
+        if routed is not None:
+            return routed
     if not text:
         return {"ok": False, "error": "empty prompt"}
     text = _strip_lone_surrogates(str(text))
@@ -29268,6 +29718,16 @@ def _acp_ask_and_wait(harness, sid, text, timeout_ms=30000):
     """Synchronous inject+wait for an ACP harness session (the /api/ask
     contract): drive session/prompt, block for the turn-end response, and
     return the assistant text the turn produced."""
+    if harness == "kimi":
+        routed = _control_plane_engine_call(
+            "kimi", "ask", {
+                "session_id": sid,
+                "text": text,
+                "timeout_ms": timeout_ms,
+            },
+        )
+        if routed is not None:
+            return routed
     source = f"{harness}-acp"
     started = time.monotonic()
     res = _acp_prompt(harness, sid, text)
@@ -29312,6 +29772,12 @@ def _acp_ask_and_wait(harness, sid, text, timeout_ms=30000):
 
 
 def _acp_cancel(harness, sid):
+    if harness == "kimi":
+        routed = _control_plane_engine_call(
+            "kimi", "cancel", {"session_id": sid},
+        )
+        if routed is not None:
+            return routed
     if _acp_ensure(harness) is None:
         return {"ok": False, "error": _acp_conn_error(harness)}
     # ACP session/cancel is a notification (no id, no response).
@@ -29389,6 +29855,12 @@ def _acp_maybe_attach_on_view(harness, sid):
     """
     if not _acp_harness_enabled(harness):
         return None
+    if harness == "kimi":
+        routed = _control_plane_engine_call(
+            "kimi", "attach", {"session_id": sid}, mutate=False,
+        )
+        if routed is not None:
+            return routed
     with _ACP_LOCK:
         state = _acp_session(harness, sid)
         conn = _ACP_CONNS.get(harness)
@@ -29428,6 +29900,16 @@ def _acp_list(harness, cwd=None):
 
 
 def _acp_set_config(harness, sid, config_id, value):
+    if harness == "kimi":
+        routed = _control_plane_engine_call(
+            "kimi", "config", {
+                "session_id": sid,
+                "config_id": config_id,
+                "value": value,
+            },
+        )
+        if routed is not None:
+            return routed
     attach_err = _acp_ensure_session_loaded(harness, sid)
     if attach_err is not None:
         return attach_err
@@ -29481,6 +29963,16 @@ def _acp_ensure_session_loaded(harness, sid):
 
 def _acp_resolve_approval(harness, sid, request_id, option_id=None):
     """Answer a pending session/request_permission. option_id None = cancel."""
+    if harness == "kimi":
+        routed = _control_plane_engine_call(
+            "kimi", "approval", {
+                "session_id": sid,
+                "request_id": request_id,
+                "option_id": option_id,
+            },
+        )
+        if routed is not None:
+            return routed
     with _ACP_LOCK:
         state = _acp_session(harness, sid)
         pending = (state or {}).get("pending_permissions") or {}
@@ -29499,6 +29991,12 @@ def _acp_resolve_approval(harness, sid, request_id, option_id=None):
 
 
 def _acp_session_snapshot(harness, sid):
+    if harness == "kimi":
+        routed = _control_plane_engine_call(
+            "kimi", "snapshot", {"session_id": sid}, mutate=False,
+        )
+        if routed is not None:
+            return routed.get("snapshot")
     with _ACP_LOCK:
         state = _acp_session(harness, sid)
         if state is None:
@@ -29593,6 +30091,8 @@ def _kimi_wire_turn_active(sid):
     client can own the same session, so the wire is the authoritative pre-send
     guard for those external turns.
     """
+    if time.time() < float(_KIMI_WIRE_BUSY_SUPPRESS_UNTIL.get(sid, 0) or 0):
+        return False
     path = _acp_wire_path("kimi", sid)
     if path is None:
         return False
@@ -33165,6 +33665,17 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
         # show "Queued: <reason>" inline instead of a bare "Queued".
         payload["queued_reason"] = reason
         payload["error"] = reason
+    approval_hint = _codex_pending_approval_hint(session_id)
+    if approval_hint:
+        payload["pending_approval"] = approval_hint
+        if not reason or approval_hint not in reason:
+            blocked = (
+                f"blocked on a Codex approval: {approval_hint}. Answer it "
+                "(approve button or POST /api/codex/approval) to release "
+                "the queue"
+            )
+            payload["queued_reason"] = f"{reason} — {blocked}" if reason else blocked
+            payload["error"] = payload["queued_reason"]
     if pid is not None:
         payload["pid"] = pid
     return payload
@@ -33417,8 +33928,21 @@ def build_codex_wake_status(session_id):
     }
 
 
-def resume_session_codex(session_id, text, *, steer=False, _from_queue=False):
+def resume_session_codex(
+    session_id, text, *, steer=False, _from_queue=False, idempotency_key=None,
+):
     """Resume a dormant Codex thread with a new prompt via `codex exec resume`."""
+    routed = _control_plane_engine_call(
+        "codex", "resume", {
+            "session_id": session_id,
+            "text": text,
+            "steer": bool(steer),
+            "from_queue": bool(_from_queue),
+        },
+        idempotency_key=idempotency_key,
+    )
+    if routed is not None:
+        return routed
     text = _strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
@@ -44900,6 +45424,20 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     + branch are returned in the response under
       `worktree_path` / `worktree_branch` so the UI can show them.
     """
+    routed = _control_plane_engine_call(
+        "claude", "spawn", {
+            "prompt": prompt,
+            "name": name,
+            "cwd": cwd,
+            "repo_path": repo_path,
+            "worktree": bool(worktree),
+            "model": model,
+            "parent_session_id": parent_session_id,
+        },
+        idempotency_key=_take_control_plane_action_id(),
+    )
+    if routed is not None:
+        return routed
     if os.environ.get("CCC_SSH_HOST"):
         try:
             import ssh_multiplexer
@@ -45079,6 +45617,21 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
       {ok: True,  pid, name, log}                       — success
       {ok: False, error}                                — resolver failed
     """
+    routed = _control_plane_engine_call(
+        "codex", "spawn", {
+            "prompt": prompt,
+            "name": name,
+            "cwd": cwd,
+            "repo_path": repo_path,
+            "worktree": bool(worktree),
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "parent_session_id": parent_session_id,
+        },
+        idempotency_key=_take_control_plane_action_id(),
+    )
+    if routed is not None:
+        return routed
     prompt = _strip_ccc_session_state_instruction(prompt)
     image_paths = _extract_pasted_image_paths(prompt)
     ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
@@ -45322,7 +45875,10 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_kimi(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, effort=None):
+def spawn_session_kimi(
+    prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
+    parent_session_id=None, effort=None,
+):
     """Spawn a Kimi session via the ACP harness (session/new + first prompt).
 
     Unlike the CLI-spawning engines there is no per-session process or log
@@ -45331,6 +45887,21 @@ def spawn_session_kimi(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
     sessionId up front; pid stays None (nothing to reattach after a CCC
     restart — the session is rediscovered from the ACP state file instead).
     """
+    routed = _control_plane_engine_call(
+        "kimi", "spawn", {
+            "prompt": prompt,
+            "name": name,
+            "cwd": cwd,
+            "repo_path": repo_path,
+            "worktree": bool(worktree),
+            "model": model,
+            "parent_session_id": parent_session_id,
+            "effort": effort,
+        },
+        idempotency_key=_take_control_plane_action_id(),
+    )
+    if routed is not None:
+        return routed
     prompt = _strip_ccc_session_state_instruction(prompt)
     resolved = _resolve_kimi_bin()
     if not resolved["available"]:
@@ -46396,12 +46967,22 @@ def _start_headless_staleness_watcher() -> None:
     ).start()
 
 
-def resume_session_headless(session_id, text, cwd=None):
+def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     """Resume a dormant session headlessly (`claude --resume`) and send text.
 
     If we already resumed this session and the process is still alive, reuse it.
     Optional `cwd` parameter allows bypassing session lookup (useful in remote envs).
     """
+    routed = _control_plane_engine_call(
+        "claude", "resume", {
+            "session_id": session_id,
+            "text": text,
+            "cwd": cwd,
+        },
+        idempotency_key=idempotency_key,
+    )
+    if routed is not None:
+        return routed
     text = _strip_ccc_session_state_instruction(text)
     if not text:
         return {"ok": False, "error": "missing text"}
@@ -47014,13 +47595,20 @@ def _pid_is_engine_process(pid, engine):
     return False
 
 
-def _reattach_spawned_orphans():
+def _reattach_spawned_orphans(skip_engines=None, only_engines=None):
     """Boot-time sweep that re-populates `_spawned_sessions` from the on-disk
     registry. Verifies every entry's PID is alive AND is still a process of
     the recorded engine (PIDs can be reused), drops dead/reused ones, and rewrites the
     registry. Never kills anything — just makes live orphans visible to the
     dashboard again."""
     raw_entries = _load_spawn_registry()
+    skip_engines = {
+        str(engine).strip().lower() for engine in (skip_engines or ())
+    }
+    only_engines = (
+        {str(engine).strip().lower() for engine in only_engines}
+        if only_engines is not None else None
+    )
     if not raw_entries:
         # Still touch the file so a stale corrupt blob is replaced with a
         # known-good empty list on first boot after upgrade.
@@ -47032,7 +47620,22 @@ def _reattach_spawned_orphans():
     dropped = 0
     survivors = []
     for entry in raw_entries:
+        engine = str(entry.get("engine") or "claude").lower()
+        if engine in skip_engines or (
+            only_engines is not None and engine not in only_engines
+        ):
+            # The persistent worker owns this entry's protocol connection,
+            # subprocess handle, and FIFO. Preserve the registry record for
+            # dashboard visibility without opening a competing writer.
+            survivors.append(dict(entry))
+            continue
         pid = entry.get("pid")
+        if pid is not None and any(
+            str(current.get("pid") or "") == str(pid)
+            for current in _spawned_sessions
+        ):
+            survivors.append(dict(entry))
+            continue
         if not isinstance(pid, int):
             dropped += 1
             continue
@@ -47148,6 +47751,65 @@ def list_spawned_sessions():
     forever (the in-memory list keeps them so the UI can still show 'finished'
     state, but persistence only needs the live ones)."""
     result = []
+    worker_owned_registry = []
+    if _control_plane_routes_engines():
+        active_work_response = _control_plane_request("work.list", {
+            "states": ["dispatching", "running"],
+            "limit": 2000,
+        })
+        active_work = (
+            active_work_response.get("work")
+            if isinstance(active_work_response.get("work"), list) else []
+        )
+        active_session_ids = {
+            str(item.get("session_id") or "")
+            for item in active_work
+            if item.get("session_id")
+        }
+        active_pids = {
+            str((item.get("result") or {}).get("pid") or "")
+            for item in active_work
+            if isinstance(item.get("result"), dict)
+            and (item.get("result") or {}).get("pid")
+        }
+        local_pids = {str(item.get("pid")) for item in _spawned_sessions}
+        worker_owned_registry = [
+            entry for entry in _load_spawn_registry()
+            if (entry.get("engine") or "claude") in ("claude", "codex", "kimi")
+            and str(entry.get("pid")) not in local_pids
+        ]
+        for entry in worker_owned_registry:
+            pid = entry.get("pid")
+            sid = (
+                entry.get("session_id")
+                or entry.get("resumed_sid")
+                or ""
+            )
+            running = bool(
+                (pid and _pid_alive(pid))
+                or str(pid or "") in active_pids
+                or str(sid or "") in active_session_ids
+            )
+            result.append({
+                "pid": pid,
+                "spawn_id": str(entry.get("spawn_id") or pid or ""),
+                "session_id": sid,
+                "session_id_pending": not bool(sid),
+                "name": entry.get("name") or "",
+                "log": entry.get("log") or "",
+                "prompt": entry.get("command_summary") or "",
+                "started": entry.get("spawned_at") or "",
+                "spawned_at": entry.get("spawned_at") or "",
+                "engine": entry.get("engine") or "claude",
+                "cwd": entry.get("cwd") or "",
+                "repo_path": entry.get("repo_path") or "",
+                "model": entry.get("model") or "",
+                "parent_session_id": entry.get("parent_session_id") or "",
+                "command_summary": entry.get("command_summary") or "",
+                "running": running,
+                "exit_code": None,
+                "status": "running" if running else "finished",
+            })
     for s in _spawned_sessions:
         poll = _poll_spawn_entry(s)
         sid = _spawn_session_id_from_entry(s)
@@ -49909,6 +50571,17 @@ def compact_session_context(session_id, *, terminal_app=None, _from_terminal_que
         return {"ok": False, "error": "missing session_id"}
 
     engine = _detect_session_engine(sid)
+    if engine == "claude":
+        routed = _control_plane_engine_call(
+            "claude", "compact", {
+                "session_id": sid,
+                "terminal_app": terminal_app,
+                "from_terminal_queue": bool(_from_terminal_queue),
+            },
+            idempotency_key=_take_control_plane_action_id(),
+        )
+        if routed is not None:
+            return routed
     if engine == "codex":
         # Codex compaction goes through the app-server `thread/compact/start`
         # RPC — no interactive TUI needed (unlike Claude). Back up the rollout
@@ -50410,6 +51083,7 @@ def _inject_text_into_session(
     wt_origin=False,
     skip_wt=False,
     preserve_queued_steer=False,
+    idempotency_key=None,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -50474,6 +51148,30 @@ def _inject_text_into_session(
     has_tty = _is_real_tty(tty)
     is_cursor = _is_cursor_session(session_id)
     is_hermes = _is_hermes_session(session_id)
+    is_kimi = _is_kimi_session(session_id)
+    if (
+        not is_codex
+        and not is_kimi
+        and not is_cursor
+        and not is_hermes
+        and not _is_gemini_session(session_id)
+        and not _is_antigravity_session(session_id)
+        and not has_tty
+    ):
+        routed = _control_plane_engine_call(
+            "claude", "inject", {
+                "session_id": session_id,
+                "text": text,
+                "from_terminal_queue": bool(_from_terminal_queue),
+                "mode": mode,
+                "wt_origin": bool(wt_origin),
+                "skip_wt": bool(skip_wt),
+                "preserve_queued_steer": bool(preserve_queued_steer),
+            },
+            idempotency_key=idempotency_key,
+        )
+        if routed is not None:
+            return routed
     # Codex: only its OWN TUI commands need a live interactive terminal.
     # Slash-shaped text that isn't one (e.g. /group-chat-checkin from the
     # group-chat flow) is just prompt text — route it through the normal
@@ -50549,7 +51247,10 @@ def _inject_text_into_session(
         ):
             return _queue_terminal_input(session_id, text, {"status": "busy"})
     if is_codex and mode == "steer":
-        steer_result = resume_session_codex(session_id, text, steer=True)
+        steer_kwargs = {"steer": True}
+        if idempotency_key:
+            steer_kwargs["idempotency_key"] = idempotency_key
+        steer_result = resume_session_codex(session_id, text, **steer_kwargs)
         if steer_result.get("code") in (
             "codex_no_active_turn",
             "codex_steer_unavailable",
@@ -50559,6 +51260,10 @@ def _inject_text_into_session(
                 steer_result["queued"] = True
                 steer_result["queued_preserved"] = True
                 return steer_result
+            if idempotency_key:
+                return resume_session_codex(
+                    session_id, text, idempotency_key=idempotency_key,
+                )
             return resume_session_codex(session_id, text)
         return steer_result
     if (
@@ -50605,6 +51310,10 @@ def _inject_text_into_session(
             # Codex/Cursor keep their own busy-turn delivery (resume/steer) —
             # their TUIs aren't driven by raw keystrokes the way Claude's is.
             if busy_or_pending and is_codex:
+                if idempotency_key:
+                    return resume_session_codex(
+                        session_id, text, idempotency_key=idempotency_key,
+                    )
                 return resume_session_codex(session_id, text)
             if busy_or_pending and is_cursor:
                 return resume_session_cursor(session_id, text)
@@ -50633,6 +51342,10 @@ def _inject_text_into_session(
         if (isinstance(keystroke_result, dict) and not keystroke_result.get("ok")
                 and not answering_tty_question):
             if is_codex:
+                if idempotency_key:
+                    return resume_session_codex(
+                        session_id, text, idempotency_key=idempotency_key,
+                    )
                 return resume_session_codex(session_id, text)
             if is_cursor:
                 return resume_session_cursor(session_id, text)
@@ -50680,18 +51393,25 @@ def _inject_text_into_session(
             return queued
         return result
     if is_codex:
+        if idempotency_key:
+            return resume_session_codex(
+                session_id, text, idempotency_key=idempotency_key,
+            )
         return resume_session_codex(session_id, text)
-    if _is_kimi_session(session_id):
+    if is_kimi:
         if (
             not _from_terminal_queue
             and mode != "steer"
             and _terminal_input_queue_has_pending(session_id)
         ):
             return _queue_terminal_input(session_id, text, {"status": "running"})
-        result = _acp_prompt(
-            "kimi", session_id, text, mode=mode,
-            from_queue=_from_terminal_queue,
-        )
+        prompt_kwargs = {
+            "mode": mode,
+            "from_queue": _from_terminal_queue,
+        }
+        if idempotency_key:
+            prompt_kwargs["idempotency_key"] = idempotency_key
+        result = _acp_prompt("kimi", session_id, text, **prompt_kwargs)
         if (
             result.get("code") == "busy"
             and not _from_terminal_queue
@@ -51022,6 +51742,403 @@ def _interrupt_session(session_id):
             "note": "headless spawn terminated — start a new session to continue",
         }
     return {"ok": False, "error": "session is not live — nothing to interrupt"}
+
+
+def _bridge_pending_inputs(session_id):
+    """Public-safe snapshot of durable messages eligible for recovery retry."""
+    rows = []
+    with _pending_resume_lock:
+        resume = list(_pending_resume_queue.get(session_id, []))
+    with _pending_terminal_input_lock:
+        terminal = list(_pending_terminal_input_queue.get(session_id, []))
+    for queue_name, values in (("resume", resume), ("terminal", terminal)):
+        for index, text in enumerate(values):
+            rows.append({
+                "id": f"{queue_name}:{index}",
+                "queue": queue_name,
+                "text": str(text or ""),
+            })
+    return rows
+
+
+def _bridge_state_is_active(engine, state):
+    if not isinstance(state, dict):
+        return False
+    if engine == "kimi":
+        return str(state.get("status") or "").lower() == "active"
+    status = str(state.get("status") or "").lower()
+    return bool(
+        state.get("active_turn_id")
+        or state.get("ccc_turn_start_pending")
+        or status == "active"
+    )
+
+
+def _engine_bridge_status_local(engine, session_id):
+    """Describe one process-shared engine bridge without starting it."""
+    engine = str(engine or "").strip().lower()
+    sid = str(session_id or "").strip()
+    if engine == "kimi":
+        with _ACP_LOCK:
+            _acp_load_state("kimi")
+            conn = _ACP_CONNS.get("kimi") or {}
+            transport = conn.get("transport")
+            sessions = dict(_ACP_SESSION_STATE.get("kimi") or {})
+            active = [
+                other_sid for other_sid, state in sessions.items()
+                if _bridge_state_is_active("kimi", state)
+            ]
+            proc = getattr(transport, "proc", None)
+            pid = getattr(proc, "pid", None)
+            live = bool(
+                conn.get("initialized")
+                and transport is not None
+                and transport.alive()
+            )
+        return {
+            "ok": True,
+            "engine": "kimi",
+            "bridge": "Kimi ACP",
+            "transport": "acp",
+            "live": live,
+            "pid": pid,
+            "active_session_ids": active,
+            "other_active_session_ids": [value for value in active if value != sid],
+            "shared": True,
+            "owned": True,
+        }
+    if engine == "codex":
+        # One thread/list call refreshes every thread known by the bridge.
+        if _codex_app_server_is_live() and sid:
+            _codex_app_server_refresh_thread_status(sid, max_age=0)
+        with _CODEX_APP_SERVER_LOCK:
+            transport = _CODEX_APP_SERVER_TRANSPORT
+            sessions = dict(_CODEX_APP_SERVER_THREAD_STATE)
+            active = [
+                other_sid for other_sid, state in sessions.items()
+                if _bridge_state_is_active("codex", state)
+            ]
+            active_sessions = []
+            for other_sid in active:
+                state = sessions.get(other_sid) or {}
+                needs_approval = _codex_app_server_thread_needs_approval(state)
+                active_sessions.append({
+                    "session_id": other_sid,
+                    "needs_approval": needs_approval,
+                    "needs_approval_message": (
+                        _codex_app_server_thread_approval_message(state)
+                        if needs_approval else ""
+                    ),
+                })
+            proc = getattr(transport, "proc", None)
+            pid = getattr(proc, "pid", None)
+            live = bool(
+                transport is not None
+                and transport.alive()
+                and _CODEX_APP_SERVER_INITIALIZED
+            )
+            kind = _codex_app_server_transport_kind()
+        return {
+            "ok": True,
+            "engine": "codex",
+            "bridge": "Codex app-server",
+            "transport": kind or "exec",
+            "live": live,
+            "pid": pid,
+            "active_session_ids": active,
+            "active_sessions": active_sessions,
+            "other_active_session_ids": [value for value in active if value != sid],
+            "shared": True,
+            # Managed transport is an external daemon: CCC can reconnect its
+            # client but must not kill a process it does not own.
+            "owned": kind != "managed",
+        }
+    return {
+        "ok": False,
+        "code": "unsupported_engine",
+        "error": "Bridge recovery is available for Codex and Kimi sessions",
+    }
+
+
+def _engine_bridge_status(session_id):
+    sid = str(session_id or "").strip()
+    engine = _detect_session_engine(sid)
+    if engine not in ("codex", "kimi"):
+        return _engine_bridge_status_local(engine, sid)
+    routed = _control_plane_engine_call(
+        engine, "bridge_status", {"session_id": sid}, mutate=False,
+    )
+    if isinstance(routed, dict) and routed.get("engine"):
+        status = routed
+    elif isinstance(routed, dict) and (
+        routed.get("available") or routed.get("ambiguous")
+    ):
+        status = routed
+    else:
+        worker_health = _control_plane_request("health")
+        worker_caps = ((worker_health.get("worker") or {}).get("capabilities") or [])
+        if worker_health.get("ok") and "engine-execution-v1" in worker_caps:
+            status = {
+                "ok": False,
+                "code": "worker_upgrade_required",
+                "error": "The running CCC worker must be restarted before bridge recovery is available",
+            }
+        else:
+            status = _engine_bridge_status_local(engine, sid)
+    status = dict(status or {})
+    status["queued_messages"] = _bridge_pending_inputs(sid)
+    status["session_id"] = sid
+    status["can_restart"] = not bool(status.get("other_active_session_ids"))
+    if not status["can_restart"]:
+        status["blocked_reason"] = "Other sessions are actively using this shared bridge"
+    elif status.get("transport") == "managed":
+        status["restart_note"] = (
+            "CCC will reconnect to the managed Codex app-server; it will not "
+            "terminate the externally owned daemon."
+        )
+    return status
+
+
+def _engine_bridge_approval_blockers():
+    """Return formal approvals held by worker-owned shared engine bridges."""
+    blockers = []
+    for engine in ("codex", "kimi"):
+        routed = _control_plane_engine_call(
+            engine, "bridge_status", {"session_id": ""}, mutate=False,
+        )
+        status = routed if isinstance(routed, dict) and routed.get("engine") else None
+        if status is None:
+            status = _engine_bridge_status_local(engine, "")
+        for row in status.get("active_sessions") or []:
+            if not isinstance(row, dict) or not row.get("needs_approval"):
+                continue
+            sid = str(row.get("session_id") or "").strip()
+            if not sid:
+                continue
+            blockers.append({
+                "session_id": sid,
+                "engine": engine,
+                "needs_approval": True,
+                "needs_approval_message": str(
+                    row.get("needs_approval_message")
+                    or f"{engine.title()} is waiting for approval"
+                ),
+            })
+    return {"ok": True, "sessions": blockers}
+
+
+def _wait_then_kill_process(proc, timeout=2.0):
+    """Wait for a bridge child to exit, then force only that known child."""
+    if proc is None:
+        return {"exited": True, "forced": False}
+    deadline = time.time() + max(0.0, float(timeout))
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.05)
+    forced = False
+    if proc.poll() is None:
+        forced = True
+        try:
+            proc.kill()
+        except OSError:
+            return {"exited": False, "forced": True}
+        try:
+            proc.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    return {"exited": proc.poll() is not None, "forced": forced}
+
+
+def _restart_engine_bridge_local(engine, session_id):
+    """Restart/reconnect one shared bridge after a same-process safety check."""
+    engine = str(engine or "").strip().lower()
+    sid = str(session_id or "").strip()
+    lock = _ACP_RECOVERY_LOCKS.setdefault(engine, threading.Lock())
+    if not lock.acquire(blocking=False):
+        return {
+            "ok": False,
+            "code": "recovery_in_progress",
+            "error": f"{engine} bridge recovery is already in progress",
+        }
+    try:
+        before = _engine_bridge_status_local(engine, sid)
+        other_active = list(before.get("other_active_session_ids") or [])
+        if other_active:
+            return {
+                "ok": False,
+                "code": "bridge_in_use",
+                "error": "Other sessions are actively using this shared bridge",
+                "other_active_session_ids": other_active,
+                "bridge": before.get("bridge"),
+            }
+        if engine == "kimi":
+            # Ask nicely first. The recovery path remains useful precisely when
+            # the notification is ignored, so process shutdown is still bounded.
+            _acp_cancel("kimi", sid)
+            with _ACP_LOCK:
+                conn = _ACP_CONNS.pop("kimi", None)
+                pending = _ACP_PENDING.pop("kimi", {})
+                target = (_ACP_SESSION_STATE.get("kimi") or {}).get(sid)
+                if target is not None:
+                    target["status"] = "idle"
+                    target["active_turn"] = None
+                    target["loaded_conn"] = None
+                    target["pending_permissions"] = {}
+                    _acp_save_state_unlocked("kimi")
+                for entry in pending.values():
+                    entry["response"] = {
+                        "error": {
+                            "code": -32003,
+                            "message": "Kimi ACP restarted by operator",
+                        },
+                    }
+                    entry["event"].set()
+                _ACP_LOCK.notify_all()
+            transport = (conn or {}).get("transport")
+            proc = getattr(transport, "proc", None)
+            if transport is not None:
+                transport.close()
+            stop = _wait_then_kill_process(proc)
+            forced = bool(stop.get("forced"))
+            old_reader = (conn or {}).get("reader")
+            if old_reader is not None and old_reader is not threading.current_thread():
+                old_reader.join(timeout=1)
+            _KIMI_WIRE_BUSY_SUPPRESS_UNTIL[sid] = time.time() + 60
+            if _acp_ensure("kimi") is None:
+                return {
+                    "ok": False,
+                    "code": "bridge_restart_failed",
+                    "error": _acp_conn_error("kimi"),
+                }
+            attach_error = _acp_ensure_session_loaded("kimi", sid)
+            if attach_error is not None:
+                return {
+                    "ok": False,
+                    "code": "bridge_reattach_failed",
+                    "error": attach_error.get("error") or "Could not reattach Kimi session",
+                }
+            after = _engine_bridge_status_local("kimi", sid)
+            return {
+                "ok": True,
+                "engine": "kimi",
+                "bridge": "Kimi ACP",
+                "restarted": True,
+                "reattached": True,
+                "old_pid": before.get("pid"),
+                "pid": after.get("pid"),
+                "forced": forced,
+                "transport": "acp",
+            }
+        if engine == "codex":
+            # Interrupt the selected thread before dropping our transport. This
+            # is especially important for the managed daemon, which CCC does
+            # not own and therefore only reconnects.
+            _codex_interrupt_via_app_server(sid)
+            with _CODEX_APP_SERVER_LOCK:
+                transport = _CODEX_APP_SERVER_TRANSPORT
+                proc = getattr(transport, "proc", None)
+            _codex_app_server_shutdown()
+            if proc is not None:
+                _wait_then_kill_process(proc)
+            if _ensure_codex_app_server() is None:
+                return {
+                    "ok": False,
+                    "code": "bridge_restart_failed",
+                    "error": "Codex app-server did not restart",
+                }
+            # Authoritative resume reconciles stale local active markers and
+            # reattaches this exact thread to the fresh client connection.
+            still_active = _codex_app_server_thread_is_active(
+                sid, start_if_needed=True,
+            )
+            after = _engine_bridge_status_local("codex", sid)
+            return {
+                "ok": True,
+                "engine": "codex",
+                "bridge": "Codex app-server",
+                "restarted": True,
+                "reattached": True,
+                "old_pid": before.get("pid"),
+                "pid": after.get("pid"),
+                "transport": after.get("transport"),
+                "reconnected": before.get("transport") == "managed",
+                "target_still_active": bool(still_active),
+            }
+        return before
+    finally:
+        lock.release()
+
+
+def _recover_engine_bridge(session_id, selected_text="", idempotency_key=None):
+    """Restart the owning bridge and optionally retry one durable queue row."""
+    sid = str(session_id or "").strip()
+    text = str(selected_text or "")
+    engine = _detect_session_engine(sid)
+    if engine not in ("codex", "kimi"):
+        return _engine_bridge_status_local(engine, sid)
+    if text and not any(row["text"] == text for row in _bridge_pending_inputs(sid)):
+        return {
+            "ok": False,
+            "code": "queued_message_missing",
+            "error": "The selected queued message no longer exists",
+        }
+    restarted = _control_plane_engine_call(
+        engine,
+        "bridge_restart",
+        {"session_id": sid},
+        idempotency_key=idempotency_key,
+    )
+    if not isinstance(restarted, dict) or not restarted.get("engine"):
+        if isinstance(restarted, dict) and (
+            restarted.get("available") or restarted.get("ambiguous")
+        ):
+            return restarted
+        worker_health = _control_plane_request("health")
+        worker_caps = ((worker_health.get("worker") or {}).get("capabilities") or [])
+        if worker_health.get("ok") and "engine-execution-v1" in worker_caps:
+            return {
+                "ok": False,
+                "code": "worker_upgrade_required",
+                "error": "Restart the CCC worker before using bridge recovery",
+            }
+        restarted = _restart_engine_bridge_local(engine, sid)
+    if not restarted.get("ok"):
+        return restarted
+    result = {
+        "ok": True,
+        "session_id": sid,
+        "engine": engine,
+        "restart": restarted,
+        "retried": False,
+    }
+    if not text:
+        return result
+    if not _consume_matching_pending_input(sid, text):
+        return {
+            "ok": False,
+            "code": "queued_message_missing",
+            "error": "The selected queued message was already consumed",
+            "restart": restarted,
+        }
+    _pending_terminal_retry_after.pop(sid, None)
+    retry = _inject_text_into_session(
+        sid,
+        text,
+        _from_terminal_queue=True,
+        skip_wt=True,
+    )
+    if not isinstance(retry, dict):
+        retry = {"ok": False, "error": "Retry returned no result"}
+    if not retry.get("ok") and not retry.get("queued"):
+        _requeue_terminal_input_front(sid, text)
+        _mark_terminal_queue_retry(sid, delay=5.0)
+        retry["requeued"] = True
+    result["retry"] = retry
+    result["retried"] = bool(retry.get("ok"))
+    result["queued"] = bool(retry.get("queued"))
+    if not retry.get("ok"):
+        result["ok"] = False
+        result["error"] = retry.get("error") or "Bridge restarted but message retry failed"
+    return result
 
 
 def _iso_to_epoch(ts):
@@ -63563,6 +64680,12 @@ def _kimi_setup_status():
 def _kimi_setup_verify():
     """Proof the Kimi setup works end-to-end: one ACP session/new roundtrip
     (no prompt, so no tokens). Returns the spawn-kimi result shape."""
+    routed = _control_plane_engine_call(
+        "kimi", "verify", {},
+        idempotency_key=_take_control_plane_action_id(),
+    )
+    if routed is not None:
+        return routed
     resolved = _acp_resolve_bin("kimi")
     if not resolved.get("available"):
         return {"ok": False, "error": resolved.get("reason") or "kimi CLI not found"}
@@ -63834,6 +64957,32 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path == "" or path == "/":
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
+        elif path == "/api/control-plane/status":
+            self.send_json(_control_plane_request("health"))
+        elif path == "/api/watchtower/service/status":
+            self.send_json(_watchtower_service_status())
+        elif path == "/api/control-plane/work":
+            qs = urllib.parse.parse_qs(parsed.query)
+            states = [
+                value
+                for raw in qs.get("state", [])
+                for value in str(raw).split(",")
+                if value
+            ]
+            self.send_json(_control_plane_request("work.list", {
+                "states": states or None,
+                "session_id": (qs.get("session_id", [""])[0] or "").strip(),
+                "limit": qs.get("limit", ["200"])[0],
+            }))
+        elif path == "/api/control-plane/graph":
+            qs = urllib.parse.parse_qs(parsed.query)
+            root_id = (qs.get("root_id", [""])[0] or "").strip()
+            if not root_id:
+                self.send_json({"ok": False, "error": "root_id required"}, 400)
+            else:
+                self.send_json(_control_plane_request(
+                    "work.graph", {"root_id": root_id}
+                ))
         elif path == "/api/voice-focus":
             # Current remote-focus target (set via POST). O(1) in-memory poll.
             self.send_json(dict(_VOICE_FOCUS))
@@ -64189,6 +65338,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "bad pid"}, 400)
             else:
                 entry = next((s for s in _spawned_sessions if s["pid"] == pid), None)
+                if entry is None:
+                    entry = next(
+                        (
+                            row for row in reversed(_load_spawn_registry())
+                            if str(row.get("pid") or "") == str(pid)
+                        ),
+                        None,
+                    )
                 if not entry:
                     self.send_json({"ok": False, "error": "no spawn entry for pid"}, 404)
                 else:
@@ -64202,7 +65359,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         except OSError as e:
                             self.send_json({"ok": False, "error": str(e)}, 500)
                         else:
-                            poll = _poll_spawn_entry(entry)
+                            if entry.get("proc") is not None:
+                                poll = _poll_spawn_entry(entry)
+                            else:
+                                poll = None if _pid_alive(pid) else entry.get("exit_code")
                             payload = {
                                 "ok": True,
                                 "pid": pid,
@@ -64231,9 +65391,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                     except OSError:
                                         payload["debug_text"] = ""
                             self.send_json(payload)
+        elif path == "/api/bridge-recovery/status":
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = str((qs.get("session_id") or [""])[0] or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            else:
+                status = _engine_bridge_status(sid)
+                self.send_json(
+                    status,
+                    200 if status.get("ok") else 400,
+                )
+        elif path == "/api/bridge-recovery/blockers":
+            self.send_json(_engine_bridge_approval_blockers())
         elif path == "/api/sessions/spawn-codex/availability":
-            info = _resolve_codex_bin()
-            info["model"] = _spawn_model_for_engine("codex")
+            routed = _control_plane_engine_call(
+                "codex", "availability", {}, mutate=False,
+            )
+            info = (
+                routed.get("availability")
+                if isinstance(routed, dict) and routed.get("availability")
+                else _resolve_codex_bin()
+            )
+            info.setdefault("model", _spawn_model_for_engine("codex"))
             self.send_json(info)
         elif path == "/api/sessions/spawn-gemini/availability":
             info = _resolve_gemini_bin()
@@ -64256,12 +65436,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info["model"] = os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
             self.send_json(info)
         elif path == "/api/sessions/spawn-kimi/availability":
-            info = _resolve_kimi_bin()
-            info["model"] = _spawn_model_for_engine("kimi")
-            _conn = _acp_conn("kimi")
-            info["acp"] = bool(
-                _conn and _conn.get("initialized") and _conn["transport"].alive()
+            routed = _control_plane_engine_call(
+                "kimi", "availability", {}, mutate=False,
             )
+            info = (
+                routed.get("availability")
+                if isinstance(routed, dict) and routed.get("availability")
+                else _resolve_kimi_bin()
+            )
+            info.setdefault("model", _spawn_model_for_engine("kimi"))
+            if "acp" not in info:
+                _conn = _acp_conn("kimi")
+                info["acp"] = bool(
+                    _conn and _conn.get("initialized")
+                    and _conn["transport"].alive()
+                )
             self.send_json(info)
         elif path == "/api/engines/kimi/setup-status":
             # 'Add Kimi engine' guided flow: installed? version? where from?
@@ -66180,6 +67369,41 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 400)
             return
 
+        if path in (
+            "/api/control-plane/drain",
+            "/api/control-plane/work",
+            "/api/control-plane/work/transition",
+            "/api/control-plane/reconcile",
+            "/api/control-plane/resolve",
+        ):
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            method = {
+                "/api/control-plane/drain": "drain.set",
+                "/api/control-plane/work": "work.submit",
+                "/api/control-plane/work/transition": "work.transition",
+                "/api/control-plane/reconcile": "work.reconcile",
+                "/api/control-plane/resolve": "work.resolve",
+            }[path]
+            result = _control_plane_request(method, payload)
+            if result.get("ok"):
+                status = 200
+            elif not result.get("available", True):
+                status = 503
+            elif result.get("code") == "not_found":
+                status = 404
+            else:
+                status = 409
+            self.send_json(result, status)
+            return
+
         if path == "/api/car-mode/start":
             # Launch the hands-free voice operator (idempotent, graceful refusal
             # if required keys are missing). Same-origin already checked above.
@@ -66552,9 +67776,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"error": "unknown objects endpoint"}, 404)
             return
 
+        if path == "/api/control-plane/start":
+            result = _start_control_plane_worker()
+            self.send_json(result, 200 if result.get("ok") else 503)
+            return
+
+        if path == "/api/watchtower/service":
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            result = _watchtower_service_action(payload.get("action"))
+            self.send_json(result, 200 if result.get("ok") else 409)
+            return
+
         if path == "/api/ingest/gemini":
             try:
-                import uuid
                 content_len = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_len)
                 data = json.loads(body)
@@ -66701,7 +67943,61 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/restart":
             # Manual in-place restart from the settings menu. Same-origin
             # POST checking above is the security boundary, matching update.
-            self.send_json({"ok": True, "restart": True, "port": PORT})
+            restart_id = str(uuid.uuid4())
+            local_active = _dashboard_owned_active_executions()
+            active_kimi = [
+                item for item in local_active if item.get("engine") == "kimi"
+            ]
+            if active_kimi:
+                self.send_json({
+                    "ok": False,
+                    "error": (
+                        "A Kimi turn is still owned by this dashboard. "
+                        "Wait for it to finish before restarting."
+                    ),
+                    "active": active_kimi,
+                }, 409)
+                return
+            adopted = _control_plane_request(
+                "engine.adopt", {}, engine_timeout=True,
+            )
+            if adopted.get("code") == "method_not_found":
+                adopted = {"ok": False, "available": False}
+            if adopted.get("available") and not adopted.get("ok"):
+                self.send_json({
+                    "ok": False,
+                    "error": adopted.get("error") or "worker could not adopt sessions",
+                }, 409)
+                return
+            if not adopted.get("available") and local_active:
+                self.send_json({
+                    "ok": False,
+                    "error": (
+                        "Agent work is still owned by this dashboard and the "
+                        "persistent worker is unavailable. Start the worker "
+                        "or wait for the active turn before restarting."
+                    ),
+                    "active": local_active,
+                }, 409)
+                return
+            protected = _control_plane_request("drain.set", {
+                "enabled": True,
+                "reason": f"dashboard-restart:{restart_id}",
+            })
+            if protected.get("available") and not protected.get("ok"):
+                self.send_json({
+                    "ok": False,
+                    "error": protected.get("error") or "worker refused safe drain",
+                }, 409)
+                return
+            self.send_json({
+                "ok": True,
+                "restart": True,
+                "port": PORT,
+                "worker_preserved": bool(protected.get("ok")),
+                "queued": int(protected.get("queued") or 0),
+                "adopted": int(adopted.get("adopted") or 0),
+            })
             try:
                 self.wfile.flush()
             except Exception:
@@ -68449,6 +69745,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # dispatcher on completion. No-op when report_to is unset.
                     prompt = _wrap_prompt_with_return_address(prompt, report_to)
                     spawn_cwd = str(cwd_resolved) if cwd_resolved else None
+                    _set_control_plane_action_id(payload.get("idempotency_key"))
                     if engine == "codex":
                         result = spawn_session_codex(
                             prompt,
@@ -68624,6 +69921,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 }, 400)
             else:
                 try:
+                    _set_control_plane_action_id(payload.get("idempotency_key"))
                     result = spawn_session_codex(
                         prompt,
                         name=name,
@@ -68904,6 +70202,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
             else:
                 try:
+                    _set_control_plane_action_id(payload.get("idempotency_key"))
                     result = spawn_session_kimi(
                         prompt,
                         name=name,
@@ -68995,7 +70294,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not text:
                 self.send_json({"ok": False, "error": "missing text"})
             else:
-                self.send_json(inject_into_spawned(pid, text))
+                routed = _control_plane_engine_call(
+                    "claude", "inject_pid", {"pid": pid, "text": text},
+                    idempotency_key=payload.get("idempotency_key"),
+                )
+                self.send_json(
+                    routed if routed is not None else inject_into_spawned(pid, text)
+                )
         elif re.match(r"^/api/session/[a-zA-Z0-9-]+/cwd$", path):
             # CCC-128: point a session at a user-chosen folder when CCC can't
             # resolve its recorded cwd ("CWD MISSING"). Display/resolution only
@@ -70484,6 +71789,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if result.get("error") == "missing session_id":
                 status_code = 400
             self.send_json(result, status_code)
+        elif path == "/api/bridge-recovery":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "expected JSON object"}, 400)
+                return
+            sid = str(payload.get("session_id") or "").strip()
+            selected_text = str(payload.get("text") or "")
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+                return
+            _record_interaction(sid)
+            result = _recover_engine_bridge(
+                sid,
+                selected_text=selected_text,
+                idempotency_key=str(payload.get("idempotency_key") or uuid.uuid4()),
+            )
+            status_code = 200 if result.get("ok") else 409
+            if result.get("code") in ("unsupported_engine", "queued_message_missing"):
+                status_code = 400 if result.get("code") == "unsupported_engine" else 409
+            self.send_json(result, status_code)
         elif path == "/api/pending-input/cancel":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -70553,9 +71883,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     }
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True
+                    if payload.get("idempotency_key"):
+                        inject_options["idempotency_key"] = payload.get(
+                            "idempotency_key"
+                        )
                     result = _inject_text_into_session(
-                        sid, text, mode=mode,
-                        **inject_options,
+                        sid, text, mode=mode, **inject_options,
                     )
                 except Exception as e:
                     # An uncaught exception anywhere in this deep, subprocess-
@@ -70582,6 +71915,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "missing session_id"})
             else:
                 _record_interaction(sid)
+                _set_control_plane_action_id(payload.get("idempotency_key"))
                 self.send_json(compact_session_context(sid, terminal_app=term_app))
         elif path == "/api/answer-question":
             # Answer a relayed AskUserQuestion (headless sessions only — the
@@ -70820,6 +72154,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         no polling — chunk latency is the Condition wake (~ms). Deltas are
         in-memory only; the finalized transcript stays authoritative.
         """
+        if harness == "kimi":
+            initial = _control_plane_engine_call(
+                "kimi", "deltas",
+                {"session_id": session_id, "after": 0},
+                mutate=False,
+            )
+            if initial is not None:
+                self._stream_worker_acp_deltas(session_id, initial)
+                return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -70863,6 +72206,44 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     except (BrokenPipeError, ConnectionResetError, OSError):
                         break
                     last_keepalive = now
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _stream_worker_acp_deltas(self, session_id, initial):
+        """SSE bridge for ACP deltas owned by the persistent worker."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        last_seq = 0
+        last_keepalive = time.time()
+        response = initial
+        try:
+            while True:
+                deltas = response.get("deltas") or []
+                if deltas:
+                    last_seq = max(int(delta.get("seq") or 0) for delta in deltas)
+                    payload = {"events": [
+                        delta.get("event") for delta in deltas if delta.get("event")
+                    ]}
+                    self.wfile.write(
+                        f"data: {json.dumps(payload)}\n\n".encode()
+                    )
+                    self.wfile.flush()
+                    last_keepalive = time.time()
+                elif time.time() - last_keepalive >= 5:
+                    self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                    self.wfile.flush()
+                    last_keepalive = time.time()
+                time.sleep(0.25)
+                response = _control_plane_engine_call(
+                    "kimi", "deltas",
+                    {"session_id": session_id, "after": last_seq},
+                    mutate=False,
+                )
+                if response is None:
+                    break
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
@@ -76623,7 +78004,41 @@ def main():
     _resume_ledger_append("server_start", pid=os.getpid())
     ensure_hooks_installed()
     install_orchestration_skill()
-    _reattach_spawned_orphans()
+    worker_health = _control_plane_request("health")
+    worker_capabilities = set(
+        ((worker_health.get("worker") or {}).get("capabilities") or [])
+    )
+    worker_owns_engines = (
+        worker_health.get("ok")
+        and "engine-execution-v1" in worker_capabilities
+    )
+    if worker_owns_engines:
+        print(
+            "  [control-plane] worker owns engine processes "
+            f"(pid {((worker_health.get('worker') or {}).get('pid'))})"
+        )
+    else:
+        _reattach_spawned_orphans()
+        if worker_health.get("ok"):
+            print(
+                "  [control-plane] worker is from an older build; "
+                "using compatible dashboard execution until it restarts"
+            )
+    if worker_owns_engines:
+        _reattach_spawned_orphans(skip_engines=("claude", "codex", "kimi"))
+        drain = worker_health.get("drain") or {}
+        if (
+            drain.get("enabled")
+            and str(drain.get("reason") or "").startswith("dashboard-restart:")
+        ):
+            resumed = _control_plane_request("drain.set", {
+                "enabled": False,
+                "reason": "dashboard online",
+            })
+            print(
+                "  [control-plane] dashboard restart handoff resumed "
+                f"({int(resumed.get('replayed') or 0)} queued action(s))"
+            )
     threading.Thread(
         target=_claude_desktop_visibility_backfill_once,
         daemon=True,

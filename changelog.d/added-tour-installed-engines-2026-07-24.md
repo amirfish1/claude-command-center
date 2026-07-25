@@ -1,1 +1,0 @@
-First Flight tour: the welcome step now shows a "Detected on this machine" row of engine chips — installed engines lit, missing ones dimmed — backed by a new `GET /api/engines/installed` endpoint covering all 11 engines (spawnable + read-only).

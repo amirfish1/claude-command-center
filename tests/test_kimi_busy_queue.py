@@ -32,7 +32,9 @@ class KimiBusyQueueTests(unittest.TestCase):
             result = server._inject_text_into_session(bare_sid, "follow up")
 
         self.assertTrue(result["ok"])
-        prompt.assert_called_once_with("kimi", canonical_sid, "follow up", mode="send")
+        prompt.assert_called_once_with(
+            "kimi", canonical_sid, "follow up", mode="send", from_queue=False,
+        )
 
     def test_busy_kimi_follow_up_is_preserved_in_the_durable_input_queue(self):
         server = importlib.import_module("server")

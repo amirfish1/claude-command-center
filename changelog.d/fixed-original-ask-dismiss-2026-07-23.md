@@ -1,1 +1,0 @@
-- Fixed the Original ask panel's close button failing to dismiss it in the mobile right-rail layout.
