@@ -5141,6 +5141,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_setStatusRailWidth(previousWidth, false);", app_js)
         self.assertIn("if (previousStoredWidth == null) localStorage.removeItem('ccc-status-rail-width');", app_js)
 
+    def test_status_rail_resizer_supports_tablet_pointer_drag(self):
+        """The right-rail divider must resize under touch/pen as well as mouse."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("$statusRailResizer.addEventListener('pointerdown'", app_js)
+        self.assertIn("$statusRailResizer.setPointerCapture(e.pointerId)", app_js)
+        self.assertIn("$statusRailResizer.addEventListener('pointermove'", app_js)
+        self.assertIn("$statusRailResizer.addEventListener('pointercancel', _railEnd)", app_js)
+        resizer_css = app_css[app_css.index(".status-rail-resizer {"):]
+        resizer_css = resizer_css[:resizer_css.index("}")]
+        self.assertIn("touch-action: none;", resizer_css)
+
     def test_done_result_can_copy_agent_answer(self):
         """Successful Done rows expose a small copy affordance for the last
         assistant answer, rather than forcing users to select rendered text

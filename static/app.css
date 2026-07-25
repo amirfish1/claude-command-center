@@ -14502,6 +14502,7 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   left: -6px; top: 0; bottom: 0;
   width: 12px;
   cursor: col-resize;
+  touch-action: none;
   z-index: 4;
   background: transparent;
 }

@@ -46203,6 +46203,7 @@
       let railStartX = 0;
       let railStartWidth = STATUS_RAIL_DEFAULT_WIDTH;
       let railCollapseOnRelease = false;
+      let railPointerId = null;
       const _railShouldCollapse = (e, rawWidth) => {
         const pane = document.querySelector('.conv-pane.is-active')
           || document.querySelector('.conv-pane[data-pane-id="' + activePaneId() + '"]')
@@ -46217,11 +46218,12 @@
           _setStatusRailWidth(raw, false);
         }
       };
-      const _railUp = (e) => {
-        document.removeEventListener('mousemove', _railMove);
-        document.removeEventListener('mouseup', _railUp);
+      const _railEnd = (e) => {
+        if (railPointerId !== e.pointerId) return;
         $statusRailResizer.classList.remove('dragging');
         document.body.classList.remove('status-rail-resizing');
+        try { $statusRailResizer.releasePointerCapture(e.pointerId); } catch (_) {}
+        railPointerId = null;
         if (railCollapseOnRelease) {
           _setStatusRailCollapsed(true, true);
         } else {
@@ -46230,17 +46232,24 @@
           _setStatusRailCollapsed(false, true);
         }
       };
-      $statusRailResizer.addEventListener('mousedown', (e) => {
-        if (!document.body.classList.contains('status-pos-right')) return;
+      $statusRailResizer.addEventListener('pointerdown', (e) => {
+        if (!document.body.classList.contains('status-pos-right') || !e.isPrimary
+            || (e.pointerType !== 'touch' && e.button !== 0)) return;
         e.preventDefault();
+        railPointerId = e.pointerId;
         railStartX = e.clientX;
         railStartWidth = $statusRail.getBoundingClientRect().width || _savedStatusRailWidth();
         railCollapseOnRelease = false;
         $statusRailResizer.classList.add('dragging');
         document.body.classList.add('status-rail-resizing');
-        document.addEventListener('mousemove', _railMove);
-        document.addEventListener('mouseup', _railUp);
+        try { $statusRailResizer.setPointerCapture(e.pointerId); } catch (_) {}
       });
+      $statusRailResizer.addEventListener('pointermove', (e) => {
+        if (railPointerId !== e.pointerId) return;
+        _railMove(e);
+      });
+      $statusRailResizer.addEventListener('pointerup', _railEnd);
+      $statusRailResizer.addEventListener('pointercancel', _railEnd);
       $statusRailResizer.addEventListener('dblclick', (e) => {
         e.preventDefault();
         _setStatusRailCollapsed(false, true);
