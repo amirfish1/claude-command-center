@@ -57,6 +57,13 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
     tomllib = None
 
+# run.sh execs this file directly, so it runs as __main__. Extracted
+# ccc_server/* modules do `import server` to reach names still living here;
+# without this alias that import would re-execute the file as a second module
+# instance (duplicate globals, double side effects). Must run before any
+# ccc_server import.
+sys.modules.setdefault("server", sys.modules[__name__])
+
 # Model-drift advisor (stdlib-only, no back-reference to this module). Lives
 # next to server.py; recommends cheaper/stronger models per live session. See
 # /api/model-advisor and model_advisor.py.
