@@ -25,6 +25,41 @@ class TestWorkLedger(unittest.TestCase):
         self.root = pathlib.Path(self.tmp.name)
         self.ledger = WorkLedger(self.root / "control-plane.sqlite3")
 
+    @unittest.skipUnless(
+        os.path.isdir("/dev/fd"), "needs /dev/fd to count descriptors"
+    )
+    def test_ledger_operations_do_not_leak_descriptors(self):
+        """Every ledger call must close its connection.
+
+        `with sqlite3.connect(...)` only ends the transaction. Leaking handles
+        starved the worker of file descriptors under launchd's 256 limit, after
+        which it accepted connections and closed them unread.
+        """
+        def open_fds():
+            return len(os.listdir("/dev/fd"))
+
+        for index in range(20):
+            self.ledger.submit(
+                engine="claude",
+                idempotency_key=f"warmup-{index}",
+                session_id="session-fd",
+                payload={"prompt": "warmup"},
+            )
+        baseline = open_fds()
+        for index in range(60):
+            self.ledger.submit(
+                engine="claude",
+                idempotency_key=f"leak-{index}",
+                session_id="session-fd",
+                payload={"prompt": "leak check"},
+            )
+            self.ledger.summary()
+            self.ledger.drain_state()
+        self.assertLessEqual(
+            open_fds() - baseline, 4,
+            "ledger connections are not being closed",
+        )
+
     def test_idempotent_submission_and_parent_child_graph(self):
         parent, created = self.ledger.submit(
             engine="claude",
@@ -349,6 +384,56 @@ class TestWorkerServiceDefinition(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["started"])
         popen.assert_called_once()
+
+    def test_wedged_worker_is_retired_so_a_new_one_can_bind(self):
+        """A reachable-but-unhealthy worker must be stopped, not worked around.
+
+        Without this the replacement worker exits with "already running" and
+        Maintenance reports "did not become ready" on every attempt.
+        """
+        import server
+
+        wedged = {"ok": False, "available": True, "ambiguous": True}
+        healthy = {"ok": True, "worker": {"pid": 78}}
+
+        class FakeProcess:
+            pid = 78
+
+            @staticmethod
+            def poll():
+                return None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            pidfile = root / "worker.pid"
+            pidfile.write_text("4242\n", encoding="utf-8")
+            sock = root / "worker.sock"
+            sock.write_text("", encoding="utf-8")
+            killed = []
+
+            def fake_kill(pid, sig):
+                killed.append((pid, sig))
+                raise ProcessLookupError  # already gone after SIGTERM
+
+            with mock.patch.object(
+                server, "COMMAND_CENTER_STATE_DIR", root
+            ), mock.patch.object(
+                server, "worker_pid_path", return_value=pidfile
+            ), mock.patch.object(
+                server, "socket_path", return_value=sock
+            ), mock.patch.object(
+                server, "_control_plane_request",
+                side_effect=[wedged, healthy],
+            ), mock.patch.object(
+                server.os, "kill", side_effect=fake_kill
+            ), mock.patch.object(
+                server.subprocess, "Popen", return_value=FakeProcess()
+            ):
+                result = server._start_control_plane_worker()
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(killed[0], (4242, signal.SIGTERM))
+            self.assertFalse(sock.exists(), "stale socket must be cleared")
 
 
 class TestWatchTowerServiceControl(unittest.TestCase):

@@ -95,7 +95,7 @@ import model_advisor
 # CCC federation (stdlib-only sibling module): stable node identity, paired
 # peers, and the transport for calling a peer CCC on its own loopback.
 import federation
-from control_plane import ControlPlaneClient
+from control_plane import ControlPlaneClient, socket_path, worker_pid_path
 
 # Productivity metrics and local persistence are isolated in a stdlib-only
 # sibling module.  server.py adapts CCC's transcripts, repositories, and queue
@@ -215,12 +215,63 @@ def _dashboard_owned_active_executions():
     return active
 
 
+def _retire_wedged_control_plane_worker():
+    """Stop a worker that still owns the socket but cannot answer health.
+
+    A worker that has exhausted its file descriptors keeps the socket bound and
+    closes every connection unread. A fresh worker then refuses to boot ("already
+    running") and Maintenance reports "did not become ready" forever, so the only
+    recovery is to retire the recorded PID and clear the stale socket. Engine
+    children run in their own sessions and are re-adopted by the next worker.
+    """
+    try:
+        pid = int(worker_pid_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pid = 0
+    stopped = False
+    if pid > 1 and pid != os.getpid():
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            # Already gone; the socket it left behind is what blocks the restart.
+            stopped = True
+        except OSError:
+            pid = 0
+        else:
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    stopped = True
+                    break
+                time.sleep(0.1)
+            if not stopped:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    stopped = True
+                except OSError:
+                    pass
+    try:
+        socket_path().unlink()
+    except OSError:
+        pass
+    return {"retired_pid": pid if stopped else 0}
+
+
 def _start_control_plane_worker():
     """Start the persistent worker when Maintenance finds it unavailable."""
     with _CONTROL_PLANE_START_LOCK:
         current = _control_plane_request("health")
         if current.get("ok"):
             return current
+        # `available` here means the socket answered at all. A worker that is
+        # reachable but not ok is wedged, and a new one cannot bind over it.
+        retired = (
+            _retire_wedged_control_plane_worker()
+            if current.get("available") or current.get("ambiguous")
+            else {}
+        )
         logs_dir = COMMAND_CENTER_STATE_DIR / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -244,14 +295,20 @@ def _start_control_plane_worker():
             if health.get("ok"):
                 health["started"] = True
                 health["started_pid"] = process.pid
+                if retired.get("retired_pid"):
+                    health["retired_pid"] = retired["retired_pid"]
                 return health
             if process.poll() is not None:
                 break
             time.sleep(0.1)
+        detail = "persistent worker did not become ready"
+        if process.poll() is not None:
+            detail += f" (exited {process.poll()}; see logs/worker.err.log)"
         return {
             "ok": False,
             "available": False,
-            "error": "persistent worker did not become ready",
+            "error": detail,
+            "retired_pid": retired.get("retired_pid") or 0,
         }
 
 

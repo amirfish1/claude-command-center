@@ -17,6 +17,7 @@ import socket
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Union
 
@@ -61,6 +62,15 @@ def socket_path() -> Path:
 
 def token_path() -> Path:
     return state_dir() / "worker.token"
+
+
+def worker_pid_path() -> Path:
+    """PID of the worker that owns ``socket_path()``.
+
+    The dashboard needs this to retire an instance that still holds the socket
+    but can no longer answer health, which the socket alone cannot tell it.
+    """
+    return socket_path().with_name("worker.pid")
 
 
 def ledger_path() -> Path:
@@ -140,8 +150,27 @@ class WorkLedger:
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
+    @contextmanager
+    def _session(self):
+        """Open a ledger connection, commit/rollback, then always close it.
+
+        `with sqlite3.connect(...) as conn` only ends the transaction; it never
+        closes the connection. Relying on refcounting to reclaim the handle is
+        not enough here: the worker runs under launchd's 256 file-descriptor
+        limit and any lingering reference (a cursor, a Row, a traceback frame)
+        keeps db + WAL + shm descriptors alive. Once those 256 are gone every
+        accept() on the worker socket fails, so the worker answers nothing while
+        still holding the socket, and the restart path cannot replace it.
+        """
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _initialize(self):
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS control_meta (
@@ -223,12 +252,12 @@ class WorkLedger:
             "reason": str(reason or "")[:500],
             "requested_at": time.time() if enabled else None,
         }
-        with self._connect() as conn:
+        with self._session() as conn:
             self._set_meta_conn(conn, "drain", value)
         return value
 
     def drain_state(self):
-        with self._connect() as conn:
+        with self._session() as conn:
             return self._get_meta_conn(conn, "drain") or {
                 "enabled": False, "reason": "", "requested_at": None,
             }
@@ -270,7 +299,7 @@ class WorkLedger:
         prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
         now = time.time()
         work_id = str(work_id or uuid.uuid4())
-        with self._connect() as conn:
+        with self._session() as conn:
             existing = conn.execute(
                 "SELECT * FROM work_items WHERE idempotency_key=?",
                 (str(idempotency_key),),
@@ -326,7 +355,7 @@ class WorkLedger:
         return self._row(row), True
 
     def get(self, work_id):
-        with self._connect() as conn:
+        with self._session() as conn:
             return self._row(conn.execute(
                 "SELECT * FROM work_items WHERE id=?", (str(work_id),)
             ).fetchone())
@@ -334,7 +363,7 @@ class WorkLedger:
     def latest_for_session(self, session_id):
         if not session_id:
             return None
-        with self._connect() as conn:
+        with self._session() as conn:
             return self._row(conn.execute(
                 """
                 SELECT * FROM work_items
@@ -348,7 +377,7 @@ class WorkLedger:
         if not session_id:
             return self.get(work_id)
         now = time.time()
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.execute(
                 "UPDATE work_items SET session_id=?, updated_at=? WHERE id=?",
                 (str(session_id), now, str(work_id)),
@@ -362,7 +391,7 @@ class WorkLedger:
         if not isinstance(payload, dict):
             raise ValueError("payload must be an object")
         now = time.time()
-        with self._connect() as conn:
+        with self._session() as conn:
             conn.execute(
                 "UPDATE work_items SET payload_json=?, updated_at=? WHERE id=?",
                 (_json(payload), now, str(work_id)),
@@ -385,7 +414,7 @@ class WorkLedger:
             args.append(str(session_id))
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         args.append(max(1, min(int(limit or 200), 2000)))
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 "SELECT * FROM work_items" + where
                 + " ORDER BY created_at DESC LIMIT ?",
@@ -401,7 +430,7 @@ class WorkLedger:
             if states:
                 clauses.append("w.state IN (%s)" % ",".join("?" for _ in states))
                 args.extend(states)
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 """
                 SELECT w.*, e.relation
@@ -427,7 +456,7 @@ class WorkLedger:
         if new_state not in WORK_STATES:
             raise ValueError("invalid work state")
         now = time.time()
-        with self._connect() as conn:
+        with self._session() as conn:
             row = conn.execute(
                 "SELECT * FROM work_items WHERE id=?", (str(work_id),)
             ).fetchone()
@@ -496,7 +525,7 @@ class WorkLedger:
 
     def renew_lease(self, work_id, owner_epoch, lease_seconds=30):
         now = time.time()
-        with self._connect() as conn:
+        with self._session() as conn:
             result = conn.execute(
                 """
                 UPDATE work_items SET lease_expires_at=?, updated_at=?
@@ -517,7 +546,7 @@ class WorkLedger:
     def recover_orphaned_running(self, current_epoch):
         """Mark work owned by a previous worker as uncertain, never replay it."""
         now = time.time()
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 """
                 SELECT id FROM work_items
@@ -549,7 +578,7 @@ class WorkLedger:
 
     def graph(self, root_id):
         root_id = str(root_id)
-        with self._connect() as conn:
+        with self._session() as conn:
             rows = conn.execute(
                 """
                 WITH RECURSIVE graph(id, depth) AS (
@@ -584,7 +613,7 @@ class WorkLedger:
         }
 
     def summary(self):
-        with self._connect() as conn:
+        with self._session() as conn:
             counts = {
                 row["state"]: row["n"]
                 for row in conn.execute(

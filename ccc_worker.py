@@ -19,11 +19,35 @@ from pathlib import Path
 
 from control_plane import (
     ControlPlaneClient, WorkLedger, authenticated, ensure_token, socket_path,
-    token_path,
+    token_path, worker_pid_path,
 )
 
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
+WANTED_OPEN_FILES = 4096
+
+
+def _raise_open_file_limit(target=WANTED_OPEN_FILES):
+    """Lift RLIMIT_NOFILE above launchd's 256 default.
+
+    The worker holds one long-lived descriptor per managed engine process plus
+    SQLite handles. At 256 an exhausted table makes every accept() fail, which
+    looks exactly like a hung worker: the socket stays bound, requests get an
+    empty reply, and the dashboard restart path cannot take over.
+    """
+    try:
+        import resource
+    except ImportError:  # pragma: no cover - non-POSIX
+        return None
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft >= target:
+        return soft
+    wanted = target if hard == resource.RLIM_INFINITY else min(target, hard)
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (wanted, hard))
+    except (ValueError, OSError):
+        return soft
+    return wanted
 
 
 class WorkerRuntime:
@@ -214,9 +238,15 @@ def serve(path=None):
             path.unlink()
         except OSError:
             pass
+    open_files = _raise_open_file_limit()
     runtime = WorkerRuntime(token=token)
     server = WorkerServer(path, runtime)
     os.chmod(path, 0o600)
+    pidfile = worker_pid_path()
+    try:
+        pidfile.write_text(f"{runtime.pid}\n", encoding="utf-8")
+    except OSError:
+        pidfile = None
 
     def stop(_signum, _frame):
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -224,7 +254,8 @@ def serve(path=None):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     print(
-        f"CCC worker running pid={runtime.pid} epoch={runtime.epoch} socket={path}",
+        f"CCC worker running pid={runtime.pid} epoch={runtime.epoch} "
+        f"socket={path} nofile={open_files}",
         flush=True,
     )
     if (
@@ -250,6 +281,12 @@ def serve(path=None):
             path.unlink()
         except OSError:
             pass
+        if pidfile is not None:
+            try:
+                if pidfile.read_text(encoding="utf-8").strip() == str(runtime.pid):
+                    pidfile.unlink()
+            except OSError:
+                pass
 
 
 def main(argv=None):
