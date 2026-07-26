@@ -64,6 +64,16 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
 # ccc_server import.
 sys.modules.setdefault("server", sys.modules[__name__])
 
+def _adopt_module_globals(mod):
+    """Bind every top-level name of an extracted ccc_server module onto this
+    module. Pre-decomposition these names WERE server globals; tests and
+    sibling modules (via _core) still address them here."""
+    globals().update({
+        k: v for k, v in vars(mod).items()
+        if not k.startswith("__") and k != "_core"
+    })
+
+
 # Model-drift advisor (stdlib-only, no back-reference to this module). Lives
 # next to server.py; recommends cheaper/stronger models per live session. See
 # /api/model-advisor and model_advisor.py.
@@ -30049,14 +30059,8 @@ def _resolve_kimi_bin():
     return _acp_resolve_bin("kimi")
 
 
-from ccc_server.wire_tail import (
-    _acp_remote_turn_busy_error,
-    _acp_shutdown_all,
-    _acp_wire_fold,
-    _acp_wire_path,
-    _acp_wire_tail_start,
-    _kimi_wire_turn_active,
-)
+import ccc_server.wire_tail
+_adopt_module_globals(ccc_server.wire_tail)
 
 # ===========================================================================
 # Kimi on-disk session store (~/.kimi-code) — read-only discovery.
@@ -33975,88 +33979,14 @@ def _extract_codex_timeline(session_id):
 # Test-patched globals kept here; ccc_server/gemini.py reads them via _core.
 GEMINI_HOME = Path.home() / ".gemini"
 
-from ccc_server.gemini import (
-    CURSOR_APP_BUNDLE_CANDIDATES,
-    CURSOR_LOCAL_BIN,
-    ANTIGRAVITY_BRAIN,
-    ANTIGRAVITY_CLI_BRAIN,
-    ANTIGRAVITY_HOME,
-    ANTIGRAVITY_SUMMARIES_PROTO,
-    CURSOR_CONTEXT_LIMIT,
-    CURSOR_HOME,
-    _CURSOR_META_VERSION,
-    ANTIGRAVITY_APP_LS_SERVICE,
-    ANTIGRAVITY_CLI_CONVERSATIONS,
-    ANTIGRAVITY_CLI_HOME,
-    ANTIGRAVITY_CLI_SETTINGS,
-    ANTIGRAVITY_CONVERSATIONS,
-    ANTIGRAVITY_MAIN_LOG,
-    CURSOR_PROJECTS_ROOT,
-    _ANTIGRAVITY_EMBEDDED_MESSAGE_RE,
-    _antigravity_add_dirs,
-    _antigravity_cli_configured_model,
-    _antigravity_command_words,
-    _antigravity_has_arg,
-    _antigravity_model_settings_label,
-    _antigravity_print_timeout,
-    _antigravity_print_timeout_seconds,
-    _antigravity_shell_command,
-    _extract_gemini_session_id_from_log,
-    _extract_gemini_tail_meta,
-    _extract_gemini_timeline,
-    _extract_gemini_usage,
-    _gemini_activity_fields_from_tail,
-    _gemini_message_text,
-    _gemini_project_root_for_chat,
-    _gemini_tool_output,
-    _git_branch_for_cwd,
-    _is_gemini_session,
-    _iso_ts_epoch,
-    _load_antigravity_summary_titles,
-    _load_gemini_chat,
-    _parse_gemini_conversation,
-    _pasted_image_parent_dirs,
-    _resolve_antigravity_bin,
-    _resolve_cursor_bin,
-    _resolve_gemini_bin,
-    _resolve_gemini_chat_path,
-    _resolve_kilo_bin,
-    _set_antigravity_cli_model,
-    find_gemini_conversations,
-)
+import ccc_server.gemini
+_adopt_module_globals(ccc_server.gemini)
 
-from ccc_server.cursor import (
-    _cursor_activity_fields_from_tail,
-    _cursor_content_blocks,
-    _cursor_cwd_from_transcript_path,
-    _cursor_event_role,
-    _cursor_project_slug,
-    _cursor_session_id_for_spawn_entry,
-    _cursor_sidebar_visibility_backfill_once,
-    _cursor_tail_resume,
-    _cursor_tool_args,
-    _cursor_tool_command,
-    _cursor_tool_name,
-    _cursor_transcript_path,
-    _ensure_cursor_session_visible,
-    _extract_cursor_chat_id_from_log,
-    _extract_cursor_tail_meta,
-    _extract_cursor_timeline,
-    _extract_cursor_usage,
-    _extract_files_from_cursor_conversation,
-    _is_cursor_session,
-    _parse_cursor_event,
-    find_cursor_conversations,
-)
+import ccc_server.cursor
+_adopt_module_globals(ccc_server.cursor)
 
-from ccc_server.antigravity import (
-    _antigravity_app_conversation_path,
-    _antigravity_cli_conversation_path,
-    _antigravity_transcript_path,
-    _antigravity_transcript_paths,
-    _is_antigravity_session,
-    _is_kilo_session,
-)
+import ccc_server.antigravity
+_adopt_module_globals(ccc_server.antigravity)
 
 # Test-patched globals kept here; ccc_server/hermes.py reads them via _core.
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
@@ -34088,61 +34018,21 @@ HERMES_PROFILES_DIR = Path(
 _ENGINE_UPDATE_STATE_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.json"
 _ENGINE_UPDATE_LOCK_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.lock"
 
-from ccc_server.hermes import (
-    _engine_cli_version,
-    _engine_update_specs,
-    _engine_maintenance_loop,
-    _engine_update_status,
-    _extract_files_from_hermes_conversation,
-    _extract_hermes_timeline,
-    _extract_hermes_usage,
-    _hermes_cache_key,
-    _hermes_session_row,
-    _is_hermes_session,
-    _parse_hermes_conversation,
-    _resolve_hermes_bin,
-    _start_engine_update_pass,
-    find_hermes_conversations,
-    resume_session_hermes,
-    _HERMES_DB_INDEX,
-    _HERMES_GATEWAY_CACHE,
-    _HERMES_ID_CACHE,
-    _hermes_db_for_session,
-    _hermes_decision_summary,
-    _hermes_tool_block,
-    _engine_maintenance_once,
-    _run_engine_updates_once,
-)
+import ccc_server.hermes
+_adopt_module_globals(ccc_server.hermes)
 
 
-from ccc_server.kilo import (
-    _kilo_connect,
-    _parse_kilo_conversation,
-    find_kilo_conversations,
-)
+import ccc_server.kilo
+_adopt_module_globals(ccc_server.kilo)
 
-from ccc_server.copilot_cli import (
-    _copilot_first_col,
-    _copilot_home,
-    _is_copilot_session,
-    _parse_copilot_conversation,
-    find_copilot_conversations,
-)
+import ccc_server.copilot_cli
+_adopt_module_globals(ccc_server.copilot_cli)
 
-from ccc_server.grok import (
-    _grok_home,
-    _is_grok_session,
-    _parse_grok_conversation,
-    find_grok_conversations,
-)
+import ccc_server.grok
+_adopt_module_globals(ccc_server.grok)
 
-from ccc_server.vscode_copilot import (
-    COPILOTCHAT_LIVE_WINDOW_S,
-    _copilotchat_chat_dirs,
-    _copilotchat_scan_dir,
-    _copilotchat_session_file,
-    _is_copilotchat_session,
-)
+import ccc_server.vscode_copilot
+_adopt_module_globals(ccc_server.vscode_copilot)
 
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
@@ -45383,13 +45273,8 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
                 pass
 
 
-from ccc_server.pkood import (
-    find_pkood_agents,
-    pkood_inject,
-    pkood_kill,
-    pkood_spawn,
-    pkood_tail,
-)
+import ccc_server.pkood
+_adopt_module_globals(ccc_server.pkood)
 
 # ---------------------------------------------------------------------------
 # GitHub issues
@@ -50323,55 +50208,14 @@ def extract_session_usage(session_id):
 _HISTORY_INDEX_PATH = Path.home() / ".claude-index" / "index.db"
 _history_conn = None
 _history_conn_lock = threading.Lock()       # guards connection open / reset
-from ccc_server.history_search import (
-    _HISTORY_AUTO_INGEST_GAP_SEC,
-    _hi_indexer,
-    _history_drop_conn,
-    get_history_message,
-    search_conversation_history,
-)
+import ccc_server.history_search
+_adopt_module_globals(ccc_server.history_search)
 # Test-patched globals kept here; ccc_server/recall_usage.py reads them via _core.
 _USAGE_SNAPSHOTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "usage-snapshots.jsonl"
 _RESET_EVENTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
 
-from ccc_server.recall_usage import (
-    _total_recall_command,
-    _KIMI_CREDENTIALS_FILE,
-    _iter_recent_codex_rollouts,
-    _kimi_fetch_usages,
-    _RESET_DETECT_JITTER_SECS,
-    _USAGE_NATIVE_FRESH_SECS,
-    _latest_native_usage_snapshot,
-    _live_usage_from_snapshot,
-    _read_codex_account_usage,
-    _read_native_usage_snapshots_unlocked,
-    _read_usage_reset_events_unlocked,
-    _reset_events_lock,
-    _start_plan_usage_poller,
-    _usage_snapshot_epoch,
-    _usage_snapshots_lock,
-    _write_week_start_override,
-    delete_usage_reset_event,
-    get_cached_plan_usage,
-    record_usage_reset_event,
-    search_total_recall_sessions,
-    update_usage_reset_event,
-    usage_current_payload,
-    usage_reset_events_payload,
-    usage_snapshots_payload,
-    _append_native_usage_snapshot,
-    _append_usage_reset_event,
-    _codex_account_usage_from_response,
-    _codex_file_latest_rate_limits,
-    _codex_usage_file_cache,
-    _codex_usage_from_account_rate_limits,
-    _detect_usage_reset_events,
-    _kimi_usage_from_response,
-    _native_usage_snapshot_from_plan_usage,
-    _read_codex_usage,
-    _read_kimi_usage,
-    _usage_snapshot_iso,
-)
+import ccc_server.recall_usage
+_adopt_module_globals(ccc_server.recall_usage)
 
 # ---------------------------------------------------------------------------
 # Global usage stats — aggregated across every transcript under PROJECTS_ROOT.
@@ -54992,19 +54836,8 @@ def morning_launch(goal_slug, strategy_id, custom_message=None):
     }
 
 
-from ccc_server.terminal import (
-    _kimi_cli_version,
-    _TERM_LOCK,
-    _kimi_setup_status,
-    _kimi_setup_verify,
-    _term_cwd,
-    _term_kill_running,
-    _term_rel,
-    _term_resolve_cwd_change,
-    _term_split_leading_cd,
-    _term_state,
-    _KIMI_SETUP_STATUS_MEMO,
-)
+import ccc_server.terminal
+_adopt_module_globals(ccc_server.terminal)
 
 # ---------------------------------------------------------------------------
 # HTTP handler
@@ -65982,9 +65815,8 @@ def _fleet_inventory_payload(fetch=False, include_deploy=True, include_prs=True,
         "repos": repo_list,
     }
 
-from ccc_server.fleet_reco import (
-    _fleet_recommendations,
-)
+import ccc_server.fleet_reco
+_adopt_module_globals(ccc_server.fleet_reco)
 
 # ---------------------------------------------------------------------------
 # Fleet executor — reviewed plan, persisted resumable jobs
