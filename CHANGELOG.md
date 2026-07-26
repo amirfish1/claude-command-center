@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.11.3] - 2026-07-26
+
+### Fixed
+- **A new GitHub issue reaches the queue board in ~20s instead of needing a
+browser reload.** GitHub-backed queues keep their tickets in GitHub Issues, so
+they never touch the local ticket store the queue-events SSE watches. The cover
+for that was a blind 60s beat — but a beat only tells the client to refetch, and
+`/api/queue/list` is stale-while-revalidate, so the first refetch after a remote
+change served the old list and merely scheduled a rebuild. The new issue did not
+surface until the next beat, putting it up to ~2 minutes away and making a
+manual reload look like the only thing that worked.
+
+The stream now polls deliberately instead of beating blindly: while a board has
+the SSE open, a watcher forces a remote refresh every 20s, writes the result
+into the memo `/api/queue/list` serves, and bumps a version counter only when
+the ticket set really changed. The SSE folds that counter into its change
+detection, so a push now means "something is new and it is already warm" — the
+client's refetch returns fresh rows on the first try. Cost is bounded by
+subscribers, not tabs: one `gh issue list` per interval while a board is open,
+and none at all when every board is closed.
+- **Plan-to-fleet import preview now shows where each ticket came from.** `wt
+import` emits the source anchor and the dependency edge as indented
+continuation lines rather than inline in parentheses, so the preview was
+parsing both away and rendering a bare title. The parser accepts both shapes,
+and a preview row now shows `after: <title>` for a dependency alongside the
+`plan.md#L8-L12` anchor. New: `docs/plan-to-fleet.md`, the end-to-end guide.
+- **WatchTower now actually installs with CCC.** The README said WatchTower
+shipped "installed by default as CCC's queue engine", but the installer only
+probed for a WatchTower checkout you already had at `~/Apps/watchtower` or
+`~/dev/watchtower` — every other user silently fell through to the built-in
+fallback engine, which files tickets but never dispatches a worker, cannot
+import a plan, and issues no delivery receipts. Homebrew, the DMG, and Docker
+never even ran the probe.
+
+The installers now fetch WatchTower for real (git clone to `~/.ccc/watchtower`,
+installed editable so a later pull upgrades in place; `watchtower-cli` on PyPI
+as the fallback), and `run.sh` bootstraps it on first launch — so every install
+path ends up with it, not just the two that already had a dev checkout. It
+installs into the same interpreter that runs `server.py`, and survives PEP 668
+interpreters and virtualenvs. Needs Python 3.11+; on anything older CCC says so
+once and stays on the fallback. `CCC_SKIP_WATCHTOWER=1` opts out.
+
 ## [5.11.2] - 2026-07-26
 
 ### Fixed
@@ -2180,7 +2222,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.2...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.3...HEAD
+[5.11.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.3
 [5.11.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.2
 [5.11.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.1
 [5.11.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.0
