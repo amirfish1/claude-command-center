@@ -35513,6 +35513,11 @@
             || (claimedBy && (claimedBy === session || claimedBy === id));
         });
       };
+      const _isUnverifiedClaim = it => {
+        const claimedBy = String((it && it.claimed_by) || '').trim();
+        const claimedSession = String((it && it.claimed_session_id) || '').trim();
+        return !!claimedBy && !claimedSession && !_hasLiveClaim(it);
+      };
       const _isStaleClaim = it => {
         const rawStatus = String((it && it.status) || 'open');
         return rawStatus === 'in_progress'
@@ -35625,6 +35630,7 @@
         if (_uxqPendingRunRefs.has(ref) && status !== 'open') _uxqPendingRunRefs.delete(ref);
         const pendingRun = _uxqPendingRunRefs.has(ref);
         const staleClaim = _isStaleClaim(it);
+        const unverifiedClaim = _isUnverifiedClaim(it);
         const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
         const blocked = !!it.needs_input;
@@ -35646,6 +35652,7 @@
         const runnable = it.watchtower_runnable !== false;
         const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
         const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
+          : unverifiedClaim ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
           : staleClaim ? 'stale claim - no current live worker' : status;
         const statusAction = pendingRun
           ? '<span class="fq-status fq-status-pending" title="Starting worker…" role="status" aria-label="Starting worker"></span>'
@@ -35665,7 +35672,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(displayRef) + '</span>'
           + _uxqChips(it, priorityBumpHtml)
