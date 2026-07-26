@@ -11290,7 +11290,7 @@ _spawned_sessions = []  # [{pid, name, log, proc}]
 # ---------------------------------------------------------------------------
 
 def extract_session_id(path):
-    """Scan the first ~60 lines of a stream-json log file for a session_id UUID."""
+    """Scan the first ~60 lines of an agent log file for a session UUID."""
     try:
         with open(path, "r") as f:
             for i, line in enumerate(f):
@@ -11302,6 +11302,15 @@ def extract_session_id(path):
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
+                    # `codex exec` writes a short human-readable header before
+                    # its output instead of a stream-json session event.
+                    match = re.fullmatch(
+                        r"session id:\s*([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})",
+                        line,
+                        flags=re.IGNORECASE,
+                    )
+                    if match:
+                        return match.group(1)
                     continue
                 sid = ev.get("session_id") or ev.get("sessionId")
                 if sid and len(sid) >= 32:
