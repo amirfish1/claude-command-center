@@ -34553,14 +34553,20 @@
           ? _drainByQueue.get(drainKey)
           : !!r.auto_drain;
         const pendingDrain = _uxqPendingDrainStates.get(drainKey);
+        const isDrainPending = !!(pendingDrain && pendingDrain.pending);
+        // A health request can have started before the POST and complete after
+        // it. Keep the confirmed value through that stale repaint; discard the
+        // override only when a later health snapshot agrees with the write.
+        const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;
+        if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);
         const displayedAutoDrain = pendingDrain ? pendingDrain.on : autoDrain;
         const drainToggle = '<button type="button" class="fq-health-drain-toggle'
-          + (displayedAutoDrain ? ' is-on' : '') + (pendingDrain ? ' is-pending' : '') + '"'
+          + (displayedAutoDrain ? ' is-on' : '') + (isDrainPending ? ' is-pending' : '') + '"'
           + ' data-drain-queue="' + escapeAttr(project) + '"'
           + ' data-drain-on="' + (displayedAutoDrain ? '1' : '0') + '"'
           + ' aria-pressed="' + (displayedAutoDrain ? 'true' : 'false') + '"'
-          + (pendingDrain ? ' aria-busy="true" disabled' : '')
-          + ' title="' + (pendingDrain
+          + (isDrainPending ? ' aria-busy="true" disabled' : '')
+          + ' title="' + (isDrainPending
             ? ('Turning auto-drain ' + (displayedAutoDrain ? 'on' : 'off') + '…')
             : (displayedAutoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable')) + '">'
           + 'drain&nbsp;<span class="fq-health-drain-val">' + (displayedAutoDrain ? 'on' : 'off') + '</span>'
@@ -35881,8 +35887,13 @@
         const drainKey = String(queue || '').toUpperCase();
         const newVal = btn.getAttribute('data-drain-on') !== '1';
         const pendingStartedAt = Date.now();
+        // A health GET already in flight can report the pre-click policy after
+        // the write succeeds. Wait for it, then ask for a new snapshot before
+        // releasing the confirmed local override.
+        const healthInFlightAtClick = _uxqHealthPromise;
         const drainVal = btn.querySelector('.fq-health-drain-val');
         const priorTitle = btn.title;
+        let drainSucceeded = false;
         // Drain policy does not change ticket depth/claimability, so classify
         // the outcome from the same snapshot that rendered the clicked row.
         // A concurrent health request may have started before this POST and
@@ -35890,7 +35901,7 @@
         const queueHealth = (_uxqHealthCache.queues || []).find(q =>
           q && String(q.queue || '').toUpperCase() === String(queue || '').toUpperCase()
         );
-        _uxqPendingDrainStates.set(drainKey, { on: newVal });
+        _uxqPendingDrainStates.set(drainKey, { on: newVal, pending: true });
         btn.classList.toggle('is-on', newVal);
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
@@ -35907,6 +35918,7 @@
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          drainSucceeded = true;
           _uxqHealthCache.ts = 0;
           if (newVal && queueHealth && Number(queueHealth.depth) > 0 && Number(queueHealth.claimable) === 0) {
             showOpToast('Auto-drain enabled for ' + queue + ', but it has no runnable tickets (' + Number(queueHealth.depth) + ' open).', 'info');
@@ -35925,12 +35937,23 @@
         } finally {
           const remainingPendingMs = _UXQ_DRAIN_MIN_PENDING_MS - (Date.now() - pendingStartedAt);
           if (remainingPendingMs > 0) await new Promise(resolve => setTimeout(resolve, remainingPendingMs));
-          _uxqPendingDrainStates.delete(drainKey);
+          const pendingDrainState = _uxqPendingDrainStates.get(drainKey);
+          if (drainSucceeded && pendingDrainState) pendingDrainState.pending = false;
+          else _uxqPendingDrainStates.delete(drainKey);
           btn.classList.remove('is-pending');
           btn.removeAttribute('aria-busy');
           btn.disabled = false;
-          _uxqHealthCache.ts = 0;
-          _renderQueueHealthStrip(true, null);
+          if (drainSucceeded) {
+            const refreshDrainHealth = async () => {
+              if (healthInFlightAtClick) await healthInFlightAtClick.catch(() => {});
+              _uxqHealthCache.ts = 0;
+              _renderQueueHealthStrip(true, null);
+            };
+            void refreshDrainHealth();
+          } else {
+            _uxqHealthCache.ts = 0;
+            _renderQueueHealthStrip(true, null);
+          }
         }
       };
       const cycleClaimTypes = async (ev) => {

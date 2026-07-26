@@ -4962,7 +4962,7 @@ class TestServerImports(unittest.TestCase):
         )
 
     def test_queue_drain_toggle_keeps_optimistic_state_through_refresh(self):
-        """A stale health repaint must not erase the clicked drain transition."""
+        """A stale health repaint must not erase a confirmed drain transition."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         strip_js = app_js[
             app_js.index("async function _renderQueueHealthStrip"):
@@ -4976,9 +4976,19 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _uxqPendingDrainStates = new Map();", app_js)
         self.assertIn("const pendingDrain = _uxqPendingDrainStates.get", strip_js)
         self.assertIn("pendingDrain ? pendingDrain.on : autoDrain", strip_js)
-        self.assertIn("is-pending", strip_js)
+        self.assertIn("const isDrainPending = !!(pendingDrain && pendingDrain.pending);", strip_js)
+        self.assertIn(
+            "const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;",
+            strip_js,
+        )
+        self.assertIn("if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);", strip_js)
         self.assertIn("_uxqPendingDrainStates.set", toggle_js)
         self.assertIn("_uxqPendingDrainStates.delete", toggle_js)
+        self.assertIn("const healthInFlightAtClick = _uxqHealthPromise;", toggle_js)
+        self.assertIn("let drainSucceeded = false;", toggle_js)
+        self.assertIn("drainSucceeded = true;", toggle_js)
+        self.assertIn("pendingDrainState.pending = false;", toggle_js)
+        self.assertIn("void refreshDrainHealth();", toggle_js)
 
     def test_queue_detail_uses_watchtower_timeline_contract(self):
         """Ticket detail should come from WT timeline, not CCC's old private
