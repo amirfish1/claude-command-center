@@ -163,7 +163,28 @@ class WorkerRequestHandler(socketserver.StreamRequestHandler):
             response = {"ok": False, "code": "invalid_request", "error": str(exc)}
         except Exception as exc:
             response = {"ok": False, "code": "worker_error", "error": str(exc)}
-        self._send(response)
+        except BaseException as exc:
+            # SystemExit and friends must not close the connection without a
+            # reply: the client cannot distinguish that from a dead worker,
+            # and the restart path then refuses to replace us.
+            import traceback
+            traceback.print_exc()
+            sys.stderr.flush()
+            response = {
+                "ok": False,
+                "code": "worker_error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        try:
+            self._send(response)
+        except TypeError as exc:
+            # Response contained something json.dumps cannot encode; still
+            # answer with a parseable error instead of dropping the socket.
+            self._send({
+                "ok": False,
+                "code": "worker_error",
+                "error": f"unserializable response: {exc}",
+            })
 
     def _send(self, payload):
         self.wfile.write(
