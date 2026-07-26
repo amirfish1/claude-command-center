@@ -38,3 +38,16 @@ def _restore_canonical_server_module():
     yield
     if orig is not None and sys.modules.get("server") is not orig:
         sys.modules["server"] = orig
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _restore_canonical_server_module_after_file():
+    """Class-scoped re-imports (setUpClass) outlive the per-test restore:
+    the function-scoped fixture sees the fresh instance as the status quo
+    and keeps it for the rest of the class — correct within the file, but
+    it must not leak into the next file. Snapshot per test file, restore
+    when the file is done."""
+    orig = sys.modules.get("server")
+    yield
+    if orig is not None and sys.modules.get("server") is not orig:
+        sys.modules["server"] = orig
