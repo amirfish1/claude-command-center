@@ -55,6 +55,18 @@ def test_url_mode_is_used_by_settings_rerenders_and_toggle():
     assert "const on = qFirstEnabled();" in qfirst_handler
 
 
+def test_qfirst_topbar_makes_sessions_exit_and_pinned_state_explicit():
+    """Queue-first users can see how to leave without changing their default."""
+    block = _qf_block(_app_js())
+    assert 'class="qf-btn qf-exit-btn"' in block
+    assert "Back to sessions" in block
+    assert "Default: queues (pinned)" in block
+    assert "click to unpin" in block
+
+    css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
+    assert ".qf-exit-btn" in css
+
+
 def test_qfirst_writes_go_through_wt_backed_endpoints_only():
     block = _qf_block(_app_js())
     # Every mutation is one of the existing wt-backed endpoints.

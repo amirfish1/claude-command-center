@@ -20582,6 +20582,12 @@ body.qf-active #issuesView { display: none !important; }
 .qf-btn-primary { background: var(--qf-amber-soft); border-color: var(--qf-amber); color: var(--text); }
 .qf-btn-ghost { background: none; }
 .qf-mode-btn.is-on { border-color: var(--qf-green); color: var(--qf-green); }
+.qf-exit-btn {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+.qf-exit-btn:hover { border-color: var(--accent); background: var(--qf-amber-soft); }
 .qf-linklike {
   background: none;
   border: none;

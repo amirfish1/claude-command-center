@@ -1,0 +1,1 @@
+- Make the queue-first board's Sessions exit and pinned-default unpin control explicit.

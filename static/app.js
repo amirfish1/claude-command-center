@@ -36415,14 +36415,14 @@
   function _qfTopbar(crumbHtml, actionsHtml) {
     const pinned = (() => { try { return localStorage.getItem('ccc-q-first') === '1'; } catch (_) { return false; } })();
     const modeBtn = pinned
-      ? '<button type="button" class="qf-btn qf-mode-btn is-on" data-qf-action="unpin-mode" title="Queue-first is your default landing view. Click to make the session list the default again." aria-pressed="true">Default: queues</button>'
+      ? '<button type="button" class="qf-btn qf-mode-btn is-on" data-qf-action="unpin-mode" title="Queue-first is your pinned default. Click to make the sessions view the default again." aria-pressed="true">Default: queues (pinned) · click to unpin</button>'
       : '<button type="button" class="qf-btn qf-mode-btn" data-qf-action="pin-mode" title="Make this queue board the default landing view on every load." aria-pressed="false">Make default</button>';
     return '<header class="qf-topbar">'
       + crumbHtml
       + '<div class="qf-topbar-actions">'
       + (actionsHtml || '')
       + modeBtn
-      + '<button type="button" class="qf-btn" data-qf-action="leave-board" title="Switch to the regular sessions view. The board stays one click away.">Sessions</button>'
+      + '<button type="button" class="qf-btn qf-exit-btn" data-qf-action="leave-board" title="Back to the sessions view. Your pinned queue default will not change."><span aria-hidden="true">&larr;</span> Back to sessions</button>'
       + '</div></header>';
   }
 
