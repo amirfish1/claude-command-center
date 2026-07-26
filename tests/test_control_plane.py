@@ -161,6 +161,11 @@ class TestWorkerIPC(unittest.TestCase):
         health = self.client.request("health")
         self.assertTrue(health["ok"])
         self.assertEqual(health["active"], 0)
+        self.assertIsInstance(health["worker"]["started_at"], float)
+        self.assertEqual(
+            self.client.request("health")["worker"]["started_at"],
+            health["worker"]["started_at"],
+        )
         self.assertIn(
             "engine-execution-v1",
             health["worker"]["capabilities"],

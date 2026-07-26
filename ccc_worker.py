@@ -14,6 +14,7 @@ import signal
 import socketserver
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -54,6 +55,7 @@ class WorkerRuntime:
     def __init__(self, ledger=None, token=None):
         self.epoch = str(uuid.uuid4())
         self.pid = os.getpid()
+        self.started_at = time.time()
         self.ledger = ledger or WorkLedger()
         self.token = token or ensure_token()
         self.recovered = self.ledger.recover_orphaned_running(self.epoch)
@@ -68,6 +70,7 @@ class WorkerRuntime:
                 "worker": {
                     "pid": self.pid,
                     "epoch": self.epoch,
+                    "started_at": self.started_at,
                     "recovered_uncertain": len(self.recovered),
                     "capabilities": [
                         "engine-execution-v1",

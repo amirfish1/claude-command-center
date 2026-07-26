@@ -52121,7 +52121,6 @@
     );
     let label = 'Worker';
     let detail = 'Persistent execution worker online';
-    let attention = 0;
     if (!data || !data.ok) {
       $workerBadge.classList.add('is-offline');
       label = 'Worker offline';
@@ -52136,19 +52135,16 @@
         const drain = data.drain || {};
         const active = Number(data.active || 0);
         const queued = Number(data.queued || 0);
-        const uncertain = Number(data.uncertain || 0);
-        const workerJobs = active + queued;
-        if (uncertain) {
-          $workerBadge.classList.add('is-uncertain');
-          label = 'Needs review:';
-          attention = uncertain;
-          detail = [
-            uncertain + (uncertain === 1 ? ' job needs review' : ' jobs need review'),
-            active + ' active',
-            queued + ' queued',
-            'open Maintenance to reconcile',
-          ].join(' · ');
-        } else if (drain.enabled) {
+        const startedAt = Number((data.worker && data.worker.started_at) || 0);
+        const restartedAt = startedAt > 0
+          ? new Date(startedAt * 1000).toLocaleString([], {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })
+          : '';
+        if (drain.enabled) {
           $workerBadge.classList.add('is-paused');
           label = 'Worker paused';
           detail = [
@@ -52157,24 +52153,20 @@
             queued + ' queued',
             'open Maintenance to resume',
           ].join(' · ');
-        } else if (workerJobs) {
-          label = 'Worker jobs:';
-          attention = workerJobs;
-          detail = [
-            'Execution worker online',
-            active + ' active',
-            queued + ' queued',
-          ].join(' · ');
         } else {
-          label = 'Worker ready';
-          detail = 'Execution worker online · no active or queued jobs';
+          label = restartedAt
+            ? 'Worker restarted ' + restartedAt
+            : 'Worker online';
+          detail = restartedAt
+            ? 'Persistent execution worker restarted ' + restartedAt
+            : 'Persistent execution worker online';
         }
       }
     }
     if ($workerWord) $workerWord.textContent = label;
     if ($workerCount) {
-      $workerCount.textContent = String(attention);
-      $workerCount.hidden = attention === 0;
+      $workerCount.textContent = '';
+      $workerCount.hidden = true;
     }
     $workerBadge.title = detail;
     $workerBadge.setAttribute(
