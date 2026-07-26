@@ -56370,10 +56370,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         The tick is stat-only (~1/s: mtime_ns+size of two files) — no store
         reads, no list_items(), no subprocess — so N subscribers cost nothing.
         Payloads are hints, not row data; the client refetches through the
-        existing memoized endpoints, which keeps ONE payload contract. A slow
-        beat (60s) covers GitHub-backed queues, whose remote changes leave no
-        local mtime. Spawned workers land in workers.json on spawn, so this
-        also kills the auto-drain discovery lag for the queue board.
+        existing memoized endpoints, which keeps ONE payload contract. Spawned
+        workers land in workers.json on spawn, so this also kills the
+        auto-drain discovery lag for the queue board.
+
+        GitHub-backed queues have no local mtime to stat, so a dedicated
+        watcher polls them while this stream is open and exposes a version
+        counter (see gh_queue_version); folding it in here means a remote issue
+        pushes within one poll interval AND arrives already warm in the list
+        memo, instead of costing two 60s beats to surface. The 60s beat is kept
+        as a floor for anything neither signal covers.
         """
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -56401,14 +56407,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
 
         store_path = str(_queue_store_path())
         workers_path = str(_wt_workers_path())
-        last = (_stat_sig(store_path), _stat_sig(workers_path))
+        gh_queue_watch_enter()
+        last = (_stat_sig(store_path), _stat_sig(workers_path), gh_queue_version())
         last_beat = last_keepalive = time.time()
         try:
             # Baseline: have the client hydrate immediately on (re)connect.
             if not _emit({"type": "hello", "ts": round(last_beat, 3)}):
                 return
             while True:
-                cur = (_stat_sig(store_path), _stat_sig(workers_path))
+                cur = (_stat_sig(store_path), _stat_sig(workers_path), gh_queue_version())
                 now = time.time()
                 if cur != last:
                     what = []
@@ -56416,6 +56423,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         what.append("tickets")
                     if cur[1] != last[1]:
                         what.append("workers")
+                    if cur[2] != last[2]:
+                        what.append("remote")
                     if not _emit({"type": "queue_changed", "what": what, "ts": round(now, 3)}):
                         return
                     last = cur
@@ -56436,6 +56445,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 time.sleep(1.0)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
+        finally:
+            # Every exit from the loop above is a `return`, so the refcount has
+            # to be released here or the GitHub poller would outlive its last
+            # subscriber and keep spending `gh` calls on nobody.
+            gh_queue_watch_exit()
 
     def _term_send_event(self, event, payload):
         """Write one SSE event to the wire. Returns False on broken pipe."""

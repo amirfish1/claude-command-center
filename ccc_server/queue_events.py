@@ -499,6 +499,135 @@ def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
     return items
 
 
+# ---------------------------------------------------------------------------
+# GitHub-backed queue freshness
+# ---------------------------------------------------------------------------
+# The queue-events SSE detects change by stat'ing the local ticket store, which
+# a GitHub-backed queue never touches — its tickets live in GitHub Issues. The
+# original cover for that was a blind 60s beat, but a beat only tells the client
+# to refetch, and the endpoint it refetches is stale-while-revalidate: the first
+# poll after a remote change serves the OLD list and merely schedules a rebuild,
+# so the new issue does not surface until the NEXT beat. Two beats plus the
+# backend's own 20s list cache put a freshly-filed issue up to ~2 minutes away,
+# which is why a manual browser reload looked like the only thing that worked.
+#
+# So: poll deliberately instead of beating blindly. While at least one board has
+# the SSE open, refresh the GitHub list on a fixed cadence, write the result
+# into the very memo /api/queue/list serves, and bump a version counter when the
+# ticket set actually changes. The SSE folds that counter into its change
+# detection, so the push now means "there is something new AND it is already
+# warm" — the client's refetch returns fresh data on the first try.
+#
+# Cost is bounded by subscribers, not by tabs: one `gh issue list` per interval
+# while a board is open, zero when none is.
+_GH_POLL_INTERVAL_S = 20.0
+_gh_watch_lock = threading.Lock()
+_gh_watch = {"subscribers": 0, "thread": None, "version": 0, "sig": None}
+_gh_watch_wake = threading.Event()
+
+
+def _github_queue_configured():
+    """True when any queue in queue-config.json is GitHub-backed."""
+    try:
+        cfg = _core._wt_read_config()
+    except Exception:
+        return False
+    return any(
+        isinstance(v, dict) and str(v.get("backend") or "") == "github"
+        for v in cfg.values()
+    )
+
+
+def _gh_queue_signature(items):
+    """Change fingerprint over GitHub-sourced tickets only.
+
+    `github_repo` is stamped on every item the GitHub backend builds, so it
+    identifies remote rows without trusting the user-settable `source` field.
+    Sorted so list ordering can never masquerade as a change.
+    """
+    rows = sorted(
+        (
+            str(it.get("ref") or ""),
+            str(it.get("status") or ""),
+            str(it.get("updated_at") or ""),
+        )
+        for it in items
+        if isinstance(it, dict) and it.get("github_repo")
+    )
+    return tuple(rows)
+
+
+def _gh_queue_poll_once():
+    """One forced remote refresh. Warms the list memo, returns True on change."""
+    try:
+        items = _core._q.list_items(fresh=True) or []
+    except TypeError:
+        # The stdlib fallback engine has no `fresh` kwarg — and no remote to
+        # refresh either, so this degrades to a plain read.
+        try:
+            items = _core._q.list_items() or []
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+    with _ux_fixes_list_cache_lock:
+        _ux_fixes_list_cache[("", "")] = {"ts": time.time(), "items": items}
+
+    sig = _gh_queue_signature(items)
+    with _gh_watch_lock:
+        first = _gh_watch["sig"] is None
+        changed = (not first) and sig != _gh_watch["sig"]
+        _gh_watch["sig"] = sig
+        if changed:
+            _gh_watch["version"] += 1
+    return changed
+
+
+def _gh_queue_watch_loop():
+    while True:
+        with _gh_watch_lock:
+            if _gh_watch["subscribers"] <= 0:
+                _gh_watch["thread"] = None
+                return
+        # Re-read config every pass so a queue switched to the GitHub backend
+        # starts being watched without needing a reconnect.
+        if _github_queue_configured():
+            try:
+                _gh_queue_poll_once()
+            except Exception:
+                pass
+        _gh_watch_wake.wait(_GH_POLL_INTERVAL_S)
+        _gh_watch_wake.clear()
+
+
+def gh_queue_watch_enter():
+    """Register an SSE subscriber; start the watcher if it is not running."""
+    with _gh_watch_lock:
+        _gh_watch["subscribers"] += 1
+        if _gh_watch["thread"] is None:
+            t = threading.Thread(
+                target=_gh_queue_watch_loop, daemon=True, name="gh-queue-watch",
+            )
+            _gh_watch["thread"] = t
+            t.start()
+
+
+def gh_queue_watch_exit():
+    with _gh_watch_lock:
+        _gh_watch["subscribers"] = max(0, _gh_watch["subscribers"] - 1)
+        idle = _gh_watch["subscribers"] <= 0
+    if idle:
+        # Let the loop notice and retire instead of sleeping out the interval.
+        _gh_watch_wake.set()
+
+
+def gh_queue_version():
+    """Monotonic counter; changes when the remote ticket set changed."""
+    with _gh_watch_lock:
+        return _gh_watch["version"]
+
+
 _UX_FIXES_HEALTH_TTL = 15.0
 _ux_fixes_health_snapshot = {"ts": 0.0, "data": None}
 _ux_fixes_health_snapshot_lock = threading.Lock()
