@@ -17610,23 +17610,6 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-run:hover { border-color: var(--accent, #58a6ff); background: rgba(88,166,255,0.18); }
 .fq-run:disabled { opacity: 0.45; cursor: wait; }
-.fq-run-once {
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--warn, #d29922) 35%, transparent);
-  background: color-mix(in srgb, var(--warn, #d29922) 12%, transparent);
-  color: var(--warn, #d29922);
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-}
-.fq-run-once:hover { border-color: var(--warn, #d29922); background: color-mix(in srgb, var(--warn, #d29922) 18%, transparent); }
-.fq-run-once:disabled { opacity: 0.45; cursor: wait; }
 .files-queue-panel.queue-wrap-titles .fq-row {
   align-items: flex-start;
   flex-wrap: wrap;
@@ -17710,6 +17693,19 @@ body:has(.gc-reader) .pwa-install-banner {
   background: var(--text-muted, #8b949e);
   animation: none;
   box-shadow: 0 0 0 3px rgba(139,148,158,0.16);
+}
+/* Queued to run (2026-07-26 ▶ design): run_requested is set but no worker has
+   claimed the ticket yet. Amber for "waiting its turn" — distinct from plain
+   open (grey) and from running (blue, pulsing). It stays a live button because
+   a second press cancels the request; the rule sits after .fq-row.is-open so
+   it wins on the open rows queued tickets still are. */
+.fq-row.is-queued-run .fq-status.fq-run {
+  background: color-mix(in srgb, var(--warn, #d29922) 85%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn, #d29922) 22%, transparent);
+}
+.fq-row.is-queued-run .fq-status.fq-run:hover,
+.fq-row.is-queued-run .fq-status.fq-run:focus-visible {
+  background: var(--warn, #d29922);
 }
 .fq-age {
   flex-shrink: 0; font-size: 11px; color: var(--text-muted);

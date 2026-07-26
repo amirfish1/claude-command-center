@@ -33930,10 +33930,13 @@
   // Every server-confirmed ticket mutation advances this version. A list read
   // that began before that mutation is stale and must not overwrite its row.
   let _uxqItemsVersion = 0;
-  // Replaces the Play control while WatchTower starts a worker. The entry is
-  // cleared only when a refreshed ticket leaves `open`, so dispatch latency is
-  // visible instead of looking like a click was ignored.
-  const _uxqPendingRunRefs = new Set();
+  // Refs whose ▶ request is in flight right now, so a second click can't
+  // double-fire while the POST is open. Deliberately NOT a "starting worker"
+  // state: that one keyed off the ticket still being `open`, so with drain off
+  // it latched forever and covered the button. Queued-to-run is real state on
+  // the ticket now (run_requested), so the row renders the store's truth and
+  // this set is cleared in a finally, never by a guess about status.
+  const _uxqRunBusyRefs = new Set();
   // Newly filed tickets appear immediately, then yield to their canonical
   // WatchTower row only after the post-write refresh sees it.
   const _uxqPendingQueueAdds = new Map();
@@ -35465,12 +35468,12 @@
       _uxqRenderFilterToggle();
       _uxqRenderTypeFilterToggle();
       _renderQueueHealthStrip(false, null, allowStale); // always show all queues regardless of scope/dropdown
-      // Ensure _uxqHealthCache.queues (auto_drain per queue) is populated
-      // before building rows below — _renderQueueHealthStrip above is
-      // fire-and-forget, so without this await the per-row "drain once"
-      // button (CCC-437) would race an empty cache on first paint and
-      // wrongly show on auto-drain queues too. _fetchUxqHealth has its own
-      // 15s TTL cache, so this is normally a no-op await, not a fetch.
+      // Ensure _uxqHealthCache is populated before building rows below —
+      // _renderQueueHealthStrip above is fire-and-forget, so without this
+      // await the live-worker list (_liveWorkers, which decides whether a
+      // claim is live or stale) would race an empty cache on first paint and
+      // read every claimed row as stale. _fetchUxqHealth has its own 15s TTL
+      // cache, so this is normally a no-op await, not a fetch.
       await _fetchUxqHealth(allowStale);
       if (renderVersion !== _uxqItemsVersion) return _renderQueuePanel({ allowStale: true });
       const inScope = proj ? items.filter(it => _uxqInScope(it && it.project, proj)) : items;
@@ -35592,14 +35595,6 @@
         if (it.value || it.confidence) c.push('<span class="fq-chip fq-vc" title="value / confidence">' + escapeHtml(it.value || '-') + '/' + escapeHtml(it.confidence || '-') + '</span>');
         return c.length ? '<div class="fq-chips">' + c.join('') + '</div>' : '';
       };
-      // Per-row "drain once" button (CCC-437): only on non-auto-drain queues
-      // — an auto-drain queue already has/gets a worker for any open ticket,
-      // so the button would be redundant there. Mirrors the health strip's
-      // project→auto_drain lookup (app.js ~28540) off the same cache.
-      const _drainByQueueRow = new Map();
-      (((_uxqHealthCache || {}).queues) || []).forEach(q => {
-        if (q && q.queue != null) _drainByQueueRow.set(String(q.queue).toUpperCase(), !!q.auto_drain);
-      });
       const pendingAddsHtml = [..._uxqPendingQueueAdds.values()]
         .filter(pending => !proj || _uxqInScope(pending.project, proj))
         .map(pending => '<div class="fq-row fq-pending-add" aria-busy="true" title="Adding ticket…">'
@@ -35613,8 +35608,6 @@
         const rawStatus = it.status || 'open';
         const status = _effectiveStatus(it);
         const ref = _uxqItemRef(it);
-        if (_uxqPendingRunRefs.has(ref) && status !== 'open') _uxqPendingRunRefs.delete(ref);
-        const pendingRun = _uxqPendingRunRefs.has(ref);
         const staleClaim = _isStaleClaim(it);
         const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
@@ -35634,19 +35627,27 @@
         const compactRef = ref.replace(/^.*-/, '#');
         const queuePrefix = String(it.project || ref.split('-')[0] || '').slice(0, 4);
         const displayRef = allQueues && queuePrefix ? queuePrefix + compactRef : compactRef;
-        const runnable = it.watchtower_runnable !== false;
-        const autoDrainQueue = !!_drainByQueueRow.get(String(it.project || proj || '').toUpperCase());
+        // One ▶ per open ticket, one meaning: run this ticket. It sets
+        // run_requested on the ticket and WatchTower's reconciler does the
+        // spawning, so presses queue serially inside desired_workers instead
+        // of each spawning its own unbudgeted worker — and the mark survives a
+        // reload because it lives on the ticket. The visible states are the
+        // store's, not the page's: open → queued to run → running → needs
+        // input / closed. Pressing ▶ again while still queued cancels.
+        const queuedToRun = status === 'open' && !!it.run_requested;
+        const runBusy = _uxqRunBusyRefs.has(ref);
+        const runTitle = queuedToRun
+          ? 'Queued to run - click to cancel'
+          : 'Run this ticket';
         const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
-          : staleClaim ? 'stale claim - no current live worker' : status;
-        const statusAction = pendingRun
-          ? '<span class="fq-status fq-status-pending" title="Starting worker…" role="status" aria-label="Starting worker"></span>'
-          : staleClaim
-          ? '<span class="fq-status" title="' + escapeAttr(statusTitle) + '">' + escapeHtml(status) + '</span>'
-          : ((!runnable && status === 'open')
-            ? '<button class="fq-status fq-status-action fq-run" data-ref="' + escapeAttr(ref) + '" title="Run with WatchTower" aria-label="Run with WatchTower">▶</button>'
-            : (!autoDrainQueue && status === 'open')
-              ? '<button class="fq-status fq-status-action fq-run-once" data-ref="' + escapeAttr(ref) + '" title="Drain once - spawn a one-off worker for just this ticket" aria-label="Drain once">▶</button>'
-              : '<span class="fq-status" title="' + escapeAttr(statusTitle) + '">' + escapeHtml(status) + '</span>');
+          : staleClaim ? 'stale claim - no current live worker'
+          : queuedToRun ? 'queued to run' : status;
+        const statusAction = (status === 'open' && !staleClaim)
+          ? '<button class="fq-status fq-status-action fq-run' + (queuedToRun ? ' is-queued-run' : '')
+            + '" data-ref="' + escapeAttr(ref) + '" data-run-cancel="' + (queuedToRun ? '1' : '0') + '"'
+            + (runBusy ? ' disabled aria-busy="true"' : '')
+            + ' title="' + escapeAttr(runTitle) + '" aria-label="' + escapeAttr(runTitle) + '">▶</button>'
+          : '<span class="fq-status" title="' + escapeAttr(statusTitle) + '">' + escapeHtml(status) + '</span>';
         const ageSrc = status === 'closed'
           ? (it.closed_at || it.updated_at || it.created_at)
           : (it.updated_at || it.created_at);
@@ -35656,7 +35657,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(displayRef) + '</span>'
           + _uxqChips(it, priorityBumpHtml)
@@ -35728,67 +35729,43 @@
           await _addQueueTicket();
           return;
         }
+        // The one ▶ : queue this ticket to run, or — pressed again while it is
+        // still only queued — cancel that request. Spawning is WatchTower's
+        // job, so all this does is flip run_requested and re-read the truth;
+        // the toast reports what the store now says, never "Running" for a
+        // ticket that nothing has picked up yet.
         const runBtn = ev.target && ev.target.closest && ev.target.closest('.fq-run[data-ref]');
         if (runBtn) {
           ev.stopPropagation();
           const ref = runBtn.getAttribute('data-ref');
-          _uxqPendingRunRefs.add(ref);
+          if (_uxqRunBusyRefs.has(ref)) return;
+          const cancel = runBtn.getAttribute('data-run-cancel') === '1';
+          const verb = cancel ? 'Cancel' : 'Run';
+          _uxqRunBusyRefs.add(ref);
           runBtn.disabled = true;
-          _renderQueuePanel({ allowStale: true });
           try {
             const res = await fetch('/api/ux-fixes/run', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ref }),
+              body: JSON.stringify({ ref, cancel }),
             });
             const data = await res.json().catch(() => ({}));
             if (res.ok && data.ok) {
-              showOpToast('Running ' + ref);
-              _uxqItemsCache.ts = 0;
-              _uxqHealthCache.ts = 0;
-              _renderQueuePanel();
+              if (data.warning) showOpToast(data.warning, 'error');
+              else showOpToast(cancel ? ('Cancelled the queued run for ' + ref)
+                : ('Queued ' + ref + ' to run'));
             } else {
-              showOpToast('Run failed: ' + (data.error || res.status), 'error');
-              _uxqPendingRunRefs.delete(ref);
-              _renderQueuePanel({ allowStale: true });
+              showOpToast(verb + ' failed: ' + (data.error || res.status), 'error');
             }
           } catch (e) {
-            showOpToast('Run failed: ' + e, 'error');
-            _uxqPendingRunRefs.delete(ref);
-            _renderQueuePanel({ allowStale: true });
-          }
-          return;
-        }
-        // "Drain once" button (CCC-437) — spawns a single worker scoped to
-        // just this ref on a non-auto-drain queue.
-        const runOnceBtn = ev.target && ev.target.closest && ev.target.closest('.fq-run-once[data-ref]');
-        if (runOnceBtn) {
-          ev.stopPropagation();
-          const ref = runOnceBtn.getAttribute('data-ref');
-          _uxqPendingRunRefs.add(ref);
-          runOnceBtn.disabled = true;
-          _renderQueuePanel({ allowStale: true });
-          try {
-            const res = await fetch('/api/ux-fixes/run-once', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ref }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (res.ok && data.ok) {
-              showOpToast('Spawned a one-off worker for ' + ref);
-              _uxqItemsCache.ts = 0;
-              _uxqHealthCache.ts = 0;
-              _renderQueuePanel();
-            } else {
-              showOpToast('Drain-once failed: ' + (data.error || res.status), 'error');
-              _uxqPendingRunRefs.delete(ref);
-              _renderQueuePanel({ allowStale: true });
-            }
-          } catch (e) {
-            showOpToast('Drain-once failed: ' + e, 'error');
-            _uxqPendingRunRefs.delete(ref);
-            _renderQueuePanel({ allowStale: true });
+            showOpToast(verb + ' failed: ' + e, 'error');
+          } finally {
+            // Always: a busy marker that outlives its request is the latch bug
+            // this replaced.
+            _uxqRunBusyRefs.delete(ref);
+            _uxqItemsCache.ts = 0;
+            _uxqHealthCache.ts = 0;
+            _renderQueuePanel();
           }
           return;
         }

@@ -1288,6 +1288,70 @@ def _uxq_item_timeline(item):
             if isinstance(event, dict) and str(event.get("event") or "").strip()]
 
 
+# Cancelling a queued run is the newer half of the ▶ pair; WatchTower may
+# expose it under any of these names. Probed in order, and whichever answers
+# is verified by reading the ticket back, so CCC never has to guess right.
+_UXQ_RUN_CANCEL_FNS = ("cancel_run_request", "clear_run_request", "unmark_runnable")
+
+
+def _uxq_set_run_requested(ref, requested):
+    """Flip a ticket's ``run_requested`` flag through WatchTower's own API.
+
+    ▶ means one thing: run this ticket. Pressing it records the request on the
+    ticket and WatchTower's reconciler does the spawning, so three presses run
+    serially inside ``desired_workers`` instead of spawning three unbudgeted
+    workers (2026-07-26 design, Part 3). CCC must never write WatchTower's JSON
+    itself (docs/watchtower-migration-state.md), so both directions go through
+    the queue module.
+
+    Both directions are verified by reading the flag back, because that flag is
+    exactly what the row renders as "queued to run" — a WatchTower that cannot
+    store it must surface, not leave the UI asserting a state the store does
+    not have. The two directions report a mismatch differently on purpose:
+    setting has a real side effect on older WatchTowers (it still adds the
+    legacy whitelist label, which can genuinely start the ticket), so calling
+    it a failure would lie about work that happened; a cancel that did not
+    stick leaves the ticket queued to run and the human has to know.
+
+    Returns (item, warning). Raises ValueError when the request was not
+    recorded at all.
+    """
+    if requested:
+        mark = getattr(_q, "mark_runnable", None)
+        if not callable(mark):
+            raise ValueError("WatchTower run action unavailable")
+        item = mark(ref)
+    else:
+        cancel = next(
+            (fn for fn in (getattr(_q, name, None) for name in _UXQ_RUN_CANCEL_FNS)
+             if callable(fn)),
+            None,
+        )
+        if cancel is not None:
+            item = cancel(ref)
+        else:
+            # No dedicated primitive: run_requested is a plain ticket field, so
+            # ask the queue module to patch it rather than touching the store.
+            update = getattr(_q, "update", None)
+            if not callable(update):
+                raise ValueError("WatchTower cancel action unavailable")
+            item = update(ref, run_requested=False)
+    if item is None:
+        raise ValueError(f"{ref} not found")
+    stored = bool(item.get("run_requested"))
+    if stored == bool(requested):
+        return item, ""
+    if requested:
+        return item, (
+            f"{item.get('ref', ref)} was marked runnable, but this WatchTower "
+            "does not record run requests — update WatchTower to queue runs"
+        )
+    raise ValueError(
+        f"{item.get('ref', ref)} is still queued to run — this WatchTower "
+        "cannot cancel a run request"
+    )
+
+
 def _uxq_item_payload(item):
     if not item:
         return item
@@ -52561,9 +52625,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
         if path == "/api/ux-fixes/run":
-            # Mark an existing GitHub issue runnable by adding the queue's
-            # WatchTower label, then dispatch the queue. This is the CCC Queue
-            # panel's play button for visible-but-not-yet-runnable issues.
+            # The Queue panel's ▶ : "run this ticket". It sets run_requested on
+            # the ticket and lets WatchTower's reconciler spawn the worker, so
+            # presses queue up serially inside desired_workers and survive a
+            # restart (the mark is on the ticket, not in page memory). Same
+            # code path for GitHub-backed and file-backed queues — the backend
+            # decides whether that flag is a label or a field, nothing here.
+            # `cancel: true` clears it again, which is what a second press on a
+            # still-queued ticket sends.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -52574,21 +52643,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not ref:
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
-            mark = getattr(_q, "mark_runnable", None)
-            if not callable(mark):
-                self.send_json({"ok": False, "error": "WatchTower run action unavailable"}, 400)
-                return
+            cancel = bool(payload.get("cancel"))
             try:
-                item = mark(ref)
-                if _WT_WORKERS_AVAILABLE and _wt_workers is not None and item:
-                    try:
-                        _wt_workers.dispatch_after_enqueue(
-                            str(item.get("project") or ""), str(item.get("ref") or ""))
-                    except Exception:
-                        pass
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                item, warning = _uxq_set_run_requested(ref, not cancel)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            # Same immediate nudge a fresh enqueue gets, so ▶ does not wait out
+            # the reconciler's 30s tick. Best-effort: the request is already
+            # durable on the ticket, so a dispatch failure only costs latency.
+            if not cancel and _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+                try:
+                    _wt_workers.dispatch_after_enqueue(
+                        str(item.get("project") or ""), str(item.get("ref") or ""))
+                except Exception:
+                    pass
+            self.send_json({
+                "ok": True,
+                "item": _uxq_item_payload(item),
+                "queued": bool(item.get("run_requested")),
+                "warning": warning,
+            })
             return
         if path == "/api/ux-fixes/run-once":
             # Per-ticket "drain once" play button (CCC-437): spawn exactly one

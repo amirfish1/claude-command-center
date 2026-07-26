@@ -520,7 +520,13 @@ def _ux_fixes_list_items_cached(status_filter=None, lane_filter=None):
 #
 # Cost is bounded by subscribers, not by tabs: one `gh issue list` per interval
 # while a board is open, zero when none is.
-_GH_POLL_INTERVAL_S = 20.0
+#
+# 5s, not 20s: the requirement is "a new issue is on the board within 5s".
+# That is affordable because WatchTower's list now revalidates with an ETag —
+# an unchanged poll is a conditional GET that returns 304 in ~0.5s and costs
+# nothing against the rate limit, so polling 4x more often consumes *less*
+# quota than the old unconditional `gh issue list` every 20s.
+_GH_POLL_INTERVAL_S = 5.0
 _gh_watch_lock = threading.Lock()
 _gh_watch = {"subscribers": 0, "thread": None, "version": 0, "sig": None}
 _gh_watch_wake = threading.Event()
