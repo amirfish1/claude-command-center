@@ -1,1 +1,0 @@
-- Removed the Open asks sidebar section and its Settings option.

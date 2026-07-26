@@ -1,1 +1,0 @@
-- Moved Car Mode access out of the session toolbar and into Settings.

@@ -1,1 +1,0 @@
-- Stop Continue New Codex handoffs from leaving ghost pending sessions when no durable child registers.

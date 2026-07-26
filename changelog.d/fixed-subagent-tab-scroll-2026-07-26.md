@@ -1,1 +1,0 @@
-- Preserve the master transcript's scroll position when switching to and from subagent tabs.

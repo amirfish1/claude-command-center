@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.12.0] - 2026-07-26
+
+### Changed
+- **One ▶ per ticket in the Queue panel.** The old Run / Drain-once pair is now a single "run this ticket" button: it marks the ticket run-requested and WatchTower's reconciler spawns the worker, so several presses run one after another inside the queue's worker budget instead of each starting its own worker, the mark survives a reload, and pressing ▶ again while a ticket is still queued cancels it. Rows now show `queued to run` as a real state, which retires the "Starting worker…" spinner that could latch forever and hide the button, and the toast that said "Running" when nothing had started.
+
+### Removed
+- Removed the Open asks sidebar section and its Settings option.
+
+### Fixed
+- Moved Car Mode access out of the session toolbar and into Settings.
+- Keep queue drain controls in their requested state with a spinner while a change is saving, even if queue health refreshes in the meantime.
+- Stop Continue New Codex handoffs from leaving ghost pending sessions when no durable child registers.
+- **GitHub-backed queues refresh on the board within 5s** (was 20s). WatchTower's list now revalidates with an ETag, so an unchanged poll is a conditional request that costs nothing against the GitHub rate limit — polling four times as often uses less quota than before.
+- Make recent WatchTower worker chips open their Codex conversations.
+- Make the queue-first board's Sessions exit and pinned-default unpin control explicit.
+- **"Check for updates" now updates WatchTower too.** The in-app updater used
+to fetch and reset CCC's own checkout and stop there, leaving the queue engine
+— the thing that dispatches workers — on whatever revision it was installed
+at. It now runs the shared `scripts/install-watchtower.sh`, bounces the
+WatchTower daemon (`wt stop && wt start`, without which the freshly-pulled
+code sits on disk while the old modules keep running), and then restarts CCC
+as before. If `wt workers` shows anyone still working, the daemon restart is
+deferred rather than killing an agent mid-ticket, and the response says so.
+The pre-flight refusals on a dirty tree or a non-`main` branch are unchanged.
+- Preserve the master transcript's scroll position when switching to and from subagent tabs.
+- Text-to-speech now strips Markdown and angle-bracket placeholders, reads long
+replies in bounded segments, and skips a failed segment with a small notice
+instead of silently stopping the rest of the reply.
+- Queue rows claimed only by an arbitrary worker label now use a hollow amber
+status marker with a “liveness unverified” tooltip, rather than looking either
+unclaimed or falsely active.
+- **WatchTower is now actually installed on every path.** One shared
+`scripts/install-watchtower.sh` owns the chain — existing local checkout,
+then a shallow clone at `~/.ccc/watchtower`, then a source tarball, and only
+as a last resort the lagging `watchtower-cli` release on PyPI — installing
+into the same interpreter that runs `server.py` and finishing with `wt start`
+so the daemon survives reboot. `run.sh` and `scripts/install.sh` both call it,
+so Homebrew, the DMG, Docker and a plain `git clone` get the same result as a
+`curl` install. The CCC-managed clone fast-forwards at most once a day; a
+checkout of your own is never pulled, only reported when it falls behind.
+- Replace the blocking automatic What's New startup modal with a compact, dismissible version badge so the first dashboard interaction after an update is never swallowed.
+- The execution-worker badge now shows the worker's last restart date and time
+instead of an ambiguous job-review count. Offline and paused states still take
+priority, and longer status labels stay on one line.
+
 ## [5.11.3] - 2026-07-26
 
 ### Fixed
@@ -2222,7 +2267,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.3...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.12.0...HEAD
+[5.12.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.12.0
 [5.11.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.3
 [5.11.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.2
 [5.11.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.1
