@@ -4951,6 +4951,25 @@ class TestServerImports(unittest.TestCase):
             toggle_js.index("await fetch('/api/queue/drain'"),
         )
 
+    def test_queue_drain_toggle_keeps_optimistic_state_through_refresh(self):
+        """A stale health repaint must not erase the clicked drain transition."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        strip_js = app_js[
+            app_js.index("async function _renderQueueHealthStrip"):
+            app_js.index("// Repo-basename", app_js.index("async function _renderQueueHealthStrip"))
+        ]
+        toggle_js = app_js[
+            app_js.index("const toggleDrain = async (ev) =>"):
+            app_js.index("const cycleClaimTypes = async (ev) =>")
+        ]
+
+        self.assertIn("const _uxqPendingDrainStates = new Map();", app_js)
+        self.assertIn("const pendingDrain = _uxqPendingDrainStates.get", strip_js)
+        self.assertIn("pendingDrain ? pendingDrain.on : autoDrain", strip_js)
+        self.assertIn("is-pending", strip_js)
+        self.assertIn("_uxqPendingDrainStates.set", toggle_js)
+        self.assertIn("_uxqPendingDrainStates.delete", toggle_js)
+
     def test_queue_detail_uses_watchtower_timeline_contract(self):
         """Ticket detail should come from WT timeline, not CCC's old private
         progress_notes/answers reconstruction."""
