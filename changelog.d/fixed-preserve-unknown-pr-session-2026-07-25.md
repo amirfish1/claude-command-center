@@ -1,1 +1,0 @@
-- Preserve sessions in All when a linked pull request's status is temporarily unavailable.

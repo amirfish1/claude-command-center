@@ -1,1 +1,0 @@
-- Fixed the Codex throughput chart so its pre-reset quota progression is visible.

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.11.2] - 2026-07-26
+
+### Fixed
+- Fixed annotation-created tickets using a generic page title instead of the annotator's note.
+- Codex resume no longer fails with "Codex CLI not found" when the CLI is a standalone install in `~/.local/bin` (or another user bin dir) and CCC's engine worker runs under launchd's minimal PATH; resolution also skips stale `codex` symlinks left behind by a deleted Codex.app.
+- Fixed the Codex throughput chart so its pre-reset quota progression is visible.
+- Restored the zero-based quota progression immediately before a throughput chart reset.
+- Preserve sessions in All when a linked pull request's status is temporarily unavailable.
+- Fixed the persistent worker wedging after a few hours of use. Every work-ledger call leaked a SQLite descriptor, and once the worker hit its file-descriptor limit it accepted connections and closed them unread - resume, inject and spawn all failed silently, and restarting the worker from Settings reported "persistent worker did not become ready" forever. Ledger connections now close, the worker raises its own descriptor limit, and Maintenance can retire a wedged instance instead of failing behind it.
+
 ## [5.11.1] - 2026-07-25
 
 ### Fixed
@@ -2170,7 +2180,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.11.2...HEAD
+[5.11.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.2
 [5.11.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.1
 [5.11.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.0
 [5.10.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.10.0
