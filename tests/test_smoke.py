@@ -4941,10 +4941,20 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Auto-drain update failed", toggle_js)
         self.assertIn("btn.classList.add('is-pending');", toggle_js)
         self.assertIn("btn.setAttribute('aria-busy', 'true');", toggle_js)
+        self.assertIn("btn.disabled = true;", toggle_js)
+        self.assertIn("btn.setAttribute('aria-pressed', newVal ? 'true' : 'false');", toggle_js)
         self.assertIn("btn.classList.toggle('is-on', newVal);", toggle_js)
         self.assertIn("drainVal.textContent = newVal ? 'on' : 'off';", toggle_js)
         self.assertIn("btn.classList.remove('is-pending');", toggle_js)
         self.assertIn("btn.removeAttribute('aria-busy');", toggle_js)
+        self.assertIn("btn.disabled = false;", toggle_js)
+        self.assertIn("const _UXQ_DRAIN_MIN_PENDING_MS = 400;", app_js)
+        self.assertIn("const pendingStartedAt = Date.now();", toggle_js)
+        self.assertIn("await new Promise(resolve => setTimeout(resolve, remainingPendingMs));", toggle_js)
+        self.assertLess(
+            toggle_js.index("await new Promise(resolve => setTimeout(resolve, remainingPendingMs));"),
+            toggle_js.index("_uxqPendingDrainStates.delete(drainKey)"),
+        )
         self.assertIn(".fq-health-drain-toggle.is-pending::after", app_css)
         self.assertLess(
             toggle_js.index("const queueHealth ="),

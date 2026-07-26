@@ -33995,6 +33995,7 @@
   // Keep the requested state separately so that stale snapshot cannot repaint
   // the button back to its former value or hide its in-progress spinner.
   const _uxqPendingDrainStates = new Map();
+  const _UXQ_DRAIN_MIN_PENDING_MS = 400;
   let _uxqHealthPromise = null;
   async function _fetchUxqHealth(allowStale) {
     if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
@@ -35879,6 +35880,7 @@
         const queue = btn.getAttribute('data-drain-queue');
         const drainKey = String(queue || '').toUpperCase();
         const newVal = btn.getAttribute('data-drain-on') !== '1';
+        const pendingStartedAt = Date.now();
         const drainVal = btn.querySelector('.fq-health-drain-val');
         const priorTitle = btn.title;
         // Drain policy does not change ticket depth/claimability, so classify
@@ -35892,6 +35894,8 @@
         btn.classList.toggle('is-on', newVal);
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
+        btn.disabled = true;
+        btn.setAttribute('aria-pressed', newVal ? 'true' : 'false');
         btn.setAttribute('data-drain-on', newVal ? '1' : '0');
         btn.title = newVal ? 'Enabling auto-drain…' : 'Disabling auto-drain…';
         if (drainVal) drainVal.textContent = newVal ? 'on' : 'off';
@@ -35913,14 +35917,18 @@
           }
         } catch (err) {
           btn.classList.toggle('is-on', !newVal);
+          btn.setAttribute('aria-pressed', newVal ? 'false' : 'true');
           btn.setAttribute('data-drain-on', newVal ? '0' : '1');
           btn.title = priorTitle;
           if (drainVal) drainVal.textContent = newVal ? 'off' : 'on';
           showOpToast('Auto-drain update failed: ' + ((err && err.message) || 'unknown'), 'error');
         } finally {
+          const remainingPendingMs = _UXQ_DRAIN_MIN_PENDING_MS - (Date.now() - pendingStartedAt);
+          if (remainingPendingMs > 0) await new Promise(resolve => setTimeout(resolve, remainingPendingMs));
           _uxqPendingDrainStates.delete(drainKey);
           btn.classList.remove('is-pending');
           btn.removeAttribute('aria-busy');
+          btn.disabled = false;
           _uxqHealthCache.ts = 0;
           _renderQueueHealthStrip(true, null);
         }
