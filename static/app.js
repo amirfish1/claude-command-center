@@ -3040,6 +3040,13 @@
           : pendingSpawns.get(tempPid);
         if (placeholder && newSid) placeholder.expected_session_id = newSid;
         f2RecordContinuationLineage(sid, newSid);
+        if (launch.engine === 'codex') {
+          _watchF2CodexSpawnRegistration(
+            spawnId || tempPid,
+            'spawning-' + tempPid,
+            newSid,
+          );
+        }
         if (typeof showOpToast === 'function') showOpToast('Continuing in a new session — it will pull only the slice it needs.', 'success');
         f2ClearComposer();
         setTimeout(refreshConversationList, 600);
@@ -12366,6 +12373,50 @@
   function _pendingSpawnStillWaiting(pid, fallbackId) {
     if (pendingSpawns.has(pid)) return true;
     return Array.from(pendingSpawns.values()).some(c => c && c.id === fallbackId);
+  }
+
+  // F2's Codex continuation takes the fire-and-watch app-server path, which
+  // deliberately skips the generic placeholder watcher below. Confirm that
+  // the accepted spawn became a durable server row instead of trusting the
+  // optimistic response forever. Once durable, force the normal session
+  // reconciliation; if it never appears, reuse the visible failed-card state
+  // rather than leaving a selected ghost session in the sidebar.
+  function _watchF2CodexSpawnRegistration(pid, fallbackId, expectedSessionId) {
+    const deadline = Date.now() + 30000;
+    const tick = async () => {
+      if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
+      let durable = false;
+      try {
+        const res = await fetch('/api/sessions/spawned?engine=codex&_=' + Date.now(), {
+          cache: 'no-store',
+        });
+        const rows = res.ok ? await res.json() : [];
+        durable = Array.isArray(rows) && rows.some(row => {
+          if (!row) return false;
+          if (expectedSessionId && row.session_id
+              && String(row.session_id) === String(expectedSessionId)) return true;
+          const rowSpawnId = row.spawn_id || row.pid || '';
+          return !!(pid && rowSpawnId && String(rowSpawnId) === String(pid));
+        });
+      } catch (_) {}
+      if (durable) {
+        try { await refreshConversationList(); } catch (_) {}
+        try {
+          await refreshArchiveData({ force: true });
+          renderArchiveList($convSearch ? $convSearch.value : '');
+        } catch (_) {}
+        if (_pendingSpawnStillWaiting(pid, fallbackId)) {
+          _watchPendingSpawnRegistration(pid, fallbackId);
+        }
+        return;
+      }
+      if (Date.now() >= deadline) {
+        markPendingSpawnNotAcknowledged(pid, fallbackId);
+        return;
+      }
+      setTimeout(tick, 5000);
+    };
+    setTimeout(tick, 5000);
   }
 
   // The sidebar's own cadence can't confirm a spawn: the 90s archive poll
