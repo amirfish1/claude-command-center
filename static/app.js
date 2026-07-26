@@ -10957,8 +10957,14 @@
     if (value === 'board' || value === 'kanban') return 'board';
     return 'list';
   }
+  // `?ccc_mode=kanban` opens the board for this page load only, never
+  // persisted - same contract as `?ccc_mode=queues`. The in-app control that
+  // used to reach the board was repurposed into the Flow popout button, so
+  // without this the view is only reachable by hand-editing localStorage.
+  const KANBAN_URL_MODE = ['kanban', 'board'].includes(_bootUrlParams.get('ccc_mode'));
   function readSidebarViewMode() {
     if (FLOW_POPOUT_MODE) return 'flow';
+    if (KANBAN_URL_MODE) return 'board';
     try {
       const saved = localStorage.getItem('ccc-session-view');
       if (saved) return normalizeSidebarViewMode(saved);
@@ -36933,11 +36939,13 @@
         const kind = String(t.type || '').trim();
         const ref = String(t.ref || '').trim();
         const src = String(t.source_ref || '').trim();
+        const dep = String(t.depends_on || '').trim();
         return '<div class="fq-import-row is-' + escapeAttr(status) + '">'
           + '<span class="fq-import-status">' + escapeHtml(_statusLabel[status] || status) + '</span>'
           + (kind ? '<span class="fq-import-kind fq-import-kind-' + escapeAttr(kind) + '">' + escapeHtml(kind) + '</span>' : '')
           + '<span class="fq-import-ttl">' + escapeHtml(t.title || '(untitled)') + '</span>'
           + (ref ? '<span class="fq-import-ref">' + escapeHtml(ref) + '</span>' : '')
+          + (dep ? '<span class="fq-import-dep" title="depends on">after: ' + escapeHtml(dep) + '</span>' : '')
           + (src ? '<span class="fq-import-src">' + escapeHtml(src) + '</span>' : '')
           + '</div>';
       }).join('');

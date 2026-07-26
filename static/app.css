@@ -18121,6 +18121,7 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-import-ttl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .fq-import-ref { font-size: 11px; font-weight: 650; color: var(--success, #3fb950); flex: 0 0 auto; }
 .fq-import-src { font-size: 10px; color: var(--faint, var(--text-muted)); flex: 0 0 auto; }
+.fq-import-dep { font-size: 10px; color: var(--text-muted); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fq-import-fleet { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .fq-import-fleet-head { font-size: 12px; color: var(--text-muted); }
 .fq-import-fleet-row { display: flex; align-items: center; gap: 8px; }

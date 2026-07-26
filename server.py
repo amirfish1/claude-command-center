@@ -42129,14 +42129,36 @@ def _parse_wt_import_output(text):
       FILED: WT-123  Short title                    -> status=filed (apply)
       IMPORT dry-run: candidates=N new=N existing=N; ...
       IMPORT applied: candidates=N created=N existing=N
+
+    W43 shipped the anchor and the dependency edge as indented continuation
+    lines under each verb line rather than inline in parentheses, so both
+    shapes are accepted:
+      WOULD FILE: [feature] Short title
+        source: /abs/plan.md#L8-L12                 -> source_ref
+        depends_on: Some earlier title              -> depends_on ("none" dropped)
     Bodies are intentionally not in the dry-run output, so a preview ticket
-    carries only status, type, title, and source anchor."""
+    carries only status, type, title, source anchor, and dependency."""
     tickets = []
     counts = {}
     for line in (text or "").splitlines():
         line = line.strip()
         if not line:
             continue
+        # Continuation lines belong to the verb line above them. Anchors are
+        # required to look like a line reference so a body sentence starting
+        # with "source:" cannot be mistaken for one.
+        if tickets:
+            sc = re.match(r"^source:\s*(\S+#L\d[\w-]*)$", line)
+            if sc:
+                if not tickets[-1].get("source_ref"):
+                    tickets[-1]["source_ref"] = sc.group(1)
+                continue
+            dc = re.match(r"^depends_on:\s*(.+)$", line)
+            if dc and "depends_on" not in tickets[-1]:
+                dep = dc.group(1).strip()
+                if dep.lower() != "none":
+                    tickets[-1]["depends_on"] = dep
+                continue
         m = re.match(r"^(WOULD FILE|FILE|EXISTS|FILED):\s*(.*)$", line)
         if m:
             verb, rest = m.group(1), m.group(2)

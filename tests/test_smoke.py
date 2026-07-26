@@ -281,6 +281,26 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(tickets[0]["title"], "Add a queue import")
         self.assertEqual(tickets[0]["source_ref"], "L12-L24")
         self.assertEqual(tickets[1]["status"], "exists")
+        # W43 actually emits the anchor and the dependency edge as indented
+        # continuation lines, not inline parens. Both shapes must parse.
+        real, real_counts = server._parse_wt_import_output(
+            "WOULD FILE: [feature] Audit existing content tooling\n"
+            "  source: /tmp/plan.md#L8-L12\n"
+            "  depends_on: none\n"
+            "  Imported from: /tmp/plan.md#L8-L12\n"
+            "  \n"
+            "  Before writing any new code, audit each tool.\n"
+            "WOULD FILE: [feature] Build the CLI\n"
+            "  source: /tmp/plan.md#L14-L29\n"
+            "  depends_on: Audit existing content tooling\n"
+            "IMPORT dry-run: candidates=2 new=2 existing=0; pass --apply to file\n"
+        )
+        self.assertEqual(real_counts, {"candidates": 2, "new": 2, "existing": 0})
+        self.assertEqual(real[0]["title"], "Audit existing content tooling")
+        self.assertEqual(real[0]["source_ref"], "/tmp/plan.md#L8-L12")
+        self.assertNotIn("depends_on", real[0])  # "none" is dropped
+        self.assertEqual(real[1]["source_ref"], "/tmp/plan.md#L14-L29")
+        self.assertEqual(real[1]["depends_on"], "Audit existing content tooling")
         # apply-mode FILED lines carry the assigned ref.
         filed, _ = server._parse_wt_import_output("FILED: WT-42  Ship the thing\n")
         self.assertEqual(filed[0]["ref"], "WT-42")
