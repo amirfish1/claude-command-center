@@ -151,6 +151,25 @@ Automation access. Download the [latest release](https://github.com/amirfish1/cl
 
 If you'd rather clone first and run the script directly, pass the channel as a flag instead: `./scripts/install.sh --from=readme`.
 
+### WatchTower comes with it
+
+[WatchTower](https://github.com/amirfish1/watchtower) (`wt`) is CCC's queue
+engine, not an optional add-on — it owns ticket lifecycle, worker dispatch,
+plan-to-fleet import, and delivery receipts. Every install path installs it:
+the `curl` and PowerShell installers do it up front, and `run.sh` bootstraps it
+on first launch, so Homebrew, the DMG, Docker, and a plain `git clone` all end
+up with it too.
+
+It installs into the same interpreter that runs `server.py` (CCC imports
+`watchtower.queue` in-process), from a git clone at `~/.ccc/watchtower`, falling
+back to the `watchtower-cli` package on PyPI. It needs Python 3.11+; on an older
+interpreter CCC skips it and runs on a built-in fallback queue engine that can
+file tickets but will not dispatch workers, import plans, or issue receipts.
+
+Set `CCC_SKIP_WATCHTOWER=1` to opt out. If `wt` ends up installed but not on
+your `PATH`, the dashboard still works — only the CLI surfaces stay hidden — and
+the installer prints the directory to add.
+
 ### From source
 
 ```bash

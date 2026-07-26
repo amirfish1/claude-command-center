@@ -532,6 +532,79 @@ if ! "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# WatchTower bootstrap
+# ---------------------------------------------------------------------------
+# WatchTower is CCC's queue engine — without it the dashboard silently loses
+# worker dispatch (filed tickets never spawn anything), plan-to-fleet import,
+# WT-tracked drain, and delivery receipts. The installers install it, but they
+# are not the only way in: Homebrew, the DMG, Docker, and a plain `git clone`
+# all reach the product through THIS script. Bootstrapping here is what makes
+# "installed by default" true for every path rather than just one of them.
+#
+# Rules: never fatal, never slow on the happy path (one import check), and
+# never retried in a tight loop — a failure is stamped and backed off for a
+# day so a restart storm cannot turn into a pip storm.
+ensure_watchtower() {
+  case "${CCC_SKIP_WATCHTOWER:-0}" in
+    1|true|True|yes|Yes) return 0 ;;
+  esac
+  "$PYTHON" -c 'import watchtower' >/dev/null 2>&1 && return 0
+  # WatchTower needs 3.11+; CCC itself only needs 3.9. Stay quiet on older
+  # interpreters rather than failing a pip resolve on every launch.
+  "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1 || return 0
+
+  local stamp_dir stamp
+  stamp_dir="$HOME/.claude/command-center"
+  stamp="$stamp_dir/watchtower-bootstrap-failed"
+  if [ -f "$stamp" ]; then
+    # Retry at most once a day.
+    if [ -n "$(find "$stamp" -mtime -1 2>/dev/null)" ]; then
+      return 0
+    fi
+  fi
+
+  echo "  watchtower: not installed — bootstrapping CCC's queue engine…"
+  local wt_dir="$HOME/.ccc/watchtower"
+  if [ -d "$wt_dir/.git" ]; then
+    git -C "$wt_dir" pull --ff-only >/dev/null 2>&1 || true
+  elif [ ! -e "$wt_dir" ] && command -v git >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$wt_dir")" 2>/dev/null || true
+    git clone --depth 1 https://github.com/amirfish1/watchtower "$wt_dir" >/dev/null 2>&1 || rm -rf "$wt_dir"
+  fi
+
+  # Prefer the checkout; otherwise a source tarball of the same branch, which
+  # needs no git. PyPI is not used here — its release lags the repo, and the
+  # installers already cover that case with an explicit message.
+  local target="https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz"
+  if [ -d "$wt_dir" ]; then
+    target="-e $wt_dir"
+  fi
+
+  # Same three-way pip dance as scripts/install.sh: venvs reject --user, and
+  # Homebrew/Debian pythons are PEP 668 and reject --user without an override.
+  local in_venv
+  in_venv="$("$PYTHON" -c 'import sys; print(1 if sys.prefix != sys.base_prefix else 0)' 2>/dev/null || echo 0)"
+  # shellcheck disable=SC2086
+  if [ "$in_venv" = "1" ]; then
+    "$PYTHON" -m pip install --quiet $target >/dev/null 2>&1
+  else
+    "$PYTHON" -m pip install --user --quiet $target >/dev/null 2>&1 \
+      || "$PYTHON" -m pip install --user --break-system-packages --quiet $target >/dev/null 2>&1
+  fi
+
+  if "$PYTHON" -c 'import watchtower' >/dev/null 2>&1; then
+    echo "  watchtower: installed — queue engine active."
+    rm -f "$stamp" 2>/dev/null || true
+  else
+    echo "  watchtower: install failed — CCC will use its built-in fallback queue engine."
+    echo "              retry manually: $PYTHON -m pip install --user watchtower-cli"
+    mkdir -p "$stamp_dir" 2>/dev/null || true
+    : > "$stamp" 2>/dev/null || true
+  fi
+}
+ensure_watchtower
+
 # Foreground installs do not have launchd/systemd to start the independent
 # execution worker. Ensure one is healthy before replacing this shell with the
 # restartable dashboard. `nohup` + a separate session keeps it alive across the
