@@ -157,8 +157,11 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("const _typeShort = { 'feature': 'FR', 'bug': 'BUG' };", queue_js)
         self.assertIn("typeLabel + '/' + it.priority", queue_js)
         self.assertIn("timeAgo(ageMs).replace(/\\s+ago$/, '')", queue_js)
-        self.assertIn('class="fq-status fq-status-action fq-run"', queue_js)
-        self.assertIn('class="fq-status fq-status-action fq-run-once"', queue_js)
+        # One play control on the status dot, not two: the fq-run/fq-run-once
+        # pair collapsed into a single "run this ticket" button (see
+        # tests/test_queue_run_button.py for the behaviour it now carries).
+        self.assertIn('class="fq-status fq-status-action fq-run', queue_js)
+        self.assertNotIn("fq-run-once", queue_js)
         self.assertIn(".fq-status-action:hover", app_css)
 
     def test_queue_panel_empty_state_explains_project_scope(self):
@@ -239,16 +242,20 @@ class TestQueuePanelLayout(unittest.TestCase):
         ]
         self.assertIn("_queuePanelIsVisible()", stream_block)
 
-        self.assertIn("const _uxqPendingRunRefs = new Set();", app_js)
-        self.assertIn("if (_uxqPendingRunRefs.has(ref) && status !== 'open') _uxqPendingRunRefs.delete(ref);", app_js)
+        # The Play control's busy state now lasts exactly as long as its POST
+        # (see tests/test_queue_run_button.py). The old pending-run set cleared
+        # only when a ticket left `open`, so with drain off the spinner latched
+        # forever and hid the button; the spinner itself stays, for the
+        # optimistic "adding ticket" row.
+        self.assertIn("const _uxqRunBusyRefs = new Set();", app_js)
+        self.assertIn("_uxqRunBusyRefs.add(ref);", app_js)
+        self.assertIn("_uxqRunBusyRefs.delete(ref);", app_js)
         self.assertIn("fq-status-pending", app_js)
-        self.assertIn("_uxqPendingRunRefs.add(ref);", app_js)
-        self.assertIn("_uxqPendingRunRefs.delete(ref);", app_js)
         self.assertIn(".fq-status.fq-status-pending", app_css)
         self.assertIn("@keyframes fq-status-pending-spin", app_css)
 
-    def test_play_handlers_set_pending_state_after_they_read_the_ticket_ref(self):
-        """The spinner must be initiated inside, not before, its click handlers."""
+    def test_play_handler_sets_busy_state_after_it_reads_the_ticket_ref(self):
+        """The busy marker must be set inside, not before, the click handler."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         queue_clicks = app_js[
             app_js.index("const $queueList = document.getElementById('sidebarQueueList')"):
@@ -257,14 +264,12 @@ class TestQueuePanelLayout(unittest.TestCase):
 
         self.assertIn(
             "const ref = runBtn.getAttribute('data-ref');\n"
-            "          _uxqPendingRunRefs.add(ref);\n"
-            "          runBtn.disabled = true;",
+            "          if (_uxqRunBusyRefs.has(ref)) return;\n",
             queue_clicks,
         )
         self.assertIn(
-            "const ref = runOnceBtn.getAttribute('data-ref');\n"
-            "          _uxqPendingRunRefs.add(ref);\n"
-            "          runOnceBtn.disabled = true;",
+            "          _uxqRunBusyRefs.add(ref);\n"
+            "          runBtn.disabled = true;",
             queue_clicks,
         )
 

@@ -65,7 +65,7 @@ See the [engine support matrix](#engine-support) below for what each engine does
 
 **Sessions that exchange context on their own.** Two sessions on one goal stay in sync through group chats and a sibling-ask API, instead of you reading one agent's output off one screen and retyping it into the other. Post once and every participant is pinged; ask a sibling synchronously when you need an answer right now; hand a problem to a fresh spawned session that reports back when it finishes.
 
-**Workers that specialize over time.** Each worker reads its queue's shared learnings file before it starts and writes back to it when it ends, so a queue handling the same kind of ticket for months keeps getting faster and more accurate, not just busier. Ships via Watchtower, installed by default as CCC's queue engine.
+**Workers that specialize over time.** Each worker reads its queue's shared learnings file before it starts and writes back to it when it ends, so a queue handling the same kind of ticket for months keeps getting faster and more accurate, not just busier. Ships via [WatchTower](https://github.com/amirfish1/watchtower), which CCC installs on first launch as its queue engine — Python 3.11+, and CCC still starts (on a reduced built-in queue) if the install doesn't take.
 
 **Find anything, from any session.** The problem you solved two weeks ago in some other session, found in seconds instead of solved again: full-text search across your session history, built in, zero setup, with an optional deeper semantic mode for when you can't remember the words you used. Covers Claude Code and Codex today.
 
@@ -178,11 +178,20 @@ the `curl` and PowerShell installers do it up front, and `run.sh` bootstraps it
 on first launch, so Homebrew, the DMG, Docker, and a plain `git clone` all end
 up with it too.
 
-It installs into the same interpreter that runs `server.py` (CCC imports
-`watchtower.queue` in-process), from a git clone at `~/.ccc/watchtower`, falling
-back to the `watchtower-cli` package on PyPI. It needs Python 3.11+; on an older
-interpreter CCC skips it and runs on a built-in fallback queue engine that can
-file tickets but will not dispatch workers, import plans, or issue receipts.
+One script, `scripts/install-watchtower.sh`, owns the whole chain: an existing
+local checkout (`$WATCHTOWER_DIR`, `~/Apps/watchtower`, `~/dev/watchtower`)
+first, then a shallow clone at `~/.ccc/watchtower`, then a source tarball, and
+only as a last resort the `watchtower-cli` package on PyPI — that release lags
+the repo, so it is a floor rather than the target. It installs into the same
+interpreter that runs `server.py` (CCC imports `watchtower.queue` in-process,
+which is why this can't be a pipx install), then runs `wt start` so the daemon
+survives reboot and login. It needs Python 3.11+; on an older interpreter CCC
+skips it and runs on a built-in fallback queue engine that can file tickets but
+will not dispatch workers, import plans, or issue receipts.
+
+Updates: the clone CCC owns is fast-forwarded at most once a day. A checkout of
+your own is never pulled — it is a working tree that may hold uncommitted work,
+so if it is behind its upstream CCC says so and leaves it alone.
 
 Set `CCC_SKIP_WATCHTOWER=1` to opt out. If `wt` ends up installed but not on
 your `PATH`, the dashboard still works — only the CLI surfaces stay hidden — and

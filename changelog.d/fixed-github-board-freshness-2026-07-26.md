@@ -1,0 +1,1 @@
+- **GitHub-backed queues refresh on the board within 5s** (was 20s). WatchTower's list now revalidates with an ETag, so an unchanged poll is a conditional request that costs nothing against the GitHub rate limit — polling four times as often uses less quota than before.

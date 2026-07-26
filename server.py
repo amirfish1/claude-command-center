@@ -1288,6 +1288,70 @@ def _uxq_item_timeline(item):
             if isinstance(event, dict) and str(event.get("event") or "").strip()]
 
 
+# Cancelling a queued run is the newer half of the ▶ pair; WatchTower may
+# expose it under any of these names. Probed in order, and whichever answers
+# is verified by reading the ticket back, so CCC never has to guess right.
+_UXQ_RUN_CANCEL_FNS = ("cancel_run_request", "clear_run_request", "unmark_runnable")
+
+
+def _uxq_set_run_requested(ref, requested):
+    """Flip a ticket's ``run_requested`` flag through WatchTower's own API.
+
+    ▶ means one thing: run this ticket. Pressing it records the request on the
+    ticket and WatchTower's reconciler does the spawning, so three presses run
+    serially inside ``desired_workers`` instead of spawning three unbudgeted
+    workers (2026-07-26 design, Part 3). CCC must never write WatchTower's JSON
+    itself (docs/watchtower-migration-state.md), so both directions go through
+    the queue module.
+
+    Both directions are verified by reading the flag back, because that flag is
+    exactly what the row renders as "queued to run" — a WatchTower that cannot
+    store it must surface, not leave the UI asserting a state the store does
+    not have. The two directions report a mismatch differently on purpose:
+    setting has a real side effect on older WatchTowers (it still adds the
+    legacy whitelist label, which can genuinely start the ticket), so calling
+    it a failure would lie about work that happened; a cancel that did not
+    stick leaves the ticket queued to run and the human has to know.
+
+    Returns (item, warning). Raises ValueError when the request was not
+    recorded at all.
+    """
+    if requested:
+        mark = getattr(_q, "mark_runnable", None)
+        if not callable(mark):
+            raise ValueError("WatchTower run action unavailable")
+        item = mark(ref)
+    else:
+        cancel = next(
+            (fn for fn in (getattr(_q, name, None) for name in _UXQ_RUN_CANCEL_FNS)
+             if callable(fn)),
+            None,
+        )
+        if cancel is not None:
+            item = cancel(ref)
+        else:
+            # No dedicated primitive: run_requested is a plain ticket field, so
+            # ask the queue module to patch it rather than touching the store.
+            update = getattr(_q, "update", None)
+            if not callable(update):
+                raise ValueError("WatchTower cancel action unavailable")
+            item = update(ref, run_requested=False)
+    if item is None:
+        raise ValueError(f"{ref} not found")
+    stored = bool(item.get("run_requested"))
+    if stored == bool(requested):
+        return item, ""
+    if requested:
+        return item, (
+            f"{item.get('ref', ref)} was marked runnable, but this WatchTower "
+            "does not record run requests — update WatchTower to queue runs"
+        )
+    raise ValueError(
+        f"{item.get('ref', ref)} is still queued to run — this WatchTower "
+        "cannot cancel a run request"
+    )
+
+
 def _uxq_item_payload(item):
     if not item:
         return item
@@ -9041,9 +9105,163 @@ def _git(args, cwd, timeout=10):
         return 124, "", f"git {' '.join(args)} timed out"
 
 
+# ── The WatchTower half of "check for updates" ─────────────────────────
+# CCC and WatchTower are one system with two checkouts: CCC does
+# `import watchtower.queue` in-process and shells out to `wt`, so pulling
+# CCC's own tree alone leaves the queue engine — the thing that actually
+# dispatches workers — on whatever revision it was installed at. The button
+# whose entire purpose is "bring me up to date" would leave half the system
+# stale.
+#
+# The spec's restart order, all three steps load-bearing:
+#   1. update WatchTower — via scripts/install-watchtower.sh, the single
+#      shared implementation every launch path already uses.
+#   2. `wt stop` && `wt start` — the daemon is a long-lived process that
+#      loaded watchtower.* at launch and keeps executing the code it read
+#      then. Skip this and step 1 is a silent no-op: new code on disk, old
+#      code reconciling the queue.
+#   3. restart CCC — done by the caller via _schedule_restart(); server.py
+#      memoises its WatchTower capability probes (_WT_IMPORT_AVAILABLE_CACHE)
+#      for the process lifetime, so a WatchTower that just gained `wt import`
+#      stays invisible until the process is replaced.
+#
+# Nothing in steps 1–2 is fatal. A WatchTower failure degrades the update to
+# "CCC moved, WT did not", which is exactly what this button did before.
+
+# The installer is fast in the common case (already importable -> a
+# `git pull --ff-only`), but a cold clone + `pip install -e` on a fresh
+# machine is not. This runs on the request thread with the client waiting on
+# the response, so the ceiling is "slow but still a UI", not "however long
+# pip wants".
+_WT_UPDATE_TIMEOUT = 180
+_WT_DAEMON_TIMEOUT = 30
+_WT_WORKERS_PROBE_TIMEOUT = 10
+
+
+def _watchtower_install_script():
+    """Path to the shared install/update script, or None when this install
+    predates it. It ships in the same clone as server.py, so it is only
+    missing on a partial checkout or on an older CCC that has just pulled but
+    is still running the previous process's code."""
+    p = _install_dir() / "scripts" / "install-watchtower.sh"
+    return p if p.is_file() else None
+
+
+def _wt_live_workers():
+    """Live WatchTower workers, as [{worker_id, queue}, ...]. Empty = nobody
+    is mid-ticket and the daemon is safe to bounce.
+
+    Asks `wt workers --json` first: WatchTower owns worker liveness (its own
+    pruning and reap rules decide what "live" means), and this must not
+    second-guess it. Falls back to workers.json — which `_wt_read_workers`
+    already filters on real os.kill liveness — when `wt` is not on PATH.
+
+    Deliberately not `_wt_cli_available()`: that memoises the lookup for the
+    process lifetime, and the update we are in the middle of is precisely the
+    event that can make `wt` appear."""
+    rows = None
+    if shutil.which("wt"):
+        try:
+            proc = subprocess.run(
+                ["wt", "workers", "--json"],
+                capture_output=True, text=True, timeout=_WT_WORKERS_PROBE_TIMEOUT,
+            )
+            if proc.returncode == 0:
+                parsed = json.loads(proc.stdout or "[]")
+                if isinstance(parsed, list):
+                    rows = parsed
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            rows = None
+    if rows is None:
+        rows = _wt_read_workers()
+    out = []
+    for w in rows:
+        if not isinstance(w, dict) or not w.get("alive"):
+            continue
+        out.append({
+            "worker_id": str(w.get("worker_id") or ""),
+            "queue": str(w.get("queue") or ""),
+        })
+    return out
+
+
+def _update_watchtower():
+    """Step 1: refresh WatchTower through scripts/install-watchtower.sh.
+
+    Returns {ok, ...}; never raises. `skipped` marks "this install has no
+    installer script", which is a degrade and not a failure."""
+    script = _watchtower_install_script()
+    if script is None:
+        return {
+            "ok": False, "skipped": True,
+            "reason": "scripts/install-watchtower.sh not present in this install",
+        }
+    env = dict(os.environ)
+    # The user just explicitly asked to be brought up to date. That outranks
+    # the installer's once-a-day back-off, which exists to keep CCC restarts
+    # from becoming a network call per restart.
+    env["CCC_WATCHTOWER_FORCE"] = "1"
+    # We bounce the daemon ourselves below, and only when no worker is
+    # mid-ticket. Letting the script run `wt start` here would just start the
+    # daemon on the old code we are about to stop.
+    env["CCC_SKIP_WATCHTOWER_DAEMON"] = "1"
+    # Install into the interpreter running server.py, not whatever `python3`
+    # resolves to: CCC needs the importable library in *this* process, which
+    # is the same reason the installer refuses pipx.
+    env.setdefault("CCC_PYTHON", sys.executable or "python3")
+    try:
+        # Invoked through `bash` rather than executed directly so a checkout
+        # that lost the exec bit (zip/DMG extraction) still works.
+        proc = subprocess.run(
+            ["bash", str(script)],
+            cwd=str(_install_dir()), env=env,
+            capture_output=True, text=True, timeout=_WT_UPDATE_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "error": str(e) or e.__class__.__name__}
+    # The script narrates what it did on stdout; the tail is what a user needs
+    # to see when it went wrong ("python 3.9 is below the 3.11 minimum", etc).
+    log = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()][-10:]
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()[:400]
+        return {"ok": False, "error": err or f"installer exited {proc.returncode}",
+                "log": log}
+    return {"ok": True, "log": log}
+
+
+def _restart_wt_daemon():
+    """Step 2: `wt stop` then `wt start`.
+
+    Prefers the `wt` binary and falls back to the module form, because `wt`
+    lands in the user scripts dir and that is routinely off PATH — the
+    library is importable either way, and it is by construction the same
+    interpreter CCC runs on."""
+    wt = shutil.which("wt")
+    base = [wt] if wt else [sys.executable or "python3", "-m", "watchtower.cli"]
+    steps = {}
+    for step in ("stop", "start"):
+        try:
+            proc = subprocess.run(
+                base + [step], capture_output=True, text=True,
+                timeout=_WT_DAEMON_TIMEOUT,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            steps[step] = str(e) or e.__class__.__name__
+            return {"ok": False, "error": f"wt {step}: {steps[step]}", "steps": steps}
+        steps[step] = proc.returncode
+    # `stop` against an already-stopped daemon is a no-op that may still exit
+    # non-zero; `start` is the step that has to succeed for the new code to be
+    # the code that runs.
+    if steps.get("start") != 0:
+        return {"ok": False, "error": f"wt start exited {steps.get('start')}",
+                "steps": steps}
+    return {"ok": True, "steps": steps}
+
+
 def _self_update():
-    """Run the pre-flight + pull. Returns a response dict; the caller is
-    responsible for writing it to the client BEFORE the restart fires."""
+    """Run the pre-flight + pull, then bring WatchTower up with it. Returns a
+    response dict; the caller is responsible for writing it to the client
+    BEFORE the restart fires."""
     d = _install_dir()
     if not (d / ".git").exists():
         return {"ok": False, "error": "not a git clone", "install_dir": str(d)}
@@ -9069,7 +9287,41 @@ def _self_update():
     # Bust the 6h cache so the post-restart UI reads fresh latest/current.
     _VERSION_CHECK_CACHE["ts"] = 0.0
     _VERSION_CHECK_CACHE["data"] = None
-    return {"ok": True, "new_sha": (sha or "").strip()}
+    result = {"ok": True, "new_sha": (sha or "").strip()}
+
+    # CCC's own tree is current. Now the other half of the system — see the
+    # restart-order note above. Both sub-results are reported, never raised:
+    # the CCC pull already succeeded and must not be reported as a failure
+    # because WatchTower could not be reached.
+    result["watchtower"] = _update_watchtower()
+    if not result["watchtower"].get("ok"):
+        # The client reloads onto the new CCC seconds from now, so the
+        # response is a poor place to be read carefully. The terminal log
+        # outlives it.
+        print("  [self-update] WatchTower not refreshed: "
+              f"{result['watchtower'].get('error') or result['watchtower'].get('reason')}")
+    live = _wt_live_workers()
+    if live:
+        # `wt stop` takes the watcher down along with the workers it
+        # supervises. Killing an agent mid-ticket loses its uncommitted work
+        # and leaves the ticket claimed-but-abandoned, which is strictly worse
+        # than a daemon running yesterday's code for another hour. Defer, and
+        # say so — the next quiet restart (or the user) picks it up.
+        result["wt_daemon"] = {
+            "ok": True, "deferred": True,
+            "reason": f"{len(live)} WatchTower worker(s) still running — "
+                      "daemon restart deferred so nothing is killed mid-ticket",
+            "workers": live[:10],
+        }
+        print(f"  [self-update] {result['wt_daemon']['reason']}")
+    else:
+        result["wt_daemon"] = _restart_wt_daemon()
+
+    # Step 3 is the caller's os.execvp, which is what genuinely clears the
+    # capability memos. Clear them here too so this process is not left
+    # asserting a stale answer if that restart never fires.
+    _reset_wt_capability_caches()
+    return result
 
 
 # ── In-app bug reporting ───────────────────────────────────────────────
@@ -21683,9 +21935,34 @@ class _CodexAppServerTransport:
             except OSError:
                 pass
             self.sock = None
-        if self.proc is not None and self.proc.poll() is None:
+        proc = self.proc
+        if proc is not None and proc.poll() is None:
+            # terminate() only *asks*. The stdio reader thread sits in
+            # `for line in proc.stdout`, which ends only at EOF -- and EOF only
+            # arrives once this process is actually gone. So a SIGTERM the
+            # app-server is slow to honour strands that reader forever, and the
+            # spawn path has already dropped the handle to it: one leaked
+            # `codex-app-server-reader-*` thread per reconnect, each pinning the
+            # subprocess it was reading. Measured at 170 threads / 45% CPU in a
+            # ccc_worker after a day of reconnects.
+            #
+            # So: ask, wait, escalate, reap. wait() also keeps the exited
+            # process from lingering as a zombie.
             try:
-                self.proc.terminate()
+                proc.terminate()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                try:
+                    proc.wait(timeout=5)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
             except OSError:
                 pass
 
@@ -42202,6 +42479,19 @@ def _wt_import_available():
     return _WT_IMPORT_AVAILABLE_CACHE
 
 
+def _reset_wt_capability_caches():
+    """Forget everything this process believes about the installed WatchTower.
+
+    Both memos above are deliberately process-lifetime: `wt` does not appear
+    or grow subcommands while CCC runs. `_self_update()` is the one moment
+    that assumption breaks — it can install WatchTower where there was none,
+    or upgrade one that predates `wt import`. Registered here, next to the
+    caches, so a future probe cache is cleared by the same call."""
+    global _WT_CLI_PATH_CACHE, _WT_IMPORT_AVAILABLE_CACHE
+    _WT_CLI_PATH_CACHE = None
+    _WT_IMPORT_AVAILABLE_CACHE = None
+
+
 def _resolve_import_doc_path(raw):
     """Clamp an import-doc request to a real, user-reachable text/markdown file.
 
@@ -52465,9 +52755,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
         if path == "/api/ux-fixes/run":
-            # Mark an existing GitHub issue runnable by adding the queue's
-            # WatchTower label, then dispatch the queue. This is the CCC Queue
-            # panel's play button for visible-but-not-yet-runnable issues.
+            # The Queue panel's ▶ : "run this ticket". It sets run_requested on
+            # the ticket and lets WatchTower's reconciler spawn the worker, so
+            # presses queue up serially inside desired_workers and survive a
+            # restart (the mark is on the ticket, not in page memory). Same
+            # code path for GitHub-backed and file-backed queues — the backend
+            # decides whether that flag is a label or a field, nothing here.
+            # `cancel: true` clears it again, which is what a second press on a
+            # still-queued ticket sends.
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
             try:
@@ -52478,21 +52773,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not ref:
                 self.send_json({"ok": False, "error": "ref required"}, 400)
                 return
-            mark = getattr(_q, "mark_runnable", None)
-            if not callable(mark):
-                self.send_json({"ok": False, "error": "WatchTower run action unavailable"}, 400)
-                return
+            cancel = bool(payload.get("cancel"))
             try:
-                item = mark(ref)
-                if _WT_WORKERS_AVAILABLE and _wt_workers is not None and item:
-                    try:
-                        _wt_workers.dispatch_after_enqueue(
-                            str(item.get("project") or ""), str(item.get("ref") or ""))
-                    except Exception:
-                        pass
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                item, warning = _uxq_set_run_requested(ref, not cancel)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            # Same immediate nudge a fresh enqueue gets, so ▶ does not wait out
+            # the reconciler's 30s tick. Best-effort: the request is already
+            # durable on the ticket, so a dispatch failure only costs latency.
+            if not cancel and _WT_WORKERS_AVAILABLE and _wt_workers is not None:
+                try:
+                    _wt_workers.dispatch_after_enqueue(
+                        str(item.get("project") or ""), str(item.get("ref") or ""))
+                except Exception:
+                    pass
+            self.send_json({
+                "ok": True,
+                "item": _uxq_item_payload(item),
+                "queued": bool(item.get("run_requested")),
+                "warning": warning,
+            })
             return
         if path == "/api/ux-fixes/run-once":
             # Per-ticket "drain once" play button (CCC-437): spawn exactly one

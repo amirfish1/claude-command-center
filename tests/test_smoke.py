@@ -12430,6 +12430,47 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.kind, "stdio")
 
+    def test_codex_transport_close_reaps_a_stubborn_app_server(self):
+        """close() must not stop at terminate() -- it has to wait and escalate.
+
+        The stdio reader thread sits in `for line in proc.stdout`, which ends
+        only at EOF, and EOF only arrives once the process is actually gone. A
+        SIGTERM the app-server is slow to honour therefore strands that reader
+        forever, and the spawn path has already dropped the handle to it: one
+        leaked `codex-app-server-reader-*` thread per reconnect. Observed at 170
+        threads / 45% CPU in a ccc_worker after a day of reconnects.
+        """
+        server = self.server
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        # Ignores SIGTERM, dies on SIGKILL.
+        proc.wait.side_effect = [
+            server.subprocess.TimeoutExpired(cmd="codex", timeout=5),
+            0,
+        ]
+        transport = server._CodexAppServerTransport("stdio", proc=proc)
+
+        transport.close()
+
+        proc.terminate.assert_called_once()
+        proc.kill.assert_called_once()
+        # Reaped, so it cannot linger as a zombie either.
+        self.assertEqual(proc.wait.call_count, 2)
+
+    def test_codex_transport_close_does_not_kill_a_cooperative_app_server(self):
+        """A process that honours SIGTERM is waited for, never SIGKILLed."""
+        server = self.server
+        proc = mock.Mock()
+        proc.poll.return_value = None
+        proc.wait.return_value = 0
+        transport = server._CodexAppServerTransport("stdio", proc=proc)
+
+        transport.close()
+
+        proc.terminate.assert_called_once()
+        proc.kill.assert_not_called()
+        proc.wait.assert_called_once()
+
     def test_codex_app_server_transport_kind_labels_managed_and_stdio(self):
         server = self.server
 
