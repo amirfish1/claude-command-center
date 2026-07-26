@@ -299,6 +299,21 @@ def enqueue(
         raise ValueError("note or text is required")
     lane = lane if lane in VALID_LANES else "normal"
     proj = _project_for(source, repo_path, project)
+    # OPS red button: while ~/dev/ops/HOLD exists, refuse new OPS tickets at
+    # the queue layer too (file-ops-ticket.sh checks it, but direct enqueue/
+    # wt callers used to bypass it — and the check-then-create race produced
+    # duplicate storm meta tickets OPS-519/520/521 on 2026-07-26). The storm
+    # breaker sets OPS_HOLD_BYPASS=1 to file its single meta ticket.
+    if proj == "OPS" and os.environ.get("OPS_HOLD_BYPASS") != "1":
+        _hold = os.path.expanduser("~/dev/ops/HOLD")
+        if os.path.exists(_hold):
+            with open(_hold) as _f:
+                _reason = _f.read().strip()
+            raise RuntimeError(
+                f"OPS HOLD active — ticket not filed. {_reason}\n"
+                "An incident is being triaged; work around the issue. "
+                "See /Users/amirfish/dev/ops/before-you-file.md."
+            )
     t = _norm_choice(item_type, VALID_TYPES, "")
     rd = _norm_choice(readiness, VALID_READINESS, "")
     if not rd and t:
