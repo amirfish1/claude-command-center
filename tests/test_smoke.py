@@ -17579,7 +17579,10 @@ class TestAcpKimiEngine(unittest.TestCase):
                 self.assertFalse(server._kimi_wire_turn_active(sid))
 
                 write_boundary("step.begin")
-                with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                # Keep this unit test local: its synthetic session ID must not
+                # be sent to the persistent worker's real Kimi harness.
+                with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                     mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
                      mock.patch.object(server, "_kimi_wire_turn_active", return_value=True), \
                      mock.patch.object(server, "_acp_ensure_session_loaded") as attach:
                     result = server._acp_prompt("kimi", sid, "too early")
@@ -17840,17 +17843,21 @@ class TestAcpKimiEngine(unittest.TestCase):
             self.assertIn("membership", status["docs"])
             self.assertIn("third_party_setup", status["docs"])
 
-            with mock.patch.object(
-                server, "_acp_session_new",
-                return_value={"ok": True, "session_id": "session_test-1", "via": "acp"},
-            ) as spawned:
+            # Keep this unit test in-process: the worker route invokes the
+            # real Kimi ACP harness and would leave a blank smoke-test session.
+            with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                 mock.patch.object(
+                     server, "_acp_session_new",
+                     return_value={"ok": True, "session_id": "session_test-1", "via": "acp"},
+                 ) as spawned:
                 out = server._kimi_setup_verify()
             self.assertTrue(out["ok"])
             self.assertTrue(out["verified"])
             self.assertEqual(out["version"], "9.9.9")
             spawned.assert_called_once()
 
-        with mock.patch.object(server, "_acp_resolve_bin", return_value=missing):
+        with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+             mock.patch.object(server, "_acp_resolve_bin", return_value=missing):
             out = server._kimi_setup_verify()
             self.assertFalse(out["ok"])
             self.assertIn("not found", out["error"])
