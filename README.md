@@ -31,9 +31,27 @@ Or download the macOS DMG and drag `CCC.app` to Applications:
 
 Try the read-only demo first: [ccc.amirfish.ai/demo](https://ccc.amirfish.ai/demo/) (or [amirfish1.github.io/claude-command-center/demo](https://amirfish1.github.io/claude-command-center/demo/)) - full kanban with seeded fake data, no install required.
 
-<video src="https://github.com/amirfish1/claude-command-center/releases/download/v4.3.2.2/May-23-v4-CCC-v5.mp4" controls width="100%" poster="docs/images/kanban.png">
-  Your browser doesn't support inline video. <a href="https://github.com/amirfish1/claude-command-center/releases/download/v4.3.2.2/May-23-v4-CCC-v5.mp4">Download the demo</a> or watch the GIF above.
+## See CCC at work
+
+**Scan every coding-agent session, then open the one that needs you.**
+
+<video src="docs/product-story/assets/video/V-01-fleet-scan.mp4" controls muted width="100%" poster="docs/product-story/assets/video/posters/V-01.png">
+  Your browser doesn't support inline video. <a href="docs/product-story/assets/video/V-01-fleet-scan.mp4">Watch the fleet scan</a>.
 </video>
+
+**Organize projects and sessions on the Flow canvas.**
+
+<video src="docs/product-story/assets/video/V-07-flow-canvas.mp4" controls muted width="100%" poster="docs/product-story/assets/video/posters/V-07.png">
+  Your browser doesn't support inline video. <a href="docs/product-story/assets/video/V-07-flow-canvas.mp4">Watch the Flow canvas</a>.
+</video>
+
+**Move work across the kanban, then jump into its session.**
+
+<video src="docs/product-story/assets/video/V-06-kanban-drag.mp4" controls muted width="100%" poster="docs/product-story/assets/video/posters/V-06.png">
+  Your browser doesn't support inline video. <a href="docs/product-story/assets/video/V-06-kanban-drag.mp4">Watch the kanban workflow</a>.
+</video>
+
+All captures use seeded demo data.
 
 CCC latches onto every Claude Code, Codex, Cursor, Antigravity, and Kilo Code session on your machine: terminal sessions, headless processes, and sessions you spawned from the dashboard. It treats each agent's on-disk state as the source of truth, so nothing slips through. Spawn the next task while the first is still building. Switch between projects without losing context. Ship multiple things at once.
 
