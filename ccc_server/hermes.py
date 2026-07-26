@@ -19,7 +19,7 @@ import subprocess
 import threading
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Hermes conversation ingestion (read-only).
@@ -421,7 +421,7 @@ def _engine_update_specs():
         {
             "id": "hermes",
             "label": "Hermes",
-            "resolver": _resolve_hermes_bin,
+            "resolver": _core._resolve_hermes_bin,
             "args": ("update", "--yes"),
             "install": "Install Hermes Agent, then restart CCC.",
         },
@@ -467,7 +467,7 @@ def _engine_update_status():
     engines = state.get("engines")
     if not isinstance(engines, dict):
         engines = {}
-    for spec in _engine_update_specs():
+    for spec in _core._engine_update_specs():
         engines.setdefault(spec["id"], {
             "label": spec["label"],
             "status": "pending",
@@ -515,7 +515,7 @@ def _run_engine_updates_once():
 
         started_at = datetime.now(tz=timezone.utc).isoformat()
         results = {}
-        for spec in _engine_update_specs():
+        for spec in _core._engine_update_specs():
             engine = spec["id"]
             base = {
                 "label": spec["label"],
@@ -546,7 +546,7 @@ def _run_engine_updates_once():
                     "message": "Managed by its desktop application.",
                 }
                 continue
-            version_before = _engine_cli_version(bin_path)
+            version_before = _core._engine_cli_version(bin_path)
             cmd = [bin_path, *spec["args"]]
             try:
                 proc = subprocess.run(
@@ -572,7 +572,7 @@ def _run_engine_updates_once():
                     "message": str(exc)[:800],
                 }
                 continue
-            version_after = _engine_cli_version(bin_path)
+            version_after = _core._engine_cli_version(bin_path)
             message = _engine_update_message(proc)
             if proc.returncode != 0:
                 status = "failed"
@@ -618,7 +618,7 @@ def _run_engine_updates_once():
 
 def _engine_maintenance_once():
     catalog_status = _core._refresh_claude_model_catalog()
-    update_status = _run_engine_updates_once()
+    update_status = _core._run_engine_updates_once()
     return {"updates": update_status, "catalog": catalog_status}
 
 
@@ -1998,7 +1998,7 @@ def _extract_hermes_usage(session_id):
         "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
                                "cache_read": 0.0, "output": 0.0},
     }
-    row = _hermes_session_row(session_id) or {}
+    row = _core._hermes_session_row(session_id) or {}
     input_tokens = _core._codex_int(row.get("input_tokens"))
     cache_read = _core._codex_int(row.get("cache_read_tokens"))
     cache_write = _core._codex_int(row.get("cache_write_tokens"))
@@ -2099,7 +2099,7 @@ def resume_session_hermes(session_id, text):
     text = _core._strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
-    resolved = _resolve_hermes_bin()
+    resolved = _core._resolve_hermes_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     for s in _core._spawned_sessions:
@@ -2119,7 +2119,7 @@ def resume_session_hermes(session_id, text):
                     }
             except Exception:
                 pass
-    row = _hermes_session_row(session_id) or {}
+    row = _core._hermes_session_row(session_id) or {}
     spawned_ctx = _core._spawn_registry_entry_for_session(session_id, "hermes") or {}
     cwd = spawned_ctx.get("cwd") or row.get("cwd") or _core.find_session_cwd(session_id) or str(Path.home())
     if not Path(cwd).is_dir():

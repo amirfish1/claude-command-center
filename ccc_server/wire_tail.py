@@ -11,7 +11,7 @@ import json
 import threading
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # wire.jsonl tail (KIMI-FIXES-3): TUI-originated turns for attached sessions.
@@ -64,7 +64,7 @@ def _kimi_wire_turn_active(sid):
     """
     if time.time() < float(_core._KIMI_WIRE_BUSY_SUPPRESS_UNTIL.get(sid, 0) or 0):
         return False
-    path = _acp_wire_path("kimi", sid)
+    path = _core._acp_wire_path("kimi", sid)
     if path is None:
         return False
     try:
@@ -310,7 +310,7 @@ def _acp_wire_tail_tick():
             if state.get("wire_watch") or state.get("attached")
         ]
     for sid, snap in sessions:
-        path = _acp_wire_path("kimi", sid)
+        path = _core._acp_wire_path("kimi", sid)
         if path is None:
             continue
         try:
@@ -373,7 +373,12 @@ def _acp_wire_tail_start(harness):
 
 
 def _acp_shutdown_all():
-    for harness in list(_core._ACP_HARNESSES):
+    try:
+        harnesses = list(_core._ACP_HARNESSES)
+    except AttributeError:
+        # atexit can outlive the server module (test suite pops it)
+        return
+    for harness in harnesses:
         conn = _core._ACP_CONNS.pop(harness, None)
         if conn and conn.get("transport"):
             conn["transport"].close()

@@ -8,3 +8,31 @@ anything from this package, so these imports never re-execute server.py.
 Rules: stdlib-only (same as server.py); no side effects at import beyond
 def/class/constants; new subsystems start here, not in server.py.
 """
+
+import sys as _sys
+
+
+class _CoreProxy:
+    """Live view of the server module.
+
+    Extracted modules reach names still living in server.py through this
+    proxy instead of a direct `import server` binding. Attribute access
+    resolves against sys.modules["server"] on every call, so it survives
+    the test suite's server-module reloads and sees monkeypatched
+    attributes either way.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name):
+        mod = _sys.modules.get("server")
+        if mod is None:
+            # e.g. atexit callbacks after the test suite popped the module
+            raise AttributeError(name)
+        return getattr(mod, name)
+
+    def __setattr__(self, name, value):
+        setattr(_sys.modules["server"], name, value)
+
+
+core = _CoreProxy()

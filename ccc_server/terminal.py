@@ -14,7 +14,7 @@ import subprocess
 import threading
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # In-UI terminal — one-shot subprocess runner with cwd tracking.
@@ -118,7 +118,7 @@ def _kimi_setup_status():
         "docs": dict(_KIMI_SETUP_DOCS),
     }
     if data["installed"]:
-        data["version"] = _kimi_cli_version(resolved["bin"])
+        data["version"] = _core._kimi_cli_version(resolved["bin"])
     memo["ts"] = now
     memo["data"] = dict(data)
     return data
@@ -139,7 +139,7 @@ def _kimi_setup_verify():
     result = _core._acp_session_new("kimi", os.getcwd())
     if result.get("ok"):
         result["verified"] = True
-        result["version"] = _kimi_cli_version(resolved["bin"])
+        result["version"] = _core._kimi_cli_version(resolved["bin"])
     return result
 
 

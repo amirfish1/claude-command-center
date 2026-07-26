@@ -13,7 +13,7 @@ import re
 import subprocess
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Pkood agent orchestration

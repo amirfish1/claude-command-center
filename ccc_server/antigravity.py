@@ -13,7 +13,7 @@ from ccc_server.kilo import (
 )
 import sqlite3
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Antigravity integration
@@ -92,10 +92,10 @@ def _antigravity_transcript_paths():
 
 
 def _is_antigravity_session(session_id):
-    path = _antigravity_transcript_path(session_id)
+    path = _core._antigravity_transcript_path(session_id)
     if path and path.is_file():
         return True
-    cli_path = _antigravity_cli_conversation_path(session_id)
+    cli_path = _core._antigravity_cli_conversation_path(session_id)
     if cli_path and cli_path.is_file():
         return True
     app_path = _antigravity_app_conversation_path(session_id)

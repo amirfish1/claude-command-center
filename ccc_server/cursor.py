@@ -17,7 +17,7 @@ import time
 import urllib.request
 import uuid
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Cursor Agent integration
@@ -116,7 +116,7 @@ def _cursor_transcript_path(session_id):
 
 
 def _is_cursor_session(session_id):
-    path = _cursor_transcript_path(session_id)
+    path = _core._cursor_transcript_path(session_id)
     return bool(path and path.is_file())
 
 
@@ -797,7 +797,7 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
     if spawn_entry:
         cwd = spawn_entry.get("cwd") or spawn_entry.get("repo_path")
     if not cwd:
-        path = _cursor_transcript_path(sid)
+        path = _core._cursor_transcript_path(sid)
         if path:
             tail = _extract_cursor_tail_meta(path) or {}
             cwd = tail.get("cwd") or _cursor_cwd_from_transcript_path(path)
@@ -817,7 +817,7 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
     if spawn_entry:
         title = spawn_entry.get("name")
     if not title:
-        path = _cursor_transcript_path(sid)
+        path = _core._cursor_transcript_path(sid)
         if path:
             tail = _extract_cursor_tail_meta(path) or {}
             title = tail.get("first_message") or tail.get("title")
@@ -845,7 +845,7 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
 
     updated_at = None
     try:
-        path = _cursor_transcript_path(sid)
+        path = _core._cursor_transcript_path(sid)
         if path and path.is_file():
             updated_at = int(path.stat().st_mtime * 1000)
     except OSError:
@@ -981,7 +981,7 @@ def backfill_cursor_sidebar_visibility(days=None, repo_paths=None, now=None, max
         if entry:
             cwd = entry.get("cwd") or entry.get("repo_path")
         if not cwd:
-            path = _cursor_transcript_path(sid)
+            path = _core._cursor_transcript_path(sid)
             if path:
                 tail = _extract_cursor_tail_meta(path) or {}
                 cwd = tail.get("cwd") or _cursor_cwd_from_transcript_path(path)
@@ -1318,14 +1318,14 @@ def _extract_cursor_usage(session_id):
         "engine": "cursor",
         "override": _core._get_session_override(session_id),
     }
-    path = _cursor_transcript_path(session_id)
+    path = _core._cursor_transcript_path(session_id)
     tail = _extract_cursor_tail_meta(path) if path else {}
     spawned = _core._spawn_registry_entry_for_session(session_id, "cursor") or {}
     return {**empty, "model": (tail or {}).get("model") or spawned.get("model") or ""}
 
 
 def _extract_cursor_timeline(session_id):
-    path = _cursor_transcript_path(session_id)
+    path = _core._cursor_transcript_path(session_id)
     if not path:
         return {"events": [], "total_turns": 0}
     events = []
@@ -1375,7 +1375,7 @@ def _extract_cursor_timeline(session_id):
 
 
 def _extract_files_from_cursor_conversation(session_id):
-    path = _cursor_transcript_path(session_id)
+    path = _core._cursor_transcript_path(session_id)
     if not path:
         return {"count": 0, "truncated": False, "groups": {}}
     seen = {}

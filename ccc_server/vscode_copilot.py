@@ -12,7 +12,7 @@ import platform
 import re
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # VS Code Copilot Chat conversation ingestion (read-only).

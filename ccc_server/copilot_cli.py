@@ -13,7 +13,7 @@ import os
 import sqlite3
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Copilot CLI conversation ingestion (read-only).

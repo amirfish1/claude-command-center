@@ -14,7 +14,7 @@ import sqlite3
 import time
 import urllib.request
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Grok CLI conversation ingestion (read-only).

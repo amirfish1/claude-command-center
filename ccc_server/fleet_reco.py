@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Fleet recommendations — deterministic rules over the inventory

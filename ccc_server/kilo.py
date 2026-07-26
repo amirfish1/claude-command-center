@@ -11,7 +11,7 @@ import json
 import sqlite3
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Kilo Code session ingestion (read-only).

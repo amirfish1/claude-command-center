@@ -21,7 +21,7 @@ import time
 import urllib.request
 import uuid
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Total Recall search — optional session-level augmentation for the sidebar
@@ -141,7 +141,7 @@ def search_total_recall_sessions(query, limit=20, cwd_like=None):
         limit = max(1, min(int(limit), 50))
     except (TypeError, ValueError):
         limit = 20
-    cmd = _total_recall_command()
+    cmd = _core._total_recall_command()
     if not cmd:
         return {"results": []}
 
@@ -621,7 +621,7 @@ def _read_codex_usage_from_rollouts(now_epoch=None):
     if now_epoch is None:
         now_epoch = time.time()
     best = None
-    for path in _iter_recent_codex_rollouts(now_epoch=now_epoch):
+    for path in _core._iter_recent_codex_rollouts(now_epoch=now_epoch):
         snap = _codex_file_latest_rate_limits(path)
         if not snap:
             continue
@@ -762,7 +762,7 @@ def _kimi_plan_type(level):
 
 
 def _kimi_load_access_token():
-    creds = json.loads(_KIMI_CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    creds = json.loads(_core._KIMI_CREDENTIALS_FILE.read_text(encoding="utf-8"))
     token = creds.get("access_token") if isinstance(creds, dict) else None
     if not token:
         raise ValueError("no access_token in Kimi credentials")
@@ -810,7 +810,7 @@ def _read_kimi_usage(now_epoch=None):
         now_epoch = time.time()
     try:
         token = _kimi_load_access_token()
-        data = _kimi_fetch_usages(token)
+        data = _core._kimi_fetch_usages(token)
         usage = _kimi_usage_from_response(data, now_epoch=now_epoch)
         if usage:
             return usage
@@ -1363,7 +1363,7 @@ def usage_current_payload(now_epoch=None):
     codex = _core._latest_codex_usage_from_snapshots(now_epoch=now_epoch)
     kimi = _core._latest_kimi_usage_from_snapshots(now_epoch=now_epoch)
     cal = _core._weekly_pct_calibration()
-    reset_events = usage_reset_events_payload(days=30, now_epoch=now_epoch).get("events", [])
+    reset_events = _core.usage_reset_events_payload(days=30, now_epoch=now_epoch).get("events", [])
     return {
         "ok": True,
         "claude": {

@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Gemini CLI integration
@@ -114,13 +114,13 @@ def _load_antigravity_summary_titles():
     Cached by file mtime so the cost is a single parse per change.
     """
     try:
-        mtime = ANTIGRAVITY_SUMMARIES_PROTO.stat().st_mtime
+        mtime = _core.ANTIGRAVITY_SUMMARIES_PROTO.stat().st_mtime
     except OSError:
         return {}
     if _antigravity_summary_cache["mtime"] == mtime:
         return _antigravity_summary_cache["titles"]
     try:
-        data = ANTIGRAVITY_SUMMARIES_PROTO.read_bytes()
+        data = _core.ANTIGRAVITY_SUMMARIES_PROTO.read_bytes()
     except OSError:
         return _antigravity_summary_cache["titles"]
     titles = {}
@@ -251,9 +251,9 @@ def _resolve_cursor_bin():
     which_bin = shutil.which("cursor-agent")
     if which_bin:
         return {"available": True, "bin": which_bin, "source": "path"}
-    if CURSOR_LOCAL_BIN.is_file() and os.access(CURSOR_LOCAL_BIN, os.X_OK):
-        return {"available": True, "bin": str(CURSOR_LOCAL_BIN), "source": "candidate"}
-    for candidate in CURSOR_APP_BUNDLE_CANDIDATES:
+    if _core.CURSOR_LOCAL_BIN.is_file() and os.access(_core.CURSOR_LOCAL_BIN, os.X_OK):
+        return {"available": True, "bin": str(_core.CURSOR_LOCAL_BIN), "source": "candidate"}
+    for candidate in _core.CURSOR_APP_BUNDLE_CANDIDATES:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return {"available": True, "bin": str(candidate), "source": "bundle"}
     return {
@@ -325,7 +325,7 @@ def _antigravity_model_settings_label(model):
 
 def _read_antigravity_cli_settings():
     try:
-        with open(ANTIGRAVITY_CLI_SETTINGS, "r", encoding="utf-8") as fh:
+        with open(_core.ANTIGRAVITY_CLI_SETTINGS, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except FileNotFoundError:
         return {}, None
@@ -340,12 +340,12 @@ def _read_antigravity_cli_settings():
 
 def _write_antigravity_cli_settings(settings):
     try:
-        ANTIGRAVITY_CLI_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-        tmp = ANTIGRAVITY_CLI_SETTINGS.with_suffix(".json.tmp")
+        _core.ANTIGRAVITY_CLI_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _core.ANTIGRAVITY_CLI_SETTINGS.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(settings, fh, indent=2)
             fh.write("\n")
-        os.replace(tmp, ANTIGRAVITY_CLI_SETTINGS)
+        os.replace(tmp, _core.ANTIGRAVITY_CLI_SETTINGS)
     except OSError as exc:
         return f"Could not write Antigravity CLI settings.json: {exc}"
     return None
@@ -473,11 +473,13 @@ def _gemini_chat_paths():
     # listing changes slowly.
     now = time.time()
     cache = _gemini_chat_paths_cache
-    if now - cache["ts"] < _GEMINI_PATHS_TTL:
-        return cache["paths"]
     root = _gemini_tmp_root()
+    # Root participates in the key: GEMINI_HOME can be rebound (tests, config
+    # reload) and a time-only cache would serve paths from the old root.
+    if now - cache["ts"] < _GEMINI_PATHS_TTL and cache.get("root") == root:
+        return cache["paths"]
     if not root.is_dir():
-        cache.update({"ts": now, "paths": []})
+        cache.update({"ts": now, "paths": [], "root": root})
         return []
     paths = []
     try:
@@ -494,13 +496,13 @@ def _gemini_chat_paths():
             except OSError:
                 continue
     except OSError:
-        cache.update({"ts": now, "paths": []})
+        cache.update({"ts": now, "paths": [], "root": root})
         return []
     try:
         paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         paths.sort(key=lambda p: str(p), reverse=True)
-    cache.update({"ts": now, "paths": paths})
+    cache.update({"ts": now, "paths": paths, "root": root})
     return paths
 
 

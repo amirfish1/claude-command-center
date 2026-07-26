@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Conversation history search — read-only window onto the separate `claude-index`

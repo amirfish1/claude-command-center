@@ -33976,6 +33976,15 @@ def _extract_codex_timeline(session_id):
 GEMINI_HOME = Path.home() / ".gemini"
 
 from ccc_server.gemini import (
+    CURSOR_APP_BUNDLE_CANDIDATES,
+    CURSOR_LOCAL_BIN,
+    ANTIGRAVITY_BRAIN,
+    ANTIGRAVITY_CLI_BRAIN,
+    ANTIGRAVITY_HOME,
+    ANTIGRAVITY_SUMMARIES_PROTO,
+    CURSOR_CONTEXT_LIMIT,
+    CURSOR_HOME,
+    _CURSOR_META_VERSION,
     ANTIGRAVITY_APP_LS_SERVICE,
     ANTIGRAVITY_CLI_CONVERSATIONS,
     ANTIGRAVITY_CLI_HOME,
@@ -34080,6 +34089,8 @@ _ENGINE_UPDATE_STATE_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.json"
 _ENGINE_UPDATE_LOCK_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.lock"
 
 from ccc_server.hermes import (
+    _engine_cli_version,
+    _engine_update_specs,
     _engine_maintenance_loop,
     _engine_update_status,
     _extract_files_from_hermes_conversation,
@@ -34111,6 +34122,7 @@ from ccc_server.kilo import (
 )
 
 from ccc_server.copilot_cli import (
+    _copilot_first_col,
     _copilot_home,
     _is_copilot_session,
     _parse_copilot_conversation,
@@ -50323,6 +50335,10 @@ _USAGE_SNAPSHOTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "usage-snapshots.js
 _RESET_EVENTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
 
 from ccc_server.recall_usage import (
+    _total_recall_command,
+    _KIMI_CREDENTIALS_FILE,
+    _iter_recent_codex_rollouts,
+    _kimi_fetch_usages,
     _RESET_DETECT_JITTER_SECS,
     _USAGE_NATIVE_FRESH_SECS,
     _latest_native_usage_snapshot,
@@ -54977,6 +54993,7 @@ def morning_launch(goal_slug, strategy_id, custom_message=None):
 
 
 from ccc_server.terminal import (
+    _kimi_cli_version,
     _TERM_LOCK,
     _kimi_setup_status,
     _kimi_setup_verify,
