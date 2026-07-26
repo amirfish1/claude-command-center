@@ -1,0 +1,1 @@
+Codex resume no longer fails with "Codex CLI not found" when the CLI is a standalone install in `~/.local/bin` (or another user bin dir) and CCC's engine worker runs under launchd's minimal PATH; resolution also skips stale `codex` symlinks left behind by a deleted Codex.app.
