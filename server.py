@@ -21935,9 +21935,34 @@ class _CodexAppServerTransport:
             except OSError:
                 pass
             self.sock = None
-        if self.proc is not None and self.proc.poll() is None:
+        proc = self.proc
+        if proc is not None and proc.poll() is None:
+            # terminate() only *asks*. The stdio reader thread sits in
+            # `for line in proc.stdout`, which ends only at EOF -- and EOF only
+            # arrives once this process is actually gone. So a SIGTERM the
+            # app-server is slow to honour strands that reader forever, and the
+            # spawn path has already dropped the handle to it: one leaked
+            # `codex-app-server-reader-*` thread per reconnect, each pinning the
+            # subprocess it was reading. Measured at 170 threads / 45% CPU in a
+            # ccc_worker after a day of reconnects.
+            #
+            # So: ask, wait, escalate, reap. wait() also keeps the exited
+            # process from lingering as a zombie.
             try:
-                self.proc.terminate()
+                proc.terminate()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                try:
+                    proc.wait(timeout=5)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
             except OSError:
                 pass
 
