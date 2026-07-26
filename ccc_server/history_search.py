@@ -37,9 +37,8 @@ except Exception:
     _hi_search = None  # type: ignore
     _hi_indexer = None  # type: ignore
 
-_HISTORY_INDEX_PATH = Path.home() / ".claude-index" / "index.db"
-_history_conn = None
-_history_conn_lock = threading.Lock()       # guards connection open / reset
+# _HISTORY_INDEX_PATH / _history_conn / _history_conn_lock live in server.py
+# (tests patch them via the server module); reached through _core below.
 
 # Self-freshening search: each /api/search-history request kicks a throttled
 # background incremental ingest so search content tracks live transcripts
@@ -208,15 +207,14 @@ def _open_history_index():
     handle, but it does NOT make concurrent use safe — every actual query
     must hold `_history_query_lock` (see its definition above).
     """
-    global _history_conn
-    if _history_conn is not None:
-        return _history_conn
-    with _history_conn_lock:
-        if _history_conn is not None:
-            return _history_conn
-        if not _HISTORY_INDEX_PATH.is_file():
+    if _core._history_conn is not None:
+        return _core._history_conn
+    with _core._history_conn_lock:
+        if _core._history_conn is not None:
+            return _core._history_conn
+        if not _core._HISTORY_INDEX_PATH.is_file():
             return None
-        uri = f"file:{_HISTORY_INDEX_PATH}?mode=ro"
+        uri = f"file:{_core._HISTORY_INDEX_PATH}?mode=ro"
         try:
             conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
         except sqlite3.OperationalError:
@@ -231,24 +229,23 @@ def _open_history_index():
                 _hi_db._try_load_vec(conn)
             except Exception:
                 pass
-        _history_conn = conn
+        _core._history_conn = conn
         return conn
 
 
 def _history_drop_conn():
     """Close and forget the cached read connection so the next search
     reopens against a freshly created index file (used after re-ingest)."""
-    global _history_conn
-    with _history_conn_lock:
-        if _history_conn is not None:
+    with _core._history_conn_lock:
+        if _core._history_conn is not None:
             # Hold the query lock too so we never close the handle out
             # from under an in-flight search on another worker thread.
             with _history_query_lock:
                 try:
-                    _history_conn.close()
+                    _core._history_conn.close()
                 except Exception:
                     pass
-                _history_conn = None
+                _core._history_conn = None
 
 
 def search_conversation_history(query, limit=20, cwd_like=None, since=None, semantic=False):

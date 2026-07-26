@@ -34,36 +34,10 @@ import server as _core
 # cross-provider search result contract.
 # ---------------------------------------------------------------------------
 
-HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
-HERMES_STATE_DB = Path(
-    os.environ.get("CCC_HERMES_STATE_DB")
-    or os.environ.get("HERMES_STATE_DB")
-    or (HERMES_HOME / "state.db")
-).expanduser()
-HERMES_GATEWAY_SESSIONS = Path(
-    os.environ.get("CCC_HERMES_GATEWAY_SESSIONS")
-    or (HERMES_HOME / "sessions" / "sessions.json")
-).expanduser()
-HERMES_WHATSAPP_DIR = Path(
-    os.environ.get("CCC_HERMES_WHATSAPP_DIR")
-    or (HERMES_HOME / "whatsapp")
-).expanduser()
-HERMES_WHATSAPP_BRIDGE_LOG = Path(
-    os.environ.get("CCC_HERMES_WHATSAPP_BRIDGE_LOG")
-    or (HERMES_WHATSAPP_DIR / "bridge.log")
-).expanduser()
-HERMES_CHUCK_PENDING_DIR = Path(
-    os.environ.get("CCC_HERMES_CHUCK_PENDING_DIR")
-    or (HERMES_WHATSAPP_DIR / "chuck_realtor_pending")
-).expanduser()
 # Profile workers (e.g. the "chuckrealtor" / Becky agent that actually writes
 # code) run under their OWN state.db at ~/.hermes/profiles/<name>/state.db,
 # not the main gateway DB. Those are the sessions that do the real work, so
 # CCC ingests every profile DB alongside the gateway one.
-HERMES_PROFILES_DIR = Path(
-    os.environ.get("CCC_HERMES_PROFILES_DIR")
-    or (HERMES_HOME / "profiles")
-).expanduser()
 HERMES_CONTEXT_LIMIT = 200_000
 _HERMES_ID_CACHE = {"key": None, "ids": set()}
 # session_id -> owning DB path (main gateway DB or a profile DB). Rebuilt by
@@ -76,7 +50,7 @@ _HERMES_PENDING_PREFIX = "hermes-whatsapp-pending:"
 
 def _hermes_db_path():
     try:
-        p = Path(HERMES_STATE_DB).expanduser()
+        p = Path(_core.HERMES_STATE_DB).expanduser()
         return p if p.is_file() else None
     except (OSError, RuntimeError, ValueError, TypeError):
         return None
@@ -88,10 +62,10 @@ def _hermes_profile_for_db(db):
     ~/.hermes/profiles/chuckrealtor/state.db -> "chuckrealtor"."""
     try:
         db = Path(db)
-        main = Path(HERMES_STATE_DB).expanduser()
+        main = Path(_core.HERMES_STATE_DB).expanduser()
         if db == main:
             return ""
-        pdir = Path(HERMES_PROFILES_DIR)
+        pdir = Path(_core.HERMES_PROFILES_DIR)
         if pdir in db.parents:
             # .../profiles/<name>/state.db -> <name>
             rel = db.relative_to(pdir)
@@ -111,7 +85,7 @@ def _hermes_db_paths():
     if main is not None:
         paths.append(main)
     try:
-        pdir = Path(HERMES_PROFILES_DIR)
+        pdir = Path(_core.HERMES_PROFILES_DIR)
         if pdir.is_dir():
             for child in sorted(pdir.iterdir(), key=lambda p: p.name.lower()):
                 try:
@@ -158,7 +132,7 @@ def _hermes_file_key(paths):
 
 def _hermes_pending_paths():
     try:
-        pdir = Path(HERMES_CHUCK_PENDING_DIR).expanduser()
+        pdir = Path(_core.HERMES_CHUCK_PENDING_DIR).expanduser()
         if not pdir.is_dir():
             return []
         return [
@@ -173,7 +147,7 @@ def _hermes_cache_key():
     """Combined cache key for all Hermes-backed cards, including file-backed
     WhatsApp gateway sources that may exist before a row reaches state.db."""
     db_mtime, db_size = _hermes_db_cache_key()
-    paths = [HERMES_WHATSAPP_BRIDGE_LOG]
+    paths = [_core.HERMES_WHATSAPP_BRIDGE_LOG]
     paths.extend(_hermes_pending_paths())
     file_mtime, file_size = _hermes_file_key(paths)
     return (max(db_mtime, file_mtime), db_size + file_size)
@@ -219,7 +193,7 @@ def _hermes_read_json_file(path):
 
 def _hermes_bridge_tail_lines(max_lines=2000):
     try:
-        with open(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser(), "r", encoding="utf-8", errors="replace") as fh:
+        with open(Path(_core.HERMES_WHATSAPP_BRIDGE_LOG).expanduser(), "r", encoding="utf-8", errors="replace") as fh:
             return list(collections.deque(fh, maxlen=max(1, int(max_lines or 2000))))
     except (OSError, RuntimeError, ValueError, TypeError):
         return []
@@ -272,7 +246,7 @@ def _hermes_bridge_events_by_chat():
     lines = _hermes_bridge_tail_lines()
     start_line = 0
     try:
-        with open(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser(), "r", encoding="utf-8", errors="replace") as fh:
+        with open(Path(_core.HERMES_WHATSAPP_BRIDGE_LOG).expanduser(), "r", encoding="utf-8", errors="replace") as fh:
             total_lines = sum(1 for _ in fh)
         start_line = max(0, total_lines - len(lines))
     except (OSError, RuntimeError, ValueError, TypeError):
@@ -405,8 +379,6 @@ def _resolve_hermes_bin():
     }
 
 
-_ENGINE_UPDATE_STATE_FILE = _core.COMMAND_CENTER_STATE_DIR / "engine-updates.json"
-_ENGINE_UPDATE_LOCK_FILE = _core.COMMAND_CENTER_STATE_DIR / "engine-updates.lock"
 _ENGINE_UPDATE_INTERVAL_SEC = 60 * 60
 _ENGINE_UPDATE_TIMEOUT_SEC = 5 * 60
 _ENGINE_UPDATE_MUTEX = threading.Lock()
@@ -458,7 +430,7 @@ def _engine_update_specs():
 
 def _read_engine_update_state():
     try:
-        data = json.loads(_ENGINE_UPDATE_STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_core._ENGINE_UPDATE_STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -466,10 +438,10 @@ def _read_engine_update_state():
 
 def _write_engine_update_state(data):
     try:
-        _ENGINE_UPDATE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _ENGINE_UPDATE_STATE_FILE.with_suffix(".tmp")
+        _core._ENGINE_UPDATE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _core._ENGINE_UPDATE_STATE_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, _ENGINE_UPDATE_STATE_FILE)
+        os.replace(tmp, _core._ENGINE_UPDATE_STATE_FILE)
         return True
     except OSError:
         return False
@@ -531,8 +503,8 @@ def _run_engine_updates_once():
     lock_file = None
     _ENGINE_UPDATE_RUNNING = True
     try:
-        _ENGINE_UPDATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-        lock_file = open(_ENGINE_UPDATE_LOCK_FILE, "a+", encoding="utf-8")
+        _core._ENGINE_UPDATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = open(_core._ENGINE_UPDATE_LOCK_FILE, "a+", encoding="utf-8")
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (BlockingIOError, OSError):
@@ -1129,7 +1101,7 @@ def _hermes_tool_block(call):
 
 def _hermes_gateway_index():
     try:
-        p = Path(HERMES_GATEWAY_SESSIONS).expanduser()
+        p = Path(_core.HERMES_GATEWAY_SESSIONS).expanduser()
         st = p.stat()
         key = (st.st_mtime_ns, st.st_size)
     except (OSError, RuntimeError, ValueError, TypeError):
@@ -1448,7 +1420,7 @@ def _hermes_external_rows(include_old=True):
         modified = _hermes_epoch(last.get("ts")) or 0.0
         if not modified:
             try:
-                modified = float(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser().stat().st_mtime)
+                modified = float(Path(_core.HERMES_WHATSAPP_BRIDGE_LOG).expanduser().stat().st_mtime)
             except OSError:
                 modified = 0.0
         sid = _hermes_bridge_session_id(chat_id)
@@ -1456,7 +1428,7 @@ def _hermes_external_rows(include_old=True):
         row = _hermes_base_file_row(sid, modified, display, text, text)
         row["size"] = sum(len(e.get("text") or "") for e in events)
         row["last_event_type"] = "assistant" if last.get("type") == "assistant" else "user"
-        row["hermes_bridge_log_path"] = str(Path(HERMES_WHATSAPP_BRIDGE_LOG).expanduser())
+        row["hermes_bridge_log_path"] = str(Path(_core.HERMES_WHATSAPP_BRIDGE_LOG).expanduser())
         rows.append(row)
     return rows
 

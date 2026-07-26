@@ -218,12 +218,10 @@ def search_total_recall_sessions(query, limit=20, cwd_like=None):
 _plan_usage_cache = None
 _plan_usage_cache_time = 0
 _plan_usage_cache_lock = threading.Lock()
-_USAGE_SNAPSHOTS_FILE = _core.COMMAND_CENTER_STATE_DIR / "usage" / "usage-snapshots.jsonl"
 _USAGE_SNAPSHOT_MAX_LINES = 50_000
 _USAGE_SNAPSHOT_MAX_AGE_DAYS = 90
 _USAGE_NATIVE_FRESH_SECS = 15 * 60
 _PLAN_USAGE_POLL_SECS = 5 * 60
-_RESET_EVENTS_FILE = _core.COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
 _RESET_DETECT_JITTER_SECS = 5 * 60
 _RESET_DETECT_MAX_PREV_AGE_SECS = 30 * 60
 _CODEX_USAGE_SCAN_DAYS = 9
@@ -933,7 +931,7 @@ def _usage_snapshot_epoch(snapshot):
 
 def _read_native_usage_snapshots_unlocked():
     try:
-        with _USAGE_SNAPSHOTS_FILE.open("r", encoding="utf-8") as f:
+        with _core._USAGE_SNAPSHOTS_FILE.open("r", encoding="utf-8") as f:
             lines = f.readlines()
     except OSError:
         return []
@@ -952,12 +950,12 @@ def _read_native_usage_snapshots_unlocked():
 
 
 def _write_native_usage_snapshots_unlocked(snapshots):
-    _USAGE_SNAPSHOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _USAGE_SNAPSHOTS_FILE.with_suffix(".tmp")
+    _core._USAGE_SNAPSHOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _core._USAGE_SNAPSHOTS_FILE.with_suffix(".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         for item in snapshots:
             f.write(json.dumps(item, separators=(",", ":")) + "\n")
-    tmp.replace(_USAGE_SNAPSHOTS_FILE)
+    tmp.replace(_core._USAGE_SNAPSHOTS_FILE)
 
 
 def _append_native_usage_snapshot(snapshot, now_epoch=None):
@@ -1069,7 +1067,7 @@ def _detect_usage_reset_events(prev, curr, now_epoch=None):
 
 def _read_usage_reset_events_unlocked():
     try:
-        lines = _RESET_EVENTS_FILE.read_text(encoding="utf-8").splitlines()
+        lines = _core._RESET_EVENTS_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
     events = []
@@ -1109,11 +1107,11 @@ def _usage_reset_event_with_id(event):
 
 
 def _write_usage_reset_events_unlocked(events):
-    _RESET_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _RESET_EVENTS_FILE.with_suffix(".tmp")
+    _core._RESET_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _core._RESET_EVENTS_FILE.with_suffix(".tmp")
     body = "".join(json.dumps(_usage_reset_event_with_id(event), separators=(",", ":")) + "\n" for event in events)
     tmp.write_text(body, encoding="utf-8")
-    tmp.replace(_RESET_EVENTS_FILE)
+    tmp.replace(_core._RESET_EVENTS_FILE)
 
 
 def _rebuild_week_start_override_from_events(events):
@@ -1173,10 +1171,10 @@ def _append_usage_reset_event(event):
     if not isinstance(event, dict):
         return False
     try:
-        _RESET_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _core._RESET_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(event, separators=(",", ":")) + "\n"
         with _reset_events_lock:
-            with _RESET_EVENTS_FILE.open("a", encoding="utf-8") as f:
+            with _core._RESET_EVENTS_FILE.open("a", encoding="utf-8") as f:
                 f.write(line)
         _refresh_week_start_override_from_event(event)
         return True

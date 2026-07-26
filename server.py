@@ -37375,6 +37375,36 @@ def _is_kilo_session(session_id):
     return False
 
 
+# Test-patched globals kept here; ccc_server/hermes.py reads them via _core.
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+HERMES_WHATSAPP_DIR = Path(
+    os.environ.get("CCC_HERMES_WHATSAPP_DIR")
+    or (HERMES_HOME / "whatsapp")
+).expanduser()
+HERMES_STATE_DB = Path(
+    os.environ.get("CCC_HERMES_STATE_DB")
+    or os.environ.get("HERMES_STATE_DB")
+    or (HERMES_HOME / "state.db")
+).expanduser()
+HERMES_GATEWAY_SESSIONS = Path(
+    os.environ.get("CCC_HERMES_GATEWAY_SESSIONS")
+    or (HERMES_HOME / "sessions" / "sessions.json")
+).expanduser()
+HERMES_WHATSAPP_BRIDGE_LOG = Path(
+    os.environ.get("CCC_HERMES_WHATSAPP_BRIDGE_LOG")
+    or (HERMES_WHATSAPP_DIR / "bridge.log")
+).expanduser()
+HERMES_CHUCK_PENDING_DIR = Path(
+    os.environ.get("CCC_HERMES_CHUCK_PENDING_DIR")
+    or (HERMES_WHATSAPP_DIR / "chuck_realtor_pending")
+).expanduser()
+HERMES_PROFILES_DIR = Path(
+    os.environ.get("CCC_HERMES_PROFILES_DIR")
+    or (HERMES_HOME / "profiles")
+).expanduser()
+_ENGINE_UPDATE_STATE_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.json"
+_ENGINE_UPDATE_LOCK_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.lock"
+
 from ccc_server.hermes import (
     _engine_maintenance_loop,
     _engine_update_status,
@@ -37389,6 +37419,14 @@ from ccc_server.hermes import (
     _start_engine_update_pass,
     find_hermes_conversations,
     resume_session_hermes,
+    _HERMES_DB_INDEX,
+    _HERMES_GATEWAY_CACHE,
+    _HERMES_ID_CACHE,
+    _hermes_db_for_session,
+    _hermes_decision_summary,
+    _hermes_tool_block,
+    _engine_maintenance_once,
+    _run_engine_updates_once,
 )
 
 
@@ -53594,6 +53632,11 @@ def extract_session_usage(session_id):
 
 
 # Conversation history search — extracted to ccc_server/history_search.py.
+# Test-patched globals kept here; ccc_server/history_search.py reads them via
+# _core (they are rebound at runtime, so they must live on this module).
+_HISTORY_INDEX_PATH = Path.home() / ".claude-index" / "index.db"
+_history_conn = None
+_history_conn_lock = threading.Lock()       # guards connection open / reset
 from ccc_server.history_search import (
     _HISTORY_AUTO_INGEST_GAP_SEC,
     _hi_indexer,
@@ -53601,6 +53644,10 @@ from ccc_server.history_search import (
     get_history_message,
     search_conversation_history,
 )
+# Test-patched globals kept here; ccc_server/recall_usage.py reads them via _core.
+_USAGE_SNAPSHOTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "usage-snapshots.jsonl"
+_RESET_EVENTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
+
 from ccc_server.recall_usage import (
     _RESET_DETECT_JITTER_SECS,
     _USAGE_NATIVE_FRESH_SECS,
@@ -53622,6 +53669,18 @@ from ccc_server.recall_usage import (
     usage_current_payload,
     usage_reset_events_payload,
     usage_snapshots_payload,
+    _append_native_usage_snapshot,
+    _append_usage_reset_event,
+    _codex_account_usage_from_response,
+    _codex_file_latest_rate_limits,
+    _codex_usage_file_cache,
+    _codex_usage_from_account_rate_limits,
+    _detect_usage_reset_events,
+    _kimi_usage_from_response,
+    _native_usage_snapshot_from_plan_usage,
+    _read_codex_usage,
+    _read_kimi_usage,
+    _usage_snapshot_iso,
 )
 
 # ---------------------------------------------------------------------------
@@ -58253,6 +58312,7 @@ from ccc_server.terminal import (
     _term_resolve_cwd_change,
     _term_split_leading_cd,
     _term_state,
+    _KIMI_SETUP_STATUS_MEMO,
 )
 
 # ---------------------------------------------------------------------------
