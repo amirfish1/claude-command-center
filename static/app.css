@@ -14928,6 +14928,7 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.04em;
+  white-space: nowrap;
   color: color-mix(in srgb, var(--worker-cur) 62%, #fff);
 }
 .worker-count {

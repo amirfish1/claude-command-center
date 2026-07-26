@@ -52053,20 +52053,38 @@
         const active = Number(data.active || 0);
         const queued = Number(data.queued || 0);
         const uncertain = Number(data.uncertain || 0);
-        attention = active + queued + uncertain;
+        const workerJobs = active + queued;
         if (uncertain) {
           $workerBadge.classList.add('is-uncertain');
-          label = 'Worker check';
+          label = 'Needs review:';
+          attention = uncertain;
+          detail = [
+            uncertain + (uncertain === 1 ? ' job needs review' : ' jobs need review'),
+            active + ' active',
+            queued + ' queued',
+            'open Maintenance to reconcile',
+          ].join(' · ');
         } else if (drain.enabled) {
           $workerBadge.classList.add('is-paused');
           label = 'Worker paused';
+          detail = [
+            'Worker dispatch paused',
+            active + ' active',
+            queued + ' queued',
+            'open Maintenance to resume',
+          ].join(' · ');
+        } else if (workerJobs) {
+          label = 'Worker jobs:';
+          attention = workerJobs;
+          detail = [
+            'Execution worker online',
+            active + ' active',
+            queued + ' queued',
+          ].join(' · ');
+        } else {
+          label = 'Worker ready';
+          detail = 'Execution worker online · no active or queued jobs';
         }
-        detail = [
-          'Execution worker online',
-          active + ' active',
-          queued + ' queued',
-          uncertain + ' uncertain',
-        ].join(' · ');
       }
     }
     if ($workerWord) $workerWord.textContent = label;
