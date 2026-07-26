@@ -1,0 +1,1 @@
+- Make recent WatchTower worker chips open their Codex conversations.

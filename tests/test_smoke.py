@@ -335,6 +335,7 @@ class TestServerImports(unittest.TestCase):
             server._session_cwd_cache.pop(agent_sid, None)
             try:
                 with mock.patch.object(server, "session_live_status", return_value={"live": False}), \
+                     mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
                      mock.patch.object(server, "resume_session_headless", return_value={"ok": True}) as resume:
                     result = server._inject_text_into_session(agent_sid, "follow up")
                 self.assertTrue(result["ok"])
@@ -4940,15 +4941,54 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("Auto-drain update failed", toggle_js)
         self.assertIn("btn.classList.add('is-pending');", toggle_js)
         self.assertIn("btn.setAttribute('aria-busy', 'true');", toggle_js)
+        self.assertIn("btn.disabled = true;", toggle_js)
+        self.assertIn("btn.setAttribute('aria-pressed', newVal ? 'true' : 'false');", toggle_js)
         self.assertIn("btn.classList.toggle('is-on', newVal);", toggle_js)
         self.assertIn("drainVal.textContent = newVal ? 'on' : 'off';", toggle_js)
         self.assertIn("btn.classList.remove('is-pending');", toggle_js)
         self.assertIn("btn.removeAttribute('aria-busy');", toggle_js)
+        self.assertIn("btn.disabled = false;", toggle_js)
+        self.assertIn("const _UXQ_DRAIN_MIN_PENDING_MS = 400;", app_js)
+        self.assertIn("const pendingStartedAt = Date.now();", toggle_js)
+        self.assertIn("await new Promise(resolve => setTimeout(resolve, remainingPendingMs));", toggle_js)
+        self.assertLess(
+            toggle_js.index("await new Promise(resolve => setTimeout(resolve, remainingPendingMs));"),
+            toggle_js.index("_uxqPendingDrainStates.delete(drainKey)"),
+        )
         self.assertIn(".fq-health-drain-toggle.is-pending::after", app_css)
         self.assertLess(
             toggle_js.index("const queueHealth ="),
             toggle_js.index("await fetch('/api/queue/drain'"),
         )
+
+    def test_queue_drain_toggle_keeps_optimistic_state_through_refresh(self):
+        """A stale health repaint must not erase a confirmed drain transition."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        strip_js = app_js[
+            app_js.index("async function _renderQueueHealthStrip"):
+            app_js.index("// Repo-basename", app_js.index("async function _renderQueueHealthStrip"))
+        ]
+        toggle_js = app_js[
+            app_js.index("const toggleDrain = async (ev) =>"):
+            app_js.index("const cycleClaimTypes = async (ev) =>")
+        ]
+
+        self.assertIn("const _uxqPendingDrainStates = new Map();", app_js)
+        self.assertIn("const pendingDrain = _uxqPendingDrainStates.get", strip_js)
+        self.assertIn("pendingDrain ? pendingDrain.on : autoDrain", strip_js)
+        self.assertIn("const isDrainPending = !!(pendingDrain && pendingDrain.pending);", strip_js)
+        self.assertIn(
+            "const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;",
+            strip_js,
+        )
+        self.assertIn("if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);", strip_js)
+        self.assertIn("_uxqPendingDrainStates.set", toggle_js)
+        self.assertIn("_uxqPendingDrainStates.delete", toggle_js)
+        self.assertIn("const healthInFlightAtClick = _uxqHealthPromise;", toggle_js)
+        self.assertIn("let drainSucceeded = false;", toggle_js)
+        self.assertIn("drainSucceeded = true;", toggle_js)
+        self.assertIn("pendingDrainState.pending = false;", toggle_js)
+        self.assertIn("void refreshDrainHealth();", toggle_js)
 
     def test_queue_detail_uses_watchtower_timeline_contract(self):
         """Ticket detail should come from WT timeline, not CCC's old private
@@ -10731,6 +10771,65 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(reg_thread["title"], "app-spawn")
         self.assertEqual(reg_thread["ccc"]["spawn_id"], result["spawn_id"])
 
+    def test_spawn_codex_reattaches_when_first_turn_cannot_find_new_thread(self):
+        """A missing new thread recycles the child when resume cannot recover."""
+        server = self.server
+        stale_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        fresh_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363486"
+        calls = []
+        thread_starts = 0
+
+        def fake_request(method, params=None, timeout=20):
+            nonlocal thread_starts
+            calls.append((method, params or {}))
+            if method == "thread/start":
+                thread_starts += 1
+                sid = stale_sid if thread_starts == 1 else fresh_sid
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}}}}
+            if method == "thread/name/set":
+                return {"result": {}}
+            if method == "turn/start":
+                if params["threadId"] == stale_sid:
+                    return {"error": {"message": f"thread not found: {stale_sid}"}}
+                return {"result": {"turn": {"id": "turn-1"}}}
+            if method == "thread/resume":
+                return {"error": {"message": f"thread not found: {stale_sid}"}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+                 mock.patch.object(server, "_codex_app_server_transport_kind", return_value="stdio"), \
+                 mock.patch.object(server, "_mark_codex_thread_user_visible", return_value=True), \
+                 mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
+                 mock.patch.object(server, "_codex_app_server_shutdown", return_value=True) as recycle, \
+                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0"}):
+                result = server.spawn_session_codex(
+                    "say ok", name="reattach app spawn", repo_path=str(self.repo),
+                )
+        finally:
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["session_id"], fresh_sid)
+        self.assertTrue(result["thread_recreated"])
+        recycle.assert_called_once()
+        self.assertEqual(
+            [method for method, _ in calls],
+            [
+                "thread/start",
+                "thread/name/set",
+                "turn/start",
+                "thread/resume",
+                "thread/start",
+                "thread/name/set",
+                "turn/start",
+            ],
+        )
+
     def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
         """Default Codex spawns should prefer 5.5 while requesting max context."""
         server = self.server
@@ -15037,6 +15136,13 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         self.server = importlib.import_module("server")
+        self.control_plane_patch = mock.patch.object(
+            self.server,
+            "_control_plane_engine_call",
+            return_value=None,
+        )
+        self.control_plane_patch.start()
+        self.addCleanup(self.control_plane_patch.stop)
         self.tmp_dir = tempfile.mkdtemp(prefix="ccc-codex-recovery-")
         self.server.CODEX_APP_SERVER_STATE_FILE = (
             pathlib.Path(self.tmp_dir) / "codex-app-server-state.json"

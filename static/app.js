@@ -33431,6 +33431,15 @@
     const selectedRow = conversationsData.find(x => x.id === id)
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null)
       || null;
+    // WatchTower's "Open CCC" deep link can hand us a raw session UUID before
+    // the sidebar request has populated sessionIdByConv. Treat that UUID as
+    // the session id directly so currentSession remains sendable and the
+    // composer does not disappear during this startup race.
+    const isSessionId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
+      .test(String(id || ''));
+    const selectedSessionId = sessionIdByConv[id]
+      || (selectedRow && selectedRow.session_id)
+      || (isSessionId ? id : null);
     updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
     // Federation handoff ownership — one-shot fetch (no polling); paints a
     // "Moved to <node>" chip in the breadcrumb if owned elsewhere now.
@@ -33488,7 +33497,7 @@
     syncActivePaneChrome(id);
     // Update split panel session ID display
     if ($cpSessionId) {
-      const sid = selectedRow && selectedRow.pending_spawn ? '' : (sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || '');
+      const sid = selectedRow && selectedRow.pending_spawn ? '' : (selectedSessionId || '');
       setCopyableSessionId($cpSessionId, sid);
     }
     const paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
@@ -33517,7 +33526,7 @@
     } else {
       setCurrentSession(
         source,
-        sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || null,
+        selectedSessionId,
         sessionCwdByConv[id] || (selectedRow && selectedRow.cwd) || null,
         sessionCwdExistsByConv[id],
         sessionSpawnPidByConv[id],
@@ -33566,7 +33575,7 @@
         // Block-level streaming from the spawn log — only succeeds if the
         // backend finds a CCC-spawned headless process for this session.
         // No-op for externally launched, IDE-launched, or pkood sessions.
-        const sid = sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || '';
+        const sid = selectedSessionId || '';
         if (sid && source !== 'codex' && source !== 'cursor' && source !== 'antigravity' && source !== 'hermes' && source !== 'backlog') startSpawnStream(sid, paneId);
       }
     } finally {
@@ -33985,6 +33994,11 @@
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
   let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
+  // A queue-health refresh can finish after a drain click but before its POST.
+  // Keep the requested state separately so that stale snapshot cannot repaint
+  // the button back to its former value or hide its in-progress spinner.
+  const _uxqPendingDrainStates = new Map();
+  const _UXQ_DRAIN_MIN_PENDING_MS = 400;
   let _uxqHealthPromise = null;
   async function _fetchUxqHealth(allowStale) {
     if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
@@ -34537,16 +34551,29 @@
           + (canNudge ? ' is-nudgeable' : '') + '"'
           + (canNudge ? ' role="button" tabindex="0" data-nudge-sid="' + escapeAttr(sid) + '"' : '')
           + ' title="' + escapeAttr(badgeTip) + '" aria-label="' + escapeAttr(badgeTip) + '">' + badgeText + '</span>';
-        const autoDrain = _drainByQueue.has(project.toUpperCase())
-          ? _drainByQueue.get(project.toUpperCase())
+        const drainKey = project.toUpperCase();
+        const autoDrain = _drainByQueue.has(drainKey)
+          ? _drainByQueue.get(drainKey)
           : !!r.auto_drain;
-        const drainToggle = '<span class="fq-health-drain-toggle' + (autoDrain ? ' is-on' : '') + '"'
-          + ' role="button" tabindex="0"'
+        const pendingDrain = _uxqPendingDrainStates.get(drainKey);
+        const isDrainPending = !!(pendingDrain && pendingDrain.pending);
+        // A health request can have started before the POST and complete after
+        // it. Keep the confirmed value through that stale repaint; discard the
+        // override only when a later health snapshot agrees with the write.
+        const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;
+        if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);
+        const displayedAutoDrain = pendingDrain ? pendingDrain.on : autoDrain;
+        const drainToggle = '<button type="button" class="fq-health-drain-toggle'
+          + (displayedAutoDrain ? ' is-on' : '') + (isDrainPending ? ' is-pending' : '') + '"'
           + ' data-drain-queue="' + escapeAttr(project) + '"'
-          + ' data-drain-on="' + (autoDrain ? '1' : '0') + '"'
-          + ' title="' + (autoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable') + '">'
-          + 'drain&nbsp;<span class="fq-health-drain-val">' + (autoDrain ? 'on' : 'off') + '</span>'
-          + '</span>';
+          + ' data-drain-on="' + (displayedAutoDrain ? '1' : '0') + '"'
+          + ' aria-pressed="' + (displayedAutoDrain ? 'true' : 'false') + '"'
+          + (isDrainPending ? ' aria-busy="true" disabled' : '')
+          + ' title="' + (isDrainPending
+            ? ('Turning auto-drain ' + (displayedAutoDrain ? 'on' : 'off') + '…')
+            : (displayedAutoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable')) + '">'
+          + 'drain&nbsp;<span class="fq-health-drain-val">' + (displayedAutoDrain ? 'on' : 'off') + '</span>'
+          + '</button>';
         // Claim-types restriction control: click-cycles all → bug → feature.
         // Only meaningful while auto-drain is on (the policy only affects
         // auto-drain workers), but always shown so the user can preset it.
@@ -35507,6 +35534,11 @@
             || (claimedBy && (claimedBy === session || claimedBy === id));
         });
       };
+      const _isUnverifiedClaim = it => {
+        const claimedBy = String((it && it.claimed_by) || '').trim();
+        const claimedSession = String((it && it.claimed_session_id) || '').trim();
+        return !!claimedBy && !claimedSession && !_hasLiveClaim(it);
+      };
       const _isStaleClaim = it => {
         const rawStatus = String((it && it.status) || 'open');
         return rawStatus === 'in_progress'
@@ -35609,6 +35641,7 @@
         const status = _effectiveStatus(it);
         const ref = _uxqItemRef(it);
         const staleClaim = _isStaleClaim(it);
+        const unverifiedClaim = _isUnverifiedClaim(it);
         const isNew = (_uxqNewItemExpires.get(ref) || 0) > Date.now();
         // When blocked, the worker's question is the most useful line to show.
         const blocked = !!it.needs_input;
@@ -35640,6 +35673,7 @@
           ? 'Queued to run - click to cancel'
           : 'Run this ticket';
         const statusTitle = blocked ? 'needs input' : hasUnresolved ? 'closed - unresolved follow-up'
+          : unverifiedClaim ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
           : staleClaim ? 'stale claim - no current live worker'
           : queuedToRun ? 'queued to run' : status;
         const statusAction = (status === 'open' && !staleClaim)
@@ -35657,7 +35691,7 @@
           + (ageStr ? '<span class="fq-age" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(ageStr) + '</span>' : '')
           + statusAction
           + '</span>';
-        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + '" data-ref="' + escapeAttr(ref)
+        return '<div class="fq-row is-' + escapeAttr(status) + (blocked ? ' is-blocked' : '') + (staleClaim ? ' is-stale-claim' : '') + (unverifiedClaim ? ' is-unverified-claim' : '') + (isNew ? ' fq-new-item' : '') + (hasUnresolved ? ' has-unresolved' : '') + (queuedToRun ? ' is-queued-run' : '') + '" data-ref="' + escapeAttr(ref)
           + '" title="' + escapeAttr(tip) + '">'
           + '<span class="fq-ref" title="' + escapeAttr(ref) + '">' + escapeHtml(displayRef) + '</span>'
           + _uxqChips(it, priorityBumpHtml)
@@ -35827,9 +35861,16 @@
         ev.stopPropagation();
         if (btn.classList.contains('is-pending')) return;
         const queue = btn.getAttribute('data-drain-queue');
+        const drainKey = String(queue || '').toUpperCase();
         const newVal = btn.getAttribute('data-drain-on') !== '1';
+        const pendingStartedAt = Date.now();
+        // A health GET already in flight can report the pre-click policy after
+        // the write succeeds. Wait for it, then ask for a new snapshot before
+        // releasing the confirmed local override.
+        const healthInFlightAtClick = _uxqHealthPromise;
         const drainVal = btn.querySelector('.fq-health-drain-val');
         const priorTitle = btn.title;
+        let drainSucceeded = false;
         // Drain policy does not change ticket depth/claimability, so classify
         // the outcome from the same snapshot that rendered the clicked row.
         // A concurrent health request may have started before this POST and
@@ -35837,9 +35878,12 @@
         const queueHealth = (_uxqHealthCache.queues || []).find(q =>
           q && String(q.queue || '').toUpperCase() === String(queue || '').toUpperCase()
         );
+        _uxqPendingDrainStates.set(drainKey, { on: newVal, pending: true });
         btn.classList.toggle('is-on', newVal);
         btn.classList.add('is-pending');
         btn.setAttribute('aria-busy', 'true');
+        btn.disabled = true;
+        btn.setAttribute('aria-pressed', newVal ? 'true' : 'false');
         btn.setAttribute('data-drain-on', newVal ? '1' : '0');
         btn.title = newVal ? 'Enabling auto-drain…' : 'Disabling auto-drain…';
         if (drainVal) drainVal.textContent = newVal ? 'on' : 'off';
@@ -35851,6 +35895,7 @@
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          drainSucceeded = true;
           _uxqHealthCache.ts = 0;
           if (newVal && queueHealth && Number(queueHealth.depth) > 0 && Number(queueHealth.claimable) === 0) {
             showOpToast('Auto-drain enabled for ' + queue + ', but it has no runnable tickets (' + Number(queueHealth.depth) + ' open).', 'info');
@@ -35861,15 +35906,31 @@
           }
         } catch (err) {
           btn.classList.toggle('is-on', !newVal);
+          btn.setAttribute('aria-pressed', newVal ? 'false' : 'true');
           btn.setAttribute('data-drain-on', newVal ? '0' : '1');
           btn.title = priorTitle;
           if (drainVal) drainVal.textContent = newVal ? 'off' : 'on';
           showOpToast('Auto-drain update failed: ' + ((err && err.message) || 'unknown'), 'error');
         } finally {
+          const remainingPendingMs = _UXQ_DRAIN_MIN_PENDING_MS - (Date.now() - pendingStartedAt);
+          if (remainingPendingMs > 0) await new Promise(resolve => setTimeout(resolve, remainingPendingMs));
+          const pendingDrainState = _uxqPendingDrainStates.get(drainKey);
+          if (drainSucceeded && pendingDrainState) pendingDrainState.pending = false;
+          else _uxqPendingDrainStates.delete(drainKey);
           btn.classList.remove('is-pending');
           btn.removeAttribute('aria-busy');
-          _uxqHealthCache.ts = 0;
-          _renderQueueHealthStrip(true, null);
+          btn.disabled = false;
+          if (drainSucceeded) {
+            const refreshDrainHealth = async () => {
+              if (healthInFlightAtClick) await healthInFlightAtClick.catch(() => {});
+              _uxqHealthCache.ts = 0;
+              _renderQueueHealthStrip(true, null);
+            };
+            void refreshDrainHealth();
+          } else {
+            _uxqHealthCache.ts = 0;
+            _renderQueueHealthStrip(true, null);
+          }
         }
       };
       const cycleClaimTypes = async (ev) => {

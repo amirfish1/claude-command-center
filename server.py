@@ -11542,7 +11542,7 @@ _spawned_sessions = []  # [{pid, name, log, proc}]
 # ---------------------------------------------------------------------------
 
 def extract_session_id(path):
-    """Scan the first ~60 lines of a stream-json log file for a session_id UUID."""
+    """Scan the first ~60 lines of an agent log file for a session UUID."""
     try:
         with open(path, "r") as f:
             for i, line in enumerate(f):
@@ -11554,6 +11554,15 @@ def extract_session_id(path):
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
+                    # `codex exec` writes a short human-readable header before
+                    # its output instead of a stream-json session event.
+                    match = re.fullmatch(
+                        r"session id:\s*([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})",
+                        line,
+                        flags=re.IGNORECASE,
+                    )
+                    if match:
+                        return match.group(1)
                     continue
                 sid = ev.get("session_id") or ev.get("sessionId")
                 if sid and len(sid) >= 32:
@@ -24954,10 +24963,14 @@ def _codex_spawn_via_app_server(
     timestamp = timestamp or time.strftime("%Y%m%dT%H%M%S")
     total_start = time.monotonic()
     app_server_warm = _codex_app_server_is_live()
+    thread_start_params = _codex_app_server_thread_start_params(
+        cwd=spawn_cwd,
+        model=model_to_use,
+    )
     thread_start_at = time.monotonic()
     start = _codex_app_server_request(
         "thread/start",
-        _codex_app_server_thread_start_params(cwd=spawn_cwd, model=model_to_use),
+        thread_start_params,
         timeout=20,
     )
     thread_start_ms = _codex_elapsed_ms(thread_start_at)
@@ -25026,19 +25039,101 @@ def _codex_spawn_via_app_server(
 
         baseline_state = _codex_app_server_thread_state(thread_id)
         baseline_rollout = _codex_rollout_stat(thread_id)
-        turn_start_at = time.monotonic()
-        started = _codex_app_server_request(
-            "turn/start",
-            _codex_turn_params(
-                thread_id,
-                prompt,
-                cwd=spawn_cwd,
-                model=model_to_use,
-                image_paths=image_paths,
-                effort=reasoning_effort or None,
-            ),
-            timeout=20,
+        turn_params = _codex_turn_params(
+            thread_id,
+            prompt,
+            cwd=spawn_cwd,
+            model=model_to_use,
+            image_paths=image_paths,
+            effort=reasoning_effort or None,
         )
+        turn_start_at = time.monotonic()
+        started = _codex_app_server_request("turn/start", turn_params, timeout=20)
+        thread_reattached = False
+        thread_recreated = False
+        recovery_thread_start_ms = None
+        # A newly-created thread can be reported before its runtime has made it
+        # available to the first turn/start request. This error is definitive
+        # (the turn was not accepted), so one resume + retry is safe and avoids
+        # rejecting an otherwise valid new-session submission.
+        if (not _codex_response_succeeded(started)
+                and "thread not found" in _codex_error_text(started).lower()):
+            resume_params = {"threadId": thread_id, "excludeTurns": False}
+            if spawn_cwd:
+                resume_params["cwd"] = spawn_cwd
+            if model_to_use:
+                resume_params["model"] = model_to_use
+            resumed = _codex_app_server_request("thread/resume", resume_params, timeout=20)
+            if _codex_response_succeeded(resumed):
+                recovered_thread = ((resumed.get("result") or {}).get("thread") or {})
+                _codex_app_server_record_thread(thread_id, recovered_thread)
+                started = _codex_app_server_request("turn/start", turn_params, timeout=20)
+                thread_reattached = _codex_response_succeeded(started)
+            # A failed resume (or a resume whose retry still cannot find the
+            # thread) means the long-lived app-server accepted thread/start
+            # without creating durable runtime state. Recycle CCC's child and
+            # recreate exactly once; retrying forever could duplicate a turn.
+            if (not _codex_response_succeeded(started)
+                    and "thread not found" in _codex_error_text(started).lower()):
+                stale_thread_id = thread_id
+                _codex_app_server_shutdown()
+                recovery_start_at = time.monotonic()
+                restarted = _codex_app_server_request(
+                    "thread/start",
+                    thread_start_params,
+                    timeout=20,
+                )
+                recovery_thread_start_ms = _codex_elapsed_ms(recovery_start_at)
+                replacement = ((restarted.get("result") or {}).get("thread") or {})
+                replacement_id = replacement.get("id")
+                if _codex_response_succeeded(restarted) and replacement_id:
+                    thread_id = str(replacement_id)
+                    _codex_app_server_record_thread(thread_id, replacement)
+                    baseline_state = _codex_app_server_thread_state(thread_id)
+                    baseline_rollout = _codex_rollout_stat(thread_id)
+                    turn_params = _codex_turn_params(
+                        thread_id,
+                        prompt,
+                        cwd=spawn_cwd,
+                        model=model_to_use,
+                        image_paths=image_paths,
+                        effort=reasoning_effort or None,
+                    )
+                    rename_warning = ""
+                    if session_name:
+                        name_set_at = time.monotonic()
+                        renamed = _codex_app_server_request(
+                            "thread/name/set",
+                            {"threadId": thread_id, "name": session_name},
+                            timeout=10,
+                        )
+                        name_set_ms = _codex_elapsed_ms(name_set_at)
+                        if not _codex_response_succeeded(renamed):
+                            rename_warning = _codex_app_server_response_error(
+                                renamed,
+                                "Codex app-server recreated the thread but did not name it",
+                            )
+                    started = _codex_app_server_request(
+                        "turn/start",
+                        turn_params,
+                        timeout=20,
+                    )
+                    thread_recreated = _codex_response_succeeded(started)
+                    log_fh.write(json.dumps({
+                        "event": "codex_app_server_recreated",
+                        "stale_thread_id": stale_thread_id,
+                        "thread_id": thread_id,
+                        "turn_started": thread_recreated,
+                    }, sort_keys=True) + "\n")
+                    log_fh.flush()
+                else:
+                    started = (
+                        restarted
+                        if not _codex_response_succeeded(restarted)
+                        else {"error": {
+                            "message": "Codex app-server recreated a thread without an id",
+                        }}
+                    )
         turn_start_ms = _codex_elapsed_ms(turn_start_at)
         if not _codex_response_succeeded(started):
             error = _codex_app_server_response_error(started)
@@ -25059,6 +25154,9 @@ def _codex_spawn_via_app_server(
                 thread_start_ms=thread_start_ms,
                 name_set_ms=name_set_ms,
                 turn_start_ms=turn_start_ms,
+                thread_reattached=thread_reattached,
+                thread_recreated=thread_recreated,
+                recovery_thread_start_ms=recovery_thread_start_ms,
                 total_ms=_codex_elapsed_ms(total_start),
                 transport=_codex_app_server_transport_kind(),
                 session_id=thread_id,
@@ -25110,6 +25208,8 @@ def _codex_spawn_via_app_server(
             "turn_id": turn_id,
             "confirmed": bool(confirmation.get("confirmed")),
             "confirmation_source": confirmation.get("source"),
+            "thread_reattached": thread_reattached,
+            "thread_recreated": thread_recreated,
         }, sort_keys=True) + "\n")
         log_fh.flush()
         total_ms = _codex_elapsed_ms(total_start)
@@ -25123,6 +25223,9 @@ def _codex_spawn_via_app_server(
             turn_start_ms=turn_start_ms,
             confirm_ms=confirm_ms,
             total_ms=total_ms,
+            thread_reattached=thread_reattached,
+            thread_recreated=thread_recreated,
+            recovery_thread_start_ms=recovery_thread_start_ms,
             confirmed=bool(confirmation.get("confirmed")),
             confirmation_source=confirmation.get("source"),
             warning=confirmation.get("warning") or rename_warning or None,
@@ -25163,6 +25266,7 @@ def _codex_spawn_via_app_server(
         "turn_start_ms": turn_start_ms,
         "confirm_ms": confirm_ms,
         "latency_ms": total_ms,
+        "thread_recreated": thread_recreated,
     }
     _spawned_sessions.append(entry)
     _codex_thread_registry_upsert(
@@ -25208,6 +25312,7 @@ def _codex_spawn_via_app_server(
         "turn_start_ms": turn_start_ms,
         "confirm_ms": confirm_ms,
         "latency_ms": total_ms,
+        "thread_recreated": thread_recreated,
     }
     if worktree_path:
         resp["worktree_path"] = worktree_path

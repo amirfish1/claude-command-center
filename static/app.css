@@ -17707,6 +17707,15 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-row.is-queued-run .fq-status.fq-run:focus-visible {
   background: var(--warn, #d29922);
 }
+/* A claim label without a durable session id cannot prove liveness. Distinguish
+   it from both live blue work and an unclaimed grey row without faking activity. */
+.fq-row.is-open.is-unverified-claim .fq-status {
+  box-sizing: border-box;
+  background: transparent;
+  border: 2px solid var(--orange, #d29922);
+  animation: none;
+  box-shadow: 0 0 0 3px rgba(210,153,34,0.16);
+}
 .fq-age {
   flex-shrink: 0; font-size: 11px; color: var(--text-muted);
   min-width: 34px; text-align: right;

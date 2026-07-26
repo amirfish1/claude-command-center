@@ -1,13 +1,39 @@
+import importlib
 import json
 import pathlib
 import subprocess
+import tempfile
 import unittest
+from unittest import mock
 
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueuePanelLayout(unittest.TestCase):
+    def test_past_codex_worker_chip_gets_its_session_id(self):
+        """Codex exec logs use a plain session header, not stream-json."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs_dir = pathlib.Path(temp_dir, "logs")
+            logs_dir.mkdir()
+            pathlib.Path(logs_dir, "ccc-deadbeef.log").write_text(
+                "OpenAI Codex v1.0.0\n"
+                "provider: openai\n"
+                "session id: 019f9fc4-c7dc-7133-a73e-d7d6df2bec22\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(server, "_WT_HOME", pathlib.Path(temp_dir)),
+                mock.patch.object(server, "_wt_read_workers", return_value=[]),
+            ):
+                rows = server._wt_past_workers(hours=1)
+
+            self.assertEqual(
+                rows[0]["session_id"],
+                "019f9fc4-c7dc-7133-a73e-d7d6df2bec22",
+            )
+
     def test_main_sidebar_replaces_merge_with_shared_queues_tab(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 

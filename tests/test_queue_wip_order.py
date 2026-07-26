@@ -63,6 +63,36 @@ class TestQueueWipOrder(unittest.TestCase):
 
         self.assertIn("background: var(--accent, #58a6ff);", live_claim_css)
 
+    def test_label_only_claim_is_marked_liveness_unverified(self):
+        """An arbitrary claimed_by label must not look live or merely unclaimed."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        queue_render = app_js[
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index(
+                "// Jump the conversation pane",
+                app_js.index("function _renderQueuePanel(options)"),
+            )
+        ]
+
+        self.assertIn("const _isUnverifiedClaim = it =>", queue_render)
+        self.assertIn("!claimedSession && !_hasLiveClaim(it)", queue_render)
+        self.assertIn("is-unverified-claim", queue_render)
+        self.assertIn("liveness unverified", queue_render)
+
+    def test_unverified_claim_uses_a_hollow_amber_marker(self):
+        app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
+        marker_css = app_css[
+            app_css.index(".fq-row.is-open.is-unverified-claim .fq-status {"):
+            app_css.index(
+                ".fq-age {",
+                app_css.index(".fq-row.is-open.is-unverified-claim .fq-status {"),
+            )
+        ]
+
+        self.assertIn("background: transparent;", marker_css)
+        self.assertIn("border: 2px solid var(--orange, #d29922);", marker_css)
+        self.assertIn("animation: none;", marker_css)
+
     def test_closed_tickets_with_unresolved_work_use_an_orange_attention_marker(self):
         """Unresolved follow-up warrants attention without implying an active error."""
         app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
