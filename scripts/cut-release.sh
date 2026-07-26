@@ -25,6 +25,8 @@ DRY_RUN=0
 SKIP_DMG=0
 SKIP_BREW=0
 BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-ccc}"
+BREW_FORMULA_UPDATED=0
+BREW_FORMULA_SHA=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -160,6 +162,8 @@ if [ "$SKIP_BREW" = 0 ]; then
   else
     TARBALL="https://github.com/amirfish1/claude-command-center/archive/refs/tags/v${VERSION}.tar.gz"
     if [ "$DRY_RUN" = 0 ]; then
+      step "     syncing Homebrew tap"
+      git -C "${BREW_TAP}" pull --rebase origin main
       step "     computing sha256 of release tarball (waiting for GitHub to publish it)"
       SHA=""
       for i in 1 2 3 4 5 6; do
@@ -171,7 +175,12 @@ if [ "$SKIP_BREW" = 0 ]; then
       sed -i '' -E "s#archive/refs/tags/v[0-9.]+\.tar\.gz#archive/refs/tags/v${VERSION}.tar.gz#" "${BREW_TAP}/Formula/ccc.rb"
       sed -i '' -E "s/^([[:space:]]*sha256 \")[a-f0-9]{64}(\")/\1${SHA}\2/" "${BREW_TAP}/Formula/ccc.rb"
       grep -q "$SHA" "${BREW_TAP}/Formula/ccc.rb" || { echo "${RED}brew sha256 update failed${NC}" >&2; exit 1; }
-      ( cd "$BREW_TAP" && git add Formula/ccc.rb && git commit -q -m "ccc ${VERSION}" && git push origin HEAD )
+      if ! ( cd "$BREW_TAP" && git add Formula/ccc.rb && git commit -q -m "ccc ${VERSION}" && git push origin HEAD ); then
+        echo "${RED}failed to publish Homebrew formula; release is incomplete${NC}" >&2
+        exit 1
+      fi
+      BREW_FORMULA_UPDATED=1
+      BREW_FORMULA_SHA="$SHA"
       echo "   brew formula → ${VERSION} (sha ${SHA:0:12}…) pushed"
     else
       echo "   ${YEL}[dry-run]${NC} would bump ${BREW_TAP}/Formula/ccc.rb to v${VERSION} + push"
@@ -189,5 +198,13 @@ if [ "$DRY_RUN" = 0 ]; then
   echo "   appcast:  $(grep -o 'sparkle:version>[0-9.]*' docs/appcast.xml | head -1)"
   echo "   /api/version: $(curl -fsS http://127.0.0.1:8090/api/version 2>/dev/null || echo '(server not running)')"
   echo "   CI:       run 'gh run list --limit 2' to confirm green"
+  if [ "$BREW_FORMULA_UPDATED" = 1 ]; then
+    git -C "${BREW_TAP}" fetch origin main
+    PUBLISHED_FORMULA="$(git -C "${BREW_TAP}" show FETCH_HEAD:Formula/ccc.rb)"
+    printf '%s\n' "$PUBLISHED_FORMULA" | grep -Fq "v${VERSION}.tar.gz" \
+      && printf '%s\n' "$PUBLISHED_FORMULA" | grep -Fq "$BREW_FORMULA_SHA" \
+      || { echo "${RED}published Homebrew formula does not match v${VERSION}${NC}" >&2; exit 1; }
+    echo "   brew formula: v${VERSION} published"
+  fi
 fi
 step "Done — v${VERSION} shipped. 🚀"
