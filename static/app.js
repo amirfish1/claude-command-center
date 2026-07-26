@@ -33431,6 +33431,15 @@
     const selectedRow = conversationsData.find(x => x.id === id)
       || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null)
       || null;
+    // WatchTower's "Open CCC" deep link can hand us a raw session UUID before
+    // the sidebar request has populated sessionIdByConv. Treat that UUID as
+    // the session id directly so currentSession remains sendable and the
+    // composer does not disappear during this startup race.
+    const isSessionId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
+      .test(String(id || ''));
+    const selectedSessionId = sessionIdByConv[id]
+      || (selectedRow && selectedRow.session_id)
+      || (isSessionId ? id : null);
     updatePaneHeader(paneId, selectedRow || Object.assign({ id, source }, selectedConv || {}));
     // Federation handoff ownership — one-shot fetch (no polling); paints a
     // "Moved to <node>" chip in the breadcrumb if owned elsewhere now.
@@ -33488,7 +33497,7 @@
     syncActivePaneChrome(id);
     // Update split panel session ID display
     if ($cpSessionId) {
-      const sid = selectedRow && selectedRow.pending_spawn ? '' : (sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || '');
+      const sid = selectedRow && selectedRow.pending_spawn ? '' : (selectedSessionId || '');
       setCopyableSessionId($cpSessionId, sid);
     }
     const paneEl = document.querySelector(`.conv-pane[data-pane-id="${paneId}"]`);
@@ -33517,7 +33526,7 @@
     } else {
       setCurrentSession(
         source,
-        sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || null,
+        selectedSessionId,
         sessionCwdByConv[id] || (selectedRow && selectedRow.cwd) || null,
         sessionCwdExistsByConv[id],
         sessionSpawnPidByConv[id],
@@ -33566,7 +33575,7 @@
         // Block-level streaming from the spawn log — only succeeds if the
         // backend finds a CCC-spawned headless process for this session.
         // No-op for externally launched, IDE-launched, or pkood sessions.
-        const sid = sessionIdByConv[id] || (selectedRow && selectedRow.session_id) || '';
+        const sid = selectedSessionId || '';
         if (sid && source !== 'codex' && source !== 'cursor' && source !== 'antigravity' && source !== 'hermes' && source !== 'backlog') startSpawnStream(sid, paneId);
       }
     } finally {
