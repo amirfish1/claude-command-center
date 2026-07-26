@@ -334,6 +334,31 @@ class TestInstallChain(WatchtowerInstallHarness):
         self.assertIn("3.11 minimum", result.stdout)
         self.assertEqual(self.pip_targets(), [])
 
+    def test_python_below_311_says_it_once_a_day_not_once_a_launch(self):
+        """The 3.11 notice is unactionable and CCC restarts often.
+
+        run.sh calls this script on every launch and the import probe can never
+        succeed on an old interpreter, so without a back-off the same two lines
+        print on every single start until the user upgrades Python — which is
+        how a real notice becomes noise people stop reading.
+        """
+        env = {"WT_FAKE_VERSION_RC": "1", "WT_FAKE_VERSION": "3.10.14"}
+        first = self.run_script(env_extra=env)
+        self.assertIn("3.11 minimum", first.stdout)
+
+        second = self.run_script(env_extra=env)
+        self.assertNotIn(
+            "3.11 minimum",
+            second.stdout,
+            "the Python-floor notice must back off like every other dead end",
+        )
+        self.assertEqual(self.pip_targets(), [])
+
+        # An explicit install (or the in-app updater) is the user asking right
+        # now, so it must still get the reason instead of a silent no-op.
+        forced = self.run_script(env_extra=dict(env, CCC_WATCHTOWER_FORCE="1"))
+        self.assertIn("3.11 minimum", forced.stdout)
+
     def test_total_failure_warns_loudly_and_backs_off_for_a_day(self):
         env = {
             "WT_FAKE_GIT_CLONE_RC": "1",

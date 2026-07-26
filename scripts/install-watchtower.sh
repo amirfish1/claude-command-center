@@ -281,12 +281,21 @@ ccc_install_watchtower() {
     return 0
   fi
 
-  # 2. Python floor.
+  # 2. Python floor. Say it once a day, not once a launch: this runs on CCC's
+  #    startup path, the answer cannot change between two launches of the same
+  #    interpreter, and two lines of unactionable warning on every single start
+  #    is how a real notice gets trained into background noise. The same marker
+  #    the install failures use, so an interpreter upgrade is picked up on the
+  #    same cadence — and CCC_WATCHTOWER_FORCE (an explicit install, or the
+  #    in-app updater) still prints it, because there the user just asked.
   if ! wt_python_ok; then
-    local got
-    got="$("$WT_PYTHON" -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
-    wt_say "python $got is below WatchTower's 3.11 minimum — skipping WatchTower."
-    wt_say "CCC will use its built-in queue engine (no worker dispatch, no plan import)."
+    if ! wt_marker_fresh "$WT_FAIL_MARKER"; then
+      local got
+      got="$("$WT_PYTHON" -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown)"
+      wt_say "python $got is below WatchTower's 3.11 minimum — skipping WatchTower."
+      wt_say "CCC will use its built-in queue engine (no worker dispatch, no plan import)."
+      wt_touch_marker "$WT_FAIL_MARKER"
+    fi
     return 0
   fi
 
