@@ -398,6 +398,13 @@
           <img class="sh-app-icon" src="/static/icon.svg" alt="" aria-hidden="true">
           <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
+          <div id="whatsNewNotice" class="whats-new-notice" role="group" aria-label="New features available">
+            <button type="button" id="whatsNewNoticeOpen" class="whats-new-notice-open" title="See what is new in this version">
+              <span class="whats-new-notice-dot" aria-hidden="true"></span>
+              <span id="whatsNewNoticeText">new</span>
+            </button>
+            <button type="button" id="whatsNewNoticeDismiss" class="whats-new-notice-dismiss" title="Dismiss this version notice" aria-label="Dismiss What's New notice">&times;</button>
+          </div>
         </div>
         <div class="sh-service-badges">
           <button type="button" class="sh-wt-badge" id="cccWtBadge" data-tour="watchtower" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
@@ -1158,8 +1165,8 @@
     </div>
   </div>
 
-  <!-- What's New modal. Opened automatically when a new version is detected
-       or manually from the sidebar header. -->
+  <!-- What's New modal. Opened only from the compact version notice or the
+       sidebar header; startup never blocks the dashboard with this dialog. -->
   <div id="whatsNewModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="whatsNewTitle">
     <div class="upd-backdrop" id="whatsNewBackdrop"></div>
     <div class="whats-new-dialog">
@@ -1179,10 +1186,6 @@
         </div>
       </div>
       <div class="whats-new-footer">
-        <label class="whats-new-checkbox" title="Hide this window automatically on future startups until the next version upgrade">
-          <input type="checkbox" id="whatsNewDontShowAgain">
-          <span>Don't show on startup</span>
-        </label>
         <div class="whats-new-footer-actions">
           <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md" class="whats-new-changelog-link" target="_blank" rel="noopener">See full changelog &rarr;</a>
           <button type="button" class="upd-btn upd-primary" id="whatsNewExploreBtn">Let's go!</button>

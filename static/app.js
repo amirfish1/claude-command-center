@@ -51751,8 +51751,11 @@
   const $whatsNewExploreBtn = document.getElementById('whatsNewExploreBtn');
   const $whatsNewMenu = document.getElementById('whatsNewMenu');
   const $whatsNewContent = document.getElementById('whatsNewContent');
-  const $whatsNewDontShowAgain = document.getElementById('whatsNewDontShowAgain');
   const $cccWhatsNewLink = document.getElementById('cccWhatsNewLink');
+  const $whatsNewNotice = document.getElementById('whatsNewNotice');
+  const $whatsNewNoticeOpen = document.getElementById('whatsNewNoticeOpen');
+  const $whatsNewNoticeDismiss = document.getElementById('whatsNewNoticeDismiss');
+  const $whatsNewNoticeText = document.getElementById('whatsNewNoticeText');
 
   const WHATS_NEW_FEATURES = [
     {
@@ -51926,27 +51929,47 @@
 
   function whatsNewOpenModal() {
     if (!$whatsNewModal) return;
+    if ($whatsNewNotice) $whatsNewNotice.classList.remove('visible');
     whatsNewActiveId = WHATS_NEW_FEATURES[0].id;
     whatsNewRenderMenu();
     whatsNewRenderFeature(whatsNewActiveId);
-    if ($whatsNewDontShowAgain) $whatsNewDontShowAgain.checked = false;
     $whatsNewModal.classList.add('open');
   }
 
   function whatsNewCloseModal() {
     if (!$whatsNewModal) return;
     $whatsNewModal.classList.remove('open');
+    if ($whatsNewNotice) $whatsNewNotice.classList.remove('visible');
     if (whatsNewVersion) {
       localStorage.setItem('ccc-last-seen-version', whatsNewVersion);
-      if ($whatsNewDontShowAgain && $whatsNewDontShowAgain.checked) {
-        localStorage.setItem('ccc-whats-new-dismissed-version', whatsNewVersion);
+    }
+  }
+
+  function whatsNewDismissNotice() {
+    if ($whatsNewNotice) $whatsNewNotice.classList.remove('visible');
+    if (whatsNewVersion) {
+      localStorage.setItem('ccc-last-seen-version', whatsNewVersion);
+    }
+  }
+
+  function whatsNewShowNotice() {
+    if (!$whatsNewNotice) return;
+    if ($whatsNewNoticeText && whatsNewVersion) {
+      $whatsNewNoticeText.textContent = 'new';
+      if ($whatsNewNoticeOpen) {
+        const label = 'New in v' + whatsNewVersion + ' — click to see changes';
+        $whatsNewNoticeOpen.title = label;
+        $whatsNewNoticeOpen.setAttribute('aria-label', label);
       }
     }
+    $whatsNewNotice.classList.add('visible');
   }
 
   if ($whatsNewCloseX) $whatsNewCloseX.addEventListener('click', whatsNewCloseModal);
   if ($whatsNewExploreBtn) $whatsNewExploreBtn.addEventListener('click', whatsNewCloseModal);
   if ($whatsNewBackdrop) $whatsNewBackdrop.addEventListener('click', whatsNewCloseModal);
+  if ($whatsNewNoticeOpen) $whatsNewNoticeOpen.addEventListener('click', whatsNewOpenModal);
+  if ($whatsNewNoticeDismiss) $whatsNewNoticeDismiss.addEventListener('click', whatsNewDismissNotice);
   if ($cccWhatsNewLink) {
     $cccWhatsNewLink.addEventListener('click', (e) => {
       e.preventDefault();
@@ -51960,7 +51983,7 @@
     }
   });
 
-  // Fetch version and optionally show popup
+  // Fetch version and optionally show a non-blocking notice.
   (async () => {
     try {
       const r = await fetch('/api/version', { cache: 'no-store' });
@@ -51970,7 +51993,7 @@
         const lastSeen = localStorage.getItem('ccc-last-seen-version');
         const dismissedVer = localStorage.getItem('ccc-whats-new-dismissed-version');
         if (lastSeen !== whatsNewVersion && dismissedVer !== whatsNewVersion && !CONV_POPOUT_MODE) {
-          whatsNewOpenModal();
+          whatsNewShowNotice();
         }
       }
     } catch (_) {}

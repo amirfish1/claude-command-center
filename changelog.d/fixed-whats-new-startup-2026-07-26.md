@@ -1,0 +1,1 @@
+- Replace the blocking automatic What's New startup modal with a compact, dismissible version badge so the first dashboard interaction after an update is never swallowed.
