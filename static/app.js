@@ -27735,14 +27735,6 @@
         + '<div class="conv-' + kind + '-list">' + rows + '</div>'
         + '</div>';
     };
-    // General waiting sessions stay in their project group. Formal approval
-    // prompts also appear here because they require action and can block a
-    // guarded shared-bridge restart.
-    const _openAskHtml = getOpenAskPref() === 'hide' ? '' : _renderActionSection(_openAskConvs, {
-      kind: 'openask', label: 'Open asks', collapseKey: 'ccc-openask-collapsed',
-      hint: 'A session waiting for your approval, or a session that ended '
-        + 'while still waiting on your answer (last 48h). Open it to respond.',
-    });
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
     // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
     // MERGE the OTHER repos' OPEN issues into the section — do NOT replace
@@ -28387,8 +28379,7 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
-      : (_openAskHtml
-          + (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions')));
+      : (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions'));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
     $convList.classList.toggle('objects-scroll-split', _objectsSplitActive);
@@ -29068,11 +29059,10 @@
         $rtmToggle.setAttribute('aria-expanded', String(!wasCollapsed));
       });
     }
-    // Action sections ("Needs you" / "Open ask"): same collapse wiring as
-    // Ready-to-merge — toggle .collapsed on the section, persist, flip caret.
+    // Action sections use the same collapse wiring as Ready-to-merge:
+    // toggle .collapsed on the section, persist, flip caret.
     [
       { role: 'needsyou', key: 'ccc-needsyou-collapsed' },
-      { role: 'openask', key: 'ccc-openask-collapsed' },
     ].forEach(({ role, key }) => {
       const $toggle = $convList.querySelector('[data-role="' + role + '-toggle"]');
       if (!$toggle) return;
@@ -56798,14 +56788,6 @@
       if (typeof renderSidebar === 'function') renderSidebar(conversationsData);
     }
   }
-  function getOpenAskPref() {
-    try { return localStorage.getItem('ccc-view-open-ask') || 'show'; } catch (_) { return 'show'; }
-  }
-  function applyOpenAskPref() {
-    if (typeof conversationsData !== 'undefined' && typeof renderSidebar === 'function') {
-      renderSidebar(conversationsData);
-    }
-  }
   // Segmented-control + toggle state for the Appearance / Layout & View
   // sections of the settings modal. Also drives the Sessions & Spawning
   // "current engine" value span. Called on modal open and after every
@@ -56830,12 +56812,6 @@
     if ($ghToggle) {
       $ghToggle.classList.toggle('is-on', ghOn);
       $ghToggle.setAttribute('aria-checked', String(ghOn));
-    }
-    const openAskOn = getOpenAskPref() !== 'hide';
-    const $openAskToggle = document.getElementById('settingsOpenAskToggle');
-    if ($openAskToggle) {
-      $openAskToggle.classList.toggle('is-on', openAskOn);
-      $openAskToggle.setAttribute('aria-checked', String(openAskOn));
     }
     let lv = 'A';
     try { lv = localStorage.getItem('ccc-hero-live-variant') || 'A'; } catch (_) {}
@@ -57271,12 +57247,10 @@
   function settingsResetLayout() {
     try {
       localStorage.removeItem('ccc-view-gh');
-      localStorage.removeItem('ccc-view-open-ask');
       localStorage.removeItem('ccc-hero-live-variant');
       localStorage.removeItem('ccc-q-first');
     } catch (_) {}
     applyViewGh(getViewGhPref());
-    applyOpenAskPref();
     if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(false);
     refreshAppearanceChecks();
   }
@@ -57426,15 +57400,6 @@
         applyViewGh(next);
         refreshAppearanceChecks();
         showSettingsSavedPulse(viewGhToggle.closest('.settings-row'));
-        return;
-      }
-      const openAskToggle = e.target.closest('[data-view-openask-toggle]');
-      if (openAskToggle) {
-        const next = getOpenAskPref() === 'hide' ? 'show' : 'hide';
-        try { localStorage.setItem('ccc-view-open-ask', next); } catch (_) {}
-        applyOpenAskPref();
-        refreshAppearanceChecks();
-        showSettingsSavedPulse(openAskToggle.closest('.settings-row'));
         return;
       }
       const liveVariantToggle = e.target.closest('[data-live-variant-toggle]');
