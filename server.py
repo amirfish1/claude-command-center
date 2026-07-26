@@ -58368,6 +58368,22 @@ def _open_history_index():
         return conn
 
 
+def _history_drop_conn():
+    """Close and forget the cached read connection so the next search
+    reopens against a freshly created index file (used after re-ingest)."""
+    global _history_conn
+    with _history_conn_lock:
+        if _history_conn is not None:
+            # Hold the query lock too so we never close the handle out
+            # from under an in-flight search on another worker thread.
+            with _history_query_lock:
+                try:
+                    _history_conn.close()
+                except Exception:
+                    pass
+                _history_conn = None
+
+
 def search_conversation_history(query, limit=20, cwd_like=None, since=None, semantic=False):
     """Search the indexed conversation history.
 
@@ -67926,21 +67942,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Both are no-ops while one is already running. Drops the cached
             # read connection so the next search picks up the freshly created
             # index file instead of a stale "missing" sentinel.
-            global _history_conn
             if _hi_indexer is None:
                 self.send_json({"error": "bundled indexer unavailable"}, 500)
                 return
             started = _hi_indexer.start_ingest(with_embed=True)
-            with _history_conn_lock:
-                if _history_conn is not None:
-                    # Hold the query lock too so we never close the handle out
-                    # from under an in-flight search on another worker thread.
-                    with _history_query_lock:
-                        try:
-                            _history_conn.close()
-                        except Exception:
-                            pass
-                        _history_conn = None
+            _history_drop_conn()
             self.send_json({
                 "ok": True,
                 "started": started,
