@@ -1179,6 +1179,16 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('<span aria-hidden="true">&#9654;</span>', panel_html)
         self.assertNotIn('>Live</button>', panel_html)
 
+    def test_car_mode_is_available_from_settings_not_the_session_toolbar(self):
+        """Car Mode belongs in Settings rather than the everyday session controls."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="sidebarCarModeBtn"', index_html)
+        self.assertIn('id="carModeMenuBtn"', index_html)
+        self.assertNotIn('sidebarCarModeBtn', app_js)
+        self.assertIn('carModeMenuBtn', app_js)
+
     def test_new_session_folder_shortcuts_are_labeled(self):
         """The folder dropdown and recent chips both set the same spawn CWD.
 

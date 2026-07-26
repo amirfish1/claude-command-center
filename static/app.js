@@ -54135,7 +54135,6 @@
   const $carModeSaveBtn = document.getElementById('carModeSaveBtn');
   const $carModeStartBtn = document.getElementById('carModeStartBtn');
   const $carModeStopBtn = document.getElementById('carModeStopBtn');
-  const $sidebarCarModeBtn = document.getElementById('sidebarCarModeBtn');
   const $carModeMenuBtn = document.getElementById('carModeMenuBtn');
   let carModePollTimer = null;
 
@@ -54146,7 +54145,6 @@
   }
   function renderCarModeStatus(d) {
     d = d || {};
-    if ($sidebarCarModeBtn) $sidebarCarModeBtn.classList.toggle('car-mode-running', !!d.running);
     if (!$carModeBanner) return;
     let cls = 'warn', msg = '';
     if (d.running) {
@@ -54243,7 +54241,6 @@
       carModeError((err && err.message) || 'Stop failed.');
     } finally { fetchCarModeStatus(); }
   }
-  if ($sidebarCarModeBtn) $sidebarCarModeBtn.addEventListener('click', openCarModeModal);
   if ($carModeMenuBtn) $carModeMenuBtn.addEventListener('click', () => {
     closeSettingsModal();
     openCarModeModal();
@@ -54253,7 +54250,7 @@
   if ($carModeSaveBtn) $carModeSaveBtn.addEventListener('click', saveCarModeKeys);
   if ($carModeStartBtn) $carModeStartBtn.addEventListener('click', startCarMode);
   if ($carModeStopBtn) $carModeStopBtn.addEventListener('click', stopCarMode);
-  // One status read at load so the sidebar 🚗 reflects a running instance.
+  // One status read at load keeps the Car Mode settings state current.
   fetchCarModeStatus();
   if ($spawnDefaultsEngine) $spawnDefaultsEngine.addEventListener('change', () => {
     if (!spawnDefaultsDraft) return;
