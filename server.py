@@ -21763,10 +21763,19 @@ def _resolve_codex_bin():
             "reason": f"CCC_CODEX_BIN is set to {env_bin!r} but it isn't an executable file",
         }
     which_bin = shutil.which("codex")
-    if which_bin:
+    # A PATH hit can still be a symlink into a deleted Codex.app
+    # (/opt/homebrew/bin/codex -> /Applications/Codex.app/...); os.path.isfile
+    # follows symlinks, so a dangling one falls through to the candidates.
+    if which_bin and os.path.isfile(which_bin):
         return {"available": True, "bin": which_bin, "source": "path"}
     if os.path.isfile(CODEX_APP_BUNDLE_PATH) and os.access(CODEX_APP_BUNDLE_PATH, os.X_OK):
         return {"available": True, "bin": CODEX_APP_BUNDLE_PATH, "source": "bundle"}
+    # launchd services (the engine worker especially) run with a minimal PATH
+    # that omits user bins like ~/.local/bin, where the standalone Codex CLI
+    # installs. Same fallback the Gemini/Cursor resolvers use.
+    for candidate in _iter_common_cli_candidates("codex"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return {"available": True, "bin": str(candidate), "source": "candidate"}
     return {
         "available": False,
         "bin": None,
