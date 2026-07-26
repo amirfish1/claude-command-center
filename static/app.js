@@ -8445,6 +8445,7 @@
   }
 
   const TTS_TEXT_MAX_CHARS = 12000;
+  const TTS_CHUNK_MAX_CHARS = 1600;
   let _ttsActive = false;
   let _ttsActivePaneId = null;
   // CCC-157: the conversation selection captured on a TTS button's pointerdown
@@ -8687,6 +8688,7 @@
 
   let _ttsUtterance = null;
   let _ttsTextMapping = [];
+  let _ttsChunkState = null;
 
   function clearTtsHighlight() {
     if (window.CSS && CSS.highlights && CSS.highlights.has('tts-highlight')) {
@@ -8988,6 +8990,7 @@
   async function stopTextToSpeech() {
     clearTtsHighlight();
     clearTtsCaption();
+    _ttsChunkState = null;
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -9126,18 +9129,173 @@
     return out.trim();
   }
 
+  function _sanitizeTtsText(text, preserveOffsets) {
+    let out = String(text || '');
+    if (preserveOffsets) {
+      const blank = (match) => ' '.repeat(match.length);
+      // Rendered DOM text is already free of Markdown syntax. Preserve its
+      // character offsets for word highlighting while removing angle-bracket
+      // placeholders (for example <repo>) and stray angle brackets that some
+      // speech engines treat as malformed markup.
+      return out
+        .replace(/<[^>\n]{1,256}>/g, blank)
+        .replace(/[<>]/g, blank);
+    }
+
+    // Background reads can arrive as raw Markdown rather than rendered DOM.
+    // Keep the human-readable label/code while dropping markup, destinations,
+    // and angle-bracket placeholders before constructing an utterance.
+    out = out
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/```[^\n]*\n?/g, ' ')
+      .replace(/`+/g, '')
+      .replace(/<[^>\n]{1,256}>/g, ' ')
+      .replace(/[<>]/g, ' ')
+      .replace(/(^|\n)\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/g, '$1')
+      .replace(/[*_~]+/g, '')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\s*\n+\s*/g, ' ');
+    return out.trim();
+  }
+
+  function _chunkTtsText(text, maxChars, baseOffset) {
+    const source = String(text || '');
+    const limit = Math.max(1, Number(maxChars) || TTS_CHUNK_MAX_CHARS);
+    const offset = Number(baseOffset) || 0;
+    const chunks = [];
+    let cursor = 0;
+
+    while (cursor < source.length) {
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
+      if (cursor >= source.length) break;
+
+      let end = Math.min(source.length, cursor + limit);
+      if (end < source.length) {
+        const windowText = source.slice(cursor, end);
+        const candidates = [
+          windowText.lastIndexOf('. '),
+          windowText.lastIndexOf('! '),
+          windowText.lastIndexOf('? '),
+          windowText.lastIndexOf('\n'),
+          windowText.lastIndexOf(' '),
+        ];
+        const splitAt = Math.max(...candidates);
+        // Avoid pathological tiny chunks when the only whitespace is near the
+        // beginning; hard-split at the limit instead.
+        if (splitAt >= Math.floor(limit * 0.4)) {
+          end = cursor + splitAt + (/[\n ]/.test(windowText[splitAt]) ? 0 : 1);
+        }
+      }
+
+      const raw = source.slice(cursor, end);
+      const leading = (raw.match(/^\s*/) || [''])[0].length;
+      const spoken = raw.trim();
+      if (spoken) chunks.push({ text: spoken, start: offset + cursor + leading });
+      cursor = end;
+    }
+    return chunks;
+  }
+
+  function _ttsBindChunkCompletion(utterance, onSettled) {
+    let settled = false;
+    const settle = (skipped) => {
+      if (settled) return;
+      settled = true;
+      onSettled(!!skipped);
+    };
+    utterance.onend = () => settle(false);
+    utterance.onerror = (event) => {
+      const error = event && event.error;
+      if (error === 'canceled' || error === 'interrupted') return;
+      settle(true);
+    };
+  }
+
+  function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart) {
+    const chunks = _chunkTtsText(text, TTS_CHUNK_MAX_CHARS, baseOffset);
+    if (!chunks.length) return false;
+    _ttsChunkState = {
+      chunks,
+      index: 0,
+      paneId: paneId || _ttsActivePaneId || activePaneId(),
+      pauseOnStart: !!pauseOnStart,
+    };
+    _ttsSpeakNextChunk();
+    return true;
+  }
+
+  function _ttsSpeakNextChunk() {
+    const state = _ttsChunkState;
+    if (!state || state.index >= state.chunks.length) {
+      stopTextToSpeech();
+      return;
+    }
+
+    const chunk = state.chunks[state.index];
+    const utterance = new SpeechSynthesisUtterance(chunk.text);
+    utterance.rate = _ttsRate;
+    _ttsUtterance = utterance;
+
+    utterance.onstart = () => {
+      if (_ttsUtterance !== utterance || _ttsChunkState !== state) return;
+      setTtsButtonsState(true, false, state.paneId);
+      setTtsButtonsBusy(false);
+      ttsButtons().forEach(btn => {
+        if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
+          btn.classList.remove('paused');
+          btn.title = 'Pause reading';
+        }
+      });
+      if (state.pauseOnStart) {
+        state.pauseOnStart = false;
+        setTimeout(() => {
+          if (_ttsUtterance !== utterance) return;
+          try { window.speechSynthesis.pause(); } catch (_) {}
+        }, 0);
+      }
+    };
+
+    utterance.onboundary = (event) => {
+      if (_ttsUtterance !== utterance || _ttsChunkState !== state) return;
+      if (event.name === 'word') {
+        const charIndex = chunk.start + event.charIndex;
+        _ttsLastCharIndex = charIndex;
+        highlightTtsWord(charIndex, event.charLength);
+        updateTtsCaption(charIndex, event.charLength, _ttsBoundUtteranceText);
+      }
+    };
+
+    _ttsBindChunkCompletion(utterance, (skipped) => {
+      if (_ttsUtterance !== utterance || _ttsChunkState !== state) return;
+      state.index += 1;
+      _ttsUtterance = null;
+      if (skipped) {
+        showOpToast('Skipped one speech segment; continuing.', 'info');
+      }
+      _ttsSpeakNextChunk();
+    });
+
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      utterance.onerror({ error: (error && error.name) || 'synthesis-failed' });
+    }
+  }
+
   // Speak a captured string directly — no DOM mapping / word highlight.
   // Used when the conversation that produced the reply is not on screen
-  // (Submit+ background completion). Honors the same single-utterance state
+  // (Submit+ background completion). Honors the same playback state
   // (_ttsUtterance / _ttsActive / _ttsPaused / _ttsActiveConvId) so the
   // floating control and in-bar button stay consistent, and rate changes
   // restart from the current word like the normal path.
   function speakTextDirect(text, convId, paneId, sourceBtn) {
     if (!window.speechSynthesis) return false;
-    const clean = String(text || '').trim();
+    const clean = _sanitizeTtsText(_stripSessionStateFromText(text));
     if (!clean) return false;
     // Starting a fresh read supersedes any prior utterance.
     if (_ttsActive || _ttsPaused || _ttsUtterance) {
+      _ttsChunkState = null;
       try { window.speechSynthesis.cancel(); } catch (_) {}
     }
     _setTtsDirectBtnState(sourceBtn || null, sourceBtn ? 'speaking' : null);
@@ -9146,26 +9304,9 @@
     _ttsLastCharIndex = 0;
     _ttsPaused = false;
     const clipped = clean.length > TTS_TEXT_MAX_CHARS ? clean.slice(0, TTS_TEXT_MAX_CHARS) : clean;
-    const utterance = new SpeechSynthesisUtterance(clipped);
-    _ttsUtterance = utterance;
     _ttsBoundUtteranceText = clipped;
     _ttsActiveConvId = convId || null;
-    utterance.rate = _ttsRate;
-    utterance.onstart = () => {
-      if (_ttsUtterance !== utterance) return;
-      setTtsButtonsState(true, false, paneId || _ttsActivePaneId || activePaneId());
-      setTtsButtonsBusy(false);
-    };
-    utterance.onend = () => { if (_ttsUtterance === utterance) stopTextToSpeech(); };
-    utterance.onerror = (e) => {
-      if (_ttsUtterance !== utterance) return;
-      if (e.error !== 'canceled' && e.error !== 'interrupted') stopTextToSpeech();
-    };
-    utterance.onboundary = (e) => {
-      if (_ttsUtterance !== utterance) return;
-      if (e.name === 'word') { _ttsLastCharIndex = e.charIndex; updateTtsCaption(e.charIndex, e.charLength, clipped); }
-    };
-    window.speechSynthesis.speak(utterance);
+    if (!_ttsStartChunkedSpeech(clipped, paneId, 0, false)) return false;
     // Reflect state immediately in case onstart is slow to fire.
     setTtsButtonsState(true, false, paneId || _ttsActivePaneId || activePaneId());
     return true;
@@ -9214,6 +9355,7 @@
       }
       // Fresh selection present — drop the paused utterance and fall through
       // to the start path below, which reads selectedConversationTtsData first.
+      _ttsChunkState = null;
       try { window.speechSynthesis.cancel(); } catch (_) {}
       clearTtsHighlight();
       _ttsActive = false;
@@ -9235,7 +9377,7 @@
       showOpToast('No message to read yet.', 'error');
       return;
     }
-    const textToSpeak = data.text;
+    const textToSpeak = _sanitizeTtsText(data.text, true);
     const mappingToUse = data.mapping;
 
     setActivePaneById(paneId);
@@ -9248,47 +9390,8 @@
     _ttsActiveConvId = (_pane && _pane.conversationId) || currentConversation || null;
 
     _ttsTextMapping = mappingToUse;
-    const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    _ttsUtterance = utterance;
     _ttsBoundUtteranceText = textToSpeak;
-    _ttsUtterance.rate = _ttsRate;
-
-    _ttsUtterance.onstart = () => {
-      if (_ttsUtterance !== utterance) return;
-      setTtsButtonsState(true, false, paneId);
-      setTtsButtonsBusy(false);
-      ttsButtons().forEach(btn => {
-        if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
-          btn.classList.remove('paused');
-          btn.title = 'Pause reading';
-        }
-      });
-    };
-
-    _ttsUtterance.onend = () => {
-      if (_ttsUtterance === utterance) stopTextToSpeech();
-    };
-
-    _ttsUtterance.onerror = (e) => {
-      if (_ttsUtterance !== utterance) return;
-      console.error("TTS Error:", e);
-      if (e.error !== 'canceled' && e.error !== 'interrupted') {
-        stopTextToSpeech();
-        showOpToast('Text-to-speech failed.', 'error');
-        setTtsButtonsState(false, true);
-      }
-    };
-
-    _ttsUtterance.onboundary = (e) => {
-      if (_ttsUtterance !== utterance) return;
-      if (e.name === 'word') {
-        _ttsLastCharIndex = e.charIndex;
-        highlightTtsWord(e.charIndex, e.charLength);
-        updateTtsCaption(e.charIndex, e.charLength, textToSpeak);
-      }
-    };
-
-    window.speechSynthesis.speak(_ttsUtterance);
+    _ttsStartChunkedSpeech(textToSpeak, paneId, 0, false);
   }
 
   function formatInjectFailure(data, status) {
@@ -9402,39 +9505,23 @@
   }
   function _restartTtsAtCurrentPosition() {
     // Only meaningful while playback is active. Cancel the in-flight
-    // utterance and re-speak the slice starting at the most recent
-    // word boundary with the new rate.
+    // chunk queue and re-speak from the most recent word boundary with the
+    // new rate.
     if (!_ttsBoundUtteranceText) return;
-    const rest = _ttsBoundUtteranceText.slice(_ttsLastCharIndex || 0);
+    const offset = _ttsLastCharIndex || 0;
+    const rest = _ttsBoundUtteranceText.slice(offset);
     if (!rest.trim()) return;
     const wasPaused = _ttsPaused;
+    _ttsChunkState = null;
     try { window.speechSynthesis.cancel(); } catch (_) {}
-    const utterance = new SpeechSynthesisUtterance(rest);
-    utterance.rate = _ttsRate;
-    // Re-base the char index so onboundary keeps tracking against the
-    // original text (mapping highlights still resolve correctly).
-    const offset = _ttsLastCharIndex || 0;
-    _ttsUtterance = utterance;
-    // Keep _ttsBoundUtteranceText pointing at the FULL text so a
-    // subsequent rate change restarts from the right base again.
-    utterance.onboundary = (e) => {
-      if (_ttsUtterance !== utterance) return;
-      if (e.name === 'word') {
-        _ttsLastCharIndex = offset + e.charIndex;
-        highlightTtsWord(_ttsLastCharIndex, e.charLength);
-        updateTtsCaption(e.charIndex, e.charLength, rest);
-      }
-    };
-    utterance.onend = () => { if (_ttsUtterance === utterance) stopTextToSpeech(); };
-    utterance.onerror = (e) => {
-      if (_ttsUtterance !== utterance) return;
-      if (e.error !== 'canceled' && e.error !== 'interrupted') stopTextToSpeech();
-    };
-    window.speechSynthesis.speak(utterance);
-    if (wasPaused) {
-      // Honor the existing paused state — pause again right after start.
-      setTimeout(() => { try { window.speechSynthesis.pause(); } catch (_) {} }, 0);
-    }
+    // Keep _ttsBoundUtteranceText pointing at the full text so subsequent
+    // changes continue to use global offsets for captions/highlights.
+    _ttsStartChunkedSpeech(
+      rest,
+      _ttsActivePaneId || activePaneId(),
+      offset,
+      wasPaused,
+    );
   }
   // Rate is adjusted with − / + buttons (replaced the drag slider). Each click
   // steps ±0.05 within [MIN, MAX]; persist, relabel, disable at the ends, and
