@@ -37755,6 +37755,9 @@
         active: 'master',
         tasks: {},  // taskId -> { label, lastSeen, closeTimer, completed }
         taskInfo: {},  // tool_use id -> {description, name} from Task tool_use seed
+        scrollByTab: Object.create(null),  // tab key -> {top, atBottom}
+        scrollRestoreVersion: 0,
+        pendingScrollRestore: null,
       };
     }
     return view._tabState;
@@ -37881,10 +37884,47 @@
     }
     if (added) _convPaneRenderTabStrip(view);
   }
+  function _convPaneRememberTabScroll(view, state) {
+    if (!view || !state || !state.active) return;
+    const pending = state.pendingScrollRestore;
+    if (pending && pending.tabKey === state.active) return;
+    state.scrollByTab[state.active] = {
+      top: view.scrollTop,
+      atBottom: isConversationAtBottom(view),
+    };
+  }
+  function _convPaneRestoreTabScroll(view, state, tabKey) {
+    if (!view || !state || !tabKey) return;
+    const restoreVersion = ++state.scrollRestoreVersion;
+    const saved = state.scrollByTab[tabKey];
+    state.pendingScrollRestore = saved ? { tabKey, restoreVersion } : null;
+    if (!saved) {
+      updateConversationEndAffordance(view);
+      return;
+    }
+    // Hiding one lane and showing another changes the shared view's
+    // scrollHeight. Restore after layout settles so a master lane that was
+    // following the tail returns to its true end, while an intentionally
+    // scrolled-up reader keeps the exact position they left.
+    view._pinnedToBottom = !!saved.atBottom;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!view.isConnected || view._tabState !== state || state.active !== tabKey
+          || restoreVersion !== state.scrollRestoreVersion) return;
+      state.pendingScrollRestore = null;
+      if (saved.atBottom) {
+        scrollConversationToEnd(view);
+      } else {
+        const max = Math.max(0, view.scrollHeight - view.clientHeight);
+        view.scrollTop = Math.min(saved.top, max);
+        updateConversationEndAffordance(view);
+      }
+    }));
+  }
   function _convPaneActivateTab(view, tabKey) {
     const state = _convPaneTabState(view);
     if (!state) return;
     if (state.active === tabKey) return;
+    _convPaneRememberTabScroll(view, state);
     state.active = tabKey;
     if (tabKey.startsWith('task-')) {
       const t = state.tasks[tabKey.slice(5)];
@@ -37892,6 +37932,7 @@
     }
     _convPaneRenderTabStrip(view);
     _convPaneApplyActiveTab(view);
+    _convPaneRestoreTabScroll(view, state, tabKey);
     // Switching AWAY from a completed task arms its auto-close. JSONL-fed
     // tabs are historical reads — they never auto-close.
     for (const tid of Object.keys(state.tasks)) {
@@ -37931,15 +37972,21 @@
     if (state.tasks[parentToolUseId].closeTimer) {
       clearTimeout(state.tasks[parentToolUseId].closeTimer);
     }
+    const closedTabKey = 'task-' + parentToolUseId;
+    const wasActive = state.active === closedTabKey;
     delete state.tasks[parentToolUseId];
+    delete state.scrollByTab[closedTabKey];
     // Hide the bubbles for that task — they stay in the DOM but aren't rendered.
     const escId = (window.CSS && CSS.escape) ? CSS.escape('task-' + parentToolUseId) : 'task-' + parentToolUseId;
     view.querySelectorAll('[data-tab="' + escId + '"]').forEach(n => { n.style.display = 'none'; });
-    if (state.active === 'task-' + parentToolUseId) {
+    if (wasActive) {
       state.active = 'master';
     }
     _convPaneRenderTabStrip(view);
     _convPaneApplyActiveTab(view);
+    if (wasActive) {
+      _convPaneRestoreTabScroll(view, state, 'master');
+    }
   }
   function _convPaneMarkTaskCompleted(view, parentToolUseId) {
     const state = _convPaneTabState(view);
