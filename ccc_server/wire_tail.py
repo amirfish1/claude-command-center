@@ -358,7 +358,7 @@ def _acp_wire_tail_tick():
             except json.JSONDecodeError:
                 continue
         if batch:
-            _acp_wire_fold("kimi", sid, batch)
+            _core._acp_wire_fold("kimi", sid, batch)
 
 
 def _acp_wire_tail_start(harness):

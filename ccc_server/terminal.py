@@ -104,7 +104,7 @@ def _kimi_setup_status():
     installed? where from? which version? Memoized briefly — bin probing
     hits PATH + the managed install dir on every call otherwise."""
     now = time.time()
-    memo = _KIMI_SETUP_STATUS_MEMO
+    memo = _core._KIMI_SETUP_STATUS_MEMO
     if memo["data"] is not None and now - memo["ts"] < 60.0:
         return dict(memo["data"])
     resolved = _core._acp_resolve_bin("kimi")

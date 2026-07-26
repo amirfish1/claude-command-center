@@ -296,9 +296,9 @@ def _hermes_db_for_session(session_id):
     sid = str(session_id or "").strip()
     if not sid:
         return None
-    if _HERMES_DB_INDEX.get("key") != _hermes_db_cache_key():
+    if _core._HERMES_DB_INDEX.get("key") != _hermes_db_cache_key():
         _hermes_session_ids()  # rebuilds the index as a side effect
-    return _HERMES_DB_INDEX.get("by_session", {}).get(sid)
+    return _core._HERMES_DB_INDEX.get("by_session", {}).get(sid)
 
 
 def _hermes_columns(con, table):
@@ -312,8 +312,8 @@ def _hermes_columns(con, table):
 
 def _hermes_session_ids():
     key = _hermes_db_cache_key()
-    if _HERMES_ID_CACHE.get("key") == key:
-        return set(_HERMES_ID_CACHE.get("ids") or set())
+    if _core._HERMES_ID_CACHE.get("key") == key:
+        return set(_core._HERMES_ID_CACHE.get("ids") or set())
     ids = set()
     by_session = {}
     for db in _hermes_db_paths():
@@ -333,10 +333,10 @@ def _hermes_session_ids():
             pass
         finally:
             con.close()
-    _HERMES_ID_CACHE["key"] = key
-    _HERMES_ID_CACHE["ids"] = set(ids)
-    _HERMES_DB_INDEX["key"] = key
-    _HERMES_DB_INDEX["by_session"] = by_session
+    _core._HERMES_ID_CACHE["key"] = key
+    _core._HERMES_ID_CACHE["ids"] = set(ids)
+    _core._HERMES_DB_INDEX["key"] = key
+    _core._HERMES_DB_INDEX["by_session"] = by_session
     return ids
 
 
@@ -633,7 +633,7 @@ def _start_engine_update_pass():
     def run():
         global _ENGINE_UPDATE_THREAD_ACTIVE
         try:
-            _engine_maintenance_once()
+            _core._engine_maintenance_once()
         finally:
             with _ENGINE_UPDATE_START_LOCK:
                 _ENGINE_UPDATE_THREAD_ACTIVE = False
@@ -649,7 +649,7 @@ def _start_engine_update_pass():
 def _engine_maintenance_loop():
     while True:
         try:
-            _engine_maintenance_once()
+            _core._engine_maintenance_once()
         except Exception:
             pass
         try:
@@ -914,7 +914,7 @@ def _hermes_failed_turns(session_id):
         return []
     out = []
     try:
-        db = _hermes_db_for_session(sid)
+        db = _core._hermes_db_for_session(sid)
         if db is None:
             return []
         dump_dir = Path(db).expanduser().parent / "sessions"
@@ -1105,11 +1105,11 @@ def _hermes_gateway_index():
         st = p.stat()
         key = (st.st_mtime_ns, st.st_size)
     except (OSError, RuntimeError, ValueError, TypeError):
-        _HERMES_GATEWAY_CACHE["key"] = None
-        _HERMES_GATEWAY_CACHE["by_session"] = {}
+        _core._HERMES_GATEWAY_CACHE["key"] = None
+        _core._HERMES_GATEWAY_CACHE["by_session"] = {}
         return {}
-    if _HERMES_GATEWAY_CACHE.get("key") == key:
-        return dict(_HERMES_GATEWAY_CACHE.get("by_session") or {})
+    if _core._HERMES_GATEWAY_CACHE.get("key") == key:
+        return dict(_core._HERMES_GATEWAY_CACHE.get("by_session") or {})
     by_session = {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -1129,8 +1129,8 @@ def _hermes_gateway_index():
             "display_name": entry.get("display_name") or "",
             "updated_at": entry.get("updated_at") or entry.get("created_at") or "",
         }
-    _HERMES_GATEWAY_CACHE["key"] = key
-    _HERMES_GATEWAY_CACHE["by_session"] = dict(by_session)
+    _core._HERMES_GATEWAY_CACHE["key"] = key
+    _core._HERMES_GATEWAY_CACHE["by_session"] = dict(by_session)
     return by_session
 
 
@@ -1186,7 +1186,7 @@ def _hermes_session_row(session_id):
     sid = str(session_id or "").strip()
     if not sid:
         return None
-    con = _hermes_connect(_hermes_db_for_session(sid))
+    con = _hermes_connect(_core._hermes_db_for_session(sid))
     if con is None:
         return None
     try:
@@ -1705,7 +1705,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
                 })
         if text:
             blocks.append({"kind": "text", "text": text})
-        tool_blocks = [_hermes_tool_block(call) for call in _hermes_tool_calls(msg.get("tool_calls"))]
+        tool_blocks = [_core._hermes_tool_block(call) for call in _hermes_tool_calls(msg.get("tool_calls"))]
         blocks.extend(tool_blocks)
         if not text and not tool_blocks:
             # JSON-mode / structured reply: content is a bare object with no
@@ -1714,7 +1714,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
             raw = _hermes_raw_content_text(msg.get("content"))
             if raw:
                 block = {"kind": "text", "text": raw}
-                summary = _hermes_decision_summary(msg.get("content"))
+                summary = _core._hermes_decision_summary(msg.get("content"))
                 if summary:
                     block["summary"] = summary
                 blocks.append(block)
@@ -1856,7 +1856,7 @@ def _parse_hermes_conversation(session_id, after_line=0):
         return _parse_hermes_pending_conversation(session_id, after_line=after_line)
     if kind == "bridge":
         return _parse_hermes_bridge_conversation(session_id, after_line=after_line)
-    con = _hermes_connect(_hermes_db_for_session(session_id))
+    con = _hermes_connect(_core._hermes_db_for_session(session_id))
     if con is None:
         return {"events": [], "last_line": 0}
     events = []
@@ -2025,7 +2025,7 @@ def _extract_hermes_usage(session_id):
 
 
 def _extract_hermes_timeline(session_id):
-    result = _parse_hermes_conversation(session_id, after_line=0)
+    result = _core._parse_hermes_conversation(session_id, after_line=0)
     events = []
     turn = 0
     for ev in result.get("events") or []:
@@ -2064,7 +2064,7 @@ def _extract_hermes_timeline(session_id):
 
 
 def _extract_files_from_hermes_conversation(session_id):
-    result = _parse_hermes_conversation(session_id, after_line=0)
+    result = _core._parse_hermes_conversation(session_id, after_line=0)
     seen = {}
     truncated = False
 

@@ -424,7 +424,7 @@ def _native_usage_snapshot_from_plan_usage(plan_usage, now_epoch=None, codex=Non
     usage = plan_usage.get("usage")
     if not isinstance(usage, dict):
         return None
-    snap = {"ts": _usage_snapshot_iso(now_epoch), "source": "native"}
+    snap = {"ts": _core._usage_snapshot_iso(now_epoch), "source": "native"}
     for key in ("five_hour", "seven_day", "seven_day_sonnet"):
         block = usage.get(key)
         if isinstance(block, dict):
@@ -533,8 +533,8 @@ def _codex_usage_from_rate_limit_snapshot(
         "weekly": weekly,
         "session": session,
         "plan_type": plan_type,
-        "snapshot_ts": snapshot_ts or _usage_snapshot_iso(now_epoch),
-        "fetched_at": _usage_snapshot_iso(now_epoch),
+        "snapshot_ts": snapshot_ts or _core._usage_snapshot_iso(now_epoch),
+        "fetched_at": _core._usage_snapshot_iso(now_epoch),
         "from_cache": False,
     }
 
@@ -554,7 +554,7 @@ def _codex_usage_from_account_rate_limits(response, now_epoch=None):
             rate_limits = legacy
     return _codex_usage_from_rate_limit_snapshot(
         rate_limits,
-        snapshot_ts=_usage_snapshot_iso(now_epoch),
+        snapshot_ts=_core._usage_snapshot_iso(now_epoch),
         now_epoch=now_epoch,
     )
 
@@ -587,7 +587,7 @@ def _codex_file_latest_rate_limits(path):
     key = str(path)
     sig = (st.st_mtime, st.st_size)
     with _codex_usage_file_cache_lock:
-        cached = _codex_usage_file_cache.get(key)
+        cached = _core._codex_usage_file_cache.get(key)
         if cached and cached.get("sig") == sig:
             return cached.get("snapshot")
     best = None
@@ -613,7 +613,7 @@ def _codex_file_latest_rate_limits(path):
     except OSError:
         return None
     with _codex_usage_file_cache_lock:
-        _codex_usage_file_cache[key] = {"sig": sig, "snapshot": best}
+        _core._codex_usage_file_cache[key] = {"sig": sig, "snapshot": best}
     return best
 
 
@@ -622,7 +622,7 @@ def _read_codex_usage_from_rollouts(now_epoch=None):
         now_epoch = time.time()
     best = None
     for path in _core._iter_recent_codex_rollouts(now_epoch=now_epoch):
-        snap = _codex_file_latest_rate_limits(path)
+        snap = _core._codex_file_latest_rate_limits(path)
         if not snap:
             continue
         if best is None or str(snap.get("timestamp")) > str(best.get("timestamp")):
@@ -796,8 +796,8 @@ def _kimi_usage_from_response(data, now_epoch=None):
         "plan_type": _kimi_plan_type(
             ((data.get("user") or {}).get("membership") or {}).get("level")
         ),
-        "snapshot_ts": _usage_snapshot_iso(now_epoch),
-        "fetched_at": _usage_snapshot_iso(now_epoch),
+        "snapshot_ts": _core._usage_snapshot_iso(now_epoch),
+        "fetched_at": _core._usage_snapshot_iso(now_epoch),
         "from_cache": False,
     }
 
@@ -811,7 +811,7 @@ def _read_kimi_usage(now_epoch=None):
     try:
         token = _kimi_load_access_token()
         data = _core._kimi_fetch_usages(token)
-        usage = _kimi_usage_from_response(data, now_epoch=now_epoch)
+        usage = _core._kimi_usage_from_response(data, now_epoch=now_epoch)
         if usage:
             return usage
     except Exception:
@@ -836,7 +836,7 @@ def _read_codex_usage(now_epoch=None):
             )
         except Exception:
             response = None
-        usage = _codex_usage_from_account_rate_limits(
+        usage = _core._codex_usage_from_account_rate_limits(
             response, now_epoch=now_epoch
         )
         if usage:
@@ -901,7 +901,7 @@ def _codex_account_usage_from_response(response, now_epoch=None):
         return None
     return {
         "source": "codex_app_server",
-        "fetched_at": _usage_snapshot_iso(now_epoch),
+        "fetched_at": _core._usage_snapshot_iso(now_epoch),
         "summary": summary,
         "daily": [
             {"day": day, "tokens": daily_by_day[day]}
@@ -917,7 +917,7 @@ def _read_codex_account_usage(now_epoch=None):
         response = _core._codex_app_server_request("account/usage/read", {}, timeout=5)
     except Exception:
         return None
-    return _codex_account_usage_from_response(response, now_epoch=now_epoch)
+    return _core._codex_account_usage_from_response(response, now_epoch=now_epoch)
 
 
 def _usage_snapshot_epoch(snapshot):
@@ -985,7 +985,7 @@ def _usage_reset_detected_at(curr, now_epoch=None):
         ts = curr.get("ts")
         if ts:
             return ts
-    return _usage_snapshot_iso(now_epoch)
+    return _core._usage_snapshot_iso(now_epoch)
 
 
 def _usage_snapshot_block(snapshot, window):
@@ -1185,7 +1185,7 @@ def _append_usage_reset_event(event):
 def record_usage_reset_event(window, reset_at=None, source="user"):
     if window not in ("five_hour", "seven_day"):
         return {"ok": False, "error": "window must be five_hour or seven_day"}
-    detected_at = reset_at or _usage_snapshot_iso()
+    detected_at = reset_at or _core._usage_snapshot_iso()
     event = {
         "id": f"reset-{uuid.uuid4().hex}",
         "detected_at": detected_at,
@@ -1197,7 +1197,7 @@ def record_usage_reset_event(window, reset_at=None, source="user"):
         "new_resets_at": None,
         "source": source or "user",
     }
-    ok = _append_usage_reset_event(event)
+    ok = _core._append_usage_reset_event(event)
     return {"ok": ok, "event": event}
 
 
@@ -1402,29 +1402,29 @@ def usage_current_payload(now_epoch=None):
             "calibrated_at": (cal or {}).get("calibrated_at"),
         },
         "last_reset_events": reset_events[-5:],
-        "fetched_at": (snap or {}).get("ts") or _usage_snapshot_iso(now_epoch),
+        "fetched_at": (snap or {}).get("ts") or _core._usage_snapshot_iso(now_epoch),
     }
 
 
 def _poll_plan_usage_once():
     global _plan_usage_cache, _plan_usage_cache_time
     res = _fetch_plan_usage()
-    codex = _read_codex_usage()
-    kimi = _read_kimi_usage()
+    codex = _core._read_codex_usage()
+    kimi = _core._read_kimi_usage()
     if not isinstance(res, dict) or not res.get("ok"):
         if codex or kimi:
-            snap = {"ts": _usage_snapshot_iso(), "source": "native", "codex": codex, "kimi": kimi}
+            snap = {"ts": _core._usage_snapshot_iso(), "source": "native", "codex": codex, "kimi": kimi}
             prev = _latest_native_usage_snapshot()
-            _append_native_usage_snapshot(snap)
-            for event in _detect_usage_reset_events(prev, snap):
-                _append_usage_reset_event(event)
+            _core._append_native_usage_snapshot(snap)
+            for event in _core._detect_usage_reset_events(prev, snap):
+                _core._append_usage_reset_event(event)
         return False
-    snap = _native_usage_snapshot_from_plan_usage(res, codex=codex, kimi=kimi)
+    snap = _core._native_usage_snapshot_from_plan_usage(res, codex=codex, kimi=kimi)
     if snap:
         prev = _latest_native_usage_snapshot()
-        _append_native_usage_snapshot(snap)
-        for event in _detect_usage_reset_events(prev, snap):
-            _append_usage_reset_event(event)
+        _core._append_native_usage_snapshot(snap)
+        for event in _core._detect_usage_reset_events(prev, snap):
+            _core._append_usage_reset_event(event)
     with _plan_usage_cache_lock:
         _plan_usage_cache = res
         _plan_usage_cache_time = time.time()

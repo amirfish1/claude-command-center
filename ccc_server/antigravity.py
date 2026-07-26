@@ -98,7 +98,7 @@ def _is_antigravity_session(session_id):
     cli_path = _core._antigravity_cli_conversation_path(session_id)
     if cli_path and cli_path.is_file():
         return True
-    app_path = _antigravity_app_conversation_path(session_id)
+    app_path = _core._antigravity_app_conversation_path(session_id)
     return bool(app_path and app_path.is_file())
 
 

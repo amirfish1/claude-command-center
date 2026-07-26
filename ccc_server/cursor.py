@@ -43,7 +43,7 @@ def _cursor_cwd_from_project_slug(slug):
         return ""
     try:
         for repo in _core._known_repo_paths():
-            if _cursor_project_slug(repo) == slug:
+            if _core._cursor_project_slug(repo) == slug:
                 return repo
     except Exception:
         pass
@@ -255,7 +255,7 @@ def _extract_cursor_tail_meta(path):
     # its newly-appended lines instead of from the top each poll. See
     # _codex_tail_resume for the rationale.
     with _core._conv_meta_cache_lock:
-        resume = _cursor_tail_resume.get(spath)
+        resume = _core._cursor_tail_resume.get(spath)
     if (
         resume
         and resume.get("meta_version") == _core._CURSOR_META_VERSION
@@ -403,7 +403,7 @@ def _extract_cursor_tail_meta(path):
         meta["last_meaningful_ts"] = mtime
     with _core._conv_meta_cache_lock:
         _core._conv_meta_cache[spath] = meta
-        _cursor_tail_resume[spath] = {
+        _core._cursor_tail_resume[spath] = {
             "meta_version": _core._CURSOR_META_VERSION,
             "offset": end_offset,
             "pos": pos,
@@ -481,7 +481,7 @@ def _cursor_session_id_for_spawn_entry(entry):
     cwd = entry.get("cwd") or entry.get("repo_path") or ""
     if not cwd:
         return None
-    slug = _cursor_project_slug(cwd)
+    slug = _core._cursor_project_slug(cwd)
     try:
         candidates = [
             p for p in _core.CURSOR_PROJECTS_ROOT.glob(f"{slug}/agent-transcripts/*/*.jsonl")
@@ -505,7 +505,7 @@ def _cursor_session_id_for_spawn_entry(entry):
             continue
         if started and st.st_mtime < started - 120:
             continue
-        tail = _extract_cursor_tail_meta(path) or {}
+        tail = _core._extract_cursor_tail_meta(path) or {}
         first = re.sub(r"\s+", " ", (tail.get("first_message") or "").strip()).lower()
         if prompt and first and not (first.startswith(prompt[:80]) or prompt.startswith(first[:80])):
             continue
@@ -531,7 +531,7 @@ def _cursor_spawn_pid_by_session_id():
             if not s.get("session_id"):
                 s["session_id"] = sid
                 _core._update_spawn_session_id_in_registry(s.get("pid"), sid)
-            _ensure_cursor_session_visible(sid, spawn_entry=s)
+            _core._ensure_cursor_session_visible(sid, spawn_entry=s)
             if sid not in out:
                 try:
                     alive = _core._poll_spawn_entry(s) is None
@@ -799,7 +799,7 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
     if not cwd:
         path = _core._cursor_transcript_path(sid)
         if path:
-            tail = _extract_cursor_tail_meta(path) or {}
+            tail = _core._extract_cursor_tail_meta(path) or {}
             cwd = tail.get("cwd") or _cursor_cwd_from_transcript_path(path)
     if not cwd:
         return False
@@ -819,7 +819,7 @@ def _ensure_cursor_session_visible(session_id, spawn_entry=None):
     if not title:
         path = _core._cursor_transcript_path(sid)
         if path:
-            tail = _extract_cursor_tail_meta(path) or {}
+            tail = _core._extract_cursor_tail_meta(path) or {}
             title = tail.get("first_message") or tail.get("title")
     if not title and spawn_entry:
         title = spawn_entry.get("prompt")
@@ -983,7 +983,7 @@ def backfill_cursor_sidebar_visibility(days=None, repo_paths=None, now=None, max
         if not cwd:
             path = _core._cursor_transcript_path(sid)
             if path:
-                tail = _extract_cursor_tail_meta(path) or {}
+                tail = _core._extract_cursor_tail_meta(path) or {}
                 cwd = tail.get("cwd") or _cursor_cwd_from_transcript_path(path)
         if not cwd:
             skipped += 1
@@ -997,7 +997,7 @@ def backfill_cursor_sidebar_visibility(days=None, repo_paths=None, now=None, max
         db_path = Path.home() / ".cursor" / "chats" / project_hash / sid / "store.db"
         
         before_exists = db_path.is_file()
-        ok = _ensure_cursor_session_visible(sid, spawn_entry=entry)
+        ok = _core._ensure_cursor_session_visible(sid, spawn_entry=entry)
         if ok:
             if before_exists:
                 already_visible += 1
@@ -1109,7 +1109,7 @@ def find_cursor_conversations(
             st = path.stat()
         except OSError:
             continue
-        tail = _extract_cursor_tail_meta(path) or {}
+        tail = _core._extract_cursor_tail_meta(path) or {}
         spawn_info = spawn_by_sid.get(sid) or {}
         cwd = tail.get("cwd") or spawn_info.get("cwd") or _cursor_cwd_from_transcript_path(path)
         pinned = repo_pins.get(sid)
@@ -1319,7 +1319,7 @@ def _extract_cursor_usage(session_id):
         "override": _core._get_session_override(session_id),
     }
     path = _core._cursor_transcript_path(session_id)
-    tail = _extract_cursor_tail_meta(path) if path else {}
+    tail = _core._extract_cursor_tail_meta(path) if path else {}
     spawned = _core._spawn_registry_entry_for_session(session_id, "cursor") or {}
     return {**empty, "model": (tail or {}).get("model") or spawned.get("model") or ""}
 

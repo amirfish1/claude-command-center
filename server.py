@@ -64,14 +64,27 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
 # ccc_server import.
 sys.modules.setdefault("server", sys.modules[__name__])
 
-def _adopt_module_globals(mod):
-    """Bind every top-level name of an extracted ccc_server module onto this
-    module. Pre-decomposition these names WERE server globals; tests and
-    sibling modules (via _core) still address them here."""
+def _adopt_ccc_module(name):
+    """Import an extracted ccc_server module and bind every top-level name
+    onto this module. Pre-decomposition these names WERE server globals;
+    tests and sibling modules (via _core) still address them here.
+
+    Re-executes the module when this file is re-imported (importlib.reload
+    runs in the existing module dict), so a fresh server instance gets fresh
+    module state — caches, registries — exactly like before the split. The
+    test suite's pop-and-reimport pattern depends on that.
+    """
+    import importlib
+    full = f"ccc_server.{name}"
+    if full in sys.modules:
+        mod = importlib.reload(sys.modules[full])
+    else:
+        mod = importlib.import_module(full)
     globals().update({
         k: v for k, v in vars(mod).items()
         if not k.startswith("__") and k != "_core"
     })
+    return mod
 
 
 # Model-drift advisor (stdlib-only, no back-reference to this module). Lives
@@ -30059,8 +30072,7 @@ def _resolve_kimi_bin():
     return _acp_resolve_bin("kimi")
 
 
-import ccc_server.wire_tail
-_adopt_module_globals(ccc_server.wire_tail)
+_adopt_ccc_module("wire_tail")
 
 # ===========================================================================
 # Kimi on-disk session store (~/.kimi-code) — read-only discovery.
@@ -33979,14 +33991,11 @@ def _extract_codex_timeline(session_id):
 # Test-patched globals kept here; ccc_server/gemini.py reads them via _core.
 GEMINI_HOME = Path.home() / ".gemini"
 
-import ccc_server.gemini
-_adopt_module_globals(ccc_server.gemini)
+_adopt_ccc_module("gemini")
 
-import ccc_server.cursor
-_adopt_module_globals(ccc_server.cursor)
+_adopt_ccc_module("cursor")
 
-import ccc_server.antigravity
-_adopt_module_globals(ccc_server.antigravity)
+_adopt_ccc_module("antigravity")
 
 # Test-patched globals kept here; ccc_server/hermes.py reads them via _core.
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
@@ -34018,21 +34027,16 @@ HERMES_PROFILES_DIR = Path(
 _ENGINE_UPDATE_STATE_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.json"
 _ENGINE_UPDATE_LOCK_FILE = COMMAND_CENTER_STATE_DIR / "engine-updates.lock"
 
-import ccc_server.hermes
-_adopt_module_globals(ccc_server.hermes)
+_adopt_ccc_module("hermes")
 
 
-import ccc_server.kilo
-_adopt_module_globals(ccc_server.kilo)
+_adopt_ccc_module("kilo")
 
-import ccc_server.copilot_cli
-_adopt_module_globals(ccc_server.copilot_cli)
+_adopt_ccc_module("copilot_cli")
 
-import ccc_server.grok
-_adopt_module_globals(ccc_server.grok)
+_adopt_ccc_module("grok")
 
-import ccc_server.vscode_copilot
-_adopt_module_globals(ccc_server.vscode_copilot)
+_adopt_ccc_module("vscode_copilot")
 
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
@@ -45273,8 +45277,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
                 pass
 
 
-import ccc_server.pkood
-_adopt_module_globals(ccc_server.pkood)
+_adopt_ccc_module("pkood")
 
 # ---------------------------------------------------------------------------
 # GitHub issues
@@ -48043,55 +48046,24 @@ def get_issue_summary(issue_number, repo_path):
             return {"summary": body}
     return {"summary": None}
 
-from ccc_server.morning_launch import (
-    _EFFECTIVE_REPO_CACHE,
-    _OPEN_PRS_CACHE,
-    _TIMELINE_COMMIT_MSG_RE,
-    _TIMELINE_COMMIT_RE,
-    _TIMELINE_COMMIT_RESULT_RE,
-    _TIMELINE_PR_CREATE_RE,
-    _TIMELINE_PR_NUMBER_FROM_URL_RE,
-    _TIMELINE_PR_TITLE_RE,
-    _TIMELINE_PUSH_RE,
-    _git_toplevel_for_path,
-    _infer_effective_repo,
-    _list_worktrees,
-    _local_command_context_usage,
-    _log_session_ids,
-    _morning_resolve_session_id_from_log,
-    _morning_resume_framing,
-    _morning_spawn_prompt,
-    _morning_task_spawn_prompt,
-    _normalize_spawn_event,
-    _open_prs_cached,
-    _pid_alive,
-    _rates_for_model_known,
-    _refresh_token_optimizer_quality_index,
-    _resolve_spawn_log_for_session,
-    _scan_session_tool_paths,
-    _start_token_optimizer_quality_index_refresher,
-    _token_optimizer_quality_for_session,
-    _worktree_dirty_cached,
-    extract_session_timeline,
-    extract_session_usage,
-    extract_session_workspace,
-    list_repo_worktrees,
-    parse_conversation_by_sid,
-)
+# Test-patched globals kept here; ccc_server/morning_launch.py reads and
+# rebinds them via _core.
+_TOKEN_OPTIMIZER_QUALITY_INDEX = {}
+_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE = {}
+
+_adopt_ccc_module("morning_launch")
 # Conversation history search — extracted to ccc_server/history_search.py.
 # Test-patched globals kept here; ccc_server/history_search.py reads them via
 # _core (they are rebound at runtime, so they must live on this module).
 _HISTORY_INDEX_PATH = Path.home() / ".claude-index" / "index.db"
 _history_conn = None
 _history_conn_lock = threading.Lock()       # guards connection open / reset
-import ccc_server.history_search
-_adopt_module_globals(ccc_server.history_search)
+_adopt_ccc_module("history_search")
 # Test-patched globals kept here; ccc_server/recall_usage.py reads them via _core.
 _USAGE_SNAPSHOTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "usage-snapshots.jsonl"
 _RESET_EVENTS_FILE = COMMAND_CENTER_STATE_DIR / "usage" / "reset-events.jsonl"
 
-import ccc_server.recall_usage
-_adopt_module_globals(ccc_server.recall_usage)
+_adopt_ccc_module("recall_usage")
 
 # ---------------------------------------------------------------------------
 # Global usage stats — aggregated across every transcript under PROJECTS_ROOT.
@@ -52712,8 +52684,7 @@ def morning_launch(goal_slug, strategy_id, custom_message=None):
     }
 
 
-import ccc_server.terminal
-_adopt_module_globals(ccc_server.terminal)
+_adopt_ccc_module("terminal")
 
 # ---------------------------------------------------------------------------
 # HTTP handler
@@ -63691,8 +63662,7 @@ def _fleet_inventory_payload(fetch=False, include_deploy=True, include_prs=True,
         "repos": repo_list,
     }
 
-import ccc_server.fleet_reco
-_adopt_module_globals(ccc_server.fleet_reco)
+_adopt_ccc_module("fleet_reco")
 
 # ---------------------------------------------------------------------------
 # Fleet executor — reviewed plan, persisted resumable jobs

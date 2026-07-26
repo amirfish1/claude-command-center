@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 
-import server as _core
+from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Morning launch — spawn-or-resume for a strategy's Claude session.
@@ -148,11 +148,11 @@ def _resolve_spawn_log_for_session(session_id):
         elif s.get("engine") == "codex":
             matches = _core._extract_codex_thread_id_from_log(log) == session_id
         elif s.get("engine") == "gemini":
-            matches = _extract_gemini_session_id_from_log(log) == session_id
+            matches = _core._extract_gemini_session_id_from_log(log) == session_id
         elif s.get("engine") == "cursor":
             matches = (
-                _extract_cursor_chat_id_from_log(log) == session_id
-                or _cursor_session_id_for_spawn_entry(s) == session_id
+                _core._extract_cursor_chat_id_from_log(log) == session_id
+                or _core._cursor_session_id_for_spawn_entry(s) == session_id
             )
         else:
             matches = session_id in _log_session_ids(log)
@@ -176,11 +176,11 @@ def _resolve_spawn_log_for_session(session_id):
                 if entry.get("engine") == "codex":
                     matches = _core._extract_codex_thread_id_from_log(log) == session_id
                 elif entry.get("engine") == "gemini":
-                    matches = _extract_gemini_session_id_from_log(log) == session_id
+                    matches = _core._extract_gemini_session_id_from_log(log) == session_id
                 elif entry.get("engine") == "cursor":
                     matches = (
-                        _extract_cursor_chat_id_from_log(log) == session_id
-                        or _cursor_session_id_for_spawn_entry(entry) == session_id
+                        _core._extract_cursor_chat_id_from_log(log) == session_id
+                        or _core._cursor_session_id_for_spawn_entry(entry) == session_id
                     )
                 else:
                     sids_in_log = _log_session_ids(log)
@@ -236,15 +236,15 @@ def _normalize_spawn_event(ev):
             "message_id": "gemini-stream",
             "blocks": [{"type": "text", "text": text}],
         }
-    if (not t or t == "message") and _cursor_event_role(ev) == "assistant":
+    if (not t or t == "message") and _core._cursor_event_role(ev) == "assistant":
         blocks = []
-        for c in _cursor_content_blocks(ev):
+        for c in _core._cursor_content_blocks(ev):
             ct = c.get("type")
             if ct == "text":
                 blocks.append({"type": "text", "text": c.get("text", "")})
             elif ct == "tool_use":
-                inp = _cursor_tool_args(c)
-                summary = _core._tool_use_detail(_cursor_tool_name(c), inp, max_len=160)
+                inp = _core._cursor_tool_args(c)
+                summary = _core._tool_use_detail(_core._cursor_tool_name(c), inp, max_len=160)
                 if not summary:
                     summary = (
                         inp.get("file_path") or inp.get("path")
@@ -253,7 +253,7 @@ def _normalize_spawn_event(ev):
                     )
                 blocks.append({
                     "type": "tool_use",
-                    "name": _cursor_tool_name(c),
+                    "name": _core._cursor_tool_name(c),
                     "id": c.get("id", ""),
                     "summary": _core._prompt_fragment(str(summary), 160) if summary else "",
                 })
@@ -498,8 +498,8 @@ def _scan_session_tool_paths(session_id, max_events=400):
 
     Capped at ~400 assistant events for bounded latency on long sessions.
     """
-    if _is_cursor_session(session_id):
-        path = _cursor_transcript_path(session_id)
+    if _core._is_cursor_session(session_id):
+        path = _core._cursor_transcript_path(session_id)
         file_paths = []
         cd_targets = []
         cd_seen = set()
@@ -516,18 +516,18 @@ def _scan_session_tool_paths(session_id, max_events=400):
                         ev = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if _cursor_event_role(ev) != "assistant":
+                    if _core._cursor_event_role(ev) != "assistant":
                         continue
                     seen_events += 1
-                    for block in _cursor_content_blocks(ev):
+                    for block in _core._cursor_content_blocks(ev):
                         if block.get("type") != "tool_use":
                             continue
-                        args = _cursor_tool_args(block)
+                        args = _core._cursor_tool_args(block)
                         for key in ("file_path", "target_file", "path", "notebook_path"):
                             raw = args.get(key)
                             if isinstance(raw, str) and raw.startswith("/"):
                                 file_paths.append(raw)
-                        cmd = _cursor_tool_command(block)
+                        cmd = _core._cursor_tool_command(block)
                         if cmd:
                             for m in _BASH_CD_RE.finditer(cmd):
                                 cd_path = m.group(1).strip("'\"")
@@ -543,8 +543,8 @@ def _scan_session_tool_paths(session_id, max_events=400):
             return [], []
         return file_paths, cd_targets
 
-    if _is_antigravity_session(session_id):
-        path = _antigravity_transcript_path(session_id)
+    if _core._is_antigravity_session(session_id):
+        path = _core._antigravity_transcript_path(session_id)
         file_paths = []
         cd_targets = []
         cd_seen = set()
@@ -759,7 +759,7 @@ def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_
         if r_mtime != jsonl_mtime and (time.time() - r_at) < _EFFECTIVE_REPO_REVALIDATE_S:
             return r_value
 
-    file_paths, cd_targets = _scan_session_tool_paths(session_id)
+    file_paths, cd_targets = _core._scan_session_tool_paths(session_id)
     if not file_paths and not cd_targets:
         _effective_repo_cache_put(cache_key, None)
         return None
@@ -926,7 +926,7 @@ def _open_prs_cached(repo_top):
     if not repo_top:
         return []
     now = time.time()
-    cached = _OPEN_PRS_CACHE.get(repo_top)
+    cached = _core._OPEN_PRS_CACHE.get(repo_top)
     if cached and now - cached[0] < _OPEN_PRS_TTL:
         return cached[1]
     prs = []
@@ -956,7 +956,7 @@ def _open_prs_cached(repo_top):
                 ]
     except (subprocess.SubprocessError, OSError, ValueError):
         prs = []
-    _OPEN_PRS_CACHE[repo_top] = (now, prs)
+    _core._OPEN_PRS_CACHE[repo_top] = (now, prs)
     return prs
 
 
@@ -1110,16 +1110,16 @@ def _session_tail_worktree_hint(session_id):
             path = _core._resolve_codex_rollout_path(session_id)
             tail = _core._extract_codex_tail_meta(path) if path else None
             source = "worktree-add"
-        elif _is_gemini_session(session_id):
-            path = _resolve_gemini_chat_path(session_id)
-            tail = _extract_gemini_tail_meta(path) if path else None
+        elif _core._is_gemini_session(session_id):
+            path = _core._resolve_gemini_chat_path(session_id)
+            tail = _core._extract_gemini_tail_meta(path) if path else None
             source = "worktree-add"
-        elif _is_cursor_session(session_id):
-            path = _cursor_transcript_path(session_id)
-            tail = _extract_cursor_tail_meta(path) if path else None
+        elif _core._is_cursor_session(session_id):
+            path = _core._cursor_transcript_path(session_id)
+            tail = _core._extract_cursor_tail_meta(path) if path else None
             source = "worktree-add"
-        elif _is_antigravity_session(session_id):
-            path = _antigravity_transcript_path(session_id)
+        elif _core._is_antigravity_session(session_id):
+            path = _core._antigravity_transcript_path(session_id)
             tail = _core._extract_antigravity_tail_meta(path) if path else None
             source = "worktree-add"
     except Exception:
@@ -1305,7 +1305,7 @@ def extract_session_workspace(session_id):
     cwd_top = None
     if out["is_repo"]:
         cwd_top = _git_toplevel_for_path(cwd, {})
-    tail_hint = _session_tail_worktree_hint(session_id)
+    tail_hint = _core._session_tail_worktree_hint(session_id)
     if tail_hint:
         snap = _workspace_git_snapshot(tail_hint.get("path"), tail_hint.get("branch"))
         try:
@@ -1325,7 +1325,7 @@ def extract_session_workspace(session_id):
     eff = None
     if not out["effective_cwd"]:
         try:
-            eff = _infer_effective_repo(session_id, literal_cwd=cwd, exclude_top=cwd_top)
+            eff = _core._infer_effective_repo(session_id, literal_cwd=cwd, exclude_top=cwd_top)
         except Exception:
             eff = None
     if eff:
@@ -1389,14 +1389,14 @@ def extract_session_timeline(session_id):
     """
     if _core._is_codex_session(session_id):
         return _core._extract_codex_timeline(session_id)
-    if _is_gemini_session(session_id):
-        return _extract_gemini_timeline(session_id)
-    if _is_cursor_session(session_id):
-        return _extract_cursor_timeline(session_id)
-    if _is_antigravity_session(session_id):
+    if _core._is_gemini_session(session_id):
+        return _core._extract_gemini_timeline(session_id)
+    if _core._is_cursor_session(session_id):
+        return _core._extract_cursor_timeline(session_id)
+    if _core._is_antigravity_session(session_id):
         return _core._extract_antigravity_timeline(session_id)
-    if _is_hermes_session(session_id):
-        return _extract_hermes_timeline(session_id)
+    if _core._is_hermes_session(session_id):
+        return _core._extract_hermes_timeline(session_id)
     if not _core.PROJECTS_ROOT.is_dir():
         return {"events": [], "total_turns": 0}
     jsonl = None
@@ -1706,8 +1706,8 @@ def _token_optimizer_quality_summary(data):
     return "; ".join(details)
 
 
-_TOKEN_OPTIMIZER_QUALITY_INDEX = {}
-_TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE = {}
+# _TOKEN_OPTIMIZER_QUALITY_INDEX / _RUNTIME_STATE live in server.py (tests
+# patch them through the server module); read and rebound via _core.
 _TOKEN_OPTIMIZER_QUALITY_INDEX_LOCK = threading.Lock()
 _TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_S = 60.0
 _TOKEN_OPTIMIZER_QUALITY_INDEX_REFRESH_STARTED = False
@@ -1776,8 +1776,7 @@ def _token_optimizer_quality_index_records(raw):
 
 def _refresh_token_optimizer_quality_index():
     """Refresh changed producer indexes; this is the only TO filesystem reader."""
-    global _TOKEN_OPTIMIZER_QUALITY_INDEX, _TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE
-    previous = _TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE
+    previous = _core._TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE
     next_state = dict(previous)
     changed = False
     for runtime, index_path in _token_optimizer_quality_index_paths():
@@ -1820,15 +1819,25 @@ def _refresh_token_optimizer_quality_index():
                 merged[sid] = (candidate_key, record["value"])
     complete_map = {sid: value for sid, (_key, value) in merged.items()}
     with _TOKEN_OPTIMIZER_QUALITY_INDEX_LOCK:
-        _TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE = next_state
-        _TOKEN_OPTIMIZER_QUALITY_INDEX = complete_map
+        _core._TOKEN_OPTIMIZER_QUALITY_RUNTIME_STATE = next_state
+        _core._TOKEN_OPTIMIZER_QUALITY_INDEX = complete_map
     return True
 
 
+# New identity per module (re)load. A refresher thread born under an older
+# load must not keep writing the live index through _core after the test
+# suite re-imports server (which reloads this module): it captures this token
+# at birth and exits when a reload replaces it.
+_TOKEN_OPTIMIZER_REFRESH_GENERATION = object()
+
+
 def _token_optimizer_quality_index_loop():
+    birth = _TOKEN_OPTIMIZER_REFRESH_GENERATION
     while True:
+        if _TOKEN_OPTIMIZER_REFRESH_GENERATION is not birth:
+            return
         try:
-            _refresh_token_optimizer_quality_index()
+            _core._refresh_token_optimizer_quality_index()
         except Exception:
             # Advisory metadata must not destabilize CCC's background work.
             pass
@@ -1851,13 +1860,13 @@ def _start_token_optimizer_quality_index_refresher():
 def _token_optimizer_quality_for_session(session_id):
     """Pure request-time lookup of the most recently published quality map."""
     sid = _token_optimizer_quality_safe_sid(session_id)
-    return dict(_TOKEN_OPTIMIZER_QUALITY_INDEX.get(sid) or {})
+    return dict(_core._TOKEN_OPTIMIZER_QUALITY_INDEX.get(sid) or {})
 
 
 def _with_token_optimizer_quality(payload, session_id):
     if not isinstance(payload, dict):
         return payload
-    quality = _token_optimizer_quality_for_session(session_id)
+    quality = _core._token_optimizer_quality_for_session(session_id)
     if quality:
         return {**payload, **quality}
     return payload
@@ -1987,20 +1996,20 @@ def extract_session_usage(session_id):
         result = _core._extract_codex_usage(session_id)
         result.setdefault("engine", "codex")
         return _with_token_optimizer_quality(result, session_id)
-    if _is_gemini_session(session_id):
-        result = _extract_gemini_usage(session_id)
+    if _core._is_gemini_session(session_id):
+        result = _core._extract_gemini_usage(session_id)
         result.setdefault("engine", "gemini")
         return _with_token_optimizer_quality(result, session_id)
-    if _is_cursor_session(session_id):
-        result = _extract_cursor_usage(session_id)
+    if _core._is_cursor_session(session_id):
+        result = _core._extract_cursor_usage(session_id)
         result.setdefault("engine", "cursor")
         return _with_token_optimizer_quality(result, session_id)
-    if _is_antigravity_session(session_id):
+    if _core._is_antigravity_session(session_id):
         result = _core._extract_antigravity_usage(session_id)
         result.setdefault("engine", "antigravity")
         return _with_token_optimizer_quality(result, session_id)
-    if _is_hermes_session(session_id):
-        return _with_token_optimizer_quality(_extract_hermes_usage(session_id), session_id)
+    if _core._is_hermes_session(session_id):
+        return _with_token_optimizer_quality(_core._extract_hermes_usage(session_id), session_id)
     if _core._is_kimi_session(session_id):
         return _with_token_optimizer_quality(_extract_kimi_usage(session_id), session_id)
     desktop_meta = _core._load_desktop_app_metadata().get(session_id) or {}
