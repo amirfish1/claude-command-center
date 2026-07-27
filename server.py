@@ -29882,9 +29882,26 @@ def _acp_permission_tool_detail(tool):
 
 _ACP_EMBEDDED_CONTROL_RE = re.compile(
     r"<system-reminder>.*?</system-reminder>"
-    r"|<kimi-skill-loaded\b[^>]*>.*?</kimi-skill-loaded>"
-    r"|<ccc-kimi-goal>.*?</ccc-kimi-goal>",
+    r"|<kimi-skill-loaded\b[^>]*>.*?</kimi-skill-loaded>",
     re.DOTALL,
+)
+
+_KIMI_GOAL_READ_PREFIX = (
+    "<ccc-kimi-goal>\n"
+    "The slash-shaped user message below is a CCC compatibility "
+    "command, not a Kimi ACP command. Use your GetGoal tool to inspect "
+    "the current durable goal, then report its objective and status.\n"
+    "</ccc-kimi-goal>\n"
+)
+
+_KIMI_GOAL_CREATE_PREFIX = (
+    "<ccc-kimi-goal>\n"
+    "The slash-shaped user message below is a CCC compatibility command, "
+    "not a Kimi ACP command. The user explicitly requested a durable goal. "
+    "Use your CreateGoal tool with the text after `/goal` as the objective, "
+    "then pursue it autonomously until its completion criterion is "
+    "satisfied.\n"
+    "</ccc-kimi-goal>\n"
 )
 
 
@@ -29895,6 +29912,14 @@ def _acp_message_event(state, speaker, text):
     text = (text or "").strip()
     if not text or _is_transcript_control_text(text):
         return None
+    # Remove only the exact compatibility prefix CCC generated. User-authored
+    # <ccc-kimi-goal> blocks — including blocks inside a /goal objective —
+    # are ordinary visible text and must survive replay byte-for-byte.
+    if speaker == "user":
+        for prefix in (_KIMI_GOAL_READ_PREFIX, _KIMI_GOAL_CREATE_PREFIX):
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                break
     # Kimi ACP appends injected control XML to the user's real prose instead
     # of delivering it as a standalone message — strip the embedded blocks,
     # then re-check for control-only / empty text.
@@ -30167,24 +30192,8 @@ def _kimi_goal_prompt_text(text):
         return raw
     objective = (match.group(1) or "").strip()
     if not objective:
-        return (
-            "<ccc-kimi-goal>\n"
-            "The slash-shaped user message below is a CCC compatibility "
-            "command, not a Kimi ACP command. Use your GetGoal tool to inspect "
-            "the current durable goal, then report its objective and status.\n"
-            "</ccc-kimi-goal>\n"
-            f"{raw.strip()}"
-        )
-    return (
-        "<ccc-kimi-goal>\n"
-        "The slash-shaped user message below is a CCC compatibility command, "
-        "not a Kimi ACP command. The user explicitly requested a durable goal. "
-        "Use your CreateGoal tool with the text after `/goal` as the objective, "
-        "then pursue it autonomously until its completion criterion is "
-        "satisfied.\n"
-        "</ccc-kimi-goal>\n"
-        f"{raw.strip()}"
-    )
+        return _KIMI_GOAL_READ_PREFIX + raw.strip()
+    return _KIMI_GOAL_CREATE_PREFIX + raw.strip()
 
 
 def _acp_prompt(

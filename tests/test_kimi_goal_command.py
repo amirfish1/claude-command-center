@@ -42,6 +42,46 @@ def test_kimi_goal_command_replays_as_the_original_visible_text():
     assert event == {"type": "user_text", "text": original}
 
 
+def test_kimi_goal_command_preserves_literal_goal_tags_in_objective():
+    original = (
+        "/goal preserve <ccc-kimi-goal>literal objective</ccc-kimi-goal> "
+        "exactly"
+    )
+    translated = server._kimi_goal_prompt_text(original)
+
+    event = server._acp_message_event(
+        {"sid": "session_test-kimi-goal-literal", "next_line": 1},
+        "user",
+        translated,
+    )
+
+    assert event == {"type": "user_text", "text": original}
+
+
+def test_kimi_replay_preserves_unrelated_literal_goal_tags():
+    original = "<ccc-kimi-goal>ordinary user text</ccc-kimi-goal>"
+
+    event = server._acp_message_event(
+        {"sid": "session_test-kimi-goal-unrelated", "next_line": 1},
+        "user",
+        original,
+    )
+
+    assert event == {"type": "user_text", "text": original}
+
+
+def test_kimi_replay_preserves_goal_prefix_in_assistant_text():
+    original = server._KIMI_GOAL_READ_PREFIX + "assistant explanation"
+
+    event = server._acp_message_event(
+        {"sid": "session_test-kimi-goal-assistant", "next_line": 1},
+        "assistant",
+        original,
+    )
+
+    assert event["blocks"] == [{"kind": "text", "text": original.strip()}]
+
+
 def test_kimi_goal_remote_busy_requeues_original_command():
     sid = "session_test-kimi-goal-busy"
     original = "/goal keep the queue empty"
