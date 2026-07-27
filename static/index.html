@@ -392,9 +392,18 @@
   </script>
 
   <div class="sidebar">
+    <!-- Queues / Sessions toggle. Identical markup and position on both pages
+         (see static/q2.html); only which side carries .is-active differs, so
+         the control never moves as you switch. Plain links — the mac app
+         treats any URL on the dashboard port as in-app
+         (scripts/macapp/main.swift:132). -->
+    <div class="q2-toggle" role="group" aria-label="Switch view">
+      <a class="q2-toggle-opt" href="/q2.html">Queues</a>
+      <span class="q2-toggle-opt is-active" aria-current="page">Sessions</span>
+    </div>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
-        <div class="sh-title-row">
+      <div class="sh-title-row">
           <img class="sh-app-icon" src="/static/icon.svg" alt="" aria-hidden="true">
           <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
@@ -456,6 +465,9 @@
         </span>
         <button id="historyBtn" class="sh-btn" title="Search past Claude Code conversations across every project on this Mac (powered by the local claude-index). Shortcut: /" aria-label="Search past conversations"><span aria-hidden="true">&#128269;</span><span class="sh-action-label">History</span></button>
         <button class="conv-kanban-toggle sh-btn" id="convKanbanToggle" title="Switch session view" aria-label="Switch session view"><span aria-hidden="true">&#9783;</span><span class="sh-action-label">Board</span></button>
+        <!-- q2 queue board. A plain link: the mac app treats any URL on the
+             dashboard port as in-app (scripts/macapp/main.swift:132), so this
+             navigates the existing window rather than spawning a new one. -->
         <!-- Folder chip color toggle. Three states: muted (uniform neutral —
              default), color (per-folder hue), and level (shared hierarchy colors),
              (uniform neutral). Persisted under `ccc-chips-mode`; body classes

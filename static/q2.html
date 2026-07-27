@@ -8,9 +8,14 @@
 </head>
 <body>
   <header class="q2-topbar">
-    <span class="q2-brand">Queues</span>
+    <!-- Same toggle, same corner, same markup as the dashboard's. -->
+    <div class="q2-toggle" role="group" aria-label="Switch view">
+      <span class="q2-toggle-opt is-active" aria-current="page">Queues</span>
+      <a class="q2-toggle-opt" href="/">Sessions</a>
+    </div>
     <span class="q2-brand-sub">q2</span>
     <span class="q2-spacer"></span>
+    <span class="q2-note" id="q2Note" role="status" hidden></span>
     <span class="q2-stale" id="q2Stale" hidden>offline &mdash; retrying</span>
     <button type="button" class="q2-btn" id="q2ThemeBtn" title="Toggle light / dark">Light</button>
   </header>
@@ -21,9 +26,15 @@
       <div class="q2-col-head">
         <span class="q2-col-title">Queues</span>
         <span class="q2-col-count" id="q2QueueCount"></span>
+        <span class="q2-spacer"></span>
+        <button type="button" class="q2-icon-btn" id="q2NewQueueBtn" title="Create a queue" aria-label="Create a queue" data-q2-icon="plus"></button>
       </div>
       <div class="q2-list" id="q2Queues"></div>
     </section>
+
+    <div class="q2-resizer" data-q2-resize="queues" role="separator" aria-orientation="vertical"
+         tabindex="0" aria-label="Resize the queues column. Drag, or use arrow keys. Double-click to reset."
+         title="Drag to resize &middot; double-click to reset"></div>
 
     <!-- Column 2: tickets of the selected queue (detail of col 1) -->
     <section class="q2-col q2-col-tickets" aria-label="Tickets">
@@ -31,19 +42,33 @@
         <span class="q2-col-title" id="q2TicketsTitle">Tickets</span>
         <span class="q2-col-count" id="q2TicketCount"></span>
         <span class="q2-spacer"></span>
+        <button type="button" class="q2-icon-btn" id="q2NewTicketBtn" title="Add a ticket to this queue" aria-label="Add a ticket" data-q2-icon="plus"></button>
+        <button type="button" class="q2-icon-btn" id="q2QueueSettingsBtn" title="Edit this queue's configuration" aria-label="Queue settings" data-q2-icon="gear"></button>
         <button type="button" class="q2-btn q2-btn-ghost" id="q2ClosedBtn" aria-pressed="false">Show closed</button>
       </div>
+      <!-- Flow diagram for this queue: backlog -> watcher -> worker -> done. -->
+      <section class="q2-diagram" id="q2Diagram" aria-label="Queue flow"></section>
       <div class="q2-col-sub">
         <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
       </div>
       <div class="q2-list" id="q2Tickets"></div>
+      <!-- Reconciler log for this queue: chronological, pinned to the newest
+           line unless the user scrolls up to read history. -->
+      <section class="q2-logbar" id="q2LogBar" aria-label="Reconciler activity log"></section>
     </section>
+
+    <div class="q2-resizer" data-q2-resize="tickets" role="separator" aria-orientation="vertical"
+         tabindex="0" aria-label="Resize the tickets column. Drag, or use arrow keys. Double-click to reset."
+         title="Drag to resize &middot; double-click to reset"></div>
 
     <!-- Column 3: the selected ticket. Conversation pane goes here later. -->
     <section class="q2-col q2-col-detail" aria-label="Ticket">
       <div class="q2-detail" id="q2Detail"></div>
     </section>
   </main>
+
+  <!-- Modal host: ticket composer and queue configuration both render here. -->
+  <div class="q2-modal-host" id="q2Modal" hidden></div>
 
   <script src="/static/q2.js"></script>
 </body>
