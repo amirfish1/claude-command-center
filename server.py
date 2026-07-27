@@ -11766,6 +11766,7 @@ CODEX_THREAD_REGISTRY_FILE = (
 # change actually lands on the next ask.
 SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
 PENDING_INPUTS_FILE = COMMAND_CENTER_STATE_DIR / "pending-inputs.json"
+PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
 
 
 # {path: {mtime, custom_title, last_prompt, agent_name, ...}}
@@ -23610,6 +23611,75 @@ def _codex_context_window_args():
     return ["-c", "model_context_window=1000000"]
 
 
+_CODEX_APP_SERVER_FALSE_MISS_LIMIT = 3
+_CODEX_APP_SERVER_FALSE_MISSES = 0
+# Thread-level methods whose "thread not found" can be checked against disk.
+_CODEX_APP_SERVER_FALSE_MISS_METHODS = {
+    "thread/resume",
+    "turn/start",
+    "turn/steer",
+    "turn/interrupt",
+    "thread/name/set",
+    "thread/settings/update",
+    "thread/compact/start",
+}
+
+
+def _codex_rollout_exists_on_disk(thread_id):
+    """True when a rollout JSONL for `thread_id` exists under ~/.codex/sessions.
+
+    Registry-independent on purpose: a wedged app-server may also have lost
+    the registry row, and this check is the ground truth for 'the thread
+    exists, the server just can't see it'.
+    """
+    sid = str(thread_id or "").strip()
+    if not sid:
+        return False
+    try:
+        root = Path.home() / ".codex" / "sessions"
+        if not root.is_dir():
+            return False
+        return any(root.rglob(f"*{sid}.jsonl"))
+    except OSError:
+        return False
+
+
+def _codex_app_server_track_thread_health(method, thread_id, response):
+    """Recycle a wedged app-server child on verified false 'thread not found'.
+
+    The liveness probe only proves the JSON-RPC loop still answers
+    `thread/list` — a half-dead child can fail every thread-level call for
+    hours while staying 'warm' (observed: ~10h of continuous thread/resume
+    and turn/start failures). 'thread not found' for a thread whose rollout
+    exists on disk is a definitive false miss: the server lost track of
+    durable state. After _CODEX_APP_SERVER_FALSE_MISS_LIMIT consecutive
+    verified misses, recycle the child so the next request respawns a fresh
+    app-server. Genuine misses (deleted/archived threads, brand-new threads
+    whose rollout hasn't landed yet) are neutral — no strike, no reset.
+    """
+    global _CODEX_APP_SERVER_FALSE_MISSES
+    if _codex_response_succeeded(response):
+        if method in _CODEX_APP_SERVER_FALSE_MISS_METHODS:
+            _CODEX_APP_SERVER_FALSE_MISSES = 0
+        return
+    if method not in _CODEX_APP_SERVER_FALSE_MISS_METHODS or not thread_id:
+        return
+    if "thread not found" not in _codex_error_text(response).lower():
+        return
+    if not _codex_rollout_exists_on_disk(thread_id):
+        return
+    _CODEX_APP_SERVER_FALSE_MISSES += 1
+    if _CODEX_APP_SERVER_FALSE_MISSES >= _CODEX_APP_SERVER_FALSE_MISS_LIMIT:
+        _CODEX_APP_SERVER_FALSE_MISSES = 0
+        print(
+            f"  [codex-app-server] {_CODEX_APP_SERVER_FALSE_MISS_LIMIT} verified"
+            " false 'thread not found' misses with rollouts on disk;"
+            " recycling app-server child",
+            file=sys.stderr,
+        )
+        _codex_app_server_shutdown()
+
+
 def _codex_app_server_request(method, params=None, timeout=20):
     """Send one JSON-RPC request to Codex app-server.
 
@@ -23672,6 +23742,10 @@ def _codex_app_server_request(method, params=None, timeout=20):
     response = _codex_app_server_request_to_transport(
         transport, method, params=params, timeout=timeout,
     )
+    try:
+        _codex_app_server_track_thread_health(method, thread_id, response)
+    except Exception:
+        pass  # health tracking must never break the request path
     if method == "turn/start" and thread_id:
         with _CODEX_APP_SERVER_LOCK:
             state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(thread_id, {})
@@ -24974,7 +25048,10 @@ def _codex_spawn_via_app_server(
 
     Returns None when callers should fall back to the legacy `codex exec` path.
     Once a durable thread has been created, errors are returned to the caller
-    instead of launching a second session for the same requested task.
+    instead of launching a second session for the same requested task — except
+    "thread not found" from turn/start, which proves the turn was never
+    accepted (even after reattach + recreate recovery), so the exec fallback
+    is safe and preferred over rejecting the user's submission.
     """
     if not _codex_app_server_spawn_enabled():
         _codex_telemetry_append(
@@ -25164,11 +25241,43 @@ def _codex_spawn_via_app_server(
         turn_start_ms = _codex_elapsed_ms(turn_start_at)
         if not _codex_response_succeeded(started):
             error = _codex_app_server_response_error(started)
+            # "thread not found" is definitive: the app-server never accepted
+            # the turn, so no work ran on this thread. After the reattach +
+            # recreate recovery above has also failed, the app-server is
+            # persistently unable to run turns (wedged child, broken shared
+            # state) — falling back to the one-shot `codex exec` path cannot
+            # duplicate the task, unlike other errors (e.g. a lost response
+            # after the turn was accepted) where a second session could.
+            thread_lost = "thread not found" in error.lower()
             log_fh.write(json.dumps({
                 "event": "codex_app_server_turn_failed",
                 "error": error,
+                "fallback": "codex-exec" if thread_lost else "none",
             }, sort_keys=True) + "\n")
             log_fh.flush()
+            if thread_lost:
+                _codex_telemetry_append(
+                    "codex_spawn",
+                    ok=False,
+                    via="codex-app-spawn",
+                    fallback="codex-exec",
+                    fallback_reason="turn/start thread-not-found after recovery",
+                    stage="turn/start",
+                    error=error,
+                    app_server_warm=app_server_warm,
+                    thread_start_ms=thread_start_ms,
+                    name_set_ms=name_set_ms,
+                    turn_start_ms=turn_start_ms,
+                    thread_reattached=thread_reattached,
+                    thread_recreated=thread_recreated,
+                    recovery_thread_start_ms=recovery_thread_start_ms,
+                    total_ms=_codex_elapsed_ms(total_start),
+                    transport=_codex_app_server_transport_kind(),
+                    session_id=thread_id,
+                    cwd=spawn_cwd,
+                    model=model_to_use,
+                )
+                return None
             _codex_telemetry_append(
                 "codex_spawn",
                 ok=False,
@@ -29851,6 +29960,24 @@ _ACP_EMBEDDED_CONTROL_RE = re.compile(
     re.DOTALL,
 )
 
+_KIMI_GOAL_READ_PREFIX = (
+    "<ccc-kimi-goal>\n"
+    "The slash-shaped user message below is a CCC compatibility "
+    "command, not a Kimi ACP command. Use your GetGoal tool to inspect "
+    "the current durable goal, then report its objective and status.\n"
+    "</ccc-kimi-goal>\n"
+)
+
+_KIMI_GOAL_CREATE_PREFIX = (
+    "<ccc-kimi-goal>\n"
+    "The slash-shaped user message below is a CCC compatibility command, "
+    "not a Kimi ACP command. The user explicitly requested a durable goal. "
+    "Use your CreateGoal tool with the text after `/goal` as the objective, "
+    "then pursue it autonomously until its completion criterion is "
+    "satisfied.\n"
+    "</ccc-kimi-goal>\n"
+)
+
 
 def _acp_message_event(state, speaker, text):
     """Replayed user/assistant text → conv event. Control bookkeeping
@@ -29859,6 +29986,14 @@ def _acp_message_event(state, speaker, text):
     text = (text or "").strip()
     if not text or _is_transcript_control_text(text):
         return None
+    # Remove only the exact compatibility prefix CCC generated. User-authored
+    # <ccc-kimi-goal> blocks — including blocks inside a /goal objective —
+    # are ordinary visible text and must survive replay byte-for-byte.
+    if speaker == "user":
+        for prefix in (_KIMI_GOAL_READ_PREFIX, _KIMI_GOAL_CREATE_PREFIX):
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                break
     # Kimi ACP appends injected control XML to the user's real prose instead
     # of delivering it as a standalone message — strip the embedded blocks,
     # then re-check for control-only / empty text.
@@ -29936,11 +30071,25 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
     # preflight check. Preserve the user's action instead of surfacing a red
     # concurrency error. The queue watcher waits on Kimi's wire state and
     # retries after the external turn reaches its real end boundary.
-    if requeue_text:
-        if requeue_front:
-            _requeue_terminal_input_front(sid, requeue_text)
-        else:
-            _queue_terminal_input(sid, requeue_text, {"status": "running"})
+    if requeue_text and not _queue_kimi_remote_busy_retry(
+            sid,
+            requeue_text,
+            front=requeue_front,
+    ):
+        with _ACP_LOCK:
+            _acp_emit_event_unlocked(harness, sid, {
+                "type": "result",
+                "subtype": "error",
+                "error": (
+                    "Kimi rejected the turn as busy, and CCC could not "
+                    "persist the retry handoff."
+                ),
+            }, save=True)
+            _acp_emit_delta_unlocked(
+                harness,
+                sid,
+                {"type": "result", "subtype": "error"},
+            )
 
 
 def _acp_reader(harness, conn):
@@ -30117,6 +30266,24 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
     }
 
 
+def _kimi_goal_prompt_text(text):
+    """Translate CCC's ``/goal`` affordance into Kimi's native goal tools.
+
+    Kimi ACP handles slash-prefixed prompts before they reach the model, but
+    its command catalog does not expose ``/goal``. Kimi does expose durable
+    CreateGoal/GetGoal tools to the model, so route only this compatibility
+    command around the ACP slash parser. All other text stays byte-for-byte.
+    """
+    raw = str(text or "")
+    match = re.match(r"^\s*/goal(?:\s+(.*))?\s*$", raw, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return raw
+    objective = (match.group(1) or "").strip()
+    if not objective:
+        return _KIMI_GOAL_READ_PREFIX + raw.strip()
+    return _KIMI_GOAL_CREATE_PREFIX + raw.strip()
+
+
 def _acp_prompt(
     harness, sid, text, mode="send", from_queue=False, idempotency_key=None,
 ):
@@ -30137,6 +30304,9 @@ def _acp_prompt(
     if not text:
         return {"ok": False, "error": "empty prompt"}
     text = _strip_lone_surrogates(str(text))
+    visible_text = text
+    if harness == "kimi":
+        text = _kimi_goal_prompt_text(text)
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
         if state.get("status") == "active" and mode != "steer":
@@ -30164,7 +30334,11 @@ def _acp_prompt(
             "req_id": req_id,
             "msg_id": f"acp-{harness}-{state['turn_seq']}",
             "text": "", "thought": "", "tools": {},
-            "prompt": text,
+            # The original user text is the canonical retry payload. Kimi may
+            # receive a translated compatibility prompt (for `/goal`), but a
+            # remote-busy race must requeue the visible command so the next
+            # send translates exactly once and transcript text stays honest.
+            "prompt": visible_text,
             "from_queue": bool(from_queue),
             "started_at": time.time(),
         }
@@ -30172,7 +30346,7 @@ def _acp_prompt(
         state["deltas"].clear()
         entry["is_active"] = True
         _acp_emit_event_unlocked(harness, sid, {
-            "type": "user_text", "text": text,
+            "type": "user_text", "text": visible_text,
         }, save=True)
 
     def roll_back_unsent_turn(req_id, _entry):
@@ -31613,7 +31787,9 @@ _pending_resume_retry_after: dict = {}
 _PENDING_RESUME_RETRY_DELAY_S = 60.0
 _pending_terminal_input_queue: dict = {}   # session_id → [text, ...]
 _pending_terminal_input_lock = threading.Lock()
+_pending_terminal_handoff_ids: dict = {}  # watcher-local handoff_id → path
 _pending_inputs_lock = threading.Lock()
+_pending_input_handoff_ingest_lock = threading.Lock()
 _pending_inputs_watcher_lock_file = None
 _pending_inputs_watcher_retry_started = False
 _codex_queue_pump_locks = {}
@@ -31652,16 +31828,28 @@ def _load_pending_inputs():
         tq = data.get("terminal_queue")
         if isinstance(tq, dict):
             _pending_terminal_input_queue.update({k: list(v) for k, v in tq.items() if isinstance(v, list)})
-
-
 def _save_pending_inputs():
     """Save pending queues from memory to PENDING_INPUTS_FILE."""
     with _pending_inputs_lock:
         with _pending_resume_lock:
             rq = dict(_pending_resume_queue)
         with _pending_terminal_input_lock:
-            tq = dict(_pending_terminal_input_queue)
-        payload = {"resume_queue": rq, "terminal_queue": tq}
+            # Worker handoff files remain the authority until delivery. Never
+            # copy their in-memory string wrappers into the shared snapshot:
+            # a stale sibling CCC can replace this JSON, but it cannot erase
+            # the worker-owned inbox entry or create a duplicate on restart.
+            tq = {
+                sid: [
+                    item for item in queue
+                    if not isinstance(item, _PendingInputHandoff)
+                ]
+                for sid, queue in _pending_terminal_input_queue.items()
+            }
+            tq = {sid: queue for sid, queue in tq.items() if queue}
+        payload = {
+            "resume_queue": rq,
+            "terminal_queue": tq,
+        }
         try:
             PENDING_INPUTS_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = PENDING_INPUTS_FILE.with_suffix(".json.tmp")
@@ -31670,6 +31858,184 @@ def _save_pending_inputs():
             tmp.replace(PENDING_INPUTS_FILE)
         except OSError as e:
             print(f"  [pending-inputs] save failed: {e}")
+            return False
+    return True
+
+
+class _PendingInputHandoff(str):
+    """String-compatible queued input backed by an authoritative inbox file."""
+
+    def __new__(cls, text, handoff_id, path):
+        value = super().__new__(cls, text)
+        value.handoff_id = handoff_id
+        value.handoff_path = path
+        return value
+
+
+def _write_pending_input_handoff(session_id, text, *, front=False):
+    """Atomically hand one terminal retry from an engine worker to the watcher.
+
+    Persistent engine workers do not own the dashboard's in-memory pending
+    queues. Writing a unique inbox file avoids replacing pending-inputs.json
+    from a worker's partial process-local snapshot.
+    """
+    session_id = str(session_id or "").strip()
+    text = str(text or "")
+    if not session_id or not text:
+        return None
+    handoff_id = str(uuid.uuid4())
+    created_at = time.time()
+    filename = f"{time.time_ns()}-{handoff_id}.json"
+    target = PENDING_INPUT_HANDOFF_DIR / filename
+    tmp = PENDING_INPUT_HANDOFF_DIR / f".{filename}.tmp"
+    payload = {
+        "id": handoff_id,
+        "session_id": session_id,
+        "text": text,
+        "front": bool(front),
+        "created_at": created_at,
+    }
+    try:
+        PENDING_INPUT_HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(target)
+        return target
+    except OSError as e:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        print(f"  [pending-inputs] worker handoff failed: {e}", flush=True)
+        return None
+
+
+def _read_pending_input_handoff(path):
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        payload = None
+    if not isinstance(payload, dict):
+        return None
+    handoff_id = str(payload.get("id") or "").strip()
+    session_id = str(payload.get("session_id") or "").strip()
+    text = payload.get("text")
+    created_at = payload.get("created_at")
+    if (
+        not handoff_id
+        or not session_id
+        or not isinstance(text, str)
+        or not text
+        or not isinstance(created_at, (int, float))
+    ):
+        return None
+    return {
+        "id": handoff_id,
+        "session_id": session_id,
+        "text": text,
+        "front": bool(payload.get("front")),
+        "created_at": float(created_at),
+        "path": path,
+    }
+
+
+def _ingest_pending_input_handoffs():
+    """Expose authoritative worker retry files in the watcher-owned queue."""
+    with _pending_input_handoff_ingest_lock:
+        try:
+            paths = sorted(PENDING_INPUT_HANDOFF_DIR.glob("*.json"))
+        except OSError:
+            return 0
+        if not paths:
+            return 0
+
+        events = []
+        for path in paths:
+            event = _read_pending_input_handoff(path)
+            if event is None:
+                try:
+                    path.replace(path.with_suffix(".invalid"))
+                except OSError:
+                    pass
+                print(
+                    f"  [pending-inputs] invalid worker handoff: {path.name}",
+                    flush=True,
+                )
+                continue
+            events.append(event)
+        if not events:
+            return 0
+
+        # Refresh immediately before merging so unrelated messages accepted by
+        # the dashboard or a sibling process remain in memory. Handoff-backed
+        # strings are deliberately excluded from pending-inputs.json; their
+        # unique files remain authoritative until proven delivery.
+        _load_pending_inputs()
+        new_events = [
+            event for event in events
+            if event["id"] not in _pending_terminal_handoff_ids
+        ]
+        with _pending_terminal_input_lock:
+            # Inserting newest-first at index zero preserves FIFO order among
+            # multiple front-of-queue retry events.
+            for event in reversed([
+                item for item in new_events if item["front"]
+            ]):
+                _pending_terminal_input_queue.setdefault(
+                    event["session_id"], []
+                ).insert(0, _PendingInputHandoff(
+                    event["text"],
+                    event["id"],
+                    event["path"],
+                ))
+            for event in (
+                item for item in new_events if not item["front"]
+            ):
+                _pending_terminal_input_queue.setdefault(
+                    event["session_id"], []
+                ).append(_PendingInputHandoff(
+                    event["text"],
+                    event["id"],
+                    event["path"],
+                ))
+        for event in new_events:
+            _pending_terminal_handoff_ids[event["id"]] = event["path"]
+        return len(new_events)
+
+
+def _complete_pending_input_handoff(text):
+    """Acknowledge one proven-delivered (or deliberately dropped) handoff."""
+    if not isinstance(text, _PendingInputHandoff):
+        return False
+    try:
+        text.handoff_path.unlink(missing_ok=True)
+    except OSError as e:
+        print(
+            f"  [pending-inputs] handoff cleanup failed: {e}",
+            flush=True,
+        )
+        return False
+    _pending_terminal_handoff_ids.pop(text.handoff_id, None)
+    return True
+
+
+def _queue_kimi_remote_busy_retry(session_id, text, *, front=False):
+    """Return a Kimi remote-busy prompt to its process-appropriate queue."""
+    if os.environ.get("CCC_WORKER_PROCESS") == "1":
+        return _write_pending_input_handoff(
+            session_id,
+            text,
+            front=front,
+        ) is not None
+    if front:
+        _requeue_terminal_input_front(session_id, text)
+    else:
+        _queue_terminal_input(session_id, text, {"status": "running"})
+    return True
 
 
 def _get_queued_events_for_session(session_id):
@@ -31774,6 +32140,7 @@ def _drop_matching_terminal_queue_entries(session_id, text):
     if not session_id or not clean:
         return 0
     removed = 0
+    removed_items = []
     with _pending_terminal_input_lock:
         queue = _pending_terminal_input_queue.get(session_id)
         if not queue:
@@ -31782,6 +32149,7 @@ def _drop_matching_terminal_queue_entries(session_id, text):
         for item in queue:
             if str(item or "").strip() == clean:
                 removed += 1
+                removed_items.append(item)
             else:
                 kept.append(item)
         if removed:
@@ -31791,6 +32159,8 @@ def _drop_matching_terminal_queue_entries(session_id, text):
                 _pending_terminal_input_queue.pop(session_id, None)
     if removed:
         _save_pending_inputs()
+        for item in removed_items:
+            _complete_pending_input_handoff(item)
     return removed
 
 
@@ -31809,6 +32179,7 @@ def _consume_matching_pending_input(session_id, text):
         (_pending_terminal_input_queue, _pending_terminal_input_lock),
     ):
         removed = False
+        removed_item = None
         with lock:
             items = queue.get(session_id)
             if not items:
@@ -31816,13 +32187,14 @@ def _consume_matching_pending_input(session_id, text):
             for index, item in enumerate(items):
                 if str(item or "").strip() != clean:
                     continue
-                items.pop(index)
+                removed_item = items.pop(index)
                 if not items:
                     queue.pop(session_id, None)
                 removed = True
                 break
         if removed:
             _save_pending_inputs()
+            _complete_pending_input_handoff(removed_item)
             return 1
     return 0
 
@@ -32847,6 +33219,7 @@ def _verify_terminal_drain_receipts(now=None):
         rec_status = (rec or {}).get("status") if isinstance(rec, dict) else None
         if rec_status == "landed":
             _terminal_drain_receipts.remove(item)
+            _complete_pending_input_handoff(item["text"])
         elif rec_status == "lost":
             _terminal_drain_receipts.remove(item)
             _terminal_drain_skip_wt.add(item["sid"])
@@ -32859,6 +33232,7 @@ def _verify_terminal_drain_receipts(now=None):
             )
         elif now > float(item.get("deadline") or 0.0):
             _terminal_drain_receipts.remove(item)
+            _complete_pending_input_handoff(item["text"])
             print(
                 f"[terminal-queue] wt-send receipt {item['receipt_id']} still "
                 f"unverified after {int(_TERMINAL_DRAIN_RECEIPT_DEADLINE_S)}s — "
@@ -32900,6 +33274,7 @@ def _start_resume_queue_watcher() -> None:
     # server behind a stale sibling process.
     _pending_inputs_watcher_lock_file = True
     _load_pending_inputs()
+    _ingest_pending_input_handoffs()
     # Restore durable Codex coordination events before any app-server
     # notification persists (and would otherwise clobber) the state file.
     try:
@@ -32913,6 +33288,7 @@ def _start_resume_queue_watcher() -> None:
             # pass. The single watcher owns delivery but always refreshes this
             # durable queue before draining it.
             _load_pending_inputs()
+            _ingest_pending_input_handoffs()
             # Recovery is lower priority than every durable user message. Run
             # this before FIFO draining so a queued message suppresses its
             # conversation's automatic continuation instead of racing it.
@@ -32966,6 +33342,7 @@ def _start_resume_queue_watcher() -> None:
             with _pending_terminal_input_lock:
                 terminal_sids = list(_pending_terminal_input_queue.keys())
             for sid in terminal_sids:
+                text = None
                 try:
                     # CHEAP LIVENESS PRE-GATE (perf + stuck-queue cleanup):
                     # terminal input can only ever be injected into a LIVE
@@ -32993,6 +33370,8 @@ def _start_resume_queue_watcher() -> None:
                                 flush=True,
                             )
                             _save_pending_inputs()
+                            for dropped_text in dropped:
+                                _complete_pending_input_handoff(dropped_text)
                         continue
                     # Backoff gate (CCC-455): a sid whose last drain attempt
                     # failed or re-parked waits out its retry window before we
@@ -33072,6 +33451,7 @@ def _start_resume_queue_watcher() -> None:
                         # The inject re-parked it itself (foreign live writer,
                         # bg-undeliverable, invalid cwd) — entry is safe; back
                         # off so a held session isn't re-driven every 5s tick.
+                        _complete_pending_input_handoff(text)
                         _mark_terminal_queue_retry(sid)
                     elif not result.get("ok"):
                         _requeue_terminal_input_front(sid, text)
@@ -33085,9 +33465,18 @@ def _start_resume_queue_watcher() -> None:
                             "last_check": 0.0,
                         })
                     else:
+                        _complete_pending_input_handoff(text)
                         _pending_terminal_retry_after.pop(sid, None)
                 except Exception:
-                    pass
+                    if isinstance(text, _PendingInputHandoff):
+                        try:
+                            _requeue_terminal_input_front(sid, text)
+                            _mark_terminal_queue_retry(sid)
+                        except Exception:
+                            _pending_terminal_handoff_ids.pop(
+                                text.handoff_id,
+                                None,
+                            )
             try:
                 _verify_terminal_drain_receipts()
             except Exception:

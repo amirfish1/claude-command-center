@@ -1,0 +1,1 @@
+Fixed wedged Codex app-server surviving for hours: the liveness probe only checks that `thread/list` answers, so a half-dead child that fails every `thread/resume`/`turn/start` stayed "warm". CCC now verifies "thread not found" errors against the on-disk rollout — 3 consecutive false misses for threads that provably exist recycles the app-server child.

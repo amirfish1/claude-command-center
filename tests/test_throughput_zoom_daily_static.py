@@ -44,6 +44,14 @@ def test_throughput_page_has_zoom_ladder():
     assert "/throughput-daily.html?date=yesterday" in html
 
 
+def test_zoom_session_names_apply_their_width_cap():
+    html = _read("static/throughput.html")
+    assert (
+        "#tput-zoom-overlay .tz-name{display:inline-block;color:var(--accent);"
+        "max-width:260px;overflow:hidden;text-overflow:ellipsis;}"
+    ) in html
+
+
 def test_daily_report_page_exists_and_renders_digest():
     html = _read("static/throughput-daily.html")
     assert "/api/throughput/daily" in html

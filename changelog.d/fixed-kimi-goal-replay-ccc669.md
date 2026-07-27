@@ -1,0 +1,1 @@
+- Preserve literal `<ccc-kimi-goal>` text in Kimi prompts when conversations replay.
