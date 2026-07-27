@@ -214,6 +214,31 @@ class TestKimiStuckDetection(unittest.TestCase):
 
 
 class TestServerImports(unittest.TestCase):
+    def test_codex_sidebar_rows_expose_thread_source_for_provenance(self):
+        import inspect as _inspect
+        server = importlib.import_module("server")
+
+        src = _inspect.getsource(server.find_codex_conversations)
+        self.assertIn('"thread_source": row.get("thread_source") or ""', src)
+        self.assertIn("thread_source", server._ARCHIVE_LIST_FIELDS)
+        self.assertGreaterEqual(server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, 6)
+
+    def test_sidebar_rows_render_session_provenance(self):
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const _sessionProvenanceChipHtml = (c) => {", app_js)
+        self.assertIn("Spawned by ", app_js)
+        self.assertIn("Started by CCC; no parent session recorded", app_js)
+        self.assertGreaterEqual(
+            app_js.count("thread_source: c.thread_source || ''"),
+            2,
+            "Every archive-row shaping branch must preserve thread provenance.",
+        )
+        self.assertIn("const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);", app_js)
+        self.assertIn("+ sessionProvenanceChipHtml", app_js)
+        self.assertIn(".conv-session-origin-chip {", app_css)
+
     def test_codex_agent_task_labels_humanize_cleartext_paths(self):
         server = importlib.import_module("server")
         self.assertEqual(
@@ -2587,7 +2612,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
@@ -2637,7 +2662,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-copy-row-session-id", app_js)
         self.assertIn("data-session-id-short", app_js)
         self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
-        self.assertIn("_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
+        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml", app_js)
         self.assertIn("+ sessionIdChipHtml", app_js)
         self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
         self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)
@@ -2653,7 +2678,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function flowObjectForConversation(c)", app_js)
         self.assertIn("function flowObjectChipHtml(c)", app_js)
         self.assertIn("const objectChipHtml = flowObjectChipHtml(c);", app_js)
-        self.assertIn("_hmObjectChip || _hmFolderChip || sessionIdChipHtml", app_js)
+        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml", app_js)
         self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
         self.assertIn("Object &middot; ", app_js)
         self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip", app_css)
@@ -10829,6 +10854,63 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "turn/start",
             ],
         )
+
+    def test_spawn_codex_falls_back_to_exec_when_threads_stay_lost(self):
+        """If even a recreated thread turns up 'thread not found', the spawn
+        must fall back to the legacy exec path instead of failing — the error
+        is definitive proof no turn was accepted, so a second session cannot
+        duplicate the task."""
+        server = self.server
+        stale_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        fresh_sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363486"
+        thread_starts = 0
+
+        def fake_request(method, params=None, timeout=20):
+            nonlocal thread_starts
+            if method == "thread/start":
+                thread_starts += 1
+                sid = stale_sid if thread_starts == 1 else fresh_sid
+                return {"result": {"thread": {"id": sid, "status": {"type": "idle"}}}}
+            if method == "thread/name/set":
+                return {"result": {}}
+            if method == "turn/start":
+                return {"error": {"message": f"thread not found: {params['threadId']}"}}
+            if method == "thread/resume":
+                return {"error": {"message": f"thread not found: {params['threadId']}"}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        proc = mock.Mock(pid=4245)
+        original_spawns = list(server._spawned_sessions)
+        server._spawned_sessions.clear()
+        try:
+            with mock.patch.object(server, "_codex_app_server_request", side_effect=fake_request), \
+                 mock.patch.object(server, "_codex_rollout_stat", return_value=None), \
+                 mock.patch.object(server, "_codex_app_server_transport_kind", return_value="stdio"), \
+                 mock.patch.object(server, "_codex_app_server_shutdown", return_value=True) as recycle, \
+                 mock.patch.object(
+                     server,
+                     "_resolve_codex_bin",
+                     return_value={"available": True, "bin": "/usr/bin/codex-test"},
+                 ), mock.patch.object(server.subprocess, "Popen", return_value=proc) as popen, \
+                 mock.patch.object(server, "_record_spawn_to_registry"):
+                result = server.spawn_session_codex(
+                    "say ok", name="lost thread spawn", repo_path=str(self.repo),
+                )
+        finally:
+            for entry in server._spawned_sessions:
+                fh = entry.get("log_fh")
+                if fh:
+                    fh.close()
+            server._spawned_sessions.clear()
+            server._spawned_sessions.extend(original_spawns)
+
+        self.assertTrue(result["ok"])
+        self.assertNotEqual(result.get("via"), "codex-app-spawn")
+        recycle.assert_called_once()
+        popen.assert_called_once()
+        cmd = popen.call_args.args[0]
+        self.assertIn("exec", cmd)
+        self.assertEqual(cmd[-1], "say ok")
 
     def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
         """Default Codex spawns should prefer 5.5 while requesting max context."""

@@ -24974,7 +24974,10 @@ def _codex_spawn_via_app_server(
 
     Returns None when callers should fall back to the legacy `codex exec` path.
     Once a durable thread has been created, errors are returned to the caller
-    instead of launching a second session for the same requested task.
+    instead of launching a second session for the same requested task — except
+    "thread not found" from turn/start, which proves the turn was never
+    accepted (even after reattach + recreate recovery), so the exec fallback
+    is safe and preferred over rejecting the user's submission.
     """
     if not _codex_app_server_spawn_enabled():
         _codex_telemetry_append(
@@ -25164,11 +25167,43 @@ def _codex_spawn_via_app_server(
         turn_start_ms = _codex_elapsed_ms(turn_start_at)
         if not _codex_response_succeeded(started):
             error = _codex_app_server_response_error(started)
+            # "thread not found" is definitive: the app-server never accepted
+            # the turn, so no work ran on this thread. After the reattach +
+            # recreate recovery above has also failed, the app-server is
+            # persistently unable to run turns (wedged child, broken shared
+            # state) — falling back to the one-shot `codex exec` path cannot
+            # duplicate the task, unlike other errors (e.g. a lost response
+            # after the turn was accepted) where a second session could.
+            thread_lost = "thread not found" in error.lower()
             log_fh.write(json.dumps({
                 "event": "codex_app_server_turn_failed",
                 "error": error,
+                "fallback": "codex-exec" if thread_lost else "none",
             }, sort_keys=True) + "\n")
             log_fh.flush()
+            if thread_lost:
+                _codex_telemetry_append(
+                    "codex_spawn",
+                    ok=False,
+                    via="codex-app-spawn",
+                    fallback="codex-exec",
+                    fallback_reason="turn/start thread-not-found after recovery",
+                    stage="turn/start",
+                    error=error,
+                    app_server_warm=app_server_warm,
+                    thread_start_ms=thread_start_ms,
+                    name_set_ms=name_set_ms,
+                    turn_start_ms=turn_start_ms,
+                    thread_reattached=thread_reattached,
+                    thread_recreated=thread_recreated,
+                    recovery_thread_start_ms=recovery_thread_start_ms,
+                    total_ms=_codex_elapsed_ms(total_start),
+                    transport=_codex_app_server_transport_kind(),
+                    session_id=thread_id,
+                    cwd=spawn_cwd,
+                    model=model_to_use,
+                )
+                return None
             _codex_telemetry_append(
                 "codex_spawn",
                 ok=False,

@@ -1,0 +1,1 @@
+Fixed Codex spawn failing with "Spawn failed: thread not found" when the app-server accepts a new thread but cannot run its first turn — after reattach + recreate recovery is exhausted, spawns now fall back to the one-shot `codex exec` path instead of rejecting the submission.
