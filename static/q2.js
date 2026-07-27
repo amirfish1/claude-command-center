@@ -195,10 +195,30 @@
   // Per-queue facts derived in ONE pass over the item list. renderQueues runs
   // every poll across every queue, so filtering the full item array per queue
   // would be O(queues x items) on each tick.
+  // A queue only drains the ticket types in its claim_types. Everything else
+  // is inventory: real, open, and never going to be picked up here. Counting
+  // those as "open" made a bugs-only queue with three feature requests look
+  // like it had three tickets waiting for a worker that will never take them.
+  // Untyped counts as a bug, matching WatchTower's own filter
+  // (ccc_server/queue_events.py:358).
+  function claimTypesFor(key) {
+    var q = (state.queues || []).filter(function (x) { return projectKey(x.queue) === key; })[0];
+    var t = q && Array.isArray(q.claim_types) ? q.claim_types : [];
+    return t.filter(function (x) { return x === 'bug' || x === 'feature'; });
+  }
+  function ticketType(it) {
+    var ty = String((it && (it.type || it.item_type)) || '').trim().toLowerCase();
+    return (ty === 'bug' || ty === 'feature') ? ty : 'bug';
+  }
+  function isClaimableType(it, types) {
+    return !types.length || types.indexOf(ticketType(it)) !== -1;
+  }
+
   function queueFacts() {
     var by = {};
+    var typesCache = {};
     function bucket(k) {
-      if (!by[k]) by[k] = { github: 0, local: 0, needsInput: 0, wip: 0, waiting: 0 };
+      if (!by[k]) by[k] = { github: 0, local: 0, needsInput: 0, wip: 0, waiting: 0, parked: 0 };
       return by[k];
     }
     (state.items || []).forEach(function (it) {
@@ -213,7 +233,13 @@
       // Waiting = open, unclaimed, and something a worker is actually allowed
       // to pick up. `claimable === false` marks GitHub issues without the
       // queue's label: real inventory, but nothing will ever claim them.
-      else if (st === 'open' && it.claimable !== false) b.waiting++;
+      else if (st === 'open') {
+        if (typesCache[k] === undefined) typesCache[k] = claimTypesFor(k);
+        // `claimable === false` is the GitHub-label exclusion; claim_types is
+        // the per-queue policy. Either one parks the ticket.
+        if (it.claimable === false || !isClaimableType(it, typesCache[k])) b.parked++;
+        else b.waiting++;
+      }
     });
     return by;
   }
@@ -223,8 +249,15 @@
   // its corners. Both draw the same markup, label and colour from here, so the
   // two surfaces cannot disagree about what a queue holds — which is exactly
   // what made the header claim "5 open" for a queue with 4 open and 1 blocked.
-  function countParts(f, done) {
+  function countParts(f, done, types) {
     f = f || {};
+    // "3 open" on a bugs-only queue reads as three things a worker will take.
+    // Naming the count after the claimed type makes "0 bugs" say what it means.
+    types = types || [];
+    var openWord = types.length === 1 ? (types[0] === 'bug' ? 'bugs' : 'features') : 'open';
+    var openTip = types.length
+      ? 'Open and claimable here (this queue drains ' + types.join(' + ') + ')'
+      : 'Open and unclaimed';
     return {
       needsInput: f.needsInput
         ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
@@ -234,16 +267,20 @@
         ? '<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
           + '<b>' + f.wip + '</b> wip</span>'
         : '',
-      open: '<span class="q2-n is-open" title="Open and unclaimed"><b>'
-        + (f.waiting || 0) + '</b> open</span>',
+      open: '<span class="q2-n is-open" title="' + esc(openTip) + '"><b>'
+        + (f.waiting || 0) + '</b> ' + esc(openWord) + '</span>',
+      parked: f.parked
+        ? '<span class="q2-n is-parked" title="Open, but this queue&#39;s claim types exclude them - no worker here will take them."><b>'
+          + f.parked + '</b> parked</span>'
+        : '',
       done: '<span class="q2-n is-done" title="Closed, all time"><b>'
         + (done || 0) + '</b> done</span>',
     };
   }
 
-  function countsLine(f, done) {
-    var c = countParts(f, done);
-    return [c.needsInput, c.wip, c.open, c.done].filter(Boolean)
+  function countsLine(f, done, types) {
+    var c = countParts(f, done, types);
+    return [c.needsInput, c.wip, c.open, c.parked, c.done].filter(Boolean)
       .join('<span class="q2-n-sep" aria-hidden="true">·</span>');
   }
 
@@ -303,8 +340,17 @@
   // below carries state (what is in it right now).
   function queueChips(q) {
     var on = effectiveAutoDrain(q);
+    var types = Array.isArray(q.claim_types)
+      ? q.claim_types.filter(function (t) { return t === 'bug' || t === 'feature'; }) : [];
+    // "auto" alone hid the policy that matters most: WHAT it drains. A
+    // bugs-only queue full of features is doing exactly what it was told.
+    var suffix = types.length && types.length < 2
+      ? ' \u00b7 ' + (types[0] === 'bug' ? 'bugs' : 'features') : '';
     return [on
-      ? { k: 'auto-on', label: 'auto', tip: 'Auto-drain is ON. WatchTower spawns workers for this queue on its own. Click to turn it off.' }
+      ? { k: 'auto-on', label: 'auto' + suffix,
+          tip: 'Auto-drain is ON'
+            + (types.length ? ', claiming ' + types.join(' + ') + ' only' : ' for every ticket type')
+            + '. Click to turn it off.' }
       : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker. Click to turn it on.' }];
   }
 
@@ -511,7 +557,7 @@
           + (busy ? '<span class="q2-spin" aria-hidden="true"></span>' : '')
           + esc(c.label) + '</button>';
       }).join('');
-      var c = countParts(f, q.closed);
+      var c = countParts(f, q.closed, claimTypesFor(projectKey(q.queue)));
       return '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' role="button" tabindex="0"'
@@ -524,7 +570,7 @@
             + '." aria-label="GitHub-backed queue">' + GH_MARK + '</span>' : '')
         + (q.state === 'stuck' ? '<span class="q2-stuck-flag">stuck</span>' : '')
         + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(shortPath(q.repo_path)) + '</span>' : '')
-        + '<span class="q2-qrow-tr">' + c.wip + c.open + '</span>'
+        + '<span class="q2-qrow-tr">' + c.wip + c.open + c.parked + '</span>'
         + '</span>'
         // Row 2 — configuration on the left, what needs a human on the right.
         + '<span class="q2-qrow-foot">'
@@ -592,7 +638,8 @@
     var mine = (state.items || []).filter(function (it) { return projectKey(it.project) === key; });
     var now = Date.now();
 
-    var waiting = [], blocked = [], working = [], doneRecent = [];
+    var types = claimTypesFor(key);
+    var waiting = [], parked = [], blocked = [], working = [], doneRecent = [];
     mine.forEach(function (it) {
       var st = statusOf(it);
       if (st === 'closed') {
@@ -602,7 +649,8 @@
       }
       if (st === 'blocked') blocked.push(it);
       else if (st === 'in_progress') working.push(it);
-      else if (it.claimable !== false) waiting.push(it);
+      else if (it.claimable === false || !isClaimableType(it, types)) parked.push(it);
+      else waiting.push(it);
     });
     doneRecent.sort(function (a, b) {
       return Date.parse(b.closed_at || b.updated_at || 0) - Date.parse(a.closed_at || a.updated_at || 0);
@@ -614,8 +662,8 @@
       auto: effectiveAutoDrain(q),
       github: !!((queueFacts()[key] || {}).github),
       stuck: q.state === 'stuck',
-      waiting: waiting, blocked: blocked, working: working, doneRecent: doneRecent,
-      workers: workers,
+      waiting: waiting, parked: parked, blocked: blocked, working: working,
+      doneRecent: doneRecent, workers: workers, types: types,
     };
   }
 
@@ -641,7 +689,7 @@
   function flowSignature(m) {
     return [
       projectKey(state.queue), m.auto ? 1 : 0, m.github ? 1 : 0, m.stuck ? 1 : 0,
-      m.waiting.length, m.blocked.length,
+      m.waiting.length, m.parked.length, m.blocked.length,
       m.working.map(function (it) { return it.ref; }).join(','),
       m.workers.map(function (w) { return w.worker_id; }).join(','),
       m.doneRecent.map(function (it) { return it.ref; }).join(','),
@@ -660,7 +708,7 @@
 
     // Flow is only animated where work can actually move. A manual queue draws
     // the same pipeline with the links dead, which is the honest picture.
-    var feedLive = m.auto && (m.waiting.length > 0);
+    var feedLive = m.auto && (m.waiting.length > 0);   // parked tickets are not flow
     var workLive = m.working.length > 0 && m.workers.length > 0;
 
     var watchLabel = !m.auto ? 'idle'
@@ -668,6 +716,7 @@
     var watchNote = !m.auto ? 'Auto-drain off'
       : m.stuck ? 'armed, nothing spawned'
       : m.waiting.length ? 'ready to dispatch'
+      : m.parked.length ? 'nothing claimable (' + m.parked.length + ' parked)'
       : 'no claimable work';
 
     var workerBody;
@@ -701,8 +750,16 @@
       + '<div class="q2-dg' + (m.stuck ? ' is-stuck' : '') + '">'
       // 1. Backlog
       + '<div class="q2-dg-stage">'
-      + '<div class="q2-dg-label">Backlog<span class="q2-dg-n">' + m.waiting.length + '</span></div>'
+      + '<div class="q2-dg-label" title="' + esc(m.types.length
+          ? 'This queue drains ' + m.types.join(' + ') + ' only' : 'This queue drains every type') + '">'
+      + esc(m.types.length === 1 ? (m.types[0] === 'bug' ? 'Bugs' : 'Features') : 'Backlog')
+      + '<span class="q2-dg-n">' + m.waiting.length + '</span></div>'
       + '<div class="q2-dg-stack">' + stackHtml(m.waiting, 'is-open') + '</div>'
+      + (m.parked.length
+          ? '<div class="q2-dg-sub is-parked" title="Open, but excluded by this queue&#39;s claim types">'
+            + m.parked.length + ' parked</div>'
+            + '<div class="q2-dg-stack is-parked">' + stackHtml(m.parked.slice(0, 6), 'is-parked') + '</div>'
+          : '')
       + (m.blocked.length
           ? '<div class="q2-dg-sub is-blocked">' + m.blocked.length + ' needs input</div>' : '')
       + '</div>'
@@ -912,14 +969,17 @@
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
     // rather than lumping blocked and in-progress under "open".
-    var hdr = { needsInput: 0, wip: 0, waiting: 0 };
+    var hdrTypes = claimTypesFor(projectKey(state.queue));
+    var hdr = { needsInput: 0, wip: 0, waiting: 0, parked: 0 };
     openish.forEach(function (it) {
       var st = statusOf(it);
       if (st === 'blocked') hdr.needsInput++;
       else if (st === 'in_progress') hdr.wip++;
+      else if (it.claimable === false || !isClaimableType(it, hdrTypes)) hdr.parked++;
       else hdr.waiting++;
     });
-    $('q2TicketCount').innerHTML = '<span class="q2-counts">' + countsLine(hdr, closed.length) + '</span>';
+    $('q2TicketCount').innerHTML = '<span class="q2-counts">'
+      + countsLine(hdr, closed.length, hdrTypes) + '</span>';
 
     if (!openish.length && !(state.showClosed && closed.length)) {
       host.innerHTML = '<div class="q2-empty">'
