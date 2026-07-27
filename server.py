@@ -24024,6 +24024,32 @@ def _codex_app_server_reap_stray_children():
             )
 
 
+def _codex_app_server_dump_stacks_on_liveness_miss(reason):
+    """Capture every thread's current frame when a liveness check misses.
+
+    Reuses the existing SIGUSR2 stack-dump handler (see
+    _install_python_stack_dump_handler) instead of duplicating dump logic --
+    this just writes a locating marker into the same python-stacks.log and
+    then raises the signal against our own process so faulthandler produces
+    an all-thread traceback right at the moment of the miss. That's the
+    evidence needed to identify which thread was actually holding the GIL
+    (or otherwise busy) when the app-server reader thread should have been
+    running, rather than guessing at a cause.
+    """
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is None or _PYTHON_STACK_DUMP_FILE is None:
+        return
+    try:
+        _PYTHON_STACK_DUMP_FILE.write(
+            f"\n=== app-server liveness miss ({reason}) pid={os.getpid()} "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC ===\n"
+        )
+        _PYTHON_STACK_DUMP_FILE.flush()
+        os.kill(os.getpid(), sigusr2)
+    except OSError:
+        pass
+
+
 def _ensure_codex_app_server(*, allow_stdio=True):
     """Start and initialize a persistent Codex app-server if needed."""
     global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT, _CODEX_APP_SERVER_READER
@@ -24068,35 +24094,52 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 )
                 return transport
             transport.consecutive_liveness_misses += 1
+            # A miss here means CCC didn't observe a reply within the
+            # timeout -- it is NOT evidence that Codex app-server itself is
+            # slow. Direct measurement (spawn, wait out an idle gap, probe,
+            # repeat) showed a freshly-spawned app-server answering in well
+            # under half a second every time, with no misses. So when this
+            # process still doesn't see a reply in time, the far more likely
+            # explanation is that the reply arrived in the OS pipe promptly
+            # but this process's own reader thread didn't get scheduled to
+            # read it -- e.g. starved of the GIL by other work running
+            # concurrently in this same single Python process. Capture what
+            # every thread was doing at the moment of the miss so the actual
+            # cause can be read from evidence next time, instead of guessed.
+            _codex_app_server_dump_stacks_on_liveness_miss(
+                "wedge-threshold"
+                if transport.consecutive_liveness_misses >= _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD
+                else "miss"
+            )
             if transport.consecutive_liveness_misses < _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD:
-                # One slow reply on an otherwise-idle transport isn't proof of
-                # wedging -- this machine sees genuine multi-second scheduling
-                # stalls under memory pressure (swap/compression), and tearing
-                # down + respawning a healthy process is itself expensive
-                # (subprocess spawn, ps scan, handshake), which only adds to
-                # that pressure. Require a couple of consecutive misses before
-                # concluding it's actually dead, not just slow this once.
+                # One missed reply on an otherwise-idle transport isn't proof
+                # the process is dead -- tearing down + respawning a healthy
+                # process is itself expensive (subprocess spawn, ps scan,
+                # handshake), so require a couple of consecutive misses
+                # before concluding that. See the dumped stacks above for
+                # what was actually happening in this process at the time.
                 _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
                 _log_activity(
-                    "app-server", "SLOW",
+                    "app-server", "MISS",
                     f"pid={getattr(transport.proc, 'pid', '-')} "
-                    f"age={round(now - transport.started_at)}s no reply within "
+                    f"age={round(now - transport.started_at)}s no reply observed within "
                     f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s "
                     f"({transport.consecutive_liveness_misses}/"
-                    f"{_CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD} misses); "
-                    f"giving it another cycle",
+                    f"{_CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD}); giving it another cycle "
+                    f"(stacks -> python-stacks.log)",
                 )
                 return transport
-            # Alive but wedged (no reply within timeout, repeatedly) — fall
-            # through to close it below so the candidates loop starts a fresh
-            # process instead of every caller queuing against a dead-end
-            # transport.
+            # No reply observed after repeated consecutive checks — fall
+            # through to close it below so the candidates loop starts a
+            # fresh process instead of every caller queuing against a
+            # dead-end transport.
             _log_activity(
                 "app-server", "WEDGED",
                 f"pid={getattr(transport.proc, 'pid', '-')} "
-                f"age={round(now - transport.started_at)}s no reply within "
+                f"age={round(now - transport.started_at)}s no reply observed within "
                 f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s after "
-                f"{transport.consecutive_liveness_misses} consecutive misses; replacing",
+                f"{transport.consecutive_liveness_misses} consecutive misses; replacing "
+                f"(stacks -> python-stacks.log)",
             )
         elif transport is not None and not transport.alive():
             _log_activity(
