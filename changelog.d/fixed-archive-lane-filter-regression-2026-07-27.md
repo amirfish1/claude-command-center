@@ -1,1 +1,0 @@
-- Keep Coding, Workers, and Messages selectable while filtering All sessions by Claude, Codex, or Kimi.

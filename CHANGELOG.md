@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.14.0] - 2026-07-27
+
+### Added
+- Added a duplicate-repo instance guard: on startup the dashboard now checks the peer registry for another *live* CCC server whose git common-dir matches its own (identical across worktrees of one repo) and refuses to start, printing the offending pid/install path/port. This catches the "forgotten `python3 server.py` from a worktree" case — observed as a day-old instance leaking app-server children and writing into the shared activity log — while leaving legitimate multi-repo peers untouched. Override with `CCC_ALLOW_DUPLICATE_REPO=1` or `CCC_EPHEMERAL=1` for intentional second instances. Registry entries now record `repo_common_dir`, and stale entries held by recycled pids are verified by argv before being treated as duplicates.
+- Add an Annotate control to the queue-first view so UI feedback can be captured without returning to sessions.
+- Worker upgrades now actually take effect: `run.sh` compares the persistent worker's loaded `server.py` version (new `server_version` field in the worker health response) against the repo on every launch and kickstarts the worker when they differ. Previously the "never restart a healthy worker" policy meant code fixes in worker-owned paths (like the Codex app-server liveness probe) never reached upgrading users until a crash or reboot. Queued work from the restarted worker shows as "needs reconciliation" and is reclaimed with one click in Settings → Maintenance.
+
+### Fixed
+- Keep Coding, Workers, and Messages selectable while filtering All sessions by Claude, Codex, or Kimi.
+- Fixed the Codex app-server WEDGED-and-respawn churn (up to every ~45s). Root cause, confirmed by full-lifecycle tracing: the liveness probe treated any reply without a `"jsonrpc"` envelope key as fake — but this app-server omits that key from responses, so every probe "failed" in ~0.5s on a perfectly healthy server, and each WEDGED replacement needlessly killed the app-server (and any live turn on it). The probe now accepts any genuine reply (`result`, or a protocol-level `error` without the synthetic `fallback` marker). Supporting hardening from the same investigation: any recent channel traffic now counts as proof of life (probe skipped entirely), a failed probe defers replacement while a tracked turn shows fresh activity, `_log_activity`'s per-call `mkdir` is cached, liveness logging no longer runs under `_CODEX_APP_SERVER_LOCK`, and a permanent JSONL firehose (`logs/app-server-trace.log`) traces every probe stage, request, reader event, and liveness decision.
+- Throughput page: the Codex weekly burn chart no longer collapses to the raw 14-day view when a refresh lands while the Codex usage snapshot is stale; the chart now shows 7 days of history and at most 2 days of forecast; the selected engine tab survives reloads; and the 48h zoom (+) switches to 1-hour columns.
+- Add a separate configurable reasoning-effort default for WatchTower workers.
+
 ## [5.13.0] - 2026-07-27
 
 ### Added
@@ -2283,7 +2296,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.13.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.14.0...HEAD
+[5.14.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.14.0
 [5.13.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.13.0
 [5.12.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.12.0
 [5.11.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.3

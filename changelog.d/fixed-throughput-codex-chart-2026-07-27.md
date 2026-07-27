@@ -1,1 +1,0 @@
-- Throughput page: the Codex weekly burn chart no longer collapses to the raw 14-day view when a refresh lands while the Codex usage snapshot is stale; the chart now shows 7 days of history and at most 2 days of forecast; the selected engine tab survives reloads; and the 48h zoom (+) switches to 1-hour columns.
