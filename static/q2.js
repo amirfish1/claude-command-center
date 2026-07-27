@@ -27,6 +27,7 @@
     search: '',
     offline: false,
     booted: false,      // guards the one-shot restore of the saved selection
+    arm: '',            // which write form is open ('' = none)
     log: [],            // reconciler activity lines for the selected queue
     logQueue: '',
   };
@@ -552,6 +553,11 @@
   var DONE_WINDOW_MS = 60 * 60 * 1000;   // "finished recently" = last hour
   var STACK_CAP = 14;                    // drawn cards before it becomes "+N"
 
+  var LS_CONV_OPEN = 'ccc-q2-conv-open';
+  function convOpen() {
+    try { return localStorage.getItem(LS_CONV_OPEN) !== '0'; } catch (_) { return true; }
+  }
+
   function logOpen() {
     try { return localStorage.getItem(LS_LOG_OPEN) !== '0'; } catch (_) { return true; }
   }
@@ -1048,14 +1054,28 @@
     return '<div class="q2-prop-k">' + esc(k) + '</div><div class="q2-prop-v">' + valHtml + '</div>';
   }
 
-  function propSelect(label, field, options, current) {
-    return '<div class="q2-prop-k">' + esc(label) + '</div>'
-      + '<div class="q2-prop-v"><select class="q2-select" data-q2-field="' + esc(field) + '">'
-      + options.map(function (o) {
-          return '<option value="' + esc(o[0]) + '"' + (String(current || '') === o[0] ? ' selected' : '') + '>'
-            + esc(o[1]) + '</option>';
-        }).join('')
-      + '</select></div>';
+  // Editable chips replace the property dropdowns. The values are already
+  // shown as chips at the top of the pane, so a second copy in a sidebar was
+  // duplication; clicking the chip itself cycles it. Order matters: the empty
+  // string is last so a chip can always be cleared.
+  var CYCLES = {
+    priority:   ['p0', 'p1', 'p2', 'p3', ''],
+    type:       ['bug', 'feature', ''],
+    value:      ['H', 'M', 'L', ''],
+    confidence: ['H', 'M', 'L', ''],
+    readiness:  ['shovel-ready', 'needs-spec', 'needs-shaping', ''],
+  };
+  function nextInCycle(field, current) {
+    var list = CYCLES[field] || [''];
+    var i = list.indexOf(String(current || ''));
+    return list[(i + 1) % list.length];
+  }
+  function editChip(field, label, value, cls) {
+    return '<button type="button" class="q2-chip q2-echip' + (cls ? ' ' + cls : '')
+      + (value ? '' : ' is-unset') + '"'
+      + ' data-q2-cycle="' + esc(field) + '" data-q2-val="' + esc(value || '') + '"'
+      + ' title="' + esc(field + ': ' + (value || 'unset') + ' — click to change') + '">'
+      + esc(label) + '</button>';
   }
 
   function renderDetail() {
@@ -1079,73 +1099,91 @@
     var st = statusOf(item);
     var parts = splitFirstSentence(titleOf(item));
     var prompt = (item.text && item.text.trim()) || '';
-    // Compare the RAW fields, exactly as the main dashboard does
-    // (static/app.js:35052). Comparing against the rendered title instead
-    // never matched — titleOf() strips boilerplate and rejoins lines, so the
-    // reconstruction always differed by whitespace and the block showed the
-    // note back verbatim under a "Full prompt" heading.
     var showPrompt = !!prompt && prompt !== String(item.note || '').trim();
     var sid = sessionOf(item);
     var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
+    var closed = st === 'closed';
 
-    var side = '<div class="q2-side-group"><div class="q2-sec-label">Properties</div>'
-      + '<div class="q2-props">'
-      + propSelect('Priority', 'priority', [['', '-'], ['p0', 'p0 - urgent'], ['p1', 'p1'], ['p2', 'p2'], ['p3', 'p3']], item.priority)
-      + propSelect('Type', 'type', [['', '-'], ['bug', 'bug'], ['feature', 'feature']], item.type)
-      + propSelect('Readiness', 'readiness', [['', '-'], ['shovel-ready', 'shovel-ready'], ['needs-spec', 'needs-spec'], ['needs-shaping', 'needs-shaping']], item.readiness)
-      + propSelect('Value', 'value', [['', '-'], ['H', 'H - High'], ['M', 'M - Med'], ['L', 'L - Low']], item.value)
-      + propSelect('Confidence', 'confidence', [['', '-'], ['H', 'H - High'], ['M', 'M - Med'], ['L', 'L - Low']], item.confidence)
-      + '</div></div>'
-      + '<div class="q2-side-group"><div class="q2-sec-label">Assignment</div><div class="q2-props">'
-      + propRow('Worker', item.claimed_by
-          ? '<span class="q2-tag">' + esc(String(item.claimed_by).slice(0, 28)) + '</span>'
-          : '<span class="q2-dim">unassigned</span>')
-      + propRow('Session', sid ? sessionBtn(sid, 'open in CCC') : '')
-      + propRow('Claimed', item.claimed_at ? '<span title="' + esc(item.claimed_at) + '">' + esc(relTime(item.claimed_at)) + '</span>' : '')
-      + propRow('Closed', item.closed_at ? '<span title="' + esc(item.closed_at) + '">' + esc(relTime(item.closed_at)) + '</span>' : '')
-      + '</div></div>'
-      + '<div class="q2-side-group"><div class="q2-sec-label">Origin</div><div class="q2-props">'
-      + propRow('Project', esc(item.project || ''))
-      + propRow('Source', esc(item.source || ''))
-      + propRow('Lane', esc(item.lane || ''))
-      + propRow('Repo', item.repo_path ? '<span class="q2-mono" title="' + esc(item.repo_path) + '">' + esc(shortPath(item.repo_path)) + '</span>' : '')
-      + propRow('URL', item.url ? '<a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">open &#8599;</a>' : '')
-      + '</div></div>';
+    // Everything editable lives on one chip row, next to the read-only state.
+    var chips = ''
+      + '<span class="q2-status is-' + esc(st) + '">' + esc(statusLabel(st)) + '</span>'
+      + (item.lane ? '<span class="q2-chip is-lane">' + esc(item.lane) + '</span>' : '')
+      + editChip('type', item.type ? (TYPE_SHORT[item.type] || item.type) : 'type?',
+                 item.type, item.type ? 'is-type-' + item.type : '')
+      + editChip('priority', item.priority || 'prio?', item.priority,
+                 item.priority ? 'is-prio-' + item.priority : '')
+      + editChip('readiness', item.readiness ? (READY_SHORT[item.readiness] || 'ready') : 'ready?',
+                 item.readiness, (item.readiness && !READY_OK[item.readiness]) ? 'is-unready' : '')
+      + editChip('value', 'V:' + (item.value || '-'), item.value)
+      + editChip('confidence', 'C:' + (item.confidence || '-'), item.confidence);
 
-    // Write actions mirror the main dashboard's: answer a blocked ticket,
-    // comment, and close or reopen depending on where the ticket stands.
-    var answerSec = st === 'blocked'
-      ? '<section class="q2-sec q2-sec-answer"><div class="q2-sec-label">The agent needs your decision</div>'
-        + (item.block_question ? '<div class="q2-block-q">' + esc(item.block_question) + '</div>' : '')
-        + '<textarea class="q2-input" data-q2-input="answer" rows="2" placeholder="Your answer" aria-label="Answer this ticket"></textarea>'
-        + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary" data-q2-act="answer">Send answer</button></div></section>'
+    // One toolbar, not four buried sections. Each write action arms an inline
+    // form rather than living permanently expanded at the bottom of the pane.
+    function act(k, label, cls) {
+      return '<button type="button" class="q2-btn' + (cls ? ' ' + cls : '')
+        + (state.arm === k ? ' is-armed' : '') + '" data-q2-arm="' + esc(k) + '">'
+        + esc(label) + '</button>';
+    }
+    var runQueued = !!item.run_requested;
+    var toolbar = '<div class="q2-actions">'
+      + (closed ? '' :
+          '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
+          + ' data-q2-act="run" title="' + (runQueued
+              ? 'Queued to run. Click to cancel.'
+              : 'Ask WatchTower to run this ticket next.') + '">'
+          + (runQueued ? '&#9632; Queued' : '&#9654; Run now') + '</button>')
+      + (st === 'blocked' ? act('answer', 'Answer', 'q2-btn-primary') : '')
+      + act('comment', 'Comment')
+      + (closed ? act('reopen', 'Reopen') : act('close', 'Close'))
+      + '<span class="q2-spacer"></span>'
+      + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
+      + '</div>';
+
+    var FORMS = {
+      answer:  ['Your answer', 'Send answer', 'answer'],
+      comment: ['Log an update - not a resolution', 'Add comment', 'comment'],
+      close:   ['Resolution summary (optional)', 'Mark as closed', 'close'],
+      reopen:  ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
+    };
+    var armed = FORMS[state.arm];
+    var formHtml = armed
+      ? '<section class="q2-sec q2-armed">'
+        + (state.arm === 'answer' && item.block_question
+            ? '<div class="q2-block-q">' + esc(item.block_question) + '</div>' : '')
+        + '<textarea class="q2-input" data-q2-input="' + esc(armed[2]) + '" rows="2" autofocus'
+        + ' placeholder="' + esc(armed[0]) + '" aria-label="' + esc(armed[1]) + '"></textarea>'
+        + '<div class="q2-actrow">'
+        + '<button type="button" class="q2-btn" data-q2-arm="">Cancel</button>'
+        + '<button type="button" class="q2-btn q2-btn-primary" data-q2-act="' + esc(armed[2]) + '">'
+        + esc(armed[1]) + '</button></div></section>'
       : '';
-    var commentSec = '<section class="q2-sec"><div class="q2-sec-label">Add comment</div>'
-      + '<textarea class="q2-input" data-q2-input="comment" rows="2" placeholder="Log an update - not a resolution" aria-label="Add a comment"></textarea>'
-      + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="comment">Add comment</button></div></section>';
-    var closeSec = st === 'closed'
-      ? '<section class="q2-sec"><div class="q2-sec-label">Reopen</div>'
-        + '<textarea class="q2-input" data-q2-input="reopen" rows="2" placeholder="Reason for reopening (optional)" aria-label="Reason for reopening"></textarea>'
-        + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="reopen">Reopen ticket</button></div></section>'
-      : '<section class="q2-sec"><div class="q2-sec-label">Close with a note</div>'
-        + '<textarea class="q2-input" data-q2-input="close" rows="2" placeholder="Resolution summary (optional)" aria-label="Resolution summary"></textarea>'
-        + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="close">Mark as closed</button></div></section>';
+
+    // Assignment and origin: one compact strip at the very bottom, replacing
+    // the fixed sidebar. It is reference data, not something you act on.
+    var metaBits = [
+      item.claimed_by ? 'worker <span class="q2-mono">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : '',
+      sid ? 'session ' + sessionBtn(sid, 'open in CCC') : '',
+      item.claimed_at ? 'claimed ' + esc(relTime(item.claimed_at)) : '',
+      item.closed_at ? 'closed ' + esc(relTime(item.closed_at)) : '',
+      item.project ? 'queue ' + esc(item.project) : '',
+      item.source ? 'source ' + esc(item.source) : '',
+      item.repo_path ? '<span class="q2-mono" title="' + esc(item.repo_path) + '">' + esc(shortPath(item.repo_path)) + '</span>' : '',
+      item.url ? '<a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">link &#8599;</a>' : '',
+    ].filter(Boolean);
 
     host.innerHTML = ''
+      + '<div class="q2-detail-top">'
       + '<div class="q2-detail-head">'
       + '<span class="q2-detail-ref">' + esc(item.ref) + '</span>'
-      + '<span class="q2-status is-' + esc(st) + '">' + esc(statusLabel(st)) + '</span>'
-      + (item.lane ? '<span class="q2-chip">' + esc(item.lane) + '</span>' : '')
-      + (item.priority ? '<span class="q2-chip is-prio-' + esc(item.priority) + '">' + esc(item.priority) + '</span>' : '')
-      + (item.type ? '<span class="q2-chip is-type-' + esc(item.type) + '">' + esc(item.type) + '</span>' : '')
+      + chips
       + '</div>'
       + '<h1 class="q2-detail-title">'
       + '<span class="q2-title-first">' + esc(parts[0]) + '</span>'
       + (parts[1] ? '<span class="q2-title-rest"> ' + esc(parts[1]) + '</span>' : '')
       + '</h1>'
-      + '<div class="q2-detail-cols">'
-      + '<div class="q2-detail-main">'
+      + toolbar
+      + formHtml
       + (showPrompt
           ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
             + '<pre class="q2-pre">' + esc(prompt) + '</pre></section>'
@@ -1154,21 +1192,37 @@
       + (editCount
           ? '<label class="q2-show-edits"><input type="checkbox" data-q2-show-edits> show edits (' + editCount + ')</label>'
           : '')
-      + '</div><div class="q2-tl-wrap">' + timelineHtml(item) + '</div></section>'
-      + answerSec + commentSec + closeSec
-      + '</div>'
-      + '<aside class="q2-detail-side">' + side + '</aside>'
-      + '</div>'
-      + '<div class="q2-detail-foot">'
-      + '<span class="q2-dim">Filed <span title="' + esc(item.created_at || '') + '">' + esc(relTime(item.created_at)) + '</span>'
+      + '</div>' + timelineHtml(item) + '</section>'
+      + (metaBits.length ? '<div class="q2-meta-strip">' + metaBits.join('<span class="q2-n-sep">·</span>') + '</div>' : '')
+      + '<div class="q2-detail-foot"><span class="q2-dim">Filed '
+      + '<span title="' + esc(item.created_at || '') + '">' + esc(relTime(item.created_at)) + '</span>'
       + (item.updated_at && item.updated_at !== item.created_at
           ? ' &middot; updated <span title="' + esc(item.updated_at) + '">' + esc(relTime(item.updated_at)) + '</span>' : '')
-      + '</span>'
-      + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
-      + '</div>';
+      + '</span></div>'
+      + '</div>'
+      // Live conversation, bottom half. Reuses the main dashboard's existing
+      // conversation popout, which app.js already embeds this way.
+      + (sid
+          ? '<div class="q2-conv" id="q2Conv">'
+            + '<div class="q2-conv-head">'
+            + '<button type="button" class="q2-ops-toggle" data-q2-conv-toggle aria-expanded="'
+            + (convOpen() ? 'true' : 'false') + '">'
+            + '<span class="q2-ops-caret" aria-hidden="true">' + (convOpen() ? '&#9662;' : '&#9656;') + '</span>'
+            + 'Conversation</button>'
+            + '<span class="q2-spacer"></span>'
+            + '<span class="q2-dim q2-mono">' + esc(sid.slice(0, 8)) + '</span>'
+            + '<a class="q2-linkbtn" href="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid)
+            + '" target="_blank" rel="noopener">pop out &#8599;</a>'
+            + '</div>'
+            + (convOpen()
+                ? '<iframe class="q2-conv-frame" title="Conversation ' + esc(sid) + '"'
+                  + ' src="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid) + '"></iframe>'
+                : '')
+            + '</div>'
+          : '');
   }
 
-  // ── detail actions ───────────────────────────────────────────────────────
+  // ── detail write actions ─────────────────────────────────────────────────
   function detailInput(name) {
     var el = document.querySelector('[data-q2-input="' + name + '"]');
     return el ? String(el.value || '').trim() : '';
@@ -1185,6 +1239,20 @@
     return data;
   }
 
+  async function saveField(field, value) {
+    if (!state.ref) return;
+    var payload = { ref: state.ref };
+    payload[field] = value;
+    try {
+      await postJson('/api/ux-fixes/edit', payload);
+      state.detail = null;
+      await loadDetail(state.ref);
+      await refresh();
+    } catch (err) {
+      note('Could not save ' + field + ': ' + err.message);
+    }
+  }
+
   async function detailAction(act, btn) {
     var ref = state.ref;
     if (!ref) return;
@@ -1193,6 +1261,23 @@
       var text = (state.detail && state.detail.text) || titleOf(state.detail) || '';
       try { await navigator.clipboard.writeText(text); note('Prompt copied'); }
       catch (e) { note('Could not copy: ' + e.message); }
+      return;
+    }
+
+    // Run is a toggle: a second press on a still-queued ticket cancels it,
+    // which is the contract /api/ux-fixes/run expects via `cancel`.
+    if (act === 'run') {
+      var queued = !!(state.detail && state.detail.run_requested);
+      btn.disabled = true;
+      try {
+        await postJson('/api/ux-fixes/run', { ref: ref, cancel: queued });
+        note(queued ? 'Run request cancelled' : 'Queued to run');
+        state.detail = null;
+        await loadDetail(ref);
+        await refresh();
+      } catch (e) {
+        note('Failed: ' + e.message);
+      } finally { btn.disabled = false; }
       return;
     }
 
@@ -1214,8 +1299,9 @@
     try {
       await postJson(plan[0], plan[1]);
       note(plan[3]);
-      // The list and the ticket both changed. Re-fetch rather than patching
-      // local state, so what is on screen is what the store actually holds.
+      state.arm = '';
+      // Re-fetch rather than patching local state, so what is on screen is
+      // what the store actually holds.
       state.detail = null;
       await loadDetail(ref);
       await refresh();
@@ -1225,26 +1311,6 @@
       btn.disabled = false;
     }
   }
-
-  // Editable property selects, same fields the main dashboard exposes.
-  document.addEventListener('change', async function (e) {
-    var sel = e.target.closest && e.target.closest('[data-q2-field]');
-    if (!sel || !state.ref) return;
-    var field = sel.getAttribute('data-q2-field');
-    var payload = { ref: state.ref };
-    payload[field] = sel.value;
-    sel.disabled = true;
-    try {
-      await postJson('/api/ux-fixes/edit', payload);
-      state.detail = null;
-      await loadDetail(state.ref);
-      await refresh();
-    } catch (err) {
-      note('Could not save ' + field + ': ' + err.message);
-    } finally {
-      sel.disabled = false;
-    }
-  });
 
   // Edit events are bookkeeping noise by default; the toggle reveals them.
   document.addEventListener('change', function (e) {
@@ -1298,6 +1364,7 @@
     if (ref === state.ref) return;
     state.ref = ref;
     state.detail = null;
+    state.arm = '';
     rememberSelection();
     renderQueues();
     renderTickets();
@@ -1321,6 +1388,36 @@
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
+    var convT = e.target.closest('[data-q2-conv-toggle]');
+    if (convT) {
+      try { localStorage.setItem(LS_CONV_OPEN, convOpen() ? '0' : '1'); } catch (_) {}
+      renderDetail();
+      return;
+    }
+    var arm = e.target.closest('[data-q2-arm]');
+    if (arm) {
+      e.stopPropagation();
+      var want = arm.getAttribute('data-q2-arm');
+      state.arm = (state.arm === want) ? '' : want;
+      renderDetail();
+      var ta = document.querySelector('[data-q2-input]');
+      if (ta) ta.focus();
+      return;
+    }
+    var cyc = e.target.closest('[data-q2-cycle]');
+    if (cyc) {
+      e.stopPropagation();
+      var field = cyc.getAttribute('data-q2-cycle');
+      saveField(field, nextInCycle(field, cyc.getAttribute('data-q2-val')));
+      return;
+    }
+    // The whole log header toggles, not just the caret.
+    var logHead = e.target.closest('.q2-logbar-head');
+    if (logHead && !e.target.closest('a')) {
+      try { localStorage.setItem(LS_LOG_OPEN, logOpen() ? '0' : '1'); } catch (_) {}
+      renderLogBar();
+      return;
+    }
     var logT = e.target.closest('[data-q2-log-toggle]');
     if (logT) {
       try { localStorage.setItem(LS_LOG_OPEN, logOpen() ? '0' : '1'); } catch (_) {}
@@ -1385,7 +1482,7 @@
       var other = which === 'queues' ? 'tickets' : 'queues';
       // Reserve room for the other column (at its own minimum) and the detail
       // pane, so the two fixed tracks can never squeeze detail out of view.
-      var roomCap = window.innerWidth - COLS[other].min - 320;
+      var roomCap = window.innerWidth - COLS[other].min - 240;
       var cap = Math.max(spec.min, Math.min(spec.max, roomCap));
       var w = Math.round(Math.min(cap, Math.max(spec.min, desired[which])));
       document.documentElement.style.setProperty(spec.varName, w + 'px');
