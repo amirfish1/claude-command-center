@@ -445,16 +445,75 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 
 /* ── column 3: ticket detail ──────────────────────────────────────────── */
-.q2-detail { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 20px; }
+/* The pane itself does not scroll: the title block and each column scroll on
+   their own, so the header and footer stay put (same shape as the main
+   dashboard's modal). */
+.q2-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+}
 .q2-detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .q2-detail-ref { font-family: var(--font-mono); font-size: 13px; color: var(--text-muted); }
+/* Opening sentence prominent, the rest at body weight: a long note is prose,
+   not one enormous heading. */
+/* Capped and scrollable, like .uxq-td-title in the main dashboard. A note can
+   run to thousands of characters; without a ceiling it pushes the activity,
+   properties and actions entirely off screen. */
 .q2-detail-title {
+  flex: 0 0 auto;
+  max-height: 168px;
+  overflow-y: auto;
   margin: 10px 0 14px;
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.35;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+  line-height: 1.5;
+  font-weight: 400;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
+.q2-title-first { display: block; font-size: 17px; font-weight: 700; line-height: 1.35; }
+.q2-title-rest { display: block; margin-top: 6px; color: var(--text-muted); }
+
+/* Activity and actions left, properties right — the main dashboard's split. */
+.q2-detail-cols {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 232px;
+  gap: 20px;
+  align-items: stretch;
+}
+.q2-detail-main { min-width: 0; min-height: 0; overflow-y: auto; }
+.q2-detail-side {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding-left: 16px;
+}
+.q2-side-group { margin-bottom: 16px; }
+/* Below ~1150px the detail pane cannot carry two columns; stack instead. */
+@media (max-width: 1150px) {
+  .q2-detail-cols { grid-template-columns: minmax(0, 1fr); }
+  .q2-detail-side { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 14px; }
+}
+.q2-detail-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+.q2-detail-foot .q2-dim { flex: 1 1 auto; color: var(--text-muted); }
+
 .q2-chip {
   font-size: 10px;
   border: 1px solid var(--border);
@@ -462,8 +521,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
   padding: 1px 6px;
   color: var(--text-muted);
 }
-.q2-chip.is-p0 { color: var(--red); border-color: currentColor; }
-.q2-chip.is-p1 { color: var(--orange); border-color: currentColor; }
+.q2-chip.is-prio-p0 { color: var(--red); border-color: currentColor; }
+.q2-chip.is-prio-p1 { color: var(--orange); border-color: currentColor; }
+.q2-chip.is-type-bug { color: var(--wip-blue); border-color: currentColor; }
+.q2-chip.is-type-feature { color: var(--purple); border-color: currentColor; }
 .q2-status {
   font-size: 10px;
   font-weight: 650;
@@ -474,18 +535,32 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border: 1px solid currentColor;
   color: var(--text-muted);
 }
-.q2-status.is-open { color: var(--accent); }
+/* Same palette as the ticket dots. */
+.q2-status.is-open { color: var(--orange); }
 .q2-status.is-in_progress { color: var(--green); }
-.q2-status.is-blocked { color: var(--orange); }
+.q2-status.is-blocked { color: var(--wip-blue); }
+.q2-status.is-closed { color: var(--text-muted); }
 
 .q2-sec { margin-bottom: 18px; }
 .q2-sec-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 10px;
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   color: var(--text-muted);
   margin-bottom: 6px;
+}
+.q2-show-edits {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  cursor: pointer;
 }
 .q2-pre {
   font-family: var(--font-mono);
@@ -497,31 +572,124 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 12px;
-  max-height: 320px;
+  max-height: 300px;
   overflow-y: auto;
 }
-.q2-props { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 4px 10px; }
+.q2-props { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px 10px; align-items: center; }
 .q2-prop-k { font-size: 11px; color: var(--text-muted); }
-.q2-prop-v { font-size: 12px; word-break: break-word; }
+.q2-prop-v { font-size: 12px; word-break: break-word; min-width: 0; }
 .q2-mono { font-family: var(--font-mono); font-size: 11.5px; }
+.q2-dim { color: var(--text-muted); }
+.q2-tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.q2-select {
+  width: 100%;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 6px;
+}
+.q2-select:disabled { opacity: 0.6; cursor: progress; }
+.q2-linkbtn, .q2-linklike {
+  font-size: 10.5px;
+  color: var(--wip-blue);
+  text-decoration: none;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.q2-linklike { background: transparent; padding: 0; }
+.q2-linkbtn:hover, .q2-linklike:hover { text-decoration: underline; }
 
-.q2-tl { display: flex; flex-direction: column; gap: 8px; }
-.q2-tl-row { display: flex; gap: 8px; align-items: baseline; }
+/* ── activity timeline ────────────────────────────────────────────────── */
+.q2-tl { display: flex; flex-direction: column; gap: 10px; }
+.q2-tl-row { display: flex; gap: 9px; }
+.q2-tl-main { min-width: 0; flex: 1 1 auto; }
+.q2-tl-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .q2-tl-dot {
   flex: 0 0 auto;
-  width: 5px;
-  height: 5px;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
   border-radius: 50%;
-  background: var(--border);
+  border: 1.5px solid var(--text-muted);
+  background: transparent;
 }
+.q2-tl-row.is-claim .q2-tl-dot { background: var(--wip-blue); border-color: var(--wip-blue); }
+.q2-tl-row.is-close .q2-tl-dot { background: var(--green); border-color: var(--green); }
+.q2-tl-row.is-block .q2-tl-dot { background: var(--wip-blue); border-color: var(--wip-blue); }
+.q2-tl-row.is-reopen .q2-tl-dot { background: var(--orange); border-color: var(--orange); }
+.q2-tl-row.is-now .q2-tl-dot { background: var(--orange); border-color: var(--orange); }
 .q2-tl-verb { font-size: 12px; font-weight: 600; }
-.q2-tl-time, .q2-tl-who { font-size: 10.5px; color: var(--text-muted); }
-.q2-tl-who { font-family: var(--font-mono); }
-.q2-tl-body {
+.q2-tl-time, .q2-tl-who, .q2-tl-meta { font-size: 10.5px; color: var(--text-muted); }
+.q2-tl-who { font-family: var(--font-mono); background: var(--surface-2); border-radius: 4px; padding: 0 5px; }
+.q2-tl-tag {
+  display: inline-block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.q2-tl-note, .q2-tl-q {
   font-size: 12px;
   color: var(--text-muted);
   white-space: pre-wrap;
-  margin-top: 2px;
+  margin-top: 3px;
+  line-height: 1.5;
+}
+.q2-tl-q { color: var(--wip-blue); }
+.q2-tl-note.is-answer { color: var(--text); }
+.q2-tl-fields { margin-top: 3px; font-size: 11px; color: var(--text-muted); }
+.q2-tl-fields span { font-family: var(--font-mono); color: var(--text); }
+/* Edit events are bookkeeping; hidden until the toggle asks for them. */
+.q2-tl-row.is-edit { display: none; }
+.q2-tl.show-edits .q2-tl-row.is-edit { display: flex; }
+
+/* A close carries the worker's own account. Keep what was fixed visually
+   distinct from what was explicitly NOT — that is the useful part. */
+.q2-res { margin-top: 6px; display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 6px 10px; }
+.q2-res-k { font-size: 11px; color: var(--text-muted); }
+.q2-res-v { font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.q2-res-row { display: contents; }
+.q2-res-row.is-caveat .q2-res-v { color: var(--orange); }
+.q2-res-row.is-unresolved .q2-res-v { color: var(--red); }
+
+.q2-input {
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.q2-input:focus { outline: none; border-color: var(--accent); }
+.q2-actrow { display: flex; justify-content: flex-end; margin-top: 6px; }
+.q2-btn-primary { border-color: var(--accent); color: var(--accent); }
+.q2-block-q {
+  font-size: 12px;
+  color: var(--wip-blue);
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+}
+.q2-sec-answer {
+  border: 1px solid var(--wip-blue);
+  border-radius: 6px;
+  padding: 10px 12px;
 }
 
 /* ── empty / loading states ───────────────────────────────────────────── */

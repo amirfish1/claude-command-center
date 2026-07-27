@@ -611,34 +611,130 @@
   }
 
   // ── render: column 3, ticket detail ──────────────────────────────────────
-  function timelineHtml(item) {
-    var verbs = {
-      filed: 'Filed', claim: 'Claimed', close: 'Closed', reopen: 'Reopened',
-      // "Blocked" is the store's word for this event; say what it means to a
-      // person, matching the "needs input" label used everywhere else.
-      comment: 'Comment', answer: 'Answered', block: 'Needs input', edit: 'Edited',
-    };
-    var tl = Array.isArray(item.timeline) ? item.timeline : [];
-    if (!tl.length) return '<div class="q2-empty">No activity yet.</div>';
-    return '<div class="q2-tl">' + tl.map(function (ev) {
-      var by = ev.by || {};
-      var who = by.worker || by.kind || '';
-      var body = ev.text || ev.note || ev.answer || ev.question || '';
-      return '<div class="q2-tl-row">'
-        + '<span class="q2-tl-dot" aria-hidden="true"></span>'
-        + '<div>'
-        + '<span class="q2-tl-verb">' + esc(verbs[ev.event] || ev.event || 'Event') + '</span> '
-        + (ev.at ? '<span class="q2-tl-time" title="' + esc(ev.at) + '">' + esc(relTime(ev.at)) + '</span> ' : '')
-        + (who ? '<span class="q2-tl-who">' + esc(String(who).slice(0, 24)) + '</span>' : '')
-        + (body ? '<div class="q2-tl-body">' + esc(body) + '</div>' : '')
-        + '</div></div>';
+  // Long ticket notes are prose, not one enormous heading. Keep the opening
+  // sentence prominent and the rest at body weight. Splits only on a real
+  // terminator followed by whitespace, so a note that wraps mid-clause is not
+  // cut in half (same rule as splitFirstSentence in app.js:2041).
+  function splitFirstSentence(text) {
+    if (!text) return ['', ''];
+    var s = String(text).trim();
+    var m = s.match(/^([\s\S]*?[.!?])\s+([\s\S]+)$/);
+    if (!m) return [s, ''];
+    return [m[1].trim(), m[2].trim()];
+  }
+
+  function resList(v) {
+    var arr = Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
+    if (!arr.length) return '';
+    if (arr.length === 1) return esc(String(arr[0]));
+    return arr.map(function (x) { return '<div>' + esc(String(x)) + '</div>'; }).join('');
+  }
+
+  // A close event carries the worker's own account of what it did. Flattening
+  // that to one blob loses the distinction that matters most: what was fixed
+  // versus what was explicitly NOT.
+  function resolutionHtml(resolution) {
+    var res = (resolution && typeof resolution === 'object') ? resolution : {};
+    var rows = [
+      ['Summary', res.summary, ''],
+      ['Caveat', res.caveats || res.caveat, 'is-caveat'],
+      ['Follow-up', res.follow_ups || res.follow_up, ''],
+      ['Unresolved', res.unresolved, 'is-unresolved'],
+    ].filter(function (r) { return resList(r[1]); });
+    if (!rows.length) return '';
+    return '<div class="q2-res">' + rows.map(function (r) {
+      return '<div class="q2-res-row ' + r[2] + '">'
+        + '<span class="q2-res-k">' + esc(r[0]) + '</span>'
+        + '<div class="q2-res-v">' + resList(r[1]) + '</div></div>';
     }).join('') + '</div>';
   }
 
-  function propRow(k, v, mono) {
-    if (!v) return '';
-    return '<div class="q2-prop-k">' + esc(k) + '</div>'
-      + '<div class="q2-prop-v' + (mono ? ' q2-mono' : '') + '">' + esc(v) + '</div>';
+  function sessionBtn(sid, label) {
+    if (!sid) return '';
+    return '<a class="q2-linkbtn" target="_blank" rel="noopener"'
+      + ' href="/?session=' + encodeURIComponent(sid) + '"'
+      + ' title="' + esc(sid) + '">' + esc(label) + ' &#8599;</a>';
+  }
+
+  function editFieldsHtml(fields) {
+    var obj = (fields && typeof fields === 'object') ? fields : {};
+    var keys = Object.keys(obj).sort();
+    if (!keys.length) return '';
+    return '<div class="q2-tl-fields">' + keys.map(function (k) {
+      return '<div><span>' + esc(k) + '</span> ' + esc(String(obj[k])) + '</div>';
+    }).join('') + '</div>';
+  }
+
+  function timelineHtml(item) {
+    var tl = Array.isArray(item.timeline) ? item.timeline : [];
+    if (!tl.length) return '<div class="q2-empty">No activity yet.</div>';
+
+    function head(label, ev) {
+      var by = (ev && ev.by && typeof ev.by === 'object') ? ev.by : {};
+      var actor = by.worker || by.kind || '';
+      return '<span class="q2-tl-verb">' + esc(label) + '</span>'
+        + (ev.at ? '<span class="q2-tl-time" title="' + esc(ev.at) + '">' + esc(relTime(ev.at)) + '</span>' : '')
+        + (actor ? '<span class="q2-tl-who">' + esc(String(actor).slice(0, 26)) + '</span>' : '')
+        + (by.session_id ? sessionBtn(by.session_id, 'open session') : '');
+    }
+    function evt(kind, headHtml, bodyHtml) {
+      return '<div class="q2-tl-row is-' + esc(kind) + '">'
+        + '<span class="q2-tl-dot" aria-hidden="true"></span>'
+        + '<div class="q2-tl-main"><div class="q2-tl-head">' + headHtml + '</div>'
+        + (bodyHtml || '') + '</div></div>';
+    }
+    function text(t, cls) {
+      return t ? '<div class="' + (cls || 'q2-tl-note') + '">' + esc(String(t)) + '</div>' : '';
+    }
+
+    var rows = tl.map(function (ev) {
+      var type = String((ev && ev.event) || '');
+      if (type === 'filed') {
+        return evt('filed', head('Filed', ev)
+          + (ev.source ? '<span class="q2-tl-meta">via ' + esc(ev.source) + '</span>' : ''),
+          ev.project ? '<span class="q2-tl-tag">' + esc(ev.project) + '</span>' : '');
+      }
+      if (type === 'claim')    return evt('claim', head('Claimed', ev), '');
+      if (type === 'progress') return evt('progress', head('Progress', ev), text(ev.text));
+      // "Blocked" is the store's word; say what it means to a person.
+      if (type === 'block')    return evt('block', head('Needs input', ev), text(ev.question, 'q2-tl-q'));
+      if (type === 'answer')   return evt('answer', head('Answered', ev), text(ev.text, 'q2-tl-note is-answer'));
+      if (type === 'comment')  return evt('comment', head('Comment', ev), text(ev.text));
+      if (type === 'reopen')   return evt('reopen', head('Reopened', ev), text(ev.reason));
+      if (type === 'close')    return evt('close', head('Closed', ev), resolutionHtml(ev.resolution));
+      if (type === 'move') {
+        var mv = [ev.from_ref, ev.to_ref].filter(Boolean).join(' → ');
+        return evt('move', head('Moved', ev), text(mv));
+      }
+      if (type === 'edit')     return evt('edit', head('Edited', ev), editFieldsHtml(ev.fields));
+      return evt('comment', head(type || 'Event', ev), text(ev.text));
+    }).join('');
+
+    // An open ticket has no terminal event, so the timeline would just stop
+    // mid-story. Cap it with where the ticket actually stands.
+    if (!item.closed_at) {
+      var st = statusOf(item);
+      var verb = st === 'in_progress' ? 'In progress'
+        : st === 'blocked' ? 'Needs your input' : 'Open';
+      rows += evt('now', '<span class="q2-tl-verb">' + esc(verb) + '</span>'
+        + (item.claimed_by ? '<span class="q2-tl-who">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : ''), '');
+    }
+    return '<div class="q2-tl">' + rows + '</div>';
+  }
+
+  function propRow(k, valHtml) {
+    if (!valHtml) return '';
+    return '<div class="q2-prop-k">' + esc(k) + '</div><div class="q2-prop-v">' + valHtml + '</div>';
+  }
+
+  function propSelect(label, field, options, current) {
+    return '<div class="q2-prop-k">' + esc(label) + '</div>'
+      + '<div class="q2-prop-v"><select class="q2-select" data-q2-field="' + esc(field) + '">'
+      + options.map(function (o) {
+          return '<option value="' + esc(o[0]) + '"' + (String(current || '') === o[0] ? ' selected' : '') + '>'
+            + esc(o[1]) + '</option>';
+        }).join('')
+      + '</select></div>';
   }
 
   function renderDetail() {
@@ -660,44 +756,177 @@
     }
 
     var st = statusOf(item);
-    var full = titleOf(item);
-    // Headline is the FIRST line only. Tickets are routinely multi-paragraph
-    // prompts; rendering all of it at h1 weight made the pane a wall of bold
-    // that duplicated the Full prompt block verbatim.
-    var title = full.split('\n')[0];
-    var body = full.slice(title.length).trim();
-    // Show the raw prompt whenever it carries more than the headline already does.
-    var prompt = (item.text && item.text.trim()) || body;
-    var showPrompt = !!prompt && prompt !== title.trim();
+    var parts = splitFirstSentence(titleOf(item));
+    var prompt = (item.text && item.text.trim()) || '';
+    var showPrompt = !!prompt && prompt.trim() !== (parts[0] + ' ' + parts[1]).trim();
     var sid = sessionOf(item);
+    var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
+      .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
+
+    var side = '<div class="q2-side-group"><div class="q2-sec-label">Properties</div>'
+      + '<div class="q2-props">'
+      + propSelect('Priority', 'priority', [['', '-'], ['p0', 'p0 - urgent'], ['p1', 'p1'], ['p2', 'p2'], ['p3', 'p3']], item.priority)
+      + propSelect('Type', 'type', [['', '-'], ['bug', 'bug'], ['feature', 'feature']], item.type)
+      + propSelect('Readiness', 'readiness', [['', '-'], ['shovel-ready', 'shovel-ready'], ['needs-spec', 'needs-spec'], ['needs-shaping', 'needs-shaping']], item.readiness)
+      + propSelect('Value', 'value', [['', '-'], ['H', 'H - High'], ['M', 'M - Med'], ['L', 'L - Low']], item.value)
+      + propSelect('Confidence', 'confidence', [['', '-'], ['H', 'H - High'], ['M', 'M - Med'], ['L', 'L - Low']], item.confidence)
+      + '</div></div>'
+      + '<div class="q2-side-group"><div class="q2-sec-label">Assignment</div><div class="q2-props">'
+      + propRow('Worker', item.claimed_by
+          ? '<span class="q2-tag">' + esc(String(item.claimed_by).slice(0, 28)) + '</span>'
+          : '<span class="q2-dim">unassigned</span>')
+      + propRow('Session', sid ? sessionBtn(sid, 'open in CCC') : '')
+      + propRow('Claimed', item.claimed_at ? '<span title="' + esc(item.claimed_at) + '">' + esc(relTime(item.claimed_at)) + '</span>' : '')
+      + propRow('Closed', item.closed_at ? '<span title="' + esc(item.closed_at) + '">' + esc(relTime(item.closed_at)) + '</span>' : '')
+      + '</div></div>'
+      + '<div class="q2-side-group"><div class="q2-sec-label">Origin</div><div class="q2-props">'
+      + propRow('Project', esc(item.project || ''))
+      + propRow('Source', esc(item.source || ''))
+      + propRow('Lane', esc(item.lane || ''))
+      + propRow('Repo', item.repo_path ? '<span class="q2-mono" title="' + esc(item.repo_path) + '">' + esc(shortPath(item.repo_path)) + '</span>' : '')
+      + propRow('URL', item.url ? '<a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">open &#8599;</a>' : '')
+      + '</div></div>';
+
+    // Write actions mirror the main dashboard's: answer a blocked ticket,
+    // comment, and close or reopen depending on where the ticket stands.
+    var answerSec = st === 'blocked'
+      ? '<section class="q2-sec q2-sec-answer"><div class="q2-sec-label">The agent needs your decision</div>'
+        + (item.block_question ? '<div class="q2-block-q">' + esc(item.block_question) + '</div>' : '')
+        + '<textarea class="q2-input" data-q2-input="answer" rows="2" placeholder="Your answer" aria-label="Answer this ticket"></textarea>'
+        + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary" data-q2-act="answer">Send answer</button></div></section>'
+      : '';
+    var commentSec = '<section class="q2-sec"><div class="q2-sec-label">Add comment</div>'
+      + '<textarea class="q2-input" data-q2-input="comment" rows="2" placeholder="Log an update - not a resolution" aria-label="Add a comment"></textarea>'
+      + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="comment">Add comment</button></div></section>';
+    var closeSec = st === 'closed'
+      ? '<section class="q2-sec"><div class="q2-sec-label">Reopen</div>'
+        + '<textarea class="q2-input" data-q2-input="reopen" rows="2" placeholder="Reason for reopening (optional)" aria-label="Reason for reopening"></textarea>'
+        + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="reopen">Reopen ticket</button></div></section>'
+      : '<section class="q2-sec"><div class="q2-sec-label">Close with a note</div>'
+        + '<textarea class="q2-input" data-q2-input="close" rows="2" placeholder="Resolution summary (optional)" aria-label="Resolution summary"></textarea>'
+        + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="close">Mark as closed</button></div></section>';
 
     host.innerHTML = ''
       + '<div class="q2-detail-head">'
       + '<span class="q2-detail-ref">' + esc(item.ref) + '</span>'
       + '<span class="q2-status is-' + esc(st) + '">' + esc(statusLabel(st)) + '</span>'
-      + (item.priority ? '<span class="q2-chip is-' + esc(item.priority) + '">' + esc(item.priority) + '</span>' : '')
-      + (item.type ? '<span class="q2-chip">' + esc(item.type) + '</span>' : '')
       + (item.lane ? '<span class="q2-chip">' + esc(item.lane) + '</span>' : '')
+      + (item.priority ? '<span class="q2-chip is-prio-' + esc(item.priority) + '">' + esc(item.priority) + '</span>' : '')
+      + (item.type ? '<span class="q2-chip is-type-' + esc(item.type) + '">' + esc(item.type) + '</span>' : '')
       + '</div>'
-      + '<h1 class="q2-detail-title">' + esc(title) + '</h1>'
+      + '<h1 class="q2-detail-title">'
+      + '<span class="q2-title-first">' + esc(parts[0]) + '</span>'
+      + (parts[1] ? '<span class="q2-title-rest"> ' + esc(parts[1]) + '</span>' : '')
+      + '</h1>'
+      + '<div class="q2-detail-cols">'
+      + '<div class="q2-detail-main">'
       + (showPrompt
-        ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
-          + '<pre class="q2-pre">' + esc(prompt) + '</pre></section>'
-        : '')
-      + '<section class="q2-sec"><div class="q2-sec-label">Activity</div>' + timelineHtml(item) + '</section>'
-      + '<section class="q2-sec"><div class="q2-sec-label">Properties</div>'
-      + '<div class="q2-props">'
-      + propRow('Queue', item.project)
-      + propRow('Worker', item.claimed_by ? String(item.claimed_by).slice(0, 28) : 'unassigned', !!item.claimed_by)
-      + propRow('Session', sid ? sid.slice(0, 28) : '', true)
-      + propRow('Created', item.created_at ? relTime(item.created_at) : '')
-      + propRow('Claimed', item.claimed_at ? relTime(item.claimed_at) : '')
-      + propRow('Closed', item.closed_at ? relTime(item.closed_at) : '')
-      + propRow('Source', item.source)
-      + propRow('Repo', item.repo_path, true)
-      + propRow('URL', item.url)
-      + '</div></section>';
+          ? '<section class="q2-sec"><div class="q2-sec-label">Full prompt</div>'
+            + '<pre class="q2-pre">' + esc(prompt) + '</pre></section>'
+          : '')
+      + '<section class="q2-sec"><div class="q2-sec-label">Activity'
+      + (editCount
+          ? '<label class="q2-show-edits"><input type="checkbox" data-q2-show-edits> show edits (' + editCount + ')</label>'
+          : '')
+      + '</div><div class="q2-tl-wrap">' + timelineHtml(item) + '</div></section>'
+      + answerSec + commentSec + closeSec
+      + '</div>'
+      + '<aside class="q2-detail-side">' + side + '</aside>'
+      + '</div>'
+      + '<div class="q2-detail-foot">'
+      + '<span class="q2-dim">Filed <span title="' + esc(item.created_at || '') + '">' + esc(relTime(item.created_at)) + '</span>'
+      + (item.updated_at && item.updated_at !== item.created_at
+          ? ' &middot; updated <span title="' + esc(item.updated_at) + '">' + esc(relTime(item.updated_at)) + '</span>' : '')
+      + '</span>'
+      + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
+      + '</div>';
   }
+
+  // ── detail actions ───────────────────────────────────────────────────────
+  function detailInput(name) {
+    var el = document.querySelector('[data-q2-input="' + name + '"]');
+    return el ? String(el.value || '').trim() : '';
+  }
+
+  async function postJson(url, payload) {
+    var res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  async function detailAction(act, btn) {
+    var ref = state.ref;
+    if (!ref) return;
+
+    if (act === 'copy') {
+      var text = (state.detail && state.detail.text) || titleOf(state.detail) || '';
+      try { await navigator.clipboard.writeText(text); note('Prompt copied'); }
+      catch (e) { note('Could not copy: ' + e.message); }
+      return;
+    }
+
+    var plan = {
+      answer:  ['/api/ux-fixes/answer',  { ref: ref, answer: detailInput('answer') },  true,  'Answer sent'],
+      comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') },   true,  'Comment added'],
+      close:   ['/api/ux-fixes/close',   { ref: ref, summary: detailInput('close') },  false, 'Ticket closed'],
+      reopen:  ['/api/ux-fixes/reopen',  { ref: ref, reason: detailInput('reopen') },  false, 'Ticket reopened'],
+    }[act];
+    if (!plan) return;
+    // Answer and comment carry the user's words; sending an empty one would
+    // write a blank event nobody can interpret.
+    if (plan[2] && !Object.values(plan[1]).filter(function (v) { return v !== ref; })[0]) {
+      note('Nothing to send - the box is empty.');
+      return;
+    }
+
+    btn.disabled = true;
+    try {
+      await postJson(plan[0], plan[1]);
+      note(plan[3]);
+      // The list and the ticket both changed. Re-fetch rather than patching
+      // local state, so what is on screen is what the store actually holds.
+      state.detail = null;
+      await loadDetail(ref);
+      await refresh();
+    } catch (e) {
+      note('Failed: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Editable property selects, same fields the main dashboard exposes.
+  document.addEventListener('change', async function (e) {
+    var sel = e.target.closest && e.target.closest('[data-q2-field]');
+    if (!sel || !state.ref) return;
+    var field = sel.getAttribute('data-q2-field');
+    var payload = { ref: state.ref };
+    payload[field] = sel.value;
+    sel.disabled = true;
+    try {
+      await postJson('/api/ux-fixes/edit', payload);
+      state.detail = null;
+      await loadDetail(state.ref);
+      await refresh();
+    } catch (err) {
+      note('Could not save ' + field + ': ' + err.message);
+    } finally {
+      sel.disabled = false;
+    }
+  });
+
+  // Edit events are bookkeeping noise by default; the toggle reveals them.
+  document.addEventListener('change', function (e) {
+    var box = e.target.closest && e.target.closest('[data-q2-show-edits]');
+    if (!box) return;
+    var tl = document.querySelector('.q2-tl');
+    if (tl) tl.classList.toggle('show-edits', box.checked);
+  });
 
   function renderAll() {
     renderChrome();
@@ -740,6 +969,8 @@
                    drain.getAttribute('data-q2-next') === '1');
       return;
     }
+    var act = e.target.closest('[data-q2-act]');
+    if (act) { e.stopPropagation(); detailAction(act.getAttribute('data-q2-act'), act); return; }
     var qBtn = e.target.closest('[data-q2-queue]');
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
