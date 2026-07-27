@@ -19,7 +19,7 @@
   --cyan: #39d2c0;
   --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --font-mono: 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
-  --q2-queues-w: 260px;
+  --q2-queues-w: 300px;
   --q2-tickets-w: 440px;
 }
 :root[data-theme="light"] {
@@ -206,14 +206,6 @@ body.q2-resizing .q2-col { pointer-events: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.q2-qrow-counts {
-  display: flex;
-  gap: 8px;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.q2-qrow-counts b { color: var(--text); font-weight: 600; }
 .q2-qrepo {
   margin-top: 3px;
   font-size: 10.5px;
@@ -225,43 +217,53 @@ body.q2-resizing .q2-col { pointer-events: none; }
   text-align: left;
 }
 
-/* State badge. Deliberately quiet: a dot carries the colour, the word is
-   muted text. Only `stuck` is allowed to shout, because it is the only state
-   that actually needs the user to do something. */
-.q2-pill {
-  margin-left: auto;          /* right-aligns the badge in .q2-qrow-head */
-  display: inline-flex;
+/* One chip per fact, right-aligned into a single ragged-right block. Most stay
+   grey on purpose: only the two that mean "a human or a worker is involved
+   right now" carry colour, so scanning the column surfaces those first. */
+.q2-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;   /* right-aligned, per the layout ask */
   align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  font-size: 10px;
+  gap: 3px;
+  margin-top: 4px;
+}
+.q2-chip {
+  font-size: 9.5px;
   font-weight: 500;
-  letter-spacing: 0.2px;
+  line-height: 1.55;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
   color: var(--text-muted);
+  background: var(--surface-2);
   white-space: nowrap;
 }
-.q2-pill-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
+/* Blocked on a human — the one chip allowed to be loud. */
+.q2-chip.is-loud {
+  color: var(--orange);
+  border-color: var(--orange);
+  background: transparent;
+  font-weight: 650;
+}
+/* A worker is on it this second. */
+.q2-chip.is-live { color: var(--green); border-color: var(--green); background: transparent; }
+.q2-chip.is-gh { color: var(--purple); }
+.q2-chip.is-auto-on { color: var(--cyan); }
+
+/* `stuck` is a queue-level alarm, not a fact chip — it stays up on the name
+   line so it can never be lost in a wrapped chip row. */
+.q2-stuck-flag {
   flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--red);
 }
-/* Colour lives on the dot only (via currentColor on a child span). */
-.q2-pill.is-working .q2-pill-dot { background: var(--green); }
-.q2-pill.is-ready   .q2-pill-dot { background: var(--green); }
-.q2-pill.is-clear   .q2-pill-dot { background: var(--text-muted); opacity: 0.5; }
-.q2-pill.is-parked  .q2-pill-dot { background: var(--text-muted); opacity: 0.5; }
-.q2-pill.is-manual  .q2-pill-dot { background: var(--text-muted); opacity: 0.5; }
-.q2-pill.is-stuck   .q2-pill-dot { background: var(--red); }
-/* The one loud state. */
-.q2-pill.is-stuck { color: var(--red); font-weight: 650; }
-/* "working" means a worker is on it this second — worth a pulse, nothing more. */
-.q2-pill.is-working .q2-pill-dot { animation: q2-pulse 1.8s ease-in-out infinite; }
-@keyframes q2-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) {
-  .q2-pill.is-working .q2-pill-dot { animation: none; }
-}
+.q2-qrow-done { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--text-muted); }
+.q2-qrow-done b { color: var(--text); font-weight: 600; }
+.q2-qrow.is-stuck { box-shadow: inset 2px 0 0 var(--red); }
 
 /* ── column 2: ticket rows ────────────────────────────────────────────── */
 .q2-trow {

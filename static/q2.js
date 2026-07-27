@@ -91,38 +91,72 @@
     return '';
   }
 
-  // The server already classifies every queue (ccc_server/queue_events.py:422)
-  // into stuck / draining / backlog. Read that instead of re-deriving a second
-  // opinion here. The only thing added on top is splitting the server's
-  // "draining" by whether a worker is on it *right now*: "auto-drain is armed"
-  // and "a worker is running" are different facts and the old single label
-  // conflated them, which is why queues read as draining while nothing ran.
-  function queueState(q) {
-    var srv = String(q.state || '');
-    var workers = Number(q.workers || 0);
-    var claimable = Number(q.claimable != null ? q.claimable : (q.depth || 0));
-    if (srv === 'stuck') {
-      return { k: 'stuck', label: 'stuck',
-        tip: 'Auto-drain is on and there is claimable work, but no worker is running. This one needs a look.' };
+  // Per-queue facts derived in ONE pass over the item list. renderQueues runs
+  // every poll across every queue, so filtering the full item array per queue
+  // would be O(queues x items) on each tick.
+  function queueFacts() {
+    var by = {};
+    function bucket(k) {
+      if (!by[k]) by[k] = { github: 0, local: 0, needsInput: 0, wip: 0, waiting: 0 };
+      return by[k];
     }
-    if (workers > 0) {
-      return { k: 'working', label: 'working',
-        tip: workers + ' worker' + (workers === 1 ? '' : 's') + ' draining this queue right now.' };
+    (state.items || []).forEach(function (it) {
+      var k = projectKey(it && it.project);
+      if (!k || k === '?') return;
+      var b = bucket(k);
+      if (String(it.source || '') === 'github' || it.github_repo) b.github++; else b.local++;
+      var st = statusOf(it);
+      if (st === 'closed') return;
+      if (it.needs_input) b.needsInput++;
+      else if (st === 'in_progress') b.wip++;
+      // Waiting = open, unclaimed, and something a worker is actually allowed
+      // to pick up. `claimable === false` marks GitHub issues without the
+      // queue's label: real inventory, but nothing will ever claim them.
+      else if (st === 'open' && it.claimable !== false) b.waiting++;
+    });
+    return by;
+  }
+
+  // Five independent chips. Each answers one question, so a queue that is
+  // "auto-drain on, GitHub-backed, nothing blocked" reads as three facts
+  // instead of one word that tries to average them.
+  function queueChips(q, f) {
+    f = f || { github: 0, local: 0, needsInput: 0, wip: 0, waiting: 0 };
+    var chips = [];
+    if (f.needsInput) {
+      chips.push({ k: 'needs-input', label: f.needsInput + ' needs input', loud: true,
+        tip: f.needsInput + ' ticket' + (f.needsInput === 1 ? '' : 's') + ' blocked waiting on a human answer.' });
     }
-    if (srv === 'draining') {
-      return claimable > 0
-        ? { k: 'ready', label: 'ready',
-            tip: 'Auto-drain is on and ' + claimable + ' ticket' + (claimable === 1 ? ' is' : 's are')
-                 + ' claimable. A worker picks them up on the next sweep.' }
-        : { k: 'clear', label: 'clear',
-            tip: 'Auto-drain is on and there is nothing left to claim.' };
+    if (f.wip) {
+      chips.push({ k: 'wip', label: f.wip + ' wip', live: true,
+        tip: f.wip + ' ticket' + (f.wip === 1 ? ' is' : 's are') + ' claimed and in progress.' });
     }
-    if (q.auto_drain) {
-      return { k: 'parked', label: 'parked',
-        tip: 'Auto-drain is on, but every open ticket is filtered out by this queue’s claim types. Nothing is claimable.' };
+    if (f.waiting) {
+      chips.push({ k: 'waiting', label: f.waiting + ' unclaimed',
+        tip: f.waiting + ' open ticket' + (f.waiting === 1 ? '' : 's') + ' nothing has picked up yet.' });
     }
-    return { k: 'manual', label: 'manual',
-      tip: 'Auto-drain is off. This queue is a parking lot — nothing runs until you start a worker.' };
+    chips.push(q.auto_drain
+      ? { k: 'auto-on', label: 'auto', tip: 'Auto-drain is ON. WatchTower spawns workers for this queue on its own.' }
+      : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker.' });
+    chips.push(f.github
+      ? { k: 'gh', label: 'github', tip: 'Backed by GitHub issues' + (f.local ? ' (plus ' + f.local + ' local ticket(s))' : '') + '.' }
+      : { k: 'local', label: 'local', tip: 'Local WatchTower tickets, not GitHub issues.' });
+    return chips;
+  }
+
+  // Sort order: the four things the user asked to float up, most-actionable
+  // first. `stuck` still outranks everything — it is the only state that means
+  // something is broken rather than merely busy.
+  function queueRank(q, f) {
+    f = f || {};
+    return [
+      q.state === 'stuck' ? 0 : 1,
+      f.needsInput ? 0 : 1,
+      f.wip ? 0 : 1,
+      q.auto_drain ? 0 : 1,
+      f.github ? 0 : 1,
+      -(q.depth || 0)
+    ];
   }
 
   function itemsForQueue(queue) {
@@ -198,21 +232,32 @@
     }
 
     var selected = projectKey(state.queue);
-    host.innerHTML = state.queues.map(function (q) {
-      var st = queueState(q);
+    var facts = queueFacts();
+    var ordered = state.queues.slice().sort(function (a, b) {
+      var ra = queueRank(a, facts[projectKey(a.queue)]);
+      var rb = queueRank(b, facts[projectKey(b.queue)]);
+      for (var i = 0; i < ra.length; i++) {
+        if (ra[i] !== rb[i]) return ra[i] - rb[i];
+      }
+      return String(a.queue).localeCompare(String(b.queue));
+    });
+
+    host.innerHTML = ordered.map(function (q) {
+      var f = facts[projectKey(q.queue)];
       var isSel = projectKey(q.queue) === selected;
-      return '<button type="button" class="q2-qrow' + (isSel ? ' is-selected' : '') + '"'
+      var chips = queueChips(q, f).map(function (c) {
+        return '<span class="q2-chip is-' + esc(c.k) + (c.loud ? ' is-loud' : '') + (c.live ? ' is-live' : '') + '"'
+          + ' title="' + esc(c.tip || '') + '">' + esc(c.label) + '</span>';
+      }).join('');
+      return '<button type="button" class="q2-qrow' + (isSel ? ' is-selected' : '')
+        + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' data-q2-queue="' + esc(q.queue) + '">'
         + '<span class="q2-qrow-head">'
         + '<span class="q2-qname">' + esc(q.queue) + '</span>'
-        + '<span class="q2-pill is-' + esc(st.k) + '" title="' + esc(st.tip || '') + '">'
-        + '<span class="q2-pill-dot" aria-hidden="true"></span>' + esc(st.label) + '</span>'
+        + (q.state === 'stuck' ? '<span class="q2-stuck-flag" title="Auto-drain is on and there is claimable work, but no worker is running.">stuck</span>' : '')
+        + '<span class="q2-qrow-done"><b>' + (q.closed || 0) + '</b> done</span>'
         + '</span>'
-        + '<span class="q2-qrow-counts">'
-        + '<span><b>' + (q.depth || 0) + '</b> open</span>'
-        + '<span><b>' + (q.workers || 0) + '</b> wip</span>'
-        + '<span><b>' + (q.closed || 0) + '</b> done</span>'
-        + '</span>'
+        + '<span class="q2-chips">' + chips + '</span>'
         + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(q.repo_path) + '</span>' : '')
         + '</button>';
     }).join('');
@@ -453,7 +498,7 @@
   // Both handles drive a CSS custom property on :root, so the grid is the only
   // thing that reacts and no render pass is needed while dragging.
   var COLS = {
-    queues:  { varName: '--q2-queues-w',  key: 'ccc-q2-w-queues',  def: 260, min: 170, max: 560 },
+    queues:  { varName: '--q2-queues-w',  key: 'ccc-q2-w-queues',  def: 300, min: 170, max: 560 },
     tickets: { varName: '--q2-tickets-w', key: 'ccc-q2-w-tickets', def: 440, min: 260, max: 900 }
   };
 
