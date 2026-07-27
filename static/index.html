@@ -577,6 +577,21 @@
         <a id="telemetryDetailsLink" class="telemetry-bar__link" href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md" target="_blank" rel="noopener">See the 5 fields</a>
       </div>
     </div>
+    <!-- Star-on-GitHub nudge. Shown by app.js only once the dashboard has
+         been opened on three distinct days, and never alongside the
+         telemetry bar above (one prompt at a time). "Star" and "Don't ask
+         again" hide it forever; "Maybe later" snoozes it for 14 days.
+         All state is localStorage-only. -->
+    <div class="star-nudge" id="starNudgeBar" hidden role="region" aria-label="Star Command Center on GitHub">
+      <span class="star-nudge__text">
+        Enjoying Command Center? A <strong>GitHub star</strong> helps other people find it.
+      </span>
+      <div class="star-nudge__actions">
+        <a id="starNudgeStarBtn" class="star-nudge__btn star-nudge__btn--primary" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener">&#9733; Star on GitHub</a>
+        <button type="button" id="starNudgeLaterBtn" class="star-nudge__btn">Maybe later</button>
+        <button type="button" id="starNudgeNeverBtn" class="star-nudge__link-btn">Don't ask again</button>
+      </div>
+    </div>
     <div class="toolbar" id="convToolbar">
       <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592;<span class="mb-label"> Back</span></button>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"

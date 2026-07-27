@@ -2197,7 +2197,61 @@
     // The "What gets sent?" link is a plain anchor — opens docs/telemetry.md
     // in a new tab on click; no JS needed beyond the default behaviour.
   })();
-  loadTelemetryStatus();
+
+  // ── Star-on-GitHub nudge ──
+  // Asks for a repo star only after the dashboard has been opened on three
+  // distinct days, and never while the telemetry opt-in bar is on screen
+  // (one prompt at a time). "Star" and "Don't ask again" hide it forever;
+  // "Maybe later" snoozes it for 14 days. State is localStorage-only.
+  const STAR_NUDGE_DISMISSED_LS = 'ccc-star-nudge-dismissed';
+  const STAR_NUDGE_SNOOZE_LS = 'ccc-star-nudge-snooze-until';
+  const STAR_NUDGE_DAYS_LS = 'ccc-star-nudge-days';
+  const STAR_NUDGE_LAST_DAY_LS = 'ccc-star-nudge-last-day';
+  const STAR_NUDGE_MIN_DAYS = 3;
+  function maybeShowStarNudge() {
+    const $bar = document.getElementById('starNudgeBar');
+    if (!$bar) return;
+    let days = 0;
+    try {
+      if (localStorage.getItem(STAR_NUDGE_DISMISSED_LS) === '1') return;
+      const snoozeUntil = parseInt(localStorage.getItem(STAR_NUDGE_SNOOZE_LS) || '0', 10);
+      if (snoozeUntil && Date.now() < snoozeUntil) return;
+      // Count distinct days the dashboard was opened, not page loads — a
+      // busy first session must not look like three days of real use.
+      const today = new Date().toISOString().slice(0, 10);
+      days = parseInt(localStorage.getItem(STAR_NUDGE_DAYS_LS) || '0', 10) || 0;
+      if (localStorage.getItem(STAR_NUDGE_LAST_DAY_LS) !== today) {
+        days += 1;
+        localStorage.setItem(STAR_NUDGE_DAYS_LS, String(days));
+        localStorage.setItem(STAR_NUDGE_LAST_DAY_LS, today);
+      }
+    } catch (_) { return; }
+    if (days < STAR_NUDGE_MIN_DAYS) return;
+    const $telemetry = document.getElementById('telemetryOptInBar');
+    if ($telemetry && !$telemetry.hidden) return;
+    $bar.hidden = false;
+  }
+  function hideStarNudge(forever, snoozeMs) {
+    const $bar = document.getElementById('starNudgeBar');
+    if ($bar) $bar.hidden = true;
+    try {
+      if (forever) localStorage.setItem(STAR_NUDGE_DISMISSED_LS, '1');
+      else if (snoozeMs) localStorage.setItem(STAR_NUDGE_SNOOZE_LS, String(Date.now() + snoozeMs));
+    } catch (_) {}
+  }
+  (function wireStarNudge() {
+    const $star = document.getElementById('starNudgeStarBtn');
+    const $later = document.getElementById('starNudgeLaterBtn');
+    const $never = document.getElementById('starNudgeNeverBtn');
+    // Following through to GitHub counts as done — never ask again.
+    if ($star) $star.addEventListener('click', () => hideStarNudge(true));
+    if ($later) $later.addEventListener('click', () => hideStarNudge(false, 14 * 24 * 60 * 60 * 1000));
+    if ($never) $never.addEventListener('click', () => hideStarNudge(true));
+  })();
+
+  // The star nudge waits for the telemetry decision so the two bars never
+  // stack — telemetry (a privacy question) always wins the slot.
+  loadTelemetryStatus().then(maybeShowStarNudge);
 
   // ── Dashboard active-time heartbeat ──
   // Beats every 30s while the tab is visible. Each beat credits 30s to
@@ -2239,6 +2293,17 @@
   // gets its own key and defaults to '1d' so the view opens scoped to recent
   // activity instead of dumping every session on disk.
   const ARCHIVE_WINDOW_KEY = 'ccc-archive-window';
+  const ARCHIVE_ENGINE_FILTER_KEY = 'ccc-archive-engine-filter';
+  function _archiveEngineFilter() {
+    try {
+      const value = String(localStorage.getItem(ARCHIVE_ENGINE_FILTER_KEY) || '').toLowerCase();
+      if (value === 'claude' || value === 'codex' || value === 'kimi') return value;
+    } catch (_) {}
+    return '';
+  }
+  function _archiveEngineAllowsRow(row, filter = _archiveEngineFilter()) {
+    return !filter || sessionIconEngine(row) === filter;
+  }
   function _archiveWindow() {
     try {
       const value = localStorage.getItem(ARCHIVE_WINDOW_KEY);
@@ -25023,6 +25088,60 @@
       try { return localStorage.getItem(sessionSummaryStorageKey(sid)) === '1'; }
       catch (_) { return false; }
     }
+    const _sessionProvenanceById = new Map();
+    [
+      ..._sessionConvs,
+      ..._openAskConvs,
+      ..._readyToMergeConvs,
+      ..._archivedConvs,
+    ].forEach(row => {
+      const sid = String((row && (row.session_id || row.id)) || '').trim();
+      if (sid && !_sessionProvenanceById.has(sid)) _sessionProvenanceById.set(sid, row);
+    });
+    const _sessionProvenanceTitle = (row, fallbackId) => {
+      if (!row) return shortSessionId(fallbackId);
+      const cleanFirst = row.first_message ? cleanIssuePrompt(row.first_message) : '';
+      const raw = row.display_name
+        || row.ai_title
+        || (cleanFirst ? firstSentenceOf(cleanFirst, 60) : '')
+        || shortSessionId(fallbackId);
+      return sidebarRowDisplayTitle(raw);
+    };
+    const _sessionProvenanceChipHtml = (c) => {
+      if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
+      const parentId = String(
+        c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from || ''
+      ).trim();
+      let label = '';
+      let title = '';
+      let className = '';
+      if (parentId) {
+        const parentTitle = _sessionProvenanceTitle(_sessionProvenanceById.get(parentId), parentId);
+        label = '\u21b3 ' + parentTitle;
+        title = 'Spawned by ' + parentTitle + ' (' + parentId + ')';
+        className = ' is-parent';
+      } else {
+        const threadSource = String(c.thread_source || '').trim().toLowerCase();
+        if (threadSource === 'ccc') {
+          label = 'CCC';
+          title = 'Started by CCC; no parent session recorded';
+          className = ' is-ccc';
+        } else if (threadSource === 'user') {
+          label = 'user';
+          title = 'Top-level session started by the user; no parent session recorded';
+        } else if (threadSource === 'subagent') {
+          label = 'parent unknown';
+          title = 'Spawned as a subagent; parent session not recorded';
+          className = ' is-unknown';
+        } else {
+          label = 'root';
+          title = 'No parent session recorded';
+        }
+      }
+      return '<span class="conv-session-origin-chip' + className + '" title="' + escapeAttr(title) + '">'
+        + escapeHtml(label)
+        + '</span>';
+    };
     // The inline NYA block — mirrors the attention-panel row markup so it looks
     // identical, minus the panel-only chrome (verify button, id chip, debug
     // column). Display-only; the parent row already handles click-to-open.
@@ -25727,6 +25846,7 @@
       // important to hide in the hover row or bury in the branch slot. (CCC-294)
       const branchSlotHtml = worktreeBadgeHtml + branch;
       const sessionIdChipHtml = sidebarSessionIdChipHtml(c);
+      const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c);
       const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
       // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
@@ -25770,7 +25890,8 @@
           + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
           + '</span>'
         : '';
-      // Hover meta row — chip order: object → folder → session-id → goal → others.
+      // Hover meta row — chip order: object → folder → provenance → session-id
+      // → goal → others.
       // Suppress object chip when rows are already grouped under an object header
       // (elevateToObject = by-objects sidebar mode — the chip would be noise).
       // Dedupe: if the object title matches the folder label exactly (case-insensitive),
@@ -25795,12 +25916,13 @@
           + (_briefOpen ? '&#9662;' : '&#9656;') + '</button>'
         : '';
       // Meta row: always shown when there are chips or a brief chevron.
-      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);
+      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || sessionIdChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _hasBrief);
       const hoverMetaRowHtml = _hasMetaContent
         ? '<div class="conv-hover-meta-row">'
           + _briefChevronHtml
           + _hmObjectChip
           + _hmFolderChip
+          + sessionProvenanceChipHtml
           + sessionIdChipHtml
           + goalMetaHtml
           + pinnedHtml
@@ -28014,9 +28136,28 @@
       const lane = String((c && c.all_lane_override) || '').trim();
       return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
     };
+    const _arcEngineFilter = _archiveEngineFilter();
+    const _arcEngineFilterLabel = _arcEngineFilter === 'codex'
+      ? 'Codex'
+      : (_arcEngineFilter === 'kimi' ? 'Kimi' : 'Claude');
     const _trashConvs = _archivedConvs.filter(c => !!c.trashed);
     const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);
-    const _allTabConvs = _sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs);
+    const _allTabUnfilteredConvs = _sessionConvs.concat(
+      _openAskConvs,
+      _readyToMergeConvs,
+      _mainArchivedConvs,
+    );
+    const _allTabConvs = _allTabUnfilteredConvs.filter(
+      c => _archiveEngineAllowsRow(c, _arcEngineFilter)
+    );
+    const _allTabTrashConvs = _trashConvs.filter(
+      c => _archiveEngineAllowsRow(c, _arcEngineFilter)
+    );
+    const _allTabGroupChatItems = _arcEngineFilter ? [] : (_gcItems || []);
+    const _allTabUnfilteredCount = _allTabUnfilteredConvs.length
+      + _trashConvs.length
+      + ((_gcItems || []).length || 0)
+      + ((Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []).length || 0);
     const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
     const _allTabParentId = (c) =>
       String((c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)) || '').trim();
@@ -28123,10 +28264,12 @@
       } catch (_) { return 'coding'; }
     })();
     const _allTabHasLaneOverride = _allTabConvs.some(c => !!_allTabLaneOverride(c));
-    const _allTabHasHermesSplit = _allTabHasLaneOverride
+    const _allTabHasHermesSplit = !_arcEngineFilter && (
+      _allTabHasLaneOverride
       || _allTabWorkerConvs.length > 0
       || _allTabHermesMessageConvs.length > 0
-      || _savedAllTabView !== 'coding';
+      || _savedAllTabView !== 'coding'
+    );
     const _allTabView = _allTabHasHermesSplit ? _savedAllTabView : 'coding';
     const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
       ? _allTabWorkerConvs
@@ -28187,12 +28330,14 @@
       flushRepeats();
       return chunks.join('');
     };
-    const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);
+    const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
-      : (Array.isArray(_archivedGroupChats)
-          ? _archivedGroupChats.filter(gc => _archiveWindowAllowsRow(gc, _ipWindowCutoff))
-          : []);
+      : (_arcEngineFilter
+          ? []
+          : (Array.isArray(_archivedGroupChats)
+              ? _archivedGroupChats.filter(gc => _archiveWindowAllowsRow(gc, _ipWindowCutoff))
+              : []));
     const _trashGroupChats = _archivedGroupChatsForRender.filter(gc => !!gc.trashed);
     const _mainArchivedGroupChats = _archivedGroupChatsForRender.filter(gc => !gc.trashed);
     const _arcGrouping = (() => {
@@ -28280,9 +28425,9 @@
           + '</div>';
       }).join('');
       _arcRows = _folderRowsHtml + (_allTabView === 'coding'
-        ? (_gcItems || []).map(it => it.allHtml || it.html).join('') + _mainArchivedGroupChats.map(gc => _renderArchivedGcRow(gc, 'all-main')).join('')
+        ? _allTabGroupChatItems.map(it => it.allHtml || it.html).join('') + _mainArchivedGroupChats.map(gc => _renderArchivedGcRow(gc, 'all-main')).join('')
         : '');
-      _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + (_gcItems || []).length + _trashConvs.length;
+      _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
     } else {
       // Flat chronological list — original behavior.
       const _archivedItems = [];
@@ -28298,7 +28443,7 @@
       // Active/paused/closed (unarchived) group chats still interleave here
       // so they appear in the All view, not just in Current Sessions.
       if (_allTabView === 'coding') {
-        for (const gci of (_gcItems || [])) {
+        for (const gci of _allTabGroupChatItems) {
           _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.allHtml || gci.html });
         }
         for (const gc of _mainArchivedGroupChats) {
@@ -28380,14 +28525,17 @@
       }
       _arcFlushCards();
       _arcRows = _arcChunks.join('');
-      _arcCount = _archivedItems.length + _archivedGroupChatsForRender.length + _trashConvs.length;
+      _arcCount = _archivedItems.length + _archivedGroupChatsForRender.length + _allTabTrashConvs.length;
     }
-    const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + ((_gcItems || []).length || 0) + _trashConvs.length;
+    if (_arcEngineFilter && !_arcRows) {
+      _arcRows = '<div class="archive-empty-state">No ' + escapeHtml(_arcEngineFilterLabel) + ' sessions.</div>';
+    }
+    const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
     _arcCount = _allTabTotalCount;
     const _allHermesTabBarHtml = _allTabHasHermesSplit
       ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '" title="Drop a session here to show it under Coding">'
-        +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + ((_gcItems || []).length || 0)) + '</span>'
+        +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + _allTabGroupChatItems.length) + '</span>'
         + '</button>'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '" title="Drop a session here to show it under Workers">'
         +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
@@ -28405,7 +28553,7 @@
     let _trashHtml = '';
     {
       const _trashItems = [];
-      for (const c of _trashConvs) {
+      for (const c of _allTabTrashConvs) {
         _trashItems.push({
           mtime: c.modified || c.last_interacted || 0,
           html: _renderRow(c, { lifecycleContext: 'trash', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true }),
@@ -28436,7 +28584,7 @@
       }
     }
 
-    if (_arcCount > 0) {
+    if (_allTabUnfilteredCount > 0) {
       const _arcGroupingToggle = _arcHasFolderChips && !_isSpecificFolderFilter
         ? '<span class="conv-grouping-toggle" data-role="archived-grouping-toggle">'
             + '<span class="grouping-opt' + (_arcGrouping !== 'time' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
@@ -28471,8 +28619,23 @@
           + '<span class="grouping-opt' + (_arcWindowCur === '7d' ? ' is-active' : '') + '" data-window="7d">7d</span>'
           + '<span class="grouping-opt' + (_arcWindowCur === 'all' ? ' is-active' : '') + '" data-window="all">All</span>'
         + '</span>';
-      const _arcTools = (_arcWindowToggle || _arcGroupingToggle || _arcExpandAllToggle)
-        ? '<div class="conv-archived-tools" data-role="archived-tools">' + _arcWindowToggle + _arcGroupingToggle + _arcExpandAllToggle + '</div>'
+      const _arcEngineButton = (engine, label, svg) => {
+        const active = _arcEngineFilter === engine;
+        const title = active
+          ? 'Showing only ' + label + ' sessions; click to show all engines'
+          : 'Show only ' + label + ' sessions';
+        return '<button type="button" class="conv-archived-engine-btn ' + engine + (active ? ' is-active' : '') + '"'
+          + ' data-archive-engine="' + engine + '"'
+          + ' aria-label="' + escapeAttr(title) + '" aria-pressed="' + active + '"'
+          + ' title="' + escapeAttr(title) + '">' + svg + '</button>';
+      };
+      const _arcEngineToggle = '<span class="conv-archived-engine-filter" data-role="archived-engine-filter" role="group" aria-label="Filter All sessions by engine">'
+          + _arcEngineButton('claude', 'Claude', getEngineSvg('claude'))
+          + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
+          + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
+        + '</span>';
+      const _arcTools = (_arcWindowToggle || _arcEngineToggle || _arcGroupingToggle || _arcExpandAllToggle)
+        ? '<div class="conv-archived-tools" data-role="archived-tools">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcExpandAllToggle + '</div>'
         : '';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
@@ -28760,6 +28923,23 @@
         if (!opt) return;
         const value = opt.getAttribute('data-grouping') === 'time' ? 'time' : 'project';
         try { localStorage.setItem('ccc-archived-grouping', value); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '');
+      });
+    }
+    const $archivedEngineFilter = $convList.querySelector('[data-role="archived-engine-filter"]');
+    if ($archivedEngineFilter) {
+      $archivedEngineFilter.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const opt = ev.target.closest('[data-archive-engine]');
+        if (!opt) return;
+        const value = String(opt.getAttribute('data-archive-engine') || '').toLowerCase();
+        if (value !== 'claude' && value !== 'codex' && value !== 'kimi') return;
+        const current = _archiveEngineFilter();
+        const next = current === value ? '' : value;
+        try {
+          if (next) localStorage.setItem(ARCHIVE_ENGINE_FILTER_KEY, next);
+          else localStorage.removeItem(ARCHIVE_ENGINE_FILTER_KEY);
+        } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
@@ -49852,6 +50032,7 @@
           pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
           model: c.model || '',
           engine: c.engine || c.source || '',
+          thread_source: c.thread_source || '',
           source_platform: c.source_platform || '',
           hermes_source: c.hermes_source || '',
           hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
@@ -49958,6 +50139,7 @@
         pin_rank: Number.isFinite(Number(c.pin_rank)) ? Number(c.pin_rank) : null,
         model: c.model || '',
         engine: c.engine || c.source || '',
+        thread_source: c.thread_source || '',
         source_platform: c.source_platform || '',
         hermes_source: c.hermes_source || '',
         hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
