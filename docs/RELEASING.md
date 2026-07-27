@@ -27,6 +27,18 @@ SemVer. Look at what's under `## [Unreleased]` in `CHANGELOG.md`:
 
 Pre-1.0 is a grey area — breaking changes at 0.x can bump minor instead of major. Use judgment.
 
+## Worker restart on upgrade (automatic since v5.14.0)
+
+The persistent execution worker owns live agent turns, so upgrades never
+restart it just because the dashboard restarted — but that also meant fixes
+in worker-owned code never took effect. Since v5.14.0, `run.sh` compares the
+worker's loaded `server.py` version (`server_version` in the worker health
+response) against the repo on every launch and kickstarts the worker when
+they differ. Every install path (curl, brew, DMG/Sparkle) funnels through
+`run.sh`, so no release-time action is needed — just note in the release
+notes that queued work may show as "needs reconciliation" once after the
+upgrade (one click on Reconcile in Settings → Maintenance).
+
 ## 1. Update the CHANGELOG
 
 Rename the `[Unreleased]` header and add a fresh empty one above it. At the bottom of the file, add the new compare link and update the `[Unreleased]` link.

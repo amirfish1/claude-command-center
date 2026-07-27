@@ -170,6 +170,14 @@ class TestWorkerIPC(unittest.TestCase):
             "engine-execution-v1",
             health["worker"]["capabilities"],
         )
+        # run.sh's ensure_worker_current gate keys off this field: present and
+        # null when the worker never imported server (nothing stale), or the
+        # loaded module's __version__ once it has. Test ordering may import
+        # server into this process, so mirror the same sys.modules lookup.
+        self.assertIn("server_version", health["worker"])
+        import sys as _sys
+        expected_version = getattr(_sys.modules.get("server"), "__version__", None)
+        self.assertEqual(health["worker"]["server_version"], expected_version)
 
         drained = self.client.request("drain.set", {
             "enabled": True,

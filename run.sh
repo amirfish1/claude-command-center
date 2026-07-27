@@ -637,6 +637,37 @@ raise SystemExit(0 if "engine-execution-v1" in caps else 1)
         echo "⚠ Persistent worker did not become ready; dashboard uses legacy execution." >&2
       fi
     fi
+    # A long-running worker keeps executing the server.py it imported at first
+    # engine RPC -- upgrades change the code on disk UNDER it, and the policy
+    # above (never restart a healthy worker) means the new code would never
+    # take effect. Its health reports the loaded module's version; if that
+    # lags the repo, kickstart exactly once per upgrade. Queued work becomes
+    # 'uncertain' and is reclaimed via Settings -> Maintenance -> Reconcile.
+    # A worker that never imported server (server_version null) needs nothing:
+    # its first RPC loads the new code from disk.
+    if [ "${worker_compatible:-0}" = "1" ]; then
+      read -r worker_server_version repo_version <<EOF
+$(printf '%s' "$worker_health" | "$PYTHON" -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
+# Key ABSENT means a pre-version-reporting worker -- definitionally stale.
+# Key present but null means a current worker that never imported server.
+sv = "absent" if "server_version" not in worker else (worker.get("server_version") or "")
+print(sv, end=" ")
+' 2>/dev/null; sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$HERE/server.py" | head -1)
+EOF
+      if [ -n "$repo_version" ] && { [ "$worker_server_version" = "absent" ] \
+        || { [ -n "$worker_server_version" ] && [ "$worker_server_version" != "$repo_version" ]; }; }; then
+        echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
+        echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
+        launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1 \
+          || kill "$existing_worker_pid" >/dev/null 2>&1 || true
+      fi
+    fi
     ;;
 esac
 

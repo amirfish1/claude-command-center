@@ -65,6 +65,14 @@ class WorkerRuntime:
     def dispatch(self, method, params):
         params = params if isinstance(params, dict) else {}
         if method == "health":
+            # Version of the `server` module CURRENTLY LOADED in this process
+            # (the worker imports it lazily on first engine RPC). None means
+            # "never imported" -- the first RPC will pick up whatever is on
+            # disk, so there is no stale code to restart away. run.sh compares
+            # this against the repo version on every launch and kickstarts the
+            # worker when they differ, so upgrades actually reach worker-owned
+            # code paths (e.g. the Codex app-server liveness probe).
+            server_mod = sys.modules.get("server")
             return {
                 "ok": True,
                 "worker": {
@@ -72,6 +80,7 @@ class WorkerRuntime:
                     "epoch": self.epoch,
                     "started_at": self.started_at,
                     "recovered_uncertain": len(self.recovered),
+                    "server_version": getattr(server_mod, "__version__", None) if server_mod else None,
                     "capabilities": [
                         "engine-execution-v1",
                         "work-graph-v1",
