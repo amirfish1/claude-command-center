@@ -240,9 +240,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
    disagree: red = needs input, grey = open, blue = in progress, green = done. */
 .q2-n { white-space: nowrap; }
 .q2-n b { color: var(--text); font-weight: 600; }
-.q2-n.is-blocked, .q2-n.is-blocked b { color: var(--red); }
-.q2-n.is-wip, .q2-n.is-wip b { color: var(--wip-blue); }
-.q2-n.is-done, .q2-n.is-done b { color: var(--green); }
+.q2-n.is-blocked, .q2-n.is-blocked b { color: var(--wip-blue); }
+.q2-n.is-open, .q2-n.is-open b { color: var(--orange); }
+.q2-n.is-wip, .q2-n.is-wip b { color: var(--green); }
+.q2-n.is-done, .q2-n.is-done b { color: var(--text-muted); }
 .q2-n-sep { color: var(--border); }
 .q2-qage { margin-left: auto; flex: 0 0 auto; color: var(--text-muted); }
 .q2-chip {
@@ -346,8 +347,12 @@ body.q2-resizing .q2-col { pointer-events: none; }
 /* Age then dot, pinned right. Mirrors .fq-row-signals in the main dashboard. */
 .q2-tsignals { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
 
-/* Status colours match the main dashboard exactly (static/app.css:17681):
-   grey = open, blue = in progress, red = needs input, green = closed. */
+/* Status palette. This DIVERGES from the main dashboard on purpose:
+   blue = needs input, yellow = open, green = in progress, grey = closed.
+   The reasoning: needs-input is a request, not a fault, so it loses the red;
+   done is the most common state by far and had no business being the loudest
+   colour on screen. Green moves to in-progress because a pulsing green dot
+   reads as "running" and blue was needed for needs-input. */
 .q2-tdot {
   flex: 0 0 auto;
   width: 8px;
@@ -356,27 +361,31 @@ body.q2-resizing .q2-col { pointer-events: none; }
   background: var(--text-muted);
   box-shadow: 0 0 0 2px rgba(139, 148, 158, 0.16);
 }
-.q2-trow.is-open .q2-tdot { background: var(--text-muted); }
+.q2-trow.is-open .q2-tdot {
+  background: var(--orange);
+  box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.16);
+}
 .q2-trow.is-in_progress .q2-tdot {
-  background: var(--wip-blue);
+  background: var(--green);
   animation: q2-status-glow 1.5s ease-in-out infinite;
   will-change: opacity, box-shadow;
 }
 @keyframes q2-status-glow {
-  0%, 100% { opacity: 0.82; box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.28), 0 0 7px rgba(33, 150, 243, 0.5); }
-  50%      { opacity: 1;    box-shadow: 0 0 0 4px rgba(33, 150, 243, 0.45), 0 0 16px rgba(33, 150, 243, 0.95); }
+  0%, 100% { opacity: 0.82; box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.28), 0 0 7px rgba(63, 185, 80, 0.5); }
+  50%      { opacity: 1;    box-shadow: 0 0 0 4px rgba(63, 185, 80, 0.45), 0 0 16px rgba(63, 185, 80, 0.95); }
 }
 @media (prefers-reduced-motion: reduce) {
   .q2-trow.is-in_progress .q2-tdot { animation: none; }
 }
 /* A claim can outlive its worker. statusOf() already demotes those rows to
-   open; this keeps them from ever picking up the live blue pulse. */
+   open; this keeps them from ever picking up the live green pulse. */
 .q2-trow.is-stale-claim .q2-tdot {
-  background: var(--text-muted);
+  background: var(--orange);
   animation: none;
-  box-shadow: 0 0 0 2px rgba(139, 148, 158, 0.16);
+  box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.16);
 }
-/* A claim label with no durable session id: liveness is unprovable either way. */
+/* A claim label with no durable session id: liveness is unprovable either way.
+   A hollow ring, so it is legible against the solid open dot next to it. */
 .q2-trow.is-unverified-claim .q2-tdot {
   box-sizing: border-box;
   background: transparent;
@@ -384,23 +393,25 @@ body.q2-resizing .q2-col { pointer-events: none; }
   animation: none;
   box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.16);
 }
-/* Closed and blocked come LAST so they win over the claim-shape rules above:
-   a blocked ticket is red whatever its claim fields say. Same cascade order the
-   main dashboard relies on (static/app.css:17723 and :17786). */
+/* Closed and blocked come last so they win over the claim-shape rules above:
+   a needs-input ticket keeps its colour whatever its claim fields say. */
 .q2-trow.is-closed .q2-tdot {
-  background: var(--green);
+  background: var(--text-muted);
+  opacity: 0.55;
   animation: none;
   border: 0;
-  box-shadow: 0 0 0 2px rgba(139, 148, 158, 0.16);
+  box-shadow: 0 0 0 2px rgba(139, 148, 158, 0.14);
 }
-/* Closed but the worker flagged unfinished follow-up: amber, not clean green. */
-.q2-trow.is-closed.has-unresolved .q2-tdot { background: var(--orange); }
+/* Closed but the worker flagged unfinished follow-up: still worth noticing. */
+.q2-trow.is-closed.has-unresolved .q2-tdot { background: var(--orange); opacity: 1; }
 .q2-trow.is-blocked .q2-tdot {
-  background: var(--red);
+  background: var(--wip-blue);
+  opacity: 1;
   animation: none;
   border: 0;
-  box-shadow: 0 0 0 2px rgba(248, 81, 73, 0.18);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.20);
 }
+
 .q2-tref {
   flex: 0 0 auto;
   font-family: var(--font-mono);

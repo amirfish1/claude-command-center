@@ -230,7 +230,7 @@
       parts.push('<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
         + '<b>' + f.wip + '</b> wip</span>');
     }
-    parts.push('<span class="q2-n" title="Open and unclaimed"><b>' + (f.waiting || 0) + '</b> open</span>');
+    parts.push('<span class="q2-n is-open" title="Open and unclaimed"><b>' + (f.waiting || 0) + '</b> open</span>');
     parts.push('<span class="q2-n is-done" title="Closed, all time"><b>' + (done || 0) + '</b> done</span>');
     return parts.join('<span class="q2-n-sep" aria-hidden="true">·</span>');
   }
@@ -343,7 +343,9 @@
       f.wip ? 0 : 1,
       q.auto_drain ? 0 : 1,
       f.github ? 0 : 1,
-      -(q.depth || 0)
+      // Everything else equal: most recently touched first. A queue with no
+      // activity timestamp at all sorts last rather than first.
+      q.last_activity_seconds != null ? q.last_activity_seconds : Infinity
     ];
   }
 
@@ -489,7 +491,7 @@
         + '<span class="q2-counts">' + countsLine(f, q.closed)
         + (q.last_activity_seconds != null
             ? '<span class="q2-qage" title="Most recent ticket activity in this queue">'
-              + esc(agoFromSeconds(q.last_activity_seconds).replace(/\s*ago$/, '')) + '</span>'
+              + esc(agoFromSeconds(q.last_activity_seconds)) + '</span>'
             : '')
         + '</span>'
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
@@ -510,7 +512,7 @@
     var ageSrc = st === 'closed'
       ? (it.closed_at || it.updated_at || it.created_at)
       : (it.updated_at || it.created_at);
-    var age = relTime(ageSrc).replace(/\s*ago$/, '');
+    var age = relTime(ageSrc);
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
