@@ -543,25 +543,26 @@
     }).join('');
   }
 
-  // ── ops strip: workers + reconciler log ──────────────────────────────────
-  // Both read existing endpoints. The point of the strip is to answer "is
-  // anything actually working this queue right now", which the ticket list
-  // alone cannot say: a ticket marked in_progress proves only that something
-  // once claimed it.
-  var LS_OPS = 'ccc-q2-ops-open';
+  // ── flow diagram + reconciler log ────────────────────────────────────────
+  // The ticket list cannot say whether anything is actually working a queue: a
+  // ticket marked in_progress proves only that something once claimed it. The
+  // diagram shows the pipeline itself — backlog, watcher, worker, recently
+  // done — so an idle-but-armed queue looks different from a dead one.
+  var LS_LOG_OPEN = 'ccc-q2-log-open';
+  var DONE_WINDOW_MS = 60 * 60 * 1000;   // "finished recently" = last hour
+  var STACK_CAP = 14;                    // drawn cards before it becomes "+N"
 
-  function opsOpen() {
-    try { return localStorage.getItem(LS_OPS) !== '0'; } catch (_) { return true; }
+  function logOpen() {
+    try { return localStorage.getItem(LS_LOG_OPEN) !== '0'; } catch (_) { return true; }
   }
 
   async function loadLog(queue) {
     if (!queue) { state.log = []; state.logQueue = ''; return; }
     try {
-      var res = await fetch('/api/wt/activity-log?queue=' + encodeURIComponent(queue) + '&lines=60',
+      var res = await fetch('/api/wt/activity-log?queue=' + encodeURIComponent(queue) + '&lines=200',
                             { cache: 'no-store' });
       var data = await res.json();
-      // A later selection may have landed while this was in flight.
-      if (projectKey(queue) !== projectKey(state.queue)) return;
+      if (projectKey(queue) !== projectKey(state.queue)) return;  // selection moved
       state.log = Array.isArray(data.lines) ? data.lines : [];
       state.logQueue = queue;
     } catch (_) {
@@ -578,47 +579,182 @@
     return { date: m[1], time: m[2], queue: m[3], verb: m[4], rest: m[5] };
   }
 
-  function renderOps() {
-    var host = $('q2Ops');
-    if (!host) return;
-    if (!state.queue) { host.innerHTML = ''; host.hidden = true; return; }
-    host.hidden = false;
-
+  // Everything the diagram draws, gathered once.
+  function flowModel() {
     var key = projectKey(state.queue);
     var q = (state.queues || []).filter(function (x) { return projectKey(x.queue) === key; })[0] || {};
-    var mine = (state.workers || []).filter(function (w) { return projectKey(w.queue) === key; });
-    var open = opsOpen();
+    var mine = (state.items || []).filter(function (it) { return projectKey(it.project) === key; });
+    var now = Date.now();
 
-    var workersHtml;
-    if (mine.length) {
-      workersHtml = mine.map(function (w) {
-        return '<span class="q2-worker">'
-          + '<span class="q2-worker-pulse" aria-hidden="true"></span>'
-          + '<span class="q2-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
+    var waiting = [], blocked = [], working = [], doneRecent = [];
+    mine.forEach(function (it) {
+      var st = statusOf(it);
+      if (st === 'closed') {
+        var t = Date.parse(it.closed_at || it.updated_at || '');
+        if (isFinite(t) && now - t < DONE_WINDOW_MS) doneRecent.push(it);
+        return;
+      }
+      if (st === 'blocked') blocked.push(it);
+      else if (st === 'in_progress') working.push(it);
+      else if (it.claimable !== false) waiting.push(it);
+    });
+    doneRecent.sort(function (a, b) {
+      return Date.parse(b.closed_at || b.updated_at || 0) - Date.parse(a.closed_at || a.updated_at || 0);
+    });
+
+    var workers = (state.workers || []).filter(function (w) { return projectKey(w.queue) === key; });
+    return {
+      q: q,
+      auto: effectiveAutoDrain(q),
+      github: !!((queueFacts()[key] || {}).github),
+      stuck: q.state === 'stuck',
+      waiting: waiting, blocked: blocked, working: working, doneRecent: doneRecent,
+      workers: workers,
+    };
+  }
+
+  function stackHtml(items, cls) {
+    if (!items.length) return '<div class="q2-dg-empty">empty</div>';
+    var shown = items.slice(0, STACK_CAP);
+    var html = shown.map(function (it, i) {
+      return '<div class="q2-dg-card ' + cls + '" style="--i:' + i + '"'
+        + ' title="' + esc(it.ref + ' — ' + titleOf(it).split('\n')[0].slice(0, 90)) + '"'
+        + ' data-q2-ref="' + esc(it.ref) + '">'
+        + '<span class="q2-dg-card-ref">' + esc(it.ref) + '</span>'
+        + '</div>';
+    }).join('');
+    if (items.length > shown.length) {
+      html += '<div class="q2-dg-more">+' + (items.length - shown.length) + ' more</div>';
+    }
+    return html;
+  }
+
+  // Re-rendering the diagram on every 5s poll would restart every CSS
+  // animation mid-cycle, which reads as a stutter. Only rebuild when something
+  // it actually draws has changed.
+  function flowSignature(m) {
+    return [
+      projectKey(state.queue), m.auto ? 1 : 0, m.github ? 1 : 0, m.stuck ? 1 : 0,
+      m.waiting.length, m.blocked.length,
+      m.working.map(function (it) { return it.ref; }).join(','),
+      m.workers.map(function (w) { return w.worker_id; }).join(','),
+      m.doneRecent.map(function (it) { return it.ref; }).join(','),
+    ].join('|');
+  }
+
+  function renderDiagram() {
+    var host = $('q2Diagram');
+    if (!host) return;
+    if (!state.queue) { host.innerHTML = ''; return; }
+
+    var m = flowModel();
+    var sig = flowSignature(m);
+    if (host.getAttribute('data-sig') === sig) return;
+    host.setAttribute('data-sig', sig);
+
+    // Flow is only animated where work can actually move. A manual queue draws
+    // the same pipeline with the links dead, which is the honest picture.
+    var feedLive = m.auto && (m.waiting.length > 0);
+    var workLive = m.working.length > 0 && m.workers.length > 0;
+
+    var watchLabel = !m.auto ? 'idle'
+      : m.github ? 'polling GitHub' : 'watching';
+    var watchNote = !m.auto ? 'Auto-drain off'
+      : m.stuck ? 'armed, nothing spawned'
+      : m.waiting.length ? 'ready to dispatch'
+      : 'no claimable work';
+
+    var workerBody;
+    if (m.workers.length) {
+      workerBody = m.workers.map(function (w) {
+        var on = m.working.filter(function (it) {
+          var s = String(it.claimed_session_id || '').trim(), by = String(it.claimed_by || '').trim();
+          return (s && s === w.session_id) || (by && (by === w.session_id || by === w.worker_id));
+        })[0];
+        return '<div class="q2-dg-worker is-live">'
+          + '<div class="q2-dg-worker-head">'
+          + '<span class="q2-dg-spin" aria-hidden="true"></span>'
+          + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
           + (w.session_id ? sessionBtn(w.session_id, 'open') : '')
-          + '</span>';
+          + '</div>'
+          + (on
+              ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
+                + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
+                + '<span class="q2-dg-worker-title">' + esc(titleOf(on).split('\n')[0].slice(0, 60)) + '</span></div>'
+              : '<div class="q2-dg-worker-idle">holding nothing</div>')
+          + '</div>';
       }).join('');
     } else {
-      // No worker is the normal case. Say WHY, because the reason decides
-      // whether the user needs to act: policy off vs nothing to do vs stuck.
-      var why = !effectiveAutoDrain(q)
-        ? 'Auto-drain is off. Nothing runs here until you start a worker.'
-        : q.state === 'stuck'
-          ? 'Auto-drain is on and work is claimable, but nothing is running.'
-          : (q.claimable > 0
-            ? 'Auto-drain is on. Watching for a slot; nothing claimed yet.'
-            : 'Auto-drain is on. Nothing claimable right now.');
-      workersHtml = '<span class="q2-worker is-idle">'
-        + '<span class="q2-worker-pulse' + (effectiveAutoDrain(q) ? ' is-watching' : '') + '" aria-hidden="true"></span>'
-        + '<span class="q2-dim">' + esc(why) + '</span></span>';
+      workerBody = '<div class="q2-dg-worker is-empty">'
+        + '<div class="q2-dg-slot" aria-hidden="true"></div>'
+        + '<div class="q2-dg-worker-idle">' + esc(m.auto ? 'no worker running' : 'none — auto-drain off') + '</div>'
+        + '</div>';
     }
 
-    var logHtml;
-    if (!state.log.length) {
-      logHtml = '<div class="q2-dim q2-log-empty">No reconciler activity recorded for this queue.</div>';
+    host.innerHTML = ''
+      + '<div class="q2-dg' + (m.stuck ? ' is-stuck' : '') + '">'
+      // 1. Backlog
+      + '<div class="q2-dg-stage">'
+      + '<div class="q2-dg-label">Backlog<span class="q2-dg-n">' + m.waiting.length + '</span></div>'
+      + '<div class="q2-dg-stack">' + stackHtml(m.waiting, 'is-open') + '</div>'
+      + (m.blocked.length
+          ? '<div class="q2-dg-sub is-blocked">' + m.blocked.length + ' needs input</div>' : '')
+      + '</div>'
+      // link: backlog -> watcher
+      + '<div class="q2-dg-link' + (feedLive ? ' is-flowing' : '') + '" aria-hidden="true">'
+      + '<span class="q2-dg-dot"></span><span class="q2-dg-dot"></span><span class="q2-dg-dot"></span></div>'
+      // 2. Watcher
+      + '<div class="q2-dg-stage is-narrow">'
+      + '<div class="q2-dg-label">Watcher</div>'
+      + '<div class="q2-dg-radar' + (m.auto ? ' is-on' : '') + (m.stuck ? ' is-stuck' : '') + '">'
+      + '<span class="q2-dg-radar-sweep" aria-hidden="true"></span>'
+      + '<span class="q2-dg-radar-core" aria-hidden="true"></span>'
+      + '</div>'
+      + '<div class="q2-dg-sub">' + esc(watchLabel) + '</div>'
+      + '<div class="q2-dg-note">' + esc(watchNote) + '</div>'
+      + '</div>'
+      // link: watcher -> worker
+      + '<div class="q2-dg-link' + (workLive ? ' is-flowing' : '') + '" aria-hidden="true">'
+      + '<span class="q2-dg-dot"></span><span class="q2-dg-dot"></span><span class="q2-dg-dot"></span></div>'
+      // 3. Worker
+      + '<div class="q2-dg-stage is-worker">'
+      + '<div class="q2-dg-label">Worker<span class="q2-dg-n">' + m.workers.length + '</span></div>'
+      + workerBody
+      + '</div>'
+      // link: worker -> done
+      + '<div class="q2-dg-link' + (m.doneRecent.length ? ' is-flowing is-slow' : '') + '" aria-hidden="true">'
+      + '<span class="q2-dg-dot"></span><span class="q2-dg-dot"></span><span class="q2-dg-dot"></span></div>'
+      // 4. Done
+      + '<div class="q2-dg-stage">'
+      + '<div class="q2-dg-label">Done <span class="q2-dg-hint">last hour</span>'
+      + '<span class="q2-dg-n">' + m.doneRecent.length + '</span></div>'
+      + '<div class="q2-dg-stack is-done">' + stackHtml(m.doneRecent, 'is-closed') + '</div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  // Chronological, pinned to the newest line unless the user has scrolled up.
+  function renderLogBar() {
+    var host = $('q2LogBar');
+    if (!host) return;
+    var open = logOpen();
+    host.classList.toggle('is-collapsed', !open);
+
+    var body = host.querySelector('.q2-logbar-body');
+    // Preserve "was the user reading history" across the repaint.
+    var pinned = true;
+    if (body) {
+      pinned = (body.scrollHeight - body.scrollTop - body.clientHeight) < 24;
+    }
+
+    var rows;
+    if (!state.queue) {
+      rows = '<div class="q2-dim q2-log-empty">Pick a queue.</div>';
+    } else if (!state.log.length) {
+      rows = '<div class="q2-dim q2-log-empty">No reconciler activity recorded for '
+        + esc(state.queue) + '.</div>';
     } else {
-      // Newest first: the last thing that happened is the thing you want.
-      logHtml = state.log.slice().reverse().map(function (line) {
+      rows = state.log.map(function (line) {
         var e = parseLogLine(line);
         if (e.raw) return '<div class="q2-log-row"><span class="q2-log-rest">' + esc(e.raw) + '</span></div>';
         return '<div class="q2-log-row">'
@@ -629,14 +765,20 @@
       }).join('');
     }
 
-    host.innerHTML = '<div class="q2-ops-head">'
-      + '<button type="button" class="q2-ops-toggle" data-q2-ops-toggle aria-expanded="' + (open ? 'true' : 'false') + '">'
+    host.innerHTML = '<div class="q2-logbar-head">'
+      + '<button type="button" class="q2-ops-toggle" data-q2-log-toggle aria-expanded="' + (open ? 'true' : 'false') + '">'
       + '<span class="q2-ops-caret" aria-hidden="true">' + (open ? '&#9662;' : '&#9656;') + '</span>'
-      + (mine.length ? mine.length + ' worker' + (mine.length === 1 ? '' : 's') : 'No worker')
+      + 'Activity log' + (state.queue ? ' &middot; ' + esc(state.queue) : '')
       + '</button>'
-      + '<span class="q2-ops-workers">' + workersHtml + '</span>'
+      + '<span class="q2-spacer"></span>'
+      + '<span class="q2-dim q2-logbar-count">' + (state.log.length ? state.log.length + ' lines' : '') + '</span>'
       + '</div>'
-      + (open ? '<div class="q2-log">' + logHtml + '</div>' : '');
+      + '<div class="q2-logbar-body">' + rows + '</div>';
+
+    if (pinned) {
+      var nb = host.querySelector('.q2-logbar-body');
+      if (nb) nb.scrollTop = nb.scrollHeight;
+    }
   }
 
   // ── render: column 2, tickets ────────────────────────────────────────────
@@ -1115,7 +1257,8 @@
   function renderAll() {
     renderChrome();
     renderQueues();
-    renderOps();
+    renderDiagram();
+    renderLogBar();
     renderTickets();
     // The detail pane owns its own fetch; only repaint from cache here so a
     // 5s poll can't flicker the pane the user is reading.
@@ -1148,7 +1291,7 @@
     rememberSelection();
     state.log = [];
     renderAll();
-    loadLog(name).then(renderOps);
+    loadLog(name).then(renderLogBar);
   }
 
   function selectTicket(ref) {
@@ -1178,10 +1321,10 @@
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
-    var opsT = e.target.closest('[data-q2-ops-toggle]');
-    if (opsT) {
-      try { localStorage.setItem(LS_OPS, opsOpen() ? '0' : '1'); } catch (_) {}
-      renderOps();
+    var logT = e.target.closest('[data-q2-log-toggle]');
+    if (logT) {
+      try { localStorage.setItem(LS_LOG_OPEN, logOpen() ? '0' : '1'); } catch (_) {}
+      renderLogBar();
       return;
     }
     if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }

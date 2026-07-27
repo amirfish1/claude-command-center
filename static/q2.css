@@ -208,19 +208,265 @@ body.q2-resizing .q2-col { pointer-events: none; }
 
 .q2-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 
-/* ── ops strip: workers + reconciler log ──────────────────────────────── */
-.q2-ops {
+/* ── flow diagram (top band) ──────────────────────────────────────────── */
+.q2-diagram {
   flex: 0 0 auto;
+  height: 22vh;
+  min-height: 150px;
+  max-height: 230px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  overflow: hidden;
 }
-.q2-ops-head {
+.q2-dg {
+  height: 100%;
+  display: flex;
+  align-items: flex-start;  /* every stage hangs from one baseline */
+  gap: 0;
+  padding: 8px 14px;
+  max-width: 1240px;        /* stop the stages sprawling on a wide monitor */
+  margin: 0 auto;
+}
+.q2-dg-stage {
+  flex: 1 1 0;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 0;
+}
+.q2-dg-stage.is-narrow { flex: 0 0 96px; align-items: center; }
+.q2-dg-stage.is-worker { flex: 1.15 1 0; justify-content: flex-start; }
+.q2-dg-label {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--text-muted);
+}
+.q2-dg-hint { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+.q2-dg-n {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0;
+}
+.q2-dg-stage.is-narrow .q2-dg-n { margin-left: 0; }
+
+/* Backlog / done: literal stacks of cards, so depth is a physical quantity. */
+.q2-dg-stack {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 3px;
+  overflow: hidden;
+}
+/* Cap the stack so a 200-ticket backlog cannot push the band's height around;
+   the "+N more" chip carries the remainder. */
+.q2-dg-stack { max-height: 100%; }
+.q2-dg-card {
+  --i: 0;
+  flex: 0 0 auto;
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.9;
+  padding: 0 6px;
+  border-radius: 3px;
+  border-left: 2px solid var(--orange);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Staggered entrance so a growing backlog visibly grows. */
+  animation: q2-dg-in 0.35s ease-out backwards;
+  animation-delay: calc(var(--i) * 28ms);
+}
+.q2-dg-card:hover { color: var(--text); border-left-color: var(--accent); }
+.q2-dg-card.is-closed { border-left-color: var(--green); opacity: 0.75; }
+@keyframes q2-dg-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+.q2-dg-more { font-size: 9.5px; color: var(--text-muted); align-self: center; }
+.q2-dg-empty { font-size: 10.5px; color: var(--text-muted); opacity: 0.6; padding-top: 2px; }
+.q2-dg-sub { font-size: 10px; color: var(--text-muted); }
+.q2-dg-sub.is-blocked { color: var(--wip-blue); }
+.q2-dg-note { font-size: 9.5px; color: var(--text-muted); opacity: 0.75; text-align: center; }
+
+/* Links between stages. Dots only travel when work can actually move, so a
+   dead pipeline looks dead rather than merely quiet. */
+.q2-dg-link {
+  flex: 0 0 40px;
+  position: relative;
+  align-self: flex-start;
+  /* Sits on the content row, clear of the label above it. */
+  margin: 30px 4px 0;
+  height: 2px;
+  background: var(--border);
+}
+.q2-dg-dot {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+}
+.q2-dg-link.is-flowing .q2-dg-dot { animation: q2-dg-travel 1.6s linear infinite; }
+.q2-dg-link.is-flowing.is-slow .q2-dg-dot { animation-duration: 2.8s; background: var(--green); }
+.q2-dg-link.is-flowing .q2-dg-dot:nth-child(2) { animation-delay: 0.53s; }
+.q2-dg-link.is-flowing .q2-dg-dot:nth-child(3) { animation-delay: 1.06s; }
+@keyframes q2-dg-travel {
+  0%   { left: 0;    opacity: 0; }
+  15%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+/* Watcher: a radar that sweeps while auto-drain is armed. This is the whole
+   point of the diagram — it shows the queue is being watched even when
+   nothing is running. */
+.q2-dg-radar {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.q2-dg-radar-core {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 6px; height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+.q2-dg-radar.is-on { border-color: var(--orange); }
+.q2-dg-radar.is-on .q2-dg-radar-core { background: var(--orange); opacity: 1; }
+.q2-dg-radar.is-on .q2-dg-radar-sweep {
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(from 0deg, rgba(210,153,34,0.42), rgba(210,153,34,0) 70%);
+  animation: q2-dg-sweep 2.6s linear infinite;
+}
+.q2-dg-radar.is-on.is-stuck { border-color: var(--red); }
+.q2-dg-radar.is-on.is-stuck .q2-dg-radar-core { background: var(--red); }
+.q2-dg-radar.is-on.is-stuck .q2-dg-radar-sweep {
+  background: conic-gradient(from 0deg, rgba(248,81,73,0.42), rgba(248,81,73,0) 70%);
+}
+@keyframes q2-dg-sweep { to { transform: rotate(360deg); } }
+
+/* Worker */
+.q2-dg-worker {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.q2-dg-worker + .q2-dg-worker { margin-top: 4px; }
+.q2-dg-worker.is-live { border-color: var(--green); }
+.q2-dg-worker.is-empty {
+  border-style: dashed;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.q2-dg-worker-head { display: flex; align-items: center; gap: 6px; }
+.q2-dg-worker-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q2-dg-spin {
+  flex: 0 0 auto;
+  width: 10px; height: 10px;
+  border: 2px solid var(--green);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: q2-spin 0.9s linear infinite;
+}
+.q2-dg-worker-on {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.q2-dg-worker-on .q2-dg-card-ref { font-family: var(--font-mono); color: var(--green); }
+.q2-dg-worker-title {
+  min-width: 0;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q2-dg-worker-idle { font-size: 10.5px; color: var(--text-muted); opacity: 0.7; }
+.q2-dg-slot {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
+  border-radius: 5px;
+  border: 1px dashed var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .q2-dg-card,
+  .q2-dg-link.is-flowing .q2-dg-dot,
+  .q2-dg-radar.is-on .q2-dg-radar-sweep,
+  .q2-dg-spin { animation: none; }
+}
+
+/* ── reconciler log (bottom band) ─────────────────────────────────────── */
+.q2-logbar {
+  flex: 0 0 auto;
+  height: 24vh;
+  min-height: 120px;
+  max-height: 260px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.q2-logbar.is-collapsed { height: auto; min-height: 0; }
+.q2-logbar-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
-  min-height: 28px;
+  padding: 4px 10px;
+  min-height: 26px;
 }
+.q2-logbar-count { font-size: 10.5px; }
+.q2-logbar-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 10px 6px;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+.q2-logbar.is-collapsed .q2-logbar-body { display: none; }
 .q2-ops-toggle {
   flex: 0 0 auto;
   display: inline-flex;
@@ -238,58 +484,6 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-ops-toggle:hover { color: var(--text); }
 .q2-ops-caret { font-size: 9px; }
-.q2-ops-workers {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  overflow: hidden;
-}
-.q2-worker {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  font-size: 11px;
-}
-.q2-worker.is-idle { color: var(--text-muted); }
-.q2-worker-id {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  background: var(--surface-2);
-  border-radius: 4px;
-  padding: 1px 5px;
-  white-space: nowrap;
-}
-/* Solid green = a worker is on it. Hollow amber ring = auto-drain is armed and
-   watching but nothing is running. Grey = policy is off, nothing is coming. */
-.q2-worker-pulse {
-  flex: 0 0 auto;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--green);
-  animation: q2-status-glow 1.5s ease-in-out infinite;
-}
-.q2-worker.is-idle .q2-worker-pulse {
-  background: var(--text-muted);
-  opacity: 0.5;
-  animation: none;
-}
-.q2-worker.is-idle .q2-worker-pulse.is-watching {
-  background: transparent;
-  border: 1.5px solid var(--orange);
-  opacity: 1;
-}
-.q2-log {
-  max-height: 132px;
-  overflow-y: auto;
-  border-top: 1px solid var(--border);
-  padding: 4px 8px 6px;
-  font-size: 10.5px;
-  line-height: 1.55;
-}
 .q2-log-empty { padding: 2px 0; }
 .q2-log-row { display: flex; gap: 7px; align-items: baseline; }
 .q2-log-time {
@@ -299,7 +493,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   opacity: 0.75;
 }
 .q2-log-verb {
-  flex: 0 0 52px;
+  flex: 0 0 58px;
   font-family: var(--font-mono);
   font-weight: 650;
   color: var(--text-muted);
@@ -311,7 +505,8 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-log-verb.is-reopen  { color: var(--orange); }
 .q2-log-verb.is-block   { color: var(--wip-blue); }
 .q2-log-verb.is-stop,
-.q2-log-verb.is-reap    { color: var(--red); }
+.q2-log-verb.is-reap,
+.q2-log-verb.is-release { color: var(--red); }
 .q2-log-rest {
   flex: 1 1 auto;
   min-width: 0;
