@@ -23,6 +23,8 @@
       <div class="q2-col-head">
         <span class="q2-col-title">Queues</span>
         <span class="q2-col-count" id="q2QueueCount"></span>
+        <span class="q2-spacer"></span>
+        <button type="button" class="q2-icon-btn" id="q2NewQueueBtn" title="Create a queue" aria-label="Create a queue">&#43;</button>
       </div>
       <div class="q2-list" id="q2Queues"></div>
     </section>
@@ -37,6 +39,8 @@
         <span class="q2-col-title" id="q2TicketsTitle">Tickets</span>
         <span class="q2-col-count" id="q2TicketCount"></span>
         <span class="q2-spacer"></span>
+        <button type="button" class="q2-icon-btn" id="q2NewTicketBtn" title="Add a ticket to this queue" aria-label="Add a ticket">&#43;</button>
+        <button type="button" class="q2-icon-btn" id="q2QueueSettingsBtn" title="Edit this queue's configuration" aria-label="Queue settings">&#9881;</button>
         <button type="button" class="q2-btn q2-btn-ghost" id="q2ClosedBtn" aria-pressed="false">Show closed</button>
       </div>
       <!-- Flow diagram for this queue: backlog -> watcher -> worker -> done. -->
@@ -59,6 +63,9 @@
       <div class="q2-detail" id="q2Detail"></div>
     </section>
   </main>
+
+  <!-- Modal host: ticket composer and queue configuration both render here. -->
+  <div class="q2-modal-host" id="q2Modal" hidden></div>
 
   <script src="/static/q2.js"></script>
 </body>

@@ -1633,6 +1633,250 @@
     if (tl) tl.classList.toggle('show-edits', box.checked);
   });
 
+  // ── modals: new ticket, queue configuration ──────────────────────────────
+  function closeModal() {
+    var host = $('q2Modal');
+    if (!host) return;
+    host.hidden = true;
+    host.innerHTML = '';
+    document.removeEventListener('keydown', modalKey, true);
+  }
+  function modalKey(e) {
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+  }
+  function openModal(html, onMount) {
+    var host = $('q2Modal');
+    if (!host) return;
+    host.innerHTML = '<div class="q2-modal-backdrop" data-q2-modal-close></div>'
+      + '<div class="q2-modal" role="dialog" aria-modal="true">' + html + '</div>';
+    host.hidden = false;
+    document.addEventListener('keydown', modalKey, true);
+    if (onMount) onMount(host.querySelector('.q2-modal'));
+  }
+
+  // ── new ticket ───────────────────────────────────────────────────────────
+  // Images paste or drop straight in: they upload to the same pasted-images
+  // directory the rest of CCC uses and their path is appended to the note, so
+  // the worker receives a path it can actually open.
+  async function uploadImage(file) {
+    var res = await fetch('/api/upload-image', {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'image/png' },
+      body: file,
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data.path;
+  }
+
+  function openNewTicket() {
+    if (!state.queue) { note('Pick a queue first.'); return; }
+    var queue = state.queue;
+    openModal(
+      '<div class="q2-modal-head"><h2>New ticket in ' + esc(queue) + '</h2>'
+      + '<button type="button" class="q2-icon-btn" data-q2-modal-close aria-label="Close">&times;</button></div>'
+      + '<div class="q2-drop" data-q2-drop>'
+      + '<div class="q2-drop-hint">Paste or drop an image</div>'
+      + '<div class="q2-drop-thumbs" data-q2-thumbs></div>'
+      + '</div>'
+      + '<label class="q2-modal-label" for="q2TicketNote">Describe the fix</label>'
+      + '<textarea class="q2-input q2-modal-text" id="q2TicketNote" rows="7"'
+      + ' placeholder="What should the agent do?"></textarea>'
+      + '<div class="q2-modal-foot">'
+      + '<span class="q2-dim q2-modal-hint">&#8984;/Ctrl + Enter to file</span>'
+      + '<button type="button" class="q2-btn" data-q2-modal-close>Cancel</button>'
+      + '<button type="button" class="q2-btn q2-btn-primary" data-q2-file-ticket>Add ticket</button>'
+      + '</div>',
+      function (modal) {
+        var ta = modal.querySelector('#q2TicketNote');
+        var thumbs = modal.querySelector('[data-q2-thumbs]');
+        var drop = modal.querySelector('[data-q2-drop]');
+
+        async function take(files) {
+          for (var i = 0; i < files.length; i++) {
+            var f = files[i];
+            if (!f || !/^image\//.test(f.type || '')) continue;
+            var img = document.createElement('div');
+            img.className = 'q2-thumb is-busy';
+            img.innerHTML = '<span class="q2-spin" aria-hidden="true"></span>';
+            thumbs.appendChild(img);
+            try {
+              var path = await uploadImage(f);
+              img.className = 'q2-thumb';
+              img.innerHTML = '<img alt="" src="/api/pasted-image?path=' + encodeURIComponent(path) + '">';
+              img.title = path;
+              // The path is what the worker acts on, so it goes in the note.
+              ta.value = (ta.value ? ta.value.replace(/\s*$/, '') + '\n' : '') + path;
+            } catch (e) {
+              img.className = 'q2-thumb is-error';
+              img.textContent = 'failed';
+              note('Image upload failed: ' + e.message);
+            }
+          }
+        }
+        ta.addEventListener('paste', function (e) {
+          var items = (e.clipboardData && e.clipboardData.files) || [];
+          if (items.length) { e.preventDefault(); take(items); }
+        });
+        ['dragenter', 'dragover'].forEach(function (t) {
+          drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('is-over'); });
+        });
+        ['dragleave', 'drop'].forEach(function (t) {
+          drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('is-over'); });
+        });
+        drop.addEventListener('drop', function (e) {
+          if (e.dataTransfer && e.dataTransfer.files) take(e.dataTransfer.files);
+        });
+        ta.addEventListener('keydown', function (e) {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            modal.querySelector('[data-q2-file-ticket]').click();
+          }
+        });
+        ta.focus();
+      });
+  }
+
+  async function fileTicket(btn) {
+    var ta = document.getElementById('q2TicketNote');
+    var noteText = ta ? String(ta.value || '').trim() : '';
+    if (!noteText) { note('Describe the fix first.'); return; }
+    btn.disabled = true;
+    try {
+      var data = await postJson('/api/ux-fixes/enqueue', {
+        note: noteText, project: state.queue, source: 'ccc',
+      });
+      closeModal();
+      note('Filed ' + ((data.item && data.item.ref) || 'ticket'));
+      await refresh();
+      if (data.item && data.item.ref) selectTicket(data.item.ref);
+    } catch (e) {
+      note('Could not file ticket: ' + e.message);
+      btn.disabled = false;
+    }
+  }
+
+  // ── queue configuration ──────────────────────────────────────────────────
+  // The same fields `wt config -q ...` takes, against the same endpoints the
+  // main dashboard's manager uses. It cannot literally reuse that dialog:
+  // openQueueManager lives inside app.js's closure and this page does not load
+  // app.js — that is the cost of the fork, paid here deliberately.
+  function opt(v, label, cur) {
+    return '<option value="' + esc(v) + '"' + (String(cur || '') === v ? ' selected' : '') + '>'
+      + esc(label) + '</option>';
+  }
+  function field(label, inner, hint) {
+    return '<label class="q2-field"><span class="q2-field-k">' + esc(label) + '</span>'
+      + inner + (hint ? '<span class="q2-field-hint">' + esc(hint) + '</span>' : '') + '</label>';
+  }
+
+  async function openQueueConfig(queueName) {
+    var options;
+    try {
+      options = await postJson('/api/queue/config-options', {});
+    } catch (e) {
+      note('Could not load queue options: ' + e.message);
+      return;
+    }
+    var isNew = !queueName;
+    var existing = (options.queues || []).filter(function (q) {
+      return projectKey(q.queue) === projectKey(queueName);
+    })[0];
+    var c = Object.assign({}, options.defaults || {}, (existing && existing.config) || {});
+    var models = options.models_by_engine || {};
+    var engine = c.engine || 'claude';
+    var types = Array.isArray(c.claim_types) ? c.claim_types : [];
+
+    function modelOptions(eng, cur) {
+      var list = models[eng] || [];
+      return opt('', 'default', cur)
+        + list.map(function (m) { return opt(m, m, cur); }).join('');
+    }
+
+    openModal(
+      '<div class="q2-modal-head"><h2>' + (isNew ? 'New queue' : 'Queue ' + esc(queueName)) + '</h2>'
+      + '<button type="button" class="q2-icon-btn" data-q2-modal-close aria-label="Close">&times;</button></div>'
+      + '<div class="q2-fields">'
+      + field('Name', '<input class="q2-input" data-q2-cfg="queue" value="' + esc(queueName || '')
+          + '"' + (isNew ? '' : ' readonly') + ' placeholder="MYQUEUE">',
+          isNew ? '1-64 letters, numbers, _ or -' : 'Renaming is not supported here')
+      + field('Repo path', '<input class="q2-input" data-q2-cfg="repo_path" list="q2RepoPaths" value="'
+          + esc(c.repo_path || '') + '" placeholder="/Users/you/Apps/project">')
+      + '<datalist id="q2RepoPaths">'
+      + (options.repo_paths || []).map(function (p) { return '<option value="' + esc(p) + '">'; }).join('')
+      + '</datalist>'
+      + field('Backend', '<select class="q2-input" data-q2-cfg="backend">'
+          + opt('file', 'file (local tickets)', c.backend) + opt('github', 'github issues', c.backend)
+          + '</select>')
+      + field('GitHub repo', '<input class="q2-input" data-q2-cfg="github_repo" list="q2GhRepos" value="'
+          + esc(c.github_repo || '') + '" placeholder="owner/repo">')
+      + '<datalist id="q2GhRepos">'
+      + (options.github_repos || []).map(function (r) { return '<option value="' + esc(r) + '">'; }).join('')
+      + '</datalist>'
+      + field('GitHub assignee', '<input class="q2-input" data-q2-cfg="github_assignee" value="'
+          + esc(c.github_assignee || '') + '">')
+      + field('Engine', '<select class="q2-input" data-q2-cfg="engine">'
+          + Object.keys(models).map(function (e) { return opt(e, e, engine); }).join('')
+          + '</select>')
+      + field('Model', '<select class="q2-input" data-q2-cfg="model">' + modelOptions(engine, c.model) + '</select>')
+      + field('Effort', '<select class="q2-input" data-q2-cfg="effort">'
+          + opt('', 'default', c.effort) + ['low', 'medium', 'high', 'xhigh'].map(function (x) {
+              return opt(x, x, c.effort); }).join('')
+          + '</select>')
+      + field('Desired workers', '<input class="q2-input" type="number" min="0" max="16"'
+          + ' data-q2-cfg="desired_workers" value="' + esc(String(c.desired_workers != null ? c.desired_workers : 1)) + '">')
+      + field('Auto-drain', '<select class="q2-input" data-q2-cfg="auto_drain">'
+          + opt('false', 'off', String(!!c.auto_drain)) + opt('true', 'on', String(!!c.auto_drain))
+          + '</select>')
+      + field('Claim types', '<span class="q2-checkrow">'
+          + '<label><input type="checkbox" data-q2-claim="bug"' + (types.indexOf('bug') !== -1 ? ' checked' : '') + '> bug</label>'
+          + '<label><input type="checkbox" data-q2-claim="feature"' + (types.indexOf('feature') !== -1 ? ' checked' : '') + '> feature</label>'
+          + '</span>', 'Neither ticked means every type')
+      + '</div>'
+      + '<div class="q2-modal-foot">'
+      + '<span class="q2-dim q2-modal-hint">Saving replaces the whole config, as `wt config` does</span>'
+      + '<button type="button" class="q2-btn" data-q2-modal-close>Cancel</button>'
+      + '<button type="button" class="q2-btn q2-btn-primary" data-q2-save-queue>Save</button>'
+      + '</div>',
+      function (modal) {
+        // Model list follows the engine, or it offers models the engine cannot run.
+        var eng = modal.querySelector('[data-q2-cfg="engine"]');
+        var mod = modal.querySelector('[data-q2-cfg="model"]');
+        eng.addEventListener('change', function () { mod.innerHTML = modelOptions(eng.value, ''); });
+        var first = modal.querySelector('[data-q2-cfg="' + (isNew ? 'queue' : 'repo_path') + '"]');
+        if (first) first.focus();
+      });
+  }
+
+  async function saveQueueConfig(btn) {
+    var modal = document.querySelector('.q2-modal');
+    if (!modal) return;
+    var payload = {};
+    modal.querySelectorAll('[data-q2-cfg]').forEach(function (el) {
+      payload[el.getAttribute('data-q2-cfg')] = el.value;
+    });
+    payload.auto_drain = payload.auto_drain === 'true';
+    payload.desired_workers = parseInt(payload.desired_workers, 10) || 0;
+    payload.claim_types = [].slice.call(modal.querySelectorAll('[data-q2-claim]'))
+      .filter(function (el) { return el.checked; })
+      .map(function (el) { return el.getAttribute('data-q2-claim'); });
+    if (!String(payload.queue || '').trim()) { note('Queue name is required.'); return; }
+    btn.disabled = true;
+    try {
+      var data = await postJson('/api/queue/config', payload);
+      closeModal();
+      note('Saved ' + (data.queue || payload.queue));
+      // The config write invalidates the drain/claim overrides we were holding.
+      var k = projectKey(data.queue || payload.queue);
+      delete drainOverride[k]; delete typesOverride[k];
+      await refresh();
+      selectQueue(data.queue || payload.queue);
+    } catch (e) {
+      note('Could not save queue: ' + e.message);
+      btn.disabled = false;
+    }
+  }
+
   function renderAll() {
     renderChrome();
     renderQueues();
@@ -1744,6 +1988,18 @@
     }
     if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
     if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
+    if (e.target.closest('[data-q2-modal-close]')) { closeModal(); return; }
+    if (e.target.closest('#q2NewTicketBtn')) { openNewTicket(); return; }
+    if (e.target.closest('#q2NewQueueBtn')) { openQueueConfig(''); return; }
+    if (e.target.closest('#q2QueueSettingsBtn')) {
+      if (!state.queue) { note('Pick a queue first.'); return; }
+      openQueueConfig(state.queue);
+      return;
+    }
+    var fileBtn = e.target.closest('[data-q2-file-ticket]');
+    if (fileBtn) { fileTicket(fileBtn); return; }
+    var saveQ = e.target.closest('[data-q2-save-queue]');
+    if (saveQ) { saveQueueConfig(saveQ); return; }
   });
 
   // Queue rows are divs now (they contain a real button), so the Enter/Space
