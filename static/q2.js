@@ -29,6 +29,8 @@
     offline: false,
     booted: false,      // guards the one-shot restore of the saved selection
     arm: '',            // which write form is open ('' = none)
+    configs: {},        // queue -> wt config (engine/model/effort/workers)
+    configDefaults: {}, // wt defaults, merged under each queue's own config
     log: [],            // reconciler activity lines for the selected queue
     logQueue: '',
   };
@@ -703,7 +705,10 @@
   // diagram shows the pipeline itself — backlog, watcher, worker, recently
   // done — so an idle-but-armed queue looks different from a dead one.
   var LS_LOG_OPEN = 'ccc-q2-log-open';
-  var DONE_WINDOW_MS = 60 * 60 * 1000;   // "finished recently" = last hour
+  // "Finished recently" window. The label is derived from it so the two can
+  // never disagree about what the Closed column is actually counting.
+  var DONE_WINDOW_MS = 60 * 60 * 1000;
+  var DONE_WINDOW_LABEL = '1h';
   var STACK_CAP = 14;                    // drawn cards before it becomes "+N"
 
   var LS_CONV_OPEN = 'ccc-q2-conv-open';
@@ -718,6 +723,25 @@
   // not a permanent fixture taking a quarter of the column.
   function logOpen() {
     try { return localStorage.getItem(LS_LOG_OPEN) === '1'; } catch (_) { return false; }
+  }
+
+  // Engine / model / effort live in the queue CONFIG, which /api/queue/status
+  // does not carry. Fetched separately and cached: it is small, changes only
+  // when someone edits a queue, and the board polls every 5s.
+  async function loadConfigs() {
+    try {
+      var data = await postJson('/api/queue/config-options', {});
+      var map = {};
+      // config-options returns only the fields a queue has EXPLICITLY set, so
+      // a queue on the default engine came back with nothing and read as "not
+      // configured". Merge the defaults in, the same way the settings form does.
+      var defaults = data.defaults || {};
+      (data.queues || []).forEach(function (q) {
+        map[projectKey(q.queue)] = Object.assign({}, defaults, q.config || {});
+      });
+      state.configDefaults = defaults;
+      state.configs = map;
+    } catch (_) { /* the strip just falls back to "not configured" */ }
   }
 
   async function loadLog(queue) {
@@ -769,7 +793,9 @@
     });
 
     var workers = (state.workers || []).filter(function (w) { return projectKey(w.queue) === key; });
+    var cfg = (state.configs || {})[key] || {};
     return {
+      cfg: cfg,
       q: q,
       auto: effectiveAutoDrain(q),
       github: !!((queueFacts()[key] || {}).github),
@@ -804,6 +830,7 @@
       m.waiting.length, m.parked.length, m.blocked.length,
       m.working.map(function (it) { return it.ref; }).join(','),
       m.workers.map(function (w) { return w.worker_id; }).join(','),
+      [m.cfg.engine, m.cfg.model, m.cfg.effort, m.cfg.desired_workers].join('~'),
       m.doneRecent.map(function (it) { return it.ref; }).join(','),
     ].join('|');
   }
@@ -852,9 +879,22 @@
           + '</div>';
       }).join('');
     } else {
+      // Nothing running: say what WOULD run. The spec is the queue's
+      // configured default worker, which is otherwise buried in the settings
+      // dialog and is the thing you check when a queue misbehaves.
+      var spec = [m.cfg.engine, m.cfg.model, m.cfg.effort].filter(Boolean).join(' \u00b7 ');
       workerBody = '<div class="q2-dg-worker is-empty">'
+        + '<div class="q2-dg-worker-head">'
         + '<div class="q2-dg-slot" aria-hidden="true"></div>'
-        + '<div class="q2-dg-worker-idle">' + esc(m.auto ? 'No live worker' : 'No live worker \u00b7 auto-drain off') + '</div>'
+        + '<div class="q2-dg-worker-idle">' + esc(m.auto ? 'None live' : 'None live \u00b7 stopped') + '</div>'
+        + '</div>'
+        + '<div class="q2-dg-default" title="The worker this queue spawns by default">'
+        + '<span class="q2-dg-default-k">default</span>'
+        + '<span class="q2-dg-default-v">' + esc(spec || 'not configured') + '</span>'
+        + (m.cfg.desired_workers != null
+            ? '<span class="q2-dg-default-n" title="Desired workers">&times;' + esc(String(m.cfg.desired_workers)) + '</span>'
+            : '')
+        + '</div>'
         + '</div>';
     }
 
@@ -905,9 +945,14 @@
       + '<span class="q2-dg-dot"></span><span class="q2-dg-dot"></span><span class="q2-dg-dot"></span></div>'
       // 4. Done
       + '<div class="q2-dg-stage">'
-      + '<div class="q2-dg-label" title="Closed in the last hour">Closed'
+      + '<div class="q2-dg-label" title="Closed in the last ' + esc(DONE_WINDOW_LABEL) + '">'
+      + 'Closed &middot; ' + esc(DONE_WINDOW_LABEL)
       + '<span class="q2-dg-n">' + m.doneRecent.length + '</span></div>'
       + '<div class="q2-dg-stack is-done">' + stackHtml(m.doneRecent, 'is-closed') + '</div>'
+      // All-time total. It was only in the header this replaces, and it is the
+      // one number the diagram could not otherwise show.
+      + '<div class="q2-dg-sub" title="Closed in this queue, all time">'
+      + (m.q.closed || 0) + ' total</div>'
       + '</div>'
       + '</div>';
   }
@@ -1119,17 +1164,10 @@
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
     // rather than lumping blocked and in-progress under "open".
-    var hdrTypes = claimTypesFor(projectKey(state.queue));
-    var hdr = { needsInput: 0, wip: 0, waiting: 0, parked: 0 };
-    openish.forEach(function (it) {
-      var st = statusOf(it);
-      if (st === 'blocked') hdr.needsInput++;
-      else if (st === 'in_progress') hdr.wip++;
-      else if (it.claimable === false || !isClaimableType(it, hdrTypes)) hdr.parked++;
-      else hdr.waiting++;
-    });
-    $('q2TicketCount').innerHTML = '<span class="q2-counts">'
-      + countsLine(hdr, closed.length, hdrTypes) + '</span>';
+    // The counts used to live here, but the diagram directly below shows the
+    // same numbers with more context. Two copies a centimetre apart is worse
+    // than one, so the header keeps only the queue name.
+    $('q2TicketCount').innerHTML = '';
 
     if (!openish.length && !(state.showClosed && closed.length)) {
       host.innerHTML = '<div class="q2-empty">'
@@ -1907,6 +1945,7 @@
       // The config write invalidates the drain/claim overrides we were holding.
       var k = projectKey(data.queue || payload.queue);
       delete drainOverride[k]; delete typesOverride[k];
+      await loadConfigs();
       await refresh();
       selectQueue(data.queue || payload.queue);
     } catch (e) {
@@ -2192,6 +2231,8 @@
     var k = el.getAttribute('data-q2-icon');
     el.innerHTML = k === 'gear' ? ICON_GEAR : ICON_PLUS;
   });
+
+  loadConfigs().then(renderAll);
 
   // ── boot ─────────────────────────────────────────────────────────────────
   refresh();

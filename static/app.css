@@ -14135,7 +14135,10 @@
   grid-column: 2 / 4;
   font-size: 11px; color: var(--text-muted);
   margin-top: 2px;
-  line-height: 1.4;
+  /* Pin the content box so the pill is the same 22px tall as q2's, whose
+     font resolves to a 14px line box. `normal` differs between the two
+     stacks and left this 2px taller. */
+  line-height: 14px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -16285,7 +16288,10 @@ body.status-pos-right #convToolbar {
   display: flex;
   gap: 8px;
   font-size: 11px;
-  line-height: 1.4;
+  /* Pin the content box so the pill is the same 22px tall as q2's, whose
+     font resolves to a 14px line box. `normal` differs between the two
+     stacks and left this 2px taller. */
+  line-height: 14px;
 }
 .mockup-chat-message .msg-sender {
   font-weight: 600;
@@ -16809,7 +16815,10 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 12px;
   margin: 0;
   color: var(--text-muted);
-  line-height: 1.4;
+  /* Pin the content box so the pill is the same 22px tall as q2's, whose
+     font resolves to a 14px line box. `normal` differs between the two
+     stacks and left this 2px taller. */
+  line-height: 14px;
 }
 
 /* CLI Checker Step */
@@ -17026,7 +17035,10 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--text-muted);
   text-align: center;
   margin-top: 14px;
-  line-height: 1.4;
+  /* Pin the content box so the pill is the same 22px tall as q2's, whose
+     font resolves to a 14px line box. `normal` differs between the two
+     stacks and left this 2px taller. */
+  line-height: 14px;
 }
 
 /* First Session Step */
@@ -17206,7 +17218,10 @@ body:has(.gc-reader) .pwa-install-banner {
   margin: 0 0 10px 0;
   color: var(--text-muted);
   font-size: 12px;
-  line-height: 1.4;
+  /* Pin the content box so the pill is the same 22px tall as q2's, whose
+     font resolves to a 14px line box. `normal` differs between the two
+     stacks and left this 2px taller. */
+  line-height: 14px;
 }
 
 .onb-arrow-close-btn {
@@ -18131,7 +18146,10 @@ body:has(.gc-reader) .pwa-install-banner {
   color: var(--text);
   padding: 10px 12px;
   font: inherit;
-  line-height: 1.4;
+  /* Pin the content box so the pill is the same 22px tall as q2's, whose
+     font resolves to a 14px line box. `normal` differs between the two
+     stacks and left this 2px taller. */
+  line-height: 14px;
 }
 .fq-ticket-textarea:focus {
   outline: none;
@@ -18733,7 +18751,10 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.35em;
-  line-height: 1.4;
+  /* Pin the content box so the pill is the same 22px tall as q2's, whose
+     font resolves to a 14px line box. `normal` differs between the two
+     stacks and left this 2px taller. */
+  line-height: 14px;
 }
 .ccc-hero-date {
   color: rgba(139, 148, 158, 0.76);
@@ -21537,24 +21558,31 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    other header controls, but keeps its LABEL: every other button in this row
    is icon-only (.sidebar-header-actions hides .sh-action-label), and an
    unlabelled glyph does not read as "go to the queue board". */
-/* Scoped to the row so it ties with `.sidebar-header-actions .sh-btn`
-   (0,2,0) and wins on order. A bare `.q2-switch` lost, which is why the
-   label kept overflowing a 30px icon box. */
-.sidebar-header-actions .q2-switch {
-  text-decoration: none;
-  width: auto;
-  min-width: 0;
-  height: auto;
-  padding: 3px 9px;
-  gap: 5px;
+/* Switch to the q2 queue board. Deliberately identical to q2's own "Sessions"
+   pill (static/q2.css .q2-back) so the control looks the same and sits in the
+   same corner going both ways. Its own element in the header rather than a
+   .sh-btn: that row hides labels and forces a 30px icon box. */
+.sidebar-header .q2-switch {
+  align-self: flex-start;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-.sidebar-header-actions .q2-switch .sh-action-label {
-  display: inline;
+  gap: 5px;
+  margin-bottom: 8px;
+  /* `font: ... inherit` is invalid shorthand (family cannot be inherit) and
+     was dropped whole, leaving the browser default 14px. Set longhand. */
+  font-family: inherit;
   font-size: 11.5px;
-  letter-spacing: 0.1px;
+  font-weight: 500;
+  /* Pinned so the pill is the same 22px tall as q2's. `normal` and `1.4`
+     both resolve differently against this page's font stack and left it
+     two pixels taller than the one it is meant to mirror. */
+  line-height: 14px;
+  color: var(--text-muted);
+  text-decoration: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 9px;
+  white-space: nowrap;
 }
+.sidebar-header .q2-switch:hover { color: var(--text); border-color: var(--accent); }
