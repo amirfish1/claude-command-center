@@ -392,19 +392,18 @@
   </script>
 
   <div class="sidebar">
-    <!-- Mirrors q2's top bar: pill = where you can go, label = where you are.
-         A SIBLING of .sidebar-header, not a child: that element is
-         `flex-direction: row` with `flex-wrap: nowrap !important`, so a child
-         can never occupy its own line and this landed inline with the
-         WatchTower badge. Plain link — the mac app treats any URL on the
-         dashboard port as in-app (scripts/macapp/main.swift:132). -->
-    <div class="q2-navrow">
-      <a class="q2-switch" id="q2BoardLink" href="/q2.html" title="Open the queue board">Queues &#8594;</a>
-      <span class="q2-here">Sessions</span>
+    <!-- Queues / Sessions toggle. Identical markup and position on both pages
+         (see static/q2.html); only which side carries .is-active differs, so
+         the control never moves as you switch. Plain links — the mac app
+         treats any URL on the dashboard port as in-app
+         (scripts/macapp/main.swift:132). -->
+    <div class="q2-toggle" role="group" aria-label="Switch view">
+      <a class="q2-toggle-opt" href="/q2.html">Queues</a>
+      <span class="q2-toggle-opt is-active" aria-current="page">Sessions</span>
     </div>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
-        <div class="sh-title-row">
+      <div class="sh-title-row">
           <img class="sh-app-icon" src="/static/icon.svg" alt="" aria-hidden="true">
           <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Command Center</span><span class="sh-title-sub">for Claude, Codex, Cursor, and Anti-Gravity</span></a>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>

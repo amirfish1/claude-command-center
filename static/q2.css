@@ -87,15 +87,7 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.q2-back {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  text-decoration: none;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 3px 9px;
-}
-.q2-back:hover { color: var(--text); border-color: var(--accent); }
+
 .q2-brand { font-weight: 650; letter-spacing: 0.2px; }
 .q2-brand-sub {
   font-family: var(--font-mono);
@@ -1480,3 +1472,32 @@ body.q2-resizing .q2-col { pointer-events: none; }
 /* The field the header sent you to. */
 .q2-field.is-target .q2-input { border-color: var(--accent); }
 .q2-field.is-target .q2-field-k { color: var(--accent); }
+
+/* Queues / Sessions toggle. One control, same corner on both pages: the
+   active side is solid, the other is a dim link. Nothing moves when you
+   switch, which is the point of a toggle. */
+.q2-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.q2-toggle-opt {
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 14px;
+  padding: 4px 10px;
+  color: var(--text-muted);
+  text-decoration: none;
+  background: transparent;
+  white-space: nowrap;
+}
+a.q2-toggle-opt:hover { color: var(--text); background: var(--surface-2); }
+.q2-toggle-opt.is-active {
+  color: var(--text);
+  background: var(--surface-2);
+  cursor: default;
+}

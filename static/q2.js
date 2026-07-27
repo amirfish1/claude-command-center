@@ -1468,8 +1468,10 @@
       // The answer box belongs WITH the question, at the end of the thread —
       // the agent is waiting on it and it should need no hunting.
       + (st === 'blocked'
+          // The question is NOT repeated here. The timeline's last "Needs input"
+          // event already shows it, immediately above, and printing it twice
+          // read as two separate questions.
           ? '<div class="q2-inline q2-inline-answer">'
-            + (item.block_question ? '<div class="q2-block-q">' + esc(item.block_question) + '</div>' : '')
             + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
             + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
             + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'

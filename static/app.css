@@ -21562,16 +21562,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    pill (static/q2.css .q2-back) so the control looks the same and sits in the
    same corner going both ways. Its own element in the header rather than a
    .sh-btn: that row hides labels and forces a 30px icon box. */
-/* Mirrors q2's header exactly: the pill names where you can GO, the label
-   beside it names where you ARE. q2 reads "[Sessions] Queues"; this reads
-   "[Queues] Sessions". */
-.q2-navrow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px 0;
-  flex: 0 0 auto;
-}
+
 .q2-navrow .q2-here {
   font-size: 13px;
   font-weight: 650;
@@ -21604,3 +21595,40 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   white-space: nowrap;
 }
 .q2-navrow .q2-switch:hover { color: var(--text); border-color: var(--accent); }
+
+/* Queues / Sessions toggle. One control, same corner on both pages: the
+   active side is solid, the other is a dim link. Nothing moves when you
+   switch, which is the point of a toggle. */
+.q2-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.q2-toggle-opt {
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 14px;
+  padding: 4px 10px;
+  color: var(--text-muted);
+  text-decoration: none;
+  background: transparent;
+  white-space: nowrap;
+}
+a.q2-toggle-opt:hover { color: var(--text); background: var(--surface-2); }
+.q2-toggle-opt.is-active {
+  color: var(--text);
+  background: var(--surface-2);
+  cursor: default;
+}
+
+/* The sidebar is a stretching flex column, so without align-self the toggle
+   grew to the full 360px width instead of hugging its two labels. */
+.q2-toggle {
+  align-self: flex-start;
+  width: auto;
+  margin: 8px 12px 0;
+}
