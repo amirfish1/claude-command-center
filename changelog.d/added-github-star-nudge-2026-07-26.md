@@ -1,0 +1,1 @@
+- Gentle "Star on GitHub" nudge bar: appears after the dashboard has been opened on three distinct days, never alongside the telemetry prompt, with Maybe later (14-day snooze) and Don't ask again options.

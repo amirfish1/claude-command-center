@@ -15624,6 +15624,64 @@ body.status-pos-right #convToolbar {
 }
 .telemetry-bar__link:hover { color: var(--text); }
 
+/* Star-on-GitHub nudge. Same visual language as the telemetry bar above;
+   app.js shows it only after three distinct days of use and only while the
+   telemetry bar is not on screen. */
+.star-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 14px;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.05));
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  flex-wrap: wrap;
+}
+.star-nudge[hidden] { display: none !important; }
+.star-nudge__text { flex: 1 1 auto; min-width: 0; }
+.star-nudge__text strong { color: var(--text); font-weight: 600; }
+.star-nudge__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.star-nudge__btn {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s, background 0.15s;
+}
+.star-nudge__btn:hover { background: var(--border); }
+.star-nudge__btn--primary {
+  background: var(--accent, #d97757);
+  border-color: var(--accent, #d97757);
+  color: #fff;
+  font-weight: 600;
+}
+.star-nudge__btn--primary:hover { opacity: 0.9; background: var(--accent, #d97757); }
+.star-nudge__link-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.star-nudge__link-btn:hover { color: var(--text); }
+
 /* Custom select dropdown styling */
 .custom-select-container {
   position: relative;

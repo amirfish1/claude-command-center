@@ -2197,7 +2197,61 @@
     // The "What gets sent?" link is a plain anchor — opens docs/telemetry.md
     // in a new tab on click; no JS needed beyond the default behaviour.
   })();
-  loadTelemetryStatus();
+
+  // ── Star-on-GitHub nudge ──
+  // Asks for a repo star only after the dashboard has been opened on three
+  // distinct days, and never while the telemetry opt-in bar is on screen
+  // (one prompt at a time). "Star" and "Don't ask again" hide it forever;
+  // "Maybe later" snoozes it for 14 days. State is localStorage-only.
+  const STAR_NUDGE_DISMISSED_LS = 'ccc-star-nudge-dismissed';
+  const STAR_NUDGE_SNOOZE_LS = 'ccc-star-nudge-snooze-until';
+  const STAR_NUDGE_DAYS_LS = 'ccc-star-nudge-days';
+  const STAR_NUDGE_LAST_DAY_LS = 'ccc-star-nudge-last-day';
+  const STAR_NUDGE_MIN_DAYS = 3;
+  function maybeShowStarNudge() {
+    const $bar = document.getElementById('starNudgeBar');
+    if (!$bar) return;
+    let days = 0;
+    try {
+      if (localStorage.getItem(STAR_NUDGE_DISMISSED_LS) === '1') return;
+      const snoozeUntil = parseInt(localStorage.getItem(STAR_NUDGE_SNOOZE_LS) || '0', 10);
+      if (snoozeUntil && Date.now() < snoozeUntil) return;
+      // Count distinct days the dashboard was opened, not page loads — a
+      // busy first session must not look like three days of real use.
+      const today = new Date().toISOString().slice(0, 10);
+      days = parseInt(localStorage.getItem(STAR_NUDGE_DAYS_LS) || '0', 10) || 0;
+      if (localStorage.getItem(STAR_NUDGE_LAST_DAY_LS) !== today) {
+        days += 1;
+        localStorage.setItem(STAR_NUDGE_DAYS_LS, String(days));
+        localStorage.setItem(STAR_NUDGE_LAST_DAY_LS, today);
+      }
+    } catch (_) { return; }
+    if (days < STAR_NUDGE_MIN_DAYS) return;
+    const $telemetry = document.getElementById('telemetryOptInBar');
+    if ($telemetry && !$telemetry.hidden) return;
+    $bar.hidden = false;
+  }
+  function hideStarNudge(forever, snoozeMs) {
+    const $bar = document.getElementById('starNudgeBar');
+    if ($bar) $bar.hidden = true;
+    try {
+      if (forever) localStorage.setItem(STAR_NUDGE_DISMISSED_LS, '1');
+      else if (snoozeMs) localStorage.setItem(STAR_NUDGE_SNOOZE_LS, String(Date.now() + snoozeMs));
+    } catch (_) {}
+  }
+  (function wireStarNudge() {
+    const $star = document.getElementById('starNudgeStarBtn');
+    const $later = document.getElementById('starNudgeLaterBtn');
+    const $never = document.getElementById('starNudgeNeverBtn');
+    // Following through to GitHub counts as done — never ask again.
+    if ($star) $star.addEventListener('click', () => hideStarNudge(true));
+    if ($later) $later.addEventListener('click', () => hideStarNudge(false, 14 * 24 * 60 * 60 * 1000));
+    if ($never) $never.addEventListener('click', () => hideStarNudge(true));
+  })();
+
+  // The star nudge waits for the telemetry decision so the two bars never
+  // stack — telemetry (a privacy question) always wins the slot.
+  loadTelemetryStatus().then(maybeShowStarNudge);
 
   // ── Dashboard active-time heartbeat ──
   // Beats every 30s while the tab is visible. Each beat credits 30s to
