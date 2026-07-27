@@ -28194,7 +28194,7 @@
       return out;
     };
     const _allTabById = new Map();
-    _allTabConvs.forEach(c => {
+    _allTabUnfilteredConvs.forEach(c => {
       const id = _allTabSessionId(c);
       if (id) _allTabById.set(id, c);
     });
@@ -28257,17 +28257,20 @@
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
+    const _allTabUnfilteredLanes = new Set(
+      _allTabUnfilteredConvs.map(c => _allTabLaneFor(c))
+    );
     const _savedAllTabView = (() => {
       try {
         const v = localStorage.getItem('ccc-all-hermes-tab');
         return (v === 'workers' || v === 'messages') ? v : 'coding';
       } catch (_) { return 'coding'; }
     })();
-    const _allTabHasLaneOverride = _allTabConvs.some(c => !!_allTabLaneOverride(c));
-    const _allTabHasHermesSplit = !_arcEngineFilter && (
+    const _allTabHasLaneOverride = _allTabUnfilteredConvs.some(c => !!_allTabLaneOverride(c));
+    const _allTabHasHermesSplit = (
       _allTabHasLaneOverride
-      || _allTabWorkerConvs.length > 0
-      || _allTabHermesMessageConvs.length > 0
+      || _allTabUnfilteredLanes.has('workers')
+      || _allTabUnfilteredLanes.has('messages')
       || _savedAllTabView !== 'coding'
     );
     const _allTabView = _allTabHasHermesSplit ? _savedAllTabView : 'coding';

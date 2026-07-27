@@ -42,6 +42,17 @@ def test_archive_engine_filter_applies_before_all_tab_grouping():
     assert "No ' + escapeHtml(_arcEngineFilterLabel) + ' sessions." in app_js
 
 
+def test_archive_engine_filter_keeps_coding_worker_message_lanes_selectable():
+    app_js = _source(APP_JS)
+
+    assert "_allTabUnfilteredConvs.forEach(c => {" in app_js
+    assert "const _allTabUnfilteredLanes = new Set(" in app_js
+    assert "_allTabUnfilteredConvs.map(c => _allTabLaneFor(c))" in app_js
+    assert "_allTabUnfilteredLanes.has('workers')" in app_js
+    assert "_allTabUnfilteredLanes.has('messages')" in app_js
+    assert "const _allTabHasHermesSplit = !_arcEngineFilter && (" not in app_js
+
+
 def test_archive_engine_filter_has_compact_accessible_icon_styles():
     app_css = _source(APP_CSS)
 
