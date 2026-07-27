@@ -1926,6 +1926,11 @@
           + '</span>', 'Neither ticked means every type')
       + '</div>'
       + '<div class="q2-modal-foot">'
+      // These fields override the SYSTEM spawn defaults. When a queue leaves
+      // one unset it falls through to those, so the form has to say where they
+      // live — otherwise "default model" is a dead end.
+      + '<a class="q2-linklike q2-modal-sys" href="/?ccc_settings=sessions" target="_blank" rel="noopener"'
+      + ' title="Open CCC settings: Sessions &amp; Spawning">System spawn defaults &#8599;</a>'
       + '<span class="q2-dim q2-modal-hint">Saving replaces the whole config, as `wt config` does</span>'
       + '<button type="button" class="q2-btn" data-q2-modal-close>Cancel</button>'
       + '<button type="button" class="q2-btn q2-btn-primary" data-q2-save-queue>Save</button>'

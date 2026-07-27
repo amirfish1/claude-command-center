@@ -1370,6 +1370,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-modal-text { min-height: 120px; }
 .q2-modal-foot { display: flex; align-items: center; gap: 8px; }
 .q2-modal-hint { flex: 1 1 auto; font-size: 10.5px; }
+.q2-modal-sys { font-size: 10.5px; white-space: nowrap; }
 .q2-btn-primary { border-color: var(--accent); color: var(--accent); }
 
 /* Paste / drop target for ticket screenshots. */

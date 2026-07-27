@@ -57584,6 +57584,19 @@
     setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);
   }
 
+  // Deep link: /?ccc_settings=<section> opens Settings on that pane. The q2
+  // board is a separate page and cannot call into this closure, so a URL is
+  // the only way for it to send someone to the system spawn defaults.
+  (function settingsDeepLink() {
+    var want = _bootUrlParams.get('ccc_settings');
+    if (!want) return;
+    var rail = document.getElementById('settingsRailTab-' + want);
+    setTimeout(function () {
+      openSettingsModal();
+      if (rail) rail.click();
+    }, 0);
+  })();
+
   function closeSettingsModal() {
     if (!$settingsModal) return;
     $settingsModal.classList.remove('open');

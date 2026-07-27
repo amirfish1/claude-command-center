@@ -21562,12 +21562,29 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    pill (static/q2.css .q2-back) so the control looks the same and sits in the
    same corner going both ways. Its own element in the header rather than a
    .sh-btn: that row hides labels and forces a 30px icon box. */
+/* Mirrors q2's header exactly: the pill names where you can GO, the label
+   beside it names where you ARE. q2 reads "[Sessions] Queues"; this reads
+   "[Queues] Sessions". */
+.sidebar-header .q2-navrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.sidebar-header .q2-here {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  color: var(--text);
+  white-space: nowrap;
+}
 .sidebar-header .q2-switch {
-  align-self: flex-start;
+  align-self: center;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-bottom: 8px;
+  /* Spacing belongs to .q2-navrow now; keeping it here pushed the pill off
+     the row's centre line and out of alignment with the "Sessions" label. */
   /* `font: ... inherit` is invalid shorthand (family cannot be inherit) and
      was dropped whole, leaving the browser default 14px. Set longhand. */
   font-family: inherit;
