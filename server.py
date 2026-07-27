@@ -127,6 +127,40 @@ PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
 # record per codex RPC stage) and _RESUME_LEDGER_FILE (JSONL, internal wake/
 # resume bookkeeping) -- this one is for a human to skim "what did CCC do".
 ACTIVITY_LOG_FILE = COMMAND_CENTER_STATE_DIR / "logs" / "activity.log"
+# High-volume, machine-readable firehose for the app-server liveness
+# investigation: one JSON object per line for EVERY probe stage, request
+# send/receive, reader event, and _ensure() decision. Separate from
+# activity.log so the human log stays skim-able. Rotated by nothing --
+# truncate it by hand when the investigation ends.
+APP_SERVER_TRACE_FILE = COMMAND_CENTER_STATE_DIR / "logs" / "app-server-trace.log"
+_APP_SERVER_TRACE_FH = None
+_APP_SERVER_TRACE_LOCK = threading.Lock()
+
+
+def _app_server_trace(event, **fields):
+    """Append one JSONL record to APP_SERVER_TRACE_FILE. Never raises --
+    tracing must not change the behavior it observes.
+
+    Keeps one open, flushed-per-line handle instead of open/close per call:
+    some trace points fire under _CODEX_APP_SERVER_LOCK on every app-server
+    notification, and per-call open() is exactly the kind of lock-held file
+    I/O that stalled this machinery before. Writes are serialized on their
+    own lock so concurrent tracers can't interleave a line.
+    """
+    global _APP_SERVER_TRACE_FH
+    try:
+        rec = {"ts": round(time.time(), 3), "ev": str(event)[:24], "pid": os.getpid()}
+        rec.update(fields)
+        line = json.dumps(rec, default=str) + "\n"
+        with _APP_SERVER_TRACE_LOCK:
+            if _APP_SERVER_TRACE_FH is None:
+                _APP_SERVER_TRACE_FH = open(APP_SERVER_TRACE_FILE, "a", encoding="utf-8")
+            _APP_SERVER_TRACE_FH.write(line)
+            _APP_SERVER_TRACE_FH.flush()
+    except Exception:
+        pass
+
+
 _PYTHON_STACK_DUMP_FILE = None
 _CONTROL_PLANE_CLIENT = ControlPlaneClient(timeout=1.5)
 _CONTROL_PLANE_ENGINE_CLIENT = ControlPlaneClient(timeout=45.0)
@@ -5776,6 +5810,16 @@ def _activity_log_preview(text, limit=160):
     return collapsed
 
 
+# Set to True after the first successful mkdir of ACTIVITY_LOG_FILE's parent.
+# The mkdir used to run on every _log_activity call; under memory pressure
+# that syscall can stall for seconds, and liveness logging happens while
+# holding _CODEX_APP_SERVER_LOCK -- stalling every thread waiting on that
+# lock (see docs/HANDOFF_codex_appserver_liveness.md). Once the directory
+# exists there is nothing to do, so only ever call mkdir again if a write
+# actually fails with FileNotFoundError (e.g. the dir was deleted).
+_ACTIVITY_LOG_DIR_READY = False
+
+
 def _log_activity(category, verb, detail):
     """Append one line to the unified activity log (see ACTIVITY_LOG_FILE).
 
@@ -5791,13 +5835,23 @@ def _log_activity(category, verb, detail):
     chars, a shifted detail with stray leading spaces) instead of failing
     loudly; truncating here is the lesser, contained failure.
     """
+    global _ACTIVITY_LOG_DIR_READY
     try:
         now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
         line = f"{str(category)[:14]:<14}  {str(verb)[:9]:<9}{detail}\n"
         line = f"{now}  {line}"
-        ACTIVITY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line)
+        if not _ACTIVITY_LOG_DIR_READY:
+            ACTIVITY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _ACTIVITY_LOG_DIR_READY = True
+        try:
+            with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line)
+        except FileNotFoundError:
+            # Directory vanished after we cached it as existing -- recreate
+            # and retry once.
+            ACTIVITY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line)
     except OSError:
         pass
 
@@ -21708,6 +21762,25 @@ _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD = 2
 _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
 _CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
 _CODEX_APP_SERVER_INFLIGHT = 0
+# req_id -> (method, timed_out_at, timeout) for requests whose client-side
+# timeout already fired. If the reply still arrives later, the reader logs
+# LATE with the lateness -- this distinguishes "reply eventually arrives"
+# (reader/scheduling/queueing delay) from "reply never arrives" (a prior
+# request wedged the app-server's in-order stdio channel). Diagnostic for
+# the liveness-miss investigation (docs/HANDOFF_codex_appserver_liveness.md).
+_CODEX_APP_SERVER_ORPHANED_WAITERS = {}
+# Wall time of the most recent message (response OR notification) received
+# from the app-server. Any recent traffic proves the connection works in
+# both directions, making the thread/list liveness probe redundant -- and
+# probing during an active turn is actively harmful, because the app-server
+# services one stdio connection largely in order, so the probe queues
+# behind turn work and "fails" on a perfectly healthy server.
+_CODEX_APP_SERVER_LAST_MSG_AT = 0.0
+# How long a known-active turn with no new activity still counts as
+# "server-side busy" for liveness purposes. Turns emit a steady stream of
+# notifications, so a genuinely live turn keeps last_activity_at fresh; a
+# stale one must not shield a wedged server from replacement forever.
+_CODEX_APP_SERVER_TURN_BUSY_GRACE_S = 120.0
 _CODEX_TELEMETRY_TURNS = {}
 _CODEX_APP_SERVER_RECENT_ITEM_MAX = 24
 _CODEX_APP_SERVER_ITEM_TEXT_MAX = 1200
@@ -22087,6 +22160,8 @@ class _CodexAppServerTransport:
             self.sock = None
         proc = self.proc
         if proc is not None and proc.poll() is None:
+            _app_server_trace("close-begin", child_pid=proc.pid)
+            close_started = time.time()
             # terminate() only *asks*. The stdio reader thread sits in
             # `for line in proc.stdout`, which ends only at EOF -- and EOF only
             # arrives once this process is actually gone. So a SIGTERM the
@@ -22115,6 +22190,11 @@ class _CodexAppServerTransport:
                     pass
             except OSError:
                 pass
+            _app_server_trace(
+                "close-end", child_pid=proc.pid,
+                elapsed=round(time.time() - close_started, 2),
+                reaped=proc.poll() is not None,
+            )
 
 
 def _read_exact(sock, n):
@@ -23447,9 +23527,12 @@ def _codex_app_server_handle_notification(method, params):
 def _codex_app_server_handle_message(payload):
     if not isinstance(payload, dict):
         return
+    global _CODEX_APP_SERVER_LAST_MSG_AT
     with _CODEX_APP_SERVER_LOCK:
+        _CODEX_APP_SERVER_LAST_MSG_AT = time.time()
         method = payload.get("method")
         if "id" in payload and method:
+            _app_server_trace("msg-server-req", id=payload.get("id"), method=method)
             _codex_app_server_handle_server_request(
                 payload.get("id"),
                 str(method),
@@ -23464,10 +23547,30 @@ def _codex_app_server_handle_message(payload):
                 if isinstance(thread, dict) and thread.get("id"):
                     _codex_app_server_record_thread(str(thread["id"]), thread)
                     _save_codex_app_server_state_unlocked()
+            orphaned = _CODEX_APP_SERVER_ORPHANED_WAITERS.pop(payload.get("id"), None)
+            _app_server_trace(
+                "msg-response", id=payload.get("id"),
+                has_result=isinstance(payload.get("result"), dict),
+                has_error="error" in payload,
+                orphaned=orphaned is not None,
+            )
             _CODEX_APP_SERVER_RESPONSES[payload.get("id")] = payload
             _CODEX_APP_SERVER_LOCK.notify_all()
+            if orphaned is not None:
+                # The waiter already gave up and logged TIMEOUT; this reply
+                # arriving now proves the channel still works, just slower
+                # than the timeout. Rare path, so logging under the lock is
+                # acceptable here (open+append only; the mkdir is cached).
+                o_method, o_timed_out_at, o_timeout, o_inflight = orphaned
+                _log_activity(
+                    "app-server", "LATE",
+                    f"method={o_method} reply arrived "
+                    f"{round(time.time() - o_timed_out_at, 1)}s after its "
+                    f"{o_timeout}s timeout ({'real' if o_inflight else 'probe'})",
+                )
             return
         if method:
+            _app_server_trace("msg-notification", method=method)
             _codex_app_server_handle_notification(str(method), payload.get("params") or {})
             _CODEX_APP_SERVER_LOCK.notify_all()
 
@@ -23667,6 +23770,9 @@ def _codex_app_server_reader(transport):
     """Collect JSON-RPC responses and notifications from Codex app-server."""
     global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT
     global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
+    _app_server_trace("reader-start", kind=transport.kind,
+                      child_pid=getattr(transport.proc, "pid", None))
+    exit_reason = "eof"
     try:
         if transport.kind == "stdio":
             for line in transport.proc.stdout:
@@ -23676,8 +23782,16 @@ def _codex_app_server_reader(transport):
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError:
+                    _app_server_trace("reader-badjson", text=line[:120])
                     continue
-                _codex_app_server_handle_message(payload)
+                try:
+                    _codex_app_server_handle_message(payload)
+                except Exception as e:
+                    # Traced, then re-raised: killing the reader on one bad
+                    # message is the PRE-EXISTING behavior -- preserve it, but
+                    # stop letting it happen silently.
+                    _app_server_trace("reader-msg-error", error=repr(e))
+                    raise
         else:
             while True:
                 try:
@@ -23688,8 +23802,17 @@ def _codex_app_server_reader(transport):
                     payload = json.loads(message)
                 except json.JSONDecodeError:
                     continue
-                _codex_app_server_handle_message(payload)
+                try:
+                    _codex_app_server_handle_message(payload)
+                except Exception as e:
+                    _app_server_trace("reader-msg-error", error=repr(e))
+                    raise
+    except Exception as e:
+        exit_reason = f"error:{e!r}"
+        raise
     finally:
+        _app_server_trace("reader-exit", reason=exit_reason,
+                          child_pid=getattr(transport.proc, "pid", None))
         with _CODEX_APP_SERVER_LOCK:
             if _CODEX_APP_SERVER_TRANSPORT is transport:
                 _CODEX_APP_SERVER_TRANSPORT = None
@@ -23714,6 +23837,10 @@ def _codex_app_server_request_to_transport(
     if count_as_inflight:
         with _CODEX_APP_SERVER_INFLIGHT_LOCK:
             _CODEX_APP_SERVER_INFLIGHT += 1
+    req_id = None
+    send_error = None
+    timed_out = None
+    sent_at = None
     try:
         with _CODEX_APP_SERVER_LOCK:
             req_id = _CODEX_APP_SERVER_NEXT_ID
@@ -23725,16 +23852,55 @@ def _codex_app_server_request_to_transport(
                     "method": method,
                     "params": params or {},
                 })
+                sent_at = time.time()
+                _app_server_trace(
+                    "send", id=req_id, method=method, timeout=timeout,
+                    kind="real" if count_as_inflight else "probe",
+                    child_pid=getattr(transport.proc, "pid", None),
+                )
             except (BrokenPipeError, OSError) as e:
-                return {"ok": False, "error": str(e), "fallback": "exec"}
-
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                response = _CODEX_APP_SERVER_RESPONSES.pop(req_id, None)
-                if response is not None:
-                    return response
-                remaining = max(0.05, deadline - time.time())
-                _CODEX_APP_SERVER_LOCK.wait(min(0.5, remaining))
+                send_error = e
+            if send_error is None:
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    response = _CODEX_APP_SERVER_RESPONSES.pop(req_id, None)
+                    if response is not None:
+                        _app_server_trace(
+                            "resp-ok", id=req_id, method=method,
+                            elapsed=round(time.time() - sent_at, 3),
+                        )
+                        return response
+                    remaining = max(0.05, deadline - time.time())
+                    _CODEX_APP_SERVER_LOCK.wait(min(0.5, remaining))
+                # Register before releasing the lock so a reply racing in right
+                # now is still caught by the reader's LATE check below.
+                if len(_CODEX_APP_SERVER_ORPHANED_WAITERS) < 256:
+                    _CODEX_APP_SERVER_ORPHANED_WAITERS[req_id] = (
+                        method, time.time(), timeout, count_as_inflight,
+                    )
+                timed_out = (method, req_id, timeout, count_as_inflight)
+        if send_error is not None:
+            # The liveness probe failing HERE (not at the wait deadline) is
+            # the current prime suspect in the liveness-miss investigation:
+            # the child is alive but writing to its stdin fails. Log the
+            # exact errno instead of guessing.
+            _app_server_trace("send-fail", id=req_id, method=method, error=repr(send_error))
+            _log_activity(
+                "app-server", "SENDFAIL",
+                f"method={method} id={req_id} send failed: {send_error!r}",
+            )
+            return {"ok": False, "error": str(send_error), "fallback": "exec"}
+        if timed_out is not None:
+            _app_server_trace(
+                "wait-timeout", id=req_id, method=method,
+                elapsed=round(time.time() - sent_at, 3),
+                kind="real" if count_as_inflight else "probe",
+            )
+            _log_activity(
+                "app-server", "TIMEOUT",
+                f"method={timed_out[0]} id={timed_out[1]} no reply within {timed_out[2]}s "
+                f"({'real' if timed_out[3] else 'probe'}); watching for late arrival",
+            )
             return {
                 "ok": False,
                 "error": f"Codex app-server request timed out: {method}",
@@ -23970,13 +24136,39 @@ def _codex_app_server_transport_responsive(transport, timeout=_CODEX_APP_SERVER_
     A wedged app-server (e.g. leaking pipe fds until it can no longer service
     requests) still passes transport.alive() forever since that only polls the
     OS process, so callers would keep reusing a transport that never replies.
-    A real reply always carries "jsonrpc"; the timeout/broken-pipe fallback in
-    _codex_app_server_request_to_transport does not.
+    A real reply carries "result" (or a protocol-level "error"); the synthetic
+    timeout/broken-pipe dicts from _codex_app_server_request_to_transport
+    always carry "fallback" instead. NOTE: do NOT test for the "jsonrpc"
+    envelope key here -- this app-server omits it from responses, and checking
+    for it made every probe "fail" on a healthy server (the root cause of the
+    long liveness-miss investigation, docs/HANDOFF_codex_appserver_liveness.md).
     """
+    probe_started = time.time()
+    _app_server_trace(
+        "probe-begin", timeout=timeout,
+        child_pid=getattr(transport.proc, "pid", None),
+    )
     response = _codex_app_server_request_to_transport(
         transport, "thread/list", {}, timeout=timeout, count_as_inflight=False,
     )
-    return isinstance(response, dict) and "jsonrpc" in response
+    ok = isinstance(response, dict) and (
+        "result" in response
+        or ("error" in response and "fallback" not in response)
+    )
+    _app_server_trace(
+        "probe-end", ok=ok, elapsed=round(time.time() - probe_started, 3),
+        response=None if ok else str(response)[:140],
+    )
+    if not ok:
+        # MISS has been observed in activity.log with NEITHER a TIMEOUT nor a
+        # SENDFAIL line preceding it, which the request_to_transport code says
+        # is impossible -- so log the raw probe return value and let evidence
+        # resolve the contradiction.
+        _log_activity(
+            "app-server", "PROBEFAIL",
+            f"probe returned: {str(response)[:140]}",
+        )
+    return ok
 
 
 def _codex_app_server_reap_stray_children():
@@ -24050,11 +24242,51 @@ def _codex_app_server_dump_stacks_on_liveness_miss(reason):
         pass
 
 
+def _codex_app_server_active_turn_fresh(now):
+    """True if a tracked thread has a turn that recently showed activity.
+
+    A running turn keeps the app-server busy SERVER-side with zero client-side
+    in-flight requests (turn/start returns as soon as the turn is accepted),
+    so the in-flight counter alone cannot distinguish "healthy but mid-turn"
+    from "wedged". Live turns emit a steady stream of notifications, which
+    the reader folds into last_activity_at -- so a turn whose activity has
+    gone stale does NOT count here, which keeps a genuinely wedged server
+    replaceable. Caller must hold _CODEX_APP_SERVER_LOCK.
+    """
+    for state in _CODEX_APP_SERVER_THREAD_STATE.values():
+        if not isinstance(state, dict):
+            continue
+        if not (
+            state.get("active_turn_id")
+            or str(state.get("status") or "").lower() == "active"
+        ):
+            continue
+        try:
+            last = float(
+                state.get("last_activity_at") or state.get("last_event_at") or 0.0
+            )
+        except (TypeError, ValueError):
+            last = 0.0
+        if now - last < _CODEX_APP_SERVER_TURN_BUSY_GRACE_S:
+            return True
+    return False
+
+
 def _ensure_codex_app_server(*, allow_stdio=True):
     """Start and initialize a persistent Codex app-server if needed."""
     global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT, _CODEX_APP_SERVER_READER
     global _CODEX_APP_SERVER_INITIALIZED, _CODEX_APP_SERVER_INITIALIZING
     global _CODEX_APP_SERVER_LAST_LIVE_CHECK
+    # _log_activity and the stack-dump marker both do file I/O, and any
+    # syscall can stall for seconds under memory pressure. Holding
+    # _CODEX_APP_SERVER_LOCK across that I/O starves the reader thread that
+    # records app-server replies -- which itself causes liveness misses
+    # (see docs/HANDOFF_codex_appserver_liveness.md). So inside the lock we
+    # only *decide* what to log; the actual logging happens right after the
+    # lock is released.
+    pending_log = None
+    pending_dump_reason = None
+    keep_transport = None
     with _CODEX_APP_SERVER_LOCK:
         while _CODEX_APP_SERVER_INITIALIZING:
             _CODEX_APP_SERVER_LOCK.wait(0.5)
@@ -24067,6 +24299,20 @@ def _ensure_codex_app_server(*, allow_stdio=True):
         if transport is not None and transport.alive() and _CODEX_APP_SERVER_INITIALIZED:
             now = time.time()
             if now - _CODEX_APP_SERVER_LAST_LIVE_CHECK < _CODEX_APP_SERVER_LIVENESS_INTERVAL:
+                return transport
+            # Any recent traffic (a notification or a response) already proves
+            # the connection works in both directions -- skip the probe. During
+            # an active turn this is what keeps the probe from queueing behind
+            # turn work on the in-order channel and "missing" on a healthy
+            # server, which used to tear down live turns every WEDGED cycle.
+            if now - _CODEX_APP_SERVER_LAST_MSG_AT < _CODEX_APP_SERVER_LIVENESS_INTERVAL:
+                _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
+                transport.consecutive_liveness_misses = 0
+                _app_server_trace(
+                    "ensure-decision", decision="skip-traffic",
+                    child_pid=getattr(transport.proc, "pid", None),
+                    last_msg_age=round(now - _CODEX_APP_SERVER_LAST_MSG_AT, 2),
+                )
                 return transport
             if _codex_app_server_transport_responsive(transport):
                 _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
@@ -24085,75 +24331,104 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 # _CODEX_APP_SERVER_LIVENESS_INTERVAL seconds until the turn
                 # finishes. Defer instead of tearing it down.
                 _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
-                _log_activity(
+                pending_log = (
                     "app-server", "BUSY",
                     f"pid={getattr(transport.proc, 'pid', '-')} "
                     f"age={round(now - transport.started_at)}s no reply within "
                     f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s but {inflight} request(s) "
                     f"in flight; not replacing",
                 )
-                return transport
-            transport.consecutive_liveness_misses += 1
-            # A miss here means CCC didn't observe a reply within the
-            # timeout -- it is NOT evidence that Codex app-server itself is
-            # slow. Direct measurement (spawn, wait out an idle gap, probe,
-            # repeat) showed a freshly-spawned app-server answering in well
-            # under half a second every time, with no misses. So when this
-            # process still doesn't see a reply in time, the far more likely
-            # explanation is that the reply arrived in the OS pipe promptly
-            # but this process's own reader thread didn't get scheduled to
-            # read it -- e.g. starved of the GIL by other work running
-            # concurrently in this same single Python process. Capture what
-            # every thread was doing at the moment of the miss so the actual
-            # cause can be read from evidence next time, instead of guessed.
-            _codex_app_server_dump_stacks_on_liveness_miss(
-                "wedge-threshold"
-                if transport.consecutive_liveness_misses >= _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD
-                else "miss"
-            )
-            if transport.consecutive_liveness_misses < _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD:
-                # One missed reply on an otherwise-idle transport isn't proof
-                # the process is dead -- tearing down + respawning a healthy
-                # process is itself expensive (subprocess spawn, ps scan,
-                # handshake), so require a couple of consecutive misses
-                # before concluding that. See the dumped stacks above for
-                # what was actually happening in this process at the time.
+                keep_transport = transport
+            elif _codex_app_server_active_turn_fresh(now):
+                # No client-side request is outstanding, but a tracked turn
+                # is still running server-side (turn/start returns as soon as
+                # the turn is accepted, so a running turn shows ZERO in-flight
+                # requests). The probe just queued behind that turn's work on
+                # the in-order channel. Tearing down here kills the live turn
+                # -- which is exactly what the pre-fix WEDGED churn did every
+                # ~45s. A turn whose activity goes stale (see
+                # _CODEX_APP_SERVER_TURN_BUSY_GRACE_S) no longer shields the
+                # server, so a genuinely wedged process is still replaced.
                 _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
-                _log_activity(
-                    "app-server", "MISS",
+                pending_log = (
+                    "app-server", "BUSY",
                     f"pid={getattr(transport.proc, 'pid', '-')} "
-                    f"age={round(now - transport.started_at)}s no reply observed within "
-                    f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s "
-                    f"({transport.consecutive_liveness_misses}/"
-                    f"{_CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD}); giving it another cycle "
-                    f"(stacks -> python-stacks.log)",
+                    f"age={round(now - transport.started_at)}s no reply within "
+                    f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s but turn(s) active "
+                    f"server-side; not replacing",
                 )
-                return transport
-            # No reply observed after repeated consecutive checks — fall
-            # through to close it below so the candidates loop starts a
-            # fresh process instead of every caller queuing against a
-            # dead-end transport.
-            _log_activity(
-                "app-server", "WEDGED",
-                f"pid={getattr(transport.proc, 'pid', '-')} "
-                f"age={round(now - transport.started_at)}s no reply observed within "
-                f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s after "
-                f"{transport.consecutive_liveness_misses} consecutive misses; replacing "
-                f"(stacks -> python-stacks.log)",
-            )
+                keep_transport = transport
+            else:
+                transport.consecutive_liveness_misses += 1
+                # A miss here means CCC didn't observe a reply within the
+                # timeout on an idle connection (no in-flight requests, no
+                # active turn, no recent traffic). A freshly-spawned app-server
+                # answers thread/list in well under half a second, so this is
+                # genuine evidence of trouble -- but capture what every thread
+                # was doing at the moment of the miss anyway, so the actual
+                # cause can be read from evidence instead of guessed.
+                pending_dump_reason = (
+                    "wedge-threshold"
+                    if transport.consecutive_liveness_misses >= _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD
+                    else "miss"
+                )
+                if transport.consecutive_liveness_misses < _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD:
+                    # One missed reply on an otherwise-idle transport isn't proof
+                    # the process is dead -- tearing down + respawning a healthy
+                    # process is itself expensive (subprocess spawn, ps scan,
+                    # handshake), so require a couple of consecutive misses
+                    # before concluding that. See the dumped stacks above for
+                    # what was actually happening in this process at the time.
+                    _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
+                    pending_log = (
+                        "app-server", "MISS",
+                        f"pid={getattr(transport.proc, 'pid', '-')} "
+                        f"age={round(now - transport.started_at)}s no reply observed within "
+                        f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s "
+                        f"({transport.consecutive_liveness_misses}/"
+                        f"{_CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD}); giving it another cycle "
+                        f"(stacks -> python-stacks.log)",
+                    )
+                    keep_transport = transport
+                else:
+                    # No reply observed after repeated consecutive checks — fall
+                    # through to close it below so the candidates loop starts a
+                    # fresh process instead of every caller queuing against a
+                    # dead-end transport.
+                    pending_log = (
+                        "app-server", "WEDGED",
+                        f"pid={getattr(transport.proc, 'pid', '-')} "
+                        f"age={round(now - transport.started_at)}s no reply observed within "
+                        f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s after "
+                        f"{transport.consecutive_liveness_misses} consecutive misses; replacing "
+                        f"(stacks -> python-stacks.log)",
+                    )
         elif transport is not None and not transport.alive():
-            _log_activity(
+            pending_log = (
                 "app-server", "DEAD",
                 f"pid={getattr(transport.proc, 'pid', '-')} "
                 f"age={round(time.time() - transport.started_at)}s exited on its own; replacing",
             )
-        if transport is not None:
-            transport.close()
-        _CODEX_APP_SERVER_PROC = None
-        _CODEX_APP_SERVER_TRANSPORT = None
-        _CODEX_APP_SERVER_INITIALIZED = False
-        _CODEX_APP_SERVER_INITIALIZING = True
-        _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
+        if keep_transport is None:
+            if transport is not None:
+                transport.close()
+            _CODEX_APP_SERVER_PROC = None
+            _CODEX_APP_SERVER_TRANSPORT = None
+            _CODEX_APP_SERVER_INITIALIZED = False
+            _CODEX_APP_SERVER_INITIALIZING = True
+            _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
+
+    if pending_dump_reason is not None:
+        _codex_app_server_dump_stacks_on_liveness_miss(pending_dump_reason)
+    if pending_log is not None:
+        _app_server_trace(
+            "ensure-decision", decision=pending_log[1],
+            child_pid=getattr(transport.proc, "pid", None) if transport else None,
+            detail=str(pending_log[2])[:160],
+        )
+        _log_activity(*pending_log)
+    if keep_transport is not None:
+        return keep_transport
 
     candidates = []
     managed_path = _codex_managed_app_server_socket_path()
@@ -24175,12 +24450,23 @@ def _ensure_codex_app_server(*, allow_stdio=True):
             if not resolved.get("available"):
                 continue
             _codex_app_server_reap_stray_children()
+            # Capture the child's stderr instead of devnull: if the Rust
+            # side's stdio listener panics or closes, the only evidence is
+            # on stderr (liveness-miss investigation -- the probe currently
+            # fails while the child process stays alive).
+            try:
+                stderr_log = open(
+                    ACTIVITY_LOG_FILE.with_name("codex-app-server-stderr.log"),
+                    "a", encoding="utf-8",
+                )
+            except OSError:
+                stderr_log = subprocess.DEVNULL
             try:
                 proc = subprocess.Popen(
                     [resolved["bin"], *_codex_context_window_args(), "app-server", "--listen", "stdio://"],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=stderr_log,
                     text=True,
                     bufsize=1,
                     start_new_session=True,
@@ -24188,8 +24474,15 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 transport = _CodexAppServerTransport("stdio", proc=proc)
             except (FileNotFoundError, OSError):
                 transport = None
+            finally:
+                # Popen dup'd the fd into the child; the parent's copy is
+                # no longer needed and would leak one fd per respawn.
+                if stderr_log is not subprocess.DEVNULL:
+                    stderr_log.close()
         if transport is None:
+            _app_server_trace("spawn-fail", kind=kind)
             continue
+        _app_server_trace("spawn-ok", kind=kind, child_pid=getattr(proc, "pid", None))
         with _CODEX_APP_SERVER_LOCK:
             _CODEX_APP_SERVER_PROC = proc
             _CODEX_APP_SERVER_TRANSPORT = transport
@@ -62136,6 +62429,83 @@ def _registry_locked_rmw(transform_fn):
                 pass
 
 
+def _git_common_dir(path):
+    """Absolute git common-dir for `path`, or None.
+
+    Identical across every worktree of a repo (`git rev-parse
+    --path-format=absolute --git-common-dir`), which makes it the right
+    identity key for "another CCC instance of THIS repo" as opposed to a
+    legitimate multi-repo peer (see registry.json).
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    common = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not common:
+        return None
+    return os.path.normpath(common)
+
+
+def _pid_command(pid):
+    """Best-effort command line for `pid` ("" if unreadable or dead)."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return ""
+    return (proc.stdout or "").strip() if proc.returncode == 0 else ""
+
+
+def _check_duplicate_repo_instance():
+    """Refuse to start when another live CCC server already serves this repo.
+
+    Multi-repo peers (different repos, each with its own CCC) are a supported
+    feature -- the registry exists to discover them. But a second instance of
+    the SAME repo (e.g. a forgotten `python3 server.py` from a git worktree,
+    observed live as a day-old process leaking app-server children and writing
+    into the shared activity log) races the primary on the shared state dir
+    and makes logs unattributable. Worktrees of one repo share a git common
+    dir, which is the identity key. Intentional duplicates (dev/verification
+    instances) bypass via CCC_EPHEMERAL=1 (matching the port.txt convention)
+    or CCC_ALLOW_DUPLICATE_REPO=1.
+    """
+    if os.environ.get("CCC_EPHEMERAL") or os.environ.get("CCC_ALLOW_DUPLICATE_REPO"):
+        return
+    mine = _git_common_dir(CCC_ROOT)
+    if not mine:
+        return
+    for entry in _read_registry_pruned():
+        if not isinstance(entry, dict):
+            continue
+        other = entry.get("repo_common_dir")
+        if not other:
+            # Entry written by an older version without the field -- derive
+            # it from the recorded install path.
+            other = _git_common_dir(entry.get("install_path") or "")
+        if other and os.path.normpath(str(other)) == mine:
+            cmd = _pid_command(entry.get("pid"))
+            if "server.py" not in cmd:
+                # Stale registry entry whose pid was recycled by an unrelated
+                # process (the registry prunes dead pids, but pid REUSE makes
+                # a dead CCC look alive). Not a real duplicate.
+                continue
+            print(
+                f"FATAL: another CCC server for this repo is already running: "
+                f"pid {entry.get('pid')} ({entry.get('install_path')}, "
+                f"port {entry.get('port')}, started {entry.get('started_at')}).\n"
+                f"Kill it first, or set CCC_ALLOW_DUPLICATE_REPO=1 for an "
+                f"intentional second instance.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+
 def _register_self(port, bind_host):
     """Insert (or replace) this process's entry in the registry.
 
@@ -62146,6 +62516,7 @@ def _register_self(port, bind_host):
     payload = {
         "label": CCC_ROOT.name,
         "install_path": str(CCC_ROOT),
+        "repo_common_dir": _git_common_dir(CCC_ROOT),
         "port": int(port),
         "bind_host": bind_host,
         "pid": self_pid,
@@ -63018,6 +63389,7 @@ def main():
         print("   trust_tailnet is on but `tailscale` CLI is not on PATH — install it or unset to silence.")
     if _wt_messaging_enabled() and not _wt_cli_available():
         print("⚠️  CCC_MESSAGING_BACKEND=wt is set but `wt` is not on PATH — headless delivery falls back to native `claude --resume`. Install WatchTower or unset to silence.")
+    _check_duplicate_repo_instance()
     write_port_file(bind_host)
     _register_self(PORT, bind_host)
     # SIGTERM (systemd / `kill <pid>`) needs explicit cleanup; SIGINT (Ctrl+C)
