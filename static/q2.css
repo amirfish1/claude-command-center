@@ -161,6 +161,8 @@ body.q2-resizing .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
 }
 .q2-col-count { font-size: 11px; color: var(--text-muted); }
+/* The ticket header reuses .q2-counts markup; inline it rather than stacking. */
+.q2-col-count .q2-counts { display: inline-flex; margin-top: 0; }
 .q2-col-sub {
   flex: 0 0 auto;
   padding: 6px 8px;
@@ -216,17 +218,25 @@ body.q2-resizing .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
 }
 
-/* One chip per fact, right-aligned into a single ragged-right block. Most stay
-   grey on purpose: only the two that mean "a human or a worker is involved
-   right now" carry colour, so scanning the column surfaces those first. */
-.q2-chips {
+/* Row 1 holds configuration only, pinned right. */
+.q2-qrow-config { margin-left: auto; flex: 0 0 auto; display: inline-flex; gap: 3px; }
+
+/* Row 2: the counts, as plain text rather than chips. Same markup is reused
+   for the ticket-list header, which is what keeps the two in agreement. */
+.q2-counts {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;   /* right-aligned, per the layout ask */
-  align-items: center;
-  gap: 3px;
+  align-items: baseline;
+  gap: 5px;
   margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
+.q2-n { white-space: nowrap; }
+.q2-n b { color: var(--text); font-weight: 600; }
+.q2-n.is-blocked, .q2-n.is-blocked b { color: var(--orange); }
+.q2-n.is-wip, .q2-n.is-wip b { color: var(--green); }
+.q2-n-sep { color: var(--border); }
 .q2-chip {
   font-size: 9.5px;
   font-weight: 500;
@@ -238,19 +248,18 @@ body.q2-resizing .q2-col { pointer-events: none; }
   background: var(--surface-2);
   white-space: nowrap;
 }
-/* Blocked on a human — the one chip allowed to be loud. */
-.q2-chip.is-loud {
-  color: var(--orange);
-  border-color: var(--orange);
-  background: transparent;
-  font-weight: 650;
-}
-/* A worker is on it this second. */
-.q2-chip.is-live { color: var(--green); border-color: var(--green); background: transparent; }
-.q2-chip.is-auto-on { color: var(--cyan); }
+.q2-chip.is-auto-on { color: var(--cyan); border-color: var(--cyan); background: transparent; }
 
-/* GitHub-backed marker, beside the queue name. */
-.q2-gh-wrap { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--text-muted); }
+/* GitHub-backed marker, beside the queue name. The mark is a solid glyph, so
+   the colour goes on the fill (via currentColor) — it cannot be layered over a
+   coloured disc. Purple keeps it distinct from every other colour in the
+   column, all of which already mean a queue state. */
+.q2-gh-wrap {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--purple);
+}
 .q2-gh { display: block; }
 
 /* `stuck` is a queue-level alarm, not a fact chip — it stays up on the name
@@ -263,8 +272,6 @@ body.q2-resizing .q2-col { pointer-events: none; }
   letter-spacing: 0.4px;
   color: var(--red);
 }
-.q2-qrow-done { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--text-muted); }
-.q2-qrow-done b { color: var(--text); font-weight: 600; }
 .q2-qrow.is-stuck { box-shadow: inset 2px 0 0 var(--red); }
 /* Why a queue is stuck, on the row itself. A cause you have to hover to find
    is a cause nobody reads, so this is plain visible text at the bottom of the

@@ -129,31 +129,33 @@
     return by;
   }
 
-  // Five independent chips. Each answers one question, so a queue that is
-  // "auto-drain on, GitHub-backed, nothing blocked" reads as three facts
-  // instead of one word that tries to average them.
-  function queueChips(q, f) {
-    f = f || { github: 0, local: 0, needsInput: 0, wip: 0, waiting: 0 };
-    var chips = [];
+  // One counts line, shared by the queue rows and the ticket-list header, so
+  // the two can never disagree about how many tickets a queue has. Plain text,
+  // fixed order, each number labelled. Blocked tickets are counted separately
+  // from open ones — folding them together was what made the header claim
+  // "5 open" for a queue with 4 open and 1 blocked.
+  function countsLine(f, done) {
+    f = f || {};
+    var parts = [];
     if (f.needsInput) {
-      chips.push({ k: 'needs-input', label: f.needsInput + ' needs input', loud: true,
-        tip: f.needsInput + ' ticket' + (f.needsInput === 1 ? '' : 's') + ' blocked waiting on a human answer.' });
+      parts.push('<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
+        + '<b>' + f.needsInput + '</b> needs input</span>');
     }
     if (f.wip) {
-      chips.push({ k: 'wip', label: f.wip + ' wip', live: true,
-        tip: f.wip + ' ticket' + (f.wip === 1 ? ' is' : 's are') + ' claimed and in progress.' });
+      parts.push('<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
+        + '<b>' + f.wip + '</b> wip</span>');
     }
-    if (f.waiting) {
-      chips.push({ k: 'waiting', label: f.waiting + ' open',
-        tip: f.waiting + ' open ticket' + (f.waiting === 1 ? '' : 's') + ' nothing has claimed yet.' });
-    }
-    chips.push(q.auto_drain
+    parts.push('<span class="q2-n" title="Open and unclaimed"><b>' + (f.waiting || 0) + '</b> open</span>');
+    parts.push('<span class="q2-n" title="Closed, all time"><b>' + (done || 0) + '</b> done</span>');
+    return parts.join('<span class="q2-n-sep" aria-hidden="true">·</span>');
+  }
+
+  // Row 1 carries only configuration (what this queue IS); the counts line
+  // below carries state (what is in it right now).
+  function queueChips(q) {
+    return [q.auto_drain
       ? { k: 'auto-on', label: 'auto', tip: 'Auto-drain is ON. WatchTower spawns workers for this queue on its own.' }
-      : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker.' });
-    // GitHub-vs-local is not a chip: it rides as a mark beside the queue name.
-    // "local" is the overwhelming default, so a chip announcing it on 30 of 32
-    // rows carried no information.
-    return chips;
+      : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker.' }];
   }
 
   // "stuck" on its own tells the user nothing actionable. The server sets it
@@ -300,13 +302,14 @@
     host.innerHTML = ordered.map(function (q) {
       var f = facts[projectKey(q.queue)];
       var isSel = projectKey(q.queue) === selected;
-      var chips = queueChips(q, f).map(function (c) {
-        return '<span class="q2-chip is-' + esc(c.k) + (c.loud ? ' is-loud' : '') + (c.live ? ' is-live' : '') + '"'
-          + ' title="' + esc(c.tip || '') + '">' + esc(c.label) + '</span>';
+      var chips = queueChips(q).map(function (c) {
+        return '<span class="q2-chip is-' + esc(c.k) + '" title="' + esc(c.tip || '') + '">'
+          + esc(c.label) + '</span>';
       }).join('');
       return '<button type="button" class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' data-q2-queue="' + esc(q.queue) + '">'
+        // Row 1 — identity and configuration.
         + '<span class="q2-qrow-head">'
         + '<span class="q2-qname">' + esc(q.queue) + '</span>'
         + ((f && f.github) ? '<span class="q2-gh-wrap" title="Backed by GitHub issues'
@@ -314,9 +317,10 @@
             + '." aria-label="GitHub-backed queue">' + GH_MARK + '</span>' : '')
         + (q.state === 'stuck' ? '<span class="q2-stuck-flag">stuck</span>' : '')
         + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(shortPath(q.repo_path)) + '</span>' : '')
-        + '<span class="q2-qrow-done"><b>' + (q.closed || 0) + '</b> done</span>'
+        + '<span class="q2-qrow-config">' + chips + '</span>'
         + '</span>'
-        + '<span class="q2-chips">' + chips + '</span>'
+        // Row 2 — the counts, same renderer the ticket header uses.
+        + '<span class="q2-counts">' + countsLine(f, q.closed) + '</span>'
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
         + '</button>';
     }).join('');
@@ -379,9 +383,17 @@
       return Date.parse(b.closed_at || b.updated_at || 0) - Date.parse(a.closed_at || a.updated_at || 0);
     });
 
-    $('q2TicketCount').textContent = openish.length
-      ? openish.length + ' open' + (closed.length ? ' · ' + closed.length + ' closed' : '')
-      : (closed.length ? closed.length + ' closed' : '');
+    // Same counts renderer as the queue rows. Derived from the rows actually on
+    // screen (so it honours the search filter) but split by the same statuses,
+    // rather than lumping blocked and in-progress under "open".
+    var hdr = { needsInput: 0, wip: 0, waiting: 0 };
+    openish.forEach(function (it) {
+      var st = statusOf(it);
+      if (st === 'blocked') hdr.needsInput++;
+      else if (st === 'in_progress') hdr.wip++;
+      else hdr.waiting++;
+    });
+    $('q2TicketCount').innerHTML = '<span class="q2-counts">' + countsLine(hdr, closed.length) + '</span>';
 
     if (!openish.length && !(state.showClosed && closed.length)) {
       host.innerHTML = '<div class="q2-empty">'
