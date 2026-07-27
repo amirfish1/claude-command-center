@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Queues</title>
+  <link rel="stylesheet" href="/static/q2.css">
+</head>
+<body>
+  <header class="q2-topbar">
+    <span class="q2-brand">Queues</span>
+    <span class="q2-brand-sub">q2</span>
+    <span class="q2-spacer"></span>
+    <span class="q2-stale" id="q2Stale" hidden>offline &mdash; retrying</span>
+    <button type="button" class="q2-btn" id="q2ThemeBtn" title="Toggle light / dark">Light</button>
+  </header>
+
+  <main class="q2-shell">
+    <!-- Column 1: queues (master) -->
+    <section class="q2-col q2-col-queues" aria-label="Queues">
+      <div class="q2-col-head">
+        <span class="q2-col-title">Queues</span>
+        <span class="q2-col-count" id="q2QueueCount"></span>
+      </div>
+      <div class="q2-list" id="q2Queues"></div>
+    </section>
+
+    <!-- Column 2: tickets of the selected queue (detail of col 1) -->
+    <section class="q2-col q2-col-tickets" aria-label="Tickets">
+      <div class="q2-col-head">
+        <span class="q2-col-title" id="q2TicketsTitle">Tickets</span>
+        <span class="q2-col-count" id="q2TicketCount"></span>
+        <span class="q2-spacer"></span>
+        <button type="button" class="q2-btn q2-btn-ghost" id="q2ClosedBtn" aria-pressed="false">Show closed</button>
+      </div>
+      <div class="q2-col-sub">
+        <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
+      </div>
+      <div class="q2-list" id="q2Tickets"></div>
+    </section>
+
+    <!-- Column 3: the selected ticket. Conversation pane goes here later. -->
+    <section class="q2-col q2-col-detail" aria-label="Ticket">
+      <div class="q2-detail" id="q2Detail"></div>
+    </section>
+  </main>
+
+  <script src="/static/q2.js"></script>
+</body>
+</html>

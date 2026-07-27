@@ -7634,7 +7634,9 @@ def find_all_conversations(
     return out
 
 
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 5
+# v6 adds Codex ``thread_source`` to cached sidebar rows so provenance chips
+# cannot be starved by a pre-feature persisted archive snapshot.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 6
 _ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
 # The all-repos archive payload can be several MB on machines with years of
 # agent history. Refreshing it every 30 seconds keeps the Python server in a
@@ -8239,7 +8241,7 @@ def _archive_all_rows_cached(cache_options):
 # allowlist explicit: /api/conversations/all remains the compatibility payload,
 # while /list must not serialize transcripts, parser/debug state, or JSONL paths.
 _ARCHIVE_LIST_FIELDS = (
-    "id", "session_id", "source", "engine", "source_platform",
+    "id", "session_id", "source", "engine", "source_platform", "thread_source",
     "hermes_source", "hermes_origin", "hermes_profile", "hermes_chat_type",
     "hermes_tool_calls", "folder_label", "folder_path", "slug", "pinned_repo",
     "session_cwd", "session_cwd_exists", "session_cwd_is_worktree", "mtime",
@@ -31143,6 +31145,7 @@ def find_codex_conversations(
             "session_id": sid,
             "source": "codex",
             "engine": "codex",
+            "thread_source": row.get("thread_source") or "",
             "timestamp": "",
             "branch": branch,
             "git_branch": branch,
@@ -51094,6 +51097,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 body = (STATIC_DIR / "group-chat-live.html").read_bytes()
             except OSError as e:
                 self.send_json({"error": "group-chat-live.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/q2.html":
+            # Standalone three-column queue board (queues | tickets | ticket).
+            # Same narrow-route pattern as /group-chat-live.html above: the
+            # /static/ handler's extension allowlist deliberately blocks .html.
+            # This page loads no app.js/app.css, so it cannot affect the main
+            # dashboard.
+            try:
+                body = (STATIC_DIR / "q2.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "q2.html missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
