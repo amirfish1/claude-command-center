@@ -21533,16 +21533,28 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   }
 }
 
-/* Switch to the q2 queue board. Mirrors q2's "Sessions" link so the control
-   sits in the same corner going both ways. */
-.q2-switch {
-  flex: 0 0 auto;
-  font-size: 11.5px;
-  color: var(--text-muted, #8b949e);
+/* Switch to the q2 queue board. Rides .sh-btn for sizing so it matches the
+   other header controls, but keeps its LABEL: every other button in this row
+   is icon-only (.sidebar-header-actions hides .sh-action-label), and an
+   unlabelled glyph does not read as "go to the queue board". */
+/* Scoped to the row so it ties with `.sidebar-header-actions .sh-btn`
+   (0,2,0) and wins on order. A bare `.q2-switch` lost, which is why the
+   label kept overflowing a 30px icon box. */
+.sidebar-header-actions .q2-switch {
   text-decoration: none;
-  border: 1px solid var(--border, #30363d);
-  border-radius: 5px;
+  width: auto;
+  min-width: 0;
+  height: auto;
   padding: 3px 9px;
+  gap: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
-.q2-switch:hover { color: var(--text, #c9d1d9); border-color: var(--accent, #6e8caf); }
+.sidebar-header-actions .q2-switch .sh-action-label {
+  display: inline;
+  font-size: 11.5px;
+  letter-spacing: 0.1px;
+}

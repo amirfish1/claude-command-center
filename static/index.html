@@ -447,6 +447,11 @@
            `.ccc-topbar`. Empty by default; collapses via :empty rule. -->
       <div class="sidebar-top-alerts" id="sidebarTopAlerts" data-role="top-alerts"></div>
       <div class="sidebar-header-actions">
+        <!-- Switch to the q2 queue board. Mirrors q2's "Sessions" link so the
+             control sits in the same corner going both ways. Plain link: the
+             mac app treats any URL on the dashboard port as in-app
+             (scripts/macapp/main.swift:132), so it navigates this window. -->
+        <a class="sh-btn q2-switch" id="q2BoardLink" href="/q2.html" title="Open the queue board" aria-label="Open the queue board"><span aria-hidden="true">&#9776;</span><span class="sh-action-label">Queues</span></a>
         <span class="sh-refresh-wrap">
           <button type="button" id="sidebarRefreshBtn" class="sh-btn sh-refresh-btn" title="Hard reload the page (cache-bust)" aria-label="Reload page"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 4 21 10 15 10"/></svg></button>
           <button type="button" id="sidebarRefreshCaret" class="sh-btn sh-refresh-caret" title="More refresh options" aria-label="More refresh options" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
@@ -569,10 +574,6 @@
       </div>
     </div>
     <div class="toolbar" id="convToolbar">
-    <!-- Mirrors the "Sessions" link in q2's top-left, so the switch sits in
-         the same place going both ways. Plain link: the mac app treats any
-         URL on the dashboard port as in-app (scripts/macapp/main.swift:132). -->
-    <a class="q2-switch" id="q2BoardLink" href="/q2.html" title="Open the queue board">Queues &#8594;</a>
       <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592;<span class="mb-label"> Back</span></button>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
               aria-expanded="false" title="Show the full original ask" hidden>

@@ -1762,23 +1762,36 @@
       });
   }
 
-  async function fileTicket(btn) {
+  // The modal closes as soon as the request is SENT, not when it returns.
+  // /api/ux-fixes/enqueue writes the ticket and then calls
+  // dispatch_after_enqueue, which can spawn a worker process before it
+  // responds (server.py:52986). Awaiting that left the dialog sitting open for
+  // seconds after the ticket already existed, which reads as a stuck dialog.
+  // The draft is held so a genuine failure can hand it back instead of
+  // discarding what the user typed.
+  function fileTicket(btn) {
     var ta = document.getElementById('q2TicketNote');
     var noteText = ta ? String(ta.value || '').trim() : '';
     if (!noteText) { note('Describe the fix first.'); return; }
+    var queue = state.queue;
     btn.disabled = true;
-    try {
-      var data = await postJson('/api/ux-fixes/enqueue', {
-        note: noteText, project: state.queue, source: 'ccc',
+    closeModal();
+    note('Filing ticket in ' + queue + '…');
+
+    postJson('/api/ux-fixes/enqueue', { note: noteText, project: queue, source: 'ccc' })
+      .then(async function (data) {
+        var ref = data.item && data.item.ref;
+        note(ref ? 'Filed ' + ref : 'Ticket filed');
+        await refresh();
+        if (ref) selectTicket(ref);
+      })
+      .catch(function (e) {
+        note('Could not file ticket: ' + e.message);
+        // Hand the text back rather than losing it.
+        openNewTicket();
+        var box = document.getElementById('q2TicketNote');
+        if (box) box.value = noteText;
       });
-      closeModal();
-      note('Filed ' + ((data.item && data.item.ref) || 'ticket'));
-      await refresh();
-      if (data.item && data.item.ref) selectTicket(data.item.ref);
-    } catch (e) {
-      note('Could not file ticket: ' + e.message);
-      btn.disabled = false;
-    }
   }
 
   // ── queue configuration ──────────────────────────────────────────────────
