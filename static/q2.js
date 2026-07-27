@@ -231,7 +231,7 @@
         + '<b>' + f.wip + '</b> wip</span>');
     }
     parts.push('<span class="q2-n" title="Open and unclaimed"><b>' + (f.waiting || 0) + '</b> open</span>');
-    parts.push('<span class="q2-n" title="Closed, all time"><b>' + (done || 0) + '</b> done</span>');
+    parts.push('<span class="q2-n is-done" title="Closed, all time"><b>' + (done || 0) + '</b> done</span>');
     return parts.join('<span class="q2-n-sep" aria-hidden="true">·</span>');
   }
 
