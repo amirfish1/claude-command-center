@@ -830,7 +830,6 @@
       m.waiting.length, m.parked.length, m.blocked.length,
       m.working.map(function (it) { return it.ref; }).join(','),
       m.workers.map(function (w) { return w.worker_id; }).join(','),
-      [m.cfg.engine, m.cfg.model, m.cfg.effort, m.cfg.desired_workers].join('~'),
       m.doneRecent.map(function (it) { return it.ref; }).join(','),
     ].join('|');
   }
@@ -879,22 +878,11 @@
           + '</div>';
       }).join('');
     } else {
-      // Nothing running: say what WOULD run. The spec is the queue's
-      // configured default worker, which is otherwise buried in the settings
-      // dialog and is the thing you check when a queue misbehaves.
-      var spec = [m.cfg.engine, m.cfg.model, m.cfg.effort].filter(Boolean).join(' \u00b7 ');
+      // The Worker stage is about the running INSTANCE. What the queue would
+      // spawn is configuration, and lives in the column header instead.
       workerBody = '<div class="q2-dg-worker is-empty">'
-        + '<div class="q2-dg-worker-head">'
         + '<div class="q2-dg-slot" aria-hidden="true"></div>'
         + '<div class="q2-dg-worker-idle">' + esc(m.auto ? 'None live' : 'None live \u00b7 stopped') + '</div>'
-        + '</div>'
-        + '<div class="q2-dg-default" title="The worker this queue spawns by default">'
-        + '<span class="q2-dg-default-k">default</span>'
-        + '<span class="q2-dg-default-v">' + esc(spec || 'not configured') + '</span>'
-        + (m.cfg.desired_workers != null
-            ? '<span class="q2-dg-default-n" title="Desired workers">&times;' + esc(String(m.cfg.desired_workers)) + '</span>'
-            : '')
-        + '</div>'
         + '</div>';
     }
 
@@ -1164,10 +1152,24 @@
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
     // rather than lumping blocked and in-progress under "open".
-    // The counts used to live here, but the diagram directly below shows the
-    // same numbers with more context. Two copies a centimetre apart is worse
-    // than one, so the header keeps only the queue name.
-    $('q2TicketCount').innerHTML = '';
+    // The counts moved to the diagram below. This slot carries the queue's
+    // worker configuration instead: engine, model and effort are always all
+    // three shown, because "which of them is unset" is itself the answer when
+    // a queue runs differently from how you remember configuring it.
+    var cfg = (state.configs || {})[projectKey(state.queue)] || {};
+    function specPart(v, fallback) {
+      return v
+        ? '<span class="q2-spec-v">' + esc(v) + '</span>'
+        : '<span class="q2-spec-v is-unset">' + esc(fallback) + '</span>';
+    }
+    $('q2TicketCount').innerHTML = '<span class="q2-spec" title="Worker this queue spawns: engine, model, effort">'
+      + specPart(cfg.engine, 'engine?')
+      + '<span class="q2-spec-sep">&middot;</span>' + specPart(cfg.model, 'default model')
+      + '<span class="q2-spec-sep">&middot;</span>' + specPart(cfg.effort, 'default effort')
+      + (cfg.desired_workers != null
+          ? '<span class="q2-spec-n" title="Desired workers">&times;' + esc(String(cfg.desired_workers)) + '</span>'
+          : '')
+      + '</span>';
 
     if (!openish.length && !(state.showClosed && closed.length)) {
       host.innerHTML = '<div class="q2-empty">'

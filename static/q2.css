@@ -185,17 +185,18 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
+/* The queue name never truncates: it is the header's subject. The worker spec
+   beside it yields instead — it clipped "MERGE" down to "M..." otherwise. */
 .q2-col-title {
+  flex: 0 0 auto;
   font-size: 11px;
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   color: var(--text-muted);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-.q2-col-count { font-size: 11px; color: var(--text-muted); }
+.q2-col-count { flex: 0 1 auto; min-width: 0; overflow: hidden; font-size: 11px; color: var(--text-muted); }
 /* The ticket header reuses .q2-counts markup; inline it rather than stacking. */
 .q2-col-count .q2-counts { display: inline-flex; margin-top: 0; }
 .q2-col-sub {
@@ -421,8 +422,12 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-dg-worker + .q2-dg-worker { margin-top: 4px; }
 .q2-dg-worker.is-live { border-color: var(--green); }
-.q2-dg-worker.is-empty { border-style: dashed; }
-.q2-dg-worker.is-empty .q2-dg-worker-head { display: flex; align-items: center; gap: 7px; }
+.q2-dg-worker.is-empty {
+  border-style: dashed;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
 /* The queue's configured default worker: what WOULD run here. */
 .q2-dg-default {
   display: flex;
@@ -1441,3 +1446,20 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-tdot-wrap.is-queued .q2-tdot-play { opacity: 1; }
 
 .q2-icon-btn svg { display: block; }
+
+/* Queue worker configuration, in the tickets column header. All three fields
+   always render: an unset one is dimmed rather than omitted, because knowing
+   WHICH is unset is the answer when a queue runs unexpectedly. */
+.q2-spec {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.q2-spec-v { color: var(--text); white-space: nowrap; }
+.q2-spec-v.is-unset { color: var(--text-muted); opacity: 0.55; }
+.q2-spec-sep { color: var(--border); }
+.q2-spec-n { color: var(--text-muted); margin-left: 2px; }
