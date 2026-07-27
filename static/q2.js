@@ -27,6 +27,8 @@
     search: '',
     offline: false,
     booted: false,      // guards the one-shot restore of the saved selection
+    log: [],            // reconciler activity lines for the selected queue
+    logQueue: '',
   };
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -428,6 +430,8 @@
       var withWork = state.queues.filter(function (q) { return q.depth > 0; });
       state.queue = (withWork[0] || state.queues[0]).queue;
     }
+    // One extra tail per poll, only for the queue on screen.
+    if (state.queue) await loadLog(state.queue);
     renderAll();
   }
 
@@ -537,6 +541,102 @@
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
         + '</div>';
     }).join('');
+  }
+
+  // ── ops strip: workers + reconciler log ──────────────────────────────────
+  // Both read existing endpoints. The point of the strip is to answer "is
+  // anything actually working this queue right now", which the ticket list
+  // alone cannot say: a ticket marked in_progress proves only that something
+  // once claimed it.
+  var LS_OPS = 'ccc-q2-ops-open';
+
+  function opsOpen() {
+    try { return localStorage.getItem(LS_OPS) !== '0'; } catch (_) { return true; }
+  }
+
+  async function loadLog(queue) {
+    if (!queue) { state.log = []; state.logQueue = ''; return; }
+    try {
+      var res = await fetch('/api/wt/activity-log?queue=' + encodeURIComponent(queue) + '&lines=60',
+                            { cache: 'no-store' });
+      var data = await res.json();
+      // A later selection may have landed while this was in flight.
+      if (projectKey(queue) !== projectKey(state.queue)) return;
+      state.log = Array.isArray(data.lines) ? data.lines : [];
+      state.logQueue = queue;
+    } catch (_) {
+      state.log = [];
+      state.logQueue = queue;
+    }
+  }
+
+  // "2026-07-27 01:02:52 UTC  CCC   SPAWN  CCC-666 — text"
+  var LOG_RE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*UTC\s+(\S+)\s+(\S+)\s*(.*)$/;
+  function parseLogLine(line) {
+    var m = String(line || '').match(LOG_RE);
+    if (!m) return { raw: String(line || '') };
+    return { date: m[1], time: m[2], queue: m[3], verb: m[4], rest: m[5] };
+  }
+
+  function renderOps() {
+    var host = $('q2Ops');
+    if (!host) return;
+    if (!state.queue) { host.innerHTML = ''; host.hidden = true; return; }
+    host.hidden = false;
+
+    var key = projectKey(state.queue);
+    var q = (state.queues || []).filter(function (x) { return projectKey(x.queue) === key; })[0] || {};
+    var mine = (state.workers || []).filter(function (w) { return projectKey(w.queue) === key; });
+    var open = opsOpen();
+
+    var workersHtml;
+    if (mine.length) {
+      workersHtml = mine.map(function (w) {
+        return '<span class="q2-worker">'
+          + '<span class="q2-worker-pulse" aria-hidden="true"></span>'
+          + '<span class="q2-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
+          + (w.session_id ? sessionBtn(w.session_id, 'open') : '')
+          + '</span>';
+      }).join('');
+    } else {
+      // No worker is the normal case. Say WHY, because the reason decides
+      // whether the user needs to act: policy off vs nothing to do vs stuck.
+      var why = !effectiveAutoDrain(q)
+        ? 'Auto-drain is off. Nothing runs here until you start a worker.'
+        : q.state === 'stuck'
+          ? 'Auto-drain is on and work is claimable, but nothing is running.'
+          : (q.claimable > 0
+            ? 'Auto-drain is on. Watching for a slot; nothing claimed yet.'
+            : 'Auto-drain is on. Nothing claimable right now.');
+      workersHtml = '<span class="q2-worker is-idle">'
+        + '<span class="q2-worker-pulse' + (effectiveAutoDrain(q) ? ' is-watching' : '') + '" aria-hidden="true"></span>'
+        + '<span class="q2-dim">' + esc(why) + '</span></span>';
+    }
+
+    var logHtml;
+    if (!state.log.length) {
+      logHtml = '<div class="q2-dim q2-log-empty">No reconciler activity recorded for this queue.</div>';
+    } else {
+      // Newest first: the last thing that happened is the thing you want.
+      logHtml = state.log.slice().reverse().map(function (line) {
+        var e = parseLogLine(line);
+        if (e.raw) return '<div class="q2-log-row"><span class="q2-log-rest">' + esc(e.raw) + '</span></div>';
+        return '<div class="q2-log-row">'
+          + '<span class="q2-log-time" title="' + esc(e.date + ' ' + e.time + ' UTC') + '">' + esc(e.time) + '</span>'
+          + '<span class="q2-log-verb is-' + esc(e.verb.toLowerCase()) + '">' + esc(e.verb) + '</span>'
+          + '<span class="q2-log-rest">' + esc(e.rest) + '</span>'
+          + '</div>';
+      }).join('');
+    }
+
+    host.innerHTML = '<div class="q2-ops-head">'
+      + '<button type="button" class="q2-ops-toggle" data-q2-ops-toggle aria-expanded="' + (open ? 'true' : 'false') + '">'
+      + '<span class="q2-ops-caret" aria-hidden="true">' + (open ? '&#9662;' : '&#9656;') + '</span>'
+      + (mine.length ? mine.length + ' worker' + (mine.length === 1 ? '' : 's') : 'No worker')
+      + '</button>'
+      + '<span class="q2-ops-workers">' + workersHtml + '</span>'
+      + '</div>'
+      + (open ? '<div class="q2-log">' + logHtml + '</div>' : '');
   }
 
   // ── render: column 2, tickets ────────────────────────────────────────────
@@ -1015,6 +1115,7 @@
   function renderAll() {
     renderChrome();
     renderQueues();
+    renderOps();
     renderTickets();
     // The detail pane owns its own fetch; only repaint from cache here so a
     // 5s poll can't flicker the pane the user is reading.
@@ -1045,7 +1146,9 @@
     var search = $('q2Search');
     if (search) search.value = '';
     rememberSelection();
+    state.log = [];
     renderAll();
+    loadLog(name).then(renderOps);
   }
 
   function selectTicket(ref) {
@@ -1075,6 +1178,12 @@
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
+    var opsT = e.target.closest('[data-q2-ops-toggle]');
+    if (opsT) {
+      try { localStorage.setItem(LS_OPS, opsOpen() ? '0' : '1'); } catch (_) {}
+      renderOps();
+      return;
+    }
     if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
     if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
   });

@@ -208,6 +208,119 @@ body.q2-resizing .q2-col { pointer-events: none; }
 
 .q2-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 
+/* ── ops strip: workers + reconciler log ──────────────────────────────── */
+.q2-ops {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.q2-ops-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  min-height: 28px;
+}
+.q2-ops-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.q2-ops-toggle:hover { color: var(--text); }
+.q2-ops-caret { font-size: 9px; }
+.q2-ops-workers {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+.q2-worker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+}
+.q2-worker.is-idle { color: var(--text-muted); }
+.q2-worker-id {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+/* Solid green = a worker is on it. Hollow amber ring = auto-drain is armed and
+   watching but nothing is running. Grey = policy is off, nothing is coming. */
+.q2-worker-pulse {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: q2-status-glow 1.5s ease-in-out infinite;
+}
+.q2-worker.is-idle .q2-worker-pulse {
+  background: var(--text-muted);
+  opacity: 0.5;
+  animation: none;
+}
+.q2-worker.is-idle .q2-worker-pulse.is-watching {
+  background: transparent;
+  border: 1.5px solid var(--orange);
+  opacity: 1;
+}
+.q2-log {
+  max-height: 132px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  padding: 4px 8px 6px;
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+.q2-log-empty { padding: 2px 0; }
+.q2-log-row { display: flex; gap: 7px; align-items: baseline; }
+.q2-log-time {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+.q2-log-verb {
+  flex: 0 0 52px;
+  font-family: var(--font-mono);
+  font-weight: 650;
+  color: var(--text-muted);
+}
+.q2-log-verb.is-spawn   { color: var(--green); }
+.q2-log-verb.is-claim   { color: var(--green); }
+.q2-log-verb.is-close   { color: var(--text-muted); }
+.q2-log-verb.is-enqueue { color: var(--orange); }
+.q2-log-verb.is-reopen  { color: var(--orange); }
+.q2-log-verb.is-block   { color: var(--wip-blue); }
+.q2-log-verb.is-stop,
+.q2-log-verb.is-reap    { color: var(--red); }
+.q2-log-rest {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── column 1: queue rows ─────────────────────────────────────────────── */
 .q2-qrow {
   display: block;
