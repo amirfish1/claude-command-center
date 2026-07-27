@@ -101,6 +101,7 @@ def test_kimi_goal_remote_busy_requeues_original_command():
         return 7
 
     with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+         mock.patch.dict(server.os.environ, {"CCC_WORKER_PROCESS": "0"}), \
          mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
          mock.patch.object(server, "_kimi_wire_turn_active", return_value=False), \
          mock.patch.object(server, "_acp_ensure_session_loaded", return_value=None), \

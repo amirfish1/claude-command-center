@@ -1,0 +1,1 @@
+- Preserve Kimi prompts rejected by remote-busy races through a durable, cross-process-safe retry handoff without overwriting other queued input.
