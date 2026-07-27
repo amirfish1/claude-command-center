@@ -303,31 +303,90 @@ def _get_claude_credentials():
     return None
 
 
-def _get_claude_org_id():
-    # 1. ~/.claude.json carries the org UUID directly — instant, no subprocess.
-    #    (`claude auth status` cold-starts node and can exceed any sane timeout.)
+_CLAUDE_ACCOUNT_FILE = Path.home() / ".claude.json"
+_CLAUDE_ORG_ID_STATE_FILE = Path.home() / ".claude" / "command-center" / "claude-org-id.json"
+_claude_org_id_last_diagnostic = None
+
+
+def _valid_claude_org_id(value):
+    if not isinstance(value, str):
+        return None
     try:
-        with open(Path.home() / ".claude.json", "r") as f:
-            data = json.load(f)
-        org_id = (data.get("oauthAccount") or {}).get("organizationUuid")
-        if org_id:
-            return org_id
-    except Exception:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _load_last_claude_org_id():
+    try:
+        with open(_CLAUDE_ORG_ID_STATE_FILE, "r") as f:
+            return _valid_claude_org_id(json.load(f).get("org_id"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _save_last_claude_org_id(org_id):
+    try:
+        _CLAUDE_ORG_ID_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = _CLAUDE_ORG_ID_STATE_FILE.with_suffix(".tmp")
+        with open(tmp_file, "w") as f:
+            json.dump({"org_id": org_id}, f)
+        os.replace(tmp_file, _CLAUDE_ORG_ID_STATE_FILE)
+    except OSError:
         pass
 
-    # 2. Fallback: ask the claude CLI (slow — node cold start is regularly >5s)
+
+def _claude_org_id_diagnostic():
+    return _claude_org_id_last_diagnostic
+
+
+def _get_claude_org_id():
+    global _claude_org_id_last_diagnostic
+    _claude_org_id_last_diagnostic = None
+
+    # ~/.claude.json carries the org UUID directly — instant, no subprocess.
+    try:
+        with open(_CLAUDE_ACCOUNT_FILE, "r") as f:
+            account_org_id = _valid_claude_org_id(
+                (json.load(f).get("oauthAccount") or {}).get("organizationUuid")
+            )
+        if account_org_id:
+            _save_last_claude_org_id(account_org_id)
+            return account_org_id
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+
+    # The CLI can cold-start slowly. A cached UUID is only safe on that
+    # transient timeout; auth failures and malformed output must stay visible.
     try:
         claude_info = _core._resolve_claude_bin()
         cmd = claude_info.get("bin") if claude_info.get("available") else "claude"
-        res = subprocess.run(
-            [cmd, "auth", "status"],
-            capture_output=True, text=True, timeout=15
-        )
-        if res.returncode == 0:
-            return json.loads(res.stdout.strip()).get("orgId")
-    except Exception:
-        pass
-    return None
+        res = subprocess.run([cmd, "auth", "status"], capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        cached_org_id = _load_last_claude_org_id()
+        if cached_org_id:
+            _claude_org_id_last_diagnostic = (
+                "claude auth status timed out after 15 seconds; using cached organization ID"
+            )
+            return cached_org_id
+        _claude_org_id_last_diagnostic = "claude auth status timed out after 15 seconds"
+        return None
+    except (FileNotFoundError, OSError) as e:
+        _claude_org_id_last_diagnostic = f"claude auth status failed: {type(e).__name__}"
+        return None
+
+    if res.returncode != 0:
+        _claude_org_id_last_diagnostic = f"claude auth status exited {res.returncode}"
+        return None
+    try:
+        cli_org_id = _valid_claude_org_id(json.loads(res.stdout.strip()).get("orgId"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        cli_org_id = None
+    if not cli_org_id:
+        _claude_org_id_last_diagnostic = "claude auth status returned an invalid organization ID"
+        return None
+    _save_last_claude_org_id(cli_org_id)
+    return cli_org_id
 
 
 def _fetch_plan_usage():
@@ -337,7 +396,9 @@ def _fetch_plan_usage():
 
     org_id = _get_claude_org_id()
     if not org_id:
-        return {"ok": False, "error": "Could not determine organization ID. Ensure `claude` is logged in."}
+        diagnostic = _claude_org_id_diagnostic()
+        error = "Could not determine organization ID. Ensure `claude` is logged in."
+        return {"ok": False, "error": f"{error} {diagnostic}" if diagnostic else error}
 
     url = f"https://claude.ai/api/organizations/{org_id}/usage"
     req = urllib.request.Request(url)
