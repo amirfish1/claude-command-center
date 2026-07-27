@@ -958,6 +958,17 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border-radius: 6px;
   padding: 8px 10px;
 }
+/* Always-open answer / comment boxes, rendered as the next entry in the
+   activity thread rather than as separate sections elsewhere on the page. */
+.q2-inline {
+  margin-top: 10px;
+  margin-left: 17px;   /* line up with the timeline's text column */
+}
+.q2-inline-answer {
+  margin-left: 0;
+  border-left: 2px solid var(--wip-blue);
+  padding-left: 14px;
+}
 .q2-actrow { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 
 /* Chips that edit on click. */
@@ -977,7 +988,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border-top: 1px solid var(--border);
   /* A distinct tint so the embedded dashboard reads as a different surface
      rather than more of the ticket pane. */
-  background: color-mix(in srgb, var(--wip-blue) 7%, var(--surface));
+  background: color-mix(in srgb, var(--wip-blue) 15%, var(--bg));
   overflow: hidden;   /* the scaled iframe is oversized by design */
 }
 .q2-conv-toggle {
@@ -1038,7 +1049,9 @@ body.q2-resizing .q2-col { pointer-events: none; }
   left: 0;
   display: block;
   border: 0;
-  background: var(--bg);
+  /* Tinted to match what gets injected inside the frame, so the two never
+     disagree while the embedded page is still loading. */
+  background: color-mix(in srgb, var(--wip-blue) 15%, var(--bg));
   /* 1 / 0.82 — oversize, then scale back so the viewport shrinks with the
      content and the page still fills the pane. */
   width: 121.95%;

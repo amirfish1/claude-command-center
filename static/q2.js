@@ -1245,16 +1245,16 @@
               ? 'Queued to run. Click to cancel.'
               : 'Ask WatchTower to run this ticket next.') + '">'
           + (runQueued ? '&#9632; Queued' : '&#9654; Run now') + '</button>')
-      + (st === 'blocked' ? act('answer', 'Answer', 'q2-btn-primary') : '')
-      + act('comment', 'Comment')
       + (closed ? act('reopen', 'Reopen') : act('close', 'Close'))
       + '<span class="q2-spacer"></span>'
       + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
       + '</div>';
 
+    // Close and reopen stay armed: they are terminal and want a deliberate
+    // press. Answer and comment do NOT — they are the two things you come to a
+    // ticket to do, and hiding them behind a button made the ticket read-only
+    // until you found the toolbar.
     var FORMS = {
-      answer:  ['Your answer', 'Send answer', 'answer'],
-      comment: ['Log an update - not a resolution', 'Add comment', 'comment'],
       close:   ['Resolution summary (optional)', 'Mark as closed', 'close'],
       reopen:  ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
     };
@@ -1303,7 +1303,25 @@
       + (editCount
           ? '<label class="q2-show-edits"><input type="checkbox" data-q2-show-edits> show edits (' + editCount + ')</label>'
           : '')
-      + '</div>' + timelineHtml(item) + '</section>'
+      + '</div>' + timelineHtml(item)
+      // The answer box belongs WITH the question, at the end of the thread —
+      // the agent is waiting on it and it should need no hunting.
+      + (st === 'blocked'
+          ? '<div class="q2-inline q2-inline-answer">'
+            + (item.block_question ? '<div class="q2-block-q">' + esc(item.block_question) + '</div>' : '')
+            + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
+            + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
+            + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
+            + ' data-q2-act="answer">Send answer</button></div></div>'
+          : '')
+      // Comment sits after the last activity item, always available: it is a
+      // reply to the thread, so it reads as the next entry in it.
+      + '<div class="q2-inline">'
+      + '<textarea class="q2-input" data-q2-input="comment" rows="2"'
+      + ' placeholder="Add a comment - an update, not a resolution" aria-label="Add a comment"></textarea>'
+      + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="comment">Comment</button></div>'
+      + '</div>'
+      + '</section>'
       + (metaBits.length ? '<div class="q2-meta-strip">' + metaBits.join('<span class="q2-n-sep">·</span>') + '</div>' : '')
       + '<div class="q2-detail-foot"><span class="q2-dim">Filed '
       + '<span title="' + esc(item.created_at || '') + '">' + esc(relTime(item.created_at)) + '</span>'
@@ -1319,7 +1337,25 @@
       host.innerHTML = '<div class="q2-detail-top"></div>';
       top = host.querySelector('.q2-detail-top');
     }
+    // renderDetail runs on every poll. Without this, anything half-typed into
+    // the always-open answer/comment boxes is destroyed 5 seconds later.
+    var drafts = {}, focused = null, selStart = 0, selEnd = 0;
+    top.querySelectorAll('[data-q2-input]').forEach(function (el) {
+      var k = el.getAttribute('data-q2-input');
+      if (el.value) drafts[k] = el.value;
+      if (document.activeElement === el) {
+        focused = k; selStart = el.selectionStart; selEnd = el.selectionEnd;
+      }
+    });
     top.innerHTML = topHtml;
+    top.querySelectorAll('[data-q2-input]').forEach(function (el) {
+      var k = el.getAttribute('data-q2-input');
+      if (drafts[k] != null) el.value = drafts[k];
+      if (focused === k) {
+        el.focus();
+        try { el.setSelectionRange(selStart, selEnd); } catch (_) {}
+      }
+    });
     syncConv(sid);
   }
 
@@ -1363,6 +1399,16 @@
   // it reads oversized and carries controls that make no sense here. It is
   // same-origin, so we can style it from outside instead of adding q2-specific
   // branches to app.js.
+  // The blue tint has to be applied INSIDE the frame. Setting it on the
+  // wrapper does nothing: the embedded document paints its own opaque
+  // background over the whole box, which is why the pane still read black.
+  function convTint() {
+    var cs = getComputedStyle(document.documentElement);
+    var blue = (cs.getPropertyValue('--wip-blue') || '#58a6ff').trim();
+    var surface = (cs.getPropertyValue('--bg') || '#0d1117').trim();
+    return 'color-mix(in srgb, ' + blue + ' 15%, ' + surface + ')';
+  }
+
   var CONV_TRIM_CSS = [
     /* No zoom here: it shrinks the document inside a full-height viewport and
        leaves a dead band at the bottom. The iframe element is scaled instead
@@ -1378,7 +1424,11 @@
     /* Composer: a few lines is plenty when the pane is half a column. */
     '#convInputBar textarea { max-height: 84px !important; min-height: 34px !important; }',
     '.conv-input-bar { padding-top: 4px !important; padding-bottom: 4px !important; }',
-    '.conv-pane, .conversations-view { padding-bottom: 0 !important; }'
+    '.conv-pane, .conversations-view { padding-bottom: 0 !important; }',
+    /* Tint every surface the embedded page paints, so the pane reads as a
+       different material from the ticket detail above it. */
+    'html, body, .conv-pane, .conversations-view, .conv-body, #convView,'
+      + ' .conv-input-bar, .conv-pane-body { background: __TINT__ !important; }'
   ].join('\n');
 
   function trimConvFrame(frame) {
@@ -1387,7 +1437,8 @@
       if (!doc || doc.getElementById('q2TrimStyle')) return;
       var st = doc.createElement('style');
       st.id = 'q2TrimStyle';
-      st.textContent = CONV_TRIM_CSS;
+      frame.style.background = 'transparent';
+      st.textContent = CONV_TRIM_CSS.replace(/__TINT__/g, convTint());
       (doc.head || doc.documentElement).appendChild(st);
     } catch (_) {
       // Cross-origin would land here. Same-origin today; if that ever changes
@@ -1471,6 +1522,8 @@
       await postJson(plan[0], plan[1]);
       note(plan[3]);
       state.arm = '';
+      var box = document.querySelector('[data-q2-input="' + act + '"]');
+      if (box) box.value = '';
       // Re-fetch rather than patching local state, so what is on screen is
       // what the store actually holds. Deliberately NOT clearing state.detail
       // first: that would flash the "Loading" state and tear down the iframe.
