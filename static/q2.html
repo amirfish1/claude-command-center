@@ -16,10 +16,6 @@
     <button type="button" class="q2-btn" id="q2ThemeBtn" title="Toggle light / dark">Light</button>
   </header>
 
-  <!-- Live flow diagram for the selected queue: stack -> watcher -> worker
-       -> recently done. Full width so it has room to actually read. -->
-  <section class="q2-diagram" id="q2Diagram" aria-label="Queue flow"></section>
-
   <main class="q2-shell">
     <!-- Column 1: queues (master) -->
     <section class="q2-col q2-col-queues" aria-label="Queues">
@@ -42,10 +38,15 @@
         <span class="q2-spacer"></span>
         <button type="button" class="q2-btn q2-btn-ghost" id="q2ClosedBtn" aria-pressed="false">Show closed</button>
       </div>
+      <!-- Flow diagram for this queue: backlog -> watcher -> worker -> done. -->
+      <section class="q2-diagram" id="q2Diagram" aria-label="Queue flow"></section>
       <div class="q2-col-sub">
         <input type="search" class="q2-search" id="q2Search" placeholder="Search tickets&hellip;" aria-label="Search tickets">
       </div>
       <div class="q2-list" id="q2Tickets"></div>
+      <!-- Reconciler log for this queue: chronological, pinned to the newest
+           line unless the user scrolls up to read history. -->
+      <section class="q2-logbar" id="q2LogBar" aria-label="Reconciler activity log"></section>
     </section>
 
     <div class="q2-resizer" data-q2-resize="tickets" role="separator" aria-orientation="vertical"
@@ -57,10 +58,6 @@
       <div class="q2-detail" id="q2Detail"></div>
     </section>
   </main>
-
-  <!-- Reconciler log for the selected queue: chronological, pinned to the
-       newest line unless the user scrolls up. -->
-  <section class="q2-logbar" id="q2LogBar" aria-label="Reconciler activity log"></section>
 
   <script src="/static/q2.js"></script>
 </body>

@@ -726,7 +726,7 @@
       + '<span class="q2-dg-dot"></span><span class="q2-dg-dot"></span><span class="q2-dg-dot"></span></div>'
       // 4. Done
       + '<div class="q2-dg-stage">'
-      + '<div class="q2-dg-label">Done <span class="q2-dg-hint">last hour</span>'
+      + '<div class="q2-dg-label" title="Closed in the last hour">Done'
       + '<span class="q2-dg-n">' + m.doneRecent.length + '</span></div>'
       + '<div class="q2-dg-stack is-done">' + stackHtml(m.doneRecent, 'is-closed') + '</div>'
       + '</div>'
