@@ -1386,3 +1386,38 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-checkrow { display: flex; gap: 12px; font-size: 12px; padding-top: 3px; }
 .q2-checkrow label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 @media (max-width: 620px) { .q2-fields { grid-template-columns: 1fr; } }
+
+/* The ticket dot doubles as a run control: hover swaps it for a play glyph,
+   click queues the ticket. Mirrors the main dashboard's .fq-status-action.
+   Only rendered for tickets that CAN run — closed and live-claimed rows keep
+   a plain, inert dot. */
+.q2-tdot-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--green);
+}
+.q2-tdot-wrap .q2-tdot { transition: opacity 0.12s ease; }
+.q2-tdot-play {
+  position: absolute;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.q2-tdot-wrap:hover .q2-tdot,
+.q2-tdot-wrap:focus-visible .q2-tdot { opacity: 0; }
+.q2-tdot-wrap:hover .q2-tdot-play,
+.q2-tdot-wrap:focus-visible .q2-tdot-play { opacity: 1; }
+.q2-tdot-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 50%; }
+/* Already queued: the stop glyph stays visible, so the row shows at a glance
+   that a run is pending and a second click will cancel it. */
+.q2-tdot-wrap.is-queued { color: var(--orange); }
+.q2-tdot-wrap.is-queued .q2-tdot { opacity: 0; }
+.q2-tdot-wrap.is-queued .q2-tdot-play { opacity: 1; }
+
+.q2-icon-btn svg { display: block; }

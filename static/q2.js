@@ -401,6 +401,19 @@
   var ICON_PLAY = '<svg class="q2-transport-icon" viewBox="0 0 16 16" width="13" height="13"'
     + ' aria-hidden="true" focusable="false"><path fill="currentColor"'
     + ' d="M4.8 3.1a.6.6 0 0 1 .92-.51l6.4 4.4a.6.6 0 0 1 0 1.02l-6.4 4.4a.6.6 0 0 1-.92-.51V3.1Z"/></svg>';
+  var ICON_GEAR = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">'
+    + '<path fill="currentColor" d="M8 10.2a2.2 2.2 0 1 1 0-4.4 2.2 2.2 0 0 1 0 4.4Zm5.6-1.4.02-.8-.02-.8 1.26-.97a.4.4 0 0 0 .1-.5l-1.2-2.07a.4.4 0 0 0-.48-.18l-1.48.6a5.7 5.7 0 0 0-1.38-.8L10.2.86a.4.4 0 0 0-.4-.34H7.4a.4.4 0 0 0-.4.34l-.22 1.58c-.5.2-.96.47-1.38.8l-1.48-.6a.4.4 0 0 0-.48.18L2.24 4.9a.4.4 0 0 0 .1.5L3.6 6.4l-.02.8.02.8-1.26.97a.4.4 0 0 0-.1.5l1.2 2.07c.1.17.3.24.48.18l1.48-.6c.42.33.88.6 1.38.8l.22 1.58c.03.2.2.34.4.34h2.4c.2 0 .37-.14.4-.34l.22-1.58c.5-.2.96-.47 1.38-.8l1.48.6c.18.06.38-.01.48-.18l1.2-2.07a.4.4 0 0 0-.1-.5L13.6 8.8Z"/>'
+    + '</svg>';
+  var ICON_PLUS = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">'
+    + '<path fill="currentColor" d="M7.25 2.75a.75.75 0 0 1 1.5 0v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5Z"/>'
+    + '</svg>';
+  var ICON_TINY_PLAY = '<svg class="q2-tdot-play" viewBox="0 0 16 16" width="11" height="11"'
+    + ' aria-hidden="true" focusable="false"><path fill="currentColor"'
+    + ' d="M4.8 3.1a.6.6 0 0 1 .92-.51l6.4 4.4a.6.6 0 0 1 0 1.02l-6.4 4.4a.6.6 0 0 1-.92-.51V3.1Z"/></svg>';
+  var ICON_TINY_STOP = '<svg class="q2-tdot-play" viewBox="0 0 16 16" width="10" height="10"'
+    + ' aria-hidden="true" focusable="false"><rect x="4" y="4" width="8" height="8" rx="1.6"'
+    + ' fill="currentColor"/></svg>';
+
   var ICON_STOP = '<svg class="q2-transport-icon" viewBox="0 0 16 16" width="13" height="13"'
     + ' aria-hidden="true" focusable="false"><rect x="4" y="4" width="8" height="8" rx="1.6"'
     + ' fill="currentColor"/></svg>';
@@ -1020,6 +1033,10 @@
       ? (new Date(touchedAt(it)).toISOString())
       : (it.updated_at || it.created_at);
     var age = relTime(ageSrc);
+    // Only an idle, open ticket can be "run now": a closed one has nothing to
+    // do and a live-claimed one is already being worked.
+    var queued = !!it.run_requested;
+    var canRun = st !== 'closed' && !isLiveWip(it);
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
@@ -1037,7 +1054,15 @@
       // the main dashboard's .fq-row-signals order.
       + '<span class="q2-tsignals">'
       + '<span class="q2-tage" title="' + esc(ageSrc || '') + '">' + esc(age) + '</span>'
-      + '<span class="q2-tdot" title="' + esc(dotTitle) + '" aria-label="' + esc(dotTitle) + '"></span>'
+      + (canRun
+          ? '<span class="q2-tdot-wrap' + (queued ? ' is-queued' : '') + '"'
+            + ' data-q2-run="' + esc(ref) + '" data-q2-queued="' + (queued ? '1' : '0') + '"'
+            + ' role="button" tabindex="0"'
+            + ' title="' + esc(queued ? 'Queued to run - click to cancel' : dotTitle + ' - click to run now') + '">'
+            + '<span class="q2-tdot" aria-hidden="true"></span>'
+            + (queued ? ICON_TINY_STOP : ICON_TINY_PLAY)
+            + '</span>'
+          : '<span class="q2-tdot" title="' + esc(dotTitle) + '" aria-label="' + esc(dotTitle) + '"></span>')
       + '</span>'
       + '</button>';
   }
@@ -1877,6 +1902,19 @@
     }
   }
 
+  // Run-now straight from the ticket list. Same endpoint as the detail pane's
+  // button; a second press on a still-queued ticket cancels it.
+  async function runTicket(ref, queued) {
+    try {
+      await postJson('/api/ux-fixes/run', { ref: ref, cancel: !!queued });
+      note(queued ? 'Run cancelled for ' + ref : 'Queued ' + ref + ' to run');
+      if (state.ref === ref) await loadDetail(ref);
+      await refresh();
+    } catch (e) {
+      note('Could not run ' + ref + ': ' + e.message);
+    }
+  }
+
   function renderAll() {
     renderChrome();
     renderQueues();
@@ -1937,6 +1975,12 @@
     if (drain) {
       e.stopPropagation();
       setDrainMode(drain.getAttribute('data-q2-drain'), drain.getAttribute('data-q2-mode'));
+      return;
+    }
+    var runDot = e.target.closest('[data-q2-run]');
+    if (runDot) {
+      e.stopPropagation();
+      runTicket(runDot.getAttribute('data-q2-run'), runDot.getAttribute('data-q2-queued') === '1');
       return;
     }
     var act = e.target.closest('[data-q2-act]');
@@ -2127,6 +2171,13 @@
   window.addEventListener('resize', function () {
     setColWidth('queues', readColWidth('queues'), false);
     setColWidth('tickets', readColWidth('tickets'), false);
+  });
+
+  // Glyph buttons in the markup are filled with drawn icons here, so the page
+  // never depends on a font shipping a decent gear or plus.
+  document.querySelectorAll('[data-q2-icon]').forEach(function (el) {
+    var k = el.getAttribute('data-q2-icon');
+    el.innerHTML = k === 'gear' ? ICON_GEAR : ICON_PLUS;
   });
 
   // ── boot ─────────────────────────────────────────────────────────────────
