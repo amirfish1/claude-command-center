@@ -391,7 +391,10 @@
   //   stop  -> play (all types) -> play/bugs -> play/features -> stop
   // Both are real WatchTower settings: auto_drain (/api/queue/drain) and
   // claim_types (/api/wt/queue/claim-types).
-  var DRAIN_MODES = ['off', 'all', 'bug', 'feature'];
+  // stop -> bugs -> features -> all -> stop. Bugs first because starting a
+  // stopped queue on everything is the broadest possible action; the narrow
+  // one should be the cheapest to reach.
+  var DRAIN_MODES = ['off', 'bug', 'feature', 'all'];
 
   // Drawn, not typed. The ▶ / ■ glyphs render at different weights and
   // baselines across fonts and never optically matched each other.

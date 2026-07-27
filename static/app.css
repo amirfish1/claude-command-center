@@ -21532,3 +21532,17 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
     transform: rotate(180deg);
   }
 }
+
+/* Switch to the q2 queue board. Mirrors q2's "Sessions" link so the control
+   sits in the same corner going both ways. */
+.q2-switch {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--text-muted, #8b949e);
+  text-decoration: none;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 5px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+.q2-switch:hover { color: var(--text, #c9d1d9); border-color: var(--accent, #6e8caf); }

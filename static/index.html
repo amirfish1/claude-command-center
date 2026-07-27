@@ -459,7 +459,6 @@
         <!-- q2 queue board. A plain link: the mac app treats any URL on the
              dashboard port as in-app (scripts/macapp/main.swift:132), so this
              navigates the existing window rather than spawning a new one. -->
-        <a class="sh-btn" id="q2BoardLink" href="/q2.html" title="Open the queue board" aria-label="Open the queue board"><span aria-hidden="true">&#9776;</span><span class="sh-action-label">Queues</span></a>
         <!-- Folder chip color toggle. Three states: muted (uniform neutral —
              default), color (per-folder hue), and level (shared hierarchy colors),
              (uniform neutral). Persisted under `ccc-chips-mode`; body classes
@@ -570,6 +569,10 @@
       </div>
     </div>
     <div class="toolbar" id="convToolbar">
+    <!-- Mirrors the "Sessions" link in q2's top-left, so the switch sits in
+         the same place going both ways. Plain link: the mac app treats any
+         URL on the dashboard port as in-app (scripts/macapp/main.swift:132). -->
+    <a class="q2-switch" id="q2BoardLink" href="/q2.html" title="Open the queue board">Queues &#8594;</a>
       <button class="mobile-back-btn" id="mobileBackBtn" title="Back to sidebar">&#8592;<span class="mb-label"> Back</span></button>
       <button type="button" class="mobile-original-ask" id="mobileOriginalAsk"
               aria-expanded="false" title="Show the full original ask" hidden>
