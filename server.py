@@ -21705,6 +21705,8 @@ _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_APP_SERVER_LIVENESS_INTERVAL = 20.0
 _CODEX_APP_SERVER_LIVENESS_TIMEOUT = 8.0
 _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
+_CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
+_CODEX_APP_SERVER_INFLIGHT = 0
 _CODEX_TELEMETRY_TURNS = {}
 _CODEX_APP_SERVER_RECENT_ITEM_MAX = 24
 _CODEX_APP_SERVER_ITEM_TEXT_MAX = 1200
@@ -23695,34 +23697,51 @@ def _codex_app_server_reader(transport):
             _CODEX_APP_SERVER_LOCK.notify_all()
 
 
-def _codex_app_server_request_to_transport(transport, method, params=None, timeout=20):
-    """Send one JSON-RPC request to an already-started Codex app-server."""
-    with _CODEX_APP_SERVER_LOCK:
-        global _CODEX_APP_SERVER_NEXT_ID
-        req_id = _CODEX_APP_SERVER_NEXT_ID
-        _CODEX_APP_SERVER_NEXT_ID += 1
-        try:
-            transport.send_json({
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "method": method,
-                "params": params or {},
-            })
-        except (BrokenPipeError, OSError) as e:
-            return {"ok": False, "error": str(e), "fallback": "exec"}
+def _codex_app_server_request_to_transport(
+    transport, method, params=None, timeout=20, count_as_inflight=True,
+):
+    """Send one JSON-RPC request to an already-started Codex app-server.
 
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            response = _CODEX_APP_SERVER_RESPONSES.pop(req_id, None)
-            if response is not None:
-                return response
-            remaining = max(0.05, deadline - time.time())
-            _CODEX_APP_SERVER_LOCK.wait(min(0.5, remaining))
-        return {
-            "ok": False,
-            "error": f"Codex app-server request timed out: {method}",
-            "fallback": "exec",
-        }
+    `count_as_inflight` marks this call in `_CODEX_APP_SERVER_INFLIGHT` for the
+    whole span it's waiting on a reply. The periodic liveness probe (see
+    _codex_app_server_transport_responsive) passes False so it never counts
+    itself -- it uses this counter to tell "busy servicing a real request"
+    apart from "actually wedged".
+    """
+    global _CODEX_APP_SERVER_NEXT_ID, _CODEX_APP_SERVER_INFLIGHT
+    if count_as_inflight:
+        with _CODEX_APP_SERVER_INFLIGHT_LOCK:
+            _CODEX_APP_SERVER_INFLIGHT += 1
+    try:
+        with _CODEX_APP_SERVER_LOCK:
+            req_id = _CODEX_APP_SERVER_NEXT_ID
+            _CODEX_APP_SERVER_NEXT_ID += 1
+            try:
+                transport.send_json({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "method": method,
+                    "params": params or {},
+                })
+            except (BrokenPipeError, OSError) as e:
+                return {"ok": False, "error": str(e), "fallback": "exec"}
+
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                response = _CODEX_APP_SERVER_RESPONSES.pop(req_id, None)
+                if response is not None:
+                    return response
+                remaining = max(0.05, deadline - time.time())
+                _CODEX_APP_SERVER_LOCK.wait(min(0.5, remaining))
+            return {
+                "ok": False,
+                "error": f"Codex app-server request timed out: {method}",
+                "fallback": "exec",
+            }
+    finally:
+        if count_as_inflight:
+            with _CODEX_APP_SERVER_INFLIGHT_LOCK:
+                _CODEX_APP_SERVER_INFLIGHT -= 1
 
 
 def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
@@ -23952,7 +23971,9 @@ def _codex_app_server_transport_responsive(transport, timeout=_CODEX_APP_SERVER_
     A real reply always carries "jsonrpc"; the timeout/broken-pipe fallback in
     _codex_app_server_request_to_transport does not.
     """
-    response = _codex_app_server_request_to_transport(transport, "thread/list", {}, timeout=timeout)
+    response = _codex_app_server_request_to_transport(
+        transport, "thread/list", {}, timeout=timeout, count_as_inflight=False,
+    )
     return isinstance(response, dict) and "jsonrpc" in response
 
 
@@ -24021,6 +24042,27 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 return transport
             if _codex_app_server_transport_responsive(transport):
                 _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
+                return transport
+            with _CODEX_APP_SERVER_INFLIGHT_LOCK:
+                inflight = _CODEX_APP_SERVER_INFLIGHT
+            if inflight > 0:
+                # A real request (e.g. an active turn) is already in flight on
+                # this transport, so a slow reply to our liveness probe means
+                # "busy", not "wedged" -- Codex app-server services requests on
+                # one stdio connection largely in order, so a long-running
+                # turn naturally delays an unrelated thread/list probe.
+                # Replacing the process here would kill a perfectly healthy,
+                # working session for no reason, and would repeat every
+                # _CODEX_APP_SERVER_LIVENESS_INTERVAL seconds until the turn
+                # finishes. Defer instead of tearing it down.
+                _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
+                _log_activity(
+                    "app-server", "BUSY",
+                    f"pid={getattr(transport.proc, 'pid', '-')} "
+                    f"age={round(now - transport.started_at)}s no reply within "
+                    f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s but {inflight} request(s) "
+                    f"in flight; not replacing",
+                )
                 return transport
             # Alive but wedged (no reply within timeout) — fall through to
             # close it below so the candidates loop starts a fresh process
@@ -24114,6 +24156,7 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 if _CODEX_APP_SERVER_TRANSPORT is transport and transport.alive():
                     _CODEX_APP_SERVER_INITIALIZED = True
                     _CODEX_APP_SERVER_INITIALIZING = False
+                    _CODEX_APP_SERVER_LAST_LIVE_CHECK = time.time()
                     _CODEX_APP_SERVER_LOCK.notify_all()
                     return transport
         transport.close()
