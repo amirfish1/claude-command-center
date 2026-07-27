@@ -214,25 +214,33 @@
     return by;
   }
 
-  // One counts line, shared by the queue rows and the ticket-list header, so
-  // the two can never disagree about how many tickets a queue has. Plain text,
-  // fixed order, each number labelled. Blocked tickets are counted separately
-  // from open ones — folding them together was what made the header claim
-  // "5 open" for a queue with 4 open and 1 blocked.
-  function countsLine(f, done) {
+  // One definition per number, shared by the queue rows and the ticket-list
+  // header. The header strings them together; the queue row scatters them to
+  // its corners. Both draw the same markup, label and colour from here, so the
+  // two surfaces cannot disagree about what a queue holds — which is exactly
+  // what made the header claim "5 open" for a queue with 4 open and 1 blocked.
+  function countParts(f, done) {
     f = f || {};
-    var parts = [];
-    if (f.needsInput) {
-      parts.push('<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
-        + '<b>' + f.needsInput + '</b> needs input</span>');
-    }
-    if (f.wip) {
-      parts.push('<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
-        + '<b>' + f.wip + '</b> wip</span>');
-    }
-    parts.push('<span class="q2-n is-open" title="Open and unclaimed"><b>' + (f.waiting || 0) + '</b> open</span>');
-    parts.push('<span class="q2-n is-done" title="Closed, all time"><b>' + (done || 0) + '</b> done</span>');
-    return parts.join('<span class="q2-n-sep" aria-hidden="true">·</span>');
+    return {
+      needsInput: f.needsInput
+        ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
+          + '<b>' + f.needsInput + '</b> needs input</span>'
+        : '',
+      wip: f.wip
+        ? '<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
+          + '<b>' + f.wip + '</b> wip</span>'
+        : '',
+      open: '<span class="q2-n is-open" title="Open and unclaimed"><b>'
+        + (f.waiting || 0) + '</b> open</span>',
+      done: '<span class="q2-n is-done" title="Closed, all time"><b>'
+        + (done || 0) + '</b> done</span>',
+    };
+  }
+
+  function countsLine(f, done) {
+    var c = countParts(f, done);
+    return [c.needsInput, c.wip, c.open, c.done].filter(Boolean)
+      .join('<span class="q2-n-sep" aria-hidden="true">·</span>');
   }
 
   // ── auto-drain toggle ────────────────────────────────────────────────────
@@ -471,11 +479,12 @@
           + (busy ? '<span class="q2-spin" aria-hidden="true"></span>' : '')
           + esc(c.label) + '</button>';
       }).join('');
+      var c = countParts(f, q.closed);
       return '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' role="button" tabindex="0"'
         + ' data-q2-queue="' + esc(q.queue) + '">'
-        // Row 1 — identity and configuration.
+        // Row 1 — identity on the left, current work on the right.
         + '<span class="q2-qrow-head">'
         + '<span class="q2-qname">' + esc(q.queue) + '</span>'
         + ((f && f.github) ? '<span class="q2-gh-wrap" title="Backed by GitHub issues'
@@ -483,16 +492,17 @@
             + '." aria-label="GitHub-backed queue">' + GH_MARK + '</span>' : '')
         + (q.state === 'stuck' ? '<span class="q2-stuck-flag">stuck</span>' : '')
         + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(shortPath(q.repo_path)) + '</span>' : '')
-        + '<span class="q2-qrow-config">' + chips + '</span>'
+        + '<span class="q2-qrow-tr">' + c.wip + c.open + '</span>'
         + '</span>'
-        // Row 2 — the counts, same renderer the ticket header uses, plus the
-        // last-touch age on the right (the queue's newest ticket activity,
-        // same figure the main dashboard's health strip shows).
-        + '<span class="q2-counts">' + countsLine(f, q.closed)
+        // Row 2 — configuration on the left, what needs a human on the right.
+        + '<span class="q2-qrow-foot">'
+        + '<span class="q2-qrow-bl">' + chips + c.done + '</span>'
+        + '<span class="q2-qrow-br">' + c.needsInput
         + (q.last_activity_seconds != null
             ? '<span class="q2-qage" title="Most recent ticket activity in this queue">'
               + esc(agoFromSeconds(q.last_activity_seconds)) + '</span>'
             : '')
+        + '</span>'
         + '</span>'
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
         + '</div>';
@@ -500,6 +510,35 @@
   }
 
   // ── render: column 2, tickets ────────────────────────────────────────────
+  // Triage chips, same set and shorthand the main dashboard puts on a row
+  // (static/app.js:35610). Type and priority share one chip because they are
+  // read together ("BUG/p0"); value and confidence share one for the same
+  // reason ("H/M"). The needs-input chip is deliberately omitted here — the
+  // status dot on the same row already carries it.
+  var TYPE_SHORT = { feature: 'FR', bug: 'BUG' };
+  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
+  function ticketChips(it) {
+    var c = [];
+    if (it.type) {
+      var label = TYPE_SHORT[it.type] || it.type;
+      c.push('<span class="q2-tchip is-type-' + esc(it.type) + (it.priority ? ' is-prio-' + esc(it.priority) : '') + '"'
+        + ' title="' + esc(it.priority ? it.type + ' / ' + it.priority : it.type) + '">'
+        + esc(it.priority ? label + '/' + it.priority : label) + '</span>');
+    } else if (it.priority) {
+      c.push('<span class="q2-tchip is-prio-' + esc(it.priority) + '" title="priority">'
+        + esc(it.priority) + '</span>');
+    }
+    if (it.readiness) {
+      c.push('<span class="q2-tchip is-ready" title="readiness: ' + esc(it.readiness) + '">'
+        + esc(READY_SHORT[it.readiness] || it.readiness) + '</span>');
+    }
+    if (it.value || it.confidence) {
+      c.push('<span class="q2-tchip is-vc" title="value / confidence">'
+        + esc(it.value || '-') + '/' + esc(it.confidence || '-') + '</span>');
+    }
+    return c.length ? '<span class="q2-tchips">' + c.join('') + '</span>' : '';
+  }
+
   function ticketRow(it) {
     var st = statusOf(it);
     var ref = it.ref || '';
@@ -524,6 +563,7 @@
       + (unresolved ? ' has-unresolved' : '') + '"'
       + ' data-q2-ref="' + esc(ref) + '">'
       + '<span class="q2-tref">' + esc(ref) + '</span>'
+      + ticketChips(it)
       + '<span class="q2-ttitle">' + esc(title) + '</span>'
       // Age then dot: the status marker sits to the RIGHT of the age, matching
       // the main dashboard's .fq-row-signals order.

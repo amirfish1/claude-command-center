@@ -244,17 +244,29 @@ body.q2-resizing .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
 }
 
-/* Row 1 holds configuration only, pinned right. */
-.q2-qrow-config { margin-left: auto; flex: 0 0 auto; display: inline-flex; gap: 3px; }
+/* Four corners. Top-left is identity, top-right is work in flight, bottom-left
+   is configuration, bottom-right is what wants a human. */
+.q2-qrow-tr { margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+.q2-qrow-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.q2-qrow-bl { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
+.q2-qrow-br { margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; }
 
 /* Row 2: the counts, as plain text rather than chips. Same markup is reused
    for the ticket-list header, which is what keeps the two in agreement. */
+/* Only the ticket-list header uses the strung-together line now; the queue
+   rows place the same parts in their corners. */
 .q2-counts {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 5px;
-  margin-top: 4px;
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -267,7 +279,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-n.is-wip, .q2-n.is-wip b { color: var(--green); }
 .q2-n.is-done, .q2-n.is-done b { color: var(--text-muted); }
 .q2-n-sep { color: var(--border); }
-.q2-qage { margin-left: auto; flex: 0 0 auto; color: var(--text-muted); }
+.q2-qage { flex: 0 0 auto; color: var(--text-muted); opacity: 0.8; }
 .q2-chip {
   font-size: 9.5px;
   font-weight: 500;
@@ -440,6 +452,27 @@ body.q2-resizing .q2-col { pointer-events: none; }
   font-size: 11px;
   color: var(--text-muted);
 }
+/* Triage chips: type/priority, readiness, value/confidence. Fixed width, never
+   shrink — the title yields the space instead, since it is truncated anyway. */
+.q2-tchips { flex: 0 0 auto; display: inline-flex; gap: 2px; }
+.q2-tchip {
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.q2-tchip.is-type-bug { color: var(--wip-blue); }
+.q2-tchip.is-type-feature { color: var(--purple); }
+/* Priority tints the whole type chip: p0/p1 are the ones worth spotting. */
+.q2-tchip.is-prio-p0 { color: var(--red); background: rgba(248, 81, 73, 0.13); }
+.q2-tchip.is-prio-p1 { color: var(--orange); background: rgba(210, 153, 34, 0.13); }
+.q2-tchip.is-vc { font-family: var(--font-mono); font-weight: 600; }
+.q2-trow.is-closed .q2-tchip { opacity: 0.5; }
 .q2-ttitle {
   flex: 1 1 auto;
   min-width: 0;
