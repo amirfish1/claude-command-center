@@ -20095,38 +20095,36 @@
   }
   function _wrapReplayWordsInHtml(htmlContent, spanClass) {
     const doc = new DOMParser().parseFromString(htmlContent, 'text/html');
-    const textNodes = [];
     let runId = 0;
 
-    function findTextNodes(node) {
+    // Assign every run during one traversal. Deferring text nodes to a second
+    // pass gives nested <code> nodes lower IDs and makes them print early.
+    function wrapRunsInDocumentOrder(node) {
       if (node.nodeType === Node.TEXT_NODE) {
-        if (node.textContent.trim()) textNodes.push(node);
-      } else {
-        if (node.tagName && (node.tagName.toLowerCase() === 'pre' || node.tagName.toLowerCase() === 'code')) {
-          node.classList.add(spanClass);
-          node.dataset.runId = runId++;
-          node.style.display = 'none';
-          return;
+        if (!node.textContent.trim()) return;
+        const parts = node.textContent.match(/\S+\s*/g) || [node.textContent];
+        const fragment = document.createDocumentFragment();
+        for (const part of parts) {
+          if (!part) continue;
+          const span = document.createElement('span');
+          span.className = spanClass;
+          span.dataset.runId = runId++;
+          span.textContent = part;
+          span.style.display = 'none';
+          fragment.appendChild(span);
         }
-        for (const child of Array.from(node.childNodes)) findTextNodes(child);
+        node.replaceWith(fragment);
+        return;
       }
-    }
-    findTextNodes(doc.body);
-
-    for (const node of textNodes) {
-      const parts = node.textContent.match(/\S+\s*/g) || [node.textContent];
-      const fragment = document.createDocumentFragment();
-      for (const part of parts) {
-        if (!part) continue;
-        const span = document.createElement('span');
-        span.className = spanClass;
-        span.dataset.runId = runId++;
-        span.textContent = part;
-        span.style.display = 'none';
-        fragment.appendChild(span);
+      if (node.tagName && (node.tagName.toLowerCase() === 'pre' || node.tagName.toLowerCase() === 'code')) {
+        node.classList.add(spanClass);
+        node.dataset.runId = runId++;
+        node.style.display = 'none';
+        return;
       }
-      node.replaceWith(fragment);
+      for (const child of Array.from(node.childNodes)) wrapRunsInDocumentOrder(child);
     }
+    wrapRunsInDocumentOrder(doc.body);
 
     const shellSelector = 'p, li, ul, ol, blockquote, table, thead, tbody, tr, th, td, h1, h2, h3, h4, h5, h6';
     doc.body.querySelectorAll(shellSelector).forEach(el => {
