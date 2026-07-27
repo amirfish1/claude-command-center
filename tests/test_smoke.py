@@ -10912,6 +10912,59 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn("exec", cmd)
         self.assertEqual(cmd[-1], "say ok")
 
+    def _run_thread_resume_requests(self, server, sid, count, rollout_exists):
+        server._CODEX_APP_SERVER_FALSE_MISSES = 0
+        error = {"error": {"message": f"thread not found: {sid}"}}
+        try:
+            with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+                 mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error), \
+                 mock.patch.object(server, "_codex_rollout_exists_on_disk", return_value=rollout_exists), \
+                 mock.patch.object(server, "_codex_app_server_shutdown") as recycle:
+                for _ in range(count):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                return recycle
+        finally:
+            server._CODEX_APP_SERVER_FALSE_MISSES = 0
+
+    def test_codex_app_server_recycles_after_verified_false_misses(self):
+        """A wedged child that keeps failing thread/resume with 'thread not
+        found' for threads whose rollouts exist on disk must be recycled —
+        the thread/list liveness probe alone cannot detect this wedge."""
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        recycle = self._run_thread_resume_requests(server, sid, 3, rollout_exists=True)
+        recycle.assert_called_once()
+
+    def test_codex_app_server_keeps_child_on_genuine_miss(self):
+        """'thread not found' for a thread with no rollout on disk is a
+        genuine miss (deleted/archived thread), not a wedge signal."""
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        recycle = self._run_thread_resume_requests(server, sid, 5, rollout_exists=False)
+        recycle.assert_not_called()
+
+    def test_codex_app_server_false_miss_counter_resets_on_success(self):
+        server = self.server
+        sid = "019e2bbb-d5e0-7df2-a1f7-26fbcf363485"
+        error = {"error": {"message": f"thread not found: {sid}"}}
+        ok = {"result": {"thread": {"id": sid, "status": {"type": "idle"}}}}
+        server._CODEX_APP_SERVER_FALSE_MISSES = 0
+        try:
+            with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+                 mock.patch.object(server, "_codex_rollout_exists_on_disk", return_value=True), \
+                 mock.patch.object(server, "_codex_app_server_shutdown") as recycle:
+                with mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                with mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=ok):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                with mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error):
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                    server._codex_app_server_request("thread/resume", {"threadId": sid})
+                recycle.assert_not_called()
+        finally:
+            server._CODEX_APP_SERVER_FALSE_MISSES = 0
+
     def test_spawn_codex_defaults_to_best_model_and_max_context_arg(self):
         """Default Codex spawns should prefer 5.5 while requesting max context."""
         server = self.server
@@ -17854,6 +17907,7 @@ class TestAcpKimiEngine(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(server, "_ACP_TRANSCRIPT_DIR", pathlib.Path(tmp)), \
              mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+             mock.patch.dict(server.os.environ, {"CCC_WORKER_PROCESS": "0"}), \
              mock.patch.object(server, "_queue_terminal_input") as queue:
             with server._ACP_LOCK:
                 state = server._acp_session("kimi", sid, create=True)
