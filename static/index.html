@@ -1467,6 +1467,19 @@
             WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).
           </div>
         </div>
+        <div>
+          <label class="bug-label" for="spawnDefaultsWorkerEffort">Worker reasoning effort</label>
+          <select id="spawnDefaultsWorkerEffort" class="bug-input">
+            <option value="">Engine default</option>
+            <option value="low">Light</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">Extra High</option>
+          </select>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            Used for Codex WatchTower workers unless their queue chooses an explicit effort.
+          </div>
+        </div>
         <div id="spawnDefaultsEffortField" style="display:none;">
           <label class="bug-label" for="spawnDefaultsEffort">Default reasoning effort</label>
           <select id="spawnDefaultsEffort" class="bug-input">

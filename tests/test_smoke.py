@@ -2935,6 +2935,36 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
+    def test_spawn_defaults_worker_effort_is_independent_and_validated(self):
+        """WatchTower workers retain their own global Codex effort default."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                defaults = server._load_spawn_defaults()
+                self.assertEqual(defaults["worker_reasoning_effort"], "")
+
+                saved = server._save_spawn_defaults({
+                    "reasoning_effort": "medium",
+                    "worker_reasoning_effort": "low",
+                })
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["reasoning_effort"], "medium")
+                self.assertEqual(saved["worker_reasoning_effort"], "low")
+
+                saved = server._save_spawn_defaults({"engine": "claude"})
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_reasoning_effort"], "low")
+
+                rejected = server._save_spawn_defaults({"worker_reasoning_effort": "max"})
+                self.assertFalse(rejected["ok"])
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
     def test_codex_spawn_default_prefers_best_model(self):
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)

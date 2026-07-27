@@ -4963,6 +4963,7 @@ def _load_spawn_defaults():
         "engine": "claude",
         "reasoning_effort": "",
         "worker_engine": "",
+        "worker_reasoning_effort": "",
         "models": {
             engine: _spawn_fallback_model_for_engine(engine)
             for engine in _ORCHESTRATION_SPAWN_ENGINES
@@ -4995,6 +4996,9 @@ def _load_spawn_defaults():
     reasoning_effort = str(raw.get("reasoning_effort") or raw.get("effort") or "").strip().lower()
     if reasoning_effort not in CODEX_REASONING_EFFORTS:
         reasoning_effort = ""
+    worker_reasoning_effort = str(raw.get("worker_reasoning_effort") or "").strip().lower()
+    if worker_reasoning_effort not in CODEX_REASONING_EFFORTS:
+        worker_reasoning_effort = ""
     # The WatchTower queue-worker default (WT's config.engine() fallback chain
     # reads this key). Separate from `engine`, which is the interactive
     # new-session default (WT-105). Blank = WT picks (codex when installed).
@@ -5008,6 +5012,7 @@ def _load_spawn_defaults():
     return {
         "engine": engine, "models": models,
         "reasoning_effort": reasoning_effort, "worker_engine": worker_engine,
+        "worker_reasoning_effort": worker_reasoning_effort,
     }
 
 
@@ -5051,6 +5056,15 @@ def _save_spawn_defaults(config):
             }
         current["reasoning_effort"] = reasoning_effort
 
+    if "worker_reasoning_effort" in config:
+        worker_reasoning_effort = str(config.get("worker_reasoning_effort") or "").strip().lower()
+        if worker_reasoning_effort not in CODEX_REASONING_EFFORTS:
+            return {
+                "ok": False,
+                "error": "worker_reasoning_effort must be low, medium, high, xhigh, or blank",
+            }
+        current["worker_reasoning_effort"] = worker_reasoning_effort
+
     raw_models = config.get("models")
     if raw_models is not None and not isinstance(raw_models, dict):
         return {"ok": False, "error": "models must be an object"}
@@ -5074,6 +5088,7 @@ def _save_spawn_defaults(config):
         "engine": current["engine"],
         "reasoning_effort": current.get("reasoning_effort", ""),
         "worker_engine": current.get("worker_engine", ""),
+        "worker_reasoning_effort": current.get("worker_reasoning_effort", ""),
         "models": {
             engine: current["models"].get(engine, "")
             for engine in _ORCHESTRATION_SPAWN_ENGINES

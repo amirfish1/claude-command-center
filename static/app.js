@@ -50559,6 +50559,7 @@
     models: Object.assign({}, _defaultModelsByEngine),
     reasoning_effort: '',
     worker_engine: '',
+    worker_reasoning_effort: '',
     codex_context_1m: true,
   };
   // The "new session modal" was removed from index.html, but several call
@@ -50676,6 +50677,9 @@
     // The WatchTower queue-worker default; '' means WT picks (codex first).
     spawnDefaultsState.worker_engine = SPAWN_DEFAULT_ENGINES.includes(data.worker_engine)
       ? data.worker_engine
+      : '';
+    spawnDefaultsState.worker_reasoning_effort = CODEX_REASONING_LEVELS.some(level => level.id === data.worker_reasoning_effort)
+      ? data.worker_reasoning_effort
       : '';
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
     try { localStorage.setItem('ccc.spawnEngine', spawnDefaultsState.engine); } catch (_) {}
@@ -54407,6 +54411,7 @@
   const $spawnDefaultsBackdrop = document.getElementById('spawnDefaultsBackdrop');
   const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
   const $spawnDefaultsWorkerEngine = document.getElementById('spawnDefaultsWorkerEngine');
+  const $spawnDefaultsWorkerEffort = document.getElementById('spawnDefaultsWorkerEffort');
   const $spawnDefaultsModel = document.getElementById('spawnDefaultsModel');
   const $spawnDefaultsOtherModel = document.getElementById('spawnDefaultsOtherModel');
   const $spawnDefaultsEffortField = document.getElementById('spawnDefaultsEffortField');
@@ -54422,6 +54427,7 @@
       models: Object.assign({}, spawnDefaultsState.models || {}),
       reasoning_effort: spawnDefaultsState.reasoning_effort,
       worker_engine: spawnDefaultsState.worker_engine || '',
+      worker_reasoning_effort: spawnDefaultsState.worker_reasoning_effort || '',
     };
   }
   function spawnDefaultsModalError(text) {
@@ -54458,6 +54464,7 @@
     if (!spawnDefaultsDraft) return;
     if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.value = spawnDefaultsDraft.worker_engine || '';
+    if ($spawnDefaultsWorkerEffort) $spawnDefaultsWorkerEffort.value = spawnDefaultsDraft.worker_reasoning_effort || '';
     renderSpawnDefaultsModelDraft();
     const isCodex = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine) === 'codex';
     if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = isCodex ? '' : 'none';
@@ -54495,6 +54502,7 @@
     updateSpawnDefaultsDraftModelFromControls();
     if ($spawnDefaultsEffort) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
     if ($spawnDefaultsWorkerEngine) spawnDefaultsDraft.worker_engine = $spawnDefaultsWorkerEngine.value || '';
+    if ($spawnDefaultsWorkerEffort) spawnDefaultsDraft.worker_reasoning_effort = $spawnDefaultsWorkerEffort.value || '';
     spawnDefaultsModalError('');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();

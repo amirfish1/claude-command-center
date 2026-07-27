@@ -1,0 +1,1 @@
+- Add a separate configurable reasoning-effort default for WatchTower workers.
