@@ -52,12 +52,23 @@
 
   function projectKey(v) { return String(v || '').trim().toUpperCase(); }
 
-  // Effective status, matching the main dashboard's collapse: a claimed but
-  // still-"open" ticket reads as in progress, and needs_input outranks both.
+  // Effective status: a claimed but still-"open" ticket reads as in progress,
+  // and needs_input outranks that.
+  //
+  // Closed wins over everything. `needs_input` is not cleared when a ticket is
+  // closed, so testing it first made every closed-but-once-blocked ticket read
+  // as blocked forever: it inflated the needs-input counts and kept those rows
+  // in the open section of the ticket list.
+  //
+  // `claimed_session_id` is deliberately NOT a claim signal. It records which
+  // session last touched the ticket and outlives the claim, so an unclaimed
+  // open ticket carrying a stale session id was counting as work in progress
+  // with nobody on it. A real claim writes claimed_by / claimed_at.
   function statusOf(it) {
-    if (it && it.needs_input) return 'blocked';
     var raw = String((it && it.status) || 'open');
-    if (raw === 'open' && it && (it.claimed_by || it.claimed_at || it.claimed_session_id)) return 'in_progress';
+    if (raw === 'closed') return 'closed';
+    if (it && it.needs_input) return 'blocked';
+    if (raw === 'open' && it && (it.claimed_by || it.claimed_at)) return 'in_progress';
     return raw;
   }
 
