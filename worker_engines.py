@@ -43,6 +43,13 @@ class EngineHost:
                 os.environ["CCC_WORKER_PROCESS"] = "1"
                 import server
                 self._module = server
+                # server.main() installs this for the dashboard process, but
+                # the worker never calls main() -- it only imports server as
+                # a library here. Without this, SIGUSR2-triggered dumps (used
+                # by e.g. _codex_app_server_dump_stacks_on_liveness_miss) are
+                # silent no-ops in the one process that actually owns Codex
+                # app-server execution and liveness churn.
+                server._install_python_stack_dump_handler()
                 # A worker restart can inherit still-live CLI children. Reopen
                 # their durable FIFOs here, in the process that owns engine
                 # execution, rather than in the restartable dashboard.
