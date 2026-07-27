@@ -185,10 +185,12 @@ class CodexAppServerHealthLoggingTests(unittest.TestCase):
         transport.alive.return_value = True
         transport.started_at = 1000.0
         transport.proc = mock.Mock(pid=777)
+        transport.consecutive_liveness_misses = 1
         with mock.patch.object(server, "_CODEX_APP_SERVER_TRANSPORT", transport), \
              mock.patch.object(server, "_CODEX_APP_SERVER_INITIALIZED", True), \
              mock.patch.object(server, "_CODEX_APP_SERVER_INITIALIZING", False), \
              mock.patch.object(server, "_CODEX_APP_SERVER_LAST_LIVE_CHECK", 0.0), \
+             mock.patch.object(server, "_CODEX_APP_SERVER_INFLIGHT", 0), \
              mock.patch.object(server, "_codex_app_server_transport_responsive", return_value=False), \
              mock.patch.object(server, "_codex_managed_app_server_enabled", return_value=False), \
              mock.patch.object(server, "_resolve_codex_bin", return_value={"available": False}), \
