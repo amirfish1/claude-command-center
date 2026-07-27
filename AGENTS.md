@@ -99,6 +99,12 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 - Flow workspace work (`#flowBoard`, `static/app.js`, `static/app.css`) has
   maintainer notes in `.claude/rules/flow-workspace.md`.
 - `hooks/` scripts run inside agent hook pipelines — they must exit fast and never prompt.
+- Multiple CCC instances are allowed only across DIFFERENT repos (multi-repo
+  peers, discovered via `registry.json`). At startup `main()` refuses to
+  launch a second instance of the SAME repo (matched by git common-dir, which
+  is identical across worktrees). Intentional dev/verification duplicates
+  bypass with `CCC_EPHEMERAL=1` (also skips the shared `port.txt` claim) or
+  `CCC_ALLOW_DUPLICATE_REPO=1`.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a **gitignored opt-in plugin** for one user's workflow. Don't reference it in the README or treat it as part of the core.
 
 ## Testing
