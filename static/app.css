@@ -5833,6 +5833,38 @@
     font: inherit;
     cursor: pointer;
   }
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip {
+    height: 20px;
+    max-width: 180px;
+    padding: 2px 7px;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid rgba(139,148,158,0.28);
+    border-radius: 4px;
+    background: rgba(139,148,158,0.10);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+  }
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-parent {
+    border-color: rgba(188,140,255,0.30);
+    background: rgba(188,140,255,0.10);
+    color: var(--purple, #bc8cff);
+  }
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-ccc {
+    border-color: rgba(88,166,255,0.28);
+    background: rgba(88,166,255,0.10);
+    color: var(--accent, #58a6ff);
+  }
+  .conv-item .conv-hover-meta-row .conv-session-origin-chip.is-unknown {
+    border-color: rgba(210,153,34,0.30);
+    background: rgba(210,153,34,0.10);
+    color: var(--orange, #d29922);
+  }
   /* CCC-467: the per-row empty "+" object chip was removed; assigning an
      object now happens from the RHS rail (#statusRailAddObjectBtn). */
   .conv-item .conv-hover-meta-row .conv-sidebar-session-id-chip,
@@ -11537,6 +11569,48 @@
   .conv-inprogress-tools .conv-grouping-toggle,
   .conv-ghissues-tools .conv-grouping-toggle,
   .conv-archived-tools .conv-grouping-toggle { margin-left: 0; }
+  .conv-archived-engine-filter {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .conv-archived-engine-btn {
+    width: 24px;
+    height: 22px;
+    padding: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-right: 1px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    opacity: 0.66;
+  }
+  .conv-archived-engine-btn:last-child { border-right: 0; }
+  .conv-archived-engine-btn:hover {
+    background: var(--surface-2);
+    opacity: 1;
+  }
+  .conv-archived-engine-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .conv-archived-engine-btn .conv-session-svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+  }
+  .conv-archived-engine-btn.claude { color: #f09a78; }
+  .conv-archived-engine-btn.codex { color: #3dd68c; }
+  .conv-archived-engine-btn.kimi { color: #7dd3fc; }
+  .conv-archived-engine-btn.is-active {
+    background: color-mix(in srgb, currentColor 18%, transparent);
+    box-shadow: inset 0 0 0 1px currentColor;
+    opacity: 1;
+  }
   .conv-objects-expand-all .grouping-opt {
     padding-left: 6px;
     padding-right: 6px;
