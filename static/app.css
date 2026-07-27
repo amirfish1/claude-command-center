@@ -21565,20 +21565,21 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 /* Mirrors q2's header exactly: the pill names where you can GO, the label
    beside it names where you ARE. q2 reads "[Sessions] Queues"; this reads
    "[Queues] Sessions". */
-.sidebar-header .q2-navrow {
+.q2-navrow {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  padding: 8px 10px 0;
+  flex: 0 0 auto;
 }
-.sidebar-header .q2-here {
+.q2-navrow .q2-here {
   font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.2px;
   color: var(--text);
   white-space: nowrap;
 }
-.sidebar-header .q2-switch {
+.q2-navrow .q2-switch {
   align-self: center;
   display: inline-flex;
   align-items: center;
@@ -21602,4 +21603,4 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   padding: 3px 9px;
   white-space: nowrap;
 }
-.sidebar-header .q2-switch:hover { color: var(--text); border-color: var(--accent); }
+.q2-navrow .q2-switch:hover { color: var(--text); border-color: var(--accent); }

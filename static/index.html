@@ -392,15 +392,17 @@
   </script>
 
   <div class="sidebar">
+    <!-- Mirrors q2's top bar: pill = where you can go, label = where you are.
+         A SIBLING of .sidebar-header, not a child: that element is
+         `flex-direction: row` with `flex-wrap: nowrap !important`, so a child
+         can never occupy its own line and this landed inline with the
+         WatchTower badge. Plain link — the mac app treats any URL on the
+         dashboard port as in-app (scripts/macapp/main.swift:132). -->
+    <div class="q2-navrow">
+      <a class="q2-switch" id="q2BoardLink" href="/q2.html" title="Open the queue board">Queues &#8594;</a>
+      <span class="q2-here">Sessions</span>
+    </div>
     <div class="sidebar-header">
-      <!-- Mirrors q2's top-left "Sessions" pill, so the switch sits in the same
-           corner and reads the same way going both directions. Plain link: the
-           mac app treats any URL on the dashboard port as in-app
-           (scripts/macapp/main.swift:132), so it navigates this window. -->
-      <div class="q2-navrow">
-        <a class="q2-switch" id="q2BoardLink" href="/q2.html" title="Open the queue board">Queues &#8594;</a>
-        <span class="q2-here">Sessions</span>
-      </div>
       <div class="sidebar-header-brand">
         <div class="sh-title-row">
           <img class="sh-app-icon" src="/static/icon.svg" alt="" aria-hidden="true">

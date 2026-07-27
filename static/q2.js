@@ -1671,11 +1671,16 @@
       return;
     }
 
+    // Field names are the SERVER's, not guesses. answer/close/reopen were sent
+    // as answer/summary/reason and every one was rejected ("ref and text
+    // required"); only comment happened to match. Verified against
+    // server.py:52747 (answer.text), :52943 (close.note), :52890 (reopen.note),
+    // :52913 (comment.text).
     var plan = {
-      answer:  ['/api/ux-fixes/answer',  { ref: ref, answer: detailInput('answer') },  true,  'Answer sent'],
-      comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') },   true,  'Comment added'],
-      close:   ['/api/ux-fixes/close',   { ref: ref, summary: detailInput('close') },  false, 'Ticket closed'],
-      reopen:  ['/api/ux-fixes/reopen',  { ref: ref, reason: detailInput('reopen') },  false, 'Ticket reopened'],
+      answer:  ['/api/ux-fixes/answer',  { ref: ref, text: detailInput('answer') },  true,  'Answer sent'],
+      comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') }, true,  'Comment added'],
+      close:   ['/api/ux-fixes/close',   { ref: ref, note: detailInput('close') },   false, 'Ticket closed'],
+      reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened'],
     }[act];
     if (!plan) return;
     // Answer and comment carry the user's words; sending an empty one would
