@@ -43,6 +43,28 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Scrollbars. Ported from the main dashboard (static/app.css:8366): a 14px
+   track whose thumb is inset by a 3px transparent border, so the visible bar
+   is 8px and floats clear of the content. Without this the page inherits the
+   OS default, which renders as a wide pale bar against a dark board.
+   `color-scheme` is what makes the native bar itself dark rather than just
+   the parts CSS can paint, and covers Firefox, which has no ::-webkit rules. */
+:root { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 7px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
 html, body { height: 100%; }
 body {
   font-family: var(--font-ui);
