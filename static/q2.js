@@ -113,6 +113,19 @@
 
   function isLiveWip(it) { return statusOf(it) === 'in_progress' && hasLiveClaim(it); }
 
+  // The store's status key is `blocked`; the word shown to a person is always
+  // "needs input". Keep the key internal (it drives classes and sorting) and
+  // translate at every render point, so the raw key can never leak into copy.
+  var STATUS_LABEL = {
+    blocked: 'needs input',
+    in_progress: 'in progress',
+    open: 'open',
+    closed: 'closed'
+  };
+  function statusLabel(st) {
+    return STATUS_LABEL[st] || String(st || '').replace(/_/g, ' ');
+  }
+
   function unresolvedNotes(it) {
     return (it && it.resolution && Array.isArray(it.resolution.unresolved))
       ? it.resolution.unresolved.filter(Boolean) : [];
@@ -421,11 +434,10 @@
       ? (it.closed_at || it.updated_at || it.created_at)
       : (it.updated_at || it.created_at);
     var age = relTime(ageSrc).replace(/\s*ago$/, '');
-    var dotTitle = st === 'blocked' ? 'needs input'
-      : unresolved ? 'closed, unresolved follow-up'
+    var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
-      : stale ? 'stale claim, no live worker is on this'
-      : st;
+      : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
+      : statusLabel(st);
     return '<button type="button" class="q2-trow is-' + esc(st)
       + (ref === state.ref ? ' is-selected' : '')
       + (stale ? ' is-stale-claim' : '')
@@ -523,7 +535,9 @@
   function timelineHtml(item) {
     var verbs = {
       filed: 'Filed', claim: 'Claimed', close: 'Closed', reopen: 'Reopened',
-      comment: 'Comment', answer: 'Answered', block: 'Blocked', edit: 'Edited',
+      // "Blocked" is the store's word for this event; say what it means to a
+      // person, matching the "needs input" label used everywhere else.
+      comment: 'Comment', answer: 'Answered', block: 'Needs input', edit: 'Edited',
     };
     var tl = Array.isArray(item.timeline) ? item.timeline : [];
     if (!tl.length) return '<div class="q2-empty">No activity yet.</div>';
@@ -581,7 +595,7 @@
     host.innerHTML = ''
       + '<div class="q2-detail-head">'
       + '<span class="q2-detail-ref">' + esc(item.ref) + '</span>'
-      + '<span class="q2-status is-' + esc(st) + '">' + esc(st.replace('_', ' ')) + '</span>'
+      + '<span class="q2-status is-' + esc(st) + '">' + esc(statusLabel(st)) + '</span>'
       + (item.priority ? '<span class="q2-chip is-' + esc(item.priority) + '">' + esc(item.priority) + '</span>' : '')
       + (item.type ? '<span class="q2-chip">' + esc(item.type) + '</span>' : '')
       + (item.lane ? '<span class="q2-chip">' + esc(item.lane) + '</span>' : '')
