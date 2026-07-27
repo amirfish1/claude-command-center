@@ -247,8 +247,11 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 /* A worker is on it this second. */
 .q2-chip.is-live { color: var(--green); border-color: var(--green); background: transparent; }
-.q2-chip.is-gh { color: var(--purple); }
 .q2-chip.is-auto-on { color: var(--cyan); }
+
+/* GitHub-backed marker, beside the queue name. */
+.q2-gh-wrap { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--text-muted); }
+.q2-gh { display: block; }
 
 /* `stuck` is a queue-level alarm, not a fact chip — it stays up on the name
    line so it can never be lost in a wrapped chip row. */
@@ -263,6 +266,18 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-qrow-done { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--text-muted); }
 .q2-qrow-done b { color: var(--text); font-weight: 600; }
 .q2-qrow.is-stuck { box-shadow: inset 2px 0 0 var(--red); }
+/* Why a queue is stuck, on the row itself. A cause you have to hover to find
+   is a cause nobody reads, so this is plain visible text at the bottom of the
+   box. Only stuck rows carry it, so it stays rare enough to mean something. */
+.q2-qwhy {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--red);
+  opacity: 0.85;
+  white-space: normal;
+  text-align: left;
+}
 
 /* ── column 2: ticket rows ────────────────────────────────────────────── */
 .q2-trow {

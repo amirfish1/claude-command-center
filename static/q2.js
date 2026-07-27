@@ -139,29 +139,39 @@
     chips.push(q.auto_drain
       ? { k: 'auto-on', label: 'auto', tip: 'Auto-drain is ON. WatchTower spawns workers for this queue on its own.' }
       : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker.' });
-    chips.push(f.github
-      ? { k: 'gh', label: 'github', tip: 'Backed by GitHub issues' + (f.local ? ' (plus ' + f.local + ' local ticket(s))' : '') + '.' }
-      : { k: 'local', label: 'local', tip: 'Local WatchTower tickets, not GitHub issues.' });
+    // GitHub-vs-local is not a chip: it rides as a mark beside the queue name.
+    // "local" is the overwhelming default, so a chip announcing it on 30 of 32
+    // rows carried no information.
     return chips;
   }
 
   // "stuck" on its own tells the user nothing actionable. The server sets it
   // when a queue has claimable work, auto-drain on, and no live worker — but
   // there are two very different causes, and the fix differs per cause.
+  // Rendered as visible text on the row, not a tooltip: a cause you have to
+  // hover to discover is a cause nobody reads. Kept to one short sentence so
+  // it fits the column at its default width.
   function stuckWhy(q) {
     var hr = (state.projects || {})[projectKey(q.queue)] || {};
-    var head = 'Stuck: auto-drain is on and ' + (q.claimable || 0)
-      + ' ticket' + ((q.claimable || 0) === 1 ? ' is' : 's are') + ' claimable, but no worker is running.\n';
+    var sid = hr.fixer_session_id ? String(hr.fixer_session_id).slice(0, 8) : '';
     if (!hr.fixer_session_id) {
-      return head + 'Cause: no worker has ever claimed anything here. Nothing was spawned.';
+      return 'No worker ever claimed here. Nothing was spawned.';
     }
     if (!hr.fixer_live) {
-      return head + 'Cause: the last worker session (' + String(hr.fixer_session_id).slice(0, 8)
-        + ') is gone. It died or was reaped before draining the queue.';
+      return 'Worker ' + sid + ' is gone. It died before draining the queue.';
     }
-    return head + 'Cause: the worker session (' + String(hr.fixer_session_id).slice(0, 8)
-      + ') is still alive but has not closed a ticket in over 10 minutes. It is hung, not working.';
+    return 'Worker ' + sid + ' is alive but has closed nothing in 10+ min. Hung.';
   }
+
+  // GitHub mark, inline so the page keeps its zero-asset contract.
+  var GH_MARK = '<svg class="q2-gh" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">'
+    + '<path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38'
+    + ' 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53'
+    + '.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95'
+    + ' 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27'
+    + 'c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95'
+    + '.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>'
+    + '</svg>';
 
   // Repo path shares the name line now, so it has to be short. Keep the last
   // two segments; the full path stays in the title attribute.
@@ -288,11 +298,15 @@
         + ' data-q2-queue="' + esc(q.queue) + '">'
         + '<span class="q2-qrow-head">'
         + '<span class="q2-qname">' + esc(q.queue) + '</span>'
-        + (q.state === 'stuck' ? '<span class="q2-stuck-flag" title="' + esc(stuckWhy(q)) + '">stuck</span>' : '')
+        + ((f && f.github) ? '<span class="q2-gh-wrap" title="Backed by GitHub issues'
+            + ((f.local) ? ' (plus ' + f.local + ' local ticket' + (f.local === 1 ? '' : 's') + ')' : '')
+            + '." aria-label="GitHub-backed queue">' + GH_MARK + '</span>' : '')
+        + (q.state === 'stuck' ? '<span class="q2-stuck-flag">stuck</span>' : '')
         + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(shortPath(q.repo_path)) + '</span>' : '')
         + '<span class="q2-qrow-done"><b>' + (q.closed || 0) + '</b> done</span>'
         + '</span>'
         + '<span class="q2-chips">' + chips + '</span>'
+        + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
         + '</button>';
     }).join('');
   }
