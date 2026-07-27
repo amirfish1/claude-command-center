@@ -1353,12 +1353,16 @@ class TestServerImports(unittest.TestCase):
         # All shows active and archived rows in its main flow. Only rows with
         # the explicit trashed state belong in the bottom Trash bucket; pin and
         # lane placement never change lifecycle membership.
-        all_start = app_js.index("const _allTabConvs = ")
+        all_start = app_js.index("const _allTabUnfilteredConvs = ")
         all_block = app_js[all_start:app_js.index("const _arcHasFolderChips", all_start)]
-        self.assertIn("_sessionConvs.concat(_openAskConvs, _readyToMergeConvs, _mainArchivedConvs)", all_block)
+        self.assertIn("const _allTabUnfilteredConvs = _sessionConvs.concat(", all_block)
+        self.assertIn("_openAskConvs,", all_block)
+        self.assertIn("_readyToMergeConvs,", all_block)
+        self.assertIn("_mainArchivedConvs,", all_block)
+        self.assertIn("const _allTabConvs = _allTabUnfilteredConvs.filter(", all_block)
         self.assertIn("const _trashConvs = _archivedConvs.filter(c => !!c.trashed);", app_js)
         self.assertIn("const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);", app_js)
-        self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_trashConvs).some(c => c.folder_label_chip);", app_js)
+        self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);", app_js)
         self.assertIn("const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);", app_js)
         self.assertIn("for (const cluster of _allTabClusters)", app_js)
         self.assertIn('data-role="trash-section"', app_js)
@@ -1425,7 +1429,8 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _savedAllTabView = (() => {", app_js)
         self.assertIn("|| _allTabWorkerConvs.length > 0", app_js)
         self.assertIn("|| _allTabHermesMessageConvs.length > 0", app_js)
-        self.assertIn("|| _savedAllTabView !== 'coding';", app_js)
+        self.assertIn("const _allTabHasHermesSplit = !_arcEngineFilter && (", app_js)
+        self.assertIn("|| _savedAllTabView !== 'coding'\n    );", app_js)
         self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
         self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
