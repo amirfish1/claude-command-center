@@ -758,7 +758,12 @@
     var st = statusOf(item);
     var parts = splitFirstSentence(titleOf(item));
     var prompt = (item.text && item.text.trim()) || '';
-    var showPrompt = !!prompt && prompt.trim() !== (parts[0] + ' ' + parts[1]).trim();
+    // Compare the RAW fields, exactly as the main dashboard does
+    // (static/app.js:35052). Comparing against the rendered title instead
+    // never matched — titleOf() strips boilerplate and rejoins lines, so the
+    // reconstruction always differed by whitespace and the block showed the
+    // note back verbatim under a "Full prompt" heading.
+    var showPrompt = !!prompt && prompt !== String(item.note || '').trim();
     var sid = sessionOf(item);
     var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
