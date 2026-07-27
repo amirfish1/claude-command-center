@@ -21704,6 +21704,7 @@ _CODEX_APP_SERVER_WARMUP_LOCK = threading.Lock()
 _CODEX_APP_SERVER_WARMUP_LAST = 0.0
 _CODEX_APP_SERVER_LIVENESS_INTERVAL = 20.0
 _CODEX_APP_SERVER_LIVENESS_TIMEOUT = 8.0
+_CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD = 2
 _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
 _CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
 _CODEX_APP_SERVER_INFLIGHT = 0
@@ -22061,6 +22062,7 @@ class _CodexAppServerTransport:
         self.sock = sock
         self.started_at = time.time()
         self._send_lock = threading.Lock()
+        self.consecutive_liveness_misses = 0
 
     def alive(self):
         if self.kind == "stdio":
@@ -24042,6 +24044,7 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 return transport
             if _codex_app_server_transport_responsive(transport):
                 _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
+                transport.consecutive_liveness_misses = 0
                 return transport
             with _CODEX_APP_SERVER_INFLIGHT_LOCK:
                 inflight = _CODEX_APP_SERVER_INFLIGHT
@@ -24064,14 +24067,36 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                     f"in flight; not replacing",
                 )
                 return transport
-            # Alive but wedged (no reply within timeout) — fall through to
-            # close it below so the candidates loop starts a fresh process
-            # instead of every caller queuing against a dead-end transport.
+            transport.consecutive_liveness_misses += 1
+            if transport.consecutive_liveness_misses < _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD:
+                # One slow reply on an otherwise-idle transport isn't proof of
+                # wedging -- this machine sees genuine multi-second scheduling
+                # stalls under memory pressure (swap/compression), and tearing
+                # down + respawning a healthy process is itself expensive
+                # (subprocess spawn, ps scan, handshake), which only adds to
+                # that pressure. Require a couple of consecutive misses before
+                # concluding it's actually dead, not just slow this once.
+                _CODEX_APP_SERVER_LAST_LIVE_CHECK = now
+                _log_activity(
+                    "app-server", "SLOW",
+                    f"pid={getattr(transport.proc, 'pid', '-')} "
+                    f"age={round(now - transport.started_at)}s no reply within "
+                    f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s "
+                    f"({transport.consecutive_liveness_misses}/"
+                    f"{_CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD} misses); "
+                    f"giving it another cycle",
+                )
+                return transport
+            # Alive but wedged (no reply within timeout, repeatedly) — fall
+            # through to close it below so the candidates loop starts a fresh
+            # process instead of every caller queuing against a dead-end
+            # transport.
             _log_activity(
                 "app-server", "WEDGED",
                 f"pid={getattr(transport.proc, 'pid', '-')} "
                 f"age={round(now - transport.started_at)}s no reply within "
-                f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s; replacing",
+                f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s after "
+                f"{transport.consecutive_liveness_misses} consecutive misses; replacing",
             )
         elif transport is not None and not transport.alive():
             _log_activity(

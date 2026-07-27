@@ -58,6 +58,7 @@ class BusyNotWedgedTests(unittest.TestCase):
         transport.alive.return_value = True
         transport.started_at = 1000.0
         transport.proc = mock.Mock(pid=556)
+        transport.consecutive_liveness_misses = 1
         with mock.patch.object(server, "_CODEX_APP_SERVER_TRANSPORT", transport), \
              mock.patch.object(server, "_CODEX_APP_SERVER_INITIALIZED", True), \
              mock.patch.object(server, "_CODEX_APP_SERVER_INITIALIZING", False), \
