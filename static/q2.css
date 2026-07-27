@@ -466,11 +466,13 @@ body.q2-resizing .q2-col { pointer-events: none; }
   color: var(--text-muted);
   white-space: nowrap;
 }
-.q2-tchip.is-type-bug { color: var(--wip-blue); }
-.q2-tchip.is-type-feature { color: var(--purple); }
-/* Priority tints the whole type chip: p0/p1 are the ones worth spotting. */
-.q2-tchip.is-prio-p0 { color: var(--red); background: rgba(248, 81, 73, 0.13); }
-.q2-tchip.is-prio-p1 { color: var(--orange); background: rgba(210, 153, 34, 0.13); }
+/* One colour per type, priority left to the text. Red for defects, purple for
+   requests: neither is used by a dot or count in this column, so a chip can
+   never be mistaken for a status. */
+.q2-tchip.is-type-bug { color: var(--red); background: rgba(248, 81, 73, 0.12); }
+.q2-tchip.is-type-feature { color: var(--purple); background: rgba(188, 140, 255, 0.13); }
+/* Only shown when readiness is a problem, so it is allowed to be visible. */
+.q2-tchip.is-unready { color: var(--orange); background: rgba(210, 153, 34, 0.13); }
 .q2-tchip.is-vc { font-family: var(--font-mono); font-weight: 600; }
 .q2-trow.is-closed .q2-tchip { opacity: 0.5; }
 .q2-ttitle {

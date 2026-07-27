@@ -26,6 +26,7 @@
     showClosed: false,
     search: '',
     offline: false,
+    booted: false,      // guards the one-shot restore of the saved selection
   };
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -396,6 +397,32 @@
       return;
     }
     reconcileDrainOverrides();
+    // Restore the last selection, but only once the queue list has arrived and
+    // only if it still exists — a saved pointer to a deleted queue would leave
+    // the board on an empty column with no way back.
+    if (!state.booted && state.queues.length) {
+      state.booted = true;
+      var savedQueue = '', savedRef = '';
+      try {
+        savedQueue = localStorage.getItem(LS_QUEUE) || '';
+        savedRef = localStorage.getItem(LS_REF) || '';
+      } catch (_) {}
+      var match = state.queues.filter(function (q) {
+        return projectKey(q.queue) === projectKey(savedQueue);
+      })[0];
+      if (match) {
+        state.queue = match.queue;
+        // The ticket is only restored if it is still in that queue. Validating
+        // against the item list rather than trusting the id avoids a detail
+        // pane stuck on "Loading" for a ref that no longer exists.
+        if (savedRef && state.items.some(function (it) {
+          return it.ref === savedRef && projectKey(it.project) === projectKey(match.queue);
+        })) {
+          state.ref = savedRef;
+          loadDetail(savedRef);
+        }
+      }
+    }
     // Default selection: first queue with open work, else the first queue.
     if (!state.queue && state.queues.length) {
       var withWork = state.queues.filter(function (q) { return q.depth > 0; });
@@ -497,11 +524,14 @@
         // Row 2 — configuration on the left, what needs a human on the right.
         + '<span class="q2-qrow-foot">'
         + '<span class="q2-qrow-bl">' + chips + c.done + '</span>'
-        + '<span class="q2-qrow-br">' + c.needsInput
+        // Age sits LEFT of needs-input so the needs-input count lands directly
+        // under the open count, making the right edge one readable column.
+        + '<span class="q2-qrow-br">'
         + (q.last_activity_seconds != null
             ? '<span class="q2-qage" title="Most recent ticket activity in this queue">'
               + esc(agoFromSeconds(q.last_activity_seconds)) + '</span>'
             : '')
+        + c.needsInput
         + '</span>'
         + '</span>'
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
@@ -516,20 +546,29 @@
   // reason ("H/M"). The needs-input chip is deliberately omitted here — the
   // status dot on the same row already carries it.
   var TYPE_SHORT = { feature: 'FR', bug: 'BUG' };
-  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec', 'shovel-ready': 'ready' };
+  var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec' };
+  // Two spellings of "this is fine" live in the store. Both stay silent.
+  var READY_OK = { 'ready': 1, 'shovel-ready': 1 };
   function ticketChips(it) {
     var c = [];
     if (it.type) {
+      // Colour carries the TYPE only. Tinting the same chip by priority as
+      // well meant a p0 bug and a p0 feature looked identical, which defeats
+      // the point of the chip; the priority is right there in the text.
       var label = TYPE_SHORT[it.type] || it.type;
-      c.push('<span class="q2-tchip is-type-' + esc(it.type) + (it.priority ? ' is-prio-' + esc(it.priority) : '') + '"'
+      c.push('<span class="q2-tchip is-type-' + esc(it.type) + '"'
         + ' title="' + esc(it.priority ? it.type + ' / ' + it.priority : it.type) + '">'
         + esc(it.priority ? label + '/' + it.priority : label) + '</span>');
     } else if (it.priority) {
       c.push('<span class="q2-tchip is-prio-' + esc(it.priority) + '" title="priority">'
         + esc(it.priority) + '</span>');
     }
-    if (it.readiness) {
-      c.push('<span class="q2-tchip is-ready" title="readiness: ' + esc(it.readiness) + '">'
+    // Readiness only shows when it is a problem. The store carries BOTH
+    // "ready" (192 tickets) and "shovel-ready" (12) for the same idea, so
+    // filtering one still left the chip on most rows. Anything that is not a
+    // problem is silent; absence means ready.
+    if (it.readiness && !READY_OK[it.readiness]) {
+      c.push('<span class="q2-tchip is-unready" title="readiness: ' + esc(it.readiness) + '">'
         + esc(READY_SHORT[it.readiness] || it.readiness) + '</span>');
     }
     if (it.value || it.confidence) {
@@ -983,6 +1022,20 @@
   }
 
   // ── events ───────────────────────────────────────────────────────────────
+  // Selection survives a reload. Without this every refresh dropped the user
+  // back on whichever queue happened to sort first, which on a 32-queue board
+  // means losing your place on every code change.
+  var LS_QUEUE = 'ccc-q2-queue';
+  var LS_REF = 'ccc-q2-ref';
+  function rememberSelection() {
+    try {
+      if (state.queue) localStorage.setItem(LS_QUEUE, state.queue);
+      else localStorage.removeItem(LS_QUEUE);
+      if (state.ref) localStorage.setItem(LS_REF, state.ref);
+      else localStorage.removeItem(LS_REF);
+    } catch (_) {}
+  }
+
   function selectQueue(name) {
     if (projectKey(name) === projectKey(state.queue)) return;
     state.queue = name;
@@ -991,6 +1044,7 @@
     state.search = '';
     var search = $('q2Search');
     if (search) search.value = '';
+    rememberSelection();
     renderAll();
   }
 
@@ -998,6 +1052,7 @@
     if (ref === state.ref) return;
     state.ref = ref;
     state.detail = null;
+    rememberSelection();
     renderQueues();
     renderTickets();
     loadDetail(ref);
