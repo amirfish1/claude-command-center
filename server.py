@@ -29852,7 +29852,6 @@ _ACP_PROTOCOL_VERSION = 1
 _ACP_TRANSCRIPT_DIR = COMMAND_CENTER_STATE_DIR / "acp"
 _ACP_EVENT_MAX = 500          # finalized conv events kept in memory per session
 _ACP_DELTA_MAX = 400          # in-flight bubble deltas kept for late SSE attach
-_ACP_TEXT_MAX = 4000          # cap for one accumulated text/thought block
 
 _ACP_HARNESSES = {
     "kimi": {
@@ -30303,10 +30302,9 @@ def _acp_handle_agent_request(harness, req_id, method, params):
 
 
 def _acp_append_turn_text(turn, field, chunk):
-    text = (turn.get(field) or "") + chunk
-    if len(text) > _ACP_TEXT_MAX:
-        text = text[-_ACP_TEXT_MAX:]
-    turn[field] = text
+    # Finalized ACP events are the replay source for a conversation. Trimming
+    # the accumulated stream here silently removed the opening of long replies.
+    turn[field] = (turn.get(field) or "") + chunk
 
 
 def _acp_handle_session_update(harness, sid, update):

@@ -6,6 +6,16 @@ from unittest import mock
 
 
 class KimiBusyQueueTests(unittest.TestCase):
+    def test_acp_turn_text_keeps_a_complete_long_reply(self):
+        """Long ACP replies must remain complete when finalized for replay."""
+        server = importlib.import_module("server")
+        reply = "x" * 7501
+        turn = {"text": ""}
+
+        server._acp_append_turn_text(turn, "text", reply)
+
+        self.assertEqual(turn["text"], reply)
+
     def test_bare_kimi_uuid_routes_to_the_canonical_acp_session_id(self):
         """Group-chat sidecars may retain Kimi's UUID without ``session_``.
 
