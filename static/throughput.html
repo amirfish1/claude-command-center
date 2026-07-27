@@ -1444,7 +1444,15 @@
   <script>
     let allSessions = [];
     let activeSessionId = null;
-    let activeThroughputEngine = 'claude';
+    const THROUGHPUT_ENGINE_STORE_KEY = 'ccc-throughput-engine';
+    function initialThroughputEngine() {
+      try {
+        const saved = localStorage.getItem(THROUGHPUT_ENGINE_STORE_KEY);
+        if (['combined', 'claude', 'codex', 'kimi'].includes(saved)) return saved;
+      } catch (_e) {}
+      return 'claude';
+    }
+    let activeThroughputEngine = initialThroughputEngine();
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
     let weeklyDataLoaded = false;
@@ -1619,6 +1627,34 @@
       };
     }
 
+    function quotaFallbackKey(engine) { return `ccc-throughput-last-quota:${engine}`; }
+
+    function isUsableWeeklyQuota(quota) {
+      if (!quota || !quota.ok || quota.weekly_pct == null || !quota.weekly_resets_at) return false;
+      const resetMs = new Date(quota.weekly_resets_at).getTime();
+      return Number.isFinite(resetMs) && resetMs > Date.now();
+    }
+
+    // Codex/Kimi usage snapshots only advance when their engine runs, and the
+    // server reports the quota as unavailable once the snapshot goes stale. A
+    // refresh landing in that gap would collapse the weekly chart to the raw
+    // 14-day view, so keep the last good quota until its own reset passes.
+    function stabilizeWeeklyQuota(weekly) {
+      const out = weekly && typeof weekly === 'object' ? weekly : {};
+      ['codex', 'kimi'].forEach(engine => {
+        const live = out[engine];
+        if (isUsableWeeklyQuota(live)) {
+          try { localStorage.setItem(quotaFallbackKey(engine), JSON.stringify(live)); } catch (_e) {}
+          return;
+        }
+        try {
+          const cached = JSON.parse(localStorage.getItem(quotaFallbackKey(engine)) || 'null');
+          if (isUsableWeeklyQuota(cached)) out[engine] = { ...cached, stale: true };
+        } catch (_e) {}
+      });
+      return out;
+    }
+
     function readActiveThroughputBootstrap(sessionId, engine) {
       if (engine !== 'combined') return readThroughputBootstrap(sessionId, engine);
       return composeCombinedBootstrap(
@@ -1680,10 +1716,10 @@
       if (!validateThroughputBootstrap(model, session.session_id, activeThroughputEngine)) return false;
       visibleBootstrap = model;
       activeSessionId = session.session_id;
-      weeklyData = model.weekly;
+      weeklyData = stabilizeWeeklyQuota(model.weekly);
       weeklyDataLoaded = true;
       resetEvents = model.reset_events;
-      renderWeeklyUsage(model.weekly);
+      renderWeeklyUsage(weeklyData);
       renderDashboard(session, model.throughput, { deferSecondary: true });
       const cachedRefresh = Object.assign({}, model.refresh, {
         state: model.refresh.state === 'refreshing' ? 'stale' : (model.refresh.state || 'stale'),
@@ -1865,6 +1901,7 @@
       const next = ['combined', 'codex', 'kimi'].includes(engine) ? engine : 'claude';
       if (next === activeThroughputEngine) return;
       activeThroughputEngine = next;
+      try { localStorage.setItem(THROUGHPUT_ENGINE_STORE_KEY, next); } catch (_e) {}
       activeSessionId = null;
       allSessions = [];
       weekRankings = {};
@@ -3038,7 +3075,7 @@
       btn.hidden = !zoomable;
       btn.classList.toggle('is-active', chartZoomLastHours);
       btn.textContent = chartZoomLastHours ? '−' : '+';
-      const label = chartZoomLastHours ? 'Restore full chart range' : 'Zoom chart to last 48 hours';
+      const label = chartZoomLastHours ? 'Restore full chart range' : 'Zoom to last 48 hours (1-hour columns)';
       btn.setAttribute('aria-label', label);
       btn.title = label;
     }
@@ -3072,6 +3109,53 @@
       };
     }
 
+    // Zoomed 48h view renders 1-hour columns: re-bucket the raw hourly rows
+    // into UTC-keyed 1h slots covering [startMs, endMs), zero-filling gaps so
+    // the x-axis stays continuous. Keys match the 3h slot key format so all
+    // downstream label/marker/tooltip code works unchanged.
+    function buildHourlyZoomRows(hourly, startMs, endMs, periodStartMs) {
+      const groups = new Map();
+      (hourly || []).forEach(row => {
+        const d = new Date(row.hour); // browser parses local-time string
+        if (Number.isNaN(d.getTime())) return;
+        const slotDt = new Date(d);
+        slotDt.setUTCMinutes(0, 0, 0);
+        const ms = slotDt.getTime();
+        if (ms < startMs || ms >= endMs) return;
+        let g = groups.get(ms);
+        if (!g) {
+          g = { raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
+                cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0,
+                active_duration_sec: 0 };
+          groups.set(ms, g);
+        }
+        g.raw_context_tokens += row.raw_context_tokens || 0;
+        g.effective_input_tokens += row.effective_input_tokens || 0;
+        g.output_tokens += row.output_tokens || 0;
+        g.cache_read_tokens += row.cache_read_tokens || 0;
+        g.cache_write_tokens += row.cache_write_tokens || 0;
+        g.turns += row.turns || 0;
+        g.cost_usd += row.cost_usd || 0;
+        g.active_duration_sec += row.active_duration_sec || 0;
+      });
+      const slots = [];
+      for (let ms = startMs; ms < endMs; ms += 3600000) {
+        const dt = new Date(ms);
+        const key = `${dt.toISOString().substring(0, 10)}T${String(dt.getUTCHours()).padStart(2, '0')}:00:00`;
+        const g = groups.get(ms);
+        slots.push({
+          hour: key, day: key.substring(0, 10),
+          raw_context_tokens: 0, effective_input_tokens: 0, output_tokens: 0,
+          cache_read_tokens: 0, cache_write_tokens: 0, turns: 0, cost_usd: 0,
+          active_duration_sec: 0,
+          ...(g || {}),
+          _projected: false,
+          _prePeriod: periodStartMs != null && ms < periodStartMs,
+        });
+      }
+      return slots;
+    }
+
     const chartZoomBtn = document.getElementById('chart-zoom-btn');
     if (chartZoomBtn) {
       chartZoomBtn.addEventListener('click', () => {
@@ -3082,7 +3166,8 @@
       });
     }
 
-    const PREVIOUS_CYCLE_DAYS = 2;
+    const CHART_HISTORY_DAYS = 7;  // history shown before now in the weekly view
+    const CHART_FUTURE_DAYS = 2;   // forecast shown ahead of now
     const FORECAST_WIDTH_RATIO = 0.45;
 
     function forecastCrossingAt100(pct, weekStart, resetAt) {
@@ -3149,7 +3234,7 @@
       })).filter(event => event.at != null && event.at >= start && event.at <= Date.now());
     }
 
-    function buildQuotaSeries(componentSummary, weekStart, sourceRows, pctPerToken, authoritativePct) {
+    function buildQuotaSeries(componentSummary, weekStart, sourceRows, pctPerToken, authoritativePct, slotMs = 3 * 3600000) {
       const start = new Date(weekStart || '').getTime();
       const events = quotaTokenEvents(componentSummary, weekStart);
       let running = 0;
@@ -3157,16 +3242,16 @@
       const actual = sourceRows.map(row => {
         const at = chartRowTimeMs(row);
         if (row._prePeriod || row._projected || at == null || at < start) return null;
-        running = events.filter(event => event.at < at + 3 * 3600000)
+        running = events.filter(event => event.at < at + slotMs)
           .reduce((sum, event) => sum + event.tokens, 0);
         actualCount += 1;
         return running * pctPerToken;
       });
-      const elapsedThreeHourSlots = Number.isFinite(start)
-        ? Math.max(1, (Date.now() - start) / (3 * 3600000))
+      const elapsedSlots = Number.isFinite(start)
+        ? Math.max(1, (Date.now() - start) / slotMs)
         : actualCount;
-      const burnPerSlot = elapsedThreeHourSlots > 0
-        ? Number(authoritativePct || 0) / elapsedThreeHourSlots
+      const burnPerSlot = elapsedSlots > 0
+        ? Number(authoritativePct || 0) / elapsedSlots
         : 0;
       const elapsedMs = Number.isFinite(start) ? Math.max(3600000, Date.now() - start) : 0;
       const pctPerMs = elapsedMs > 0 ? Number(authoritativePct || 0) / elapsedMs : 0;
@@ -3174,7 +3259,7 @@
         if (value != null) return value;
         if (!sourceRows[index] || !sourceRows[index]._projected || actualCount === 0) return null;
         const projectedAt = chartRowTimeMs(sourceRows[index]);
-        const projectedElapsedMs = projectedAt == null ? 0 : Math.max(0, projectedAt + 3 * 3600000 - Date.now());
+        const projectedElapsedMs = projectedAt == null ? 0 : Math.max(0, projectedAt + slotMs - Date.now());
         return Math.min(100, Number(authoritativePct || 0) + pctPerMs * projectedElapsedMs);
       });
       return {
@@ -3187,7 +3272,7 @@
       };
     }
 
-    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken) {
+    function buildPreviousQuotaSeries(componentSummary, sourceRows, pctPerToken, slotMs = 3 * 3600000) {
       const firstPreResetRow = sourceRows.find(row => row && row._prePeriod && !row._projected);
       const start = firstPreResetRow ? chartRowTimeMs(firstPreResetRow) : null;
       if (start == null) return null;
@@ -3200,7 +3285,7 @@
         const at = chartRowTimeMs(row);
         if (!row || !row._prePeriod || row._projected || at == null) return null;
         lastPreResetIndex = index;
-        return events.filter(event => event.at < at + 3 * 3600000)
+        return events.filter(event => event.at < at + slotMs)
           .reduce((sum, event) => sum + event.tokens, 0) * pctPerToken;
       });
       if (lastPreResetIndex < 0) return null;
@@ -3402,10 +3487,18 @@
           selPeriodStart = new Date(selPeriodEnd.getTime() - 7 * 86400000);
           const nowTs = Date.now();
           const forecastEnd = compactForecastEnd();
-          const displayEnd = chartWeekOffset === 0 && Number.isFinite(forecastEnd)
-            ? new Date(Math.max(nowTs + 3 * 3600000, forecastEnd))
+          // Current period: always show the full recent history and only a
+          // short forecast — a freshly reset cycle would otherwise render two
+          // days of bars followed by ~7 empty future days.
+          const uncappedEnd = chartWeekOffset === 0 && Number.isFinite(forecastEnd)
+            ? Math.max(nowTs + 3 * 3600000, forecastEnd)
+            : selPeriodEnd.getTime();
+          const displayEnd = chartWeekOffset === 0
+            ? new Date(Math.max(nowTs + 3 * 3600000, Math.min(uncappedEnd, nowTs + CHART_FUTURE_DAYS * 86400000)))
             : selPeriodEnd;
-          const slotBase = new Date(selPeriodStart.getTime() - (chartWeekOffset === 0 ? PREVIOUS_CYCLE_DAYS * 86400000 : 0));
+          const slotBase = chartWeekOffset === 0
+            ? new Date(nowTs - CHART_HISTORY_DAYS * 86400000)
+            : new Date(selPeriodStart.getTime());
           slotBase.setUTCHours(Math.floor(slotBase.getUTCHours() / 3) * 3, 0, 0, 0);
           const slots = [];
           // Night-slot carry: accumulate data from skipped UTC slots (local 00–06)
@@ -3471,6 +3564,23 @@
       const zoomState = applyChartZoomRows(sourceRows);
       sourceRows = zoomState.rows;
       updateChartZoomButton(zoomState.zoomable);
+
+      // Zoomed 48h view switches to 1-hour columns.
+      const zoomHourly = sixhourly && chartZoomLastHours && zoomState.zoomable && sourceRows.length >= 2;
+      const chartSlotMs = zoomHourly ? 3600000 : 3 * 3600000;
+      if (zoomHourly) {
+        const windowStart = chartRowTimeMs(sourceRows[0]);
+        const lastSlotMs = chartRowTimeMs(sourceRows[sourceRows.length - 1]);
+        if (windowStart != null && lastSlotMs != null) {
+          const windowEnd = Math.min(lastSlotMs + 3 * 3600000, Date.now() + 3600000);
+          sourceRows = buildHourlyZoomRows(
+            (summary && summary.hourly) || [], windowStart, windowEnd,
+            selPeriodStart ? selPeriodStart.getTime() : null
+          );
+        }
+        document.getElementById('chart-title-label').textContent = 'Hourly Cache-Adjusted Burn (last 48h)';
+        document.getElementById('chart-legend-label').textContent = 'Cache-adj tokens / hour';
+      }
 
       // Label helper for 6h slots: show day name at midnight, "HH:00" otherwise.
       const sixhourLabel = (hourStr) => {
@@ -3819,13 +3929,13 @@
         const codexPpt = codexCurrentTokens > 0 ? weeklyData.codex.weekly_pct / codexCurrentTokens : 0;
         const kimiPpt = kimiCurrentTokens > 0 ? kimiWeekly.weekly_pct / kimiCurrentTokens : 0;
         const claudeSeries = claudePpt > 0 ? buildQuotaSeries(
-          claudeComponent, weeklyData.week_start, sourceRows, claudePpt, weeklyData.display_pct
+          claudeComponent, weeklyData.week_start, sourceRows, claudePpt, weeklyData.display_pct, chartSlotMs
         ) : null;
         const codexSeries = codexPpt > 0 ? buildQuotaSeries(
-          codexComponent, weeklyData.codex.week_start, sourceRows, codexPpt, weeklyData.codex.weekly_pct
+          codexComponent, weeklyData.codex.week_start, sourceRows, codexPpt, weeklyData.codex.weekly_pct, chartSlotMs
         ) : null;
         const kimiSeries = kimiPpt > 0 ? buildQuotaSeries(
-          kimiComponent, kimiWeekly.week_start, sourceRows, kimiPpt, kimiWeekly.weekly_pct
+          kimiComponent, kimiWeekly.week_start, sourceRows, kimiPpt, kimiWeekly.weekly_pct, chartSlotMs
         ) : null;
         const primarySeries = activeThroughputEngine === 'codex' ? codexSeries
           : (activeThroughputEngine === 'kimi' ? kimiSeries : claudeSeries);
@@ -3837,7 +3947,7 @@
         // The current view includes a small lead-in from before the latest reset.
         // Preserve its own zero-based progression without joining it to the new
         // billing-period line, whose ending value must match the live meter.
-        const previousSeries = buildPreviousQuotaSeries(primaryComponent, sourceRows, ppt);
+        const previousSeries = buildPreviousQuotaSeries(primaryComponent, sourceRows, ppt, chartSlotMs);
         // Kimi's weekly line is purple so it never reads as the Claude meter.
         const weeklyLineColor = activeThroughputEngine === 'kimi' ? '#c084fc' : '#f59e0b';
 
@@ -4642,7 +4752,7 @@
         const res = await fetch('/api/weekly_usage');
         if (!res.ok) return;
         const d = await res.json();
-        weeklyData = d && typeof d === 'object' ? d : {};
+        weeklyData = stabilizeWeeklyQuota(d && typeof d === 'object' ? d : {});
         weeklyDataLoaded = true;
         renderWeeklyUsage(weeklyData);
         if (lastRender && lastRender.session && lastRender.data) {
