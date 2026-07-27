@@ -691,11 +691,12 @@
   var STACK_CAP = 14;                    // drawn cards before it becomes "+N"
 
   var LS_CONV_OPEN = 'ccc-q2-conv-open';
-  // Default collapsed: the conversation is a drill-in, not the main event, and
-  // an embedded dashboard booting on every ticket click is expensive.
-  function convOpen() {
-    try { return localStorage.getItem(LS_CONV_OPEN) === '1'; } catch (_) { return false; }
-  }
+  // Collapsed by default, and RESET on every ticket change. Persisting "open"
+  // meant one expand made every subsequent ticket boot an embedded dashboard
+  // on click; the preference is per-ticket, not global.
+  var convOpenFor = '';
+  function convOpen() { return !!convOpenFor && convOpenFor === state.ref; }
+  function setConvOpen(on) { convOpenFor = on ? state.ref : ''; }
 
   // Closed by default: the log is a drill-in for when something looks wrong,
   // not a permanent fixture taking a quarter of the column.
@@ -1699,7 +1700,7 @@
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
     var convT = e.target.closest('[data-q2-conv-toggle], .q2-conv-head');
     if (convT && !e.target.closest('a')) {
-      try { localStorage.setItem(LS_CONV_OPEN, convOpen() ? '0' : '1'); } catch (_) {}
+      setConvOpen(!convOpen());
       renderDetail();
       return;
     }
