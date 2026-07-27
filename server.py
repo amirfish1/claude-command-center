@@ -39048,6 +39048,14 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
     If we already resumed this session and the process is still alive, reuse it.
     Optional `cwd` parameter allows bypassing session lookup (useful in remote envs).
     """
+    # Claude Task-tool children have their own JSONL transcripts but cannot be
+    # resumed independently. Some automatic callers invoke this lower-level
+    # helper directly, bypassing _inject_text_into_session's normalization.
+    # Always resume the owning parent session instead of sending forbidden
+    # direct app-server input to the child (the multi-agent v2 -32600 path).
+    # Resolved before control-plane routing so a remote node receives the
+    # parent id too.
+    session_id = _claude_subagent_parent_session_id(session_id) or session_id
     routed = _control_plane_engine_call(
         "claude", "resume", {
             "session_id": session_id,

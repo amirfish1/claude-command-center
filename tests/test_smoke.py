@@ -1427,9 +1427,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
         self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
         self.assertIn("const _savedAllTabView = (() => {", app_js)
-        self.assertIn("|| _allTabWorkerConvs.length > 0", app_js)
-        self.assertIn("|| _allTabHermesMessageConvs.length > 0", app_js)
-        self.assertIn("const _allTabHasHermesSplit = !_arcEngineFilter && (", app_js)
+        self.assertIn("const _allTabUnfilteredLanes = new Set(", app_js)
+        self.assertIn("|| _allTabUnfilteredLanes.has('workers')", app_js)
+        self.assertIn("|| _allTabUnfilteredLanes.has('messages')", app_js)
+        self.assertIn("const _allTabHasHermesSplit = (", app_js)
         self.assertIn("|| _savedAllTabView !== 'coding'\n    );", app_js)
         self.assertIn("data-role=\"all-hermes-tabs\"", app_js)
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
@@ -18324,6 +18325,34 @@ def test_skills_ecosystem_route_and_inventory():
     # Cache returns the identical object on the second call (no dir change).
     assert _server._build_skills_ecosystem() is data
 
+
+
+class TestClaudeSubagentResumeRouting(unittest.TestCase):
+    def test_headless_resume_routes_claude_subagent_reference_to_parent_session(self):
+        """Automatic resume must never target a non-resumable Task child."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        parent_sid = "11111111-2222-3333-4444-555555555555"
+        agent_sid = "agent-a473bdecd59d4f637"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            projects_root = pathlib.Path(tmp) / "projects"
+            child_path = projects_root / "-example-project" / parent_sid / "subagents" / f"{agent_sid}.jsonl"
+            child_path.parent.mkdir(parents=True)
+            child_path.write_text(json.dumps({"cwd": tmp}) + "\n", encoding="utf-8")
+            original_root = server.PROJECTS_ROOT
+            server.PROJECTS_ROOT = projects_root
+            server._session_cwd_cache.pop(agent_sid, None)
+            try:
+                with mock.patch.object(server, "_resolve_claude_bin", return_value={"available": False, "reason": "test"}), \
+                     mock.patch.object(server, "repo_from_session") as repo_from_session:
+                    result = server.resume_session_headless(agent_sid, "follow up")
+                self.assertFalse(result["ok"])
+                repo_from_session.assert_called_once_with(parent_sid)
+            finally:
+                server._session_cwd_cache.pop(agent_sid, None)
+                server.PROJECTS_ROOT = original_root
 
 if __name__ == "__main__":
     unittest.main()
