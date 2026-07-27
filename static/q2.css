@@ -831,18 +831,18 @@ body.q2-resizing .q2-col { pointer-events: none; }
    properties and actions entirely off screen. */
 .q2-detail-title {
   flex: 0 0 auto;
-  max-height: 168px;
+  max-height: 150px;
   overflow-y: auto;
-  margin: 10px 0 14px;
+  margin: 9px 0 12px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
-  font-size: 13.5px;
+  font-size: 12.5px;
   line-height: 1.5;
   font-weight: 400;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.q2-title-first { display: block; font-size: 17px; font-weight: 700; line-height: 1.35; }
+.q2-title-first { display: block; font-size: 14px; font-weight: 650; line-height: 1.4; }
 .q2-title-rest { display: block; margin-top: 6px; color: var(--text-muted); }
 
 /* No properties rail: the pane is one column, split top (ticket) / bottom

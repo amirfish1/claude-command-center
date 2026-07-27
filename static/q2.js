@@ -747,11 +747,15 @@
     host.classList.toggle('is-collapsed', !open);
 
     var body = host.querySelector('.q2-logbar-body');
-    // Preserve "was the user reading history" across the repaint.
+    // Preserve "was the user reading history" across a repaint of the SAME
+    // queue. A different queue is a different log, so it always opens at the
+    // newest line rather than inheriting the previous queue's scroll offset.
+    var sameQueue = host.getAttribute('data-log-queue') === projectKey(state.queue);
     var pinned = true;
-    if (body) {
+    if (body && sameQueue) {
       pinned = (body.scrollHeight - body.scrollTop - body.clientHeight) < 24;
     }
+    host.setAttribute('data-log-queue', projectKey(state.queue));
 
     var rows;
     if (!state.queue) {
@@ -1172,8 +1176,7 @@
       item.url ? '<a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">link &#8599;</a>' : '',
     ].filter(Boolean);
 
-    host.innerHTML = ''
-      + '<div class="q2-detail-top">'
+    var topHtml = ''
       + '<div class="q2-detail-head">'
       + '<span class="q2-detail-ref">' + esc(item.ref) + '</span>'
       + chips
@@ -1198,28 +1201,50 @@
       + '<span title="' + esc(item.created_at || '') + '">' + esc(relTime(item.created_at)) + '</span>'
       + (item.updated_at && item.updated_at !== item.created_at
           ? ' &middot; updated <span title="' + esc(item.updated_at) + '">' + esc(relTime(item.updated_at)) + '</span>' : '')
-      + '</span></div>'
+      + '</span></div>';
+
+    // Only the top half is rewritten on a poll. The conversation iframe is a
+    // sibling managed separately — replacing it every 5s reloaded the whole
+    // embedded dashboard, which scrolled and flickered under the user.
+    var top = host.querySelector('.q2-detail-top');
+    if (!top) {
+      host.innerHTML = '<div class="q2-detail-top"></div>';
+      top = host.querySelector('.q2-detail-top');
+    }
+    top.innerHTML = topHtml;
+    syncConv(sid);
+  }
+
+  // Rebuilds the conversation block ONLY when the session or the open state
+  // changes. Any other render leaves the existing iframe untouched, so it
+  // keeps its scroll position, its input text, and its own polling.
+  function syncConv(sid) {
+    var host = $('q2Detail');
+    if (!host) return;
+    var existing = host.querySelector('.q2-conv');
+    if (!sid) { if (existing) existing.remove(); return; }
+    var open = convOpen();
+    var want = sid + '|' + (open ? '1' : '0');
+    if (existing && existing.getAttribute('data-conv') === want) return;
+    if (existing) existing.remove();
+    var el = document.createElement('div');
+    el.className = 'q2-conv';
+    el.setAttribute('data-conv', want);
+    el.innerHTML = '<div class="q2-conv-head">'
+      + '<button type="button" class="q2-ops-toggle" data-q2-conv-toggle aria-expanded="'
+      + (open ? 'true' : 'false') + '">'
+      + '<span class="q2-ops-caret" aria-hidden="true">' + (open ? '&#9662;' : '&#9656;') + '</span>'
+      + 'Conversation</button>'
+      + '<span class="q2-spacer"></span>'
+      + '<span class="q2-dim q2-mono">' + esc(sid.slice(0, 8)) + '</span>'
+      + '<a class="q2-linkbtn" href="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid)
+      + '" target="_blank" rel="noopener">pop out &#8599;</a>'
       + '</div>'
-      // Live conversation, bottom half. Reuses the main dashboard's existing
-      // conversation popout, which app.js already embeds this way.
-      + (sid
-          ? '<div class="q2-conv" id="q2Conv">'
-            + '<div class="q2-conv-head">'
-            + '<button type="button" class="q2-ops-toggle" data-q2-conv-toggle aria-expanded="'
-            + (convOpen() ? 'true' : 'false') + '">'
-            + '<span class="q2-ops-caret" aria-hidden="true">' + (convOpen() ? '&#9662;' : '&#9656;') + '</span>'
-            + 'Conversation</button>'
-            + '<span class="q2-spacer"></span>'
-            + '<span class="q2-dim q2-mono">' + esc(sid.slice(0, 8)) + '</span>'
-            + '<a class="q2-linkbtn" href="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid)
-            + '" target="_blank" rel="noopener">pop out &#8599;</a>'
-            + '</div>'
-            + (convOpen()
-                ? '<iframe class="q2-conv-frame" title="Conversation ' + esc(sid) + '"'
-                  + ' src="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid) + '"></iframe>'
-                : '')
-            + '</div>'
+      + (open
+          ? '<iframe class="q2-conv-frame" title="Conversation ' + esc(sid) + '"'
+            + ' src="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid) + '"></iframe>'
           : '');
+    host.appendChild(el);
   }
 
   // ── detail write actions ─────────────────────────────────────────────────
@@ -1245,7 +1270,6 @@
     payload[field] = value;
     try {
       await postJson('/api/ux-fixes/edit', payload);
-      state.detail = null;
       await loadDetail(state.ref);
       await refresh();
     } catch (err) {
@@ -1272,7 +1296,6 @@
       try {
         await postJson('/api/ux-fixes/run', { ref: ref, cancel: queued });
         note(queued ? 'Run request cancelled' : 'Queued to run');
-        state.detail = null;
         await loadDetail(ref);
         await refresh();
       } catch (e) {
@@ -1301,8 +1324,8 @@
       note(plan[3]);
       state.arm = '';
       // Re-fetch rather than patching local state, so what is on screen is
-      // what the store actually holds.
-      state.detail = null;
+      // what the store actually holds. Deliberately NOT clearing state.detail
+      // first: that would flash the "Loading" state and tear down the iframe.
       await loadDetail(ref);
       await refresh();
     } catch (e) {
