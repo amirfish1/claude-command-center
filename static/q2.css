@@ -1459,7 +1459,23 @@ body.q2-resizing .q2-col { pointer-events: none; }
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
-.q2-spec-v { color: var(--text); white-space: nowrap; }
-.q2-spec-v.is-unset { color: var(--text-muted); opacity: 0.55; }
+/* Each field is a button into the settings form. Inherited values are dimmed:
+   they are not this queue's choice, they are what it fell back to. */
+.q2-spec-v, .q2-spec-n {
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dotted transparent;
+  padding: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.q2-spec-v:hover, .q2-spec-n:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.q2-spec-v:focus-visible, .q2-spec-n:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.q2-spec-v.is-inherited { color: var(--text-muted); opacity: 0.6; }
 .q2-spec-sep { color: var(--border); }
 .q2-spec-n { color: var(--text-muted); margin-left: 2px; }
+/* The field the header sent you to. */
+.q2-field.is-target .q2-input { border-color: var(--accent); }
+.q2-field.is-target .q2-field-k { color: var(--accent); }

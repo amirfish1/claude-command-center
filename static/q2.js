@@ -31,6 +31,7 @@
     arm: '',            // which write form is open ('' = none)
     configs: {},        // queue -> wt config (engine/model/effort/workers)
     configDefaults: {}, // wt defaults, merged under each queue's own config
+    configsOwn: {},     // queue -> only the fields that queue SET itself
     log: [],            // reconciler activity lines for the selected queue
     logQueue: '',
   };
@@ -736,10 +737,13 @@
       // a queue on the default engine came back with nothing and read as "not
       // configured". Merge the defaults in, the same way the settings form does.
       var defaults = data.defaults || {};
+      var own = {};
       (data.queues || []).forEach(function (q) {
+        own[projectKey(q.queue)] = q.config || {};
         map[projectKey(q.queue)] = Object.assign({}, defaults, q.config || {});
       });
       state.configDefaults = defaults;
+      state.configsOwn = own;
       state.configs = map;
     } catch (_) { /* the strip just falls back to "not configured" */ }
   }
@@ -1156,19 +1160,29 @@
     // worker configuration instead: engine, model and effort are always all
     // three shown, because "which of them is unset" is itself the answer when
     // a queue runs differently from how you remember configuring it.
-    var cfg = (state.configs || {})[projectKey(state.queue)] || {};
-    function specPart(v, fallback) {
-      return v
-        ? '<span class="q2-spec-v">' + esc(v) + '</span>'
-        : '<span class="q2-spec-v is-unset">' + esc(fallback) + '</span>';
+    var qk = projectKey(state.queue);
+    var cfg = (state.configs || {})[qk] || {};
+    var own = (state.configsOwn || {})[qk] || {};
+    // A value inherited from the wt defaults is shown dimmed, exactly like an
+    // unset one — because it IS unset on this queue. Rendering the inherited
+    // engine at full weight while the inherited model read "default model" was
+    // the same fact told two different ways.
+    function specPart(field, fallback) {
+      var v = cfg[field];
+      var isOwn = own[field] != null && own[field] !== '';
+      return '<button type="button" class="q2-spec-v' + (isOwn ? '' : ' is-inherited') + '"'
+        + ' data-q2-cfg-open="' + esc(field) + '"'
+        + ' title="' + esc(field + ': ' + (v || 'unset')
+            + (isOwn ? ' (set on this queue)' : ' (inherited default)') + ' - click to edit') + '">'
+        + esc(v || fallback) + '</button>';
     }
-    $('q2TicketCount').innerHTML = '<span class="q2-spec" title="Worker this queue spawns: engine, model, effort">'
-      + specPart(cfg.engine, 'engine?')
-      + '<span class="q2-spec-sep">&middot;</span>' + specPart(cfg.model, 'default model')
-      + '<span class="q2-spec-sep">&middot;</span>' + specPart(cfg.effort, 'default effort')
-      + (cfg.desired_workers != null
-          ? '<span class="q2-spec-n" title="Desired workers">&times;' + esc(String(cfg.desired_workers)) + '</span>'
-          : '')
+    $('q2TicketCount').innerHTML = '<span class="q2-spec">'
+      + specPart('engine', 'default engine')
+      + '<span class="q2-spec-sep">&middot;</span>' + specPart('model', 'default model')
+      + '<span class="q2-spec-sep">&middot;</span>' + specPart('effort', 'default effort')
+      + '<button type="button" class="q2-spec-n" data-q2-cfg-open="desired_workers"'
+      + ' title="Desired workers - click to edit">&times;'
+      + esc(String(cfg.desired_workers != null ? cfg.desired_workers : 1)) + '</button>'
       + '</span>';
 
     if (!openish.length && !(state.showClosed && closed.length)) {
@@ -1848,7 +1862,7 @@
       + inner + (hint ? '<span class="q2-field-hint">' + esc(hint) + '</span>' : '') + '</label>';
   }
 
-  async function openQueueConfig(queueName) {
+  async function openQueueConfig(queueName, focusField) {
     var options;
     try {
       options = await postJson('/api/queue/config-options', {});
@@ -1921,8 +1935,16 @@
         var eng = modal.querySelector('[data-q2-cfg="engine"]');
         var mod = modal.querySelector('[data-q2-cfg="model"]');
         eng.addEventListener('change', function () { mod.innerHTML = modelOptions(eng.value, ''); });
-        var first = modal.querySelector('[data-q2-cfg="' + (isNew ? 'queue' : 'repo_path') + '"]');
-        if (first) first.focus();
+        // Land on the field the user clicked, not the top of the form.
+        var target = focusField && modal.querySelector('[data-q2-cfg="' + focusField + '"]');
+        var first = target || modal.querySelector('[data-q2-cfg="' + (isNew ? 'queue' : 'repo_path') + '"]');
+        if (first) {
+          first.focus();
+          if (target) {
+            target.closest('.q2-field').classList.add('is-target');
+            target.scrollIntoView({ block: 'center' });
+          }
+        }
       });
   }
 
@@ -2089,6 +2111,12 @@
     if (e.target.closest('[data-q2-modal-close]')) { closeModal(); return; }
     if (e.target.closest('#q2NewTicketBtn')) { openNewTicket(); return; }
     if (e.target.closest('#q2NewQueueBtn')) { openQueueConfig(''); return; }
+    var cfgOpen = e.target.closest('[data-q2-cfg-open]');
+    if (cfgOpen) {
+      if (!state.queue) { note('Pick a queue first.'); return; }
+      openQueueConfig(state.queue, cfgOpen.getAttribute('data-q2-cfg-open'));
+      return;
+    }
     if (e.target.closest('#q2QueueSettingsBtn')) {
       if (!state.queue) { note('Pick a queue first.'); return; }
       openQueueConfig(state.queue);
