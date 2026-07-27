@@ -198,23 +198,22 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-qrow.is-selected { background: var(--surface-2); border-left-color: var(--accent); }
 .q2-qrow-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .q2-qname {
-  flex: 0 1 auto;   /* let a long queue name ellipsis rather than shove the badge */
+  flex: 0 0 auto;   /* the name never truncates; the path yields instead */
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
+/* Repo path shares the name line. It is the only flexible thing there, so it
+   absorbs the squeeze and ellipsises before the name or the done count do. */
 .q2-qrepo {
-  margin-top: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 10.5px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
 }
 
 /* One chip per fact, right-aligned into a single ragged-right block. Most stay

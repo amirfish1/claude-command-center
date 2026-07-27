@@ -17,6 +17,7 @@
 
   var state = {
     queues: [],
+    projects: {},       // queue name → per-project health row (why it's stuck)
     items: [],
     queue: '',
     ref: '',
@@ -132,8 +133,8 @@
         tip: f.wip + ' ticket' + (f.wip === 1 ? ' is' : 's are') + ' claimed and in progress.' });
     }
     if (f.waiting) {
-      chips.push({ k: 'waiting', label: f.waiting + ' unclaimed',
-        tip: f.waiting + ' open ticket' + (f.waiting === 1 ? '' : 's') + ' nothing has picked up yet.' });
+      chips.push({ k: 'waiting', label: f.waiting + ' open',
+        tip: f.waiting + ' open ticket' + (f.waiting === 1 ? '' : 's') + ' nothing has claimed yet.' });
     }
     chips.push(q.auto_drain
       ? { k: 'auto-on', label: 'auto', tip: 'Auto-drain is ON. WatchTower spawns workers for this queue on its own.' }
@@ -142,6 +143,32 @@
       ? { k: 'gh', label: 'github', tip: 'Backed by GitHub issues' + (f.local ? ' (plus ' + f.local + ' local ticket(s))' : '') + '.' }
       : { k: 'local', label: 'local', tip: 'Local WatchTower tickets, not GitHub issues.' });
     return chips;
+  }
+
+  // "stuck" on its own tells the user nothing actionable. The server sets it
+  // when a queue has claimable work, auto-drain on, and no live worker — but
+  // there are two very different causes, and the fix differs per cause.
+  function stuckWhy(q) {
+    var hr = (state.projects || {})[projectKey(q.queue)] || {};
+    var head = 'Stuck: auto-drain is on and ' + (q.claimable || 0)
+      + ' ticket' + ((q.claimable || 0) === 1 ? ' is' : 's are') + ' claimable, but no worker is running.\n';
+    if (!hr.fixer_session_id) {
+      return head + 'Cause: no worker has ever claimed anything here. Nothing was spawned.';
+    }
+    if (!hr.fixer_live) {
+      return head + 'Cause: the last worker session (' + String(hr.fixer_session_id).slice(0, 8)
+        + ') is gone. It died or was reaped before draining the queue.';
+    }
+    return head + 'Cause: the worker session (' + String(hr.fixer_session_id).slice(0, 8)
+      + ') is still alive but has not closed a ticket in over 10 minutes. It is hung, not working.';
+  }
+
+  // Repo path shares the name line now, so it has to be short. Keep the last
+  // two segments; the full path stays in the title attribute.
+  function shortPath(p) {
+    var parts = String(p || '').replace(/\/+$/, '').split('/').filter(Boolean);
+    if (parts.length <= 2) return parts.join('/');
+    return parts.slice(-2).join('/');
   }
 
   // Sort order: the four things the user asked to float up, most-actionable
@@ -179,6 +206,13 @@
         getJson('/api/queue/list'),
       ]);
       state.queues = (results[0] && results[0].queues) || [];
+      // Per-project health rows carry WHY a queue is stuck (is there a fixer at
+      // all, is it alive, has it closed anything lately). The queue rows only
+      // carry the boolean, which is useless to a user staring at a red flag.
+      state.projects = {};
+      ((results[0] && results[0].projects) || []).forEach(function (r) {
+        state.projects[projectKey(r && r.project)] = r;
+      });
       state.items = (results[1] && results[1].items) || [];
       state.offline = false;
     } catch (e) {
@@ -254,11 +288,11 @@
         + ' data-q2-queue="' + esc(q.queue) + '">'
         + '<span class="q2-qrow-head">'
         + '<span class="q2-qname">' + esc(q.queue) + '</span>'
-        + (q.state === 'stuck' ? '<span class="q2-stuck-flag" title="Auto-drain is on and there is claimable work, but no worker is running.">stuck</span>' : '')
+        + (q.state === 'stuck' ? '<span class="q2-stuck-flag" title="' + esc(stuckWhy(q)) + '">stuck</span>' : '')
+        + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(shortPath(q.repo_path)) + '</span>' : '')
         + '<span class="q2-qrow-done"><b>' + (q.closed || 0) + '</b> done</span>'
         + '</span>'
         + '<span class="q2-chips">' + chips + '</span>'
-        + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(q.repo_path) + '</span>' : '')
         + '</button>';
     }).join('');
   }
