@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.13.0] - 2026-07-27
+
+### Added
+- Add icon-only Claude, Codex, and Kimi filters to the All sessions toolbar.
+- Gentle "Star on GitHub" nudge bar: appears after the dashboard has been opened on three distinct days, never alongside the telemetry prompt, with Maybe later (14-day snooze) and Don't ask again options.
+- Kimi sessions now accept `/goal <objective>` and bare `/goal` through CCC, translating them to Kimi's native durable goal tools instead of returning “Unknown ACP command.”
+- Show each session's recorded origin in sidebar metadata, including its parent session, CCC, the user, or an honest unknown-root state.
+- Show each session's recorded origin in sidebar metadata, including its parent session, CCC, the user, or an honest unknown-root state.
+
+### Fixed
+- Fixed wedged Codex app-server surviving for hours: the liveness probe only checks that `thread/list` answers, so a half-dead child that fails every `thread/resume`/`turn/start` stayed "warm". CCC now verifies "thread not found" errors against the on-disk rollout — 3 consecutive false misses for threads that provably exist recycles the app-server child.
+- Fixed Codex spawn failing with "Spawn failed: thread not found" when the app-server accepts a new thread but cannot run its first turn — after reattach + recreate recovery is exhausted, spawns now fall back to the one-shot `codex exec` path instead of rejecting the submission.
+- Preserve literal `<ccc-kimi-goal>` text in Kimi prompts when conversations replay.
+- Preserve Kimi prompts rejected by remote-busy races through a durable, cross-process-safe retry handoff without overwriting other queued input.
+- Keep inline code in its original sentence order while new assistant text reveals word by word.
+
 ## [5.12.0] - 2026-07-26
 
 ### Changed
@@ -2267,7 +2283,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.12.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.13.0...HEAD
+[5.13.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.13.0
 [5.12.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.12.0
 [5.11.3]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.3
 [5.11.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.11.2

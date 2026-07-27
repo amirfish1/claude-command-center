@@ -1,1 +1,0 @@
-- Keep inline code in its original sentence order while new assistant text reveals word by word.

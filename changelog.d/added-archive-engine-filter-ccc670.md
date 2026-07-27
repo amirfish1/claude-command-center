@@ -1,1 +1,0 @@
-- Add icon-only Claude, Codex, and Kimi filters to the All sessions toolbar.
