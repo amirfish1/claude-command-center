@@ -350,6 +350,32 @@ body.q2-resizing .q2-col { pointer-events: none; }
 /* Watcher: a radar that sweeps while auto-drain is armed. This is the whole
    point of the diagram — it shows the queue is being watched even when
    nothing is running. */
+/* GitHub-backed queues are continuously polled into the local store. The
+   pulsing mark says that intake is live, which the radar alone cannot: the
+   radar is about dispatching work, not fetching it. */
+.q2-dg-gh {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--purple);
+  margin-bottom: 2px;
+}
+.q2-dg-gh-pulse {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--purple);
+  opacity: 0;
+  animation: q2-gh-ping 2.2s ease-out infinite;
+}
+@keyframes q2-gh-ping {
+  0%   { transform: scale(0.7); opacity: 0.9; }
+  70%  { transform: scale(1.5); opacity: 0; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .q2-dg-gh-pulse { animation: none; } }
+
 .q2-dg-radar {
   position: relative;
   width: 34px;
@@ -608,6 +634,8 @@ body.q2-resizing .q2-col { pointer-events: none; }
 /* Parked = open but excluded by the queue's claim types. Purple, matching the
    feature-request chip, because that is nearly always what these are. */
 .q2-n.is-parked, .q2-n.is-parked b { color: var(--purple); }
+/* A zero is not news. Dim it so the eye lands on the counts that matter. */
+.q2-n.is-zero, .q2-n.is-zero b { color: var(--text-muted); opacity: 0.45; }
 .q2-n-sep { color: var(--border); }
 .q2-qage { flex: 0 0 auto; color: var(--text-muted); opacity: 0.8; }
 .q2-chip {
@@ -621,7 +649,21 @@ body.q2-resizing .q2-col { pointer-events: none; }
   background: var(--surface-2);
   white-space: nowrap;
 }
-.q2-chip.is-auto-on { color: var(--cyan); border-color: var(--cyan); background: transparent; }
+.q2-chip.is-auto-on {
+  color: var(--cyan);
+  border-color: transparent;
+  background: transparent;
+  font-style: italic;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.q2-chip.is-auto-off {
+  border-color: transparent;
+  background: transparent;
+  font-style: italic;
+  padding-left: 2px;
+  padding-right: 2px;
+}
 
 /* The auto/manual chip is a real switch. */
 .q2-drain {
@@ -669,14 +711,6 @@ body.q2-resizing .q2-col { pointer-events: none; }
 
 /* `stuck` is a queue-level alarm, not a fact chip — it stays up on the name
    line so it can never be lost in a wrapped chip row. */
-.q2-stuck-flag {
-  flex: 0 0 auto;
-  font-size: 9.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--red);
-}
 .q2-qrow.is-stuck { box-shadow: inset 2px 0 0 var(--red); }
 /* Why a queue is stuck, on the row itself. A cause you have to hover to find
    is a cause nobody reads, so this is plain visible text at the bottom of the
@@ -944,6 +978,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   /* A distinct tint so the embedded dashboard reads as a different surface
      rather than more of the ticket pane. */
   background: color-mix(in srgb, var(--wip-blue) 7%, var(--surface));
+  overflow: hidden;   /* the scaled iframe is oversized by design */
 }
 .q2-conv-toggle {
   flex: 0 0 auto;
@@ -979,15 +1014,37 @@ body.q2-resizing .q2-col { pointer-events: none; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px;
-  min-height: 26px;
+  padding: 5px 10px;
+  min-height: 28px;
+  cursor: pointer;
+  user-select: none;
 }
-.q2-conv-frame {
+.q2-conv-head:hover { background: var(--surface-2); }
+/* Scaling the ELEMENT (not zooming the document) shrinks the viewport along
+   with the content, so the embedded page still fills the pane. Zooming the
+   document instead left an 18% dead band under the composer. The inverse
+   width/height compensates for the scale so it covers the full box. */
+/* The frame is absolutely sized inside this box. As a flex item its height
+   percentage resolved against the wrong basis and still left a dead band. */
+.q2-conv-body {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  width: 100%;
+  overflow: hidden;
+}
+.q2-conv-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
   border: 0;
-  background: transparent;
+  background: var(--bg);
+  /* 1 / 0.82 — oversize, then scale back so the viewport shrinks with the
+     content and the page still fills the pane. */
+  width: 121.95%;
+  height: 121.95%;
+  transform: scale(0.82);
+  transform-origin: 0 0;
 }
 /* Collapsed: just the header bar. */
 .q2-conv:not(:has(.q2-conv-frame)) { height: auto; }

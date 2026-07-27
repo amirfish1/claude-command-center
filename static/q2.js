@@ -255,10 +255,21 @@
     // "3 open" on a bugs-only queue reads as three things a worker will take.
     // Naming the count after the claimed type makes "0 bugs" say what it means.
     types = types || [];
-    var openWord = types.length === 1 ? (types[0] === 'bug' ? 'bugs' : 'features') : 'open';
+    // Singular for one, so a row never reads "1 features".
+    var openBase = types.length === 1 ? (types[0] === 'bug' ? 'bug' : 'feature') : '';
+    var openWord = openBase
+      ? openBase + ((f.waiting || 0) === 1 ? '' : 's')
+      : 'open';
     var openTip = types.length
       ? 'Open and claimable here (this queue drains ' + types.join(' + ') + ')'
       : 'Open and unclaimed';
+    // Name the excluded pile after what it IS. On a bugs-only queue the parked
+    // tickets are the features; "parked" described their state, not their kind.
+    // Only bug/feature pluralise; "parked" is already the plural-neutral word.
+    var parkedBase = types.length === 1 ? (types[0] === 'bug' ? 'feature' : 'bug') : '';
+    var parkedWord = parkedBase
+      ? parkedBase + ((f.parked || 0) === 1 ? '' : 's')
+      : 'parked';
     return {
       needsInput: f.needsInput
         ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
@@ -268,20 +279,21 @@
         ? '<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
           + '<b>' + f.wip + '</b> wip</span>'
         : '',
-      open: '<span class="q2-n is-open" title="' + esc(openTip) + '"><b>'
+      open: '<span class="q2-n is-open' + ((f.waiting || 0) ? '' : ' is-zero')
+        + '" title="' + esc(openTip) + '"><b>'
         + (f.waiting || 0) + '</b> ' + esc(openWord) + '</span>',
       parked: f.parked
         ? '<span class="q2-n is-parked" title="Open, but this queue&#39;s claim types exclude them - no worker here will take them."><b>'
-          + f.parked + '</b> parked</span>'
+          + f.parked + '</b> ' + esc(parkedWord) + '</span>'
         : '',
-      done: '<span class="q2-n is-done" title="Closed, all time"><b>'
-        + (done || 0) + '</b> done</span>',
+      done: '<span class="q2-n is-done' + ((done || 0) ? '' : ' is-zero')
+        + '" title="Closed, all time"><b>' + (done || 0) + '</b> closed</span>',
     };
   }
 
   function countsLine(f, done, types) {
     var c = countParts(f, done, types);
-    return [c.needsInput, c.wip, c.open, c.parked, c.done].filter(Boolean)
+    return [c.needsInput, c.wip, c.parked, c.open, c.done].filter(Boolean)
       .join('<span class="q2-n-sep" aria-hidden="true">·</span>');
   }
 
@@ -569,9 +581,9 @@
         + ((f && f.github) ? '<span class="q2-gh-wrap" title="Backed by GitHub issues'
             + ((f.local) ? ' (plus ' + f.local + ' local ticket' + (f.local === 1 ? '' : 's') + ')' : '')
             + '." aria-label="GitHub-backed queue">' + GH_MARK + '</span>' : '')
-        + (q.state === 'stuck' ? '<span class="q2-stuck-flag">stuck</span>' : '')
+
         + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(shortPath(q.repo_path)) + '</span>' : '')
-        + '<span class="q2-qrow-tr">' + c.wip + c.open + c.parked + '</span>'
+        + '<span class="q2-qrow-tr">' + c.wip + c.parked + c.open + '</span>'
         + '</span>'
         // Row 2 — configuration on the left, what needs a human on the right.
         + '<span class="q2-qrow-foot">'
@@ -607,8 +619,10 @@
     try { return localStorage.getItem(LS_CONV_OPEN) === '1'; } catch (_) { return false; }
   }
 
+  // Closed by default: the log is a drill-in for when something looks wrong,
+  // not a permanent fixture taking a quarter of the column.
   function logOpen() {
-    try { return localStorage.getItem(LS_LOG_OPEN) !== '0'; } catch (_) { return true; }
+    try { return localStorage.getItem(LS_LOG_OPEN) === '1'; } catch (_) { return false; }
   }
 
   async function loadLog(queue) {
@@ -745,7 +759,7 @@
     } else {
       workerBody = '<div class="q2-dg-worker is-empty">'
         + '<div class="q2-dg-slot" aria-hidden="true"></div>'
-        + '<div class="q2-dg-worker-idle">' + esc(m.auto ? 'no worker running' : 'none — auto-drain off') + '</div>'
+        + '<div class="q2-dg-worker-idle">' + esc(m.auto ? 'No live worker' : 'No live worker \u00b7 auto-drain off') + '</div>'
         + '</div>';
     }
 
@@ -772,6 +786,10 @@
       // 2. Watcher
       + '<div class="q2-dg-stage is-narrow">'
       + '<div class="q2-dg-label">Watcher</div>'
+      + (m.github
+          ? '<div class="q2-dg-gh" title="This queue is backed by GitHub issues, polled continuously into the local store.">'
+            + '<span class="q2-dg-gh-pulse" aria-hidden="true"></span>' + GH_MARK + '</div>'
+          : '')
       + '<div class="q2-dg-radar' + (m.auto ? ' is-on' : '') + (m.stuck ? ' is-stuck' : '') + '">'
       + '<span class="q2-dg-radar-sweep" aria-hidden="true"></span>'
       + '<span class="q2-dg-radar-core" aria-hidden="true"></span>'
@@ -792,7 +810,7 @@
       + '<span class="q2-dg-dot"></span><span class="q2-dg-dot"></span><span class="q2-dg-dot"></span></div>'
       // 4. Done
       + '<div class="q2-dg-stage">'
-      + '<div class="q2-dg-label" title="Closed in the last hour">Done'
+      + '<div class="q2-dg-label" title="Closed in the last hour">Closed'
       + '<span class="q2-dg-n">' + m.doneRecent.length + '</span></div>'
       + '<div class="q2-dg-stack is-done">' + stackHtml(m.doneRecent, 'is-closed') + '</div>'
       + '</div>'
@@ -1331,8 +1349,10 @@
       + '" target="_blank" rel="noopener">pop out &#8599;</a>'
       + '</div>'
       + (open
-          ? '<iframe class="q2-conv-frame" title="Conversation ' + esc(sid) + '"'
+          ? '<div class="q2-conv-body">'
+            + '<iframe class="q2-conv-frame" title="Conversation ' + esc(sid) + '"'
             + ' src="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid) + '"></iframe>'
+            + '</div>'
           : '');
     host.appendChild(el);
     var frame = el.querySelector('.q2-conv-frame');
@@ -1344,17 +1364,21 @@
   // same-origin, so we can style it from outside instead of adding q2-specific
   // branches to app.js.
   var CONV_TRIM_CSS = [
-    /* Scale the whole document down to sit alongside q2's 13px UI. */
-    'html { zoom: 0.82; }',
-    /* The popout toolbar: headless/terminal/Verbose/Replay/Annotate/Clear.
-       Every one of those is a whole-session control that belongs in the main
-       dashboard, not in a ticket pane. */
+    /* No zoom here: it shrinks the document inside a full-height viewport and
+       leaves a dead band at the bottom. The iframe element is scaled instead
+       (see .q2-conv-frame), which shrinks the viewport with it. */
+    /* The row with the engine chip, headless/terminal pills, session id and
+       Verbose/Replay/Annotate/Clear. It is .conv-pane-header, NOT #convToolbar
+       (which the popout CSS already hides) — every control on it is a
+       whole-session action that belongs in the main dashboard. */
     '#convToolbar { display: none !important; }',
+    '.conv-pane-header, [data-role="pane-header"] { display: none !important; }',
     /* Floating Annotate button, only ever shown in popout contexts. */
     '#annotationFabBtn { display: none !important; }',
     /* Composer: a few lines is plenty when the pane is half a column. */
     '#convInputBar textarea { max-height: 84px !important; min-height: 34px !important; }',
-    '.conv-input-bar { padding-top: 4px !important; padding-bottom: 4px !important; }'
+    '.conv-input-bar { padding-top: 4px !important; padding-bottom: 4px !important; }',
+    '.conv-pane, .conversations-view { padding-bottom: 0 !important; }'
   ].join('\n');
 
   function trimConvFrame(frame) {
@@ -1536,8 +1560,8 @@
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
-    var convT = e.target.closest('[data-q2-conv-toggle]');
-    if (convT) {
+    var convT = e.target.closest('[data-q2-conv-toggle], .q2-conv-head');
+    if (convT && !e.target.closest('a')) {
       try { localStorage.setItem(LS_CONV_OPEN, convOpen() ? '0' : '1'); } catch (_) {}
       renderDetail();
       return;
