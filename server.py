@@ -29882,7 +29882,8 @@ def _acp_permission_tool_detail(tool):
 
 _ACP_EMBEDDED_CONTROL_RE = re.compile(
     r"<system-reminder>.*?</system-reminder>"
-    r"|<kimi-skill-loaded\b[^>]*>.*?</kimi-skill-loaded>",
+    r"|<kimi-skill-loaded\b[^>]*>.*?</kimi-skill-loaded>"
+    r"|<ccc-kimi-goal>.*?</ccc-kimi-goal>",
     re.DOTALL,
 )
 
@@ -30152,6 +30153,40 @@ def _acp_session_new(harness, cwd, prompt=None, model=None, mode=None, effort=No
     }
 
 
+def _kimi_goal_prompt_text(text):
+    """Translate CCC's ``/goal`` affordance into Kimi's native goal tools.
+
+    Kimi ACP handles slash-prefixed prompts before they reach the model, but
+    its command catalog does not expose ``/goal``. Kimi does expose durable
+    CreateGoal/GetGoal tools to the model, so route only this compatibility
+    command around the ACP slash parser. All other text stays byte-for-byte.
+    """
+    raw = str(text or "")
+    match = re.match(r"^\s*/goal(?:\s+(.*))?\s*$", raw, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return raw
+    objective = (match.group(1) or "").strip()
+    if not objective:
+        return (
+            "<ccc-kimi-goal>\n"
+            "The slash-shaped user message below is a CCC compatibility "
+            "command, not a Kimi ACP command. Use your GetGoal tool to inspect "
+            "the current durable goal, then report its objective and status.\n"
+            "</ccc-kimi-goal>\n"
+            f"{raw.strip()}"
+        )
+    return (
+        "<ccc-kimi-goal>\n"
+        "The slash-shaped user message below is a CCC compatibility command, "
+        "not a Kimi ACP command. The user explicitly requested a durable goal. "
+        "Use your CreateGoal tool with the text after `/goal` as the objective, "
+        "then pursue it autonomously until its completion criterion is "
+        "satisfied.\n"
+        "</ccc-kimi-goal>\n"
+        f"{raw.strip()}"
+    )
+
+
 def _acp_prompt(
     harness, sid, text, mode="send", from_queue=False, idempotency_key=None,
 ):
@@ -30172,6 +30207,9 @@ def _acp_prompt(
     if not text:
         return {"ok": False, "error": "empty prompt"}
     text = _strip_lone_surrogates(str(text))
+    visible_text = text
+    if harness == "kimi":
+        text = _kimi_goal_prompt_text(text)
     with _ACP_LOCK:
         state = _acp_session(harness, sid, create=True)
         if state.get("status") == "active" and mode != "steer":
@@ -30199,7 +30237,11 @@ def _acp_prompt(
             "req_id": req_id,
             "msg_id": f"acp-{harness}-{state['turn_seq']}",
             "text": "", "thought": "", "tools": {},
-            "prompt": text,
+            # The original user text is the canonical retry payload. Kimi may
+            # receive a translated compatibility prompt (for `/goal`), but a
+            # remote-busy race must requeue the visible command so the next
+            # send translates exactly once and transcript text stays honest.
+            "prompt": visible_text,
             "from_queue": bool(from_queue),
             "started_at": time.time(),
         }
@@ -30207,7 +30249,7 @@ def _acp_prompt(
         state["deltas"].clear()
         entry["is_active"] = True
         _acp_emit_event_unlocked(harness, sid, {
-            "type": "user_text", "text": text,
+            "type": "user_text", "text": visible_text,
         }, save=True)
 
     def roll_back_unsent_turn(req_id, _entry):
