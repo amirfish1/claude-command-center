@@ -235,12 +235,65 @@
     return parts.join('<span class="q2-n-sep" aria-hidden="true">·</span>');
   }
 
+  // ── auto-drain toggle ────────────────────────────────────────────────────
+  // /api/queue/status is cached server-side for 15s with stale-while-
+  // revalidate, so for up to 15s after a successful write the poll still
+  // reports the OLD auto_drain. Rendering that would flip the control back
+  // under the user's hand. So a confirmed write is held as an override and
+  // only released once the server's own payload agrees with it.
+  var drainPending = {};    // queue → true while the POST is in flight
+  var drainOverride = {};   // queue → value we wrote and the server has not caught up to
+
+  function effectiveAutoDrain(q) {
+    var k = projectKey(q.queue);
+    if (drainOverride[k] != null) return drainOverride[k];
+    return !!q.auto_drain;
+  }
+
+  // Drop overrides the server has caught up with. Called on every poll, before
+  // rendering, so a stale override can never outlive the truth it was masking.
+  function reconcileDrainOverrides() {
+    (state.queues || []).forEach(function (q) {
+      var k = projectKey(q.queue);
+      if (drainOverride[k] != null && !!q.auto_drain === drainOverride[k]) {
+        delete drainOverride[k];
+      }
+    });
+  }
+
+  async function setAutoDrain(queue, next) {
+    var k = projectKey(queue);
+    if (drainPending[k]) return;
+    drainPending[k] = true;
+    renderQueues();                       // paint the spinner immediately
+    try {
+      var res = await fetch('/api/queue/drain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue: queue, auto_drain: next }),
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      // Trust the value the server echoes back, not the one we asked for.
+      drainOverride[k] = !!data.auto_drain;
+    } catch (e) {
+      // Leave no override: the row falls back to the server's value, which is
+      // the honest thing to show when the write did not land.
+      delete drainOverride[k];
+      note('Could not change auto-drain for ' + queue + ': ' + e.message);
+    } finally {
+      delete drainPending[k];
+      renderQueues();
+    }
+  }
+
   // Row 1 carries only configuration (what this queue IS); the counts line
   // below carries state (what is in it right now).
   function queueChips(q) {
-    return [q.auto_drain
-      ? { k: 'auto-on', label: 'auto', tip: 'Auto-drain is ON. WatchTower spawns workers for this queue on its own.' }
-      : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker.' }];
+    var on = effectiveAutoDrain(q);
+    return [on
+      ? { k: 'auto-on', label: 'auto', tip: 'Auto-drain is ON. WatchTower spawns workers for this queue on its own. Click to turn it off.' }
+      : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker. Click to turn it on.' }];
   }
 
   // "stuck" on its own tells the user nothing actionable. The server sets it
@@ -332,6 +385,7 @@
       renderChrome();
       return;
     }
+    reconcileDrainOverrides();
     // Default selection: first queue with open work, else the first queue.
     if (!state.queue && state.queues.length) {
       var withWork = state.queues.filter(function (q) { return q.depth > 0; });
@@ -358,6 +412,18 @@
   function renderChrome() {
     var stale = $('q2Stale');
     if (stale) stale.hidden = !state.offline;
+  }
+
+  // A write that fails silently is worse than one that fails loudly: the user
+  // would be left believing a toggle took effect. Surfaced in the topbar.
+  var noteTimer = null;
+  function note(msg) {
+    var el = $('q2Note');
+    if (!el) return;
+    el.textContent = msg;
+    el.hidden = false;
+    if (noteTimer) clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () { el.hidden = true; }, 6000);
   }
 
   // ── render: column 1, queues ─────────────────────────────────────────────
@@ -389,12 +455,23 @@
     host.innerHTML = ordered.map(function (q) {
       var f = facts[projectKey(q.queue)];
       var isSel = projectKey(q.queue) === selected;
+      var busy = !!drainPending[projectKey(q.queue)];
+      var on = effectiveAutoDrain(q);
+      // A real <button>, which is why the row itself cannot be one: nesting
+      // interactive controls is invalid and breaks keyboard traversal.
       var chips = queueChips(q).map(function (c) {
-        return '<span class="q2-chip is-' + esc(c.k) + '" title="' + esc(c.tip || '') + '">'
-          + esc(c.label) + '</span>';
+        return '<button type="button" class="q2-chip q2-drain is-' + esc(c.k)
+          + (busy ? ' is-busy' : '') + '"'
+          + ' data-q2-drain="' + esc(q.queue) + '" data-q2-next="' + (on ? '0' : '1') + '"'
+          + (busy ? ' disabled aria-busy="true"' : '')
+          + ' role="switch" aria-checked="' + (on ? 'true' : 'false') + '"'
+          + ' title="' + esc(busy ? 'Saving…' : c.tip || '') + '">'
+          + (busy ? '<span class="q2-spin" aria-hidden="true"></span>' : '')
+          + esc(c.label) + '</button>';
       }).join('');
-      return '<button type="button" class="q2-qrow' + (isSel ? ' is-selected' : '')
+      return '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
+        + ' role="button" tabindex="0"'
         + ' data-q2-queue="' + esc(q.queue) + '">'
         // Row 1 — identity and configuration.
         + '<span class="q2-qrow-head">'
@@ -416,7 +493,7 @@
             : '')
         + '</span>'
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
-        + '</button>';
+        + '</div>';
     }).join('');
   }
 
@@ -651,12 +728,32 @@
   }
 
   document.addEventListener('click', function (e) {
+    // The drain toggle sits INSIDE the queue row, so it has to be matched
+    // first — otherwise the row's own handler swallows the click and the
+    // toggle only ever selects the queue.
+    var drain = e.target.closest('[data-q2-drain]');
+    if (drain) {
+      e.stopPropagation();
+      setAutoDrain(drain.getAttribute('data-q2-drain'),
+                   drain.getAttribute('data-q2-next') === '1');
+      return;
+    }
     var qBtn = e.target.closest('[data-q2-queue]');
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
     if (tBtn) { selectTicket(tBtn.getAttribute('data-q2-ref')); return; }
     if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
     if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
+  });
+
+  // Queue rows are divs now (they contain a real button), so the Enter/Space
+  // activation a <button> gave for free has to be restored by hand.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    var row = e.target.closest && e.target.closest('.q2-qrow[data-q2-queue]');
+    if (!row || e.target !== row) return;
+    e.preventDefault();
+    selectQueue(row.getAttribute('data-q2-queue'));
   });
 
   var searchInput = $('q2Search');

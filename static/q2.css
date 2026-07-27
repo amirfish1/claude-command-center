@@ -258,6 +258,38 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-chip.is-auto-on { color: var(--cyan); border-color: var(--cyan); background: transparent; }
 
+/* The auto/manual chip is a real switch. */
+.q2-drain {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.q2-drain:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.q2-drain:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.q2-drain:disabled { cursor: progress; opacity: 0.75; }
+.q2-spin {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: q2-spin 0.7s linear infinite;
+}
+@keyframes q2-spin { to { transform: rotate(360deg); } }
+
+.q2-note {
+  font-size: 11px;
+  color: var(--red);
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* GitHub-backed marker, beside the queue name. The mark is a solid glyph, so
    the colour goes on the fill (via currentColor) — it cannot be layered over a
    coloured disc. Purple keeps it distinct from every other colour in the
