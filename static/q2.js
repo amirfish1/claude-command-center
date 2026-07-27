@@ -91,11 +91,38 @@
     return '';
   }
 
+  // The server already classifies every queue (ccc_server/queue_events.py:422)
+  // into stuck / draining / backlog. Read that instead of re-deriving a second
+  // opinion here. The only thing added on top is splitting the server's
+  // "draining" by whether a worker is on it *right now*: "auto-drain is armed"
+  // and "a worker is running" are different facts and the old single label
+  // conflated them, which is why queues read as draining while nothing ran.
   function queueState(q) {
-    if (q.stuck) return { k: 'stuck', label: 'stuck' };
-    if (q.workers > 0) return { k: 'draining', label: 'draining' };
-    if (q.depth > 0) return { k: 'blocked', label: 'waiting' };
-    return { k: 'idle', label: 'idle' };
+    var srv = String(q.state || '');
+    var workers = Number(q.workers || 0);
+    var claimable = Number(q.claimable != null ? q.claimable : (q.depth || 0));
+    if (srv === 'stuck') {
+      return { k: 'stuck', label: 'stuck',
+        tip: 'Auto-drain is on and there is claimable work, but no worker is running. This one needs a look.' };
+    }
+    if (workers > 0) {
+      return { k: 'working', label: 'working',
+        tip: workers + ' worker' + (workers === 1 ? '' : 's') + ' draining this queue right now.' };
+    }
+    if (srv === 'draining') {
+      return claimable > 0
+        ? { k: 'ready', label: 'ready',
+            tip: 'Auto-drain is on and ' + claimable + ' ticket' + (claimable === 1 ? ' is' : 's are')
+                 + ' claimable. A worker picks them up on the next sweep.' }
+        : { k: 'clear', label: 'clear',
+            tip: 'Auto-drain is on and there is nothing left to claim.' };
+    }
+    if (q.auto_drain) {
+      return { k: 'parked', label: 'parked',
+        tip: 'Auto-drain is on, but every open ticket is filtered out by this queue’s claim types. Nothing is claimable.' };
+    }
+    return { k: 'manual', label: 'manual',
+      tip: 'Auto-drain is off. This queue is a parking lot — nothing runs until you start a worker.' };
   }
 
   function itemsForQueue(queue) {
@@ -178,7 +205,8 @@
         + ' data-q2-queue="' + esc(q.queue) + '">'
         + '<span class="q2-qrow-head">'
         + '<span class="q2-qname">' + esc(q.queue) + '</span>'
-        + '<span class="q2-pill is-' + esc(st.k) + '">' + esc(st.label) + '</span>'
+        + '<span class="q2-pill is-' + esc(st.k) + '" title="' + esc(st.tip || '') + '">'
+        + '<span class="q2-pill-dot" aria-hidden="true"></span>' + esc(st.label) + '</span>'
         + '</span>'
         + '<span class="q2-qrow-counts">'
         + '<span><b>' + (q.depth || 0) + '</b> open</span>'
@@ -420,6 +448,99 @@
     var btn = $('q2ThemeBtn');
     if (btn) btn.textContent = saved === 'light' ? 'Dark' : 'Light';
   })();
+
+  // ── column resizers ──────────────────────────────────────────────────────
+  // Both handles drive a CSS custom property on :root, so the grid is the only
+  // thing that reacts and no render pass is needed while dragging.
+  var COLS = {
+    queues:  { varName: '--q2-queues-w',  key: 'ccc-q2-w-queues',  def: 260, min: 170, max: 560 },
+    tickets: { varName: '--q2-tickets-w', key: 'ccc-q2-w-tickets', def: 440, min: 260, max: 900 }
+  };
+
+  // `desired` is what the user actually asked for; the applied width is that
+  // value clamped to the current viewport. Keeping the two separate is what
+  // lets a width survive a narrow-then-widen round trip instead of ratcheting
+  // permanently smaller.
+  var desired = { queues: COLS.queues.def, tickets: COLS.tickets.def };
+
+  function applyColWidths() {
+    ['queues', 'tickets'].forEach(function (which) {
+      var spec = COLS[which];
+      var other = which === 'queues' ? 'tickets' : 'queues';
+      // Reserve room for the other column (at its own minimum) and the detail
+      // pane, so the two fixed tracks can never squeeze detail out of view.
+      var roomCap = window.innerWidth - COLS[other].min - 320;
+      var cap = Math.max(spec.min, Math.min(spec.max, roomCap));
+      var w = Math.round(Math.min(cap, Math.max(spec.min, desired[which])));
+      document.documentElement.style.setProperty(spec.varName, w + 'px');
+    });
+  }
+
+  function setColWidth(which, px, persist) {
+    if (!COLS[which]) return;
+    desired[which] = px;
+    applyColWidths();
+    if (persist) {
+      try { localStorage.setItem(COLS[which].key, String(Math.round(px))); } catch (_) {}
+    }
+  }
+
+  function readColWidth(which) { return desired[which]; }
+
+  (function initColWidths() {
+    Object.keys(COLS).forEach(function (which) {
+      var saved = null;
+      try { saved = localStorage.getItem(COLS[which].key); } catch (_) {}
+      var n = parseFloat(saved);
+      if (!isNaN(n)) desired[which] = n;
+    });
+    applyColWidths();
+  })();
+
+  document.querySelectorAll('[data-q2-resize]').forEach(function (handle) {
+    var which = handle.getAttribute('data-q2-resize');
+    var spec = COLS[which];
+    if (!spec) return;
+
+    handle.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var startX = e.clientX;
+      var startW = readColWidth(which);
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add('is-dragging');
+      document.body.classList.add('q2-resizing');
+
+      function onMove(ev) { setColWidth(which, startW + (ev.clientX - startX), false); }
+      function onUp() {
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onUp);
+        handle.classList.remove('is-dragging');
+        document.body.classList.remove('q2-resizing');
+        setColWidth(which, readColWidth(which), true);
+      }
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onUp);
+    });
+
+    handle.addEventListener('dblclick', function () { setColWidth(which, spec.def, true); });
+
+    handle.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 40 : 12;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setColWidth(which, readColWidth(which) - step, true); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); setColWidth(which, readColWidth(which) + step, true); }
+      else if (e.key === 'Home') { e.preventDefault(); setColWidth(which, spec.def, true); }
+    });
+  });
+
+  // A narrowed window can leave saved widths wider than the viewport. Re-clamp
+  // without persisting, so the user's chosen width returns when they widen back.
+  window.addEventListener('resize', function () {
+    setColWidth('queues', readColWidth('queues'), false);
+    setColWidth('tickets', readColWidth('tickets'), false);
+  });
 
   // ── boot ─────────────────────────────────────────────────────────────────
   refresh();

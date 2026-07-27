@@ -92,7 +92,9 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--q2-queues-w) var(--q2-tickets-w) minmax(0, 1fr);
+  /* The 6px tracks are the drag handles. They live in the grid rather than
+     overlaying the columns so a drag can never land on a ticket row. */
+  grid-template-columns: var(--q2-queues-w) 6px var(--q2-tickets-w) 6px minmax(0, 1fr);
 }
 .q2-col {
   min-width: 0;
@@ -102,6 +104,41 @@ body {
   border-right: 1px solid var(--border);
 }
 .q2-col-detail { border-right: 0; }
+
+/* ── column resizers ──────────────────────────────────────────────────── */
+.q2-resizer {
+  position: relative;
+  cursor: col-resize;
+  background: var(--border);
+  /* Widen the grab target past the 6px track without widening the layout. */
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  background-clip: padding-box;
+  touch-action: none;
+  user-select: none;
+}
+.q2-resizer:hover,
+.q2-resizer:focus-visible,
+.q2-resizer.is-dragging { background-color: var(--accent); outline: 0; }
+/* Grip dots, so the handle reads as draggable when it is not hovered. */
+.q2-resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  background: var(--text-muted);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.q2-resizer:hover::after,
+.q2-resizer.is-dragging::after { opacity: 0; }
+/* While dragging, kill text selection and pointer noise everywhere else. */
+body.q2-resizing { cursor: col-resize; user-select: none; }
+body.q2-resizing .q2-col { pointer-events: none; }
 
 .q2-col-head {
   flex: 0 0 auto;
@@ -159,8 +196,9 @@ body {
 }
 .q2-qrow:hover { background: var(--surface); }
 .q2-qrow.is-selected { background: var(--surface-2); border-left-color: var(--accent); }
-.q2-qrow-head { display: flex; align-items: center; gap: 6px; }
+.q2-qrow-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .q2-qname {
+  flex: 0 1 auto;   /* let a long queue name ellipsis rather than shove the badge */
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
@@ -187,20 +225,43 @@ body {
   text-align: left;
 }
 
+/* State badge. Deliberately quiet: a dot carries the colour, the word is
+   muted text. Only `stuck` is allowed to shout, because it is the only state
+   that actually needs the user to do something. */
 .q2-pill {
-  font-size: 9.5px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  border-radius: 999px;
-  padding: 1px 6px;
-  border: 1px solid currentColor;
+  margin-left: auto;          /* right-aligns the badge in .q2-qrow-head */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  color: var(--text-muted);
   white-space: nowrap;
 }
-.q2-pill.is-idle { color: var(--text-muted); }
-.q2-pill.is-draining { color: var(--green); }
-.q2-pill.is-stuck { color: var(--red); }
-.q2-pill.is-blocked { color: var(--orange); }
+.q2-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+/* Colour lives on the dot only (via currentColor on a child span). */
+.q2-pill.is-working .q2-pill-dot { background: var(--green); }
+.q2-pill.is-ready   .q2-pill-dot { background: var(--green); }
+.q2-pill.is-clear   .q2-pill-dot { background: var(--text-muted); opacity: 0.5; }
+.q2-pill.is-parked  .q2-pill-dot { background: var(--text-muted); opacity: 0.5; }
+.q2-pill.is-manual  .q2-pill-dot { background: var(--text-muted); opacity: 0.5; }
+.q2-pill.is-stuck   .q2-pill-dot { background: var(--red); }
+/* The one loud state. */
+.q2-pill.is-stuck { color: var(--red); font-weight: 650; }
+/* "working" means a worker is on it this second — worth a pulse, nothing more. */
+.q2-pill.is-working .q2-pill-dot { animation: q2-pulse 1.8s ease-in-out infinite; }
+@keyframes q2-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .q2-pill.is-working .q2-pill-dot { animation: none; }
+}
 
 /* ── column 2: ticket rows ────────────────────────────────────────────── */
 .q2-trow {
