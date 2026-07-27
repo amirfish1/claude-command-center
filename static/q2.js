@@ -305,6 +305,14 @@
   // only released once the server's own payload agrees with it.
   var drainPending = {};    // queue → true while the POST is in flight
   var drainOverride = {};   // queue → value we wrote and the server has not caught up to
+  var typesOverride = {};   // queue → claim_types we wrote, same 15s cache lag
+
+  function effectiveClaimTypes(q) {
+    var k = projectKey(q.queue);
+    if (typesOverride[k]) return typesOverride[k];
+    return Array.isArray(q.claim_types)
+      ? q.claim_types.filter(function (t) { return t === 'bug' || t === 'feature'; }) : [];
+  }
 
   function effectiveAutoDrain(q) {
     var k = projectKey(q.queue);
@@ -320,7 +328,43 @@
       if (drainOverride[k] != null && !!q.auto_drain === drainOverride[k]) {
         delete drainOverride[k];
       }
+      if (typesOverride[k]) {
+        var live = Array.isArray(q.claim_types)
+          ? q.claim_types.filter(function (t) { return t === 'bug' || t === 'feature'; }) : [];
+        if (live.slice().sort().join(',') === typesOverride[k].slice().sort().join(',')) {
+          delete typesOverride[k];
+        }
+      }
     });
+  }
+
+  // One press can change BOTH settings (e.g. off -> play/bugs on a queue that
+  // was claiming everything), so they are written together and the row only
+  // settles once both land.
+  async function setDrainMode(queue, mode) {
+    var k = projectKey(queue);
+    if (drainPending[k]) return;
+    drainPending[k] = true;
+    renderQueues();
+    try {
+      var wantAuto = mode !== 'off';
+      var wantTypes = (mode === 'bug' || mode === 'feature') ? [mode] : [];
+      var res = await postJson('/api/queue/drain', { queue: queue, auto_drain: wantAuto });
+      drainOverride[k] = !!res.auto_drain;
+      // Claim types only matter while running; leave them alone when stopping
+      // so the previous selection is still there when it starts again.
+      if (wantAuto) {
+        await postJson('/api/wt/queue/claim-types', { queue: queue, claim_types: wantTypes });
+        typesOverride[k] = wantTypes;
+      }
+    } catch (e) {
+      delete drainOverride[k];
+      delete typesOverride[k];
+      note('Could not change drain policy for ' + queue + ': ' + e.message);
+    } finally {
+      delete drainPending[k];
+      renderQueues();
+    }
   }
 
   async function setAutoDrain(queue, next) {
@@ -347,6 +391,49 @@
       delete drainPending[k];
       renderQueues();
     }
+  }
+
+  // Drain policy as a single transport control instead of a text chip. The
+  // cycle walks the two settings that decide whether anything runs here:
+  //   stop  -> play (all types) -> play/bugs -> play/features -> stop
+  // Both are real WatchTower settings: auto_drain (/api/queue/drain) and
+  // claim_types (/api/wt/queue/claim-types).
+  var DRAIN_MODES = ['off', 'all', 'bug', 'feature'];
+
+  function drainMode(q) {
+    if (!effectiveAutoDrain(q)) return 'off';
+    var t = effectiveClaimTypes(q);
+    if (t.length === 1) return t[0];
+    return 'all';
+  }
+  function nextDrainMode(mode) {
+    var i = DRAIN_MODES.indexOf(mode);
+    return DRAIN_MODES[(i + 1) % DRAIN_MODES.length];
+  }
+  function drainModeLabel(mode) {
+    return mode === 'off' ? 'Stopped - nothing runs here'
+      : mode === 'all' ? 'Running - claims every type'
+      : mode === 'bug' ? 'Running - claims bugs only'
+      : 'Running - claims features only';
+  }
+
+  function drainControl(q) {
+    var key = projectKey(q.queue);
+    var busy = !!drainPending[key];
+    var mode = drainMode(q);
+    var next = nextDrainMode(mode);
+    var sub = (mode === 'bug' || mode === 'feature') ? mode + 's' : '';
+    return '<button type="button" class="q2-transport is-' + esc(mode) + (busy ? ' is-busy' : '') + '"'
+      + ' data-q2-drain="' + esc(q.queue) + '" data-q2-mode="' + esc(next) + '"'
+      + (busy ? ' disabled aria-busy="true"' : '')
+      + ' aria-label="' + esc(drainModeLabel(mode)) + '"'
+      + ' title="' + esc(busy ? 'Saving…' : drainModeLabel(mode) + '. Click for: ' + drainModeLabel(next)) + '">'
+      + (busy
+          ? '<span class="q2-spin" aria-hidden="true"></span>'
+          : '<span class="q2-transport-icon" aria-hidden="true">'
+            + (mode === 'off' ? '&#9632;' : '&#9654;') + '</span>')
+      + (sub ? '<span class="q2-transport-sub">' + esc(sub) + '</span>' : '')
+      + '</button>';
   }
 
   // Row 1 carries only configuration (what this queue IS); the counts line
@@ -556,25 +643,12 @@
     host.innerHTML = ordered.map(function (q) {
       var f = facts[projectKey(q.queue)];
       var isSel = projectKey(q.queue) === selected;
-      var busy = !!drainPending[projectKey(q.queue)];
-      var on = effectiveAutoDrain(q);
-      // A real <button>, which is why the row itself cannot be one: nesting
-      // interactive controls is invalid and breaks keyboard traversal.
-      var chips = queueChips(q).map(function (c) {
-        return '<button type="button" class="q2-chip q2-drain is-' + esc(c.k)
-          + (busy ? ' is-busy' : '') + '"'
-          + ' data-q2-drain="' + esc(q.queue) + '" data-q2-next="' + (on ? '0' : '1') + '"'
-          + (busy ? ' disabled aria-busy="true"' : '')
-          + ' role="switch" aria-checked="' + (on ? 'true' : 'false') + '"'
-          + ' title="' + esc(busy ? 'Saving…' : c.tip || '') + '">'
-          + (busy ? '<span class="q2-spin" aria-hidden="true"></span>' : '')
-          + esc(c.label) + '</button>';
-      }).join('');
       var c = countParts(f, q.closed, claimTypesFor(projectKey(q.queue)));
       return '<div class="q2-qrow' + (isSel ? ' is-selected' : '')
         + (q.state === 'stuck' ? ' is-stuck' : '') + '"'
         + ' role="button" tabindex="0"'
         + ' data-q2-queue="' + esc(q.queue) + '">'
+        + '<span class="q2-qrow-main">'
         // Row 1 — identity on the left, current work on the right.
         + '<span class="q2-qrow-head">'
         + '<span class="q2-qname">' + esc(q.queue) + '</span>'
@@ -587,7 +661,7 @@
         + '</span>'
         // Row 2 — configuration on the left, what needs a human on the right.
         + '<span class="q2-qrow-foot">'
-        + '<span class="q2-qrow-bl">' + chips + c.done + '</span>'
+        + '<span class="q2-qrow-bl">' + c.done + '</span>'
         // Age sits LEFT of needs-input so the needs-input count lands directly
         // under the open count, making the right edge one readable column.
         + '<span class="q2-qrow-br">'
@@ -599,6 +673,9 @@
         + '</span>'
         + '</span>'
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
+        + '</span>'
+        // Spans both rows: the policy governs the whole queue, not one line.
+        + drainControl(q)
         + '</div>';
     }).join('');
   }
@@ -1603,8 +1680,7 @@
     var drain = e.target.closest('[data-q2-drain]');
     if (drain) {
       e.stopPropagation();
-      setAutoDrain(drain.getAttribute('data-q2-drain'),
-                   drain.getAttribute('data-q2-next') === '1');
+      setDrainMode(drain.getAttribute('data-q2-drain'), drain.getAttribute('data-q2-mode'));
       return;
     }
     var act = e.target.closest('[data-q2-act]');

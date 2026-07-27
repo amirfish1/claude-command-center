@@ -563,7 +563,9 @@ body.q2-resizing .q2-col { pointer-events: none; }
 
 /* ── column 1: queue rows ─────────────────────────────────────────────── */
 .q2-qrow {
-  display: block;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
   width: 100%;
   text-align: left;
   font: inherit;
@@ -577,6 +579,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-qrow:hover { background: var(--surface); }
 .q2-qrow.is-selected { background: var(--surface-2); border-left-color: var(--accent); }
+.q2-qrow-main { flex: 1 1 auto; min-width: 0; }
 .q2-qrow-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .q2-qname {
   flex: 0 0 auto;   /* the name never truncates; the path yields instead */
@@ -664,6 +667,50 @@ body.q2-resizing .q2-col { pointer-events: none; }
   padding-left: 2px;
   padding-right: 2px;
 }
+
+/* Drain policy as a transport control, spanning both text rows because the
+   policy governs the queue, not a line of it. Stop / play / play+bugs /
+   play+features, cycled by clicking. */
+.q2-transport {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 34px;
+  min-height: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  font: inherit;
+  padding: 3px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.q2-transport:hover { border-color: var(--accent); color: var(--text); }
+.q2-transport:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.q2-transport:disabled { cursor: progress; opacity: 0.7; }
+.q2-transport-icon { font-size: 11px; line-height: 1; }
+.q2-transport-sub {
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  line-height: 1;
+}
+/* Stopped is deliberately quiet; running is the state worth spotting. */
+.q2-transport.is-off { color: var(--text-muted); }
+.q2-transport.is-all,
+.q2-transport.is-bug,
+.q2-transport.is-feature {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, var(--border));
+  background: color-mix(in srgb, var(--green) 10%, var(--surface-2));
+}
+.q2-transport.is-bug .q2-transport-sub { color: var(--red); }
+.q2-transport.is-feature .q2-transport-sub { color: var(--purple); }
 
 /* The auto/manual chip is a real switch. */
 .q2-drain {
