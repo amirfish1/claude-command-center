@@ -309,9 +309,9 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-dg-empty { font-size: 10.5px; color: var(--text-muted); opacity: 0.6; padding-top: 2px; }
 .q2-dg-sub { font-size: 10px; color: var(--text-muted); }
 .q2-dg-sub.is-blocked { color: var(--wip-blue); }
-.q2-dg-sub.is-parked { color: var(--purple); }
+.q2-dg-sub.is-parked { color: var(--text-muted); }
 .q2-dg-stack.is-parked { margin-top: 1px; }
-.q2-dg-card.is-parked { border-left-color: var(--purple); opacity: 0.8; }
+.q2-dg-card.is-parked { border-left-color: var(--text-muted); opacity: 0.7; }
 .q2-dg-note { font-size: 9.5px; color: var(--text-muted); opacity: 0.75; text-align: center; }
 
 /* Links between stages. Dots only travel when work can actually move, so a
@@ -634,9 +634,6 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-n.is-open, .q2-n.is-open b { color: var(--orange); }
 .q2-n.is-wip, .q2-n.is-wip b { color: var(--green); }
 .q2-n.is-done, .q2-n.is-done b { color: var(--text-muted); }
-/* Parked = open but excluded by the queue's claim types. Purple, matching the
-   feature-request chip, because that is nearly always what these are. */
-.q2-n.is-parked, .q2-n.is-parked b { color: var(--purple); }
 /* A zero is not news. Dim it so the eye lands on the counts that matter. */
 .q2-n.is-zero, .q2-n.is-zero b { color: var(--text-muted); opacity: 0.45; }
 .q2-n-sep { color: var(--border); }
@@ -683,16 +680,16 @@ body.q2-resizing .q2-col { pointer-events: none; }
   gap: 1px;
   font: inherit;
   padding: 3px 0;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: var(--surface-2);
+  background: transparent;
   color: var(--text-muted);
   cursor: pointer;
 }
-.q2-transport:hover { border-color: var(--accent); color: var(--text); }
+.q2-transport:hover { border-color: var(--border); color: var(--text); }
 .q2-transport:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .q2-transport:disabled { cursor: progress; opacity: 0.7; }
-.q2-transport-icon { font-size: 11px; line-height: 1; }
+.q2-transport-icon { display: block; }
 .q2-transport-sub {
   font-size: 7.5px;
   font-weight: 700;
@@ -704,13 +701,8 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-transport.is-off { color: var(--text-muted); }
 .q2-transport.is-all,
 .q2-transport.is-bug,
-.q2-transport.is-feature {
-  color: var(--green);
-  border-color: color-mix(in srgb, var(--green) 45%, var(--border));
-  background: color-mix(in srgb, var(--green) 10%, var(--surface-2));
-}
-.q2-transport.is-bug .q2-transport-sub { color: var(--red); }
-.q2-transport.is-feature .q2-transport-sub { color: var(--purple); }
+.q2-transport.is-feature { color: var(--green); }
+.q2-transport-sub { color: var(--text-muted); }
 
 /* The auto/manual chip is a real switch. */
 .q2-drain {

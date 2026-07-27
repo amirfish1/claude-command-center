@@ -263,13 +263,6 @@
     var openTip = types.length
       ? 'Open and claimable here (this queue drains ' + types.join(' + ') + ')'
       : 'Open and unclaimed';
-    // Name the excluded pile after what it IS. On a bugs-only queue the parked
-    // tickets are the features; "parked" described their state, not their kind.
-    // Only bug/feature pluralise; "parked" is already the plural-neutral word.
-    var parkedBase = types.length === 1 ? (types[0] === 'bug' ? 'feature' : 'bug') : '';
-    var parkedWord = parkedBase
-      ? parkedBase + ((f.parked || 0) === 1 ? '' : 's')
-      : 'parked';
     return {
       needsInput: f.needsInput
         ? '<span class="q2-n is-blocked" title="Blocked waiting on a human answer">'
@@ -282,10 +275,10 @@
       open: '<span class="q2-n is-open' + ((f.waiting || 0) ? '' : ' is-zero')
         + '" title="' + esc(openTip) + '"><b>'
         + (f.waiting || 0) + '</b> ' + esc(openWord) + '</span>',
-      parked: f.parked
-        ? '<span class="q2-n is-parked" title="Open, but this queue&#39;s claim types exclude them - no worker here will take them."><b>'
-          + f.parked + '</b> ' + esc(parkedWord) + '</span>'
-        : '',
+      // Parked (open, but excluded by claim_types) is deliberately NOT counted
+      // here. It is inventory nothing will act on, and a second number beside
+      // the real one only competed with it. The diagram still shows the pile.
+      parked: '',
       done: '<span class="q2-n is-done' + ((done || 0) ? '' : ' is-zero')
         + '" title="Closed, all time"><b>' + (done || 0) + '</b> closed</span>',
     };
@@ -400,6 +393,15 @@
   // claim_types (/api/wt/queue/claim-types).
   var DRAIN_MODES = ['off', 'all', 'bug', 'feature'];
 
+  // Drawn, not typed. The ▶ / ■ glyphs render at different weights and
+  // baselines across fonts and never optically matched each other.
+  var ICON_PLAY = '<svg class="q2-transport-icon" viewBox="0 0 16 16" width="13" height="13"'
+    + ' aria-hidden="true" focusable="false"><path fill="currentColor"'
+    + ' d="M4.8 3.1a.6.6 0 0 1 .92-.51l6.4 4.4a.6.6 0 0 1 0 1.02l-6.4 4.4a.6.6 0 0 1-.92-.51V3.1Z"/></svg>';
+  var ICON_STOP = '<svg class="q2-transport-icon" viewBox="0 0 16 16" width="13" height="13"'
+    + ' aria-hidden="true" focusable="false"><rect x="4" y="4" width="8" height="8" rx="1.6"'
+    + ' fill="currentColor"/></svg>';
+
   function drainMode(q) {
     if (!effectiveAutoDrain(q)) return 'off';
     var t = effectiveClaimTypes(q);
@@ -430,8 +432,7 @@
       + ' title="' + esc(busy ? 'Saving…' : drainModeLabel(mode) + '. Click for: ' + drainModeLabel(next)) + '">'
       + (busy
           ? '<span class="q2-spin" aria-hidden="true"></span>'
-          : '<span class="q2-transport-icon" aria-hidden="true">'
-            + (mode === 'off' ? '&#9632;' : '&#9654;') + '</span>')
+          : (mode === 'off' ? ICON_STOP : ICON_PLAY))
       + (sub ? '<span class="q2-transport-sub">' + esc(sub) + '</span>' : '')
       + '</button>';
   }
@@ -1498,8 +1499,15 @@
     '.conv-pane-header, [data-role="pane-header"] { display: none !important; }',
     /* Floating Annotate button, only ever shown in popout contexts. */
     '#annotationFabBtn { display: none !important; }',
-    /* Composer: a few lines is plenty when the pane is half a column. */
-    '#convInputBar textarea { max-height: 84px !important; min-height: 34px !important; }',
+    /* Composer: two lines is plenty when the pane is half a column. */
+    '#convInputBar textarea { max-height: 46px !important; min-height: 26px !important; }',
+    '.conv-input-row-top { padding-top: 2px !important; padding-bottom: 2px !important; }',
+    /* Workspace strip (clone/branch/ahead, context %, model) moves BELOW the
+       composer. It is reference state, not something you act on before typing,
+       and above the box it pushed the input down the pane. */
+    '.conv-pane { display: flex !important; flex-direction: column !important; }',
+    '.conv-input-context { order: 99 !important; margin-top: 2px !important; }',
+    '#convInputBar { order: 98 !important; }',
     '.conv-input-bar { padding-top: 4px !important; padding-bottom: 4px !important; }',
     '.conv-pane, .conversations-view { padding-bottom: 0 !important; }',
     /* Tint every surface the embedded page paints, so the pane reads as a
