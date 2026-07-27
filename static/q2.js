@@ -18,6 +18,7 @@
   var state = {
     queues: [],
     projects: {},       // queue name → per-project health row (why it's stuck)
+    workers: [],        // live WatchTower workers — the only proof a claim is real
     items: [],
     queue: '',
     ref: '',
@@ -36,12 +37,12 @@
 
   function $(id) { return document.getElementById(id); }
 
-  function relTime(iso) {
-    if (!iso) return '';
-    var diff = Date.now() - Date.parse(iso);
-    if (!isFinite(diff)) return '';
-    if (diff < 0) return 'just now';
-    var s = Math.floor(diff / 1000);
+  // Elapsed seconds → "3h ago". Split out because the queue health rows carry
+  // an age in seconds while tickets carry timestamps; both must format alike.
+  function agoFromSeconds(s) {
+    if (s == null || !isFinite(s)) return '';
+    if (s < 0) return 'just now';
+    s = Math.floor(s);
     if (s < 60) return s + 's ago';
     var m = Math.floor(s / 60);
     if (m < 60) return m + 'm ago';
@@ -50,26 +51,97 @@
     return Math.floor(h / 24) + 'd ago';
   }
 
+  function relTime(iso) {
+    if (!iso) return '';
+    var diff = Date.now() - Date.parse(iso);
+    if (!isFinite(diff)) return '';
+    return agoFromSeconds(diff / 1000);
+  }
+
   function projectKey(v) { return String(v || '').trim().toUpperCase(); }
 
-  // Effective status: a claimed but still-"open" ticket reads as in progress,
-  // and needs_input outranks that.
-  //
-  // Closed wins over everything. `needs_input` is not cleared when a ticket is
-  // closed, so testing it first made every closed-but-once-blocked ticket read
-  // as blocked forever: it inflated the needs-input counts and kept those rows
-  // in the open section of the ticket list.
-  //
-  // `claimed_session_id` is deliberately NOT a claim signal. It records which
-  // session last touched the ticket and outlives the claim, so an unclaimed
-  // open ticket carrying a stale session id was counting as work in progress
-  // with nobody on it. A real claim writes claimed_by / claimed_at.
+  // Claim model, matching the main dashboard (static/app.js:35523). A ticket's
+  // claim fields are just a record; they outlive the worker that wrote them.
+  // The only proof that work is happening is a LIVE WatchTower worker on the
+  // same queue whose session or id matches the claim.
+  function hasClaimMetadata(it) {
+    return !!(it && (it.claimed_by || it.claimed_at || it.claimed_session_id));
+  }
+
+  function hasLiveClaim(it) {
+    if (!hasClaimMetadata(it)) return false;
+    var project = projectKey(it && it.project);
+    var claimedSession = String((it && it.claimed_session_id) || '').trim();
+    var claimedBy = String((it && it.claimed_by) || '').trim();
+    return (state.workers || []).some(function (w) {
+      if (project && projectKey(w.queue) !== project) return false;
+      var session = String(w.session_id || '').trim();
+      var id = String(w.worker_id || '').trim();
+      return (claimedSession && claimedSession === session)
+        || (claimedBy && (claimedBy === session || claimedBy === id));
+    });
+  }
+
+  // A claim whose worker is gone. NOT an error: the ticket is simply back to
+  // open and the store never cleared the fields. Main CCC demotes it to open
+  // rather than flagging it, and so do we.
+  function isStaleClaim(it) {
+    var raw = String((it && it.status) || 'open');
+    return raw === 'in_progress' ? !hasLiveClaim(it)
+      : hasClaimMetadata(it) && !hasLiveClaim(it);
+  }
+
+  // claimed_by with no claimed_session_id: a claim label with no durable id, so
+  // liveness can never be proven either way. Worth marking, not worth alarming.
+  function isUnverifiedClaim(it) {
+    var claimedBy = String((it && it.claimed_by) || '').trim();
+    var claimedSession = String((it && it.claimed_session_id) || '').trim();
+    return !!claimedBy && !claimedSession && !hasLiveClaim(it);
+  }
+
+  // Effective status. Closed wins over everything: needs_input is not cleared
+  // on close, so testing it first made every closed-but-once-blocked ticket
+  // read as blocked forever.
   function statusOf(it) {
     var raw = String((it && it.status) || 'open');
     if (raw === 'closed') return 'closed';
     if (it && it.needs_input) return 'blocked';
-    if (raw === 'open' && it && (it.claimed_by || it.claimed_at)) return 'in_progress';
+    if (raw === 'in_progress' && isStaleClaim(it)) return 'open';
+    if (raw === 'open' && hasLiveClaim(it)) return 'in_progress';
     return raw;
+  }
+
+  function isLiveWip(it) { return statusOf(it) === 'in_progress' && hasLiveClaim(it); }
+
+  function unresolvedNotes(it) {
+    return (it && it.resolution && Array.isArray(it.resolution.unresolved))
+      ? it.resolution.unresolved.filter(Boolean) : [];
+  }
+
+  // Operational bucket, the order the main dashboard sorts by
+  // (static/app.js:35571): live work, then things needing a human, then
+  // follow-ups, then claimable work, then clean closes, then inert rows.
+  var PRIO_RANK = { p0: 0, p1: 1, p2: 2, p3: 3 };
+  function prioRank(it) {
+    if (it && PRIO_RANK[it.priority] != null) return PRIO_RANK[it.priority];
+    return (it && it.lane === 'express') ? 0 : 2;
+  }
+  function unready(it) {
+    return (it && (it.readiness === 'needs-shaping' || it.readiness === 'needs-spec')) ? 1 : 0;
+  }
+  function isWaitingToDrain(it) {
+    if (statusOf(it) !== 'open') return false;
+    return !isStaleClaim(it) && it.claimable !== false
+      && it.watchtower_runnable !== false && !unready(it);
+  }
+  function operationalBucket(it) {
+    var st = statusOf(it);
+    if (isLiveWip(it)) return 0;
+    if (st === 'blocked') return 1;
+    if (String(it.status) === 'closed' && unresolvedNotes(it).length) return 2;
+    if (isWaitingToDrain(it)) return 3;
+    if (st === 'closed') return 4;
+    return 5;
   }
 
   // Ticket title: the note/text with the annotation boilerplate stripped, so
@@ -236,6 +308,8 @@
       ((results[0] && results[0].projects) || []).forEach(function (r) {
         state.projects[projectKey(r && r.project)] = r;
       });
+      state.workers = (((results[0] && results[0].wt_workers) || [])
+        .filter(function (w) { return w && w.alive !== false; }));
       state.items = (results[1] && results[1].items) || [];
       state.offline = false;
     } catch (e) {
@@ -319,8 +393,15 @@
         + (q.repo_path ? '<span class="q2-qrepo" title="' + esc(q.repo_path) + '">' + esc(shortPath(q.repo_path)) + '</span>' : '')
         + '<span class="q2-qrow-config">' + chips + '</span>'
         + '</span>'
-        // Row 2 — the counts, same renderer the ticket header uses.
-        + '<span class="q2-counts">' + countsLine(f, q.closed) + '</span>'
+        // Row 2 — the counts, same renderer the ticket header uses, plus the
+        // last-touch age on the right (the queue's newest ticket activity,
+        // same figure the main dashboard's health strip shows).
+        + '<span class="q2-counts">' + countsLine(f, q.closed)
+        + (q.last_activity_seconds != null
+            ? '<span class="q2-qage" title="Most recent ticket activity in this queue">'
+              + esc(agoFromSeconds(q.last_activity_seconds).replace(/\s*ago$/, '')) + '</span>'
+            : '')
+        + '</span>'
         + (q.state === 'stuck' ? '<span class="q2-qwhy">' + esc(stuckWhy(q)) + '</span>' : '')
         + '</button>';
     }).join('');
@@ -331,16 +412,34 @@
     var st = statusOf(it);
     var ref = it.ref || '';
     var title = titleOf(it).split('\n')[0];
+    var stale = isStaleClaim(it);
+    var unverified = isUnverifiedClaim(it);
+    var unresolved = String(it.status) === 'closed' && unresolvedNotes(it).length > 0;
+    // Same source the main dashboard uses: last touch, or close time once
+    // closed. Rendered without the trailing " ago", as it is there.
     var ageSrc = st === 'closed'
       ? (it.closed_at || it.updated_at || it.created_at)
       : (it.updated_at || it.created_at);
-    return '<button type="button" class="q2-trow is-' + esc(st) + (ref === state.ref ? ' is-selected' : '') + '"'
+    var age = relTime(ageSrc).replace(/\s*ago$/, '');
+    var dotTitle = st === 'blocked' ? 'needs input'
+      : unresolved ? 'closed, unresolved follow-up'
+      : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
+      : stale ? 'stale claim, no live worker is on this'
+      : st;
+    return '<button type="button" class="q2-trow is-' + esc(st)
+      + (ref === state.ref ? ' is-selected' : '')
+      + (stale ? ' is-stale-claim' : '')
+      + (unverified ? ' is-unverified-claim' : '')
+      + (unresolved ? ' has-unresolved' : '') + '"'
       + ' data-q2-ref="' + esc(ref) + '">'
-      + '<span class="q2-tdot" aria-hidden="true"></span>'
       + '<span class="q2-tref">' + esc(ref) + '</span>'
       + '<span class="q2-ttitle">' + esc(title) + '</span>'
-      + (sessionOf(it) ? '<span class="q2-tsess" title="An agent session is attached">&#9679;</span>' : '')
-      + '<span class="q2-tage" title="' + esc(ageSrc || '') + '">' + esc(relTime(ageSrc)) + '</span>'
+      // Age then dot: the status marker sits to the RIGHT of the age, matching
+      // the main dashboard's .fq-row-signals order.
+      + '<span class="q2-tsignals">'
+      + '<span class="q2-tage" title="' + esc(ageSrc || '') + '">' + esc(age) + '</span>'
+      + '<span class="q2-tdot" title="' + esc(dotTitle) + '" aria-label="' + esc(dotTitle) + '"></span>'
+      + '</span>'
       + '</button>';
   }
 
@@ -372,16 +471,21 @@
     var openish = mine.filter(function (it) { return statusOf(it) !== 'closed'; });
     var closed = mine.filter(function (it) { return statusOf(it) === 'closed'; });
 
-    // Blocked first (a human is the bottleneck), then in-progress, then open.
-    var rank = { blocked: 0, in_progress: 1, open: 2 };
-    openish.sort(function (a, b) {
-      var d = (rank[statusOf(a)] || 3) - (rank[statusOf(b)] || 3);
-      if (d) return d;
-      return Date.parse(b.updated_at || b.created_at || 0) - Date.parse(a.updated_at || a.created_at || 0);
-    });
-    closed.sort(function (a, b) {
-      return Date.parse(b.closed_at || b.updated_at || 0) - Date.parse(a.closed_at || a.updated_at || 0);
-    });
+    // Same comparator as the main dashboard (static/app.js:35581): operational
+    // bucket first, then open rows by priority and oldest-first (engine order),
+    // everything else newest-first.
+    function bySameOrderAsMainCcc(a, b) {
+      var bucket = operationalBucket(a) - operationalBucket(b);
+      if (bucket) return bucket;
+      if (statusOf(a) === 'open') {
+        var p = prioRank(a) - prioRank(b);
+        if (p) return p;
+        return (a.number || 0) - (b.number || 0);
+      }
+      return (b.number || 0) - (a.number || 0);
+    }
+    openish.sort(bySameOrderAsMainCcc);
+    closed.sort(bySameOrderAsMainCcc);
 
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
