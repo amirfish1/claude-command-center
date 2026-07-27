@@ -87,6 +87,15 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
+.q2-back {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 9px;
+}
+.q2-back:hover { color: var(--text); border-color: var(--accent); }
 .q2-brand { font-weight: 650; letter-spacing: 0.2px; }
 .q2-brand-sub {
   font-family: var(--font-mono);
@@ -488,6 +497,13 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-ops-toggle:hover { color: var(--text); }
 .q2-ops-caret { font-size: 9px; }
 .q2-log-empty { padding: 2px 0; }
+/* A visual break where the log moves from one ticket to another. The file
+   interleaves several tickets' events; without this it reads as one wall. */
+.q2-log-row.is-cluster-start {
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
 .q2-log-row { display: flex; gap: 7px; align-items: baseline; }
 .q2-log-time {
   flex: 0 0 auto;
@@ -801,6 +817,19 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-trow.is-closed .q2-ttitle { color: var(--text-muted); }
 .q2-tage { flex: 0 0 auto; font-size: 10.5px; color: var(--text-muted); }
 .q2-tsess { flex: 0 0 auto; font-size: 10px; color: var(--cyan); }
+.q2-more-btn {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  cursor: pointer;
+}
+.q2-more-btn:hover { color: var(--accent); background: var(--surface); }
 .q2-group-label {
   padding: 6px 10px 4px;
   font-size: 10px;
@@ -903,7 +932,8 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-echip.is-unset { opacity: 0.55; }
 .q2-chip.is-lane { opacity: 0.8; }
 
-/* Conversation, bottom half of the pane. */
+/* Conversation, bottom half of the pane. Collapsed by default; the header bar
+   stays docked at the bottom as the affordance to bring it back. */
 .q2-conv {
   flex: 0 0 auto;
   height: 46%;
@@ -911,8 +941,39 @@ body.q2-resizing .q2-col { pointer-events: none; }
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
-  background: var(--surface);
+  /* A distinct tint so the embedded dashboard reads as a different surface
+     rather than more of the ticket pane. */
+  background: color-mix(in srgb, var(--wip-blue) 7%, var(--surface));
 }
+.q2-conv-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.q2-conv-toggle:hover { color: var(--wip-blue); }
+.q2-conv-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--wip-blue);
+}
+.q2-conv-toggle:hover .q2-conv-caret { border-color: var(--wip-blue); }
 .q2-conv-head {
   flex: 0 0 auto;
   display: flex;
@@ -926,7 +987,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   min-height: 0;
   width: 100%;
   border: 0;
-  background: var(--bg);
+  background: transparent;
 }
 /* Collapsed: just the header bar. */
 .q2-conv:not(:has(.q2-conv-frame)) { height: auto; }

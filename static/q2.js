@@ -24,6 +24,7 @@
     ref: '',
     detail: null,       // full item payload for state.ref
     showClosed: false,
+    closedCap: CLOSED_CAP,   // grows via the 'show more' button
     search: '',
     offline: false,
     booted: false,      // guards the one-shot restore of the saved selection
@@ -600,8 +601,10 @@
   var STACK_CAP = 14;                    // drawn cards before it becomes "+N"
 
   var LS_CONV_OPEN = 'ccc-q2-conv-open';
+  // Default collapsed: the conversation is a drill-in, not the main event, and
+  // an embedded dashboard booting on every ticket click is expensive.
   function convOpen() {
-    try { return localStorage.getItem(LS_CONV_OPEN) !== '0'; } catch (_) { return true; }
+    try { return localStorage.getItem(LS_CONV_OPEN) === '1'; } catch (_) { return false; }
   }
 
   function logOpen() {
@@ -821,10 +824,18 @@
       rows = '<div class="q2-dim q2-log-empty">No reconciler activity recorded for '
         + esc(state.queue) + '.</div>';
     } else {
+      // Group consecutive lines about the same ticket. The log interleaves
+      // several tickets' events, and without a break between clusters it reads
+      // as one undifferentiated wall.
+      var prevRef = null;
       rows = state.log.map(function (line) {
         var e = parseLogLine(line);
         if (e.raw) return '<div class="q2-log-row"><span class="q2-log-rest">' + esc(e.raw) + '</span></div>';
-        return '<div class="q2-log-row">'
+        var refM = String(e.rest || '').match(/^([A-Z0-9][A-Z0-9-]*-\d+)\b/);
+        var thisRef = refM ? refM[1] : null;
+        var newCluster = prevRef !== null && thisRef !== prevRef;
+        prevRef = thisRef;
+        return '<div class="q2-log-row' + (newCluster ? ' is-cluster-start' : '') + '">'
           + '<span class="q2-log-time" title="' + esc(e.date + ' ' + e.time + ' UTC') + '">' + esc(e.time) + '</span>'
           + '<span class="q2-log-verb is-' + esc(e.verb.toLowerCase()) + '">' + esc(e.verb) + '</span>'
           + '<span class="q2-log-rest">' + esc(e.rest) + '</span>'
@@ -858,6 +869,15 @@
   var READY_SHORT = { 'needs-shaping': 'shape', 'needs-spec': 'spec' };
   // Two spellings of "this is fine" live in the store. Both stay silent.
   var READY_OK = { 'ready': 1, 'shovel-ready': 1 };
+  // Last touch: the newest of updated / closed / created. Closed rows sort by
+  // this and must DISPLAY it too, or the list looks mis-ordered — a ticket
+  // reopened and re-closed an hour ago showed its original close time.
+  function touchedAt(it) {
+    return Math.max(Date.parse((it && it.updated_at) || 0) || 0,
+                    Date.parse((it && it.closed_at) || 0) || 0,
+                    Date.parse((it && it.created_at) || 0) || 0);
+  }
+
   function ticketChips(it) {
     var c = [];
     if (it.type) {
@@ -897,7 +917,7 @@
     // Same source the main dashboard uses: last touch, or close time once
     // closed. Rendered without the trailing " ago", as it is there.
     var ageSrc = st === 'closed'
-      ? (it.closed_at || it.updated_at || it.created_at)
+      ? (new Date(touchedAt(it)).toISOString())
       : (it.updated_at || it.created_at);
     var age = relTime(ageSrc);
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
@@ -964,7 +984,12 @@
       return (b.number || 0) - (a.number || 0);
     }
     openish.sort(bySameOrderAsMainCcc);
-    closed.sort(bySameOrderAsMainCcc);
+    // Closed rows sort by last TOUCH, not by ref number. Ticket ids are
+    // creation order, so a ticket reopened and re-closed an hour ago sank to
+    // wherever it was filed (CCC-625 landed 37 rows down despite being the
+    // most recently touched ticket in the queue). The row's age column shows
+    // the same value, so the order it implies is the order you see.
+    closed.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });
 
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
@@ -991,12 +1016,17 @@
       return;
     }
 
-    var shownClosed = state.showClosed ? closed.slice(0, CLOSED_CAP) : [];
+    var shownClosed = state.showClosed ? closed.slice(0, state.closedCap) : [];
     var html = openish.map(ticketRow).join('');
     if (shownClosed.length) {
       var label = 'Closed' + (closed.length > shownClosed.length
         ? ' (newest ' + shownClosed.length + ' of ' + closed.length + ')' : '');
       html += '<div class="q2-group-label">' + esc(label) + '</div>' + shownClosed.map(ticketRow).join('');
+      if (closed.length > shownClosed.length) {
+        html += '<button type="button" class="q2-more-btn" data-q2-more>Show '
+          + Math.min(CLOSED_CAP, closed.length - shownClosed.length)
+          + ' more closed &middot; ' + (closed.length - shownClosed.length) + ' left</button>';
+      }
     }
     host.innerHTML = html;
   }
@@ -1291,9 +1321,9 @@
     el.className = 'q2-conv';
     el.setAttribute('data-conv', want);
     el.innerHTML = '<div class="q2-conv-head">'
-      + '<button type="button" class="q2-ops-toggle" data-q2-conv-toggle aria-expanded="'
-      + (open ? 'true' : 'false') + '">'
-      + '<span class="q2-ops-caret" aria-hidden="true">' + (open ? '&#9662;' : '&#9656;') + '</span>'
+      + '<button type="button" class="q2-conv-toggle" data-q2-conv-toggle aria-expanded="'
+      + (open ? 'true' : 'false') + '" title="' + (open ? 'Collapse' : 'Expand') + ' the conversation">'
+      + '<span class="q2-conv-caret" aria-hidden="true">' + (open ? '&#9660;' : '&#9650;') + '</span>'
       + 'Conversation</button>'
       + '<span class="q2-spacer"></span>'
       + '<span class="q2-dim q2-mono">' + esc(sid.slice(0, 8)) + '</span>'
@@ -1305,6 +1335,40 @@
             + ' src="/?ccc_popout=conversation&conv=' + encodeURIComponent(sid) + '"></iframe>'
           : '');
     host.appendChild(el);
+    var frame = el.querySelector('.q2-conv-frame');
+    if (frame) frame.addEventListener('load', function () { trimConvFrame(frame); });
+  }
+
+  // The popout is a full dashboard sized for a whole window, so inside a pane
+  // it reads oversized and carries controls that make no sense here. It is
+  // same-origin, so we can style it from outside instead of adding q2-specific
+  // branches to app.js.
+  var CONV_TRIM_CSS = [
+    /* Scale the whole document down to sit alongside q2's 13px UI. */
+    'html { zoom: 0.82; }',
+    /* The popout toolbar: headless/terminal/Verbose/Replay/Annotate/Clear.
+       Every one of those is a whole-session control that belongs in the main
+       dashboard, not in a ticket pane. */
+    '#convToolbar { display: none !important; }',
+    /* Floating Annotate button, only ever shown in popout contexts. */
+    '#annotationFabBtn { display: none !important; }',
+    /* Composer: a few lines is plenty when the pane is half a column. */
+    '#convInputBar textarea { max-height: 84px !important; min-height: 34px !important; }',
+    '.conv-input-bar { padding-top: 4px !important; padding-bottom: 4px !important; }'
+  ].join('\n');
+
+  function trimConvFrame(frame) {
+    try {
+      var doc = frame.contentDocument;
+      if (!doc || doc.getElementById('q2TrimStyle')) return;
+      var st = doc.createElement('style');
+      st.id = 'q2TrimStyle';
+      st.textContent = CONV_TRIM_CSS;
+      (doc.head || doc.documentElement).appendChild(st);
+    } catch (_) {
+      // Cross-origin would land here. Same-origin today; if that ever changes
+      // the frame simply renders untrimmed rather than breaking.
+    }
   }
 
   // ── detail write actions ─────────────────────────────────────────────────
@@ -1435,6 +1499,7 @@
     state.ref = '';
     state.detail = null;
     state.search = '';
+    state.closedCap = CLOSED_CAP;
     var search = $('q2Search');
     if (search) search.value = '';
     rememberSelection();
@@ -1505,6 +1570,11 @@
     if (logT) {
       try { localStorage.setItem(LS_LOG_OPEN, logOpen() ? '0' : '1'); } catch (_) {}
       renderLogBar();
+      return;
+    }
+    if (e.target.closest('[data-q2-more]')) {
+      state.closedCap += CLOSED_CAP;
+      renderTickets();
       return;
     }
     if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
