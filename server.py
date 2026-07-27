@@ -119,6 +119,14 @@ COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
+# Unified human-readable activity log — spawn/inject/kill/app-server-health
+# events, one line each. Mirrors ~/.watchtower/activity.log's format
+# (TIMESTAMP UTC  CATEGORY   VERB     detail) on purpose: the two logs get
+# tailed side by side, so matching the layout means no re-learning a second
+# format. Distinct from CODEX_TELEMETRY_FILE (JSONL, machine-oriented, one
+# record per codex RPC stage) and _RESUME_LEDGER_FILE (JSONL, internal wake/
+# resume bookkeeping) -- this one is for a human to skim "what did CCC do".
+ACTIVITY_LOG_FILE = COMMAND_CENTER_STATE_DIR / "logs" / "activity.log"
 _PYTHON_STACK_DUMP_FILE = None
 _CONTROL_PLANE_CLIENT = ControlPlaneClient(timeout=1.5)
 _CONTROL_PLANE_ENGINE_CLIENT = ControlPlaneClient(timeout=45.0)
@@ -5754,6 +5762,92 @@ _CODEX_WAKE_MAX_SIDS = 64
 _CODEX_WAKE_PER_SID = 24
 
 
+def _activity_log_preview(text, limit=160):
+    """Collapse whitespace and truncate for a one-line log entry.
+
+    Never raises: called from logging paths that must not break the action
+    they're recording."""
+    try:
+        collapsed = " ".join(str(text or "").split())
+    except Exception:
+        return ""
+    if len(collapsed) > limit:
+        return collapsed[:limit].rstrip() + "…"
+    return collapsed
+
+
+def _log_activity(category, verb, detail):
+    """Append one line to the unified activity log (see ACTIVITY_LOG_FILE).
+
+    Format matches ~/.watchtower/activity.log: `TIMESTAMP UTC  CATEGORY  VERB  detail`.
+    Best-effort and silent on failure -- logging must never break the caller.
+
+    category/verb are hard-truncated to their field widths (14/9 chars).
+    _parse_activity_log_line reads this file back with fixed-width slicing
+    -- chosen so `detail` can freely contain the same double-space
+    separator used elsewhere in the line -- which only stays correct if
+    every category/verb actually fits its column. A future caller passing
+    a longer one would otherwise silently corrupt the parse (lost tail
+    chars, a shifted detail with stray leading spaces) instead of failing
+    loudly; truncating here is the lesser, contained failure.
+    """
+    try:
+        now = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + " UTC"
+        line = f"{str(category)[:14]:<14}  {str(verb)[:9]:<9}{detail}\n"
+        line = f"{now}  {line}"
+        ACTIVITY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
+def _parse_activity_log_line(line):
+    """Split one `_log_activity` line back into its fields.
+
+    Fixed-width slicing, not a regex split, because `detail` is free text
+    and may itself contain the double-space separator used elsewhere in the
+    line. Layout (see _log_activity): 23-char UTC timestamp, 2 spaces,
+    14-char category, 2 spaces, 9-char verb, then detail with no separator.
+    Returns None for a line too short to be one of ours (e.g. a stray
+    newline) rather than raising.
+    """
+    line = line.rstrip("\n")
+    if len(line) < 41:
+        return None
+    return {
+        "ts": line[0:23].strip(),
+        "category": line[25:39].strip(),
+        "verb": line[41:50].strip(),
+        "detail": line[50:],
+    }
+
+
+def _read_activity_log(session_id=None, limit=200):
+    """Return up to `limit` most recent activity-log lines, oldest first.
+
+    When `session_id` is given, only lines whose raw text contains it are
+    kept -- a plain substring match (like grepping the file yourself), not
+    a strict field match, so it also surfaces context lines that reference
+    the session indirectly (e.g. a codex-app-server WEDGED line logged
+    moments before this session's spawn failed). Malformed lines are
+    skipped rather than raising.
+    """
+    try:
+        limit = max(1, min(int(limit), 2000))
+    except (TypeError, ValueError):
+        limit = 200
+    try:
+        raw_lines = ACTIVITY_LOG_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    if session_id:
+        needle = str(session_id)
+        raw_lines = [ln for ln in raw_lines if needle in ln]
+    parsed = [p for p in (_parse_activity_log_line(ln) for ln in raw_lines) if p]
+    return parsed[-limit:]
+
+
 def _resume_ledger_append(event, sid=None, pid=None, **fields):
     """Append one lifecycle event to the resume ledger. Never raises."""
     try:
@@ -6525,6 +6619,7 @@ def system_health_reap(pids):
             # `exit` (SIGTERM) row be matched to this CCC-side kill rather than
             # being misread as an external / mystery death.
             _resume_ledger_append("kill", pid=pid, source="system_health_reap")
+            _log_activity("kill", "KILL", f"pid={pid} source=system_health_reap")
             killed.append(pid)
         except (ProcessLookupError, PermissionError):
             pass
@@ -21962,6 +22057,7 @@ class _CodexAppServerTransport:
         self.kind = kind
         self.proc = proc
         self.sock = sock
+        self.started_at = time.time()
         self._send_lock = threading.Lock()
 
     def alive(self):
@@ -23718,11 +23814,10 @@ def _codex_app_server_track_thread_health(method, thread_id, response):
     _CODEX_APP_SERVER_FALSE_MISSES += 1
     if _CODEX_APP_SERVER_FALSE_MISSES >= _CODEX_APP_SERVER_FALSE_MISS_LIMIT:
         _CODEX_APP_SERVER_FALSE_MISSES = 0
-        print(
-            f"  [codex-app-server] {_CODEX_APP_SERVER_FALSE_MISS_LIMIT} verified"
+        _log_codex_app_server(
+            f"{_CODEX_APP_SERVER_FALSE_MISS_LIMIT} verified"
             " false 'thread not found' misses with rollouts on disk;"
-            " recycling app-server child",
-            file=sys.stderr,
+            " recycling app-server child"
         )
         _codex_app_server_shutdown()
 
@@ -23861,6 +23956,51 @@ def _codex_app_server_transport_responsive(transport, timeout=_CODEX_APP_SERVER_
     return isinstance(response, dict) and "jsonrpc" in response
 
 
+def _codex_app_server_reap_stray_children():
+    """Kill any stdio app-server child not currently tracked as ours.
+
+    _CodexAppServerTransport.close() asks (SIGTERM), waits, escalates
+    (SIGKILL), and waits again -- but if that final wait still times out
+    (e.g. the child is stuck in uninterruptible sleep under memory
+    pressure), close() gives up silently and the caller spawns a
+    replacement on top of it. Python's only handle to the old process is
+    gone at that point, but the OS-level child is still alive and still
+    parented to us. Left unchecked this compounds: each stuck stray adds
+    to memory pressure, making the next replacement more likely to stall
+    too. Call this right before spawning a new stdio app-server so at
+    most one ever survives as our child, regardless of why a prior
+    close() failed to reap its predecessor.
+    """
+    tracked_pid = _CODEX_APP_SERVER_PROC.pid if _CODEX_APP_SERVER_PROC is not None else None
+    my_pid = os.getpid()
+    try:
+        out = subprocess.check_output(["ps", "-eo", "pid,ppid,command"], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return
+    for line in out.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if ppid != my_pid or pid == tracked_pid:
+            continue
+        cmd = parts[2]
+        if "app-server" not in cmd or "--listen" not in cmd or "stdio://" not in cmd:
+            continue
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        else:
+            _log_activity(
+                "app-server", "REAP",
+                f"pid={pid} stray app-server child not tracked as ours; SIGTERM sent",
+            )
+
+
 def _ensure_codex_app_server(*, allow_stdio=True):
     """Start and initialize a persistent Codex app-server if needed."""
     global _CODEX_APP_SERVER_PROC, _CODEX_APP_SERVER_TRANSPORT, _CODEX_APP_SERVER_READER
@@ -23885,6 +24025,18 @@ def _ensure_codex_app_server(*, allow_stdio=True):
             # Alive but wedged (no reply within timeout) — fall through to
             # close it below so the candidates loop starts a fresh process
             # instead of every caller queuing against a dead-end transport.
+            _log_activity(
+                "app-server", "WEDGED",
+                f"pid={getattr(transport.proc, 'pid', '-')} "
+                f"age={round(now - transport.started_at)}s no reply within "
+                f"{_CODEX_APP_SERVER_LIVENESS_TIMEOUT}s; replacing",
+            )
+        elif transport is not None and not transport.alive():
+            _log_activity(
+                "app-server", "DEAD",
+                f"pid={getattr(transport.proc, 'pid', '-')} "
+                f"age={round(time.time() - transport.started_at)}s exited on its own; replacing",
+            )
         if transport is not None:
             transport.close()
         _CODEX_APP_SERVER_PROC = None
@@ -23912,6 +24064,7 @@ def _ensure_codex_app_server(*, allow_stdio=True):
             resolved = _resolve_codex_bin()
             if not resolved.get("available"):
                 continue
+            _codex_app_server_reap_stray_children()
             try:
                 proc = subprocess.Popen(
                     [resolved["bin"], *_codex_context_window_args(), "app-server", "--listen", "stdio://"],
@@ -43253,6 +43406,10 @@ def _inject_text_into_session(
     # before engine detection so a Kimi nudge cannot fall through to a Claude
     # resume and fail with an unrelated ``repo_required`` error.
     session_id = _canonical_kimi_session_id(session_id)
+    _log_activity(
+        "inject", "INJECT",
+        f"session={session_id} mode={mode} text=\"{_activity_log_preview(text)}\"",
+    )
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
@@ -49123,6 +49280,11 @@ def _reap_idle_sessions(now=None):
                 "kill", sid=sid, pid=int(pid), source="idle_reaper",
                 idle_hours=round((now - last_active) / 3600, 1),
             )
+            _log_activity(
+                "kill", "KILL",
+                f"pid={int(pid)} sid={sid} source=idle_reaper "
+                f"idle_hours={round((now - last_active) / 3600, 1)}",
+            )
             reaped.append({
                 "sid": sid,
                 "pid": int(pid),
@@ -49328,6 +49490,10 @@ def _reap_idle_spawned_headless(now=None):
         _resume_ledger_append(
             "kill", sid=sid, pid=pid, source="spawn_idle_ttl",
             idle_hours=idle_hours,
+        )
+        _log_activity(
+            "kill", "KILL",
+            f"pid={pid} sid={sid} source=spawn_idle_ttl idle_hours={idle_hours}",
         )
         reaped.append({
             "pid": pid,
@@ -49805,6 +49971,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Car Mode running state + capability mode + which keys are set
             # (booleans only — never the key values). O(1).
             self.send_json(_car_mode_snapshot())
+        elif path == "/api/activity-log":
+            # Human-readable spawn/inject/kill/codex-app-server-health feed
+            # (see ACTIVITY_LOG_FILE). session_id narrows to lines mentioning
+            # that session; omitted, returns the tail of the whole log.
+            qs = urllib.parse.parse_qs(parsed.query)
+            session_id = (qs.get("session_id", [""])[0] or "").strip()
+            limit = qs.get("limit", ["200"])[0]
+            self.send_json({
+                "ok": True,
+                "events": _read_activity_log(session_id=session_id or None, limit=limit),
+            })
         elif path == "/api/attention":
             qs = urllib.parse.parse_qs(parsed.query)
             include_all = qs.get("all", ["0"])[0] in ("1", "true")
@@ -54554,25 +54731,42 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             else:
                                 cwd_resolved = candidate
             worktree_flag = bool(payload.get("worktree"))
+            # Logged unconditionally, before any validation, so a request that
+            # never reaches spawn_session_* (missing prompt, bad cwd, unknown
+            # engine, ...) still leaves a trace of what was actually submitted.
+            # This endpoint's own HTTP access log is suppressed for everything
+            # but 404s (see log_message), so without this line a rejected spawn
+            # is otherwise completely unrecoverable after the fact.
+            _log_activity(
+                "spawn", "REQUEST",
+                f"engine={engine_raw!r} name={name!r} cwd={cwd_input or '-'} "
+                f"prompt=\"{_activity_log_preview(prompt)}\"",
+            )
             if not prompt:
+                _log_activity("spawn", "REJECT", "missing prompt")
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
             elif engine is None:
+                _log_activity("spawn", "REJECT", f"unsupported engine: {engine_raw}")
                 self.send_json({
                     "ok": False,
                     "error": f"unsupported engine: {engine_raw}",
                     "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
                 }, 400)
             elif model_error:
+                _log_activity("spawn", "REJECT", f"model_error: {model_error}")
                 self.send_json({
                     "ok": False,
                     "error": model_error,
                     "known_codex_models": list(_ENGINE_KNOWN_MODELS["codex"]),
                 }, 400)
             elif cwd_error:
+                _log_activity("spawn", "REJECT", f"invalid cwd: {cwd_error}")
                 self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
             elif report_to_error:
+                _log_activity("spawn", "REJECT", f"report_to error: {report_to_error}")
                 self.send_json({"ok": False, "error": report_to_error}, 400)
             elif parent_session_error:
+                _log_activity("spawn", "REJECT", f"parent_session error: {parent_session_error}")
                 self.send_json({"ok": False, "error": parent_session_error}, 400)
             else:
                 try:
@@ -54680,6 +54874,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         result["report_to"] = report_to
                     if parent_session_id and isinstance(result, dict):
                         result["parent_session_id"] = parent_session_id
+                    if result.get("ok"):
+                        _log_activity(
+                            "spawn", "SPAWN",
+                            f"engine={engine} session={result.get('session_id') or result.get('pid') or '-'} "
+                            f"name={name!r}",
+                        )
+                    else:
+                        _log_activity(
+                            "spawn", "FAILED",
+                            f"engine={engine} code={result.get('code') or '-'} "
+                            f"error={result.get('error') or '-'}",
+                        )
                     if result.get("code") in (
                         "claude_unavailable",
                         "codex_unavailable",
@@ -54697,8 +54903,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     else:
                         self.send_json(result)
                 except RepoContextError as e:
+                    _log_activity("spawn", "FAILED", f"engine={engine} error={e}")
                     self.send_json(e.as_payload(), e.status)
                 except Exception as e:
+                    _log_activity("spawn", "FAILED", f"engine={engine} error={e}")
                     self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/sessions/spawn-codex":
             length = int(self.headers.get("Content-Length", "0"))
