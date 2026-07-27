@@ -1235,6 +1235,38 @@ def _wt_past_workers(hours=24, max_per_queue=3):
 _queue_answer = _q.answer
 
 
+def _answer_queue_item_and_notify_worker(ref, text):
+    """Record a dashboard answer and deliver it to the claimed worker.
+
+    ``wt answer`` sends this same follow-up through WatchTower's liveness-aware
+    messaging path.  CCC's inline answer endpoint must do so too: clearing
+    ``needs_input`` alone leaves a claimed, idle worker unaware of the answer.
+    """
+    item = _queue_answer(ref, text, session_id="ccc")
+    delivery = None
+    target = (item or {}).get("claimed_session_id") or (item or {}).get("claimed_by")
+    if (
+        item
+        and _WT_QUEUE_AVAILABLE
+        and item.get("status") == "in_progress"
+        and target
+    ):
+        prompt = (
+            f"[WATCHTOWER] A human answered your blocked question on ticket "
+            f"{item['ref']}:\n\n{text}\n\n"
+            f"Apply it, finish the ticket, and close it with `wt close {item['ref']} "
+            "--worker <your-id> --summary \"...\" --commit <SHA>` (or `--no-code` "
+            "if no code changed). If it still cannot be resolved, run `wt block` "
+            "again with the new open question."
+        )
+        try:
+            from watchtower import messages as wt_messages
+            delivery = wt_messages.send(str(target), prompt, mode="steer")
+        except Exception as e:
+            delivery = {"ok": False, "error": str(e)}
+    return item, delivery
+
+
 def _comment_queue_item_and_notify_worker(ref, text):
     """Record a dashboard comment and alert its active WatchTower worker.
 
@@ -53138,13 +53170,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "ref and text required"}, 400)
                 return
             try:
-                # WT-26 Phase 1: delegate to watchtower.queue.answer when WT is
-                # installed; fall back to ux_fixes_queue.answer otherwise.
-                # Both write the same store shape — interop is guaranteed.
-                item = _queue_answer(
-                    ref, text, session_id=str(payload.get("session_id") or "ccc"),
-                )
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                # Use the same liveness-aware delivery path as `wt answer`.
+                # Merely clearing needs_input strands an idle claimed worker:
+                # its reconciler sees no reason to wake it and the human's
+                # decision never reaches the session.
+                item, delivery = _answer_queue_item_and_notify_worker(ref, text)
+                self.send_json({
+                    "ok": bool(item),
+                    "item": _uxq_item_payload(item),
+                    "delivery": delivery,
+                })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
