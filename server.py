@@ -502,6 +502,25 @@ ANNOTATION_UX_FIXES_QUEUE_NAME = "UX-fixes-queue"
 _ANNOTATIONS_LOCK = threading.Lock()
 _ANNOTATION_QUEUE_SUBMISSIONS_LOCK = threading.Lock()
 _ANNOTATION_QUEUE_SUBMISSIONS_IN_FLIGHT = set()
+# Per-queue_name locks serializing "is there already a session for this
+# queue?" against "spawn one if not" in enqueue_annotation_ux_fixes_queue.
+# _ANNOTATION_QUEUE_SUBMISSIONS_LOCK above only covers the enqueue() ticket
+# write and is released before this decision runs, so two annotate
+# submissions close together in time (double-click, a client retry) could
+# both see "no session yet" and both spawn -- two duplicate sessions on the
+# same prompt, each burning a full session's cost. This lock closes that gap.
+_ANNOTATION_QUEUE_SPAWN_LOCKS = {}
+_ANNOTATION_QUEUE_SPAWN_LOCKS_GUARD = threading.Lock()
+
+
+def _annotation_queue_spawn_lock(queue_name):
+    key = _normalize_annotation_queue_name(queue_name)
+    with _ANNOTATION_QUEUE_SPAWN_LOCKS_GUARD:
+        lock = _ANNOTATION_QUEUE_SPAWN_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _ANNOTATION_QUEUE_SPAWN_LOCKS[key] = lock
+        return lock
 import ux_fixes_queue  # kept as fallback when watchtower is not installed
 # WT-32 Phase 2: watchtower.queue is now the primary engine. ux_fixes_queue is
 # the fallback so CCC works without WT installed. Both read/write the same store.
@@ -10694,74 +10713,79 @@ def enqueue_annotation_ux_fixes_queue(
             }
         return {"ok": False, "action": "queue", "error": queue_error or "enqueue failed"}
 
-    existing = _find_annotation_ux_queue_session(queue_name)
-    if existing:
-        sid = existing.get("session_id") or existing.get("id")
-        injected = _inject_text_into_session(sid, text)
-        if injected.get("ok"):
-            _record_interaction(sid)
+    # Locked for the full find-existing-or-spawn decision (see the lock's
+    # definition near _ANNOTATION_QUEUE_SUBMISSIONS_LOCK) so a second
+    # near-simultaneous call for the same queue_name waits for this one to
+    # either inject or finish spawning, instead of racing it.
+    with _annotation_queue_spawn_lock(queue_name):
+        existing = _find_annotation_ux_queue_session(queue_name)
+        if existing:
+            sid = existing.get("session_id") or existing.get("id")
+            injected = _inject_text_into_session(sid, text)
+            if injected.get("ok"):
+                _record_interaction(sid)
+                return {
+                    "ok": True,
+                    "action": "injected",
+                    "queue_name": queue_name,
+                    "session_id": sid,
+                    "repo_path": repo_path,
+                    "inject": injected,
+                }
             return {
-                "ok": True,
-                "action": "injected",
+                "ok": False,
+                "action": "inject",
                 "queue_name": queue_name,
                 "session_id": sid,
                 "repo_path": repo_path,
+                "error": injected.get("error") or "inject failed",
                 "inject": injected,
             }
+
+        if engine == "antigravity":
+            spawned = spawn_session_antigravity(text, name=queue_name, repo_path=repo_path)
+        elif engine == "gemini":
+            spawned = spawn_session_gemini(text, name=queue_name, repo_path=repo_path)
+        elif engine == "kilo":
+            spawned = spawn_session_kilo(text, name=queue_name, repo_path=repo_path)
+        elif engine == "cursor":
+            spawned = spawn_session_cursor(text, name=queue_name, repo_path=repo_path)
+        else:
+            spawned = spawn_session(text, name=queue_name, repo_path=repo_path)
+
+        if not spawned.get("ok"):
+            out = {
+                "ok": False,
+                "action": "spawn",
+                "queue_name": queue_name,
+                "repo_path": repo_path,
+                "error": spawned.get("error") or "spawn failed",
+                "spawn": spawned,
+            }
+            if spawned.get("code") == "claude_unavailable":
+                out["status"] = 503
+            return out
+
+        sid = None
+        log_path = spawned.get("log")
+        if log_path:
+            sid = _morning_resolve_session_id_from_log(log_path, max_wait_s=8.0)
+        if sid:
+            try:
+                _save_session_name_override(sid, queue_name)
+            except OSError:
+                pass
+            _record_interaction(sid)
+
         return {
-            "ok": False,
-            "action": "inject",
+            "ok": True,
+            "action": "spawned",
             "queue_name": queue_name,
             "session_id": sid,
             "repo_path": repo_path,
-            "error": injected.get("error") or "inject failed",
-            "inject": injected,
-        }
-
-    if engine == "antigravity":
-        spawned = spawn_session_antigravity(text, name=queue_name, repo_path=repo_path)
-    elif engine == "gemini":
-        spawned = spawn_session_gemini(text, name=queue_name, repo_path=repo_path)
-    elif engine == "kilo":
-        spawned = spawn_session_kilo(text, name=queue_name, repo_path=repo_path)
-    elif engine == "cursor":
-        spawned = spawn_session_cursor(text, name=queue_name, repo_path=repo_path)
-    else:
-        spawned = spawn_session(text, name=queue_name, repo_path=repo_path)
-        
-    if not spawned.get("ok"):
-        out = {
-            "ok": False,
-            "action": "spawn",
-            "queue_name": queue_name,
-            "repo_path": repo_path,
-            "error": spawned.get("error") or "spawn failed",
+            "pid": spawned.get("pid"),
             "spawn": spawned,
         }
-        if spawned.get("code") == "claude_unavailable":
-            out["status"] = 503
-        return out
-
-    sid = None
-    log_path = spawned.get("log")
-    if log_path:
-        sid = _morning_resolve_session_id_from_log(log_path, max_wait_s=8.0)
-    if sid:
-        try:
-            _save_session_name_override(sid, queue_name)
-        except OSError:
-            pass
-        _record_interaction(sid)
-
-    return {
-        "ok": True,
-        "action": "spawned",
-        "queue_name": queue_name,
-        "session_id": sid,
-        "repo_path": repo_path,
-        "pid": spawned.get("pid"),
-        "spawn": spawned,
-    }
 
 
 def _schedule_restart(delay=0.5):
