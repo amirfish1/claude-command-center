@@ -6,7 +6,7 @@ CCC puts every session on one local board and tells you which one needs you.
 
 _Start the next while Claude builds the first._
 
-One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, and **Kimi Code** session on your machine, however you launched it. Spawn, monitor, and ingest all six; steer five of them with follow-up. Local, open source, MIT.
+One local dashboard that attaches to every **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, and **Kimi Code** session on your machine, however you launched it. Spawn, monitor, and ingest all six; steer five of them with follow-up. Local, source-available, free for non-commercial use.
 
 > 📢 Shipping fast. **Watch → Releases** (top-right) to get pinged on new versions without the noise.
 
@@ -631,7 +631,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE) © 2026 Amir Fish
+[Claude Command Center Software License](LICENSE) © 2026 Amir Fish — source-available, free for non-commercial use; commercial use requires permission. Versions released before 2026-07-28 remain under the [MIT License](LICENSE-MIT); some third-party contributions stay MIT (see [NOTICE](NOTICE)).
 
 ## Acknowledgments
 

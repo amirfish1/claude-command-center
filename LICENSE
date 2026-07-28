@@ -1,21 +1,75 @@
-MIT License
+Claude Command Center Software License
 
-Copyright (c) 2026 Amir Fish
+Copyright (c) 2026 Amir Fish. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+---
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## 1. Definitions
+
+"Software" means Claude Command Center (CCC): all source code, binaries,
+documentation, and other files in this repository, including updates.
+
+"Licensor" means Amir Fish.
+
+"Non-Commercial Use" means use by an individual for private, non-commercial
+purposes — personal productivity, hobby projects, research, experimentation,
+education, and private study — where no compensation is received in
+connection with the use.
+
+"Commercial Use" means any use of the Software in connection with or in
+furtherance of any activity intended to generate revenue, profit, or other
+economic benefit, whether or not revenue is actually received. This includes
+use by or on behalf of a for-profit entity, and use in the development of
+products or services intended for sale.
+
+## 2. Non-Commercial Use
+
+The Licensor grants you a limited, non-exclusive, non-transferable,
+revocable license to use, copy, and modify the Software for Non-Commercial
+Use at no charge. The source code remains visible so you can audit what
+runs on your machine, adapt it to your own setup, and learn from it.
+
+## 3. Commercial Use
+
+Commercial Use of the Software requires a separate license from the
+Licensor. Contact: amir.fish@gmail.com.
+
+Using the Software for Commercial Use without a valid commercial license is
+a violation of this Agreement.
+
+## 4. Redistribution
+
+You may share unmodified copies of the Software, with this license and
+copyright notice intact, for Non-Commercial Use.
+
+You may not:
+
+- redistribute the Software, modified or unmodified, for Commercial Use;
+- offer the Software, or a derivative of it, as a hosted or managed
+  service;
+- use the Software, or substantial portions of it, to build a product or
+  service that competes with the Software;
+- remove or alter copyright notices, license texts, or attribution.
+
+## 5. Contributions
+
+Contributions to this repository are governed by the project's Contributor
+License Agreement (see CLA.md), which grants the Licensor the right to use,
+sublicense, and relicense contributions.
+
+## 6. Prior Versions
+
+Versions of the Software released before 2026-07-28 were published under
+the MIT License (see LICENSE-MIT). Those prior versions remain available
+under the MIT License; this Agreement applies to the Software from
+2026-07-28 forward. Third-party contributions made under the MIT License
+remain under the MIT License (see NOTICE).
+
+## 7. No Warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
