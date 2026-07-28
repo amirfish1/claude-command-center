@@ -1194,12 +1194,16 @@
         <button type="button" class="upd-promo-more" id="updPromoMore">See all new features &rarr;</button>
       </div>
       <div class="upd-warning">
-        Runs <code>git fetch + reset --hard origin/main</code> in the install
-        directory, then restarts the server. Pre-flight checks require a
-        clean working tree on the <code>main</code> branch. The execution
-        worker also restarts if it is running older code &mdash; queued work
-        may show as <em>needs reconciliation</em> afterwards (one click on
-        <strong>Reconcile</strong> in Settings &rarr; Maintenance).
+        Click <strong>Update now</strong> and CCC does the rest — no commands
+        to run. It first checks the update is safe (this install is a clean
+        git checkout on <code>main</code>), downloads the latest code, then
+        <strong>restarts itself</strong>: the dashboard and the execution
+        worker come back on the new code automatically. If the check fails,
+        nothing is changed and the reason appears here. After the worker
+        restarts, queued work may show as <em>needs reconciliation</em> &mdash;
+        one click on <strong>Reconcile</strong> in Settings &rarr; Maintenance.
+        To restart the dashboard without updating, use <strong>Restart
+        dashboard</strong> there instead.
       </div>
       <div class="upd-error" id="updError"></div>
       <div class="upd-actions">
@@ -1431,17 +1435,55 @@
 
   <div id="bugReportModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="bugReportTitle">
     <div class="upd-backdrop" id="bugReportBackdrop"></div>
-    <div class="upd-dialog" style="width:min(560px,92vw);">
+    <div class="upd-dialog" style="width:min(560px,92vw); max-height:92vh; overflow-y:auto;">
       <div class="upd-title" id="bugReportTitle">Report a bug</div>
       <div class="upd-versions">
-        Files a GitHub issue against
-        <strong>amirfish1/claude-command-center</strong>. The context block
-        below is auto-attached to the report.
+        Tell us what broke — privately by email (recommended) or as a public
+        GitHub issue against <strong>amirfish1/claude-command-center</strong>.
+      </div>
+      <div class="bug-auto-banner" id="bugAutoBanner" style="display:none;">
+        We noticed spawning a new session didn't finish within 30 seconds.
+        A bug report has been prepared for you — please review it below.
+        <label class="bug-auto-optout" for="bugAutoOptOut">
+          <input type="checkbox" id="bugAutoOptOut">
+          Don't show this automatically again
+        </label>
+      </div>
+      <div class="bug-privacy-note">
+        Only the data shown in the preview below is sent. No code, no file
+        contents, no personal data is included.
       </div>
       <div>
         <label class="bug-label" for="bugReportDescInput">Details</label>
         <textarea id="bugReportDescInput" class="bug-input bug-textarea"
                   placeholder="What did you see? What did you expect? Steps to reproduce… The first line becomes the issue title."></textarea>
+      </div>
+      <div class="bug-field-row">
+        <div>
+          <label class="bug-label" for="bugName">Your name (optional)</label>
+          <input id="bugName" class="bug-input" type="text" autocomplete="name">
+        </div>
+        <div>
+          <label class="bug-label" for="bugContact">Email or phone (optional — so the maintainer can reply)</label>
+          <input id="bugContact" class="bug-input" type="text" autocomplete="email">
+        </div>
+      </div>
+      <div class="bug-dest-group" id="bugDestGroup" role="radiogroup" aria-label="Send via">
+        <label class="bug-label">Send via</label>
+        <label class="bug-dest-option">
+          <input type="radio" name="bugDest" value="email" checked>
+          <span class="bug-dest-text">
+            <span class="bug-dest-title">Private email to the maintainer (recommended)</span>
+            <span class="bug-dest-sub">Opens a pre-filled draft in your mail app. Nothing is posted publicly; only you and the maintainer see it. You review it and press send yourself.</span>
+          </span>
+        </label>
+        <label class="bug-dest-option">
+          <input type="radio" name="bugDest" value="github">
+          <span class="bug-dest-text">
+            <span class="bug-dest-title">Public GitHub issue</span>
+            <span class="bug-dest-sub">Posted publicly at github.com/amirfish1/claude-command-center/issues. Anyone on the internet can see it.</span>
+          </span>
+        </label>
       </div>
       <div id="bugReportShotSection">
         <label class="bug-label">Screenshot (optional)</label>
@@ -1464,9 +1506,17 @@
           </div>
         </div>
       </div>
+      <div id="bugShotEmailNote" class="bug-shot-help" style="display:none;">
+        Screenshots can't be attached to an email draft — choose the GitHub
+        issue option above if you want to include one.
+      </div>
       <div>
         <label class="bug-label">Auto-attached context</label>
         <div class="bug-meta" id="bugReportMeta">Loading…</div>
+      </div>
+      <div>
+        <label class="bug-label" for="bugPreview">Exactly what will be sent</label>
+        <textarea id="bugPreview" class="bug-input bug-preview" readonly tabindex="-1"></textarea>
       </div>
       <div class="upd-error" id="bugReportError"></div>
       <div class="bug-success" id="bugReportSuccess"></div>
