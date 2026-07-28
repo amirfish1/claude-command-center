@@ -194,6 +194,48 @@ latency). The committed `scripts/pre-push.sh` runs it before every push (shared
 gate via `.git/hooks/pre-push`). If it fails, restore the gate — don't relax the
 bound. Add a call-count test there for any new all-conversations/all-sessions path.
 
+## Restart matrix — report this on EVERY fix
+
+A committed fix is not a live fix. Python code is loaded once at process
+start, so a change sits inert until the process that runs it is restarted.
+**End every fix with these three lines**, so nobody has to guess whether what
+they just changed is actually running:
+
+```
+Dashboard server restart needed:  Y/N
+Worker restart needed:            Y/N
+WatchTower server restart needed: Y/N
+```
+
+How to decide — the three services and what each one loads:
+
+| Service | launchd label | Runs | Restart when you touched |
+|---|---|---|---|
+| **Dashboard** | `com.github.claude-command-center` | `server.py` + the HTTP API | `server.py` or any module it imports |
+| **Worker** | `com.github.claude-command-center.worker` | `ccc_worker.py`, owns engine execution + the shared Codex app-server | `ccc_worker.py`, `worker_engines.py`, `control_plane.py` — **and `server.py`**, see the gotcha below |
+| **WatchTower** | `ai.watchtower.watcher` | the `wt` queue daemon on `:8787` | WatchTower's own code (separate repo). CCC changes never need this — default **N** |
+
+**The gotcha that gets missed:** `worker_engines.py` does a lazy `import server`
+(`EngineHost._legacy()`), so the worker runs its **own copy** of `server.py`'s
+module-level state. A `server.py` fix that runs on an engine path is therefore
+**Y for both** the dashboard and the worker. Restarting only the dashboard
+leaves the old code live in the worker, which looks exactly like "the fix
+didn't work."
+
+**No restart needed (default N everywhere):** `static/*` (served from disk per
+request — a browser reload is enough), `docs/`, `changelog.d/`, `tests/`,
+markdown. Frontend-only fixes are `N/N/N`.
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center.worker
+launchctl kickstart -k gui/$(id -u)/com.github.claude-command-center
+```
+
+Restart the worker **first**: it is the one holding engine subprocesses, and
+the dashboard reconnects to it. Note that restarting the worker marks running
+queue items "needs reconciliation" (one click on Reconcile), so only do it when
+the change actually requires it.
+
 ## Finishing a change — does it need a deploy?
 
 Depends entirely on what you touched. Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.
