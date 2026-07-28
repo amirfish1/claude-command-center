@@ -51874,6 +51874,25 @@
     updOpenModal();
   }
 
+  function updRenderPromo() {
+    // Show the two newest curated feature promos (WHATS_NEW_FEATURES is
+    // newest-first) so the update sells itself; "see all" opens the full
+    // What's New modal with mockups.
+    const $promo = document.getElementById('updPromo');
+    const $list = document.getElementById('updPromoList');
+    if (!$promo || !$list || typeof WHATS_NEW_FEATURES === 'undefined') return;
+    const features = WHATS_NEW_FEATURES.slice(0, 2);
+    if (!features.length) return;
+    $list.innerHTML = features.map((f) =>
+      '<div class="upd-promo-item">' +
+        '<span class="promo-tag">' + f.tag + '</span>' +
+        '<span class="promo-title">' + f.title + '</span>' +
+        '<span class="promo-date">' + f.date + '</span>' +
+      '</div>'
+    ).join('');
+    $promo.hidden = false;
+  }
+
   function updOpenModal() {
     if (!updCheckData || !updCheckData.behind) return;
     if ($updVersions) {
@@ -51884,6 +51903,7 @@
     if ($updCompareLink && updCheckData.changelog_url) {
       $updCompareLink.href = updCheckData.changelog_url;
     }
+    updRenderPromo();
     if ($updError) {
       $updError.textContent = '';
       $updError.classList.remove('visible');
@@ -51995,6 +52015,14 @@
     }
   }
   if ($updNowBtn) $updNowBtn.addEventListener('click', updRunSelfUpdate);
+
+  const $updPromoMore = document.getElementById('updPromoMore');
+  if ($updPromoMore) {
+    $updPromoMore.addEventListener('click', () => {
+      if ($updModal) $updModal.classList.remove('open');
+      whatsNewOpenModal();
+    });
+  }
 
   if (!READER_ONLY_POPOUT) {
     (async () => {
@@ -52293,6 +52321,14 @@
   const $whatsNewNoticeText = document.getElementById('whatsNewNoticeText');
 
   const WHATS_NEW_FEATURES = [
+    {
+      id: 'liveness-and-system-status',
+      title: 'Rock-Solid Codex & System Status',
+      date: 'Jul 28, 2026',
+      tag: 'Reliability',
+      desc: '<p>The Codex app-server liveness probe no longer kills healthy bridges: it accepts real replies instead of demanding an envelope the app-server never sends, recent traffic counts as proof of life, and a running turn shields the bridge from replacement. No more WEDGED churn.</p><p>Upgrades now restart a stale execution worker automatically, the update modal opens itself once per version, and a new <strong>System status</strong> modal (Settings &rarr; Maintenance) shows every background process live.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><strong style="color:var(--text);">System status</strong><span style="color:var(--text-muted);">Settings &rarr; Maintenance</span></div><div style="display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;"><span style="color:var(--text);">Dashboard</span><span style="color:#3dd68c;">on &middot; v5.15.0</span></div><div style="display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;"><span style="color:var(--text);">Execution worker</span><span style="color:#3dd68c;">on &middot; pid 27159</span></div><div style="display:flex;justify-content:space-between;padding:6px 10px;border:1px solid var(--border);border-radius:6px;"><span style="color:var(--text);">Codex app-server</span><span style="color:#3dd68c;">on &middot; misses 0/2</span></div></div>'
+    },
     {
       id: 'engine-bridge-recovery',
       title: 'Guarded Engine Bridge Recovery',
@@ -55801,7 +55837,9 @@
       showOpToast('Server restarted', 'ok');
     } else if (sessionStorage.getItem('ccc-updating')) {
       sessionStorage.removeItem('ccc-updating');
-      showOpToast('Updated to the latest version', 'ok');
+      // The update promo experience: land on What's New (feature promos with
+      // mockups), not just a transient toast.
+      whatsNewOpenModal();
     }
   } catch (_) {}
 

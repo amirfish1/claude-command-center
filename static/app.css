@@ -9635,6 +9635,24 @@
     white-space: pre-wrap; word-break: break-word; }
   .upd-error.visible { display: block; }
 
+  /* ── Update-modal "What's in this update" promo section ─────── */
+  .upd-promo { border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; background: var(--bg); }
+  .upd-promo-heading { font-size: 12px; font-weight: 600; color: var(--text);
+    margin-bottom: 8px; }
+  .upd-promo-item { display: flex; align-items: baseline; gap: 8px;
+    font-size: 12px; padding: 4px 0; }
+  .upd-promo-item .promo-tag { font-size: 10px; padding: 1px 7px;
+    border-radius: 9px; background: rgba(88,166,255,0.12);
+    color: var(--accent); white-space: nowrap; }
+  .upd-promo-item .promo-title { color: var(--text); font-weight: 600; }
+  .upd-promo-item .promo-date { color: var(--text-muted); margin-left: auto;
+    font-size: 11px; white-space: nowrap; }
+  .upd-promo-more { margin-top: 8px; font-size: 12px; color: var(--accent);
+    background: none; border: none; padding: 0; cursor: pointer;
+    font-family: inherit; }
+  .upd-promo-more:hover { text-decoration: underline; }
+
   /* ── System status modal ──────────────────────────────────────
      Settings → Maintenance → System status. Reuses the .upd-* shell. */
   #sysModal { z-index: 10001;  /* opened from inside Settings (9999) — must paint above it */
