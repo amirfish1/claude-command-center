@@ -22199,6 +22199,7 @@ _SPAWN_TIMELINE_FILE = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"
 _SPAWN_TIMELINE_MAX = 200
 _SPAWN_TIMELINE_LOCK = threading.Lock()
 _SPAWN_TIMELINE = {}
+_SPAWN_TIMELINE_FILE_SIG = None
 
 
 def _spawn_timeline_enabled():
@@ -22214,6 +22215,9 @@ def _spawn_timeline_start(session_id, **fields):
     """Open a timeline for a spawn. t0 is when CCC accepted the request."""
     if not _spawn_timeline_enabled() or not session_id:
         return
+    # Adopt the shared history before adding to it, so a freshly booted
+    # process does not hold a dict that knows only about its own spawns.
+    _spawn_timeline_sync()
     with _SPAWN_TIMELINE_LOCK:
         _SPAWN_TIMELINE[str(session_id)] = {
             "session_id": str(session_id),
@@ -22225,52 +22229,115 @@ def _spawn_timeline_start(session_id, **fields):
             _SPAWN_TIMELINE.pop(next(iter(_SPAWN_TIMELINE)), None)
 
 
+def _spawn_timeline_sync():
+    """Pull in whatever the *other* process has written since we last looked.
+
+    The dashboard and the worker each run their own copy of this module
+    (worker_engines.py lazily imports server), and the marks are split across
+    both: the engine ones (thread_start_done ... finalize_done) are recorded
+    in the worker, row_in_session_list in the dashboard. The JSON file is the
+    only thing they share.
+
+    Reading it once at startup is not enough, and that is exactly how this
+    first shipped broken: the dashboard boots, loads an empty file, the worker
+    writes a spawn a minute later, and every query is answered from the
+    dashboard's stale dict -- so the panel showed nothing at all. Stat-gated
+    so the common case costs one stat() rather than a parse.
+    """
+    global _SPAWN_TIMELINE_FILE_SIG
+    if not _spawn_timeline_enabled():
+        return
+    try:
+        st = _SPAWN_TIMELINE_FILE.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return
+    if sig == _SPAWN_TIMELINE_FILE_SIG:
+        return
+    try:
+        data = json.loads(_SPAWN_TIMELINE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    _SPAWN_TIMELINE_FILE_SIG = sig
+    if not isinstance(data, dict):
+        return
+    with _SPAWN_TIMELINE_LOCK:
+        for sid, entry in data.items():
+            if not isinstance(entry, dict) or not isinstance(entry.get("marks"), dict):
+                continue
+            mine = _SPAWN_TIMELINE.get(sid)
+            if mine is None:
+                _SPAWN_TIMELINE[sid] = entry
+                continue
+            # Our own marks win on conflict: we recorded them live, the file
+            # copy may predate them and first-write-wins is the contract.
+            merged = dict(entry["marks"])
+            merged.update(mine.get("marks") or {})
+            mine["marks"] = merged
+        while len(_SPAWN_TIMELINE) > _SPAWN_TIMELINE_MAX:
+            _SPAWN_TIMELINE.pop(next(iter(_SPAWN_TIMELINE)), None)
+
+
 def _spawn_timeline_mark(session_id, name, value_ms=None):
     """Record a named mark. Defaults to 'now, relative to t0'.
 
     First write wins: these are "time until X *first* happened" and a later
     poll must not overwrite the moment it actually occurred.
+
+    Returns True only when this call actually wrote the mark, so a caller on a
+    hot path can persist on the transition instead of on every poll.
     """
     if not _spawn_timeline_enabled() or not session_id:
-        return
+        return False
+    _spawn_timeline_sync()
     with _SPAWN_TIMELINE_LOCK:
         entry = _SPAWN_TIMELINE.get(str(session_id))
         if not entry or name in entry["marks"]:
-            return
+            return False
         entry["marks"][name] = (
             round(float(value_ms), 1) if value_ms is not None
             else round((time.time() - entry["t0"]) * 1000, 1)
         )
+        return True
 
 
 def _spawn_timeline_get(session_id):
+    _spawn_timeline_sync()
     with _SPAWN_TIMELINE_LOCK:
         entry = _SPAWN_TIMELINE.get(str(session_id))
         return json.loads(json.dumps(entry)) if entry else None
 
 
 def _spawn_timeline_save():
+    """Persist the shared store. ALWAYS read-merge-write, never blind-write.
+
+    This file is written by two processes (the worker records the engine
+    marks, the dashboard records row_in_session_list), and a save writes the
+    whole dict. A process that boots, starts one spawn and saves would
+    otherwise replace the file with that single entry and wipe every other
+    spawn -- which is exactly what happened: the file kept collapsing to one
+    record. Syncing first makes the write additive.
+    """
+    global _SPAWN_TIMELINE_FILE_SIG
     if not _spawn_timeline_enabled():
         return
+    _spawn_timeline_sync()
     try:
         with _SPAWN_TIMELINE_LOCK:
             payload = json.loads(json.dumps(_SPAWN_TIMELINE))
         tmp = _SPAWN_TIMELINE_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp, _SPAWN_TIMELINE_FILE)
+        # Adopt our own write as the seen signature, so the next sync() does
+        # not re-parse the file we just produced.
+        st = _SPAWN_TIMELINE_FILE.stat()
+        _SPAWN_TIMELINE_FILE_SIG = (st.st_mtime_ns, st.st_size)
     except (OSError, ValueError):
         pass
 
 
 def _spawn_timeline_load():
-    global _SPAWN_TIMELINE
-    try:
-        data = json.loads(_SPAWN_TIMELINE_FILE.read_text())
-        if isinstance(data, dict):
-            with _SPAWN_TIMELINE_LOCK:
-                _SPAWN_TIMELINE = data
-    except (OSError, ValueError):
-        pass
+    _spawn_timeline_sync()
 
 
 def _codex_telemetry_append(event, **fields):
@@ -32523,7 +32590,11 @@ def find_codex_conversations(
         # The row is about to be emitted into the session list -- for a
         # just-spawned session this is the moment the sidebar can stop saying
         # "spawning", so it is the mark that matches what the user sees.
-        _spawn_timeline_mark(sid, "row_in_session_list")
+        # Persist only on the transition. This runs per Codex row on a hot
+        # list path, so writing the file every pass would be a per-row fsync;
+        # mark() returns True exactly once, when the mark is first recorded.
+        if _spawn_timeline_mark(sid, "row_in_session_list"):
+            _spawn_timeline_save()
         codex_ai_title = title if (title and title != first_message) else None
         # Codex's SQLite `title` is the raw first user message when the
         # prompt was too short to summarize — for annotation prompts that
