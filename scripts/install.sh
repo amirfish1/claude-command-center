@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Amir Fish. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-CCC-Software-License
 # Claude Command Center one-command installer.
 #
 # Usage:

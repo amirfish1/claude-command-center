@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Amir Fish. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-CCC-Software-License
 """Extracted from server.py (originally lines 37378-39574).
 
 Part of the server.py decomposition; see
