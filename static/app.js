@@ -12479,6 +12479,15 @@
     renderSidebar(filterConversations($convSearch.value));
     if (currentConversation === id) renderPendingSpawnConversation(card, activePaneId());
     if (typeof showOpToast === 'function') showOpToast('Session did not register within 30s - placeholder kept. Dismiss if the session opened.', 'warn');
+    // Offer a pre-filled bug report for the stall. bugMaybeAutoOpen guards
+    // on modal-already-open and the user's localStorage opt-out.
+    if (typeof bugMaybeAutoOpen === 'function') {
+      bugMaybeAutoOpen({
+        engine: card.source || '',
+        name: card.display_name || '',
+        waitedSeconds: 30,
+      });
+    }
   }
 
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {
@@ -39289,6 +39298,21 @@
     }
   }
 
+  // The prompt CCC already knows for a session, before the engine has echoed
+  // it back to disk. Pending placeholder first (freshest), then the row.
+  function optimisticPromptForSession(sid) {
+    if (!sid) return '';
+    for (const card of pendingSpawns.values()) {
+      if (!card) continue;
+      if (card.id === sid || card.session_id === sid || card.expected_session_id === sid) {
+        return card.first_message || card.prompt || '';
+      }
+    }
+    const row = (conversationsData || []).find(
+      (c) => c && (c.id === sid || c.session_id === sid));
+    return (row && (row.first_message || row.prompt)) || '';
+  }
+
   async function fetchConversationEvents(paneId) {
     if (paneId) {
       const idx = paneIndexByPaneId(paneId);
@@ -39412,6 +39436,23 @@
           _insertLoadEarlierBanner($view, id, fetchPaneId);
         }
         restorePendingSendEchoes(id, fetchPaneId);
+        // Codex writes its rollout lazily: measured, the user's own message
+        // does not reach disk for ~15s after the turn is accepted, and CCC
+        // renders the transcript FROM that file. So a freshly spawned session
+        // showed an empty pane (just "Thinking...") even though CCC has held
+        // the prompt since the moment it was submitted. Echo it optimistically
+        // until the real transcript arrives -- the next poll replaces this.
+        if ((!Array.isArray(data.events) || !data.events.length) && convLastLine === 0) {
+          const echo = optimisticPromptForSession(id);
+          if (echo) {
+            $view.innerHTML = '<div class="event user_text pending">'
+              + '<span class="label">User</span>'
+              + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(echo) + '">'
+              + linkifyPastedImages(escapeHtml(echo)) + '</div>'
+              + '<div class="optimistic-echo-note">Sent. Waiting for the engine to write its transcript&hellip;</div>'
+              + '</div>';
+          }
+        }
         // First real content on screen for this session -- the moment the
         // wait actually ends from the user's point of view.
         if (Array.isArray(data.events) && data.events.length) {
