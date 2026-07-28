@@ -19,6 +19,18 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("var recentClosed = closed.filter(isRecentClosed);", q2_js)
         self.assertIn("Recent closed", q2_js)
 
+    def test_standalone_queue_glows_a_newly_filed_ticket(self):
+        """The new ticket remains easy to locate after the queue refreshes."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn("var NEW_TICKET_GLOW_MS = 4500;", q2_js)
+        self.assertIn("function markNewTicket(ref)", q2_js)
+        self.assertIn("markNewTicket(ref);", q2_js)
+        self.assertIn("q2-new-ticket", q2_js)
+        self.assertIn(".q2-trow.q2-new-ticket", q2_css)
+        self.assertIn("@keyframes q2-new-ticket-glow", q2_css)
+
     def test_past_codex_worker_chip_gets_its_session_id(self):
         """Codex exec logs use a plain session header, not stream-json."""
         server = importlib.import_module("server")

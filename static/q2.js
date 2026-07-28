@@ -14,6 +14,7 @@
 
   var POLL_MS = 5000;
   var CLOSED_CAP = 50;
+  var NEW_TICKET_GLOW_MS = 4500;
   // Keep a just-finished ticket in the working list for handoff context, while
   // leaving the all-time closure history behind the explicit control.
   var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;
@@ -38,6 +39,27 @@
     log: [],            // reconciler activity lines for the selected queue
     logQueue: '',
   };
+  var newTicketExpires = {};
+
+  function markNewTicket(ref) {
+    if (!ref) return;
+    newTicketExpires[ref] = Date.now() + NEW_TICKET_GLOW_MS;
+    window.setTimeout(function () {
+      if ((newTicketExpires[ref] || 0) <= Date.now()) {
+        delete newTicketExpires[ref];
+        renderTickets();
+      }
+    }, NEW_TICKET_GLOW_MS);
+  }
+
+  function isNewTicket(ref) {
+    var expires = newTicketExpires[ref] || 0;
+    if (expires <= Date.now()) {
+      delete newTicketExpires[ref];
+      return false;
+    }
+    return true;
+  }
 
   // ── helpers ──────────────────────────────────────────────────────────────
   function esc(s) {
@@ -1083,6 +1105,7 @@
       : statusLabel(st);
     return '<button type="button" class="q2-trow is-' + esc(st)
       + (ref === state.ref ? ' is-selected' : '')
+      + (isNewTicket(ref) ? ' q2-new-ticket' : '')
       + (stale ? ' is-stale-claim' : '')
       + (unverified ? ' is-unverified-claim' : '')
       + (unresolved ? ' has-unresolved' : '') + '"'
@@ -1851,6 +1874,7 @@
       .then(async function (data) {
         var ref = data.item && data.item.ref;
         note(ref ? 'Filed ' + ref : 'Ticket filed');
+        markNewTicket(ref);
         await refresh();
         if (ref) selectTicket(ref);
       })
