@@ -25832,6 +25832,12 @@
       const repoBadgeHtml = c._repoSearchMatch
         ? '<span class="conv-history-badge" title="Matched repo search; showing latest sessions from ' + escapeHtml(c._repoSearchLabel || 'repo') + '">repo</span>'
         : '';
+      // A row without a first transcript message is a created-but-unused
+      // conversation. Keep this beside the title so it remains visible in
+      // compact lists, and exclude synthetic backlog / PR rows.
+      const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.first_message)
+        ? '<span class="conv-empty-session-chip" title="This session has no transcript messages">[EMPTY]</span>'
+        : '';
       const historySnippetHtml = c._historySnippet
         ? '<div class="conv-history-snippet is-search-result">' + c._historySnippet + '</div>'
         : '';
@@ -26111,6 +26117,7 @@
             + (opts.evergreenAgent ? '' : evergreenStateHtml)
             + historyBadgeHtml
             + repoBadgeHtml
+            + emptySessionChipHtml
             + (opts.evergreenAgent ? '' : rowMetaHtml)
             + (opts.evergreenAgent ? '' : cooStatusHtml)
             + (opts.evergreenAgent ? '' : cooEscalatedHtml)

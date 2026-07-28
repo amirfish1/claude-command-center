@@ -4899,6 +4899,18 @@
     word-break: keep-all;
     letter-spacing: -0.005em;
   }
+  .conv-item .conv-empty-session-chip {
+    flex: 0 0 auto;
+    margin-left: 5px;
+    padding: 1px 4px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+  }
   /* Fast custom tooltip (JS-driven, body-mounted) for truncated titles —
      replaces the native title= attribute's fixed ~500ms OS delay. */
   .ccc-tip {
