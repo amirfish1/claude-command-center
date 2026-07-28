@@ -3134,6 +3134,9 @@
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
+        // ...then keep chasing until the row actually lands, because for
+        // Codex the engine has not written anything yet at 3s.
+        chasePendingSpawn(tempPid);
       } else {
         _removePendingSpawnCard(tempPid);
         if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
@@ -16431,6 +16434,9 @@
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
+        // ...then keep chasing until the row actually lands, because for
+        // Codex the engine has not written anything yet at 3s.
+        chasePendingSpawn(tempPid);
       } else {
         throw new Error(data.error || ('HTTP ' + res.status));
       }
@@ -53977,6 +53983,8 @@
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
+        // ...then keep chasing until the row actually lands, because for
+        // Codex the engine has not written anything yet at 3s.
       }
       try {
         if (typeof refreshArchiveData === 'function') {
@@ -57279,6 +57287,9 @@
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
+        // ...then keep chasing until the row actually lands, because for
+        // Codex the engine has not written anything yet at 3s.
+        chasePendingSpawn((data.spawn_id || data.pid));
       } else {
         flashRed();
         showOpToast('Spawn failed: ' + (data.error || 'HTTP ' + res.status), 'error');
@@ -57361,6 +57372,26 @@
     }
     if ($convSendBtn) $convSendBtn.disabled = false;
     if ($convInput) $convInput.focus();
+  }
+
+  // A spawned session only reaches the sidebar once the engine has written
+  // its transcript to disk and a list rebuild has picked it up. Measured for
+  // Codex: the rollout file appears at ~6.5s, but the fixed 0.6/1.5/3s
+  // refresh burst below is entirely spent before then, so the row waited for
+  // the next ordinary poll -- 22s from submit, most of it dead time with the
+  // row stuck on "spawning". Keep nudging the list until the placeholder is
+  // actually reconciled, then stop.
+  function chasePendingSpawn(pid, opts) {
+    const deadline = Date.now() + ((opts && opts.timeoutMs) || 45000);
+    const every = (opts && opts.intervalMs) || 1500;
+    (function tick() {
+      if (!pendingSpawns.has(pid)) return;      // reconciled: nothing to chase
+      if (Date.now() > deadline) return;        // give up quietly; the normal
+                                                // poll and the not-acknowledged
+                                                // path still cover this
+      refreshConversationList();
+      setTimeout(tick, every);
+    })();
   }
 
   async function spawnFromInlineInput(body) {
@@ -57479,6 +57510,9 @@
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
+        // ...then keep chasing until the row actually lands, because for
+        // Codex the engine has not written anything yet at 3s.
+        chasePendingSpawn(tempPid);
       } else {
         restoreDraftAfterFailure();
         flashRed();
