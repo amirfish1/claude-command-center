@@ -7692,7 +7692,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "injected")
         self.assertEqual(result["session_id"], sid)
-        inject.assert_called_once_with(sid, "Annotation: bad pill")
+        inject.assert_called_once_with(sid, "Annotation: bad pill", source="annotate-queue")
         spawn.assert_not_called()
 
     def test_inject_input_wraps_announced_from(self):
@@ -7728,6 +7728,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Announced from: Gerry\n\nSTATUS: done",
                 mode="send",
+                source="api",
                 wt_origin=False,
                 skip_wt=False,
             )
@@ -7776,6 +7777,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "Use the selected scope",
                 mode="answer",
+                source="api",
                 wt_origin=False,
                 skip_wt=False,
             )
@@ -7819,6 +7821,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 sid,
                 "delivered by wt delegate",
                 mode="send",
+                source="api",
                 wt_origin=True,
                 skip_wt=False,
             )

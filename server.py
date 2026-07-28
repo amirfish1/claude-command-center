@@ -126,7 +126,16 @@ PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"
 # format. Distinct from CODEX_TELEMETRY_FILE (JSONL, machine-oriented, one
 # record per codex RPC stage) and _RESUME_LEDGER_FILE (JSONL, internal wake/
 # resume bookkeeping) -- this one is for a human to skim "what did CCC do".
-ACTIVITY_LOG_FILE = COMMAND_CENTER_STATE_DIR / "logs" / "activity.log"
+if "pytest" in sys.modules:
+    # The test suite re-imports this module fresh per test (`sys.modules.pop
+    # ("server"); import server`) without mocking this path, so every test
+    # exercising an inject/spawn/kill code path wrote real lines into the
+    # live dashboard's log -- polluting the file a human actually tails to
+    # debug production issues. Redirect for the whole pytest process instead
+    # of a per-test fixture, since that survives arbitrary re-imports.
+    ACTIVITY_LOG_FILE = Path(tempfile.gettempdir()) / "ccc-test-activity.log"
+else:
+    ACTIVITY_LOG_FILE = COMMAND_CENTER_STATE_DIR / "logs" / "activity.log"
 # High-volume, machine-readable firehose for the app-server liveness
 # investigation: one JSON object per line for EVERY probe stage, request
 # send/receive, reader event, and _ensure() decision. Separate from
@@ -10888,7 +10897,7 @@ def enqueue_annotation_ux_fixes_queue(
         existing = _find_annotation_ux_queue_session(queue_name)
         if existing:
             sid = existing.get("session_id") or existing.get("id")
-            injected = _inject_text_into_session(sid, text)
+            injected = _inject_text_into_session(sid, text, source="annotate-queue")
             if injected.get("ok"):
                 _record_interaction(sid)
                 return {
@@ -34234,6 +34243,7 @@ def _start_resume_queue_watcher() -> None:
                         result = _inject_text_into_session(
                             sid, text, _from_terminal_queue=True,
                             skip_wt=(sid in _terminal_drain_skip_wt),
+                            source="terminal-queue-watcher",
                         )
                     except Exception:
                         result = None
@@ -41570,7 +41580,7 @@ def _coordinate_sessions(payload):
         text = _group_chat_inject_text(
             chat_path, topic, mode, sid, chat_uuid=chat_uuid,
             remote_host_node=self_node if remote else "")
-        inject_result = _inject_text_into_session(sid, text)
+        inject_result = _inject_text_into_session(sid, text, source="group-chat-coordinate")
         results.append({
             "session_id": sid,
             "ok": bool(inject_result.get("ok")),
@@ -41815,7 +41825,7 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
         if not message_key:
             message_key = f"manual:{time.time():.3f}"
         text = _group_chat_checkin_text(real_path, topic, mode, target_sid)
-        r = _inject_text_into_session(target_sid, text)
+        r = _inject_text_into_session(target_sid, text, source="group-chat-manual-nudge")
         results.append({"session_id": target_sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
         # Reflect the manual nudge in the orchestrator panel: bump
         # both the in-memory last_nudge (used by the auto-nudge watcher
@@ -41899,7 +41909,7 @@ def _group_chat_nudge(path, chat_uuid="", target_sid=""):
         now_iso = datetime.now().astimezone().isoformat()
         label = _group_chat_participant_label(sid, name_map, session_ids)
         text = _group_chat_checkin_text(real_path, topic, mode, sid)
-        r = _inject_text_into_session(sid, text)
+        r = _inject_text_into_session(sid, text, source="group-chat-auto-nudge")
         results.append({"session_id": sid, "ok": bool(r.get("ok")), "error": r.get("error", "")})
         log_entries.append({
             "message_key": reminder_key or f"auto:{time.time():.3f}",
@@ -42963,7 +42973,7 @@ def _group_chat_add_participant(raw_path: str, session_id: str, display_name: st
     # join link doubles as a "go read the chat now" nudge, so re-adding is
     # idempotent for membership but still delivers the check-in.
     text = _group_chat_checkin_text(real_path, topic, mode, sid)
-    inject_result = _inject_text_into_session(sid, text)
+    inject_result = _inject_text_into_session(sid, text, source="group-chat-add-participant")
     if not already:
         added_label = _group_chat_participant_label(sid, name_map, session_ids)
         _group_chat_log_system(real_path, f"added `{added_label}` ({sid[:8]})")
@@ -43963,6 +43973,7 @@ def _inject_text_into_session(
     skip_wt=False,
     preserve_queued_steer=False,
     idempotency_key=None,
+    source="api",
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -44001,7 +44012,8 @@ def _inject_text_into_session(
     session_id = _canonical_kimi_session_id(session_id)
     _log_activity(
         "inject", "INJECT",
-        f"session={session_id} mode={mode} text=\"{_activity_log_preview(text)}\"",
+        f"session={session_id} mode={mode} source={source} "
+        f"text=\"{_activity_log_preview(text)}\"",
     )
     is_codex = _is_codex_session(session_id)
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
@@ -45008,6 +45020,7 @@ def _recover_engine_bridge(session_id, selected_text="", idempotency_key=None):
         text,
         _from_terminal_queue=True,
         skip_wt=True,
+        source="engine-bridge-recover",
     )
     if not isinstance(retry, dict):
         retry = {"ok": False, "error": "Retry returned no result"}
@@ -53231,7 +53244,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                if kind == "commit" else
                                "please finish this slice — commit, push, and "
                                "complete its PR."))
-                self.send_json(_inject_text_into_session(ref, text))
+                self.send_json(_inject_text_into_session(ref, text, source="fleet-ping"))
             elif path == "/api/fleet/attribute":
                 node_id_param = str(data.get("node_id") or "").strip()
                 if node_id_param and node_id_param != federation.node_id():
@@ -56580,7 +56593,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "items unchecked, or a prior 'do not merge' instruction in this "
                     "session — surface them and wait for confirmation."
                 )
-                inject_result = _inject_text_into_session(sid, prompt)
+                inject_result = _inject_text_into_session(sid, prompt, source="archive-bulk")
                 self.send_json({
                     "ok": bool(inject_result.get("ok")),
                     "via": "session",
@@ -57579,7 +57592,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             "idempotency_key"
                         )
                     result = _inject_text_into_session(
-                        sid, text, mode=mode, **inject_options,
+                        sid, text, mode=mode, source="api", **inject_options,
                     )
                 except Exception as e:
                     # An uncaught exception anywhere in this deep, subprocess-
@@ -61713,7 +61726,7 @@ def _fleet_execute_local_step(action):
                     "unfinished (unmerged or dirty). Please finish the slice: "
                     "commit, push, and open/complete its PR — or reply ABANDON "
                     "if it should be preserved for someone else.")
-        result = _inject_text_into_session(ref, text)
+        result = _inject_text_into_session(ref, text, source="fleet-step")
         return {"ok": bool(result.get("ok")), "pinged": ref,
                 "via": result.get("via"), "detail": result.get("error")}
     return {"ok": False, "error": "unsupported_capability",
