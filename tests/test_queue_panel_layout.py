@@ -11,6 +11,14 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueuePanelLayout(unittest.TestCase):
+    def test_standalone_queue_keeps_recent_closed_tickets_visible(self):
+        """Recent closes stay in context without expanding full history."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+
+        self.assertIn("var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;", q2_js)
+        self.assertIn("var recentClosed = closed.filter(isRecentClosed);", q2_js)
+        self.assertIn("Recent closed", q2_js)
+
     def test_past_codex_worker_chip_gets_its_session_id(self):
         """Codex exec logs use a plain session header, not stream-json."""
         server = importlib.import_module("server")

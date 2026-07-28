@@ -14,6 +14,9 @@
 
   var POLL_MS = 5000;
   var CLOSED_CAP = 50;
+  // Keep a just-finished ticket in the working list for handoff context, while
+  // leaving the all-time closure history behind the explicit control.
+  var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;
 
   var state = {
     queues: [],
@@ -1152,6 +1155,9 @@
     // most recently touched ticket in the queue). The row's age column shows
     // the same value, so the order it implies is the order you see.
     closed.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });
+    var recentClosedCutoff = Date.now() - RECENT_CLOSED_WINDOW_MS;
+    function isRecentClosed(it) { return touchedAt(it) >= recentClosedCutoff; }
+    var recentClosed = closed.filter(isRecentClosed);
 
     // Same counts renderer as the queue rows. Derived from the rows actually on
     // screen (so it honours the search filter) but split by the same statuses,
@@ -1185,7 +1191,7 @@
       + esc(String(cfg.desired_workers != null ? cfg.desired_workers : 1)) + '</button>'
       + '</span>';
 
-    if (!openish.length && !(state.showClosed && closed.length)) {
+    if (!openish.length && !(state.showClosed ? closed.length : recentClosed.length)) {
       host.innerHTML = '<div class="q2-empty">'
         + '<div class="q2-empty-title">'
         + (needle ? 'No match' : (closed.length ? 'All clear in ' + esc(state.queue) : 'No tickets in ' + esc(state.queue)))
@@ -1195,11 +1201,13 @@
       return;
     }
 
-    var shownClosed = state.showClosed ? closed.slice(0, state.closedCap) : [];
+    var shownClosed = state.showClosed ? closed.slice(0, state.closedCap) : recentClosed;
     var html = openish.map(ticketRow).join('');
     if (shownClosed.length) {
-      var label = 'Closed' + (closed.length > shownClosed.length
-        ? ' (newest ' + shownClosed.length + ' of ' + closed.length + ')' : '');
+      var label = state.showClosed
+        ? 'Closed' + (closed.length > shownClosed.length
+          ? ' (newest ' + shownClosed.length + ' of ' + closed.length + ')' : '')
+        : 'Recent closed · last 12h';
       html += '<div class="q2-group-label">' + esc(label) + '</div>' + shownClosed.map(ticketRow).join('');
       if (closed.length > shownClosed.length) {
         html += '<button type="button" class="q2-more-btn" data-q2-more>Show '

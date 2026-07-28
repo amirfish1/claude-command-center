@@ -1,0 +1,1 @@
+- Keep recently closed tickets visible on the standalone Queues page.
