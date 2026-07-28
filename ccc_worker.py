@@ -89,6 +89,21 @@ class WorkerRuntime:
                 },
                 **self.ledger.summary(),
             }
+        if method == "system.app_server":
+            # The Codex transport lives HERE, not in the dashboard:
+            # _control_plane_routes_engines() defaults on, so worker_engines
+            # drives it through this process's lazily-imported copy of
+            # `server`. The dashboard asking its own module global always got
+            # live:false on a perfectly healthy system, which is why the
+            # System status panel used to say "idle" mid-Codex-session.
+            server_mod = sys.modules.get("server")
+            if server_mod is None:
+                return {
+                    "ok": False,
+                    "code": "not_loaded",
+                    "error": "worker has not imported server yet",
+                }
+            return {"ok": True, "status": server_mod._system_app_server_status()}
         if method == "drain.set":
             state = self.ledger.set_drain(
                 params.get("enabled"), params.get("reason") or ""
