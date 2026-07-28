@@ -10795,13 +10795,19 @@ class TestRepoContextHelpers(unittest.TestCase):
                  mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
                  mock.patch.object(server, "_record_spawn_to_registry") as registry, \
                  mock.patch.object(server.subprocess, "Popen", side_effect=AssertionError("exec fallback should not run")), \
-                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1"}):
+                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0.1",
+                                              "CCC_CODEX_SPAWN_CONFIRM_TIMEOUT": "0.1"}):
                 result = server.spawn_session_codex(
                     "say ok",
                     name="app spawn",
                     repo_path=str(self.repo),
                 )
                 rows = server.list_spawned_sessions()
+                # Naming and the durability check moved off the spawn critical
+                # path; join the finalizer so its calls are observable here.
+                finalizer = server._CODEX_LAST_SPAWN_FINALIZER
+                if finalizer:
+                    finalizer.join(10)
         finally:
             for entry in server._spawned_sessions:
                 fh = entry.get("log_fh")
@@ -10814,12 +10820,16 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["via"], "codex-app-spawn")
         self.assertEqual(result["session_id"], sid)
         self.assertFalse(result["session_id_pending"])
-        self.assertTrue(result["confirmed"])
-        self.assertEqual(result["confirmation_source"], "app-server-notification")
+        # The turn is accepted and running; the durability check reports
+        # asynchronously, so the response carries "pending", never a false
+        # negative that would read as failure.
+        self.assertIsNone(result["confirmed"])
+        self.assertEqual(result["confirmation_source"], "pending")
         self.assertEqual(result["app_server_transport"], "managed")
         self.assertTrue(str(result["spawn_id"]).startswith("codex-app-"))
         self.assertEqual(result["pid"], result["spawn_id"])
-        self.assertEqual([method for method, _ in calls], ["thread/start", "thread/name/set", "turn/start"])
+        # turn/start is no longer stuck behind the ~1.7s rename.
+        self.assertEqual([method for method, _ in calls], ["thread/start", "turn/start", "thread/name/set"])
 
         start_params = calls[0][1]
         self.assertEqual(start_params["cwd"], str(self.repo))
@@ -10829,15 +10839,16 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(start_params["model"], "gpt-5.5")
         self.assertEqual(start_params["config"]["model_context_window"], 1000000)
 
-        name_params = calls[1][1]
-        self.assertEqual(name_params, {"threadId": sid, "name": "app-spawn"})
-
-        turn_params = calls[2][1]
+        # turn/start now runs second (was third, behind the rename).
+        turn_params = calls[1][1]
         self.assertEqual(turn_params["threadId"], sid)
         self.assertEqual(turn_params["cwd"], str(self.repo))
         self.assertEqual(turn_params["input"], [{"type": "text", "text": "say ok"}])
         self.assertEqual(turn_params["approvalPolicy"], "never")
         self.assertEqual(turn_params["sandboxPolicy"], {"type": "dangerFullAccess"})
+
+        name_params = calls[2][1]
+        self.assertEqual(name_params, {"threadId": sid, "name": "app-spawn"})
         registry.assert_not_called()
         self.assertEqual(rows[0]["spawn_id"], result["spawn_id"])
         self.assertEqual(rows[0]["pid"], result["pid"])
@@ -10891,10 +10902,14 @@ class TestRepoContextHelpers(unittest.TestCase):
                  mock.patch.object(server, "_mark_codex_thread_user_visible", return_value=True), \
                  mock.patch.object(server, "_register_codex_sidebar_project_for_spawn_entry"), \
                  mock.patch.object(server, "_codex_app_server_shutdown", return_value=True) as recycle, \
-                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0"}):
+                 mock.patch.dict(os.environ, {"CCC_CODEX_WAKE_CONFIRM_TIMEOUT": "0",
+                                              "CCC_CODEX_SPAWN_CONFIRM_TIMEOUT": "0"}):
                 result = server.spawn_session_codex(
                     "say ok", name="reattach app spawn", repo_path=str(self.repo),
                 )
+                finalizer = server._CODEX_LAST_SPAWN_FINALIZER
+                if finalizer:
+                    finalizer.join(10)
         finally:
             server._spawned_sessions.clear()
             server._spawned_sessions.extend(original_spawns)
@@ -10903,18 +10918,21 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["session_id"], fresh_sid)
         self.assertTrue(result["thread_recreated"])
         recycle.assert_called_once()
+        # Recovery retries thread/start + turn/start only. The rename runs once
+        # at the end against whichever thread actually took the turn, instead of
+        # once per attempt ahead of it.
         self.assertEqual(
             [method for method, _ in calls],
             [
                 "thread/start",
-                "thread/name/set",
                 "turn/start",
                 "thread/resume",
                 "thread/start",
-                "thread/name/set",
                 "turn/start",
+                "thread/name/set",
             ],
         )
+        self.assertEqual(calls[-1][1]["threadId"], fresh_sid)
 
     def test_spawn_codex_falls_back_to_exec_when_threads_stay_lost(self):
         """If even a recreated thread turns up 'thread not found', the spawn

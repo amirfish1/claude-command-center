@@ -22097,6 +22097,15 @@ _CODEX_APP_SERVER_INFLIGHT = 0
 # channel. The backlog that built up starved everything sharing the channel,
 # including a new session's thread/start (see the TIMEOUT/LATE storms in
 # activity.log and docs/HANDOFF_codex_appserver_liveness.md).
+# thread/name/set resolves against the thread's rollout file, so it can lose a
+# race with Codex's first write to it ("rollout ... is empty"). Cheap bounded
+# retry -- this runs in the background finalizer, so nobody is waiting on it.
+_CODEX_NAME_SET_ATTEMPTS = 3
+_CODEX_NAME_SET_RETRY_DELAY = 1.0
+# Most recent _codex_finalize_spawn_async thread. Test-only synchronisation
+# handle so a spawn assertion can join the background finalizer rather than
+# sleeping; production never reads it.
+_CODEX_LAST_SPAWN_FINALIZER = None
 _CODEX_THREAD_LIST_COND = threading.Condition()
 _CODEX_THREAD_LIST_LAST_AT = 0.0
 _CODEX_THREAD_LIST_INFLIGHT = False
@@ -25170,6 +25179,128 @@ def _codex_wait_for_turn_activity(session_id, turn_id=None, *, baseline_state=No
     }
 
 
+def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
+                                log_path, baseline_state, baseline_rollout):
+    """Do the post-acceptance spawn work off the caller's critical path.
+
+    Once turn/start is accepted the turn is already running inside Codex, so
+    nothing below needs to block the spawn response:
+
+      * `thread/name/set` — a cosmetic label, measured at ~1.7s, and turn/start
+        never depended on it.
+      * the durability confirmation — measured p50 148ms but p75 ~5.0s, and no
+        caller branches on the result (every unconfirmed spawn in telemetry
+        still returned ok=True).
+
+    Results land in the spawn log and telemetry a few seconds later instead of
+    holding the user's session open.
+
+    Order matters: the confirmation runs FIRST and the rename second. Codex
+    resolves thread/name/set against the thread's rollout file, so naming
+    before that file has content fails outright with "rollout ... is empty" --
+    observed when this ran the other way round. Waiting for the durability
+    confirmation is exactly the signal that the rollout now exists, which is
+    also why the rename used to appear to "cost" ~1.7s: it was Codex blocking
+    on the same write.
+    """
+    def worker():
+        # Nobody waits on this any more, so give it a window that can actually
+        # observe the answer. Codex writes ~85KB of preamble into a fresh
+        # rollout before the user_message row lands, which the old 5s budget
+        # regularly lost to -- a confirmation that is almost always "no" cannot
+        # flag a genuinely dropped prompt. The inject path keeps its own 5s
+        # budget, because a human is waiting on that one.
+        try:
+            confirm_timeout = float(
+                os.environ.get("CCC_CODEX_SPAWN_CONFIRM_TIMEOUT", "30")
+            )
+        except ValueError:
+            confirm_timeout = 30.0
+        confirm_at = time.monotonic()
+        confirmation = _codex_wait_for_turn_activity(
+            thread_id,
+            turn_id,
+            baseline_state=baseline_state,
+            baseline_rollout=baseline_rollout,
+            expected_text=prompt,
+            timeout=confirm_timeout,
+        )
+        confirm_ms = _codex_elapsed_ms(confirm_at)
+
+        name_set_ms = None
+        rename_warning = ""
+        if session_name:
+            name_set_at = time.monotonic()
+            # A confirmation timeout does not prove the rollout is missing, so
+            # still try -- but retry briefly, since the only known failure here
+            # is losing a race with Codex's first rollout write.
+            for attempt in range(_CODEX_NAME_SET_ATTEMPTS):
+                renamed = _codex_app_server_request(
+                    "thread/name/set",
+                    {"threadId": thread_id, "name": session_name},
+                    timeout=10,
+                )
+                if _codex_response_succeeded(renamed):
+                    rename_warning = ""
+                    break
+                rename_warning = _codex_app_server_response_error(
+                    renamed,
+                    "Codex app-server accepted the thread but did not name it",
+                )
+                if attempt + 1 < _CODEX_NAME_SET_ATTEMPTS:
+                    time.sleep(_CODEX_NAME_SET_RETRY_DELAY)
+            name_set_ms = _codex_elapsed_ms(name_set_at)
+        # Append, don't reopen for write: the spawn path already closed its
+        # handle on this file by the time we get here.
+        try:
+            with open(log_path, "a") as fh:
+                if rename_warning:
+                    fh.write(json.dumps({
+                        "event": "codex_app_server_name_warning",
+                        "warning": rename_warning,
+                    }, sort_keys=True) + "\n")
+                if not confirmation.get("confirmed"):
+                    fh.write(json.dumps({
+                        "event": "codex_app_server_spawn_warning",
+                        "warning": confirmation.get("warning"),
+                        "turn_id": turn_id,
+                    }, sort_keys=True) + "\n")
+                fh.write(json.dumps({
+                    "event": "codex_app_server_spawn_finalized",
+                    "turn_id": turn_id,
+                    "confirmed": bool(confirmation.get("confirmed")),
+                    "confirmation_source": confirmation.get("source"),
+                    "name_set_ms": name_set_ms,
+                    "confirm_ms": confirm_ms,
+                }, sort_keys=True) + "\n")
+        except OSError:
+            pass
+        _codex_telemetry_append(
+            "codex_spawn_finalize",
+            ok=True,
+            via="codex-app-spawn",
+            session_id=thread_id,
+            turn_id=turn_id,
+            name_set_ms=name_set_ms,
+            confirm_ms=confirm_ms,
+            confirmed=bool(confirmation.get("confirmed")),
+            confirmation_source=confirmation.get("source"),
+            warning=confirmation.get("warning") or rename_warning or None,
+        )
+
+    thread = threading.Thread(
+        target=worker,
+        daemon=True,
+        name=f"ccc-codex-finalize-{str(thread_id)[:8]}",
+    )
+    # Published so tests can join the finalizer instead of racing it; nothing
+    # in production reads this.
+    global _CODEX_LAST_SPAWN_FINALIZER
+    _CODEX_LAST_SPAWN_FINALIZER = thread
+    thread.start()
+    return thread
+
+
 def _codex_reconcile_thread_idle(session_id):
     """Clear volatile ownership after Codex authoritatively reports idle."""
     cleared_phantom = False
@@ -26113,21 +26244,13 @@ def _codex_spawn_via_app_server(
     thread_id = str(thread_id)
     _codex_app_server_record_thread(thread_id, thread)
 
-    rename_warning = ""
+    # thread/name/set costs a measured ~1.7s and turn/start does not depend on
+    # it (turn/start takes only threadId and returns in 1-2ms). Running it here
+    # delayed the user's prompt by that much for a cosmetic label, so it now
+    # runs in _codex_finalize_spawn_async after the turn is already going.
+    # Stays None on every synchronous path, including the exec-fallback
+    # telemetry below, which reads it before the finalizer exists.
     name_set_ms = None
-    if session_name:
-        name_set_at = time.monotonic()
-        renamed = _codex_app_server_request(
-            "thread/name/set",
-            {"threadId": thread_id, "name": session_name},
-            timeout=10,
-        )
-        name_set_ms = _codex_elapsed_ms(name_set_at)
-        if not _codex_response_succeeded(renamed):
-            rename_warning = _codex_app_server_response_error(
-                renamed,
-                "Codex app-server accepted the thread but did not name it",
-            )
 
     log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -26143,11 +26266,6 @@ def _codex_spawn_via_app_server(
             "reasoning_effort": reasoning_effort or "",
             "transport": _codex_app_server_transport_kind(),
         }, sort_keys=True) + "\n")
-        if rename_warning:
-            log_fh.write(json.dumps({
-                "event": "codex_app_server_name_warning",
-                "warning": rename_warning,
-            }, sort_keys=True) + "\n")
         log_fh.flush()
         if worktree_path:
             _run_worktree_init_hook(worktree_path, parent_repo or repo_for_logs, session_name, log_fh)
@@ -26214,20 +26332,9 @@ def _codex_spawn_via_app_server(
                         image_paths=image_paths,
                         effort=reasoning_effort or None,
                     )
-                    rename_warning = ""
-                    if session_name:
-                        name_set_at = time.monotonic()
-                        renamed = _codex_app_server_request(
-                            "thread/name/set",
-                            {"threadId": thread_id, "name": session_name},
-                            timeout=10,
-                        )
-                        name_set_ms = _codex_elapsed_ms(name_set_at)
-                        if not _codex_response_succeeded(renamed):
-                            rename_warning = _codex_app_server_response_error(
-                                renamed,
-                                "Codex app-server recreated the thread but did not name it",
-                            )
+                    # Naming is deferred here too — the recreated thread is
+                    # named by _codex_finalize_spawn_async once its turn is
+                    # accepted, so recovery does not pay the rename twice.
                     started = _codex_app_server_request(
                         "turn/start",
                         turn_params,
@@ -26330,35 +26437,31 @@ def _codex_spawn_via_app_server(
             cwd=spawn_cwd,
             model=model_to_use,
         )
-        try:
-            confirm_timeout = float(os.environ.get("CCC_CODEX_WAKE_CONFIRM_TIMEOUT", "5"))
-        except ValueError:
-            confirm_timeout = 5.0
-        confirm_at = time.monotonic()
-        confirmation = _codex_wait_for_turn_activity(
-            thread_id,
-            turn_id,
-            baseline_state=baseline_state,
-            baseline_rollout=baseline_rollout,
-            expected_text=prompt,
-            timeout=confirm_timeout,
-        )
-        confirm_ms = _codex_elapsed_ms(confirm_at)
-        if not confirmation.get("confirmed"):
-            log_fh.write(json.dumps({
-                "event": "codex_app_server_spawn_warning",
-                "warning": confirmation.get("warning"),
-                "turn_id": turn_id,
-            }, sort_keys=True) + "\n")
+        # The turn is accepted and already running. Naming the thread and
+        # proving the prompt landed are both diagnostics that no caller branches
+        # on, and together they cost up to ~6.6s (measured: rename ~1.7s,
+        # confirmation p75 ~5.0s). Hand them to a background thread so the
+        # spawn response returns as soon as Codex has the work.
         log_fh.write(json.dumps({
             "event": "codex_app_server_turn_started",
             "turn_id": turn_id,
-            "confirmed": bool(confirmation.get("confirmed")),
-            "confirmation_source": confirmation.get("source"),
+            "confirmed": None,
+            "confirmation_source": "pending",
             "thread_reattached": thread_reattached,
             "thread_recreated": thread_recreated,
         }, sort_keys=True) + "\n")
         log_fh.flush()
+        confirm_ms = None
+        confirmation = {"confirmed": None, "source": "pending", "warning": None}
+        _codex_finalize_spawn_async(
+            thread_id,
+            turn_id,
+            session_name=session_name,
+            prompt=prompt,
+            log_path=log_path,
+            baseline_state=baseline_state,
+            baseline_rollout=baseline_rollout,
+        )
         total_ms = _codex_elapsed_ms(total_start)
         _codex_telemetry_append(
             "codex_spawn",
@@ -26373,9 +26476,9 @@ def _codex_spawn_via_app_server(
             thread_reattached=thread_reattached,
             thread_recreated=thread_recreated,
             recovery_thread_start_ms=recovery_thread_start_ms,
-            confirmed=bool(confirmation.get("confirmed")),
-            confirmation_source=confirmation.get("source"),
-            warning=confirmation.get("warning") or rename_warning or None,
+            confirmed=None,
+            confirmation_source="pending",
+            warning=None,
             transport=_codex_app_server_transport_kind(),
             session_id=thread_id,
             turn_id=turn_id,
@@ -26405,7 +26508,7 @@ def _codex_spawn_via_app_server(
         "session_id": thread_id,
         "app_server_spawn": True,
         "turn_id": turn_id,
-        "confirmed": bool(confirmation.get("confirmed")),
+        "confirmed": confirmation.get("confirmed"),
         "confirmation_source": confirmation.get("source"),
         "app_server_warm": app_server_warm,
         "thread_start_ms": thread_start_ms,
@@ -26447,9 +26550,11 @@ def _codex_spawn_via_app_server(
         "log": str(log_path),
         "via": "codex-app-spawn",
         "accepted": True,
-        "confirmed": bool(confirmation.get("confirmed")),
+        # None (not False) until _codex_finalize_spawn_async lands: the turn
+        # was accepted, the durability check just has not reported yet.
+        "confirmed": confirmation.get("confirmed"),
         "confirmation_source": confirmation.get("source"),
-        "warning": confirmation.get("warning") or rename_warning or None,
+        "warning": confirmation.get("warning") or None,
         "turn_id": turn_id,
         "session_id": thread_id,
         "app_server_transport": _codex_app_server_transport_kind(),
