@@ -8399,6 +8399,25 @@ _ARCHIVE_HERMES_EXTRA_PATH = Path.home() / ".hermes" / "state.db"
 _ARCHIVE_HERMES_EXTRA_KEY = str(_ARCHIVE_HERMES_EXTRA_PATH)
 
 
+def _codex_rollout_day_dirs():
+    """Date-nested Codex rollout dirs whose mtime marks a NEW thread.
+
+    Codex writes one rollout JSONL per thread into
+    ~/.codex/sessions/YYYY/MM/DD, so the store root only changes at year
+    rollover and is useless as a change signal (observed 50 days stale on a
+    reporting user's machine). The day directory is the right granularity:
+    adding a thread creates a file in it (dir mtime moves), while an existing
+    transcript growing does not. Yesterday is included so a session started
+    just before midnight still invalidates the cache.
+    """
+    root = Path.home() / ".codex" / "sessions"
+    now = time.time()
+    return [
+        root / time.strftime("%Y/%m/%d", time.localtime(now - offset))
+        for offset in (0, 86400)
+    ]
+
+
 def _archive_corpus_signature_parts():
     """Cheap stat-only fingerprint of the conversation corpus on disk.
 
@@ -8443,8 +8462,13 @@ def _archive_corpus_signature_parts():
     # Fold in dir-level mtimes of sibling engine transcript stores so adds /
     # removes / renames there also bust the cache. stat() only — cheap. These
     # are transcript corpora (not live state), so they are safe to gate on.
-    for extra in (
+    for extra in [
+        # Year-rollover granularity only -- kept so a brand-new ~/.codex tree
+        # registers, but it CANNOT see new threads on its own: Codex nests
+        # rollouts by date, so _codex_rollout_day_dirs() below is what actually
+        # detects a session being added.
         Path.home() / ".codex" / "sessions",
+        *_codex_rollout_day_dirs(),
         Path.home() / ".cursor" / "projects",
         Path.home() / ".gemini" / "antigravity" / "brain",
         _ARCHIVE_HERMES_EXTRA_PATH,
@@ -8458,7 +8482,7 @@ def _archive_corpus_signature_parts():
         _copilot_home() / "session-state",
         _grok_home() / "sessions",
         _grok_home() / "grok.db",
-    ):
+    ]:
         try:
             mt = os.stat(extra).st_mtime_ns
         except OSError:
