@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.16.0] - 2026-07-28
+
+### Added
+- Added a System status modal (Settings → Maintenance → System status): live state for every background process CCC runs — dashboard, execution worker (pid + loaded server version), WatchTower daemon, and the Codex app-server (new `/api/system/app-server` endpoint) — with restart guidance for each and an explainer of what WEDGED means and what it impacts.
+- The in-app "Update now" flow now restarts a stale execution worker too: `/api/self-update` re-execs the dashboard directly, which bypassed the run.sh worker-version gate, so it now performs the same stale-worker check (kickstart via launchd, or kill+respawn on install paths without a worker service). The update modal notes that queued work may need one Reconcile click.
+
+### Changed
+- The update experience is now prominent: when the dashboard detects a newer release, the update modal opens itself once per new version (suppressed per version via localStorage, and skipped while the First Flight tour owns first-run) instead of relying on the user noticing the topbar pill. The pill and manual click-to-open are unchanged, and dismissal no longer nags on every load.
+- The update promo experience is now prominent: the update modal includes a "What's in this update" section with the newest curated feature promos and a "See all new features" jump into the full What's New modal; after a successful in-app update the What's New modal opens instead of just a toast; and WHATS_NEW_FEATURES gains an entry for the Codex liveness fix, automatic worker restarts on upgrade, and the System status modal.
+
 ## [5.15.0] - 2026-07-27
 
 ### Added
@@ -2314,7 +2324,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.15.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.16.0...HEAD
+[5.16.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.16.0
 [5.15.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.15.0
 [5.14.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.14.0
 [5.13.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.13.0

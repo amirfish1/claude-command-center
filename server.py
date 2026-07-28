@@ -15,7 +15,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.15.0"
+__version__ = "5.16.0"
 
 import ast
 import base64
@@ -9835,7 +9835,8 @@ _BUG_SCREENSHOT_BRANCH = "bug-screenshots"
 
 
 def _build_bug_report_body(description, ccc_version, user_agent, session_id,
-                           screenshot_url=None, screenshot_local_path=None):
+                           screenshot_url=None, screenshot_local_path=None,
+                           reporter_name=None, reporter_contact=None):
     """Render the GitHub issue body (markdown). Pure — no I/O — so it's
     cheap to also return on the failure path for clipboard fallback.
 
@@ -9843,7 +9844,12 @@ def _build_bug_report_body(description, ccc_version, user_agent, session_id,
     inline image (the happy path — image was pushed to the bug-screenshots
     branch). Otherwise if `screenshot_local_path` is given we surface the
     local path with a drag-drop instruction so the user can manually
-    attach it to the issue after it's filed."""
+    attach it to the issue after it's filed.
+
+    `reporter_name` / `reporter_contact` are optional self-identification
+    from the modal; when either is present a single ``Reporter:`` line is
+    added after the Context table. Callers must sanitize them first (see
+    `_create_bug_report_issue`)."""
     lines = [
         "## Description",
         "",
