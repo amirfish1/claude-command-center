@@ -9682,6 +9682,26 @@
   .sys-desc .sys-live { color: var(--text); font-weight: 600; }
   .sys-wedged { font-size: 12px; }
 
+  /* ── Spawn stats (debug) ──────────────────────────────────────
+     Collapsed by default so it never competes with the transcript;
+     the summary alone answers "how long did this take". */
+  .spawn-stats { margin: 0 0 10px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--bg); font-size: 12px; }
+  .spawn-stats-summary { cursor: pointer; padding: 7px 10px;
+    color: var(--text-muted); list-style: none; user-select: none; }
+  .spawn-stats-summary::-webkit-details-marker { display: none; }
+  .spawn-stats-summary strong { color: var(--text); }
+  .spawn-stats-summary:hover { color: var(--text); }
+  .spawn-stats-sub { opacity: 0.75; }
+  .spawn-stats-body { padding: 4px 10px 9px; border-top: 1px solid var(--border); }
+  .spawn-stat-row { display: flex; justify-content: space-between; gap: 12px;
+    padding: 2px 0; }
+  .spawn-stat-label { color: var(--text-muted); }
+  .spawn-stat-val { color: var(--text); font-variant-numeric: tabular-nums; }
+  .spawn-stats-note { margin-top: 7px; padding-top: 6px;
+    border-top: 1px solid var(--border); color: var(--text-muted);
+    font-size: 11px; line-height: 1.5; }
+
   /* Restart controls. Sits below the per-service sections and above the
      dialog's Close row, so the reading order is state -> what to do. */
   .sys-restart { border: 1px solid var(--border); border-radius: 8px;

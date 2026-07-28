@@ -12408,6 +12408,11 @@
       const placeholderId = placeholder.id || ('spawning-' + pid);
       const defaultPlaceholderId = 'spawning-' + pid;
       carryFlowPendingSpawnNode(placeholder, realCard);
+      const resolvedSid = realCard.session_id || realCard.id;
+      if (resolvedSid) {
+        spawnStatsMark(resolvedSid, 'row_rendered');
+        spawnStatsMark(resolvedSid, 'row_resolved');
+      }
       if (currentConversation === placeholderId || currentConversation === defaultPlaceholderId) {
         selectionSwap = { realCard, placeholderId };
       }
@@ -39191,6 +39196,99 @@
     return ok;
   }
 
+  // ── Spawn stats (debug) ───────────────────────────────────────────
+  // The server can time everything up to "the row exists"; only the browser
+  // knows when the row actually RENDERED and when the transcript first
+  // painted -- which is what the user experiences as "how long it took".
+  // Both halves are posted to one timeline so they can be read together.
+  // Kill switch: localStorage['ccc-spawn-stats'] = '0' (or CCC_SPAWN_STATS=0
+  // server-side, which also stops collection).
+  const spawnStatsT0 = new Map();      // sid -> epoch ms when we asked
+  const spawnStatsSent = new Map();    // sid -> Set of already-posted marks
+
+  function spawnStatsEnabled() {
+    try { return localStorage.getItem('ccc-spawn-stats') !== '0'; } catch (_) { return true; }
+  }
+
+  function spawnStatsBegin(sid, t0) {
+    if (!sid || !spawnStatsEnabled()) return;
+    if (!spawnStatsT0.has(sid)) spawnStatsT0.set(sid, t0 || Date.now());
+  }
+
+  function spawnStatsMark(sid, name) {
+    if (!sid || !spawnStatsEnabled()) return;
+    const t0 = spawnStatsT0.get(sid);
+    if (!t0) return;
+    let sent = spawnStatsSent.get(sid);
+    if (!sent) { sent = new Set(); spawnStatsSent.set(sid, sent); }
+    if (sent.has(name)) return;   // first occurrence is the interesting one
+    sent.add(name);
+    const ms = Date.now() - t0;
+    fetch('/api/session/spawn-timeline/mark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sid, marks: { [name]: ms } }),
+    }).catch(() => {});
+  }
+
+  // Ordered for reading top-to-bottom as a story: what CCC did, what Codex
+  // did on disk, then what the user actually saw.
+  const SPAWN_STAT_ROWS = [
+    ['thread_start_done',        'Codex created the thread'],
+    ['turn_accepted',            'Turn accepted by Codex'],
+    ['spawn_response_sent',      'CCC answered the browser'],
+    ['client_response_received', 'Browser got the response'],
+    ['rollout_file_created',     'Transcript file created'],
+    ['rollout_first_bytes',      'Transcript first bytes'],
+    ['client_row_rendered',      'Row rendered in sidebar'],
+    ['client_row_resolved',      'Row left "spawning"'],
+    ['rollout_has_user_message', 'Your prompt durable on disk'],
+    ['client_first_paint',       'Transcript first painted'],
+    ['confirm_finished',         'Durability check done'],
+    ['name_set_finished',        'Thread named'],
+    ['finalize_done',            'Background finalize done'],
+  ];
+
+  function fmtStatMs(ms) {
+    if (ms == null) return '—';
+    return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
+  }
+
+  async function renderSpawnStatsPanel(sid, $view) {
+    if (!sid || !$view || !spawnStatsEnabled()) return;
+    let data = null;
+    try {
+      const r = await fetch('/api/session/spawn-timeline?session_id=' + encodeURIComponent(sid),
+        { cache: 'no-store' });
+      data = await r.json();
+    } catch (_) { return; }
+    if (!data || !data.ok || !data.timeline) return;
+    const marks = (data.timeline.marks) || {};
+    if (!Object.keys(marks).length) return;
+    const rows = SPAWN_STAT_ROWS
+      .filter(([k]) => marks[k] != null)
+      .map(([k, label]) => '<div class="spawn-stat-row"><span class="spawn-stat-label">'
+        + escapeHtml(label) + '</span><span class="spawn-stat-val">'
+        + fmtStatMs(marks[k]) + '</span></div>').join('');
+    // "Visible" is the honest headline: the number the user actually felt.
+    const visible = marks.client_first_paint != null ? marks.client_first_paint
+      : (marks.rollout_has_user_message != null ? marks.rollout_has_user_message : null);
+    const existing = $view.querySelector('.spawn-stats');
+    const html = '<details class="spawn-stats"' + (existing && existing.open ? ' open' : '') + '>'
+      + '<summary class="spawn-stats-summary">&#9201; Session start: '
+      + '<strong>' + fmtStatMs(visible) + '</strong> to first paint'
+      + '<span class="spawn-stats-sub"> &middot; accepted in '
+      + fmtStatMs(marks.spawn_response_sent) + '</span></summary>'
+      + '<div class="spawn-stats-body">' + rows
+      + '<div class="spawn-stats-note">Times are from when CCC accepted the spawn. '
+      + 'Hide with <code>localStorage[\'ccc-spawn-stats\']=\'0\'</code>.</div></div></details>';
+    if (existing) {
+      existing.outerHTML = html;
+    } else {
+      $view.insertAdjacentHTML('afterbegin', html);
+    }
+  }
+
   async function fetchConversationEvents(paneId) {
     if (paneId) {
       const idx = paneIndexByPaneId(paneId);
@@ -39314,6 +39412,12 @@
           _insertLoadEarlierBanner($view, id, fetchPaneId);
         }
         restorePendingSendEchoes(id, fetchPaneId);
+        // First real content on screen for this session -- the moment the
+        // wait actually ends from the user's point of view.
+        if (Array.isArray(data.events) && data.events.length) {
+          spawnStatsMark(id, 'first_paint');
+        }
+        renderSpawnStatsPanel(id, $view);
       } finally {
         splitState.activeIndex = savedIdx;
       }
@@ -54694,6 +54798,10 @@
       session_id: sid,
     };
     if (bugShotB64) payload.screenshot_b64 = bugShotB64;
+    const reporterName = $bugName ? $bugName.value.trim() : '';
+    const reporterContact = $bugContact ? $bugContact.value.trim() : '';
+    if (reporterName) payload.reporter_name = reporterName;
+    if (reporterContact) payload.reporter_contact = reporterContact;
     let data;
     try {
       const r = await fetch('/api/bug-report', {
@@ -57306,12 +57414,17 @@
       if (engine === 'codex' && $convInputEffortSelect && ($convInputEffortSelect.value || spawnEffortChoiceDirty)) {
         spawnBody.reasoning_effort = $convInputEffortSelect.value;
       }
+      const spawnAskedAt = Date.now();
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(spawnBody),
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
+        if (data.session_id) {
+          spawnStatsBegin(data.session_id, spawnAskedAt);
+          spawnStatsMark(data.session_id, 'response_received');
+        }
         const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);
         assignSpawnedSessionToDefaultObject(data);
         // Fire-and-watch engines can stream their spawn log once the real pid

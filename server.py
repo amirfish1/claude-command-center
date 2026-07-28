@@ -22185,6 +22185,94 @@ def _codex_recovery_activity_text(recovery):
     return "Recovering after compaction"
 
 
+# ── Spawn timeline (debug stats) ─────────────────────────────────────
+# Why a session "feels slow" is rarely one number. A Codex spawn crosses four
+# boundaries -- CCC -> app-server -> Codex's rollout file on disk -> CCC's
+# session list -> the browser -- and the user-visible wait is the LAST of
+# those, not the first. Recording a mark at each boundary is what turns
+# "it took 60 seconds" into a specific culprit.
+#
+# Bounded in-memory ring, mirrored to disk so a dashboard restart mid-debug
+# does not lose the evidence. Marks are milliseconds since the spawn request
+# was accepted, so every number reads as "time until X".
+_SPAWN_TIMELINE_FILE = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"
+_SPAWN_TIMELINE_MAX = 200
+_SPAWN_TIMELINE_LOCK = threading.Lock()
+_SPAWN_TIMELINE = {}
+
+
+def _spawn_timeline_enabled():
+    """Stats collection is on by default and killable without a code change.
+
+    Set CCC_SPAWN_STATS=0 to turn the whole thing off (collection *and* the
+    UI panel) once it has served its purpose.
+    """
+    return os.environ.get("CCC_SPAWN_STATS", "1") not in ("0", "false", "no")
+
+
+def _spawn_timeline_start(session_id, **fields):
+    """Open a timeline for a spawn. t0 is when CCC accepted the request."""
+    if not _spawn_timeline_enabled() or not session_id:
+        return
+    with _SPAWN_TIMELINE_LOCK:
+        _SPAWN_TIMELINE[str(session_id)] = {
+            "session_id": str(session_id),
+            "t0": time.time(),
+            "marks": {},
+            **fields,
+        }
+        while len(_SPAWN_TIMELINE) > _SPAWN_TIMELINE_MAX:
+            _SPAWN_TIMELINE.pop(next(iter(_SPAWN_TIMELINE)), None)
+
+
+def _spawn_timeline_mark(session_id, name, value_ms=None):
+    """Record a named mark. Defaults to 'now, relative to t0'.
+
+    First write wins: these are "time until X *first* happened" and a later
+    poll must not overwrite the moment it actually occurred.
+    """
+    if not _spawn_timeline_enabled() or not session_id:
+        return
+    with _SPAWN_TIMELINE_LOCK:
+        entry = _SPAWN_TIMELINE.get(str(session_id))
+        if not entry or name in entry["marks"]:
+            return
+        entry["marks"][name] = (
+            round(float(value_ms), 1) if value_ms is not None
+            else round((time.time() - entry["t0"]) * 1000, 1)
+        )
+
+
+def _spawn_timeline_get(session_id):
+    with _SPAWN_TIMELINE_LOCK:
+        entry = _SPAWN_TIMELINE.get(str(session_id))
+        return json.loads(json.dumps(entry)) if entry else None
+
+
+def _spawn_timeline_save():
+    if not _spawn_timeline_enabled():
+        return
+    try:
+        with _SPAWN_TIMELINE_LOCK:
+            payload = json.loads(json.dumps(_SPAWN_TIMELINE))
+        tmp = _SPAWN_TIMELINE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, _SPAWN_TIMELINE_FILE)
+    except (OSError, ValueError):
+        pass
+
+
+def _spawn_timeline_load():
+    global _SPAWN_TIMELINE
+    try:
+        data = json.loads(_SPAWN_TIMELINE_FILE.read_text())
+        if isinstance(data, dict):
+            with _SPAWN_TIMELINE_LOCK:
+                _SPAWN_TIMELINE = data
+    except (OSError, ValueError):
+        pass
+
+
 def _codex_telemetry_append(event, **fields):
     rec = {
         "ts": time.time(),
@@ -25224,6 +25312,27 @@ def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
     on the same write.
     """
     def worker():
+        # Watch the rollout appear/fill alongside the confirmation. These are
+        # the marks that explain a "slow" session: CCC renders the transcript
+        # FROM this file, so nothing can reach the screen before it exists and
+        # carries the user's message.
+        def watch_rollout():
+            deadline = time.time() + 180
+            seen_file = False
+            while time.time() < deadline:
+                stat = _codex_rollout_stat(thread_id)
+                if stat and not seen_file:
+                    seen_file = True
+                    _spawn_timeline_mark(thread_id, "rollout_file_created")
+                if stat and (stat.get("size") or 0) > 0:
+                    _spawn_timeline_mark(thread_id, "rollout_first_bytes")
+                    return
+                time.sleep(0.25)
+        threading.Thread(
+            target=watch_rollout, daemon=True,
+            name=f"ccc-rollout-watch-{str(thread_id)[:8]}",
+        ).start()
+
         # Nobody waits on this any more, so give it a window that can actually
         # observe the answer. Codex writes ~85KB of preamble into a fresh
         # rollout before the user_message row lands, which the old 5s budget
@@ -25246,6 +25355,11 @@ def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
             timeout=confirm_timeout,
         )
         confirm_ms = _codex_elapsed_ms(confirm_at)
+        if confirmation.get("confirmed"):
+            # The prompt is now durably on disk -- this is the earliest moment
+            # CCC could possibly render the user's own message.
+            _spawn_timeline_mark(thread_id, "rollout_has_user_message")
+        _spawn_timeline_mark(thread_id, "confirm_finished")
 
         name_set_ms = None
         rename_warning = ""
@@ -25270,6 +25384,7 @@ def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
                 if attempt + 1 < _CODEX_NAME_SET_ATTEMPTS:
                     time.sleep(_CODEX_NAME_SET_RETRY_DELAY)
             name_set_ms = _codex_elapsed_ms(name_set_at)
+            _spawn_timeline_mark(thread_id, "name_set_finished")
         # Append, don't reopen for write: the spawn path already closed its
         # handle on this file by the time we get here.
         try:
@@ -25295,6 +25410,8 @@ def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
                 }, sort_keys=True) + "\n")
         except OSError:
             pass
+        _spawn_timeline_mark(thread_id, "finalize_done")
+        _spawn_timeline_save()
         _codex_telemetry_append(
             "codex_spawn_finalize",
             ok=True,
@@ -26263,6 +26380,21 @@ def _codex_spawn_via_app_server(
         return None
     thread_id = str(thread_id)
     _codex_app_server_record_thread(thread_id, thread)
+    # Backdate t0 to the start of the spawn so thread_start is measured from
+    # when the user actually asked, not from when Codex answered.
+    _spawn_timeline_start(
+        thread_id,
+        engine="codex",
+        name=session_name,
+        cwd=spawn_cwd,
+        model=model_to_use or "",
+        app_server_warm=app_server_warm,
+    )
+    with _SPAWN_TIMELINE_LOCK:
+        _entry = _SPAWN_TIMELINE.get(thread_id)
+        if _entry:
+            _entry["t0"] = time.time() - (time.monotonic() - total_start)
+    _spawn_timeline_mark(thread_id, "thread_start_done", thread_start_ms)
 
     # thread/name/set costs a measured ~1.7s and turn/start does not depend on
     # it (turn/start takes only threadId and returns in 1-2ms). Running it here
@@ -26471,6 +26603,7 @@ def _codex_spawn_via_app_server(
             "thread_recreated": thread_recreated,
         }, sort_keys=True) + "\n")
         log_fh.flush()
+        _spawn_timeline_mark(thread_id, "turn_accepted")
         confirm_ms = None
         confirmation = {"confirmed": None, "source": "pending", "warning": None}
         _codex_finalize_spawn_async(
@@ -26589,6 +26722,8 @@ def _codex_spawn_via_app_server(
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
+    _spawn_timeline_mark(thread_id, "spawn_response_sent")
+    _spawn_timeline_save()
     return _finalize_spawn_response(resp, entry, {"cwd": spawn_cwd, "repo_path": repo_for_logs}, wait_for_session_id=False)
 
 
@@ -32385,6 +32520,10 @@ def find_codex_conversations(
         # title as AI-generated when it actually differs from first_message
         # — otherwise the ✨ glyph would show on rows where Codex did no
         # summarization.
+        # The row is about to be emitted into the session list -- for a
+        # just-spawned session this is the moment the sidebar can stop saying
+        # "spawning", so it is the mark that matches what the user sees.
+        _spawn_timeline_mark(sid, "row_in_session_list")
         codex_ai_title = title if (title and title != first_message) else None
         # Codex's SQLite `title` is the raw first user message when the
         # prompt was too short to summarize — for annotation prompts that
@@ -50873,6 +51012,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_html(_load_index_html())
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
+        elif path == "/api/session/spawn-timeline":
+            # Debug stats for "why did this session take so long to appear".
+            # Marks are ms since CCC accepted the spawn request.
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = str((qs.get("session_id") or [""])[0] or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            else:
+                entry = _spawn_timeline_get(sid)
+                self.send_json({
+                    "ok": bool(entry),
+                    "enabled": _spawn_timeline_enabled(),
+                    "timeline": entry,
+                })
         elif path == "/api/system/app-server":
             self.send_json(_system_app_server_status())
         elif path == "/api/watchtower/service/status":
@@ -53932,6 +54085,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "started": started,
                 "already_running": not started,
             })
+            return
+        if path == "/api/session/spawn-timeline/mark":
+            # The browser owns the marks that matter most to the user: when
+            # the row actually rendered, when the transcript first painted.
+            # The server cannot observe those, so the client posts them here
+            # and both halves end up on one timeline.
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = str(payload.get("session_id") or "").strip()
+            marks = payload.get("marks")
+            if not sid or not isinstance(marks, dict):
+                self.send_json({"ok": False, "error": "session_id and marks required"}, 400)
+                return
+            for name, value in list(marks.items())[:40]:
+                try:
+                    _spawn_timeline_mark(sid, f"client_{name}", float(value))
+                except (TypeError, ValueError):
+                    continue
+            _spawn_timeline_save()
+            self.send_json({"ok": True, "timeline": _spawn_timeline_get(sid)})
             return
         if path == "/api/restart/worker":
             # Restart ONLY the execution worker. The common case after a
@@ -63908,6 +64085,9 @@ def main():
     _raise_open_file_limit()
     migrate_state_dir()
     _install_python_stack_dump_handler()
+    # Keep spawn stats across a dashboard restart -- otherwise restarting
+    # mid-investigation throws away the evidence you restarted to look at.
+    _spawn_timeline_load()
     # Diagnostic: mark every server start in the resume ledger so a burst of
     # cold_resume events right after this line implicates restart-EOF as the
     # cause of warm processes dying.
