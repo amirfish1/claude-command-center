@@ -50598,6 +50598,8 @@
       repos: d.repos || [],
       current: d.current || '',
       recent: d.recent || [],
+      rankings: d.rankings || [],
+      by_kind: d.by_kind || {},
     };
     try {
       if (currentConversation === '__new__') populateSpawnCwdPicker();
@@ -55849,7 +55851,7 @@
   // exactly where the new session will land. This is the explicit repo
   // context for All-repos mode.
   const SPAWN_CWD_KEY = 'ccc-spawn-cwd';
-  const SPAWN_CWD_CHIP_LIMIT = 6;
+  const SPAWN_CWD_CHIP_LIMIT = 10;
   let spawnCwdOptions = [];
 
   function normalizeSpawnCwdPath(value) {
@@ -55932,32 +55934,58 @@
     const wanted = normalizeSpawnCwdPath(current);
     const out = [];
     const seen = new Set();
-    const addPath = (path) => {
+    const addPath = (path, kind) => {
       const opt = spawnCwdOptionForPath(path);
       if (!opt || seen.has(opt.value)) return;
       seen.add(opt.value);
-      out.push(opt);
+      out.push(Object.assign({}, opt, { kind: kind || 'production' }));
     };
 
-    for (const path of ((repoListState && repoListState.recent) || [])) {
-      addPath(path);
-      if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+    // Prefer signal-driven rankings; keep production and dev/test groups
+    // contiguous so the user can scan by purpose.
+    const rankings = (repoListState && repoListState.rankings) || [];
+    if (rankings.length) {
+      const byKind = {};
+      for (const r of rankings) {
+        const k = r.kind || 'production';
+        byKind[k] = byKind[k] || [];
+        byKind[k].push(r);
+      }
+      const activeKinds = Object.keys(byKind).filter(k => byKind[k].length);
+      const perKindCap = activeKinds.length > 1
+        ? Math.ceil(SPAWN_CWD_CHIP_LIMIT / activeKinds.length)
+        : SPAWN_CWD_CHIP_LIMIT;
+      for (const k of ['production', 'dev_test']) {
+        for (const item of (byKind[k] || []).slice(0, perKindCap)) {
+          addPath(item.path, k);
+          if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+        }
+        if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+      }
+    }
+
+    // Fallback to recent + alphabetical when signals are missing / empty.
+    if (!out.length) {
+      for (const path of ((repoListState && repoListState.recent) || [])) {
+        addPath(path, 'production');
+        if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
+      }
     }
     if (out.length < SPAWN_CWD_CHIP_LIMIT) {
       for (const opt of (spawnCwdOptions || [])) {
-        addPath(opt && opt.value);
+        addPath(opt && opt.value, 'production');
         if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
       }
     }
     if (!out.length) {
       for (const repo of ((repoListState && repoListState.repos) || [])) {
-        addPath(repo && repo.path);
+        addPath(repo && repo.path, 'production');
         if (out.length >= SPAWN_CWD_CHIP_LIMIT) break;
       }
     }
     if (wanted && !seen.has(wanted)) {
       const currentOpt = spawnCwdOptionForPath(wanted);
-      if (currentOpt) out.unshift(currentOpt);
+      if (currentOpt) out.unshift(Object.assign({}, currentOpt, { kind: 'production' }));
     }
     return out.slice(0, SPAWN_CWD_CHIP_LIMIT);
   }
@@ -55973,23 +56001,37 @@
       return;
     }
     wrap.hidden = false;
-    const label = document.createElement('div');
-    label.className = 'ns-choice-title';
-    label.textContent = 'Pick a repo';
-    wrap.appendChild(label);
-    const row = document.createElement('div');
-    row.className = 'ns-repo-chips';
-    wrap.appendChild(row);
-    for (const opt of chips) {
-      const active = normalizeSpawnCwdPath(opt.value) === normalizeSpawnCwdPath(current);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'ns-repo-chip' + (active ? ' is-current' : '');
-      btn.textContent = opt.label;
-      btn.title = 'Start the new session in ' + opt.value;
-      btn.setAttribute('data-ns-repo', opt.value);
-      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-      row.appendChild(btn);
+
+    // Group signal-ranked chips by kind so production and dev/test are
+    // visually separated on the new-session stage.
+    const byKind = {};
+    for (const c of chips) {
+      const k = c.kind || 'production';
+      byKind[k] = byKind[k] || [];
+      byKind[k].push(c);
+    }
+
+    for (const k of ['production', 'dev_test']) {
+      const group = byKind[k];
+      if (!group || !group.length) continue;
+      const label = document.createElement('div');
+      label.className = 'ns-choice-title';
+      label.textContent = k === 'dev_test' ? 'Development & test' : 'Production';
+      wrap.appendChild(label);
+      const row = document.createElement('div');
+      row.className = 'ns-repo-chips';
+      wrap.appendChild(row);
+      for (const opt of group) {
+        const active = normalizeSpawnCwdPath(opt.value) === normalizeSpawnCwdPath(current);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ns-repo-chip' + (active ? ' is-current' : '');
+        btn.textContent = opt.label;
+        btn.title = 'Start the new session in ' + opt.value;
+        btn.setAttribute('data-ns-repo', opt.value);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        row.appendChild(btn);
+      }
     }
   }
 
@@ -56000,13 +56042,20 @@
     const chips = spawnCwdQuickChipOptions(current);
     wrap.innerHTML = '';
     wrap.style.display = chips.length ? '' : 'none';
-    if (chips.length) {
-      const label = document.createElement('span');
-      label.className = 'spawn-cwd-chip-label';
-      label.textContent = 'Recent folders';
-      wrap.appendChild(label);
+    if (!chips.length) {
+      renderNewSessionRepoSuggestions();
+      return;
     }
+
+    let lastKind = null;
     for (const opt of chips) {
+      if (opt.kind !== lastKind) {
+        const label = document.createElement('span');
+        label.className = 'spawn-cwd-chip-group-label';
+        label.textContent = opt.kind === 'dev_test' ? 'Dev & test' : 'Production';
+        wrap.appendChild(label);
+        lastKind = opt.kind;
+      }
       const active = normalizeSpawnCwdPath(opt.value) === normalizeSpawnCwdPath(current);
       const btn = document.createElement('button');
       btn.type = 'button';

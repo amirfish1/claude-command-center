@@ -1,0 +1,1 @@
+Added signal-driven repo suggestions on the new-session page. Quick chips and the repo gallery are now ranked by recent usage (sessions, turns, and tokens over 7/30 days) and grouped into Production and Development & test folders.

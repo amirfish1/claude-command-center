@@ -291,6 +291,26 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_repo_kind_classifier(self):
+        """Production vs dev/test classification respects explicit overrides
+        and common path-name heuristics."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as td:
+            prod = pathlib.Path(td, "my-app")
+            prod.mkdir()
+            self.assertEqual(server._repo_kind_for_path(str(prod)), "production")
+
+            test_repo = pathlib.Path(td, "my-app-test")
+            test_repo.mkdir()
+            self.assertEqual(server._repo_kind_for_path(str(test_repo)), "dev_test")
+
+            sandbox = pathlib.Path(td, "sandbox")
+            sandbox.mkdir()
+            override = sandbox / ".ccc" / "project-type"
+            override.parent.mkdir(parents=True)
+            override.write_text("production\n")
+            self.assertEqual(server._repo_kind_for_path(str(sandbox)), "production")
+
     def test_import_doc_parser_and_path_clamp(self):
         """Plan-to-fleet (W51): the `wt import` stdout parser and the doc-path
         clamp behave, and neither hard-depends on Watchtower being installed."""
@@ -1227,13 +1247,15 @@ class TestServerImports(unittest.TestCase):
 
         self.assertIn('placeholder="Pick or type a folder path"', index_html)
         self.assertIn('aria-label="Recent folder shortcuts"', index_html)
-        self.assertIn("spawn-cwd-chip-label", app_js)
-        self.assertIn("Recent folders", app_js)
+        self.assertIn("spawn-cwd-chip-group-label", app_js)
+        self.assertIn("Production", app_js)
+        self.assertIn("Dev & test", app_js)
         self.assertIn("id=\"nsRepoSuggestions\"", app_js)
         self.assertIn("function renderNewSessionRepoSuggestions", app_js)
         self.assertIn("for (const opt of (spawnCwdOptions || []))", app_js)
         self.assertIn("Show all folder suggestions", index_html)
         self.assertIn(".spawn-cwd-chip-label", app_css)
+        self.assertIn(".spawn-cwd-chip-group-label", app_css)
         self.assertIn(".ns-repo-suggestions", app_css)
 
     def test_new_session_stage_demotes_center_card_and_expands_composer(self):

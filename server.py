@@ -3861,6 +3861,173 @@ def _known_repo_paths():
     return out
 
 
+_REPO_SIGNALS_CACHE = {"paths": (), "data": None, "ts": 0.0}
+_REPO_SIGNALS_TTL = 30  # seconds
+
+_DEV_TEST_NAME_SEGMENTS = frozenset({
+    "ccc-voice", "draft", "experiment", "experiments", "fixture", "fixtures",
+    "playground", "sandbox", "scratch", "spec", "specs", "temp", "test",
+    "testing", "tests", "tmp",
+})
+
+
+def _repo_kind_for_path(path_str):
+    """Classify a repo path as production or dev_test.
+
+    An explicit .ccc/project-type file overrides the heuristic. The file
+    should contain one of: production, prod, development, dev, test, testing.
+    Everything that does not look like a test/dev sandbox is treated as
+    production, which is the common case for shipped work.
+    """
+    try:
+        p = Path(path_str).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        return "production"
+    override = p / ".ccc" / "project-type"
+    if override.is_file():
+        try:
+            text = override.read_text().strip().lower()
+            if text in ("production", "prod"):
+                return "production"
+            if text in ("development", "dev", "test", "testing"):
+                return "dev_test"
+        except (OSError, ValueError):
+            pass
+    for part in p.parts:
+        lowered = part.lower()
+        if lowered in _DEV_TEST_NAME_SEGMENTS:
+            return "dev_test"
+        # Also match compound names like my-app-test or test_fixtures.
+        for token in re.split(r"[-_.]", lowered):
+            if token in _DEV_TEST_NAME_SEGMENTS:
+                return "dev_test"
+    return "production"
+
+
+def _compute_repo_usage_signals(repo_paths):
+    """Return usage signals and a composite score for each repo path.
+
+    Shape per path:
+      {
+        "kind": "production" | "dev_test",
+        "signals": {
+          "d7":  {"sessions": int, "turns": int, "tokens": int},
+          "d30": {"sessions": int, "turns": int, "tokens": int},
+          "all": {"sessions": int, "turns": int, "tokens": int},
+        },
+        "score": float,
+      }
+
+    Signals are derived from the cached per-transcript aggregates so the
+    expensive JSONL parsing only happens for changed files. Results are
+    memoised for a few seconds because /api/repo/list is polled repeatedly.
+    """
+    key = tuple(sorted(repo_paths))
+    now = time.time()
+    cached = _REPO_SIGNALS_CACHE
+    if cached["paths"] == key and (now - cached["ts"]) < _REPO_SIGNALS_TTL:
+        return cached["data"]
+
+    today = datetime.now().astimezone().date()
+    cutoff_7 = today - timedelta(days=6)   # inclusive: last 7 days
+    cutoff_30 = today - timedelta(days=29)  # inclusive: last 30 days
+
+    signals = {}
+    for p in repo_paths:
+        signals[p] = {
+            "kind": _repo_kind_for_path(p),
+            "signals": {
+                "d7": {"sessions": set(), "turns": 0, "tokens": 0},
+                "d30": {"sessions": set(), "turns": 0, "tokens": 0},
+                "all": {"sessions": set(), "turns": 0, "tokens": 0},
+            },
+            "score": 0.0,
+        }
+
+    if not repo_paths or not PROJECTS_ROOT.is_dir():
+        return signals
+
+    # Map project dirs back to repo paths.
+    dir_to_repo = {}
+    for p in repo_paths:
+        try:
+            for d in _candidate_conversation_dirs(p):
+                dir_to_repo[str(d)] = p
+        except (OSError, ValueError, RuntimeError):
+            continue
+
+    with _STATS_CACHE_LOCK:
+        try:
+            project_dirs = list(PROJECTS_ROOT.iterdir())
+        except OSError:
+            project_dirs = []
+        for project_dir in project_dirs:
+            if not project_dir.is_dir():
+                continue
+            repo_path = dir_to_repo.get(str(project_dir))
+            if not repo_path:
+                continue
+            try:
+                jsonl_files = list(project_dir.iterdir())
+            except OSError:
+                continue
+            for jsonl in jsonl_files:
+                if not jsonl.name.endswith(".jsonl") or not jsonl.is_file():
+                    continue
+                agg = _stats_get_file_agg(jsonl)
+                if not agg:
+                    continue
+                session_id = agg.get("session_id")
+                by_date = agg.get("by_date") or {}
+                for date_str, day in by_date.items():
+                    try:
+                        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    except ValueError:
+                        continue
+                    if d > today:
+                        continue
+                    turns = int(day.get("messages", 0))
+                    tokens = int(day.get("in_tokens", 0)) + int(day.get("out_tokens", 0))
+                    repo = signals[repo_path]
+                    # all time
+                    repo["signals"]["all"]["turns"] += turns
+                    repo["signals"]["all"]["tokens"] += tokens
+                    if session_id:
+                        repo["signals"]["all"]["sessions"].add(session_id)
+                    # 30 days (7 days are a subset)
+                    if d >= cutoff_30:
+                        repo["signals"]["d30"]["turns"] += turns
+                        repo["signals"]["d30"]["tokens"] += tokens
+                        if session_id:
+                            repo["signals"]["d30"]["sessions"].add(session_id)
+                        # 7 days
+                        if d >= cutoff_7:
+                            repo["signals"]["d7"]["turns"] += turns
+                            repo["signals"]["d7"]["tokens"] += tokens
+                            if session_id:
+                                repo["signals"]["d7"]["sessions"].add(session_id)
+
+    # Convert session sets to counts and compute composite score.
+    for p in repo_paths:
+        repo = signals[p]
+        for window in ("d7", "d30", "all"):
+            repo["signals"][window]["sessions"] = len(repo["signals"][window]["sessions"])
+        s = repo["signals"]
+        repo["score"] = (
+            s["d7"]["sessions"] * 8.0
+            + s["d7"]["turns"] * 2.0
+            + s["d7"]["tokens"] * 0.002
+            + s["d30"]["sessions"] * 4.0
+            + s["d30"]["turns"] * 1.0
+            + s["d30"]["tokens"] * 0.001
+        )
+
+    _REPO_SIGNALS_CACHE["paths"] = key
+    _REPO_SIGNALS_CACHE["data"] = signals
+    _REPO_SIGNALS_CACHE["ts"] = now
+    return signals
+
+
 def _git_toplevel_for_existing_dir(path):
     try:
         p = Path(path).expanduser().resolve()
@@ -52408,12 +52575,67 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/repo/list":
             # List of repos the picker offers. There is no server-active repo.
             repos = load_known_repos()
+            known_paths = _known_repo_paths()
+            signals_by_path = _compute_repo_usage_signals(known_paths)
+
+            # Attach usage signals / kind / score to every repo the picker knows.
+            for r in repos:
+                info = signals_by_path.get(r["path"])
+                if info is None:
+                    info = {
+                        "kind": _repo_kind_for_path(r["path"]),
+                        "signals": {
+                            "d7": {"sessions": 0, "turns": 0, "tokens": 0},
+                            "d30": {"sessions": 0, "turns": 0, "tokens": 0},
+                            "all": {"sessions": 0, "turns": 0, "tokens": 0},
+                        },
+                        "score": 0.0,
+                    }
+                r["kind"] = info["kind"]
+                r["signals"] = info["signals"]
+                r["score"] = info["score"]
+
+            # Build a signal-ranked list for the new-session quick chips.
+            repos_by_path = {r["path"]: r for r in repos}
+            label_counts = {}
+            for r in repos:
+                label_counts[r.get("label")] = label_counts.get(r.get("label"), 0) + 1
+
+            def _ranking_label(path):
+                if path in repos_by_path:
+                    return repos_by_path[path]["label"]
+                name = Path(path).name
+                if label_counts.get(name, 0) > 1:
+                    parent = Path(path).parent.name
+                    return f"{name} ({parent})" if parent else path
+                return name
+
+            rankings = []
+            for p in known_paths:
+                info = signals_by_path.get(p)
+                if not info or info["score"] <= 0:
+                    continue
+                rankings.append({
+                    "path": p,
+                    "label": _ranking_label(p),
+                    "kind": info["kind"],
+                    "score": info["score"],
+                    "signals": info["signals"],
+                })
+            rankings.sort(key=lambda x: x["score"], reverse=True)
+
+            by_kind = {}
+            for r in rankings:
+                by_kind.setdefault(r["kind"], []).append(r)
+
             # recent[] is the subset of repos ordered by last use; the
             # client uses it to surface a "Recent" group in the picker modal.
             self.send_json({
                 "current": None,
                 "repos": repos,
                 "recent": _load_recent_repos(),
+                "rankings": rankings,
+                "by_kind": by_kind,
             })
         elif path == "/api/registry":
             # Multi-repo peer discovery: list every CCC server live on this

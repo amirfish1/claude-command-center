@@ -3751,6 +3751,20 @@
     line-height: 1.2;
     text-transform: uppercase;
   }
+  .conv-input-context .spawn-cwd-chip-group-label {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    margin-left: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+  .conv-input-context .spawn-cwd-chip-group-label:first-child {
+    margin-left: 0;
+  }
   .conv-input-context .spawn-cwd-chip {
     display: inline-flex;
     align-items: center;
