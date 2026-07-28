@@ -437,6 +437,20 @@ final class CCCWebWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindow
 
 // MARK: - App Delegate
 
+// Sparkle's installer progress agent asks the host to terminate via
+// NSRunningApplication.terminate so it can swap in the downloaded bundle —
+// but on this app that request never lands (verified on macOS 26, Sparkle
+// 2.9.2: the agent sits waiting, the host sits healthy-idle, and the
+// "Updating…" status window hangs forever; an Apple-Event quit, a menu
+// Quit, or a manual SIGTERM all unstick it instantly). Quitting ourselves
+// when the driver reports the install is starting puts the termination
+// exactly where the flow expects it; the agent then installs + relaunches.
+final class CCCUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        NSApp.terminate(nil)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var mainWebWindow: CCCWebWindow!
     var window: NSWindow! { mainWebWindow.window }
@@ -464,6 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // check (interval and "automatically check" flag are controlled by the
     // user via the standard Sparkle update prompt the first time it runs).
     var updaterController: SPUStandardUpdaterController!
+    let updaterDelegate = CCCUpdaterDelegate()
     var updaterStarted = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -474,7 +489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // session and can accidentally select Retry or Quit. Defer until
             // the live dashboard has finished loading.
             startingUpdater: false,
-            updaterDelegate: nil,
+            updaterDelegate: updaterDelegate,
             userDriverDelegate: nil
         )
         buildMenuBar()
