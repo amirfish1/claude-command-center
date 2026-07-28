@@ -10,6 +10,11 @@
 #   ./scripts/cut-release.sh X.Y.Z --notes-file path/to/notes.md
 #   ./scripts/cut-release.sh X.Y.Z --dry-run    # print steps, change nothing
 #   ./scripts/cut-release.sh X.Y.Z --skip-dmg   # source/brew only, no DMG
+#   ./scripts/cut-release.sh X.Y.Z --allow-dirty  # cut anyway with a dirty tree
+#
+# A dirty working tree is refused by default: this script stages a fixed file
+# list, so uncommitted work in static/ (or anywhere outside that list) would be
+# left out and the release would ship a half-finished feature. See the preflight.
 #
 # Prereqs (see docs/RELEASING.md): Developer ID cert, notarytool profile
 # 'ccc-notary', Sparkle EdDSA key in login keychain, gh logged in, and the
@@ -24,6 +29,7 @@ NOTES_FILE=""
 DRY_RUN=0
 SKIP_DMG=0
 SKIP_BREW=0
+ALLOW_DIRTY=0
 BREW_TAP="${CCC_BREW_TAP:-$HOME/Apps/homebrew-ccc}"
 BREW_FORMULA_UPDATED=0
 BREW_FORMULA_SHA=""
@@ -33,6 +39,7 @@ for arg in "$@"; do
     --dry-run) DRY_RUN=1 ;;
     --skip-dmg) SKIP_DMG=1 ;;
     --skip-brew) SKIP_BREW=1 ;;
+    --allow-dirty) ALLOW_DIRTY=1 ;;
     --notes-file=*) NOTES_FILE="${arg#*=}" ;;
     --notes-file) shift; NOTES_FILE="${1:-}" ;;
     -*) echo "cut-release: unknown flag $arg" >&2; exit 2 ;;
@@ -42,7 +49,7 @@ done
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "cut-release: version must be X.Y.Z, got '${VERSION:-<none>}'" >&2
-  echo "usage: ./scripts/cut-release.sh X.Y.Z [--skip-dmg] [--skip-brew] [--dry-run] [--notes-file F]" >&2
+  echo "usage: ./scripts/cut-release.sh X.Y.Z [--skip-dmg] [--skip-brew] [--allow-dirty] [--dry-run] [--notes-file F]" >&2
   exit 2
 fi
 
@@ -56,8 +63,38 @@ step "Cutting v${VERSION}  (prev tag: ${PREV_TAG:-none})  dry-run=${DRY_RUN}"
 
 # ── Preflight ───────────────────────────────────────────────────────────────
 step "Preflight checks"
-[ -z "$(git status --porcelain --untracked-files=no | grep -vE 'README.md|docs/images')" ] \
-  || warn "working tree has tracked changes beyond README/demo — they may ride along"
+# A dirty tree is a HARD STOP, not a warning.
+#
+# Step 4 stages a fixed list (CHANGELOG.md pyproject.toml server.py
+# changelog.d) because that is where the version bump lives. Two ways that
+# silently corrupts a release when other files are modified:
+#
+#   1. Uncommitted server.py work rides along into the release commit and
+#      gets tagged, notarized and published under someone else's name.
+#   2. Worse, a feature whose backend is in server.py and whose UI is in
+#      static/ ships BACKEND ONLY, because static/ is never staged. The
+#      release then advertises a feature it does not contain.
+#
+# Both happened on v5.17.0 (2026-07-28): the server-status endpoint shipped
+# without the chip that renders it, and 5.17.1 had to follow immediately.
+# The old behaviour here was warn-and-continue, which is how it got missed.
+DIRTY="$(git status --porcelain --untracked-files=no | grep -vE 'README.md|docs/images' || true)"
+if [ -n "$DIRTY" ]; then
+  if [ "$ALLOW_DIRTY" = 1 ]; then
+    warn "working tree is dirty and --allow-dirty was passed; these files ride along:"
+    echo "$DIRTY" | sed 's/^/     /'
+    warn "anything outside CHANGELOG.md/pyproject.toml/server.py/changelog.d will NOT be staged"
+  else
+    echo "${RED}working tree has uncommitted tracked changes; refusing to cut a release${NC}" >&2
+    echo "$DIRTY" | sed 's/^/     /' >&2
+    echo "" >&2
+    echo "Commit them first. Only CHANGELOG.md, pyproject.toml, server.py and" >&2
+    echo "changelog.d/ get staged by this script, so a change in static/ (or" >&2
+    echo "anywhere else) would be left out and the release would ship a" >&2
+    echo "half-finished feature. Re-run with --allow-dirty to override." >&2
+    exit 1
+  fi
+fi
 git rev-parse "v${VERSION}" >/dev/null 2>&1 && { echo "${RED}tag v${VERSION} already exists${NC}" >&2; exit 1; } || true
 command -v gh >/dev/null || { echo "${RED}gh not found${NC}" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "${RED}gh not authenticated${NC}" >&2; exit 1; }
