@@ -820,6 +820,14 @@
                   <!-- CCC-467: assign-to-object moved off the per-row "+" chip
                        to here — the RHS, for the selected session. -->
                   <button type="button" id="statusRailAddObjectBtn" class="status-rail-add-object-btn" title="Add to object" aria-label="Add session to object" style="display:none;">+&#8202;Object</button>
+                  <!-- Activity log: opens the unified spawn/inject/kill/app-server
+                       log for the selected session. Lives here (not the sticky
+                       header) because updatePaneHeader sets this on every
+                       selection, before the transcript finishes loading --
+                       unlike the sticky header, which only exists once the
+                       first user_text event renders (gated behind full-history
+                       load on long/truncated transcripts). -->
+                  <button type="button" id="statusRailActivityLogBtn" class="status-rail-activity-log-btn" title="View CCC's spawn/inject/kill activity log for this session" aria-label="View activity log" style="display:none;">Log</button>
                 </div>
                 <!-- CCC-505: the bold title above is clipped (WT ticket
                      context is hard-capped at 60 chars); show whatever got

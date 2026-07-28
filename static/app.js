@@ -2669,12 +2669,17 @@
   //            min, ~26% by 25-30, ~41% by 40-50, ~68% by 50-60. Graded, so
   //            the copy says "likely partial", never "cold", and the verdict
   //            talks about paying for *part* of the reload.
+  //   kimi   — No measured decay curve yet. Treating it as graded and warning
+  //            at 35 min is a conservative first cut: earlier than Claude's
+  //            cliff, later than Codex's material-loss point. The copy hedges
+  //            so we don't teach users to dismiss the measured engines.
   //
-  // Everything else (gemini, kimi, cursor, antigravity, hermes, kilo) has no
+  // Everything else (gemini, cursor, antigravity, hermes, kilo) has no
   // measurement behind it. Absent evidence we stay silent rather than warn —
   // an unfounded warning trains the user to dismiss the founded ones.
   const F2_STALE_MINUTES = 60;         // claude: the cliff
   const F2_STALE_MINUTES_CODEX = 25;   // codex: where graded loss is material
+  const F2_STALE_MINUTES_KIMI = 35;    // kimi: conservative provisional threshold
   const F2_ENGINE_CACHE = {
     claude: {
       staleMinutes: F2_STALE_MINUTES,
@@ -2690,6 +2695,14 @@
       // No cliff to point at — the honest statement is "some of it", scaling
       // with idle time, not "all of it".
       verdictNote: 'Codex caches decay gradually rather than expiring, so a growing share of that reload is no longer cached',
+    },
+    kimi: {
+      staleMinutes: F2_STALE_MINUTES_KIMI,
+      decay: 'graded',
+      railNote: 'cache likely partial',
+      // Honest about the lack of measurement — we warn conservatively rather
+      // than staying silent for a large reload.
+      verdictNote: 'Kimi cache decay has not been measured yet; after ' + F2_STALE_MINUTES_KIMI + ' min idle a growing share of that reload may no longer be cached',
     },
   };
   // 'interactive' is how a Claude session started outside CCC labels itself.
@@ -32076,6 +32089,12 @@
         if (railRenameBtn) railRenameBtn.style.display = (_statusRailActiveRow && _statusRailActiveRow.id) ? '' : 'none';
         const railAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
         if (railAddObjectBtn) railAddObjectBtn.style.display = (_statusRailActiveRow && (_statusRailActiveRow.session_id || _statusRailActiveRow.id)) ? '' : 'none';
+        const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
+        if (railActivityLogBtn) {
+          const sid = _statusRailActiveRow && (_statusRailActiveRow.session_id || _statusRailActiveRow.id) || '';
+          railActivityLogBtn.style.display = sid ? '' : 'none';
+          railActivityLogBtn.onclick = sid ? () => openActivityLogModal(sid, shortSessionId(sid)) : null;
+        }
       } else if (isActive) {
         breadcrumbEl.innerHTML = '';
         breadcrumbEl.hidden = true;
@@ -32086,6 +32105,8 @@
         _statusRailActiveRow = null;
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
         if (railRenameBtn) railRenameBtn.style.display = 'none';
+        const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
+        if (railActivityLogBtn) { railActivityLogBtn.style.display = 'none'; railActivityLogBtn.onclick = null; }
         const railAddObjectBtn = document.getElementById('statusRailAddObjectBtn');
         if (railAddObjectBtn) railAddObjectBtn.style.display = 'none';
       }
@@ -44460,9 +44481,12 @@
   // Reads CCC's own unified spawn/inject/kill/codex-app-server-health log
   // (~/.claude/command-center/logs/activity.log) via GET /api/activity-log
   // and renders it for the session currently open in the conv pane. Opened
-  // from the "Log" button in the sticky header (see .conv-sticky-header__
-  // activity-log). Mirrors ~/.watchtower/activity.log's one-line-per-event
-  // shape, but formatted for the browser instead of a terminal.
+  // from the status rail's "Log" button (#statusRailActivityLogBtn, wired
+  // in updatePaneHeader) rather than the sticky header -- the rail updates
+  // on every conversation selection, before the transcript (and truncated-
+  // history-gated sticky header) finishes loading. Mirrors
+  // ~/.watchtower/activity.log's one-line-per-event shape, but formatted
+  // for the browser instead of a terminal.
   const _ACTIVITY_LOG_VERB_CLASS = {
     SPAWN: 'is-good', INJECT: 'is-good',
     FAILED: 'is-bad', REJECT: 'is-bad', DEAD: 'is-bad', KILL: 'is-bad',
@@ -44716,7 +44740,6 @@
           const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
           if (paneId === activePaneId()) syncMobileOriginalAsk(mobileOriginalAskText);
           sticky.innerHTML = resolveBtn + issueBtn
-            + '<button type="button" class="conv-sticky-header__activity-log" data-csh-activity-log title="View CCC\'s spawn/inject/kill activity log for this session">Log</button>'
             + '<button type="button" class="conv-sticky-header__close" data-csh-close title="Hide this panel completely">×</button>'
             + '<div class="csh-row">'
             +   '<div class="csh-col csh-col-ask">'
@@ -44814,14 +44837,6 @@
               if (_dynamicAskState && _dynamicAskState.sticky === sticky) {
                 _dynamicAskState = null;
               }
-            });
-          }
-          const activityLogBtn = sticky.querySelector('[data-csh-activity-log]');
-          if (activityLogBtn) {
-            activityLogBtn.addEventListener('click', (e) => {
-              e.stopPropagation();
-              const sid = conv.session_id || '';
-              openActivityLogModal(sid, sid ? shortSessionId(sid) : '');
             });
           }
           const resolveClickBtn = sticky.querySelector('.resolve-btn');

@@ -1343,17 +1343,6 @@
   }
   .conv-sticky-header .conv-sticky-header__close:hover { opacity: 1; color: var(--red); }
 
-  .conv-sticky-header .conv-sticky-header__activity-log {
-    position: absolute; top: 9px; right: 34px;
-    background: transparent; border: 1px solid var(--border);
-    color: var(--text-muted); font-size: 11px; padding: 2px 7px;
-    border-radius: 4px; cursor: pointer; z-index: 10;
-    line-height: 1.4;
-  }
-  .conv-sticky-header .conv-sticky-header__activity-log:hover {
-    color: var(--text); background: var(--surface-2);
-  }
-
   /* RTL support — `unicode-bidi: plaintext` lets each block (paragraph,
      blockquote, code block) detect its own direction from its first
      strong directional character (Hebrew/Arabic flips to RTL, Latin
@@ -14402,6 +14391,26 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   color: var(--text);
   outline: none;
 }
+.status-rail-activity-log-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.status-rail-activity-log-btn:hover,
+.status-rail-activity-log-btn:focus-visible {
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+}
 .status-rail-title-input {
   width: 100%;
   font: inherit;
@@ -21450,8 +21459,8 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 /* ── Activity log modal ──────────────────────────────────────────────────
    Reuses .settings-modal-overlay/.settings-modal-backdrop for the shared
    overlay-and-backdrop convention; everything below is specific to this
-   modal's content. Opened from the conv-pane sticky header's "Log" button
-   (see .conv-sticky-header__activity-log) — shows CCC's own spawn/inject/
+   modal's content. Opened from the status rail's "Log" button
+   (see .status-rail-activity-log-btn) — shows CCC's own spawn/inject/
    kill/codex-app-server-health feed (~/.claude/command-center/logs/
    activity.log), filtered to the open session. */
 .activity-log-modal {
