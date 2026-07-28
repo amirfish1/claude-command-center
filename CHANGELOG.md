@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.17.1] - 2026-07-28
+
+### Fixed
+- Ships the server-status chip UI. Its backend endpoint went out in 5.17.0 without the frontend that renders it, so the sidebar still showed the old separate WatchTower and Worker badges.
+
 ## [5.17.0] - 2026-07-28
 
 ### Added
@@ -2350,7 +2355,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.17.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.17.1...HEAD
+[5.17.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.17.1
 [5.17.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.17.0
 [5.16.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.16.0
 [5.15.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.15.0
