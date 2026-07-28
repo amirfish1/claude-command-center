@@ -9389,6 +9389,90 @@ def _install_dir():
     return Path(__file__).resolve().parent
 
 
+_WORKER_LAUNCHD_LABEL = "com.github.claude-command-center.worker"
+
+
+def _repo_version_on_disk():
+    """`__version__` declared by the server.py currently on disk (post-pull)."""
+    try:
+        for line in (_install_dir() / "server.py").read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines():
+            if line.startswith('__version__ = "'):
+                return line.split('"')[1]
+    except (OSError, IndexError):
+        pass
+    return ""
+
+
+def _restart_stale_worker():
+    """Restart the execution worker if it is running an older server.py.
+
+    The in-app update re-execs the dashboard directly (os.execvp), bypassing
+    run.sh's ensure_worker_current gate -- so the modal update path must make
+    the same check itself, or the worker keeps running pre-upgrade code
+    forever. Mirrors run.sh's rules: a worker too old to report
+    server_version counts as stale; a null server_version means it never
+    imported server (its first RPC loads the new code from disk -- leave it).
+    Best-effort and never raised into: the pull already succeeded, and a
+    worker that stays old for one more launch is caught by run.sh's gate.
+    """
+    try:
+        health = _control_plane_request("health")
+    except Exception as e:
+        return {"restarted": False, "reason": f"worker health unreachable ({e})"}
+    if not isinstance(health, dict) or not health.get("ok"):
+        return {"restarted": False, "reason": "no healthy worker"}
+    worker = health.get("worker") if isinstance(health.get("worker"), dict) else {}
+    repo_version = _repo_version_on_disk()
+    loaded = worker.get("server_version")
+    stale = ("server_version" not in worker) or (
+        bool(loaded) and bool(repo_version) and loaded != repo_version
+    )
+    if not stale:
+        return {"restarted": False, "reason": "current", "server_version": loaded}
+    target = f"gui/{os.getuid()}/{_WORKER_LAUNCHD_LABEL}"
+    try:
+        proc = subprocess.run(
+            ["launchctl", "kickstart", "-k", target],
+            capture_output=True, text=True, timeout=10,
+        )
+        kicked = proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        kicked = False
+    outcome = {"restarted": True, "was": loaded, "now": repo_version}
+    if kicked:
+        outcome["via"] = "launchd"
+        return outcome
+    # No launchd worker service on this install path (Homebrew's single
+    # service, DMG app spawn): kill + respawn detached, mirroring run.sh,
+    # or the dashboard runs workerless until the next launch.
+    outcome["via"] = "respawn"
+    pid = worker.get("pid")
+    try:
+        if pid:
+            os.kill(int(pid), signal.SIGTERM)
+            for _ in range(20):
+                try:
+                    os.kill(int(pid), 0)
+                except OSError:
+                    break
+                time.sleep(0.1)
+        log_dir = COMMAND_CENTER_STATE_DIR / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        out = open(log_dir / "worker.out.log", "a")
+        err = open(log_dir / "worker.err.log", "a")
+        subprocess.Popen(
+            [sys.executable, str(_install_dir() / "ccc_worker.py")],
+            stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+            start_new_session=True,
+        )
+    except OSError as e:
+        outcome["restarted"] = False
+        outcome["reason"] = f"kill/respawn failed ({e})"
+    return outcome
+
+
 def _ccc_last_updated_iso():
     """ISO-8601 timestamp of the most recent change to this install.
 
@@ -9683,6 +9767,17 @@ def _self_update():
     _VERSION_CHECK_CACHE["ts"] = 0.0
     _VERSION_CHECK_CACHE["data"] = None
     result = {"ok": True, "new_sha": (sha or "").strip()}
+
+    # The dashboard restarts via os.execvp, which bypasses run.sh's
+    # ensure_worker_current gate -- so the modal update path does its own
+    # stale-worker check here, while the freshly-pulled code is on disk.
+    result["worker"] = _restart_stale_worker()
+    if result["worker"].get("restarted"):
+        print(
+            f"  [self-update] worker restarted ({result['worker'].get('via')}): "
+            f"was {result['worker'].get('was') or 'pre-version-reporting'}, "
+            f"now {result['worker'].get('now')}"
+        )
 
     # CCC's own tree is current. Now the other half of the system — see the
     # restart-order note above. Both sub-results are reported, never raised:
@@ -24779,6 +24874,42 @@ def _codex_app_server_transport_kind():
     if transport.kind == "stdio":
         return "stdio"
     return transport.kind
+
+
+def _system_app_server_status():
+    """Read-only Codex app-server liveness snapshot for the System status
+    modal (GET /api/system/app-server). All fields best-effort; the transport
+    is read without the lock, so values may be a beat stale."""
+    transport = _CODEX_APP_SERVER_TRANSPORT
+    now = time.time()
+    live = bool(
+        transport is not None
+        and transport.alive()
+        and _CODEX_APP_SERVER_INITIALIZED
+    )
+    return {
+        "live": live,
+        "kind": _codex_app_server_transport_kind(),
+        "pid": (
+            getattr(getattr(transport, "proc", None), "pid", None)
+            if live else None
+        ),
+        "age_s": round(now - transport.started_at) if live else None,
+        "last_msg_age_s": (
+            round(now - _CODEX_APP_SERVER_LAST_MSG_AT)
+            if _CODEX_APP_SERVER_LAST_MSG_AT else None
+        ),
+        "last_check_age_s": (
+            round(now - _CODEX_APP_SERVER_LAST_LIVE_CHECK)
+            if _CODEX_APP_SERVER_LAST_LIVE_CHECK else None
+        ),
+        "consecutive_liveness_misses": (
+            getattr(transport, "consecutive_liveness_misses", 0)
+            if transport is not None else 0
+        ),
+        "miss_threshold": _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD,
+        "probe_timeout_s": _CODEX_APP_SERVER_LIVENESS_TIMEOUT,
+    }
 
 
 def _schedule_codex_managed_app_server_warmup():
@@ -50543,6 +50674,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_html(_load_index_html())
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
+        elif path == "/api/system/app-server":
+            self.send_json(_system_app_server_status())
         elif path == "/api/watchtower/service/status":
             self.send_json(_watchtower_service_status())
         elif path == "/api/control-plane/work":

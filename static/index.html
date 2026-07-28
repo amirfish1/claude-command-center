@@ -1191,12 +1191,52 @@
       <div class="upd-warning">
         Runs <code>git fetch + reset --hard origin/main</code> in the install
         directory, then restarts the server. Pre-flight checks require a
-        clean working tree on the <code>main</code> branch.
+        clean working tree on the <code>main</code> branch. The execution
+        worker also restarts if it is running older code &mdash; queued work
+        may show as <em>needs reconciliation</em> afterwards (one click on
+        <strong>Reconcile</strong> in Settings &rarr; Maintenance).
       </div>
       <div class="upd-error" id="updError"></div>
       <div class="upd-actions">
         <button type="button" class="upd-btn" id="updLaterBtn">Later</button>
         <button type="button" class="upd-btn upd-primary" id="updNowBtn">Update now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- System status modal. Opened from Settings → Maintenance → System status. -->
+  <div id="sysModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="sysTitle">
+    <div class="upd-backdrop" id="sysBackdrop"></div>
+    <div class="upd-dialog sys-dialog">
+      <div class="upd-title" id="sysTitle">System status</div>
+      <div class="sys-section">
+        <div class="sys-name">Dashboard <span class="sys-state" id="sysDashState">…</span></div>
+        <div class="sys-desc" id="sysDashDetail">The web UI you are looking at (server.py). Restarts itself on crash or reboot via launchd KeepAlive. Restart it after pulling new code or when the UI misbehaves — cheap, agent turns survive it.</div>
+      </div>
+      <div class="sys-section">
+        <div class="sys-name">Execution worker <span class="sys-state" id="sysWorkerState">…</span></div>
+        <div class="sys-desc" id="sysWorkerDetail">Owns agent processes (Claude/Codex/Kimi spawns, the work queue, the Codex app-server). Also under launchd KeepAlive. Restart only when it is actually stuck — restarting it marks running queue items "needs reconciliation" (one click on Reconcile above).</div>
+      </div>
+      <div class="sys-section">
+        <div class="sys-name">WatchTower server <span class="sys-state" id="sysWtState">…</span></div>
+        <div class="sys-desc" id="sysWtDetail">The fleet/queue tracker (daemon on :8787). KeepAlive-managed too. Restart when queue state looks stale.</div>
+      </div>
+      <div class="sys-section">
+        <div class="sys-name">Codex app-server <span class="sys-state" id="sysAppServerState">…</span></div>
+        <div class="sys-desc" id="sysAppServerDetail">A subprocess of the worker (not a launchd service) that all Codex sessions share. CCC probes it periodically and replaces it if it stops answering.</div>
+      </div>
+      <div class="upd-warning sys-wedged">
+        <strong>What is WEDGED?</strong> The verdict CCC logs when the Codex
+        app-server fails to answer the liveness probe
+        <span id="sysWedgedThreshold"></span> in a row, triggering teardown and
+        respawn. It affects only the worker's Codex sessions — never the
+        dashboard or WatchTower. It exists because the app-server once wedged
+        for real (a 600-process leak); the probe-and-replace is the
+        self-healing. A healthy app-server shows no WEDGED lines in the
+        activity log.
+      </div>
+      <div class="upd-actions">
+        <button type="button" class="upd-btn upd-primary" id="sysCloseBtn">Close</button>
       </div>
     </div>
   </div>
@@ -1850,6 +1890,16 @@
 
           <section class="settings-section" id="settingsSection-maintenance" data-section-id="maintenance" role="tabpanel" aria-labelledby="settingsRailTab-maintenance">
             <div class="settings-section-eyebrow">Maintenance</div>
+
+            <div class="settings-row" data-keywords="system status servers processes wedged app-server health versions">
+              <div class="settings-row-main">
+                <div class="settings-row-label">System status</div>
+                <div class="settings-row-desc">Every background process CCC runs, whether it comes back by itself, and what WEDGED means.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-action-btn" id="systemStatusBtn">View</button>
+              </div>
+            </div>
 
             <div class="settings-row" data-keywords="restart server 8090 reboot reload">
               <div class="settings-row-main">

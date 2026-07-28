@@ -51910,7 +51910,7 @@
       if ($label) {
         $label.innerHTML =
           '<strong>Updating Command Center&hellip;</strong>' +
-          '<div class="ccc-loading-detail">Pulling latest from GitHub and restarting the server.</div>';
+          '<div class="ccc-loading-detail">Pulling latest from GitHub and restarting the dashboard and worker.</div>';
       }
     }
     try { sessionStorage.setItem('ccc-updating', '1'); } catch (_) {}
@@ -52063,6 +52063,90 @@
         $cccCheckUpdatesLink.textContent = 'check for updates';
       }
     });
+  }
+
+  // ── System status modal ─────────────────────────────────────
+  // Settings → Maintenance → System status. Shows every background process
+  // CCC relies on, live, plus restart guidance and the WEDGED explainer
+  // (markup and static copy live in index.html #sysModal).
+  const $sysModal = document.getElementById('sysModal');
+  const $sysBackdrop = document.getElementById('sysBackdrop');
+
+  function sysSetState(id, on, text) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('on', on === true);
+    el.classList.toggle('off', on === false);
+  }
+  function sysOpenModal() {
+    if ($sysModal) $sysModal.classList.add('open');
+    sysRefresh();
+  }
+  function sysCloseModal() { if ($sysModal) $sysModal.classList.remove('open'); }
+  const $sysBtn = document.getElementById('systemStatusBtn');
+  if ($sysBtn) $sysBtn.addEventListener('click', sysOpenModal);
+  const $sysCloseBtn = document.getElementById('sysCloseBtn');
+  if ($sysCloseBtn) $sysCloseBtn.addEventListener('click', sysCloseModal);
+  if ($sysBackdrop) $sysBackdrop.addEventListener('click', sysCloseModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $sysModal && $sysModal.classList.contains('open')) {
+      sysCloseModal();
+    }
+  });
+
+  async function sysRefresh() {
+    // Four independent status probes — fire them concurrently or a loaded
+    // dashboard (seconds per request) leaves the modal on placeholders.
+    const dash = (async () => {
+      try {
+        const r = await fetch('/api/version', { cache: 'no-store' });
+        const d = await r.json();
+        sysSetState('sysDashState', true, 'on · v' + (d.version || '?'));
+      } catch (_) { sysSetState('sysDashState', false, 'unreachable'); }
+    })();
+    const worker = (async () => {
+      try {
+        const r = await fetch('/api/control-plane/status', { cache: 'no-store' });
+        const d = await r.json();
+        const w = (d && d.worker) || {};
+        if (d && d.ok) {
+          sysSetState('sysWorkerState', true,
+            'on · pid ' + (w.pid || '?') + ' · ' +
+            (w.server_version ? 'server v' + w.server_version : 'server v? (pre-version-reporting)'));
+        } else {
+          sysSetState('sysWorkerState', false, 'off');
+        }
+      } catch (_) { sysSetState('sysWorkerState', false, 'off'); }
+    })();
+    const wt = (async () => {
+      try {
+        const r = await fetch('/api/watchtower/service/status', { cache: 'no-store' });
+        const d = await r.json();
+        if (d && d.running) {
+          sysSetState('sysWtState', !!d.api_ok,
+            (d.api_ok ? 'on' : 'degraded') + ' · pid ' + (d.pid || '?') + ' · :' + (d.port || '?'));
+        } else {
+          sysSetState('sysWtState', false, 'stopped');
+        }
+      } catch (_) { sysSetState('sysWtState', false, 'stopped'); }
+    })();
+    const appServer = (async () => {
+      try {
+        const r = await fetch('/api/system/app-server', { cache: 'no-store' });
+        const d = await r.json();
+        const thr = document.getElementById('sysWedgedThreshold');
+        if (thr && d && d.miss_threshold) thr.textContent = ' ' + d.miss_threshold + '×';
+        if (d && d.live) {
+          sysSetState('sysAppServerState', true,
+            'on · pid ' + (d.pid || '?') + ' · age ' + (d.age_s == null ? '?' : d.age_s) + 's · ' +
+            'misses ' + (d.consecutive_liveness_misses || 0) + '/' + (d.miss_threshold || '?'));
+        } else {
+          sysSetState('sysAppServerState', null, 'idle (starts on first Codex request)');
+        }
+      } catch (_) { sysSetState('sysAppServerState', false, 'off'); }
+    })();
+    await Promise.allSettled([dash, worker, wt, appServer]);
   }
 
   // ── WatchTower sentinel badge ────────────────────────────────────

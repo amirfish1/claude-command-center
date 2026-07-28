@@ -9635,6 +9635,23 @@
     white-space: pre-wrap; word-break: break-word; }
   .upd-error.visible { display: block; }
 
+  /* ── System status modal ──────────────────────────────────────
+     Settings → Maintenance → System status. Reuses the .upd-* shell. */
+  #sysModal { z-index: 10001;  /* opened from inside Settings (9999) — must paint above it */
+  }
+  .sys-dialog { width: min(560px, 92vw); max-height: 84vh; overflow-y: auto; }
+  .sys-section { border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; background: var(--bg); }
+  .sys-name { font-size: 13px; font-weight: 600; color: var(--text);
+    display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .sys-state { font-size: 11px; font-weight: 500; padding: 1px 8px;
+    border-radius: 10px; background: var(--surface-2); color: var(--text-muted); }
+  .sys-state.on { color: var(--green, #3fb950); background: rgba(63,185,80,0.12); }
+  .sys-state.off { color: var(--red); background: rgba(248,81,73,0.12); }
+  .sys-desc { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+  .sys-desc .sys-live { color: var(--text); font-weight: 600; }
+  .sys-wedged { font-size: 12px; }
+
   /* ── Car Mode modal ─────────────────────────────────────────
      Reuses the .upd-* shell; these add the capability banner + the
      cost / graceful-degradation callouts. */
