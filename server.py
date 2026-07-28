@@ -22059,6 +22059,21 @@ _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD = 2
 _CODEX_APP_SERVER_LAST_LIVE_CHECK = 0.0
 _CODEX_APP_SERVER_INFLIGHT_LOCK = threading.Lock()
 _CODEX_APP_SERVER_INFLIGHT = 0
+# `thread/list` is a GLOBAL call -- one reply carries every thread the
+# app-server knows -- so it must be throttled globally too. It used to be
+# throttled per session id, and /api/session-status is polled once per
+# visible Codex session, so N open sessions meant N identical thread/list
+# requests every couple of seconds against the single serialized stdio
+# channel. The backlog that built up starved everything sharing the channel,
+# including a new session's thread/start (see the TIMEOUT/LATE storms in
+# activity.log and docs/HANDOFF_codex_appserver_liveness.md).
+_CODEX_THREAD_LIST_COND = threading.Condition()
+_CODEX_THREAD_LIST_LAST_AT = 0.0
+_CODEX_THREAD_LIST_INFLIGHT = False
+# Longest we let a coalesced caller block on someone else's in-flight call
+# before giving up and returning stale data. Comfortably above thread/list's
+# own 3s timeout so the waiter normally sees the real result.
+_CODEX_THREAD_LIST_WAIT_TIMEOUT = 5.0
 # req_id -> (method, timed_out_at, timeout) for requests whose client-side
 # timeout already fired. If the reply still arrives later, the reader logs
 # LATE with the lateness -- this distinguishes "reply eventually arrives"
@@ -24397,20 +24412,39 @@ def _codex_app_server_refresh_thread_status(session_id, *, max_age=2.0):
     """
     if not session_id:
         return False
-    now = time.time()
-    with _CODEX_APP_SERVER_LOCK:
-        state = _CODEX_APP_SERVER_THREAD_STATE.setdefault(str(session_id), {})
-        try:
-            last = float(state.get("thread_status_refreshed_at") or 0)
-        except (TypeError, ValueError):
-            last = 0.0
-        if now - last < max_age:
-            return False
-        state["thread_status_refreshed_at"] = now
+    global _CODEX_THREAD_LIST_LAST_AT, _CODEX_THREAD_LIST_INFLIGHT
+    # Decide whether *this* caller owns the next call. One reply updates every
+    # thread, so a refresh another caller just made (or is making right now)
+    # is exactly as good as one we would issue ourselves -- and a duplicate
+    # would only lengthen the shared channel's queue.
+    with _CODEX_THREAD_LIST_COND:
+        while True:
+            if max_age > 0 and (time.time() - _CODEX_THREAD_LIST_LAST_AT) < max_age:
+                # Someone refreshed inside our freshness window; reuse it.
+                return _codex_app_server_thread_is_known(session_id)
+            if _CODEX_THREAD_LIST_INFLIGHT:
+                # A call is already on the wire. Wait for it rather than
+                # queueing a second one behind it. Forced refreshes (max_age=0)
+                # re-evaluate afterwards and then issue their own, so
+                # grab-back still observes post-interrupt state.
+                if not _CODEX_THREAD_LIST_COND.wait(_CODEX_THREAD_LIST_WAIT_TIMEOUT):
+                    # Waited out the in-flight call without being notified --
+                    # treat it as stuck and fall through to our own attempt.
+                    break
+                continue
+            break
+        _CODEX_THREAD_LIST_INFLIGHT = True
     try:
         response = _codex_app_server_request("thread/list", {}, timeout=3)
     except Exception:
         return False
+    finally:
+        with _CODEX_THREAD_LIST_COND:
+            _CODEX_THREAD_LIST_INFLIGHT = False
+            # Stamp on completion, not on entry: the throttle window should
+            # start when data actually landed.
+            _CODEX_THREAD_LIST_LAST_AT = time.time()
+            _CODEX_THREAD_LIST_COND.notify_all()
     data = ((response or {}).get("result") or {}).get("data")
     if not isinstance(data, list):
         return False
@@ -24425,6 +24459,16 @@ def _codex_app_server_refresh_thread_status(session_id, *, max_age=2.0):
         if changed:
             _save_codex_app_server_state_unlocked()
     return changed
+
+
+def _codex_app_server_thread_is_known(session_id):
+    """Did the last `thread/list` refresh carry this thread?
+
+    Mirrors the return contract of _codex_app_server_refresh_thread_status for
+    callers served out of the shared refresh instead of their own RPC.
+    """
+    with _CODEX_APP_SERVER_LOCK:
+        return str(session_id) in _CODEX_APP_SERVER_THREAD_STATE
 
 
 def _codex_app_server_transport_responsive(transport, timeout=_CODEX_APP_SERVER_LIVENESS_TIMEOUT):
