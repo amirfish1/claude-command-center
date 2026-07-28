@@ -664,8 +664,26 @@ EOF
         || { [ -n "$worker_server_version" ] && [ "$worker_server_version" != "$repo_version" ]; }; }; then
         echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
         echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
-        launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1 \
-          || kill "$existing_worker_pid" >/dev/null 2>&1 || true
+        if ! launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
+          # No launchd worker service on this install path (brew service or
+          # DMG app spawn): kill the stale worker AND immediately replace it,
+          # or the dashboard runs workerless (legacy execution) until the
+          # next launch.
+          kill "$existing_worker_pid" >/dev/null 2>&1 || true
+          sleep 0.5
+          if ! "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+            nohup "$PYTHON" "$HERE/ccc_worker.py" \
+              >>"$SERVICE_LOG_DIR/worker.out.log" \
+              2>>"$SERVICE_LOG_DIR/worker.err.log" </dev/null &
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if "$PYTHON" "$HERE/ccc_worker.py" --health >/dev/null 2>&1; then
+                echo "  worker   : restarted on v$repo_version"
+                break
+              fi
+              sleep 0.2
+            done
+          fi
+        fi
       fi
     fi
     ;;
