@@ -51854,6 +51854,26 @@
   const $updNowBtn = document.getElementById('updNowBtn');
   let updCheckData = null;
 
+  // Prominent update experience: the modal opens ITSELF once per new
+  // version instead of relying on the user noticing the pill. Suppressed
+  // per version via localStorage so a dismissal doesn't nag on every load,
+  // and skipped entirely while the First Flight tour owns first-run.
+  const UPD_DISMISS_KEY = 'ccc-update-modal-dismissed';
+  function updDismissedFor(version) {
+    try { return localStorage.getItem(UPD_DISMISS_KEY) === String(version || ''); }
+    catch (_) { return true; }
+  }
+  function updMarkDismissed() {
+    if (!updCheckData) return;
+    try { localStorage.setItem(UPD_DISMISS_KEY, String(updCheckData.latest || '')); } catch (_) {}
+  }
+  function updAutoOpen() {
+    if (!updCheckData || !updCheckData.behind) return;
+    if (updDismissedFor(updCheckData.latest)) return;
+    try { if (!localStorage.getItem('ccc-tour-done')) return; } catch (_) {}
+    updOpenModal();
+  }
+
   function updOpenModal() {
     if (!updCheckData || !updCheckData.behind) return;
     if ($updVersions) {
@@ -51873,6 +51893,7 @@
   }
   function updCloseModal() {
     if ($updModal) $updModal.classList.remove('open');
+    updMarkDismissed();
   }
   if ($updPill) $updPill.addEventListener('click', updOpenModal);
   if ($updLaterBtn) $updLaterBtn.addEventListener('click', updCloseModal);
@@ -51986,6 +52007,8 @@
             $updPillText.textContent = 'Update → v' + String(d.latest).replace(/[<>&]/g, '');
           }
           if ($updPill) $updPill.classList.add('visible');
+          // Let the page settle before the modal takes focus.
+          setTimeout(updAutoOpen, 1200);
         }
       } catch (_) { /* silent - the pill just stays hidden */ }
     })();
