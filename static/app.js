@@ -3132,11 +3132,10 @@
         if (typeof showOpToast === 'function') showOpToast('Continuing in a new session — it will pull only the slice it needs.', 'success');
         f2ClearComposer();
         setTimeout(refreshConversationList, 600);
-        setTimeout(refreshConversationList, 1500);
-        setTimeout(refreshConversationList, 3000);
-        // ...then keep chasing until the row actually lands, because for
-        // Codex the engine has not written anything yet at 3s.
-        chasePendingSpawn(tempPid);
+        // ...then chase with a cheap probe rather than two more full-corpus
+        // refreshes: for Codex the engine has written nothing at 3s, and each
+        // of those refreshes is a multi-megabyte fetch of every row we have.
+        chasePendingSpawn(tempPid, { sessionId: d && d.session_id });
       } else {
         _removePendingSpawnCard(tempPid);
         if (typeof showOpToast === 'function') showOpToast('Spawn failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
@@ -16432,11 +16431,10 @@
         if (engine === 'cursor') showOpToast('Cursor headless run started.', 'ok');
         if (engine === 'antigravity') showOpToast('Antigravity headless run started.', 'ok');
         setTimeout(refreshConversationList, 600);
-        setTimeout(refreshConversationList, 1500);
-        setTimeout(refreshConversationList, 3000);
-        // ...then keep chasing until the row actually lands, because for
-        // Codex the engine has not written anything yet at 3s.
-        chasePendingSpawn(tempPid);
+        // ...then chase with a cheap probe rather than two more full-corpus
+        // refreshes: for Codex the engine has written nothing at 3s, and each
+        // of those refreshes is a multi-megabyte fetch of every row we have.
+        chasePendingSpawn(tempPid, { sessionId: data && data.session_id });
       } else {
         throw new Error(data.error || ('HTTP ' + res.status));
       }
@@ -53980,11 +53978,11 @@
       // surfaces fast.
       if (data.action === 'spawned' && typeof refreshConversationList === 'function') {
         try { refreshConversationList(); } catch (_) {}
+        // This path stages no pending placeholder, so there is nothing for
+        // chasePendingSpawn to track and it keeps the plain refresh burst.
         setTimeout(refreshConversationList, 600);
         setTimeout(refreshConversationList, 1500);
         setTimeout(refreshConversationList, 3000);
-        // ...then keep chasing until the row actually lands, because for
-        // Codex the engine has not written anything yet at 3s.
       }
       try {
         if (typeof refreshArchiveData === 'function') {
@@ -57285,11 +57283,10 @@
         }).catch(() => {});
         clearInputDraftForConversation(currentConversation);
         setTimeout(refreshConversationList, 600);
-        setTimeout(refreshConversationList, 1500);
-        setTimeout(refreshConversationList, 3000);
-        // ...then keep chasing until the row actually lands, because for
-        // Codex the engine has not written anything yet at 3s.
-        chasePendingSpawn((data.spawn_id || data.pid));
+        // ...then chase with a cheap probe rather than two more full-corpus
+        // refreshes: for Codex the engine has written nothing at 3s, and each
+        // of those refreshes is a multi-megabyte fetch of every row we have.
+        chasePendingSpawn((data.spawn_id || data.pid), { sessionId: data && data.session_id });
       } else {
         flashRed();
         showOpToast('Spawn failed: ' + (data.error || 'HTTP ' + res.status), 'error');
@@ -57381,16 +57378,43 @@
   // the next ordinary poll -- 22s from submit, most of it dead time with the
   // row stuck on "spawning". Keep nudging the list until the placeholder is
   // actually reconciled, then stop.
+  // Chase a just-spawned session until its real row lands.
+  //
+  // This used to call refreshConversationList() on every tick, which fetches
+  // /api/conversations/all - roughly 10 MB and several seconds once the corpus
+  // is large. Every tick therefore started a request that outlived its own
+  // interval, and a row the server already had at ~2s took ~80s to reach the
+  // browser. Now the tick is a tiny "has it landed?" probe and the expensive
+  // refresh runs once, when there is actually something new to show.
   function chasePendingSpawn(pid, opts) {
     const deadline = Date.now() + ((opts && opts.timeoutMs) || 45000);
-    const every = (opts && opts.intervalMs) || 1500;
+    const every = (opts && opts.intervalMs) || 1200;
+    const sid = (opts && opts.sessionId) || null;
+    let ticks = 0;
+    let landed = false;
     (function tick() {
       if (!pendingSpawns.has(pid)) return;      // reconciled: nothing to chase
       if (Date.now() > deadline) return;        // give up quietly; the normal
                                                 // poll and the not-acknowledged
                                                 // path still cover this
-      refreshConversationList();
-      setTimeout(tick, every);
+      ticks += 1;
+      // Landing is when the ENGINE has the session. The row still has to
+      // survive a list build and a render, so keep going until the pending
+      // placeholder is actually reconciled above - just at a slower cadence,
+      // since each of these is the expensive full refresh.
+      const again = (delay) => setTimeout(tick, delay || every);
+      if (landed || !sid) { refreshConversationList(); again(landed ? 2500 : 0); return; }
+      fetch('/api/session/landed?session_id=' + encodeURIComponent(sid), { cache: 'no-store' })
+        .then(d => d.json())
+        .then(d => {
+          if (d && d.landed) { landed = true; refreshConversationList(); again(2500); return; }
+          // Not landed yet. Still refresh occasionally in case this engine is
+          // one the probe cannot speak for, so a false negative cannot strand
+          // the row - but every 5th tick, not every tick.
+          if (ticks % 5 === 0) refreshConversationList();
+          again();
+        })
+        .catch(() => { refreshConversationList(); again(); });
     })();
   }
 
@@ -57508,11 +57532,10 @@
         if (engine === 'cursor') showOpToast('Cursor headless run started.', 'ok');
         if (engine === 'antigravity') showOpToast('Antigravity headless run started.', 'ok');
         setTimeout(refreshConversationList, 600);
-        setTimeout(refreshConversationList, 1500);
-        setTimeout(refreshConversationList, 3000);
-        // ...then keep chasing until the row actually lands, because for
-        // Codex the engine has not written anything yet at 3s.
-        chasePendingSpawn(tempPid);
+        // ...then chase with a cheap probe rather than two more full-corpus
+        // refreshes: for Codex the engine has written nothing at 3s, and each
+        // of those refreshes is a multi-megabyte fetch of every row we have.
+        chasePendingSpawn(tempPid, { sessionId: data && data.session_id });
       } else {
         restoreDraftAfterFailure();
         flashRed();

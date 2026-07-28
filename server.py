@@ -9066,6 +9066,13 @@ def _rehydrate_archive_cached_rows(rows):
         live_candidates = set()
     _now_rehydrate = time.time()
 
+    # Codex names a thread seconds AFTER the spawn returns, and that name lands
+    # in state_*.sqlite, which the corpus signature deliberately ignores (see
+    # _codex_titles_snapshot). Without re-layering it here the row stays
+    # "(untitled)" until an unrelated change invalidates the cache. Loaded lazily
+    # so a corpus with no Codex rows never touches the DB at all.
+    _codex_titles = None
+
     hydrated = []
     for raw in rows or []:
         if not isinstance(raw, dict):
@@ -9087,6 +9094,26 @@ def _rehydrate_archive_cached_rows(rows):
                 # on every fetch and the client fell back to the AI title.
                 # Don't lose user intent recorded in the JSONL.
                 row["name_overridden"] = False
+                if row.get("engine") == "codex":
+                    if _codex_titles is None:
+                        try:
+                            _codex_titles = _codex_titles_snapshot()
+                        except Exception:
+                            _codex_titles = {}
+                    fresh = _codex_titles.get(sid)
+                    if fresh:
+                        title = fresh["title"]
+                        first_message = fresh["first_user_message"]
+                        name = _codex_display_name(
+                            fresh, title=title, first_message=first_message
+                        )
+                        if name:
+                            row["display_name"] = name
+                        # Mirrors the build path: only call it an AI title when
+                        # Codex actually summarized rather than copying the ask.
+                        row["ai_title"] = (
+                            title if (title and title != first_message) else None
+                        )
 
             row["archived"] = sid in archived_set
             row["trashed"] = sid in trashed_set
@@ -28179,6 +28206,112 @@ def _codex_goals_snapshot():
         _codex_goals_cache["data"] = data
         _codex_goals_cache["ts"] = now
     return data
+
+
+_codex_titles_cache = {"key": None, "data": {}, "ts": 0.0}
+_codex_titles_lock = threading.Lock()
+_CODEX_TITLES_TTL = 2.0
+
+
+def _codex_titles_snapshot():
+    """Map thread_id -> the fields a Codex row's display name is derived from.
+
+    Codex names a thread asynchronously (`thread/name/set` lands seconds after
+    the spawn returns) and stores the result in ~/.codex/state_*.sqlite. That
+    DB is deliberately NOT part of the archive corpus signature: it is WAL and
+    its mtime flips on every write from any live Codex session, so gating the
+    corpus cache on it would bust an O(all-rows) rebuild constantly. The cost
+    of leaving it out was that a renamed thread kept rendering as "(untitled)"
+    until some unrelated change happened to invalidate the cache.
+
+    So the title is treated as live state and re-layered at serve time instead
+    (see _rehydrate_archive_cached_rows). ONE batched read for the whole list,
+    cached by (mtime, size) of both the DB and its -wal sidecar -- the main
+    file's mtime alone does not move in WAL mode -- so the common case is a
+    couple of stat() calls and no query at all. Never per-row.
+    """
+    now = time.monotonic()
+    with _codex_titles_lock:
+        cached_ts = _codex_titles_cache["ts"]
+        cached_key = _codex_titles_cache["key"]
+        cached_data = _codex_titles_cache["data"]
+
+    key_parts = []
+    for db in _codex_state_db_candidates():
+        for path in (db, db.with_name(db.name + "-wal")):
+            try:
+                st = path.stat()
+                key_parts.append((str(path), st.st_mtime_ns, st.st_size))
+            except OSError:
+                continue
+    key = tuple(key_parts)
+    if not key:
+        return {}
+    if cached_key == key and (now - cached_ts) < _CODEX_TITLES_TTL:
+        return cached_data
+
+    data = {}
+    for row in _codex_fetch_threads():
+        sid = row.get("id")
+        if not sid:
+            continue
+        data[sid] = {
+            "title": (row.get("title") or "").strip(),
+            "first_user_message": row.get("first_user_message") or "",
+            "agent_nickname": row.get("agent_nickname"),
+            "agent_role": row.get("agent_role"),
+            "agent_path": row.get("agent_path"),
+        }
+    if not data and cached_key:
+        # A locked/partial read must not blank every row's name.
+        return cached_data
+    with _codex_titles_lock:
+        _codex_titles_cache["key"] = key
+        _codex_titles_cache["data"] = data
+        _codex_titles_cache["ts"] = now
+    return data
+
+
+def _session_landed(session_id):
+    """Cheap "is this just-spawned session visible to CCC yet?" probe.
+
+    Deliberately does NOT build or touch the archive list: the whole point is
+    to give the post-spawn chase something it can poll every second or so
+    without paying for a full corpus serialization.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "landed": False, "known": False}
+    # Codex writes the thread row into state_*.sqlite the moment the thread is
+    # created, well before the rollout has any content. Cached snapshot, so in
+    # the steady state this is a dict hit behind two stat() calls.
+    try:
+        fresh = _codex_titles_snapshot().get(sid)
+    except Exception:
+        fresh = None
+    if fresh:
+        return {
+            "ok": True,
+            "landed": True,
+            "known": True,
+            "engine": "codex",
+            "display_name": _codex_display_name(
+                fresh,
+                title=fresh["title"],
+                first_message=fresh["first_user_message"],
+            ),
+        }
+    # Claude and everything else that logs a transcript under ~/.claude/projects.
+    try:
+        for path in PROJECTS_ROOT.glob(f"*/{sid}.jsonl"):
+            if path.is_file():
+                return {"ok": True, "landed": True, "known": True, "engine": "claude"}
+    except OSError:
+        pass
+    # known=False means "this probe cannot answer for this id" (an engine that
+    # stores sessions somewhere neither branch reads). The client keeps its
+    # periodic full refresh in that case rather than trusting a false negative.
+    return {"ok": True, "landed": False, "known": True}
 
 
 def _codex_thread_row(thread_id):
@@ -51097,8 +51230,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "enabled": _spawn_timeline_enabled(),
                     "timeline": entry,
                 })
+        elif path == "/api/session/landed":
+            # "Has this just-spawned session appeared in its engine's store
+            # yet?" — the question the post-spawn chase actually needs.
+            #
+            # It used to answer this by re-fetching /api/conversations/all
+            # every 1.5s, which is a 10 MB, multi-second payload of every row
+            # in the corpus. The chase therefore spent its whole window on
+            # requests that outlived their own interval, and the row that the
+            # server already had at ~2s did not reach the browser for ~80s.
+            # This reads the engine store directly (cached snapshot, no
+            # archive build) so the poll is cheap and the expensive list
+            # refresh happens ONCE, when there is something new to show.
+            qs = urllib.parse.parse_qs(parsed.query)
+            sid = str((qs.get("session_id") or [""])[0] or "").strip()
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"}, 400)
+            else:
+                self.send_json(_session_landed(sid))
         elif path == "/api/system/app-server":
-            self.send_json(_system_app_server_status())
+            self.send_json(_app_server_status_preferring_worker())
+        elif path == "/api/system/services":
+            # One coalesced snapshot for the SERVER STATUS chip (20s) and the
+            # open System status panel (5s). 3s TTL absorbs both; zero forks
+            # on the warm path (see build_system_services).
+            self.send_json(build_system_services())
         elif path == "/api/watchtower/service/status":
             self.send_json(_watchtower_service_status())
         elif path == "/api/control-plane/work":
