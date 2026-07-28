@@ -463,6 +463,161 @@ def test_repo_sessions_gate_liveness_by_candidates(monkeypatch, tmp_path):
     ], "auto-verification must inspect only the original Claude conversation rows"
 
 
+# ── Workflow-run discovery (candidacy gate) ──────────────────────────────────
+# find_conversations attaches Workflow-tool runs from
+# <project>/<sid>/subagents/workflows/<run>/. The scan must stay gated: with
+# no session subdirs (the common case) it does ZERO filesystem work, and with
+# subdirs it touches journals only for sessions that actually own them.
+
+def _mk_workflow_repo(tmp_path, monkeypatch, n_plain=20):
+    """Synthetic repo + projects root. Returns (repo, project_dir, parent_sid)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(server, "resolve_repo_path", lambda path: str(repo))
+    root = tmp_path / ".claude" / "projects"
+    monkeypatch.setattr(server, "PROJECTS_ROOT", root)
+    project_dir = root / server._encode_project_slug(repo)
+    project_dir.mkdir(parents=True)
+    old_ts = time.time() - 30 * 86400
+    for _ in range(n_plain):
+        sid = str(uuid.uuid4())
+        _write_transcript(project_dir / f"{sid}.jsonl", sid, old_ts=old_ts)
+    parent_sid = str(uuid.uuid4())
+    _write_transcript(project_dir / f"{parent_sid}.jsonl", parent_sid, old_ts=old_ts)
+    return repo, project_dir, parent_sid
+
+
+def _mk_run_dir(project_dir, parent_sid, run_id, agents, now=None):
+    """One synthetic workflow run. ``agents``: {agent_id: status} where status
+    is 'done' (started+result), 'running' (started, fresh mtime), or
+    'interrupted' (started, stale mtime)."""
+    now = now if now is not None else time.time()
+    run_dir = project_dir / parent_sid / "subagents" / "workflows" / run_id
+    run_dir.mkdir(parents=True)
+    journal = []
+    for agent_id, status in agents.items():
+        journal.append({"type": "started", "key": "v2:" + agent_id, "agentId": agent_id})
+        if status == "done":
+            journal.append({"type": "result", "key": "v2:" + agent_id,
+                            "agentId": agent_id, "result": "ok"})
+        agent_file = run_dir / f"agent-{agent_id}.jsonl"
+        agent_file.write_text(json.dumps({
+            "type": "user", "message": {"role": "user", "content": f"task {agent_id}"},
+        }) + "\n")
+        mtime = now if status == "running" else now - 3600
+        os.utime(agent_file, (mtime, mtime))
+    (run_dir / "journal.jsonl").write_text("\n".join(json.dumps(e) for e in journal) + "\n")
+    return run_dir
+
+
+def test_workflow_scan_no_subdirs_does_no_journal_work(monkeypatch, tmp_path):
+    """N plain transcripts, zero session subdirs → zero journal probes."""
+    repo, _project_dir, _parent = _mk_workflow_repo(tmp_path, monkeypatch)
+    calls = _count_calls(monkeypatch, "_parse_workflow_journal", passthrough_return=None)
+    server.find_conversations(str(repo))
+    assert calls == [], (
+        f"_parse_workflow_journal called {len(calls)}x with no session subdirs — "
+        "the workflow discovery candidacy gate regressed"
+    )
+
+
+def test_workflow_scan_gated_to_subdir_owning_sessions(monkeypatch, tmp_path):
+    """Only the session owning a subagents/workflows dir gets its journal read,
+    and the row carries run + per-agent status."""
+    repo, project_dir, parent_sid = _mk_workflow_repo(tmp_path, monkeypatch)
+    _mk_run_dir(project_dir, parent_sid, "wf_test-001", {
+        "aaa111": "done",
+        "bbb222": "running",
+        "ccc333": "interrupted",
+    })
+    calls = _count_calls(monkeypatch, "_parse_workflow_journal")
+    rows = server.find_conversations(str(repo))
+    assert len(calls) == 1, (
+        f"_parse_workflow_journal called {len(calls)}x for one run dir — "
+        "must be one read per run, never per row"
+    )
+    row = next(r for r in rows if r["session_id"] == parent_sid)
+    assert len(row["workflows"]) == 1
+    run = row["workflows"][0]
+    assert run["run_id"] == "wf_test-001"
+    assert run["status"] == "running", "one running agent makes the run running"
+    by_id = {a["id"]: a for a in run["agents"]}
+    assert by_id["aaa111"]["status"] == "done"
+    assert by_id["bbb222"]["status"] == "running"
+    assert by_id["ccc333"]["status"] == "interrupted"
+    assert by_id["aaa111"]["conv_id"] == f"{parent_sid}:agent-aaa111"
+    assert by_id["aaa111"]["description"] == "task aaa111"
+    plain = next(r for r in rows if r["session_id"] != parent_sid)
+    assert plain["workflows"] == []
+
+
+def test_workflow_run_died_midflight_marks_interrupted(monkeypatch, tmp_path):
+    """Started lines with no results and stale transcripts = interrupted, not
+    running (the workflow runtime writes no tombstone)."""
+    repo, project_dir, parent_sid = _mk_workflow_repo(tmp_path, monkeypatch, n_plain=0)
+    _mk_run_dir(project_dir, parent_sid, "wf_dead-002", {
+        "ddd444": "interrupted",
+        "eee555": "interrupted",
+    })
+    rows = server.find_conversations(str(repo))
+    run = next(r for r in rows if r["session_id"] == parent_sid)["workflows"][0]
+    assert run["status"] == "interrupted"
+    assert {a["status"] for a in run["agents"]} == {"interrupted"}
+
+
+def test_archive_build_workflow_scan_gated(big_projects, monkeypatch):
+    """The archive build must not probe journals when no session owns a
+    subagents/workflows dir (the common case on a 200-transcript corpus)."""
+    server._ARCHIVE_WORKFLOW_SESSION_DIRS.clear()
+    calls = _count_calls(monkeypatch, "_parse_workflow_journal", passthrough_return=None)
+    server._build_archive_conversations()
+    assert calls == [], (
+        f"_parse_workflow_journal called {len(calls)}x in an archive build with "
+        "no workflow subdirs — the candidacy gate regressed"
+    )
+    assert server._ARCHIVE_WORKFLOW_SESSION_DIRS == {}
+
+
+def test_archive_rehydrate_recomputes_workflow_status(big_projects, monkeypatch, tmp_path):
+    """A workflow journal flips without any top-level transcript changing, so
+    the cached-serve path (rehydrate) must recompute runs for owner rows."""
+    n, sids = big_projects
+    parent_sid = sids[0]
+    project_dir = tmp_path / ".claude" / "projects" / "-tmp-perf-repo"
+    run_dir = project_dir / parent_sid / "subagents" / "workflows" / "wf_rehy-003"
+    run_dir.mkdir(parents=True)
+    agent_file = run_dir / "agent-abc123.jsonl"
+    agent_file.write_text(json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "do things"}}) + "\n")
+    (run_dir / "journal.jsonl").write_text(
+        json.dumps({"type": "started", "key": "v2:x", "agentId": "abc123"}) + "\n")
+    fresh = time.time()
+    os.utime(agent_file, (fresh, fresh))
+
+    server._ARCHIVE_WORKFLOW_SESSION_DIRS.clear()
+    server._ARCHIVE_WORKFLOW_SESSION_DIRS[parent_sid] = project_dir / parent_sid
+    server._WORKFLOW_JOURNAL_CACHE.clear()
+    row = {"session_id": parent_sid, "engine": "claude", "mtime": time.time() - 30 * 86400}
+    journal_calls = _count_calls(monkeypatch, "_parse_workflow_journal")
+    out = server._rehydrate_archive_cached_rows([row])
+    assert len(journal_calls) == 1, (
+        f"rehydrate probed {len(journal_calls)} journals for one owner row — "
+        "must be one parse attempt per owner row per serve, never per all rows"
+    )
+    run = out[0]["workflows"][0]
+    assert run["status"] == "running"
+    # (mtime,size) cache: an unchanged journal re-parses nothing.
+    parsed1 = server._parse_workflow_journal(run_dir / "journal.jsonl")
+    parsed2 = server._parse_workflow_journal(run_dir / "journal.jsonl")
+    assert parsed1 is parsed2, "journal parse cache did not hit on unchanged file"
+    # A non-owner row costs nothing.
+    plain = {"session_id": sids[1], "engine": "claude", "mtime": time.time() - 30 * 86400}
+    out3 = server._rehydrate_archive_cached_rows([plain])
+    assert len(journal_calls) == 3  # 1 rehydrate + 2 direct probes above
+    assert "workflows" not in out3[0]
+
+
 def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
     """The non-Claude live-id scan must not poll unrelated Claude workers."""
     claude_spawn = {"engine": "claude", "session_id": "claude-session"}
@@ -2287,3 +2442,193 @@ def test_archive_signature_dedupes_symlinked_project_dirs(big_projects, tmp_path
     _sig, files, _extras = server._archive_corpus_signature_parts()
 
     assert len(files) == n
+
+
+# ── /api/system/services (SERVER STATUS chip + System status panel) ──────────
+# The chip polls this every 20s and the open panel every 5s. It aggregates four
+# services, so the temptation is to fan out to whatever helper is closest —
+# build_system_health() (a ps + lsof sweep), _ccc_last_updated_iso() (git log),
+# a per-pid `ps`. All of those turn a status readout into a fork per poll.
+
+def test_system_services_no_subprocess_on_warm_cache(monkeypatch):
+    """A second call inside the 3s TTL must not fork anything."""
+    server._system_services_cache = {"ts": 0.0, "payload": None}
+
+    # Keep the cold build itself deterministic and fork-free.
+    monkeypatch.setattr(server, "_control_plane_request", lambda *a, **k: {
+        "ok": True, "available": True, "active": 0, "queued": 0, "uncertain": 0,
+        "drain": {"enabled": False},
+        "worker": {"pid": 42, "started_at": 1.0, "server_version": server.__version__,
+                   "capabilities": ["engine-execution-v1"]},
+    })
+    monkeypatch.setattr(server, "_watchtower_service_status", lambda **k: {
+        "ok": True, "installed": False, "running": False, "pid": None,
+        "command_verified": False, "pid_reused": False, "api_ok": False,
+        "state": "stopped", "host": "127.0.0.1", "port": 8787,
+        "url": "http://127.0.0.1:8787", "started_at": None,
+        "started_at_approx": False, "uptime_s": None,
+    })
+    server.build_system_services(force=True)
+
+    import subprocess as _subprocess
+
+    def boom(*a, **k):  # pragma: no cover - only runs on regression
+        raise AssertionError(f"/api/system/services forked a subprocess: {a!r}")
+
+    monkeypatch.setattr(_subprocess, "run", boom)
+    monkeypatch.setattr(_subprocess, "Popen", boom)
+    monkeypatch.setattr(_subprocess, "check_output", boom)
+
+    health_calls = _count_calls(monkeypatch, "build_system_health", passthrough_return={})
+    sessions_calls = _count_calls(monkeypatch, "find_all_conversations", passthrough_return=[])
+
+    payload = server.build_system_services()
+
+    assert payload["ok"] is True
+    assert {row["id"] for row in payload["services"]} == {
+        "dashboard", "worker", "watchtower", "app_server"
+    }
+    assert health_calls == [], (
+        "build_system_services called build_system_health — that runs a ps+lsof "
+        "sweep and turns a 5s poll into a machine-wide scan"
+    )
+    assert sessions_calls == [], (
+        "build_system_services triggered the O(all sessions) conversation build"
+    )
+
+
+def test_system_services_does_not_call_ccc_last_updated_iso(monkeypatch):
+    """_ccc_last_updated_iso() shells out to `git log -1`. Never on a poll."""
+    server._system_services_cache = {"ts": 0.0, "payload": None}
+    monkeypatch.setattr(server, "_control_plane_request", lambda *a, **k: {
+        "ok": False, "available": False,
+    })
+    monkeypatch.setattr(server, "_watchtower_service_status", lambda **k: {
+        "ok": True, "installed": False, "running": False, "state": "stopped",
+        "port": 8787, "url": "http://127.0.0.1:8787", "started_at": None,
+        "started_at_approx": False, "uptime_s": None,
+    })
+
+    git_calls = _count_calls(monkeypatch, "_ccc_last_updated_iso", passthrough_return="")
+
+    server.build_system_services(force=True)
+
+    assert git_calls == [], (
+        "build_system_services called _ccc_last_updated_iso — one `git log` "
+        "fork per poll, 3x/min from the chip alone"
+    )
+
+
+def test_watchtower_process_argv_is_memoised_per_pid(monkeypatch):
+    """A WatchTower restart used to cost ~130 `ps -p` forks. Memoise by pid."""
+    server._watchtower_forget_process_argv()
+    calls = []
+
+    def fake_uncached(pid):
+        calls.append(pid)
+        return ["/usr/local/bin/wt", "start"]
+
+    monkeypatch.setattr(server, "_watchtower_process_argv_uncached", fake_uncached)
+
+    for _ in range(50):
+        assert server._watchtower_process_argv(4242) == ["/usr/local/bin/wt", "start"]
+
+    assert calls == [4242], (
+        f"_watchtower_process_argv probed {len(calls)}x for one live pid — "
+        "the per-pid memo is gone and every status poll forks `ps` again"
+    )
+
+    # A different pid is a different process: it must be probed, and the stale
+    # entry must not survive (pid reuse is the only way this cache can lie).
+    server._watchtower_process_argv(4343)
+    assert calls == [4242, 4343]
+    assert 4242 not in server._WT_ARGV_CACHE
+
+    server._watchtower_forget_process_argv()
+
+
+def test_watchtower_api_probe_is_cached_and_never_blocks_twice(monkeypatch):
+    """A degraded WatchTower must not cost 0.8s of an HTTP thread per poll.
+
+    `_watchtower_api_probe` is a urlopen with a 0.8s timeout. When the daemon
+    is up but its API is not answering, that timeout is paid in full — and the
+    System status panel polls on a 5s cadence against a 3s payload TTL, so
+    nearly every poll paid it, in exactly the degraded state the panel exists
+    to report. It also stretched the window where a settled restart still
+    looked unsettled. Cache the verdict; refresh it off the request thread.
+    """
+    server._watchtower_forget_api_probe()
+    calls = []
+
+    def fake_probe(base_url):
+        calls.append(base_url)
+        return False  # the degraded shape: daemon alive, API silent
+
+    monkeypatch.setattr(server, "_watchtower_api_probe", fake_probe)
+    # Keep the background refresh out of the assertion: this test is about the
+    # request thread, and a real thread makes the count racy.
+    monkeypatch.setattr(server.threading, "Thread", _NoopThread)
+
+    url = "http://127.0.0.1:8787"
+    for _ in range(40):
+        assert server._watchtower_api_up(url) is False
+
+    assert calls == [url], (
+        f"_watchtower_api_up probed {len(calls)}x for 40 polls — the TTL cache "
+        "is gone and every System status poll blocks an HTTP handler thread "
+        "for up to 0.8s"
+    )
+
+    # The verdict must carry its own age so callers can be honest about it.
+    age = server._watchtower_api_probe_age(url)
+    assert age is not None and age >= 0
+
+    # A restart invalidates it: the new daemon is a different process, so a
+    # cached verdict about the old one is worse than no verdict.
+    server._watchtower_forget_api_probe()
+    assert server._watchtower_api_probe_age(url) is None
+    assert server._watchtower_api_up(url) is False
+    assert calls == [url, url]
+
+    server._watchtower_forget_api_probe()
+
+
+class _NoopThread:
+    """threading.Thread stand-in that never actually runs the target."""
+
+    def __init__(self, *args, **kwargs):
+        self._name = kwargs.get("name", "noop")
+
+    def start(self):
+        return None
+
+    def join(self, timeout=None):
+        return None
+
+
+def test_system_services_does_not_probe_watchtower_api_synchronously(monkeypatch):
+    """Warm-cache /api/system/services must not touch the network at all."""
+    server._system_services_cache = {"ts": 0.0, "payload": None}
+    server._watchtower_forget_api_probe()
+    monkeypatch.setattr(server, "_control_plane_request", lambda *a, **k: {
+        "ok": True, "available": True, "active": 0, "queued": 0, "uncertain": 0,
+        "drain": {"enabled": False},
+        "worker": {"pid": 42, "started_at": 1.0, "server_version": server.__version__,
+                   "capabilities": ["engine-execution-v1"]},
+    })
+    probes = []
+    monkeypatch.setattr(server, "_watchtower_api_probe", lambda url: probes.append(url) or False)
+    monkeypatch.setattr(server.threading, "Thread", _NoopThread)
+
+    server.build_system_services(force=True)
+    cold = len(probes)
+    for _ in range(10):
+        server.build_system_services(force=True)
+
+    assert len(probes) == cold, (
+        f"the WatchTower API was probed {len(probes) - cold} extra times across "
+        "10 rebuilds — the probe cache is not covering the services payload"
+    )
+
+    server._watchtower_forget_api_probe()
+    server._system_services_cache = {"ts": 0.0, "payload": None}
