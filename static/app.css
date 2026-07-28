@@ -12747,6 +12747,52 @@
     }
   }
 
+  /* ── Phone header tidy-up (≤600px) ─────────────────────────────────
+     The compact desktop header squeezes the brand into whatever width the
+     icon-button row leaves, truncating "Command Center" to "Co…" and
+     clipping the subtitle onto a second line. On phones, give the brand
+     the full header width, hide the subtitle and version text (identity
+     is carried by the title alone; the version is still reachable via
+     "what's new"), and overlay the icon actions top-right so the badges
+     and last-updated rows span the full width. The refresh caret (server
+     restart) and chip-color toggle are desktop-grade controls — hidden
+     here to keep the overlaid action row narrow enough for the title. */
+  @media (max-width: 600px) {
+    .sidebar-header {
+      position: relative;
+      flex-wrap: wrap !important;
+      padding-right: 10px;
+    }
+    .sidebar-header-brand { flex: 1 1 100%; }
+    .sidebar-header-actions {
+      position: absolute;
+      top: 8px;
+      right: 10px;
+    }
+    .sidebar-header-actions .sh-refresh-caret,
+    .sidebar-header-actions #chipsColorToggle { display: none !important; }
+    .sidebar-header-brand .sh-title-row {
+      /* Keep the title clear of the overlaid action buttons. */
+      padding-right: 104px;
+    }
+    .sidebar-header-brand .sh-title-link { flex: 0 1 auto; }
+    .sidebar-header-brand .sh-title-sub,
+    .sidebar-header-brand .sh-version { display: none; }
+    /* WatchTower + worker share one row; long worker status text
+       ("Worker restarted Jul 27, 4:00 PM") truncates instead of forcing
+       its pill onto a full-width line of its own. */
+    .sh-service-badges { flex-wrap: nowrap; }
+    .sh-service-badges .sh-wt-badge { flex: 0 1 auto; min-width: 0; }
+    .sh-service-badges .sh-worker-badge { flex: 1 1 auto; min-width: 0; }
+    .sh-service-badges .wt-word,
+    .sh-service-badges .worker-word {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   /* Prominent "+ New session" / "+ New Group chat" pair — sits in the slot
      the Vercel deploy panel used to occupy (just below the sidebar header).
      The deploy indicator now lives in the global topbar, freeing this slot
@@ -19789,6 +19835,15 @@ body:has(.gc-reader) .pwa-install-banner {
   font-weight: 500 !important;
   letter-spacing: 0.05em !important;
   line-height: 1.6 !important;
+  /* WebUI sessions wrap the text in a second, narrower card (max-width 78%,
+     hairline border, own fill) — meant to REPLACE the default bubble. Under
+     stitch the outer element already IS the bubble, so the inner card just
+     wastes the right ~25% of it. Neutralize it: text fills the bubble. */
+  max-width: none !important;
+  background: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
 }
 
 /* Cyan >_ prompt at the end of the user message */
@@ -21890,4 +21945,17 @@ a.q2-toggle-opt:hover { color: var(--text); background: var(--surface-2); }
   align-self: flex-start;
   width: auto;
   margin: 8px 12px 0;
+}
+
+/* ── Phone session-panel rows (≤600px) ───────────────────────────────
+   Companion to the phone header tidy-up above; placed at end of file
+   because the base .new-session-panel rules declare flex-wrap: nowrap
+   and equal-specificity ties resolve by source order. On a phone the
+   single nowrap row clipped the group-chat button mid-label
+   ("lew Group c"); give each row its own full-width line. */
+@media (max-width: 600px) {
+  .new-session-panel { flex-wrap: wrap; }
+  .new-session-primary-row,
+  .new-session-secondary-row { flex: 1 1 100%; }
+  .new-session-secondary-row #sidebarNewGroupChatBtn { flex: 1 1 auto; }
 }

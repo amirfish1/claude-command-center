@@ -2669,17 +2669,20 @@
   //            min, ~26% by 25-30, ~41% by 40-50, ~68% by 50-60. Graded, so
   //            the copy says "likely partial", never "cold", and the verdict
   //            talks about paying for *part* of the reload.
-  //   kimi   — No measured decay curve yet. Treating it as graded and warning
-  //            at 35 min is a conservative first cut: earlier than Claude's
-  //            cliff, later than Codex's material-loss point. The copy hedges
-  //            so we don't teach users to dismiss the measured engines.
+  //   kimi   — Measured across ~5,600 consecutive Kimi turns (mostly k3,
+  //            with a few kimi-for-coding variants). Cache retention stays
+  //            >99% for idle gaps under ~30 min, then becomes variable: by
+  //            40 min the median retained cache is ~63% and ~50% of samples
+  //            retain <50%. No clean cliff like Claude, so the copy stays
+  //            graded. Warning at 35 min catches the rising tail of loss
+  //            without nagging the still-warm short-idle sessions.
   //
   // Everything else (gemini, cursor, antigravity, hermes, kilo) has no
   // measurement behind it. Absent evidence we stay silent rather than warn —
   // an unfounded warning trains the user to dismiss the founded ones.
   const F2_STALE_MINUTES = 60;         // claude: the cliff
   const F2_STALE_MINUTES_CODEX = 25;   // codex: where graded loss is material
-  const F2_STALE_MINUTES_KIMI = 35;    // kimi: conservative provisional threshold
+  const F2_STALE_MINUTES_KIMI = 35;    // kimi: measured rise in cache-miss risk
   const F2_ENGINE_CACHE = {
     claude: {
       staleMinutes: F2_STALE_MINUTES,
@@ -2700,9 +2703,10 @@
       staleMinutes: F2_STALE_MINUTES_KIMI,
       decay: 'graded',
       railNote: 'cache likely partial',
-      // Honest about the lack of measurement — we warn conservatively rather
-      // than staying silent for a large reload.
-      verdictNote: 'Kimi cache decay has not been measured yet; after ' + F2_STALE_MINUTES_KIMI + ' min idle a growing share of that reload may no longer be cached',
+      // Measured: retention is >99% under ~30 min, then variable; by 40 min
+      // roughly half of samples retain <50%. The warning hedges because the
+      // decay is not a clean cliff.
+      verdictNote: 'after ' + F2_STALE_MINUTES_KIMI + ' min idle a material share of Kimi context cache reads may miss, and the miss rate grows with idle time',
     },
   };
   // 'interactive' is how a Claude session started outside CCC labels itself.
@@ -32557,8 +32561,25 @@
     // Initialized true so a brand-new pane auto-scrolls; user scrolling
     // away from the bottom flips it off, scrolling back flips it on.
     view._pinnedToBottom = true;
+    view._lastPinScrollTop = view.scrollTop;
     view.addEventListener('scroll', () => {
-      view._pinnedToBottom = isConversationAtBottom(view);
+      const prevTop = (typeof view._lastPinScrollTop === 'number')
+        ? view._lastPinScrollTop : view.scrollTop;
+      const nowTop = view.scrollTop;
+      view._lastPinScrollTop = nowTop;
+      if (isConversationAtBottom(view)) {
+        view._pinnedToBottom = true;
+      } else if (nowTop < prevTop - 2) {
+        // A deliberate upward scroll unpins even inside the 80px bottom
+        // tolerance. On a phone with the keyboard open the visible area
+        // can be only ~250px tall, so the tolerance used to swallow small
+        // drags whole — the next content mutation then snapped the reader
+        // back to the tail and scrolling appeared broken. Downward drift
+        // (rubber-band settle, programmatic clamps at the bottom edge)
+        // never reaches this branch: those positions are within the
+        // tolerance and take the re-pin branch above.
+        view._pinnedToBottom = false;
+      }
       updateConversationEndAffordance(view);
       // Cache the topmost-visible message on every scroll so a later window
       // resize (which fires the 'resize' event only after the browser has
@@ -59218,6 +59239,13 @@
     let done = null;
     try { done = localStorage.getItem(FFT_DONE_KEY); } catch (_) { return; }
     if (done) return;
+    // Never AUTO-start on small viewports. The tour's spotlight anchors
+    // assume the desktop split layout, and its fixed welcome card sits on
+    // top of the transcript swallowing every touch gesture — drag-to-scroll
+    // dies underneath it (worst with the keyboard open, where the card can
+    // be panned out of the visible frame and block invisibly). The Settings
+    // "Take the tour" button (force=true) still works everywhere.
+    if (window.matchMedia && window.matchMedia('(max-width: 1200px)').matches) return;
     // Defer while any modal (e.g. the login onboarding wizard) is open.
     if (document.querySelector('.upd-overlay.open')) {
       if ((attempt || 0) < 50) setTimeout(() => maybeStartFirstFlight((attempt || 0) + 1), 4000);
@@ -59778,6 +59806,14 @@
       '#cccThroughputStrip .ts-yd{margin-left:auto;color:#58a6ff;opacity:.75;text-decoration:none;white-space:nowrap;}' +
       '#cccThroughputStrip .ts-yd:hover{opacity:1;text-decoration:underline;}' +
       'body.flow-popout #cccThroughputStrip{display:none;}' +
+      /* Phones: the lane/pace text overflows the strip ("…vs yd yd" clipped
+         against the yd-report link). Hide the redundant link (the whole
+         strip already opens the dashboard on tap) and let the rest
+         side-scroll instead of colliding. */
+      '@media (max-width:600px){' +
+        '#cccThroughputStrip{overflow-x:auto;scrollbar-width:none;}' +
+        '#cccThroughputStrip::-webkit-scrollbar{display:none;}' +
+        '#cccThroughputStrip .ts-yd{display:none;}}' +
       '@media (max-width:480px){#cccThroughputStrip .ts-spark{display:none;}}';
     document.head.appendChild(st);
   }
