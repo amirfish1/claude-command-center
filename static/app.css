@@ -9682,6 +9682,23 @@
   .sys-desc .sys-live { color: var(--text); font-weight: 600; }
   .sys-wedged { font-size: 12px; }
 
+  /* Restart controls. Sits below the per-service sections and above the
+     dialog's Close row, so the reading order is state -> what to do. */
+  .sys-restart { border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; background: var(--bg); display: flex;
+    flex-direction: column; gap: 8px; }
+  .sys-restart-label { font-size: 13px; font-weight: 600; color: var(--text); }
+  .sys-restart-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sys-restart-btn { font-size: 12px; padding: 5px 12px; }
+  .sys-restart-hint { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+  .sys-restart-hint code { font-size: 11px; }
+  .sys-restart-status { font-size: 12px; border-radius: 6px; padding: 6px 9px;
+    background: var(--surface-2); color: var(--text-muted); }
+  .sys-restart-status.is-ok { color: var(--green, #3fb950);
+    background: rgba(63,185,80,0.12); }
+  .sys-restart-status.is-error { color: var(--red);
+    background: rgba(248,81,73,0.12); }
+
   /* ── Car Mode modal ─────────────────────────────────────────
      Reuses the .upd-* shell; these add the capability banner + the
      cost / graceful-degradation callouts. */

@@ -52147,6 +52147,68 @@
   const $sysCloseBtn = document.getElementById('sysCloseBtn');
   if ($sysCloseBtn) $sysCloseBtn.addEventListener('click', sysCloseModal);
   if ($sysBackdrop) $sysBackdrop.addEventListener('click', sysCloseModal);
+
+  // Restart controls (System status modal). A fix only goes live in the
+  // process that loaded the code: server.py runs in BOTH the dashboard and
+  // the worker, so "Restart all" is the honest default after new code lands.
+  const $sysRestartDashBtn = document.getElementById('sysRestartDashBtn');
+  const $sysRestartWorkerBtn = document.getElementById('sysRestartWorkerBtn');
+  const $sysRestartAllBtn = document.getElementById('sysRestartAllBtn');
+  const $sysRestartStatus = document.getElementById('sysRestartStatus');
+
+  function sysRestartSay(text, kind) {
+    if (!$sysRestartStatus) return;
+    $sysRestartStatus.hidden = !text;
+    $sysRestartStatus.textContent = text || '';
+    $sysRestartStatus.className = 'sys-restart-status'
+      + (kind ? ' is-' + kind : '');
+  }
+
+  if ($sysRestartDashBtn) {
+    $sysRestartDashBtn.addEventListener('click', () => restartServerRun('/api/restart'));
+  }
+  if ($sysRestartAllBtn) {
+    $sysRestartAllBtn.addEventListener('click', () => {
+      // Worth a confirm: this one interrupts the worker, which owns live
+      // agent processes, so it is not a free click.
+      const ok = window.confirm(
+        'Restart the execution worker and the dashboard?\n\n'
+        + 'Running queue items may come back as "needs reconciliation" '
+        + '(one click on Reconcile in Settings \u2192 Maintenance).'
+      );
+      if (ok) restartServerRun('/api/restart/all');
+    });
+  }
+  if ($sysRestartWorkerBtn) {
+    $sysRestartWorkerBtn.addEventListener('click', async () => {
+      const ok = window.confirm(
+        'Restart the execution worker?\n\n'
+        + 'It owns running agent processes. Queue items in flight may come '
+        + 'back as "needs reconciliation".'
+      );
+      if (!ok) return;
+      $sysRestartWorkerBtn.disabled = true;
+      sysRestartSay('Restarting worker\u2026', 'busy');
+      try {
+        const r = await fetch('/api/restart/worker', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) {
+          // The worker takes a moment to re-register; re-read rather than
+          // asserting a state we have not observed.
+          sysRestartSay('Worker restarted. Re-checking\u2026', 'ok');
+          setTimeout(() => { sysRefresh(); sysRestartSay('Worker restarted.', 'ok'); }, 2500);
+        } else {
+          sysRestartSay('Worker restart failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
+        }
+      } catch (e) {
+        sysRestartSay('Worker restart failed: ' + ((e && e.message) || 'network'), 'error');
+      } finally {
+        $sysRestartWorkerBtn.disabled = false;
+      }
+    });
+  }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $sysModal && $sysModal.classList.contains('open')) {
       sysCloseModal();
@@ -52813,21 +52875,31 @@
     if (maintenanceTab) maintenanceTab.click();
   }
 
-  async function restartServerRun() {
+  // endpoint '/api/restart' restarts this dashboard only; '/api/restart/all'
+  // also kicks the execution worker (server-side, after the session handoff,
+  // so a live worker is still there to hand off to).
+  async function restartServerRun(endpoint) {
+    endpoint = (typeof endpoint === 'string' && endpoint) ? endpoint : '/api/restart';
+    const withWorker = endpoint.endsWith('/all');
     if (!$restartServerBtn) return;
     closeSettingsModal();
+    if (typeof sysCloseModal === 'function') sysCloseModal();
     $restartServerBtn.disabled = true;
     restartServerShowOverlay(
       'Restarting&hellip;',
-      'Agent work stays in the persistent worker while the dashboard'
-        + (restartServerPort ? ' on :' + restartServerPort : '')
-        + ' comes back.'
+      withWorker
+        ? 'Restarting the execution worker and the dashboard'
+          + (restartServerPort ? ' on :' + restartServerPort : '')
+          + '. Running queue items may need reconciliation.'
+        : 'Agent work stays in the persistent worker while the dashboard'
+          + (restartServerPort ? ' on :' + restartServerPort : '')
+          + ' comes back.'
     );
     try { sessionStorage.setItem('ccc-restarting', '1'); } catch (_) {}
 
     let postError = null;
     try {
-      const r = await fetch('/api/restart', {
+      const r = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });

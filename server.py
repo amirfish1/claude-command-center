@@ -9455,6 +9455,26 @@ def _restart_stale_worker():
     )
     if not stale:
         return {"restarted": False, "reason": "current", "server_version": loaded}
+    return _restart_worker_process(worker, was=loaded, now=repo_version)
+
+
+def _restart_worker_process(worker=None, *, was=None, now=None):
+    """Restart the execution worker, whatever its version.
+
+    Split out of _restart_stale_worker so the Maintenance UI can restart the
+    worker on demand (a server.py fix only goes live in the worker once this
+    runs -- worker_engines.py lazily imports server, so the worker holds its
+    own copy of that module state).
+
+    Prefers launchd; falls back to kill + detached respawn for install paths
+    with no worker service (Homebrew's single service, the DMG app spawn).
+    """
+    if worker is None:
+        try:
+            health = _control_plane_request("health")
+        except Exception:
+            health = {}
+        worker = health.get("worker") if isinstance(health, dict) and isinstance(health.get("worker"), dict) else {}
     target = f"gui/{os.getuid()}/{_WORKER_LAUNCHD_LABEL}"
     try:
         proc = subprocess.run(
@@ -9464,7 +9484,7 @@ def _restart_stale_worker():
         kicked = proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         kicked = False
-    outcome = {"restarted": True, "was": loaded, "now": repo_version}
+    outcome = {"restarted": True, "was": was, "now": now}
     if kicked:
         outcome["via"] = "launchd"
         return outcome
@@ -53913,9 +53933,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "already_running": not started,
             })
             return
-        if path == "/api/restart":
+        if path == "/api/restart/worker":
+            # Restart ONLY the execution worker. The common case after a
+            # server.py fix: worker_engines.py lazily imports server, so the
+            # worker keeps running the old code until this happens, which
+            # reads to the user as "the fix didn't work".
+            outcome = _restart_worker_process()
+            self.send_json({
+                "ok": bool(outcome.get("restarted")),
+                "worker": outcome,
+                "note": (
+                    "Running queue items may show as needs reconciliation."
+                ),
+            }, 200 if outcome.get("restarted") else 500)
+            return
+        if path in ("/api/restart", "/api/restart/all"):
             # Manual in-place restart from the settings menu. Same-origin
             # POST checking above is the security boundary, matching update.
+            # /api/restart/all additionally kicks the worker, but only AFTER
+            # the handoff below succeeds: adopt/drain need a live worker, so
+            # restarting it first would strand this dashboard's sessions.
+            restart_all = path.endswith("/all")
             restart_id = str(uuid.uuid4())
             local_active = _dashboard_owned_active_executions()
             active_kimi = [
@@ -53963,6 +54001,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     "error": protected.get("error") or "worker refused safe drain",
                 }, 409)
                 return
+            # Worker first, then this process: the dashboard's own restart is
+            # scheduled after the response flushes, so kicking the worker here
+            # keeps the ordering right without stranding the reply.
+            worker_outcome = _restart_worker_process() if restart_all else None
             self.send_json({
                 "ok": True,
                 "restart": True,
@@ -53970,6 +54012,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "worker_preserved": bool(protected.get("ok")),
                 "queued": int(protected.get("queued") or 0),
                 "adopted": int(adopted.get("adopted") or 0),
+                "worker_restarted": bool((worker_outcome or {}).get("restarted")),
+                "worker": worker_outcome,
             })
             try:
                 self.wfile.flush()

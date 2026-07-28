@@ -1244,6 +1244,21 @@
         self-healing. A healthy app-server shows no WEDGED lines in the
         activity log.
       </div>
+      <!-- Restart controls. A code fix only goes live in the process that
+           loaded it: server.py runs in BOTH the dashboard and the worker
+           (worker_engines.py lazily imports it), so "Restart all" is the
+           honest default after pulling new code. Per-service buttons stay
+           for surgical use. -->
+      <div class="sys-restart" id="sysRestartRow">
+        <div class="sys-restart-label">Restart</div>
+        <div class="sys-restart-btns">
+          <button type="button" class="upd-btn sys-restart-btn" id="sysRestartDashBtn">Dashboard</button>
+          <button type="button" class="upd-btn sys-restart-btn" id="sysRestartWorkerBtn">Worker</button>
+          <button type="button" class="upd-btn upd-primary sys-restart-btn" id="sysRestartAllBtn">Restart all</button>
+        </div>
+        <div class="sys-restart-hint" id="sysRestartHint">After new code lands, use <strong>Restart all</strong> — a <code>server.py</code> fix runs in both the dashboard and the worker. Restarting the worker marks running queue items <em>needs reconciliation</em>.</div>
+        <div class="sys-restart-status" id="sysRestartStatus" hidden></div>
+      </div>
       <div class="upd-actions">
         <button type="button" class="upd-btn upd-primary" id="sysCloseBtn">Close</button>
       </div>
