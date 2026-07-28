@@ -8,6 +8,32 @@
         <description>Sparkle update feed for CCC.app.</description>
         <language>en</language>
         <item>
+            <title>v5.16.0</title>
+            <pubDate>Tue, 28 Jul 2026 14:27:20 +0000</pubDate>
+            <sparkle:version>5.16.0</sparkle:version>
+            <sparkle:shortVersionString>5.16.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v5.16.0</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v5.16.0/ccc-v5.16.0.dmg"
+                length="3495121"
+                type="application/octet-stream"
+                sparkle:edSignature="i9xz0WuDoSsTQpkhGo2L4wNS8Wj9Vu0lPIyM/9RVeVrzNf1MdQLGMPI5PU+psmrSNk/KbnBioeIa6hsCIsAABA==" />
+        </item>
+<item>
+            <title>v5.14.0</title>
+            <pubDate>Tue, 28 Jul 2026 01:38:29 +0000</pubDate>
+            <sparkle:version>5.14.0</sparkle:version>
+            <sparkle:shortVersionString>5.14.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>https://github.com/amirfish1/claude-command-center/releases/tag/v5.14.0</sparkle:releaseNotesLink>
+            <enclosure
+                url="https://github.com/amirfish1/claude-command-center/releases/download/v5.14.0/ccc-v5.14.0.dmg"
+                length="3490727"
+                type="application/octet-stream"
+                sparkle:edSignature="ZjRBSu0xf2LrJa9jebmhchxvs6FRDB7yg1qsotCiK5qcfUetossamtMHjN5TcG8SJnQJvX5anEn5UbXOO2zxDg==" />
+        </item>
+<item>
             <title>v5.13.0</title>
             <pubDate>Mon, 27 Jul 2026 08:46:21 +0000</pubDate>
             <sparkle:version>5.13.0</sparkle:version>
