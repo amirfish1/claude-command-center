@@ -11878,8 +11878,10 @@
 
   // Populate the status-rail Subagents panel from the active conversation's
   // row data. Shows the last 8 Task spawns (parser cap) with description,
-  // optional subagent_type, and a status pill. Hidden when the session has
-  // no spawns or no row data — keeps the rail compact for plain sessions.
+  // optional subagent_type, and a status pill, plus any Workflow tool runs
+  // discovered under the session's subagents/workflows dir. Hidden when the
+  // session has neither — keeps the rail compact for plain sessions.
+  const WF_AGENT_GLYPH = { running: '▶', done: '✓', failed: '✕', interrupted: '⚠' };
   function updateSubagentsPanel(convId) {
     const panel = document.getElementById('subagentsPanel');
     if (!panel) return;
@@ -11890,18 +11892,20 @@
     const recent = row && Array.isArray(row.subagent_recent) ? row.subagent_recent : [];
     const total = row ? Number(row.subagent_count || 0) : 0;
     const inFlight = row ? Number(row.subagent_in_flight_count || 0) : 0;
-    if (!recent.length) {
+    const workflows = row && Array.isArray(row.workflows) ? row.workflows : [];
+    if (!recent.length && !workflows.length) {
       panel.style.display = 'none';
       listEl.innerHTML = '';
       countEl.textContent = '';
       return;
     }
     panel.style.display = '';
+    const wfRunning = workflows.filter(r => r && r.status === 'running').length;
     countEl.textContent = inFlight > 0 ? (inFlight + ' / ' + total) : String(total);
     countEl.title = inFlight > 0
       ? (inFlight + ' running, ' + total + ' total spawned this session')
       : (total + ' subagent' + (total === 1 ? '' : 's') + ' spawned this session');
-    listEl.innerHTML = recent.map(t => {
+    let html = recent.map(t => {
       const status = (t && t.status) === 'in-flight' ? 'in-flight' : 'done';
       const desc = escapeHtml(String((t && t.description) || '(unnamed task)'));
       const type = t && t.subagent_type
@@ -11913,7 +11917,46 @@
         + type
         + '</div>';
     }).join('');
+    if (workflows.length) {
+      html += workflows.map(run => {
+        const agents = Array.isArray(run.agents) ? run.agents : [];
+        const doneN = agents.filter(a => a && a.status === 'done').length;
+        const runStatus = ['running', 'done', 'failed', 'interrupted'].includes(run.status) ? run.status : 'done';
+        const runTip = 'Workflow run ' + run.run_id + ' · ' + doneN + ' of ' + agents.length + ' agents done · ' + runStatus;
+        let runHtml = '<div class="workflow-run is-' + runStatus + '">'
+          + '<div class="workflow-run-header" title="' + escapeAttr(runTip) + '">'
+          + '<span class="subagent-status">' + (WF_AGENT_GLYPH[runStatus] || '✓') + '</span>'
+          + '<span class="workflow-run-id">' + escapeHtml(String(run.run_id || '')) + '</span>'
+          + '<span class="workflow-run-count">' + doneN + ' / ' + agents.length + '</span>'
+          + '</div>';
+        runHtml += agents.map(a => {
+          const aStatus = ['running', 'done', 'failed', 'interrupted'].includes(a.status) ? a.status : 'done';
+          const aDesc = String(a.description || a.id || '');
+          const aTip = aDesc + ' · ' + aStatus + ' · click to open transcript';
+          return '<button type="button" class="subagent-row wf-agent is-' + aStatus + '"'
+            + ' data-wf-conv="' + escapeAttr(String(a.conv_id || '')) + '"'
+            + ' title="' + escapeAttr(aTip) + '">'
+            + '<span class="subagent-status">' + (WF_AGENT_GLYPH[aStatus] || '✓') + '</span>'
+            + '<span class="subagent-desc">' + escapeHtml(aDesc || '(unnamed agent)') + '</span>'
+            + '</button>';
+        }).join('');
+        return runHtml + '</div>';
+      }).join('');
+    }
+    listEl.innerHTML = html;
   }
+  // Workflow agent rows open the agent transcript read-only in a popout via
+  // the composite "<parent>:agent-<id>" conversation id (same pipeline as
+  // Task subagent transcripts, CCC-112).
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest('.wf-agent');
+    if (!btn) return;
+    ev.stopPropagation();
+    const conv = btn.getAttribute('data-wf-conv') || '';
+    if (!conv) return;
+    window.open('/?ccc_popout=conversation&conv=' + encodeURIComponent(conv), '_blank',
+      'width=900,height=800');
+  });
   function setActivePaneById(paneId, activeConvId) {
     const idx = paneIndexByPaneId(paneId);
     if (idx < 0) return false;
@@ -25545,6 +25588,21 @@
           : ('🤖 ' + _subCount);
         signals += '<span class="conv-signal subagents' + (_subInFlight > 0 ? ' in-flight' : '') + '" title="' + escapeAttr(_subTip) + '">' + _subInner + '</span>';
       }
+      // Workflow chip — Workflow tool runs found under the session's
+      // subagents/workflows dir. A running run adds the ▶ suffix + pulse so
+      // live fan-out reads differently from historic runs. Hidden when the
+      // session has no workflow runs.
+      const _wfRuns = Array.isArray(c.workflows) ? c.workflows : [];
+      if (_wfRuns.length > 0) {
+        const _wfRunning = _wfRuns.filter(r => r && r.status === 'running').length;
+        const _wfTip = _wfRunning > 0
+          ? (_wfRunning + ' workflow run' + (_wfRunning === 1 ? '' : 's') + ' running · ' + _wfRuns.length + ' total')
+          : (_wfRuns.length + ' workflow run' + (_wfRuns.length === 1 ? '' : 's'));
+        const _wfInner = _wfRunning > 0
+          ? ('⚙ ' + _wfRuns.length + ' <span class="conv-signal-sub-flight">▶ ' + _wfRunning + '</span>')
+          : ('⚙ ' + _wfRuns.length);
+        signals += '<span class="conv-signal workflows' + (_wfRunning > 0 ? ' in-flight' : '') + '" title="' + escapeAttr(_wfTip) + '">' + _wfInner + '</span>';
+      }
       const _rowActivityTs = c.sidecar_ts || c.last_interacted || c.modified || 0;
       const _rowActivityAge = _rowActivityTs ? Math.max(0, Math.floor(Date.now() / 1000 - _rowActivityTs)) : 9999;
       // "done" chip: a turn that completed within the last 15 min reads as a
@@ -34251,6 +34309,51 @@
   // the button back to its former value or hide its in-progress spinner.
   const _uxqPendingDrainStates = new Map();
   const _UXQ_DRAIN_MIN_PENDING_MS = 400;
+  // ── Service health (SERVER STATUS chip + System status panel) ────────
+  // One endpoint, one round trip: GET /api/system/services returns the
+  // dashboard, the execution worker, WatchTower and the Codex app-server in
+  // a single 3s-coalesced payload. The chip polls it at 20s and the open
+  // panel at 5s, so a client-side dedupe of 3s matches the server TTL and
+  // the two pollers never double-fetch.
+  let _sysServicesCache = { ts: 0, payload: null };
+  let _sysServicesPromise = null;
+  let _sysServicesFailures = 0;
+  const _SYS_SERVICES_DEDUPE_MS = 3000;
+
+  async function _fetchSystemServices(force) {
+    if (!force && Date.now() - _sysServicesCache.ts < _SYS_SERVICES_DEDUPE_MS) {
+      return _sysServicesCache;
+    }
+    if (_sysServicesPromise) return _sysServicesPromise;
+    _sysServicesPromise = (async () => {
+      try {
+        const res = await fetch('/api/system/services', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok || !data || !Array.isArray(data.services)) {
+          throw new Error('bad payload');
+        }
+        _sysServicesCache = { ts: Date.now(), payload: data };
+        _sysServicesFailures = 0;
+      } catch (_) {
+        // Keep the last good payload. One failure is a hiccup; two in a row
+        // means the dashboard itself is not answering, which the chip paints
+        // red as `unreachable`.
+        _sysServicesFailures += 1;
+      } finally { _sysServicesPromise = null; }
+      return _sysServicesCache;
+    })();
+    return _sysServicesPromise;
+  }
+
+  function _sysServiceMap(payload) {
+    const map = new Map();
+    const rows = (payload && Array.isArray(payload.services)) ? payload.services : [];
+    for (const svc of rows) {
+      if (svc && svc.id) map.set(String(svc.id), svc);
+    }
+    return map;
+  }
+
   let _uxqHealthPromise = null;
   async function _fetchUxqHealth(allowStale) {
     if (allowStale && _uxqHealthCache.ts) return _uxqHealthCache;
@@ -52276,12 +52379,67 @@
     });
   }
 
-  // ── System status modal ─────────────────────────────────────
-  // Settings → Maintenance → System status. Shows every background process
-  // CCC relies on, live, plus restart guidance and the WEDGED explainer
-  // (markup and static copy live in index.html #sysModal).
+  // ── System status: SERVER STATUS chip + panel ────────────────
+  // One chip in the sidebar header rolls up every service CCC runs; clicking
+  // it opens this panel, which is the only place the detail lives. Both read
+  // the same _fetchSystemServices() cache, so the chip and the open panel
+  // never disagree and never double-fetch.
+  //
+  // Structural rule: every element below is captured once at boot from
+  // index.html. Nothing here rebuilds markup with innerHTML except the queue
+  // list inside #cccWtPop, which owns its own children.
   const $sysModal = document.getElementById('sysModal');
   const $sysBackdrop = document.getElementById('sysBackdrop');
+  const $sysDialog = document.getElementById('sysDialog');
+  const $sysChip = document.getElementById('cccServerStatusChip');
+  const $sysChipVerdict = document.getElementById('cccServerStatusVerdict');
+  const $sysChipCount = document.getElementById('cccServerStatusCount');
+  const $sysRollup = document.getElementById('sysRollup');
+  const $sysRollupText = document.getElementById('sysRollupText');
+  const $sysLiveRegion = document.getElementById('sysLiveRegion');
+
+  // Same confirm string in the panel and in Settings → Maintenance, so the
+  // consequence is described identically wherever you click Restart worker.
+  const WORKER_RESTART_CONFIRM =
+    'Restart the execution worker?\n\n'
+    + 'Running queue items will be marked "needs reconciliation" and you clear '
+    + 'them with one click on Reconcile. Agent turns already in flight may be '
+    + 'interrupted.';
+  const WT_RESTART_CONFIRM =
+    'Restart the WatchTower server?\n\n'
+    + 'In-flight queue workers are stopped mid task and queue draining pauses '
+    + 'until it is back. This can take up to 30 seconds.';
+
+  const SYS_ROWS = {
+    dashboard: {
+      label: 'Dashboard',
+      row: 'sysRowDash', state: 'sysDashState', started: 'sysDashStarted',
+      busy: 'sysDashBusy', result: 'sysDashResult', btn: 'sysRestartDashBtn',
+      meta: 'sysDashMeta', detail: 'sysDashDetail',
+    },
+    worker: {
+      label: 'Execution worker',
+      row: 'sysRowWorker', state: 'sysWorkerState', started: 'sysWorkerStarted',
+      busy: 'sysWorkerBusy', result: 'sysWorkerResult', btn: 'sysRestartWorkerBtn',
+      meta: 'sysWorkerMeta', detail: 'sysWorkerDetail',
+    },
+    watchtower: {
+      label: 'WatchTower server',
+      row: 'sysRowWt', state: 'sysWtState', started: 'sysWtStarted',
+      busy: 'sysWtBusy', result: 'sysWtResult', btn: 'sysRestartWtBtn',
+      meta: 'sysWtMeta', detail: 'sysWtDetail',
+    },
+  };
+
+  let _sysPollTimer = null;
+  let _sysReturnFocus = null;
+  let _sysRestartInFlight = null;
+  // Armed but not fired: the dashboard restart counts down for 5s with an
+  // Undo before it commits. It locks the same controls as a live restart, but
+  // it is NOT "restarting" yet, so it never touches the state pill.
+  let _sysArmedRestart = null;
+  let _sysFirstAttemptAt = 0;
+  let _sysLastRollupLevel = '';
 
   function sysSetState(id, on, text) {
     const el = document.getElementById(id);
@@ -52289,23 +52447,572 @@
     el.textContent = text;
     el.classList.toggle('on', on === true);
     el.classList.toggle('off', on === false);
+    el.classList.remove('is-busy');
   }
-  function sysOpenModal() {
-    if ($sysModal) $sysModal.classList.add('open');
-    sysRefresh();
-  }
-  function sysCloseModal() { if ($sysModal) $sysModal.classList.remove('open'); }
-  const $sysBtn = document.getElementById('systemStatusBtn');
-  if ($sysBtn) $sysBtn.addEventListener('click', sysOpenModal);
-  const $sysCloseBtn = document.getElementById('sysCloseBtn');
-  if ($sysCloseBtn) $sysCloseBtn.addEventListener('click', sysCloseModal);
-  if ($sysBackdrop) $sysBackdrop.addEventListener('click', sysCloseModal);
 
-  // Restart controls (System status modal). A fix only goes live in the
-  // process that loaded the code: server.py runs in BOTH the dashboard and
-  // the worker, so "Restart all" is the honest default after new code lands.
+  // ── Time formatting ───────────────────────────────────────────
+  // "Started", never "Restarted": CCC cannot tell a first boot from a
+  // restart, and guessing wrong in the one panel whose whole job is being
+  // trustworthy is not worth the extra word.
+  // coarse: drop the minor unit. Used whenever the number is prefixed with
+  // "about", because "about 13h 11m ago" claims a precision the word "about"
+  // just disclaimed.
+  function relDuration(seconds, coarse) {
+    const s = Math.max(0, Math.round(Number(seconds) || 0));  // clock skew -> just now
+    if (s < 45) return 'just now';
+    if (s < 90) return '1m ago';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    if (s < 86400) {
+      const h = Math.floor(s / 3600);
+      const m = coarse ? 0 : Math.floor((s % 3600) / 60);
+      return h + 'h' + (m ? ' ' + m + 'm' : '') + ' ago';
+    }
+    if (s < 604800) {
+      const d = Math.floor(s / 86400);
+      const h = coarse ? 0 : Math.floor((s % 86400) / 3600);
+      return d + 'd' + (h ? ' ' + h + 'h' : '') + ' ago';
+    }
+    return Math.floor(s / 86400) + 'd ago';
+  }
+
+  function absStamp(unix) {
+    const d = new Date(Number(unix) * 1000);
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    const date = d.toLocaleDateString(undefined, sameYear
+      ? { month: 'short', day: 'numeric' }
+      : { month: 'short', day: 'numeric', year: 'numeric' });
+    const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return date + ' at ' + time;
+  }
+
+  function formatStarted(svc) {
+    if (!svc) return 'Checking start time';
+    if (svc.state === 'offline') return 'Not running';
+    if (!svc.started_at) {
+      // The Codex app-server reports uptime but no absolute start.
+      if (svc.uptime_s != null) return 'Started about ' + relDuration(svc.uptime_s, true);
+      return 'Start time not reported';
+    }
+    const approx = !!svc.started_at_approx;
+    const rel = relDuration(Date.now() / 1000 - svc.started_at, approx);
+    return 'Started ' + (approx ? 'about ' : '') + rel
+      + ', ' + absStamp(svc.started_at);
+  }
+
+  function _plural(n, one, many) { return Number(n) === 1 ? one : many; }
+
+  // ── Busy lines: what a restart would actually cost, right now ──
+  function sysDashBusySentence(svc) {
+    if (svc.restart_blocking) {
+      return 'Busy: a Kimi turn is owned by this dashboard. A restart is '
+        + 'refused until it finishes.';
+    }
+    const n = Number(svc.busy_count || 0);
+    if (n > 0) {
+      return 'Busy: ' + n + ' ' + _plural(n, 'turn is', 'turns are')
+        + ' running inside the dashboard right now.'
+        + _plural(n, ' Restarting would interrupt it.', ' Restarting would interrupt them.');
+    }
+    return 'Idle. Restarting is cheap: agent turns keep running inside the '
+      + 'worker, and this page reloads itself in a few seconds.';
+  }
+
+  function sysWorkerBusySentence(svc) {
+    let text;
+    if (svc.state === 'offline') {
+      text = 'Not running. Queued work is not being dispatched.';
+    } else if (svc.state === 'degraded') {
+      text = 'Running but not answering health checks. A restart usually clears it.';
+    } else if (Number(svc.active || 0) + Number(svc.queued || 0) > 0) {
+      text = 'Busy: ' + Number(svc.active || 0) + ' running, '
+        + Number(svc.queued || 0) + ' queued. Restarting now marks running '
+        + 'queue items "needs reconciliation", and you clear them with one '
+        + 'click on Reconcile.';
+    } else {
+      text = 'Idle. Nothing is running. Restarting now is safe and takes a few seconds.';
+    }
+    const uncertain = Number(svc.uncertain || 0);
+    if (uncertain > 0) {
+      text += ' ' + uncertain + ' '
+        + _plural(uncertain, 'item already needs reconciliation.',
+                  'items already need reconciliation.');
+    }
+    if (svc.drain_enabled) text += ' Dispatch is paused, so nothing new starts.';
+    if (svc.version_stale) {
+      text += ' This worker is running older code than the dashboard. '
+        + 'Restart it to pick up the current server.py.';
+    }
+    return text;
+  }
+
+  // Deliberately carries no queue counts. The Queues panel 12px below states
+  // them from a different cache on a different clock, and two numbers for the
+  // same thing that disagree by 20 seconds is worse than one number. This line
+  // owns the restart implication; the panel owns the counts.
+  function sysWtBusySentence(svc) {
+    const workers = Number(svc.workers_live || 0);
+    let text;
+    if (!svc.installed) {
+      return 'WatchTower is not installed on this machine. Queue tracking is off.';
+    }
+    if (svc.state === 'offline') {
+      text = 'Not running. Queues are not being drained and worker health is '
+        + 'not being tracked. Agent sessions keep working.';
+    } else if (svc.state === 'degraded') {
+      text = 'Running but the API on port ' + (svc.port || 8787) + ' is not '
+        + 'answering. Queue data on this page may be stale. A restart usually '
+        + 'clears it.';
+    } else if (workers > 0) {
+      text = 'Busy: ' + workers + ' queue ' + _plural(workers, 'worker is', 'workers are')
+        + ' live. Restarting now stops them mid task and pauses draining '
+        + 'until it is back.';
+    } else {
+      text = 'Idle. No queue worker is running, so restarting now is safe; '
+        + 'draining pauses for a few seconds.';
+    }
+    const stuck = Number(svc.stuck_total || 0);
+    if (stuck > 0) {
+      text += ' ' + stuck + ' ' + _plural(stuck, 'queue is stuck.', 'queues are stuck.');
+    }
+    return text;
+  }
+
+  // ── Rollup ────────────────────────────────────────────────────
+  // First match wins, in this exact order. A not-installed WatchTower is
+  // excluded entirely: painting the header yellow forever for a feature the
+  // user never installed would train them to ignore the chip.
+  function computeServerRollup(payload) {
+    const reasons = [];
+    if (_sysServicesFailures >= 2 || (!payload && _sysFirstAttemptAt
+        && Date.now() - _sysFirstAttemptAt > 10000)) {
+      return {
+        level: 'red', verdict: 'no answer', unreachable: true,
+        count: 0, reasons: [], critical: false, down: [],
+      };
+    }
+    if (!payload) {
+      return {
+        level: 'unknown', verdict: 'checking', count: 0, reasons: [],
+        critical: false, down: [],
+      };
+    }
+    const map = _sysServiceMap(payload);
+    const dash = map.get('dashboard') || {};
+    const worker = map.get('worker') || {};
+    const wt = map.get('watchtower') || {};
+    const appServer = map.get('app_server') || {};
+    const wtCounts = wt.installed !== false;
+
+    if (worker.state === 'offline') reasons.push('Execution worker is offline');
+    if (worker.state === 'degraded') reasons.push('Execution worker is degraded');
+    if (dash.state === 'degraded') reasons.push('Dashboard is reporting errors');
+    if (wtCounts && wt.state === 'offline') reasons.push('WatchTower server is not running');
+    if (wtCounts && wt.state === 'degraded') reasons.push('WatchTower server is degraded');
+    const stuck = wtCounts ? Number(wt.stuck_total || 0) : 0;
+    if (stuck > 0) {
+      reasons.push(stuck + ' ' + _plural(stuck, 'queue stuck', 'queues stuck'));
+    }
+    const uncertain = Number(worker.uncertain || 0);
+    if (uncertain > 0) {
+      reasons.push(uncertain + ' ' + _plural(uncertain, 'item needs', 'items need')
+        + ' reconciliation');
+    }
+    if (worker.drain_enabled) reasons.push('dispatch is paused');
+    if (worker.version_stale) reasons.push('worker is running older code');
+    // Crash-loop blindness: every service is KeepAlive-managed, so a process
+    // that dies every 90 seconds reads "online, started just now" forever. The
+    // backend counts distinct starts it has observed in a 10-minute window.
+    for (const [svc, name] of [[worker, 'Execution worker'], [wt, 'WatchTower server']]) {
+      if (!svc || (svc === wt && !wtCounts)) continue;
+      const starts = Number(svc.starts_10m || 0);
+      const limit = Number(svc.flap_threshold || 3);
+      if (starts >= limit) {
+        reasons.push(name + ' started ' + starts + ' times in 10 minutes');
+      }
+    }
+    if (_sysRestartInFlight) reasons.push('restart in progress');
+    if (Number(appServer.consecutive_liveness_misses || 0) > 0) {
+      reasons.push('Codex app-server missed a liveness probe');
+    }
+
+    const tracked = [dash, worker].concat(wtCounts ? [wt] : []);
+    const notOnline = tracked.filter(s => s.state !== 'online');
+    const workerDown = worker.state === 'offline';
+    const red = workerDown || dash.state === 'offline' || notOnline.length >= 2;
+    // One unit for the count badge in every non-green state: the number of
+    // distinct things needing attention. It used to mean "reasons" when amber
+    // and "services down" when red, so the same "3" meant two different
+    // things depending on the colour.
+    if (red) {
+      return {
+        level: 'red', verdict: 'down', count: reasons.length,
+        reasons, critical: workerDown, down: notOnline,
+      };
+    }
+    if (reasons.length) {
+      return {
+        level: 'yellow', verdict: 'attention', count: reasons.length,
+        reasons, critical: false, down: [],
+      };
+    }
+    return {
+      level: 'green', verdict: 'online', count: 0, reasons: [],
+      critical: false, down: [], tracked: tracked.length,
+    };
+  }
+
+  function _sysCountLabel(n) { return n > 99 ? '99+' : String(n); }
+
+  function paintServerChip(rollup) {
+    if (!$sysChip) return;
+    $sysChip.classList.remove('is-green', 'is-yellow', 'is-red', 'is-unknown', 'is-critical');
+    $sysChip.classList.add('is-' + rollup.level);
+    if (rollup.critical) $sysChip.classList.add('is-critical');
+    if ($sysChipVerdict) $sysChipVerdict.textContent = rollup.verdict;
+    if ($sysChipCount) {
+      const show = rollup.level !== 'green' && rollup.count > 0;
+      $sysChipCount.hidden = !show;
+      $sysChipCount.textContent = show ? _sysCountLabel(rollup.count) : '';
+    }
+    // aria-label wins over the child text, so it must always carry the
+    // verdict: a screen-reader user hears the answer before activating.
+    let label;
+    if (rollup.unreachable) {
+      label = 'Server status: the dashboard is not answering. Open system status.';
+    } else if (rollup.level === 'unknown') {
+      label = 'Server status: checking. Open system status.';
+    } else if (rollup.level === 'green') {
+      // Do not claim three services when WatchTower is not installed.
+      label = 'Server status: '
+        + (rollup.tracked === 3
+          ? 'all three services are online.'
+          : 'the dashboard and the execution worker are online.')
+        + ' Open system status.';
+    } else {
+      label = 'Server status: '
+        + (rollup.level === 'red' ? 'something is down. ' : 'needs attention. ')
+        + rollup.reasons.slice(0, 3).join(', ') + '. Open system status.';
+    }
+    $sysChip.setAttribute('aria-label', label);
+    $sysChip.title = label;
+  }
+
+  function paintSysRollup(rollup) {
+    if (!$sysRollup) return;
+    $sysRollup.classList.remove('is-green', 'is-yellow', 'is-red', 'is-unknown');
+    $sysRollup.classList.add('is-' + rollup.level);
+    let text;
+    if (rollup.unreachable) text = 'Dashboard is not answering';
+    else if (rollup.level === 'unknown') text = 'Checking services';
+    else if (rollup.level === 'green') {
+      // A not-installed WatchTower is excluded from the rollup, so "All
+      // services online" would sit directly above a row reading "offline".
+      // Name the two that are actually being vouched for.
+      text = rollup.tracked === 3
+        ? 'All services online'
+        : 'Dashboard and worker online';
+    }
+    else if (rollup.level === 'red') {
+      // Name the service when exactly one is down. "1 service is down" makes
+      // someone open the panel to learn a word we already had.
+      const down = rollup.down || [];
+      text = down.length === 1
+        ? ((down[0].label || 'A service') + ' is down')
+        : (down.length + ' services are down');
+    } else {
+      text = rollup.count + ' '
+        + _plural(rollup.count, 'thing needs attention', 'things need attention');
+    }
+    if ($sysRollupText) $sysRollupText.textContent = text;
+    // Announce the verdict only when it changes; the panel polls every 5s.
+    if ($sysModal && $sysModal.classList.contains('open')
+        && rollup.level !== _sysLastRollupLevel && !_sysRestartInFlight) {
+      sysSay(text);
+    }
+    _sysLastRollupLevel = rollup.level;
+  }
+
+  function sysSay(text) {
+    if ($sysLiveRegion) $sysLiveRegion.textContent = text || '';
+  }
+
+  function sysRowSay(id, text, kind) {
+    const ids = SYS_ROWS[id];
+    if (!ids) return;
+    const el = document.getElementById(ids.result);
+    if (!el) return;
+    el.hidden = !text;
+    el.textContent = text || '';
+    el.className = 'sys-svc-result' + (kind ? ' is-' + kind : '');
+  }
+
+  const SYS_STATE_PILL = {
+    online: 'online', degraded: 'degraded', offline: 'offline',
+    idle: 'idle', unknown: 'checking',
+  };
+
+  function _sysStateFlag(state) {
+    if (state === 'online') return true;
+    if (state === 'offline') return false;
+    return null;  // degraded / idle / unknown read as neutral
+  }
+
+  function renderSysRow(id, svc) {
+    const ids = SYS_ROWS[id];
+    if (!ids) return;
+    const row = document.getElementById(ids.row);
+    const state = (svc && svc.state) || 'unknown';
+    if (row) {
+      row.classList.remove('is-checking', 'is-online', 'is-degraded', 'is-offline', 'is-idle');
+      row.classList.add(svc ? 'is-' + state : 'is-checking');
+    }
+    if (_sysRestartInFlight === id) {
+      // The 5s panel poll runs straight through a restart. Do not let it
+      // repaint the pill back to the pre-restart verdict mid-flight.
+      sysSetRestartingPill(id);
+    } else {
+      sysSetState(ids.state, _sysStateFlag(state), SYS_STATE_PILL[state] || 'checking');
+    }
+    // The explainer is hidden by CSS while a row is online, so hover on the
+    // row name has to carry it. Nothing is lost, it is just quiet at rest.
+    const nameEl = row && row.querySelector('.sys-name');
+    const detailEl = ids.detail && document.getElementById(ids.detail);
+    if (nameEl && detailEl && !nameEl.title) nameEl.title = detailEl.textContent || '';
+    const started = document.getElementById(ids.started);
+    if (started) {
+      started.textContent = svc ? formatStarted(svc) : 'Checking start time';
+      // Say where an approximate number came from rather than hiding it.
+      started.title = (svc && svc.started_at_approx)
+        ? 'Derived from the WatchTower daemon pid file' : '';
+    }
+    const busy = document.getElementById(ids.busy);
+    if (busy) {
+      if (!svc) busy.textContent = 'Checking activity';
+      else if (id === 'dashboard') busy.textContent = sysDashBusySentence(svc);
+      else if (id === 'worker') busy.textContent = sysWorkerBusySentence(svc);
+      else busy.textContent = sysWtBusySentence(svc);
+    }
+    sysPaintRestartButton(id, svc);
+    sysPaintSvcMeta(id, svc);
+  }
+
+  // Why this service's Restart is unavailable, or '' when it is available.
+  // Single source of truth: renderSysRow paints from it on every poll AND
+  // sysApplyRestartLocks paints from it the instant a restart settles, so the
+  // buttons can never sit dead waiting for the next round trip.
+  function sysRestartBlockReason(id, svc) {
+    if (!svc) return 'Still checking this service.';
+    if (_sysArmedRestart && _sysArmedRestart !== id) {
+      return 'Another restart is about to start.';
+    }
+    if (_sysArmedRestart === id) {
+      return 'Restarting in a moment. Choose Undo to cancel.';
+    }
+    if (_sysRestartInFlight) return 'Another restart is in progress.';
+    if (svc.restart_blocking && id === 'dashboard') {
+      return 'Waiting for the running Kimi turn to finish.';
+    }
+    if (svc.restart_blocking && id === 'watchtower') {
+      return 'CCC cannot verify the WatchTower process identity, so it will '
+        + 'not restart it. Restart it from the terminal with wt restart.';
+    }
+    return '';
+  }
+
+  function sysPaintRestartButton(id, svc) {
+    const ids = SYS_ROWS[id];
+    const btn = ids && document.getElementById(ids.btn);
+    if (!btn) return;
+    if (id === 'watchtower' && svc) {
+      // Not installed is not a failure anybody fixes from here.
+      btn.hidden = svc.installed === false;
+    }
+    if (_sysRestartInFlight === id) {
+      btn.disabled = true;
+      btn.textContent = 'Restarting…';
+      btn.title = 'Restart in progress.';
+      return;
+    }
+    const why = sysRestartBlockReason(id, svc);
+    btn.disabled = !!why;
+    btn.title = why;
+    btn.textContent = (id === 'watchtower' && svc && svc.state === 'offline')
+      ? 'Start' : 'Restart';
+  }
+
+  // The ops facts the backend already returns and nothing rendered: pid,
+  // version, port, and the crash-loop count. One 11px line.
+  function sysPaintSvcMeta(id, svc) {
+    const ids = SYS_ROWS[id];
+    const el = ids && document.getElementById(ids.meta);
+    if (!el) return;
+    el.textContent = '';
+    if (!svc) return;
+    const bits = [];
+    if (svc.pid) bits.push('pid ' + svc.pid);
+    if (svc.version) bits.push('v' + svc.version);
+    if (svc.port) bits.push('port ' + svc.port);
+    if (Number(svc.recent_errors || 0) > 0) {
+      const n = Number(svc.recent_errors);
+      bits.push(n + ' recent ' + _plural(n, 'error', 'errors'));
+    }
+    for (const bit of bits) {
+      if (el.childNodes.length) el.appendChild(document.createTextNode(' · '));
+      el.appendChild(document.createTextNode(bit));
+    }
+    // A KeepAlive-managed service that keeps dying reads "online, started just
+    // now" forever. Say the count out loud when it crosses the flap line.
+    const starts = Number(svc.starts_10m || 0);
+    if (starts >= Number(svc.flap_threshold || 3)) {
+      if (el.childNodes.length) el.appendChild(document.createTextNode(' · '));
+      const warn = document.createElement('span');
+      warn.className = 'sys-meta-warn';
+      warn.textContent = 'started ' + starts + ' times in the last 10 minutes';
+      el.appendChild(warn);
+    }
+  }
+
+  function renderSysAppServerRow(svc, workerSvc) {
+    const row = document.getElementById('sysRowAppServer');
+    const meta = document.getElementById('sysAppServerDetail');
+    const thr = document.getElementById('sysWedgedThreshold');
+    const state = (svc && svc.state) || 'unknown';
+    if (row) {
+      row.classList.remove('is-checking', 'is-online', 'is-degraded', 'is-offline', 'is-idle');
+      row.classList.add(svc ? 'is-' + state : 'is-checking');
+    }
+    const pill = { online: 'on', degraded: 'degraded', offline: 'off', idle: 'idle' };
+    sysSetState('sysAppServerState', _sysStateFlag(state), pill[state] || 'checking');
+    if (thr && svc && svc.miss_threshold) thr.textContent = ' ' + svc.miss_threshold + '×';
+    if (!meta) return;
+    let text = 'Shared by every Codex session. CCC probes it and replaces it '
+      + 'if it stops answering.';
+    if (svc && state === 'offline' && workerSvc && workerSvc.state === 'offline') {
+      text = 'The worker is not running, so there is no app-server.';
+    } else if (svc && state === 'idle') {
+      text += ' Not started yet; it starts on the first Codex request.';
+    }
+    const misses = Number((svc && svc.consecutive_liveness_misses) || 0);
+    if (misses > 0) {
+      text += ' Missed ' + misses + ' of ' + ((svc && svc.miss_threshold) || '?')
+        + ' liveness probes.';
+    }
+    meta.textContent = text;
+  }
+
+  async function sysRefresh(force) {
+    if (!_sysFirstAttemptAt) _sysFirstAttemptAt = Date.now();
+    const cache = await _fetchSystemServices(force);
+    const payload = cache && cache.payload;
+    const map = _sysServiceMap(payload);
+    renderSysRow('dashboard', map.get('dashboard'));
+    renderSysRow('worker', map.get('worker'));
+    renderSysRow('watchtower', map.get('watchtower'));
+    renderSysAppServerRow(map.get('app_server'), map.get('worker'));
+    const rollup = computeServerRollup(payload);
+    paintSysRollup(rollup);
+    paintServerChip(rollup);
+    return payload;
+  }
+
+  // ── Open / close / focus ──────────────────────────────────────
+  function _sysFocusables() {
+    if (!$sysDialog) return [];
+    return Array.prototype.filter.call(
+      $sysDialog.querySelectorAll(
+        'button:not([disabled]):not([hidden]), summary, [href], [tabindex]:not([tabindex="-1"])'
+      ),
+      el => el.offsetParent !== null || el === document.activeElement
+    );
+  }
+  function _sysTrapTab(e) {
+    if (e.key !== 'Tab') return;
+    if (!$sysModal || !$sysModal.classList.contains('open')) return;
+    const items = _sysFocusables();
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  }
+
+  function sysOpenModal(opener) {
+    if (!$sysModal) return;
+    // Remember the opener explicitly rather than trusting activeElement: a
+    // click on a <button> focuses it in a real browser but not when the click
+    // is synthesised, and "focus went to <body>" is the one failure mode a
+    // keyboard user actually feels.
+    const from = (opener && opener.focus) ? opener : document.activeElement;
+    _sysReturnFocus = (from && from !== document.body) ? from : $sysChip;
+    $sysModal.classList.add('open');
+    if ($sysChip) $sysChip.setAttribute('aria-expanded', 'true');
+    _sysLastRollupLevel = '';
+    sysRefresh(true);
+    // The worker pill inside the worker row is painted by the control-plane
+    // poller, which ticks every 20s. Re-read on open so it is never stale.
+    if (typeof refreshControlPlaneStatus === 'function') refreshControlPlaneStatus();
+    // Same for the inline Queues panel: it rides its own 20s timer over a 15s
+    // client cache, so on open it could be 35s behind the WatchTower row it
+    // sits 12px under. Force it, so the two readouts are from one moment.
+    if (typeof _wtQueueRefresh === 'function') _wtQueueRefresh(true);
+    if ($sysDialog) $sysDialog.focus();
+    document.addEventListener('keydown', _sysTrapTab, true);
+    if (_sysPollTimer) clearInterval(_sysPollTimer);
+    _sysPollTimer = setInterval(() => sysRefresh(false), 5000);
+  }
+
+  function sysCloseModal() {
+    if (!$sysModal) return;
+    // An armed dashboard restart is cancelled by closing the panel: nothing
+    // that reloads the page should survive the dialog that offered the Undo.
+    if (typeof sysCancelDashArm === 'function') sysCancelDashArm(true);
+    $sysModal.classList.remove('open');
+    if ($sysChip) $sysChip.setAttribute('aria-expanded', 'false');
+    if (_sysPollTimer) { clearInterval(_sysPollTimer); _sysPollTimer = null; }
+    document.removeEventListener('keydown', _sysTrapTab, true);
+    const back = (_sysReturnFocus && document.contains(_sysReturnFocus)
+      && _sysReturnFocus.offsetParent !== null) ? _sysReturnFocus : $sysChip;
+    if (back) { try { back.focus(); } catch (_) {} }
+    _sysReturnFocus = null;
+  }
+
+  // Never trap the user, but never let a backdrop click look like a cancel
+  // for a POST that is already running on the server.
+  function sysRequestClose() {
+    if (_sysRestartInFlight) {
+      showOpToast('Restart is still running in the background.', 'info');
+      return;
+    }
+    sysCloseModal();
+  }
+
+  const $sysBtn = document.getElementById('systemStatusBtn');
+  if ($sysBtn) $sysBtn.addEventListener('click', () => sysOpenModal($sysBtn));
+  if ($sysChip) $sysChip.addEventListener('click', () => sysOpenModal($sysChip));
+  const $sysCloseBtn = document.getElementById('sysCloseBtn');
+  if ($sysCloseBtn) $sysCloseBtn.addEventListener('click', sysRequestClose);
+  if ($sysBackdrop) $sysBackdrop.addEventListener('click', sysRequestClose);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $sysModal && $sysModal.classList.contains('open')) {
+      if (_sysRestartInFlight) {
+        showOpToast('Restart is still running in the background.', 'info');
+      }
+      sysCloseModal();
+    }
+  });
+
+  // ── Restart controls ──────────────────────────────────────────
+  // A fix only goes live in the process that loaded the code: server.py runs
+  // in BOTH the dashboard and the worker, so "Restart all" is the honest
+  // default after new code lands. The three per-service shapes below are
+  // genuinely different endpoints (fire-and-die, fire-and-return, and one
+  // that blocks the HTTP thread for ~33s), so they are modelled separately.
   const $sysRestartDashBtn = document.getElementById('sysRestartDashBtn');
   const $sysRestartWorkerBtn = document.getElementById('sysRestartWorkerBtn');
+  const $sysRestartWtBtn = document.getElementById('sysRestartWtBtn');
   const $sysRestartAllBtn = document.getElementById('sysRestartAllBtn');
   const $sysRestartStatus = document.getElementById('sysRestartStatus');
 
@@ -52317,116 +53024,333 @@
       + (kind ? ' is-' + kind : '');
   }
 
+  function sysSetRestartingPill(id) {
+    const ids = SYS_ROWS[id];
+    const pill = ids && document.getElementById(ids.state);
+    if (!pill) return;
+    pill.textContent = 'restarting';
+    pill.classList.remove('on', 'off');
+    pill.classList.add('is-busy');
+  }
+
+  function sysSetRestartInFlight(id, sentence) {
+    _sysRestartInFlight = id;
+    _sysArmedRestart = null;
+    const ids = id ? SYS_ROWS[id] : null;
+    if (ids) {
+      const row = document.getElementById(ids.row);
+      if (row) row.classList.add('is-restarting');
+      sysSetRestartingPill(id);
+      sysRowSay(id, sentence, 'busy');
+    }
+    if (sentence) sysSay(sentence);
+    sysApplyRestartLocks();
+  }
+
+  // Everything here is SYNCHRONOUS on purpose. Handing the un-lock and the
+  // pill reset to the next `await _fetchSystemServices()` left a multi-second
+  // window where the row was green, the result line said "restarted", the
+  // pill still said "restarting", and every per-row Restart silently swallowed
+  // clicks. The panel settles the instant the POST settles; the refresh that
+  // follows only corrects the numbers.
+  function sysClearRestartInFlight(id) {
+    _sysRestartInFlight = null;
+    _sysArmedRestart = null;
+    const ids = id ? SYS_ROWS[id] : null;
+    if (ids) {
+      const row = document.getElementById(ids.row);
+      if (row) row.classList.remove('is-restarting');
+      // Repaint the pill from the last good payload rather than leaving the
+      // word "restarting" next to a green LED and a success line.
+      const svc = _sysServiceMap(_sysServicesCache.payload).get(id);
+      const state = (svc && svc.state) || 'unknown';
+      sysSetState(ids.state, _sysStateFlag(state), SYS_STATE_PILL[state] || 'checking');
+    }
+    sysApplyRestartLocks();
+    sysRefresh(true);
+  }
+
+  // One switch for every restart control on the page, and it is symmetric: it
+  // both disables and re-enables, computed from the cached payload. Two
+  // concurrent restarts are impossible by construction, including a restart
+  // started from Settings while the panel is open (that path sets the same
+  // flag, because "locked one way only" is not a lock).
+  function sysApplyRestartLocks() {
+    const busy = !!(_sysRestartInFlight || _sysArmedRestart);
+    if ($sysRestartAllBtn) $sysRestartAllBtn.disabled = busy;
+    const cpRestart = document.getElementById('controlPlaneRestartBtn');
+    if (cpRestart) cpRestart.disabled = busy;
+    const map = _sysServiceMap(_sysServicesCache.payload);
+    for (const id of Object.keys(SYS_ROWS)) {
+      sysPaintRestartButton(id, map.get(id));
+    }
+  }
+
+  // POST /api/restart pauses dispatch on the SHARED worker and reloads the
+  // page. It used to be buried in Settings; it is now two clicks from an
+  // always-visible header chip, and a misclick was already observed. A confirm
+  // dialog is the wrong gate for a cheap action, so it arms with a five second
+  // countdown and an Undo instead: no modal to dismiss, always a way out.
+  const SYS_DASH_ARM_SECONDS = 5;
+  let _sysDashArmTimer = null;
+
+  // Also called when the panel closes: an armed countdown that keeps running
+  // behind a closed dialog and reloads the page 3 seconds later would be a
+  // worse trapdoor than the one this replaced.
+  function sysCancelDashArm(quiet) {
+    if (_sysDashArmTimer) { clearInterval(_sysDashArmTimer); _sysDashArmTimer = null; }
+    if (_sysArmedRestart !== 'dashboard') return false;
+    _sysArmedRestart = null;
+    sysRowSay('dashboard', '');
+    if (!quiet) sysSay('Dashboard restart cancelled.');
+    sysApplyRestartLocks();
+    return true;
+  }
+
+  function sysArmDashRestart() {
+    let left = SYS_DASH_ARM_SECONDS;
+    _sysArmedRestart = 'dashboard';
+    sysApplyRestartLocks();
+
+    const paint = () => {
+      const el = document.getElementById(SYS_ROWS.dashboard.result);
+      if (!el) return;
+      el.hidden = false;
+      el.className = 'sys-svc-result is-busy';
+      el.textContent = 'Restarting the dashboard in ' + left + 's. ';
+      const undo = document.createElement('button');
+      undo.type = 'button';
+      undo.className = 'sys-undo-btn';
+      undo.textContent = 'Undo';
+      undo.addEventListener('click', () => sysCancelDashArm());
+      el.appendChild(undo);
+    };
+
+    sysSay('Restarting the dashboard in ' + SYS_DASH_ARM_SECONDS
+      + ' seconds. Choose Undo to cancel.');
+    paint();
+    if (_sysDashArmTimer) clearInterval(_sysDashArmTimer);
+    _sysDashArmTimer = setInterval(async () => {
+      left -= 1;
+      if (left > 0) { paint(); return; }
+      clearInterval(_sysDashArmTimer);
+      _sysDashArmTimer = null;
+      _sysArmedRestart = null;
+      // restartServerRun takes over the screen with a full-page overlay and
+      // reloads when the port answers again. It closes this modal itself, so
+      // do not fight it.
+      sysSetRestartInFlight('dashboard', 'Restarting the dashboard…');
+      try {
+        await restartServerRun('/api/restart');
+      } finally {
+        // Only reached when the POST failed: on success the page reloads.
+        sysClearRestartInFlight('dashboard');
+      }
+    }, 1000);
+  }
+
   if ($sysRestartDashBtn) {
-    $sysRestartDashBtn.addEventListener('click', () => restartServerRun('/api/restart'));
+    $sysRestartDashBtn.addEventListener('click', () => {
+      if (_sysArmedRestart || _sysRestartInFlight) return;
+      sysArmDashRestart();
+    });
   }
   if ($sysRestartAllBtn) {
     $sysRestartAllBtn.addEventListener('click', () => {
-      // Worth a confirm: this one interrupts the worker, which owns live
-      // agent processes, so it is not a free click.
+      if (_sysRestartInFlight || _sysArmedRestart) {
+        showOpToast('Another restart is already running.', 'info');
+        return;
+      }
       const ok = window.confirm(
         'Restart the execution worker and the dashboard?\n\n'
         + 'Running queue items may come back as "needs reconciliation" '
-        + '(one click on Reconcile in Settings \u2192 Maintenance).'
-      );
-      if (ok) restartServerRun('/api/restart/all');
-    });
-  }
-  if ($sysRestartWorkerBtn) {
-    $sysRestartWorkerBtn.addEventListener('click', async () => {
-      const ok = window.confirm(
-        'Restart the execution worker?\n\n'
-        + 'It owns running agent processes. Queue items in flight may come '
-        + 'back as "needs reconciliation".'
+        + '(one click on Reconcile in Settings → Maintenance).'
       );
       if (!ok) return;
-      $sysRestartWorkerBtn.disabled = true;
-      sysRestartSay('Restarting worker\u2026', 'busy');
+      // Takes the same lock as a per-service restart, so no per-row Restart
+      // stays live underneath the most destructive control on the panel.
+      _sysRestartInFlight = 'all';
+      sysApplyRestartLocks();
+      sysRestartSay('Restarting the worker and the dashboard…', 'busy');
+      sysSay('Restarting the worker and the dashboard.');
+      Promise.resolve(restartServerRun('/api/restart/all')).catch(() => {}).then(() => {
+        // Only reached when the POST failed: on success the page reloads.
+        _sysRestartInFlight = null;
+        sysApplyRestartLocks();
+      });
+    });
+  }
+
+  // THE single worker-restart path. Settings > Maintenance calls this too,
+  // with an `echo` that mirrors each message into its own note element. When
+  // Settings ran its own copy, it never took _sysRestartInFlight, so the panel
+  // locked Settings but not the reverse: restart from Settings, open the
+  // panel, and its Restart was live for a second launchctl kickstart.
+  async function sysRestartWorker(opts) {
+    const o = opts || {};
+    if (_sysRestartInFlight || _sysArmedRestart) {
+      showOpToast('Another restart is already running.', 'info');
+      return false;
+    }
+    if (!window.confirm(WORKER_RESTART_CONFIRM)) return false;
+    const say = (text, kind) => {
+      sysRowSay('worker', text, kind);
+      if (typeof o.echo === 'function') o.echo(text, kind);
+      sysSay(text);
+    };
+    // _restart_worker_process returns restarted:true on launchctl rc 0
+    // WITHOUT verifying the worker answered, so compare start times rather
+    // than trusting the POST.
+    const before = Number(
+      ((_sysServiceMap(_sysServicesCache.payload).get('worker')) || {}).started_at || 0
+    );
+    sysSetRestartInFlight('worker', 'Restarting the execution worker…');
+    if (typeof o.echo === 'function') o.echo('Restarting the execution worker…', 'busy');
+    let ok = false;
+    try {
+      const r = await fetch('/api/restart/worker', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) {
+        ok = true;
+        say('Worker restarted. Re-checking…', 'ok');
+      } else {
+        const msg = (d && d.error) || 'Worker restart failed.';
+        say(msg, 'error');
+        if (o.toastErrors) showOpToast(msg, 'error');
+      }
+    } catch (e) {
+      const msg = (e && e.message) ? ('Worker restart failed: ' + e.message)
+        : 'Worker restart failed.';
+      say(msg, 'error');
+      if (o.toastErrors) showOpToast(msg, 'error');
+    }
+    sysClearRestartInFlight('worker');
+    if (ok) {
+      setTimeout(() => sysRefresh(true), 1500);
+      if (typeof refreshControlPlaneStatus === 'function') {
+        setTimeout(refreshControlPlaneStatus, 1500);
+        setTimeout(refreshControlPlaneStatus, 5000);
+      }
+      setTimeout(async () => {
+        await sysRefresh(true);
+        const now = Number(
+          ((_sysServiceMap(_sysServicesCache.payload).get('worker')) || {}).started_at || 0
+        );
+        if (now > before) {
+          say('Worker restarted. Running queue items may show as needs '
+            + 'reconciliation.', 'ok');
+        } else {
+          say('Worker restart was requested but the worker has not come '
+            + 'back yet. Check Settings then Maintenance.', 'error');
+        }
+      }, 5000);
+    }
+    if (typeof o.onDone === 'function') o.onDone(ok);
+    return ok;
+  }
+
+  if ($sysRestartWorkerBtn) {
+    $sysRestartWorkerBtn.addEventListener('click', () => { sysRestartWorker(); });
+  }
+
+  if ($sysRestartWtBtn) {
+    $sysRestartWtBtn.addEventListener('click', async () => {
+      if (_sysRestartInFlight || _sysArmedRestart) {
+        showOpToast('Another restart is already running.', 'info');
+        return;
+      }
+      const svc = _sysServiceMap(_sysServicesCache.payload).get('watchtower') || {};
+      const starting = svc.state === 'offline';
+      if (!starting && !window.confirm(WT_RESTART_CONFIRM)) return;
+      // This POST holds the server's HTTP thread under a global lock for up
+      // to ~33s (stop + wait + start + wait), so the UI must count out loud
+      // instead of looking hung.
+      let elapsed = 0;
+      const label = starting ? 'Starting WatchTower' : 'Restarting WatchTower';
+      sysSetRestartInFlight('watchtower', label + '… (0s)');
+      const ticker = setInterval(() => {
+        elapsed += 5;
+        sysRowSay('watchtower', label + '… (' + elapsed + 's)', 'busy');
+      }, 5000);
+      const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      const abortTimer = controller ? setTimeout(() => controller.abort(), 45000) : null;
+      let timedOut = false;
       try {
-        const r = await fetch('/api/restart/worker', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const r = await fetch('/api/watchtower/service', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: starting ? 'start' : 'restart' }),
+          signal: controller ? controller.signal : undefined,
         });
         const d = await r.json().catch(() => ({}));
         if (r.ok && d.ok) {
-          // The worker takes a moment to re-register; re-read rather than
-          // asserting a state we have not observed.
-          sysRestartSay('Worker restarted. Re-checking\u2026', 'ok');
-          setTimeout(() => { sysRefresh(); sysRestartSay('Worker restarted.', 'ok'); }, 2500);
+          const msg = starting ? 'WatchTower started.' : 'WatchTower restarted.';
+          sysRowSay('watchtower', msg, 'ok');
+          sysSay(msg);
         } else {
-          sysRestartSay('Worker restart failed: ' + ((d && d.error) || ('HTTP ' + r.status)), 'error');
+          // 409 carries the pid-reuse refusal text verbatim; do not rewrite it.
+          const msg = (d && d.error) || ('WatchTower restart failed (HTTP ' + r.status + ').');
+          sysRowSay('watchtower', msg, 'error');
+          sysSay(msg);
         }
       } catch (e) {
-        sysRestartSay('Worker restart failed: ' + ((e && e.message) || 'network'), 'error');
+        timedOut = true;
+        const msg = 'WatchTower did not answer within 45 seconds. It may still '
+          + 'be restarting; this panel will keep checking.';
+        sysRowSay('watchtower', msg, 'error');
+        sysSay(msg);
       } finally {
-        $sysRestartWorkerBtn.disabled = false;
+        clearInterval(ticker);
+        if (abortTimer) clearTimeout(abortTimer);
+      }
+      sysClearRestartInFlight('watchtower');
+      if (timedOut) {
+        let ticks = 0;
+        const retry = setInterval(() => {
+          ticks += 1;
+          sysRefresh(true);
+          if (ticks >= 6) clearInterval(retry);
+        }, 5000);
       }
     });
   }
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && $sysModal && $sysModal.classList.contains('open')) {
-      sysCloseModal();
-    }
-  });
 
-  async function sysRefresh() {
-    // Four independent status probes — fire them concurrently or a loaded
-    // dashboard (seconds per request) leaves the modal on placeholders.
-    const dash = (async () => {
-      try {
-        const r = await fetch('/api/version', { cache: 'no-store' });
-        const d = await r.json();
-        sysSetState('sysDashState', true, 'on · v' + (d.version || '?'));
-      } catch (_) { sysSetState('sysDashState', false, 'unreachable'); }
-    })();
-    const worker = (async () => {
-      try {
-        const r = await fetch('/api/control-plane/status', { cache: 'no-store' });
-        const d = await r.json();
-        const w = (d && d.worker) || {};
-        if (d && d.ok) {
-          sysSetState('sysWorkerState', true,
-            'on · pid ' + (w.pid || '?') + ' · ' +
-            (w.server_version ? 'server v' + w.server_version : 'server v? (pre-version-reporting)'));
-        } else {
-          sysSetState('sysWorkerState', false, 'off');
-        }
-      } catch (_) { sysSetState('sysWorkerState', false, 'off'); }
-    })();
-    const wt = (async () => {
-      try {
-        const r = await fetch('/api/watchtower/service/status', { cache: 'no-store' });
-        const d = await r.json();
-        if (d && d.running) {
-          sysSetState('sysWtState', !!d.api_ok,
-            (d.api_ok ? 'on' : 'degraded') + ' · pid ' + (d.pid || '?') + ' · :' + (d.port || '?'));
-        } else {
-          sysSetState('sysWtState', false, 'stopped');
-        }
-      } catch (_) { sysSetState('sysWtState', false, 'stopped'); }
-    })();
-    const appServer = (async () => {
-      try {
-        const r = await fetch('/api/system/app-server', { cache: 'no-store' });
-        const d = await r.json();
-        const thr = document.getElementById('sysWedgedThreshold');
-        if (thr && d && d.miss_threshold) thr.textContent = ' ' + d.miss_threshold + '×';
-        if (d && d.live) {
-          sysSetState('sysAppServerState', true,
-            'on · pid ' + (d.pid || '?') + ' · age ' + (d.age_s == null ? '?' : d.age_s) + 's · ' +
-            'misses ' + (d.consecutive_liveness_misses || 0) + '/' + (d.miss_threshold || '?'));
-        } else {
-          sysSetState('sysAppServerState', null, 'idle (starts on first Codex request)');
-        }
-      } catch (_) { sysSetState('sysAppServerState', false, 'off'); }
-    })();
-    await Promise.allSettled([dash, worker, wt, appServer]);
+  // ── Chip poller ───────────────────────────────────────────────
+  // 20s, replacing the two 20s pollers the old badges each ran. Skipped in
+  // reader-only popouts AND in Flow popout, where `body.flow-popout` hides the
+  // whole sidebar header with display:none. READER_ONLY_POPOUT alone was not
+  // enough: the Flow window kept polling a status nobody could see.
+  const _sysChipVisible = () => !!($sysChip && $sysChip.offsetParent !== null);
+  const _sysPopoutMode = (typeof READER_ONLY_POPOUT !== 'undefined' && READER_ONLY_POPOUT)
+    || (typeof FLOW_POPOUT_MODE !== 'undefined' && FLOW_POPOUT_MODE);
+  if ($sysChip && !_sysPopoutMode) {
+    // The first fetch is unconditional: a sidebar that is collapsed at boot
+    // and expanded later must not be stuck on "checking" forever.
+    sysRefresh(true);
+    setInterval(() => {
+      if ($sysModal && $sysModal.classList.contains('open')) return;  // panel owns the cadence
+      // Nothing to paint, so nothing to pay for.
+      if (!_sysChipVisible()) return;
+      sysRefresh(false);
+    }, 20000);
   }
 
-  // ── WatchTower sentinel badge ────────────────────────────────────
-  // Live beacon in the sidebar header: sweeps while WatchTower is up,
-  // flags a numeric count when a queue is stuck, and a click pops a
-  // mini health readout sourced from the same /api/ux-fixes/health
-  // payload the queue panel itself uses (WT-side data, CCC-side view).
+  // ── WatchTower sentinel beacon + queue list ──────────────────────
+  // Both now live in the WatchTower row of the System status panel rather
+  // than the sidebar header. The beacon still ticks once per 20s refresh:
+  // its job is "is WatchTower alive right now", which is exactly the
+  // question that row answers, and a visibly live row is what makes the
+  // panel feel trustworthy instead of a static readout.
+  //
+  // The popover became an inline panel (see .wt-pop.is-inline). Escalation
+  // moved to the header instead: a stuck queue is a yellow rollup reason, so
+  // the signal still reaches the sidebar even though the number does not.
+  //
+  // sysOpenModal forces this refresh so the queue counts and the WatchTower
+  // row are read from the same moment.
+  let _wtQueueRefresh = null;
   (() => {
     const $badge = document.getElementById('cccWtBadge');
     const $count = document.getElementById('cccWtCount');
@@ -52438,26 +53362,6 @@
     if (typeof READER_ONLY_POPOUT !== 'undefined' && READER_ONLY_POPOUT) return;
 
     let lastQueues = [];
-
-    function closePop() {
-      $pop.hidden = true;
-      $badge.setAttribute('aria-expanded', 'false');
-      document.removeEventListener('click', onOutsideClick, true);
-      document.removeEventListener('keydown', onKeydown, true);
-    }
-    function onOutsideClick(ev) {
-      if (!$pop.contains(ev.target) && !$badge.contains(ev.target)) closePop();
-    }
-    function onKeydown(ev) {
-      if (ev.key === 'Escape') closePop();
-    }
-    function openPop() {
-      renderPop();
-      $pop.hidden = false;
-      $badge.setAttribute('aria-expanded', 'true');
-      document.addEventListener('click', onOutsideClick, true);
-      document.addEventListener('keydown', onKeydown, true);
-    }
 
     function renderPop() {
       const total = lastQueues.length;
@@ -52483,10 +53387,14 @@
       )).join('');
     }
 
-    async function refresh() {
+    async function refresh(force) {
       try {
         // Share the 15s client cache with the queue panel/sidebar pollers —
         // the raw per-badge fetch bypassed it and doubled health builds.
+        // `force` (panel open) expires that cache so the queue numbers and the
+        // WatchTower row above them describe the same moment. The endpoint is
+        // itself coalesced server-side, so this costs one cheap round trip.
+        if (force && Date.now() - _uxqHealthCache.ts > 5000) _uxqHealthCache.ts = 0;
         const d = await _fetchUxqHealth();
         lastQueues = Array.isArray(d && d.queues) ? d.queues : [];
         const openSum = lastQueues.reduce((n, q) => n + (q.depth || 0), 0);
@@ -52501,7 +53409,9 @@
         $badge.title = lastQueues.length
           ? `WatchTower - ${openSum} open across ${lastQueues.length} queues` + (stuck.length ? `, ${stuck.length} stuck` : '')
           : 'WatchTower - no queues yet';
-        if (!$pop.hidden) renderPop();
+        // The list is inline now, so it renders every poll rather than only
+        // while an open popover was showing.
+        renderPop();
         // One brief tick per poll (not an idling loop) — see the CSS comment
         // above .is-ticking for why this replaced an `infinite` animation.
         $badge.classList.remove('is-ticking');
@@ -52510,12 +53420,10 @@
       } catch (_) { /* keep last known state */ }
     }
 
-    $badge.addEventListener('click', () => {
-      if ($pop.hidden) openPop(); else closePop();
-    });
     if ($popCta) {
       $popCta.addEventListener('click', () => {
-        closePop();
+        // The queue panel is behind this modal, so close it before scrolling.
+        if (typeof sysCloseModal === 'function') sysCloseModal();
         const target = document.getElementById('queuePanel');
         if (target) {
           target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -52525,6 +53433,7 @@
       });
     }
 
+    _wtQueueRefresh = refresh;
     refresh();
     setInterval(refresh, 20000);
   })();
@@ -52856,26 +53765,17 @@
     if (!data || !data.ok) {
       $workerBadge.classList.add('is-offline');
       label = 'Worker offline';
-      detail = 'Execution worker unavailable · open Maintenance';
+      detail = 'Execution worker unavailable';
     } else {
       const capabilities = (data.worker && data.worker.capabilities) || [];
       if (!capabilities.includes('engine-execution-v1')) {
         $workerBadge.classList.add('is-update');
         label = 'Worker update';
-        detail = 'Execution worker update pending · open Maintenance';
+        detail = 'Execution worker update pending';
       } else {
         const drain = data.drain || {};
         const active = Number(data.active || 0);
         const queued = Number(data.queued || 0);
-        const startedAt = Number((data.worker && data.worker.started_at) || 0);
-        const restartedAt = startedAt > 0
-          ? new Date(startedAt * 1000).toLocaleString([], {
-              month: 'short',
-              day: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-            })
-          : '';
         if (drain.enabled) {
           $workerBadge.classList.add('is-paused');
           label = 'Worker paused';
@@ -52883,15 +53783,14 @@
             'Worker dispatch paused',
             active + ' active',
             queued + ' queued',
-            'open Maintenance to resume',
           ].join(' · ');
         } else {
-          label = restartedAt
-            ? 'Worker restarted ' + restartedAt
-            : 'Worker online';
-          detail = restartedAt
-            ? 'Persistent execution worker restarted ' + restartedAt
-            : 'Persistent execution worker online';
+          // Deliberately NOT "Worker restarted <time>". CCC cannot tell a cold
+          // boot from a restart, and the System status row renders the same
+          // timestamp as "Started ...". Two words for one fact, one of them a
+          // guess, is exactly what this panel is supposed to stop doing.
+          label = 'Worker online';
+          detail = 'Persistent execution worker online';
         }
       }
     }
@@ -52901,9 +53800,8 @@
       $workerCount.hidden = true;
     }
     $workerBadge.title = detail;
-    $workerBadge.setAttribute(
-      'aria-label', detail + '; open Maintenance settings'
-    );
+    // It is aria-hidden decoration inside the worker row, whose state pill,
+    // started line and busy line already carry all of this. No aria-label.
   }
 
   function renderControlPlaneStatus(data) {
@@ -53018,6 +53916,10 @@
     }
   }
 
+  // Shared deep link into Settings → Maintenance. The header worker badge used
+  // to be its only caller; that badge is now a decorative span inside the
+  // System status panel, whose rows carry their own Restart buttons. Kept as
+  // the one place that knows how to open that tab.
   function openMaintenanceSettings() {
     const modal = document.getElementById('settingsModal');
     const settingsButton = document.getElementById('settingsBtn');
@@ -53094,8 +53996,50 @@
     }
     $restartServerBtn.addEventListener('click', restartServerRun);
   }
-  if ($workerBadge) {
-    $workerBadge.addEventListener('click', openMaintenanceSettings);
+  // Settings → Maintenance → Restart worker. Same endpoint and same confirm
+  // string as the System status panel; the outcome goes to its own note
+  // element because refreshControlPlaneStatus() rewrites #controlPlaneStatus
+  // every 20s and would silently erase it.
+  const $controlPlaneRestartBtn = document.getElementById('controlPlaneRestartBtn');
+  const $controlPlaneRestartNote = document.getElementById('controlPlaneRestartNote');
+  let _controlPlaneNoteTimer = null;
+
+  function controlPlaneNote(text, kind) {
+    if (!$controlPlaneRestartNote) return;
+    if (_controlPlaneNoteTimer) {
+      clearTimeout(_controlPlaneNoteTimer);
+      _controlPlaneNoteTimer = null;
+    }
+    $controlPlaneRestartNote.hidden = !text;
+    $controlPlaneRestartNote.textContent = text || '';
+    $controlPlaneRestartNote.className = 'settings-row-note'
+      + (kind ? ' is-' + kind : '');
+  }
+
+  if ($controlPlaneRestartBtn) {
+    $controlPlaneRestartBtn.addEventListener('click', async () => {
+      // Delegates to the panel's handler so both share _sysRestartInFlight,
+      // the same confirm string, and the same not-back-yet detection. The
+      // only Settings-specific part is where the outcome is written.
+      $controlPlaneRestartBtn.textContent = 'Restarting…';
+      await sysRestartWorker({
+        toastErrors: true,
+        echo: (text, kind) => {
+          controlPlaneNote(text, kind);
+          // Success is transient information; a failure stays until it is read.
+          if (kind === 'ok') {
+            _controlPlaneNoteTimer = setTimeout(() => controlPlaneNote(''), 20000);
+          }
+        },
+        onDone: () => {
+          $controlPlaneRestartBtn.textContent = 'Restart worker';
+        },
+      });
+      $controlPlaneRestartBtn.textContent = 'Restart worker';
+      // sysApplyRestartLocks owns .disabled for this button; make sure a
+      // cancelled confirm does not leave it stuck.
+      sysApplyRestartLocks();
+    });
   }
   if ($controlPlaneDrainBtn) {
     $controlPlaneDrainBtn.addEventListener('click', async () => {
@@ -54685,9 +55629,18 @@
   const $bugShotImg = document.getElementById('bugReportShotImg');
   const $bugShotRetakeBtn = document.getElementById('bugReportShotRetakeBtn');
   const $bugShotRemoveBtn = document.getElementById('bugReportShotRemoveBtn');
+  const $bugName = document.getElementById('bugName');
+  const $bugContact = document.getElementById('bugContact');
+  const $bugPreview = document.getElementById('bugPreview');
+  const $bugAutoBanner = document.getElementById('bugAutoBanner');
+  const $bugAutoOptOut = document.getElementById('bugAutoOptOut');
+  const $bugShotSection = document.getElementById('bugReportShotSection');
+  const $bugShotEmailNote = document.getElementById('bugShotEmailNote');
   let bugCachedVersion = null;
   let bugFallbackMarkdown = '';
   let bugShotB64 = '';  // raw base64 PNG (no data: prefix), '' when no screenshot
+  // localStorage opt-out for the auto-opened spawn-stall bug report.
+  const BUG_AUTO_OPTOUT_KEY = 'ccc-bug-report-auto-optout';
 
   function bugEscape(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
@@ -54716,6 +55669,56 @@
       '<div><strong>CCC version:</strong> <code>' + bugEscape(version || '-') + '</code></div>' +
       '<div><strong>Session:</strong> <code>' + bugEscape(sid || '-') + '</code></div>' +
       '<div><strong>User agent:</strong> <code>' + bugEscape(ua || '-') + '</code></div>';
+    bugRenderPreview();
+  }
+
+  function bugDestination() {
+    const r = document.querySelector('input[name="bugDest"]:checked');
+    return (r && r.value) === 'github' ? 'github' : 'email';
+  }
+
+  // Renders the exact outbound report body. Mirrors server.py's
+  // _build_bug_report_body line-for-line (Description section, Context
+  // table, optional Reporter line, trailing italic footer) so the preview
+  // is honest about what leaves the machine. The one divergence: a
+  // screenshot attached for the GitHub destination is uploaded only at
+  // submit time, so the preview shows a placeholder image line.
+  function bugBuildReportMarkdown() {
+    const desc = $bugDescInput ? $bugDescInput.value.trim() : '';
+    const name = $bugName ? $bugName.value.trim() : '';
+    const contact = $bugContact ? $bugContact.value.trim() : '';
+    const version = bugCachedVersion || '';
+    const sid = (typeof currentSession !== 'undefined' && currentSession && currentSession.id) || '';
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    const lines = ['## Description', '', desc, ''];
+    if (bugDestination() === 'github' && bugShotB64) {
+      lines.push('## Screenshot', '', '![screenshot](attached — uploaded when the issue is filed)', '');
+    }
+    lines.push('## Context', '', '| Field | Value |', '|---|---|');
+    lines.push('| **CCC version** | `' + (version || '-') + '` |');
+    lines.push('| **Session** | `' + (sid || '-') + '` |');
+    lines.push('| **User agent** | `' + (ua || '-') + '` |', '');
+    if (name || contact) {
+      let reporter = 'Reporter: ' + name;
+      if (contact) reporter += (name ? ' ' : '') + '(' + contact + ')';
+      lines.push(reporter, '');
+    }
+    lines.push('_Reported via the in-app Report a bug feature._');
+    return lines.join('\n');
+  }
+
+  function bugRenderPreview() {
+    if ($bugPreview) $bugPreview.value = bugBuildReportMarkdown();
+  }
+
+  // Destination toggle: screenshots can only ride along with a GitHub
+  // issue (they're pushed to a public branch at submit time), so the
+  // screenshot section swaps out for an explanatory note on email.
+  function bugApplyDestinationUI() {
+    const isGithub = bugDestination() === 'github';
+    if ($bugShotSection) $bugShotSection.style.display = isGithub ? '' : 'none';
+    if ($bugShotEmailNote) $bugShotEmailNote.style.display = isGithub ? 'none' : '';
+    bugRenderPreview();
   }
 
   function bugClearShot() {
@@ -54798,13 +55801,41 @@
   if ($bugShotRetakeBtn) $bugShotRetakeBtn.addEventListener('click', bugCaptureScreenshot);
   if ($bugShotRemoveBtn) $bugShotRemoveBtn.addEventListener('click', bugClearShot);
 
-  function bugOpenModal() {
+  // opts: {auto?: bool, stall?: {engine?, name?, waitedSeconds?}}.
+  // Manual opens come from the topbar link; auto opens come from the
+  // spawn-stall watcher and can be silenced with the banner's opt-out
+  // checkbox (persisted in localStorage).
+  function bugOpenModal(opts) {
     if (!$bugModal) return;
+    opts = opts || {};
+    const auto = !!opts.auto;
+    if (auto) {
+      try { if (localStorage.getItem(BUG_AUTO_OPTOUT_KEY) === '1') return; } catch (_) {}
+    }
     bugResetState();
-    if ($bugDescInput) $bugDescInput.value = '';
+    if ($bugAutoBanner) $bugAutoBanner.style.display = auto ? '' : 'none';
+    if ($bugAutoOptOut) $bugAutoOptOut.checked = false;
+    if ($bugDescInput) {
+      if (auto && opts.stall) {
+        const engine = opts.stall.engine || 'unknown';
+        const waited = opts.stall.waitedSeconds || 30;
+        const label = opts.stall.name ? ' "' + opts.stall.name + '"' : '';
+        $bugDescInput.value = 'Spawning a new session' + label +
+          ' (engine: ' + engine + ') did not complete within ' + waited + ' seconds.\n\n';
+      } else {
+        $bugDescInput.value = '';
+      }
+    }
     bugRenderMeta();
+    bugApplyDestinationUI();
     $bugModal.classList.add('open');
     setTimeout(() => { if ($bugDescInput) $bugDescInput.focus(); }, 0);
+  }
+  // Guard for the spawn-stall auto-trigger: don't stack on an already-open
+  // modal, and honor the user's opt-out.
+  function bugMaybeAutoOpen(stall) {
+    if (!$bugModal || $bugModal.classList.contains('open')) return;
+    bugOpenModal({ auto: true, stall: stall });
   }
   function bugCloseModal() {
     if ($bugModal) $bugModal.classList.remove('open');
@@ -54819,6 +55850,51 @@
     }
   });
 
+  // Live preview: any field that feeds the report body re-renders it.
+  if ($bugDescInput) $bugDescInput.addEventListener('input', bugRenderPreview);
+  if ($bugName) $bugName.addEventListener('input', bugRenderPreview);
+  if ($bugContact) $bugContact.addEventListener('input', bugRenderPreview);
+  document.querySelectorAll('input[name="bugDest"]').forEach((r) => {
+    r.addEventListener('change', bugApplyDestinationUI);
+  });
+  if ($bugAutoOptOut) $bugAutoOptOut.addEventListener('change', () => {
+    try {
+      if ($bugAutoOptOut.checked) localStorage.setItem(BUG_AUTO_OPTOUT_KEY, '1');
+      else localStorage.removeItem(BUG_AUTO_OPTOUT_KEY);
+    } catch (_) {}
+  });
+
+  // Email destination: open a pre-filled mailto draft addressed to the
+  // maintainer (address is already public in LICENSE / SECURITY.md).
+  // Nothing is sent automatically — the user reviews the draft and presses
+  // send. The full report body is also copied to the clipboard in case the
+  // mail client drops or truncates the mailto body.
+  function bugSubmitEmail(desc) {
+    const md = bugBuildReportMarkdown();
+    let subject = 'CCC bug report';
+    for (const line of desc.split('\n')) {
+      const t = line.trim();
+      if (t) { subject = 'CCC bug report — ' + (t.length > 80 ? t.slice(0, 80).trimEnd() + '…' : t); break; }
+    }
+    // Some mail clients choke on very long mailto URLs — keep the encoded
+    // body under ~1800 chars and say so in the body when we had to cut.
+    let body = md;
+    if (encodeURIComponent(body).length > 1800) {
+      const note = '\n\n[…truncated — the full report text was copied to your clipboard]';
+      while (body.length > 0 && encodeURIComponent(body + note).length > 1800) {
+        body = body.slice(0, Math.floor(body.length * 0.8));
+      }
+      body = body.trimEnd() + note;
+    }
+    try { navigator.clipboard.writeText(md); } catch (_) {}
+    window.location.href = 'mailto:amir.fish@gmail.com?subject=' +
+      encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    try {
+      showOpToast('Draft opened in your mail app — review and press send. (The report text was also copied to your clipboard.)', 'success');
+    } catch (_) {}
+    bugCloseModal();
+  }
+
   async function bugSubmit() {
     if (!$bugDescInput) return;
     const desc = $bugDescInput.value.trim();
@@ -54830,6 +55906,7 @@
       $bugDescInput.focus();
       return;
     }
+    if (bugDestination() === 'email') { bugSubmitEmail(desc); return; }
     if ($bugSubmitBtn) {
       $bugSubmitBtn.disabled = true;
       // Sending an image takes a couple of seconds (push to a public branch

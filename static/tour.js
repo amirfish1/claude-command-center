@@ -82,7 +82,7 @@
         {
           anchor: '[data-tour="watchtower"]',
           title: 'Where health lives',
-          body: 'This badge is Watchtower, the tower that watches the tower. It counts queued work and flags sessions that look stuck. Quiet badge, healthy fleet.'
+          body: 'This chip is the health of everything CCC runs: the dashboard, the execution worker, and the WatchTower queue server. Green means all three are online. Click it for the full readout and to restart any of them.'
         },
         {
           anchor: '[data-tour="settings"]',
@@ -117,8 +117,8 @@
         },
         {
           anchor: '[data-tour="watchtower"]',
-          title: 'Watchtower',
-          body: 'The fleet brain. Queues of tickets, worker counts, stuck-session warnings, all behind this badge. Got a plan document? wt import turns it into a queue and your fleet drains it.'
+          title: 'Server status',
+          body: 'One chip, three services. Green is all clear, yellow means something needs a look, red means something is down. Click it for queue depth, uptime and restart controls. Got a plan document? wt import turns it into a queue and your fleet drains it.'
         },
         {
           anchor: '[data-tour="group-chat"]',

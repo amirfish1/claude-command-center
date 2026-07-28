@@ -416,31 +416,27 @@
             <button type="button" id="whatsNewNoticeDismiss" class="whats-new-notice-dismiss" title="Dismiss this version notice" aria-label="Dismiss What's New notice">&times;</button>
           </div>
         </div>
+        <!-- One rollup chip for every service CCC runs. It replaced two
+             separate header badges (WatchTower + Worker) whose signals fought
+             for the same 20px of sidebar; both still live inside #sysModal,
+             which is where the detail belongs. The chip only carries the
+             verdict. -->
         <div class="sh-service-badges">
-          <button type="button" class="sh-wt-badge" id="cccWtBadge" data-tour="watchtower" aria-haspopup="dialog" aria-expanded="false" title="WatchTower is watching your queues">
-            <span class="wt-beacon" aria-hidden="true">
-              <svg viewBox="0 0 32 32" width="14" height="14">
-                <circle class="wt-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="1.5"/>
-                <g class="wt-sweep"><path d="M16 16 L16 2.2 A13.8 13.8 0 0 1 27.1 9.1 Z"/></g>
-                <circle class="wt-core" cx="16" cy="16" r="2.8"/>
-              </svg>
-            </span>
-            <span class="wt-word">WatchTower</span>
-            <span class="wt-count" id="cccWtCount" hidden>0</span>
+          <button type="button" class="sh-status-chip is-unknown" id="cccServerStatusChip"
+                  data-tour="watchtower"
+                  aria-haspopup="dialog" aria-expanded="false"
+                  aria-label="Server status: checking. Open system status."
+                  title="Server status: checking">
+            <span class="ssc-led" aria-hidden="true"></span>
+            <!-- "STATUS", not "SERVER STATUS": the brand column is ~144px at
+                 the default width and the longer word forced the pill onto two
+                 lines in every state, green included. The subject stays visible
+                 at every breakpoint so the chip never reads as a bare verdict
+                 that could be about anything on the page. -->
+            <span class="ssc-word">STATUS</span>
+            <span class="ssc-verdict" id="cccServerStatusVerdict">checking</span>
+            <span class="ssc-count" id="cccServerStatusCount" hidden>0</span>
           </button>
-          <button type="button" class="sh-worker-badge is-checking" id="cccWorkerBadge" title="Checking execution worker…" aria-label="Execution worker status; open Maintenance settings">
-            <span class="worker-status-dot" aria-hidden="true"></span>
-            <span class="worker-word" id="cccWorkerWord">Worker</span>
-            <span class="worker-count" id="cccWorkerCount" hidden>0</span>
-          </button>
-        </div>
-        <div class="wt-pop" id="cccWtPop" role="dialog" aria-label="WatchTower queue health" hidden>
-          <div class="wt-pop-head">
-            <span class="wt-pop-title">WatchTower</span>
-            <span class="wt-pop-sub" id="cccWtPopSub">watching…</span>
-          </div>
-          <div class="wt-pop-list" id="cccWtPopList"></div>
-          <button type="button" class="wt-pop-cta" id="cccWtPopCta">Open queue list <span aria-hidden="true">&#8595;</span></button>
         </div>
         <span class="sh-meta-row">
           Last updated <span id="cccLastUpdated">…</span>
@@ -1213,52 +1209,141 @@
     </div>
   </div>
 
-  <!-- System status modal. Opened from Settings → Maintenance → System status. -->
+  <!-- System status. Opened from the SERVER STATUS chip in the sidebar header
+       and from Settings > Maintenance > System status.
+
+       Structural rule for this block: every id below is captured ONCE by
+       getElementById at boot (static/app.js), with no re-query and no null
+       guard in the render loop. Move these nodes if you must, but never
+       rebuild them with innerHTML after boot or the whole panel goes silent.
+       #sysModal itself is in the DOM from first paint; only .open toggles. -->
   <div id="sysModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="sysTitle">
     <div class="upd-backdrop" id="sysBackdrop"></div>
-    <div class="upd-dialog sys-dialog">
-      <div class="upd-title" id="sysTitle">System status</div>
-      <div class="sys-section">
-        <div class="sys-name">Dashboard <span class="sys-state" id="sysDashState">…</span></div>
-        <div class="sys-desc" id="sysDashDetail">The web UI you are looking at (server.py). Restarts itself on crash or reboot via launchd KeepAlive. Restart it after pulling new code or when the UI misbehaves — cheap, agent turns survive it.</div>
+    <div class="upd-dialog sys-dialog" tabindex="-1" id="sysDialog">
+      <div class="sys-head">
+        <div class="upd-title" id="sysTitle">System status</div>
+        <div class="sys-rollup is-unknown" id="sysRollup">
+          <span class="sys-rollup-led" aria-hidden="true"></span>
+          <span class="sys-rollup-text" id="sysRollupText">Checking services</span>
+        </div>
       </div>
-      <div class="sys-section">
-        <div class="sys-name">Execution worker <span class="sys-state" id="sysWorkerState">…</span></div>
-        <div class="sys-desc" id="sysWorkerDetail">Owns agent processes (Claude/Codex/Kimi spawns, the work queue, the Codex app-server). Also under launchd KeepAlive. Restart only when it is actually stuck — restarting it marks running queue items "needs reconciliation" (one click on Reconcile above).</div>
+      <p class="sys-live-region" id="sysLiveRegion" role="status" aria-live="polite" aria-atomic="true"></p>
+
+      <!-- Dashboard -->
+      <div class="sys-section sys-svc is-checking" id="sysRowDash" data-service="dashboard">
+        <div class="sys-svc-head">
+          <span class="sys-svc-led" aria-hidden="true"></span>
+          <div class="sys-name">Dashboard <span class="sys-state" id="sysDashState">checking</span></div>
+          <button type="button" class="upd-btn sys-svc-restart" id="sysRestartDashBtn" disabled>Restart</button>
+        </div>
+        <div class="sys-svc-started" id="sysDashStarted">Checking start time</div>
+        <div class="sys-svc-busy" id="sysDashBusy">Checking activity</div>
+        <!-- The explainer earns its space during an incident, not on the 200th
+             visit: CSS hides .sys-desc while the row is online. The row's name
+             carries the same sentence as a title so hover still teaches. -->
+        <div class="sys-desc" id="sysDashDetail">The web UI you are looking at (server.py). Restart it after pulling new code or when the UI misbehaves.</div>
+        <div class="sys-svc-meta" id="sysDashMeta"></div>
+        <div class="sys-svc-result" id="sysDashResult" hidden></div>
       </div>
-      <div class="sys-section">
-        <div class="sys-name">WatchTower server <span class="sys-state" id="sysWtState">…</span></div>
-        <div class="sys-desc" id="sysWtDetail">The fleet/queue tracker (daemon on :8787). KeepAlive-managed too. Restart when queue state looks stale.</div>
+
+      <!-- Execution worker -->
+      <div class="sys-section sys-svc is-checking" id="sysRowWorker" data-service="worker">
+        <div class="sys-svc-head">
+          <span class="sys-svc-led" aria-hidden="true"></span>
+          <div class="sys-name">Execution worker <span class="sys-state" id="sysWorkerState">checking</span></div>
+          <button type="button" class="upd-btn sys-svc-restart" id="sysRestartWorkerBtn" disabled>Restart</button>
+        </div>
+        <div class="sys-svc-started" id="sysWorkerStarted">Checking start time</div>
+        <div class="sys-svc-busy" id="sysWorkerBusy">Checking activity</div>
+        <div class="sys-desc" id="sysWorkerDetail">Owns agent processes (Claude, Codex and Kimi spawns, the work queue, the Codex app-server).</div>
+        <div class="sys-svc-meta" id="sysWorkerMeta"></div>
+        <!-- The old sidebar worker pill. It is kept in the DOM (the control
+             plane still paints it, and tests assert the id is served) but it
+             is no longer shown: it said "Worker restarted <time>" off the same
+             timestamp the line above renders as "Started <time>", which is the
+             exact claim this panel refuses to make, and it duplicated the
+             state pill in a louder colour. -->
+        <span class="sh-worker-badge is-checking is-inline" id="cccWorkerBadge" role="img" aria-hidden="true" hidden>
+          <span class="worker-status-dot" aria-hidden="true"></span>
+          <span class="worker-word" id="cccWorkerWord">Worker</span>
+          <span class="worker-count" id="cccWorkerCount" hidden>0</span>
+        </span>
+        <div class="sys-svc-result" id="sysWorkerResult" hidden></div>
+
+        <!-- Codex app-server: a subprocess of the worker, not a service. -->
+        <div class="sys-subrow" id="sysRowAppServer" data-service="app_server">
+          <span class="sys-subrow-led" aria-hidden="true"></span>
+          <span class="sys-subrow-name">Codex app-server <span class="sys-state" id="sysAppServerState">checking</span></span>
+          <span class="sys-subrow-meta" id="sysAppServerDetail">Shared by every Codex session. CCC probes it and replaces it if it stops answering.</span>
+        </div>
       </div>
-      <div class="sys-section">
-        <div class="sys-name">Codex app-server <span class="sys-state" id="sysAppServerState">…</span></div>
-        <div class="sys-desc" id="sysAppServerDetail">A subprocess of the worker (not a launchd service) that all Codex sessions share. CCC probes it periodically and replaces it if it stops answering.</div>
+
+      <!-- WatchTower -->
+      <div class="sys-section sys-svc is-checking" id="sysRowWt" data-service="watchtower">
+        <div class="sys-svc-head">
+          <span class="sys-svc-led" aria-hidden="true"></span>
+          <div class="sys-name">WatchTower server <span class="sys-state" id="sysWtState">checking</span></div>
+          <span class="sh-wt-badge is-inline" id="cccWtBadge" role="img" aria-hidden="true">
+            <span class="wt-beacon" aria-hidden="true">
+              <svg viewBox="0 0 32 32" width="14" height="14">
+                <circle class="wt-ring" cx="16" cy="16" r="12.5" fill="none" stroke-width="1.5"/>
+                <g class="wt-sweep"><path d="M16 16 L16 2.2 A13.8 13.8 0 0 1 27.1 9.1 Z"/></g>
+                <circle class="wt-core" cx="16" cy="16" r="2.8"/>
+              </svg>
+            </span>
+            <span class="wt-word">WatchTower</span>
+            <span class="wt-count" id="cccWtCount" hidden>0</span>
+          </span>
+          <button type="button" class="upd-btn sys-svc-restart" id="sysRestartWtBtn" disabled>Restart</button>
+        </div>
+        <div class="sys-svc-started" id="sysWtStarted">Checking start time</div>
+        <div class="sys-svc-busy" id="sysWtBusy">Checking activity</div>
+        <div class="sys-desc" id="sysWtDetail">The fleet and queue tracker, a daemon on port 8787.</div>
+        <div class="sys-svc-meta" id="sysWtMeta"></div>
+        <!-- Was a popover anchored to the old header badge. Inlined here: a
+             popover inside a modal is transient UI over transient UI, it fights
+             #sysModal's z-index, and it lost the positioned ancestor it used to
+             hang off. Same ids and child classes, so the existing CSS and
+             renderPop() keep working unchanged. -->
+        <div class="wt-pop is-inline" id="cccWtPop" aria-label="WatchTower queue health">
+          <div class="wt-pop-head">
+            <span class="wt-pop-title">Queues</span>
+            <span class="wt-pop-sub" id="cccWtPopSub">watching…</span>
+          </div>
+          <div class="wt-pop-list" id="cccWtPopList"></div>
+          <button type="button" class="wt-pop-cta" id="cccWtPopCta">Open queue list <span aria-hidden="true">&#8595;</span></button>
+        </div>
+        <div class="sys-svc-result" id="sysWtResult" hidden></div>
       </div>
-      <div class="upd-warning sys-wedged">
-        <strong>What is WEDGED?</strong> The verdict CCC logs when the Codex
-        app-server fails to answer the liveness probe
-        <span id="sysWedgedThreshold"></span> in a row, triggering teardown and
-        respawn. It affects only the worker's Codex sessions — never the
-        dashboard or WatchTower. It exists because the app-server once wedged
-        for real (a 600-process leak); the probe-and-replace is the
-        self-healing. A healthy app-server shows no WEDGED lines in the
-        activity log.
-      </div>
-      <!-- Restart controls. A code fix only goes live in the process that
-           loaded it: server.py runs in BOTH the dashboard and the worker
-           (worker_engines.py lazily imports it), so "Restart all" is the
-           honest default after pulling new code. Per-service buttons stay
-           for surgical use. -->
+
+      <!-- The KeepAlive fact used to be restated in all three row explainers,
+           in three different phrasings. It is one fact about all three, so it
+           is stated once, here. -->
+      <p class="sys-keepalive-note">All three run under launchd KeepAlive, so they come back on their own after a crash or a reboot.</p>
+
+      <details class="sys-wedged-details">
+        <summary>What is WEDGED?</summary>
+        <div class="upd-warning sys-wedged">
+          The verdict CCC logs when the Codex app-server fails to answer the
+          liveness probe <span id="sysWedgedThreshold"></span> in a row,
+          triggering teardown and respawn. It affects only the worker's Codex
+          sessions, never the dashboard or WatchTower. A healthy app-server
+          shows no WEDGED lines in the activity log.
+        </div>
+      </details>
+
+      <!-- A code fix only goes live in the process that loaded it, and
+           server.py runs in BOTH the dashboard and the worker
+           (worker_engines.py lazily imports it). Hence "Restart all". -->
       <div class="sys-restart" id="sysRestartRow">
-        <div class="sys-restart-label">Restart</div>
+        <div class="sys-restart-label">After new code lands</div>
         <div class="sys-restart-btns">
-          <button type="button" class="upd-btn sys-restart-btn" id="sysRestartDashBtn">Dashboard</button>
-          <button type="button" class="upd-btn sys-restart-btn" id="sysRestartWorkerBtn">Worker</button>
           <button type="button" class="upd-btn upd-primary sys-restart-btn" id="sysRestartAllBtn">Restart all</button>
         </div>
-        <div class="sys-restart-hint" id="sysRestartHint">After new code lands, use <strong>Restart all</strong> — a <code>server.py</code> fix runs in both the dashboard and the worker. Restarting the worker marks running queue items <em>needs reconciliation</em>.</div>
+        <div class="sys-restart-hint" id="sysRestartHint">A <code>server.py</code> fix runs in both the dashboard and the worker, so <strong>Restart all</strong> is the honest default after pulling new code.</div>
         <div class="sys-restart-status" id="sysRestartStatus" hidden></div>
       </div>
+
       <div class="upd-actions">
         <button type="button" class="upd-btn upd-primary" id="sysCloseBtn">Close</button>
       </div>
@@ -1981,14 +2066,19 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="worker execution pause drain queue control plane">
+            <div class="settings-row" data-keywords="worker execution pause drain queue control plane restart">
               <div class="settings-row-main">
                 <div class="settings-row-label">Execution worker</div>
                 <div class="settings-row-desc" id="controlPlaneStatus">Checking persistent worker…</div>
+                <!-- Separate element on purpose: refreshControlPlaneStatus()
+                     overwrites #controlPlaneStatus every 20s, so a restart
+                     outcome written there would silently vanish. -->
+                <div class="settings-row-note" id="controlPlaneRestartNote" role="status" aria-live="polite" hidden></div>
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-action-btn" id="controlPlaneReconcileBtn" hidden>Reconcile</button>
                 <button type="button" class="settings-action-btn" id="controlPlaneDrainBtn" disabled>Pause dispatch</button>
+                <button type="button" class="settings-action-btn danger" id="controlPlaneRestartBtn">Restart worker</button>
               </div>
             </div>
 

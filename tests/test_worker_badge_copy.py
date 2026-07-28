@@ -55,7 +55,16 @@ console.log(JSON.stringify({{
         )
         return json.loads(result.stdout)
 
-    def test_online_worker_shows_last_restart_time_without_job_count(self):
+    def test_online_worker_never_claims_a_restart_it_did_not_observe(self):
+        """`started_at` is a START time, and the badge must not call it a restart.
+
+        It used to render "Worker restarted Jul 26, 12:18 PM" off `started_at`,
+        which is the timestamp of whenever the process came up — a cold boot
+        after a reboot reads identically to a restart. The System status panel
+        renders that same number as "Started ...", deliberately, so the badge
+        sitting next to it claiming "restarted" was both a guess and a direct
+        contradiction of the row it lived in.
+        """
         badge = self.render_badge(
             {
                 "ok": True,
@@ -69,10 +78,26 @@ console.log(JSON.stringify({{
                 "drain": {"enabled": False},
             }
         )
-        self.assertEqual(badge["word"], "Worker restarted Jul 26, 12:18 PM")
+        self.assertEqual(badge["word"], "Worker online")
+        self.assertNotIn("restart", badge["word"].lower())
+        self.assertNotIn("restart", badge["title"].lower())
         self.assertTrue(badge["hidden"])
         self.assertNotIn("needs review", badge["title"].lower())
         self.assertNotIn("is-uncertain", badge["classes"])
+
+    def test_badge_copy_does_not_point_at_a_place_it_cannot_open(self):
+        """The badge is inert decoration now; it must not promise navigation."""
+        for data in (
+            {"ok": False},
+            {
+                "ok": True,
+                "worker": {"capabilities": ["engine-execution-v1"]},
+                "active": 0, "queued": 0, "uncertain": 0,
+                "drain": {"enabled": True},
+            },
+        ):
+            badge = self.render_badge(data)
+            self.assertNotIn("maintenance", badge["title"].lower(), badge)
 
     def test_paused_worker_has_no_ambiguous_count(self):
         badge = self.render_badge(

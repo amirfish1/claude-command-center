@@ -6894,6 +6894,16 @@
     font-weight: 600;
   }
   .conv-signal.subagents.in-flight { animation: pulse 2s infinite; }
+  /* Workflow chip — "⚙ N" surfaces Workflow tool runs. Same visual family
+     as the subagent chip; the in-flight variant pulses while any run is
+     still executing. */
+  .conv-signal.workflows {
+    background: rgba(87, 139, 215, 0.12);
+    color: #7aa2e3;
+    border: 1px solid rgba(87, 139, 215, 0.25);
+    font-weight: 600;
+  }
+  .conv-signal.workflows.in-flight { animation: pulse 2s infinite; }
   .conv-signal-sub-flight {
     margin-left: 4px;
     opacity: 0.9;
@@ -9669,18 +9679,129 @@
      Settings → Maintenance → System status. Reuses the .upd-* shell. */
   #sysModal { z-index: 10001;  /* opened from inside Settings (9999) — must paint above it */
   }
-  .sys-dialog { width: min(560px, 92vw); max-height: 84vh; overflow-y: auto; }
+  /* 680px, not 560: four service rows each carry a started line, a busy
+     line, an explainer and a Restart button, and the WatchTower row inlines
+     the queue list. The old width wrapped every head row. */
+  .sys-dialog { width: min(680px, 94vw); max-height: 84vh; overflow-y: auto; }
   .sys-section { border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; background: var(--bg); }
   .sys-name { font-size: 13px; font-weight: 600; color: var(--text);
     display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .sys-state { font-size: 11px; font-weight: 500; padding: 1px 8px;
-    border-radius: 10px; background: var(--surface-2); color: var(--text-muted); }
+    border-radius: 10px; background: var(--surface-2); color: var(--text-muted);
+    white-space: nowrap; }
   .sys-state.on { color: var(--green, #3fb950); background: rgba(63,185,80,0.12); }
   .sys-state.off { color: var(--red); background: rgba(248,81,73,0.12); }
+  .sys-state.is-busy { color: var(--orange); background: rgba(210,153,34,0.14); }
   .sys-desc { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
   .sys-desc .sys-live { color: var(--text); font-weight: 600; }
   .sys-wedged { font-size: 12px; }
+
+  /* Header: title on the left, one-line rollup verdict on the right, so the
+     answer to "is anything wrong" is readable before you read any row. */
+  .sys-head { display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; }
+  .sys-rollup { --sys-cur: var(--text-muted);
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 3px 10px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--sys-cur) 34%, transparent);
+    background: color-mix(in srgb, var(--sys-cur) 10%, var(--bg)); }
+  .sys-rollup.is-green { --sys-cur: var(--green); }
+  .sys-rollup.is-yellow { --sys-cur: var(--orange); }
+  .sys-rollup.is-red { --sys-cur: var(--red); }
+  .sys-rollup.is-unknown { --sys-cur: var(--text-muted); }
+  .sys-rollup-led { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%;
+    background: var(--sys-cur);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--sys-cur) 70%, transparent); }
+  .sys-rollup-text { font-size: 11px; font-weight: 700;
+    color: color-mix(in srgb, var(--sys-cur) 78%, var(--text)); }
+
+  /* Exactly one live region for the whole panel. Three live rows on a 5s
+     poll would be unusable with a screen reader. */
+  .sys-live-region { position: absolute; width: 1px; height: 1px; margin: -1px;
+    padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+    border: 0; }
+
+  /* Service rows. The left border repeats the LED colour so the row reads at
+     a glance without relying on an 9px dot alone. */
+  .sys-svc { --svc-cur: var(--text-muted);
+    border-left: 3px solid var(--svc-cur); }
+  .sys-svc.is-online { --svc-cur: var(--green); }
+  .sys-svc.is-degraded { --svc-cur: var(--orange); }
+  .sys-svc.is-offline { --svc-cur: var(--red); }
+  .sys-svc.is-idle,
+  .sys-svc.is-checking { --svc-cur: var(--text-muted); }
+  .sys-svc-head { display: flex; align-items: center; gap: 8px; }
+  .sys-svc-head .sys-name { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
+  .sys-svc-led { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%;
+    background: var(--svc-cur);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--svc-cur) 70%, transparent); }
+  .sys-svc-restart { font-size: 12px; padding: 4px 12px; flex: 0 0 auto; }
+  .sys-svc-started { margin-top: 6px; font-size: 11px; color: var(--text-muted); }
+  /* The emphasis line: what a restart would actually cost right now. */
+  .sys-svc-busy { margin-top: 3px; font-size: 12px; color: var(--text);
+    line-height: 1.55; }
+  .sys-svc .sys-desc { margin-top: 5px; }
+  /* Prose weight at rest: three rows of explainer is ~1000px of text nobody
+     reads twice. The explainer appears the moment a row stops being online,
+     which is when someone actually needs to know what the service does. The
+     row name keeps it as a title for hover, so it is never truly gone. */
+  .sys-svc.is-online .sys-desc { display: none; }
+  /* Ops facts the backend already returns: pid, version, port, and the
+     crash-loop count. One 11px line turns a friendly panel into a usable one. */
+  .sys-svc-meta { margin-top: 5px; font-size: 11px; color: var(--text-muted);
+    font-variant-numeric: tabular-nums; }
+  .sys-svc-meta:empty { display: none; }
+  .sys-svc-meta .sys-meta-warn { color: var(--orange); font-weight: 600; }
+  .sys-svc.is-restarting { opacity: 0.92; }
+  .sys-svc-result { margin-top: 8px; font-size: 12px; border-radius: 6px;
+    padding: 6px 9px; background: var(--surface-2); color: var(--text-muted); }
+  .sys-svc-result.is-busy { color: var(--text); }
+  .sys-svc-result.is-ok { color: var(--green, #3fb950);
+    background: rgba(63,185,80,0.12); }
+  .sys-svc-result.is-error { color: var(--red);
+    background: rgba(248,81,73,0.12); }
+  /* Undo, for the armed dashboard restart. A cheap action does not deserve a
+     confirm dialog, but it does deserve a way out now that it is two clicks
+     from an always-visible header chip. */
+  .sys-svc-result .sys-undo-btn { margin-left: 8px; padding: 2px 9px;
+    border: 1px solid color-mix(in srgb, var(--text) 32%, transparent);
+    border-radius: 999px; background: transparent; color: inherit;
+    font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+  .sys-svc-result .sys-undo-btn:hover,
+  .sys-svc-result .sys-undo-btn:focus-visible {
+    border-color: var(--accent); color: var(--accent); outline: none; }
+
+  .sys-keepalive-note { margin: 2px 0 0; font-size: 11px;
+    color: var(--text-muted); line-height: 1.5; }
+
+  /* Codex app-server: a worker subprocess, so it is a sub-row of the worker
+     card rather than a fourth peer service. */
+  .sys-subrow { margin: 9px 0 0 10px; padding: 6px 9px;
+    border-left: 2px solid var(--border); border-radius: 0 6px 6px 0;
+    background: var(--surface-2);
+    display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+  .sys-subrow-led { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%;
+    background: var(--text-muted); align-self: center; }
+  .sys-subrow.is-online .sys-subrow-led { background: var(--green); }
+  .sys-subrow.is-degraded .sys-subrow-led { background: var(--orange); }
+  .sys-subrow.is-offline .sys-subrow-led { background: var(--red); }
+  .sys-subrow-name { font-size: 12px; font-weight: 600; color: var(--text);
+    display: inline-flex; align-items: center; gap: 6px; }
+  .sys-subrow-meta { flex: 1 1 200px; min-width: 0; font-size: 11px;
+    color: var(--text-muted); line-height: 1.5; }
+
+  /* Skeleton: never show a resting verdict before a payload lands. */
+  .sys-svc.is-checking .sys-svc-started,
+  .sys-svc.is-checking .sys-svc-busy { opacity: 0.55; }
+  .sys-svc.is-checking .sys-svc-led { animation: sscBlink 1.1s ease-in-out infinite; }
+  @keyframes sscBlink { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.9; } }
+
+  .sys-wedged-details { font-size: 12px; color: var(--text-muted); }
+  .sys-wedged-details > summary { cursor: pointer; user-select: none;
+    padding: 2px 0; }
+  .sys-wedged-details > summary:hover { color: var(--text); }
+  .sys-wedged-details .sys-wedged { margin-top: 6px; }
 
   /* ── Spawn stats (debug) ──────────────────────────────────────
      Collapsed by default so it never competes with the transcript;
@@ -9718,6 +9839,8 @@
   .sys-restart-hint code { font-size: 11px; }
   .sys-restart-status { font-size: 12px; border-radius: 6px; padding: 6px 9px;
     background: var(--surface-2); color: var(--text-muted); }
+  /* sysRestartSay(..., 'busy') has always been called; the rule was missing. */
+  .sys-restart-status.is-busy { color: var(--text); }
   .sys-restart-status.is-ok { color: var(--green, #3fb950);
     background: rgba(63,185,80,0.12); }
   .sys-restart-status.is-error { color: var(--red);
@@ -12903,14 +13026,13 @@
     .sidebar-header-brand .sh-title-link { flex: 0 1 auto; }
     .sidebar-header-brand .sh-title-sub,
     .sidebar-header-brand .sh-version { display: none; }
-    /* WatchTower + worker share one row; long worker status text
-       ("Worker restarted Jul 27, 4:00 PM") truncates instead of forcing
-       its pill onto a full-width line of its own. */
+    /* The chip stays LED + STATUS + verdict + count. The subject word is not
+       dropped here: "attention 3" on its own could be about anything on the
+       page, and "STATUS" is only ~40px. The verdict is what truncates. */
     .sh-service-badges { flex-wrap: nowrap; }
-    .sh-service-badges .sh-wt-badge { flex: 0 1 auto; min-width: 0; }
-    .sh-service-badges .sh-worker-badge { flex: 1 1 auto; min-width: 0; }
-    .sh-service-badges .wt-word,
-    .sh-service-badges .worker-word {
+    .sh-service-badges .sh-status-chip { flex: 0 1 auto; min-width: 0; }
+    .sh-service-badges .ssc-word { flex: 0 0 auto; }
+    .sh-service-badges .ssc-verdict {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -14741,6 +14863,59 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   animation: pulse 2s infinite;
 }
 .subagent-row.is-done .subagent-status { color: var(--green); }
+/* Workflow runs inside the Subagents rail panel. Agent rows are buttons
+   (click opens the read-only transcript popout), so reset button chrome and
+   reuse the subagent-row layout. */
+.workflow-run {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.workflow-run-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 0;
+}
+.workflow-run-id {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+.workflow-run-count { flex: 0 0 auto; }
+.workflow-run.is-running .workflow-run-header .subagent-status {
+  color: #bd93f7;
+  animation: pulse 2s infinite;
+}
+.workflow-run.is-done .workflow-run-header .subagent-status { color: var(--green); }
+.workflow-run.is-failed .workflow-run-header .subagent-status { color: var(--red, #ff5555); }
+.workflow-run.is-interrupted .workflow-run-header .subagent-status { color: var(--yellow, #f1fa8c); }
+button.subagent-row.wf-agent {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.subagent-row.wf-agent:hover { border-color: rgba(139, 87, 215, 0.45); }
+.subagent-row.is-running {
+  border-color: rgba(139, 87, 215, 0.45);
+  background: rgba(139, 87, 215, 0.06);
+}
+.subagent-row.is-running .subagent-status {
+  color: #bd93f7;
+  animation: pulse 2s infinite;
+}
+.subagent-row.is-failed .subagent-status { color: var(--red, #ff5555); }
+.subagent-row.is-interrupted .subagent-status { color: var(--yellow, #f1fa8c); }
 .subagent-desc {
   flex: 1 1 auto;
   min-width: 0;
@@ -15096,6 +15271,105 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   gap: 5px;
   margin: 3px 0 1px;
 }
+
+/* ── SERVER STATUS chip ────────────────────────────────────────────────
+   The one always-present health control in the header. Unlike the two
+   badges it replaced, this uses design tokens rather than the fixed
+   dark-glass palette: those badges were defensible as decorative accents,
+   a primary control has to stay legible in the light theme too. */
+.sh-status-chip {
+  --ssc-cur: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  /* The sidebar header gives the brand column whatever the action buttons do
+     not take, which is ~144px at the default width. The chip must fit that on
+     ONE line: an unbreakable pill slides underneath the absolutely-positioned
+     actions and swallows their clicks, and a wrapped pill is the largest,
+     ugliest thing in the brand column. So nothing wraps, and the verdict is
+     the one part allowed to shrink (with an ellipsis) if a locale or a font
+     makes it wider than the budget below. */
+  flex-wrap: nowrap;
+  max-width: 100%;
+  min-width: 0;
+  gap: 5px;
+  margin: 3px 0 1px;
+  padding: 3px 8px 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--ssc-cur) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ssc-cur) 11%, var(--surface));
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.12s ease;
+}
+.sh-status-chip.is-green { --ssc-cur: var(--green); }
+.sh-status-chip.is-yellow { --ssc-cur: var(--orange); }
+.sh-status-chip.is-red { --ssc-cur: var(--red); }
+.sh-status-chip.is-unknown { --ssc-cur: var(--text-muted); }
+.sh-status-chip:hover,
+.sh-status-chip:focus-visible {
+  border-color: color-mix(in srgb, var(--ssc-cur) 72%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ssc-cur) 14%, transparent);
+  outline: none;
+}
+.sh-status-chip:active { transform: scale(0.97); }
+.ssc-led {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ssc-cur);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ssc-cur) 70%, transparent);
+}
+/* The subject. Never hidden, at any width: "attention 3" on its own could be
+   about anything on the page. Tracking is tight because the whole chip has a
+   ~144px budget. */
+.ssc-word {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+/* Mixed toward --text rather than the raw accent so it clears 4.5:1 on both
+   themes (--orange on --surface is the tight one in the light theme). */
+.ssc-verdict {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--ssc-cur) 60%, var(--text));
+}
+.sh-status-chip.is-unknown .ssc-verdict { opacity: 0.75; }
+.ssc-count {
+  flex: 0 0 auto;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ssc-cur);
+  color: var(--bg);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 15px;
+}
+/* The only animation on the chip, and only when the worker is the thing that
+   died. That was the old worker badge's real job: be noticeable from across
+   the room. Everything quieter than that stays static. */
+.sh-status-chip.is-critical .ssc-led { animation: sscPulse 2.4s ease-in-out infinite; }
+@keyframes sscPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.55; }
+}
+
 .sh-wt-badge {
   --wt-cur: #35e7cf;
   display: inline-flex;
@@ -15111,16 +15385,16 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   cursor: pointer;
   transition: border-color 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
 }
-.sh-wt-badge:hover,
-.sh-wt-badge:focus-visible {
+.sh-wt-badge:not(.is-inline):hover,
+.sh-wt-badge:not(.is-inline):focus-visible {
   border-color: rgba(53, 231, 207, 0.6);
   box-shadow: 0 0 0 3px rgba(53, 231, 207, 0.1);
   outline: none;
 }
-.sh-wt-badge:active { transform: scale(0.97); }
+.sh-wt-badge:not(.is-inline):active { transform: scale(0.97); }
 .sh-wt-badge.is-alert { --wt-cur: #ffb443; border-color: rgba(255, 180, 67, 0.4); }
-.sh-wt-badge.is-alert:hover,
-.sh-wt-badge.is-alert:focus-visible {
+.sh-wt-badge.is-alert:not(.is-inline):hover,
+.sh-wt-badge.is-alert:not(.is-inline):focus-visible {
   border-color: rgba(255, 180, 67, 0.7);
   box-shadow: 0 0 0 3px rgba(255, 180, 67, 0.12);
 }
@@ -15186,13 +15460,13 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   cursor: pointer;
   transition: border-color 0.18s ease, transform 0.12s ease, box-shadow 0.18s ease;
 }
-.sh-worker-badge:hover,
-.sh-worker-badge:focus-visible {
+.sh-worker-badge:not(.is-inline):hover,
+.sh-worker-badge:not(.is-inline):focus-visible {
   border-color: color-mix(in srgb, var(--worker-cur) 70%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-cur) 12%, transparent);
   outline: none;
 }
-.sh-worker-badge:active { transform: scale(0.97); }
+.sh-worker-badge:not(.is-inline):active { transform: scale(0.97); }
 .sh-worker-badge.is-checking { --worker-cur: #7d8998; }
 .sh-worker-badge.is-offline { --worker-cur: #ff6b6b; }
 .sh-worker-badge.is-paused,
@@ -15239,7 +15513,46 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
 @media (prefers-reduced-motion: reduce) {
   .sh-wt-badge .wt-sweep,
   .sh-wt-badge .wt-core,
-  .sh-wt-badge .wt-count { animation: none !important; }
+  .sh-wt-badge .wt-count,
+  .sh-status-chip.is-critical .ssc-led { animation: none !important; }
+  .sys-svc.is-checking .sys-svc-led { animation: none !important; opacity: 0.6; }
+}
+
+/* The WatchTower beacon now lives inside the System status panel next to its
+   row's LED and state pill. It is no longer a button, so drop the affordance
+   that promises a click, but keep pointer events so its title still shows on
+   hover. (#cccWorkerBadge is hidden there; these rules cover it anyway so a
+   future unhide cannot reintroduce the dark-glass-on-white bug.) */
+.sh-wt-badge.is-inline,
+.sh-worker-badge.is-inline {
+  cursor: default;
+}
+.sh-wt-badge.is-inline[hidden],
+.sh-worker-badge.is-inline[hidden] { display: none; }
+/* Both badges hardcode a dark-glass palette. That was fine as a header accent
+   over a dark sidebar; inside a light-theme modal card it renders as a dark
+   blob in the head of the row. Light theme is a first-class theme here. */
+:root[data-theme="light"] .sh-wt-badge.is-inline,
+:root[data-theme="light"] .sh-worker-badge.is-inline {
+  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--text) 16%, transparent);
+  box-shadow: none;
+  color: var(--text);
+}
+:root[data-theme="light"] .sh-wt-badge.is-inline .wt-word,
+:root[data-theme="light"] .sh-worker-badge.is-inline .worker-word {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .sh-wt-badge.is-inline .wt-ring {
+  stroke: color-mix(in srgb, var(--text) 28%, transparent);
+}
+:root[data-theme="light"] .sh-wt-badge.is-inline .wt-core,
+:root[data-theme="light"] .sh-wt-badge.is-inline .wt-sweep path {
+  fill: var(--accent);
+}
+:root[data-theme="light"] .sh-wt-badge.is-inline.is-alert .wt-core,
+:root[data-theme="light"] .sh-wt-badge.is-inline.is-alert .wt-sweep path {
+  fill: var(--orange);
 }
 
 .wt-pop {
@@ -15256,6 +15569,40 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   animation: wtPopIn 0.14s ease-out;
 }
 .wt-pop[hidden] { display: none; }
+/* Inline variant: the queue list now sits inside the WatchTower row of the
+   System status panel. Everything the popover needed to float (absolute
+   positioning, a fixed width, a shadow, an entry animation, a positioned
+   ancestor) is wrong there, but every child class is unchanged so ~100 lines
+   of working CSS below keep applying. */
+.wt-pop.is-inline {
+  position: static;
+  width: auto;
+  margin-top: 8px;
+  z-index: auto;
+  box-shadow: none;
+  animation: none;
+  border-color: color-mix(in srgb, var(--svc-cur) 26%, transparent);
+  background: var(--bg);
+}
+.wt-pop.is-inline .wt-pop-list { max-height: 132px; }
+/* The dark-glass text colours below are unreadable on a light --bg, and only
+   the inline variant ever renders on one. */
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-title { color: var(--text); }
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-sub,
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-empty,
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-row .wt-pop-depth {
+  color: var(--text-muted);
+}
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-row {
+  background: var(--surface-2);
+}
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-row .wt-pop-q {
+  color: var(--text);
+}
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-row.is-stuck .wt-pop-q {
+  color: var(--orange);
+}
+:root[data-theme="light"] .wt-pop.is-inline .wt-pop-cta { color: var(--accent); }
 @keyframes wtPopIn {
   from { opacity: 0; transform: translateY(-4px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
@@ -21468,6 +21815,18 @@ a.settings-row {
 .settings-row-main { flex: 1 1 auto; min-width: 0; }
 .settings-row-label { font-size: 13.5px; font-weight: 500; color: var(--text); }
 .settings-row-desc { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+/* Outcome line for a row whose -desc is rewritten by a poller. Keeping it
+   separate is the whole point: the 20s control-plane refresh would otherwise
+   erase the result of the click you just made. */
+.settings-row-note { font-size: 11.5px; margin-top: 5px; line-height: 1.4;
+  border-radius: 6px; padding: 5px 8px;
+  background: var(--surface-2); color: var(--text-muted); }
+.settings-row-note[hidden] { display: none; }
+.settings-row-note.is-busy { color: var(--text); }
+.settings-row-note.is-ok { color: var(--green, #3fb950);
+  background: rgba(63, 185, 80, 0.12); }
+.settings-row-note.is-error { color: var(--red);
+  background: rgba(248, 81, 73, 0.12); }
 .settings-row-control { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
 .settings-row-value { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .settings-row-crumb {
