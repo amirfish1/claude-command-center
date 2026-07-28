@@ -44456,6 +44456,109 @@
       + '</span>';
   }
 
+  // ── Activity log modal ─────────────────────────────────────────────────
+  // Reads CCC's own unified spawn/inject/kill/codex-app-server-health log
+  // (~/.claude/command-center/logs/activity.log) via GET /api/activity-log
+  // and renders it for the session currently open in the conv pane. Opened
+  // from the "Log" button in the sticky header (see .conv-sticky-header__
+  // activity-log). Mirrors ~/.watchtower/activity.log's one-line-per-event
+  // shape, but formatted for the browser instead of a terminal.
+  const _ACTIVITY_LOG_VERB_CLASS = {
+    SPAWN: 'is-good', INJECT: 'is-good',
+    FAILED: 'is-bad', REJECT: 'is-bad', DEAD: 'is-bad', KILL: 'is-bad',
+    WEDGED: 'is-warn', REAP: 'is-warn',
+    REQUEST: 'is-info',
+  };
+
+  function _activityLogRowHtml(ev) {
+    const cls = _ACTIVITY_LOG_VERB_CLASS[ev.verb] || '';
+    return '<div class="activity-log-row">'
+      + '<span class="activity-log-ts">' + escapeHtml((ev.ts || '').replace(' UTC', '')) + '</span>'
+      + '<span class="activity-log-verb ' + cls + '">' + escapeHtml(ev.verb || '') + '</span>'
+      + '<span class="activity-log-detail">' + escapeHtml(ev.detail || '') + '</span>'
+      + '</div>';
+  }
+
+  let _activityLogModalEl = null;
+  let _activityLogModalKeydownHandler = null;
+
+  function closeActivityLogModal() {
+    if (!_activityLogModalEl) return;
+    _activityLogModalEl.remove();
+    _activityLogModalEl = null;
+    if (_activityLogModalKeydownHandler) {
+      document.removeEventListener('keydown', _activityLogModalKeydownHandler);
+      _activityLogModalKeydownHandler = null;
+    }
+  }
+
+  async function _loadActivityLogInto(overlay, body, sessionId, scopeAll) {
+    body.innerHTML = '<div class="activity-log-empty">Loading…</div>';
+    try {
+      const useSession = sessionId && !scopeAll;
+      const qs = useSession ? ('?session_id=' + encodeURIComponent(sessionId) + '&limit=200') : '?limit=200';
+      const res = await fetch('/api/activity-log' + qs);
+      const data = await res.json();
+      if (!_activityLogModalEl || _activityLogModalEl !== overlay) return;  // closed while in flight
+      if (!data || !data.ok) {
+        body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
+        return;
+      }
+      const events = Array.isArray(data.events) ? data.events : [];
+      if (!events.length) {
+        body.innerHTML = '<div class="activity-log-empty">No activity-log entries'
+          + (useSession ? ' for this session' : '') + ' yet.</div>';
+        return;
+      }
+      // Newest first for reading — the API returns oldest-first (tail order).
+      body.innerHTML = events.slice().reverse().map(_activityLogRowHtml).join('');
+    } catch (e) {
+      if (!_activityLogModalEl || _activityLogModalEl !== overlay) return;
+      body.innerHTML = '<div class="activity-log-error">Could not load the activity log.</div>';
+    }
+  }
+
+  function openActivityLogModal(sessionId, titleHint) {
+    closeActivityLogModal();
+    const overlay = document.createElement('div');
+    overlay.className = 'settings-modal-overlay open';
+    // No toggle at all when there's no session to scope to in the first
+    // place (opened without a session_id) — "This session"/"All" would
+    // both show the same thing.
+    const toggleHtml = sessionId
+      ? '<div class="activity-log-modal-scope">'
+        + '<button type="button" class="activity-log-scope-btn is-active" data-scope="session">This session</button>'
+        + '<button type="button" class="activity-log-scope-btn" data-scope="all">All</button>'
+        + '</div>'
+      : '';
+    overlay.innerHTML = '<div class="settings-modal-backdrop"></div>'
+      + '<div class="activity-log-modal" role="dialog" aria-modal="true" aria-label="CCC activity log">'
+      +   '<div class="activity-log-modal-header">'
+      +     '<div class="activity-log-modal-title">Activity log' + (titleHint ? ' — ' + escapeHtml(titleHint) : '') + '</div>'
+      +     toggleHtml
+      +     '<button type="button" class="activity-log-modal-close" title="Close" aria-label="Close">&times;</button>'
+      +   '</div>'
+      +   '<div class="activity-log-modal-body"><div class="activity-log-empty">Loading…</div></div>'
+      + '</div>';
+    document.body.appendChild(overlay);
+    _activityLogModalEl = overlay;
+    const closeIt = () => closeActivityLogModal();
+    overlay.querySelector('.settings-modal-backdrop').addEventListener('click', closeIt);
+    overlay.querySelector('.activity-log-modal-close').addEventListener('click', closeIt);
+    _activityLogModalKeydownHandler = (e) => { if (e.key === 'Escape') closeIt(); };
+    document.addEventListener('keydown', _activityLogModalKeydownHandler);
+
+    const body = overlay.querySelector('.activity-log-modal-body');
+    overlay.querySelectorAll('.activity-log-scope-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        overlay.querySelectorAll('.activity-log-scope-btn').forEach((b) => b.classList.remove('is-active'));
+        btn.classList.add('is-active');
+        _loadActivityLogInto(overlay, body, sessionId, btn.dataset.scope === 'all');
+      });
+    });
+    _loadActivityLogInto(overlay, body, sessionId, false);
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -44613,6 +44716,7 @@
           const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
           if (paneId === activePaneId()) syncMobileOriginalAsk(mobileOriginalAskText);
           sticky.innerHTML = resolveBtn + issueBtn
+            + '<button type="button" class="conv-sticky-header__activity-log" data-csh-activity-log title="View CCC\'s spawn/inject/kill activity log for this session">Log</button>'
             + '<button type="button" class="conv-sticky-header__close" data-csh-close title="Hide this panel completely">×</button>'
             + '<div class="csh-row">'
             +   '<div class="csh-col csh-col-ask">'
@@ -44710,6 +44814,14 @@
               if (_dynamicAskState && _dynamicAskState.sticky === sticky) {
                 _dynamicAskState = null;
               }
+            });
+          }
+          const activityLogBtn = sticky.querySelector('[data-csh-activity-log]');
+          if (activityLogBtn) {
+            activityLogBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const sid = conv.session_id || '';
+              openActivityLogModal(sid, sid ? shortSessionId(sid) : '');
             });
           }
           const resolveClickBtn = sticky.querySelector('.resolve-btn');
