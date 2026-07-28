@@ -1,1 +1,0 @@
-Switched the project license from MIT to the source-available Claude Command Center Software License: free for non-commercial use, commercial use by permission. Code stays readable; releases before 2026-07-28 remain MIT (see LICENSE-MIT and NOTICE).

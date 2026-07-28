@@ -1,1 +1,0 @@
-Fixed user message bubbles in WebUI-spawned sessions using the "stitch" conversation background: the text was wrapped in a second inner card capped at 78% width, leaving a dead band inside the bubble — the message now fills the whole bubble.

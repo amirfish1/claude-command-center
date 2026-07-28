@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.15.0] - 2026-07-27
+
+### Added
+- Added a "Log" button to the session status rail opening an in-app viewer for CCC's unified spawn/inject/kill/app-server activity log, with a This-session/All toggle.
+- The cold-session composer now warns on large, stale Kimi sessions and offers "Continue new" to avoid reloading a cold context. Codex and Claude behavior is unchanged.
+- Added signal-driven repo suggestions on the new-session page. Quick chips and the repo gallery are now ranked by recent usage (sessions, turns, and tokens over 7/30 days) and grouped into Production and Development & test folders.
+
+### Changed
+- Switched the project license from MIT to the source-available Claude Command Center Software License: free for non-commercial use, commercial use by permission. Code stays readable; releases before 2026-07-28 remain MIT (see LICENSE-MIT and NOTICE).
+- Redesigned the mobile (≤600px) sidebar header: the full "Command Center" title now fits (subtitle/version text hidden on phones), the action icons overlay top-right instead of squeezing the brand, WatchTower + Worker badges share one truncating row, the "+ New Group chat" row wraps to its own full-width line instead of clipping mid-label, and the throughput strip side-scrolls instead of overflowing.
+
+### Fixed
+- Kimi and other ACP conversation replays now preserve complete long assistant replies.
+- Fixed transcript touch-scrolling on phones. Two culprits: the First Flight tour could auto-start mid-session on small viewports, and its fixed welcome card swallowed every drag gesture over the conversation (it no longer auto-starts ≤1200px; the Settings tour button still works); and scroll-up drags inside the 80px bottom tolerance snapped straight back to the tail on the next content update — a deliberate upward scroll now unpins immediately, which matters most with the on-screen keyboard open and only ~250px of visible transcript.
+- Fixed Sparkle in-app updates hanging forever at "Updating…": the installer progress agent's request for the host app to terminate never landed (host stayed healthy-idle, agent waited indefinitely, and quitting the app manually made the install complete instantly — reproduced on two version pairs). The app now terminates itself when Sparkle reports the install is starting (`updater(_:willInstallUpdate:)` → `NSApp.terminate`), letting the staged install proceed. Residual known issue: the app does not auto-relaunch after the install completes.
+- Keep recently closed tickets visible on the standalone Queues page.
+- Fixed user message bubbles in WebUI-spawned sessions using the "stitch" conversation background: the text was wrapped in a second inner card capped at 78% width, leaving a dead band inside the bubble — the message now fills the whole bubble.
+
 ## [5.14.0] - 2026-07-27
 
 ### Added
@@ -2296,7 +2314,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.14.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.15.0...HEAD
+[5.15.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.15.0
 [5.14.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.14.0
 [5.13.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.13.0
 [5.12.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.12.0
