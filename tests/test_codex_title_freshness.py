@@ -138,5 +138,39 @@ class SessionLandedProbeTests(unittest.TestCase):
         build.assert_not_called()
 
 
+class CodexSignatureExtraKeysTests(unittest.TestCase):
+    """The isolated-refresh keys must match what the signature actually folds in.
+
+    _archive_signature_delta routes a codex-only extras change to an
+    engine-scoped rebuild by matching against _archive_codex_extra_keys(). If
+    that set drifts from _archive_corpus_signature_parts, the match silently
+    fails and every new Codex session goes back to forcing a full rebuild --
+    the 49.6s-to-appear bug, reintroduced quietly.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = importlib.import_module("server")
+
+    def test_every_codex_key_is_one_the_signature_tracks(self):
+        server = self.server
+        _sig, _files, extras = server._archive_corpus_signature_parts()
+        keys = server._archive_codex_extra_keys()
+        self.assertTrue(keys, "no codex extra keys at all")
+        present = [k for k in keys if k in extras]
+        self.assertTrue(
+            present,
+            "none of _archive_codex_extra_keys() appear in the signature extras; "
+            "the isolated codex refresh can never fire",
+        )
+
+    def test_the_rollout_day_dirs_are_included(self):
+        """Codex nests rollouts by date, so today's dir is the one that moves."""
+        server = self.server
+        keys = server._archive_codex_extra_keys()
+        for day_dir in server._codex_rollout_day_dirs():
+            self.assertIn(str(day_dir), keys)
+
+
 if __name__ == "__main__":
     unittest.main()

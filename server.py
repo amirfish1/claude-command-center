@@ -8304,9 +8304,23 @@ def _archive_signature_delta(old_sig, new_sig):
             k for k in set(old_extras) | set(new_extras)
             if old_extras.get(k) != new_extras.get(k)
         }
-        if changed_extras - {_ARCHIVE_HERMES_EXTRA_KEY}:
+        isolated = set()
+        if changed_extras & {_ARCHIVE_HERMES_EXTRA_KEY}:
+            isolated.add(_ARCHIVE_HERMES_EXTRA_KEY)
+            refresh_engines.add("hermes")
+        # Codex gets the same isolated treatment, for the same reason. A newly
+        # spawned Codex thread only ever shows up as a day-dir mtime bump (its
+        # rollouts are date-nested), which is dir-granular and so used to force
+        # the full-rebuild path -- meaning the new session could not appear
+        # until a background O(all-rows) rebuild finished and a later poll
+        # picked it up. Measured: 49.6s from spawn to the row existing in a
+        # built list. Rebuilding codex rows alone is ~0.2s warm.
+        codex_keys = changed_extras & _archive_codex_extra_keys()
+        if codex_keys:
+            isolated |= codex_keys
+            refresh_engines.add("codex")
+        if changed_extras - isolated:
             return None
-        refresh_engines.add("hermes")
     changed = [p for p, st in new_files.items() if old_files.get(p) != st]
     removed = [p for p in old_files if p not in new_files]
     if not changed and not removed and not refresh_engines:
@@ -8397,6 +8411,17 @@ def _archive_canonical_project_dirs(projects_root):
 # churn into an engine-scoped row refresh instead of a full rebuild.
 _ARCHIVE_HERMES_EXTRA_PATH = Path.home() / ".hermes" / "state.db"
 _ARCHIVE_HERMES_EXTRA_KEY = str(_ARCHIVE_HERMES_EXTRA_PATH)
+
+
+def _archive_codex_extra_keys():
+    """Signature-extra keys that a new/updated Codex thread can move.
+
+    Must stay in lockstep with what _archive_corpus_signature_parts folds in
+    for Codex, or a codex-only delta silently falls back to a full rebuild.
+    """
+    keys = {str(Path.home() / ".codex" / "sessions")}
+    keys.update(str(p) for p in _codex_rollout_day_dirs())
+    return keys
 
 
 def _codex_rollout_day_dirs():
@@ -8842,6 +8867,17 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
                                 merged,
                                 "hermes",
                                 find_hermes_conversations(
+                                    include_old=True,
+                                    repo_only=False,
+                                    resolve_pr_states=cache_options.get("resolve_pr_states", False),
+                                    resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+                                ),
+                            )
+                        if "codex" in refresh_engines:
+                            merged = _archive_merge_engine_rows(
+                                merged,
+                                "codex",
+                                find_codex_conversations(
                                     include_old=True,
                                     repo_only=False,
                                     resolve_pr_states=cache_options.get("resolve_pr_states", False),

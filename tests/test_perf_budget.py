@@ -1256,36 +1256,52 @@ def test_archive_all_serve_cache_coalesces_concurrent_polls(big_projects, isolat
     )
 
 
-def test_archive_signature_delta_hermes_churn_is_engine_scoped_refresh():
-    """Hermes state.db mtime flips per internal event; that churn must NOT force
-    a full O(all-rows) rebuild — the delta converts it to an engine-scoped row
-    refresh (the measured 60-95s-per-poll burn while hermes ran)."""
+def test_archive_signature_delta_engine_churn_is_engine_scoped_refresh():
+    """Dir-granular engine churn must NOT force a full O(all-rows) rebuild.
+
+    Hermes state.db mtime flips per internal event (the measured 60-95s-per-poll
+    burn while hermes ran). Codex has the same shape: a newly spawned thread
+    only ever appears as a rollout day-dir mtime bump, and routing that to the
+    full-rebuild path meant a new session could not show up until a background
+    rebuild finished and a later poll picked it up (measured 49.6s from spawn to
+    the row existing in a built list). Both convert to an engine-scoped refresh.
+
+    An engine WITHOUT an isolated rebuild path must still force the full
+    rebuild — that is the part of this gate that must not erode.
+    """
     hermes_key = server._ARCHIVE_HERMES_EXTRA_KEY
     codex_key = str(Path.home() / ".codex" / "sessions")
+    other_key = str(Path.home() / ".cursor" / "projects")
     files = {"/p/a.jsonl": (1, 100)}
-    old_extras = {hermes_key: 100, codex_key: 200}
+    old_extras = {hermes_key: 100, codex_key: 200, other_key: 300}
     with server._archive_sig_lock:
         server._ARCHIVE_STATMAP_BY_SIG["sig_old"] = (dict(files), dict(old_extras))
         server._ARCHIVE_STATMAP_BY_SIG["sig_hermes"] = (
-            dict(files), {hermes_key: 300, codex_key: 200})
+            dict(files), {hermes_key: 300, codex_key: 200, other_key: 300})
         server._ARCHIVE_STATMAP_BY_SIG["sig_codex"] = (
-            dict(files), {hermes_key: 100, codex_key: 999})
+            dict(files), {hermes_key: 100, codex_key: 999, other_key: 300})
+        server._ARCHIVE_STATMAP_BY_SIG["sig_other"] = (
+            dict(files), {hermes_key: 100, codex_key: 200, other_key: 999})
         server._ARCHIVE_STATMAP_BY_SIG["sig_both"] = (
             {"/p/a.jsonl": (2, 100), "/p/b.jsonl": (1, 10)},
-            {hermes_key: 300, codex_key: 200})
+            {hermes_key: 300, codex_key: 200, other_key: 300})
     try:
         changed, removed, engines = server._archive_signature_delta("sig_old", "sig_hermes")
         assert changed == [] and removed == []
         assert engines == {"hermes"}
-        # A non-hermes engine-source change still forces the full rebuild.
-        assert server._archive_signature_delta("sig_old", "sig_codex") is None
+        # A new Codex thread is a day-dir bump, and rebuilds codex rows only.
+        changed, removed, engines = server._archive_signature_delta("sig_old", "sig_codex")
+        assert changed == [] and removed == []
+        assert engines == {"codex"}
+        # An engine source with no isolated path still forces the full rebuild.
+        assert server._archive_signature_delta("sig_old", "sig_other") is None
         # Claude transcript churn + hermes churn ride the same delta.
         changed, removed, engines = server._archive_signature_delta("sig_old", "sig_both")
         assert changed == ["/p/a.jsonl", "/p/b.jsonl"] and removed == []
         assert engines == {"hermes"}
     finally:
         with server._archive_sig_lock:
-            for k in ("sig_old", "sig_hermes", "sig_codex", "sig_both"):
+            for k in ("sig_old", "sig_hermes", "sig_codex", "sig_other", "sig_both"):
                 server._ARCHIVE_STATMAP_BY_SIG.pop(k, None)
 
 
