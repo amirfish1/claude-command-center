@@ -138,6 +138,78 @@ class SessionLandedProbeTests(unittest.TestCase):
         build.assert_not_called()
 
 
+class JustSpawnedRowLabellingTests(unittest.TestCase):
+    """A row now reaches the list before its engine writes a transcript.
+
+    Measured: the row lands at ~4.9s, Codex writes title and first_user_message
+    at ~6.9s. In that window the row rendered as "(untitled)" wearing an
+    [EMPTY] chip. Both are honest about the transcript and misleading about
+    what is happening, and CCC knows the prompt because it sent it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = importlib.import_module("server")
+
+    @staticmethod
+    def _spawn(age_sec, prompt="test6"):
+        import time
+        return {
+            "prompt": prompt,
+            "spawned_at": time.strftime(
+                "%Y%m%dT%H%M%S", time.localtime(time.time() - age_sec)
+            ),
+        }
+
+    def _rehydrate(self, row, spawn):
+        from unittest import mock
+        sid = row["session_id"]
+        with mock.patch.object(
+            self.server, "_spawn_registry_entries_by_session",
+            return_value={sid: dict(spawn, session_id=sid)},
+        ):
+            return self.server._rehydrate_archive_cached_rows([dict(row)])[0]
+
+    def test_a_just_spawned_row_shows_the_prompt_not_untitled(self):
+        row = {"session_id": "s1", "engine": "codex", "display_name": "", "first_message": ""}
+        out = self._rehydrate(row, self._spawn(10))
+        self.assertEqual(out["display_name"], "test6")
+
+    def test_a_just_spawned_row_suppresses_the_empty_chip(self):
+        row = {"session_id": "s1", "engine": "codex", "display_name": "", "first_message": ""}
+        out = self._rehydrate(row, self._spawn(10))
+        self.assertTrue(out.get("spawn_recent"))
+
+    def test_first_message_is_never_faked(self):
+        """[EMPTY] must keep meaning "no transcript" — suppress it, don't lie."""
+        row = {"session_id": "s1", "engine": "codex", "display_name": "", "first_message": ""}
+        out = self._rehydrate(row, self._spawn(10))
+        self.assertFalse(out.get("first_message"))
+
+    def test_an_old_empty_session_still_reads_as_empty(self):
+        """Created-but-unused is a real state and must stay visible."""
+        row = {"session_id": "s1", "engine": "codex", "display_name": "", "first_message": ""}
+        out = self._rehydrate(row, self._spawn(3600))
+        self.assertFalse(out.get("spawn_recent"))
+
+    def test_an_engine_title_is_not_overwritten_by_the_prompt(self):
+        row = {"session_id": "s1", "engine": "codex",
+               "display_name": "a real title", "first_message": ""}
+        out = self._rehydrate(row, self._spawn(10))
+        self.assertEqual(out["display_name"], "a real title")
+
+    def test_a_row_with_a_transcript_is_left_alone(self):
+        row = {"session_id": "s1", "engine": "codex",
+               "display_name": "", "first_message": "already here"}
+        out = self._rehydrate(row, self._spawn(10))
+        self.assertFalse(out.get("spawn_recent"))
+
+    def test_recency_gate_tolerates_a_missing_or_broken_timestamp(self):
+        server = self.server
+        self.assertFalse(server._spawn_is_recent({}))
+        self.assertFalse(server._spawn_is_recent({"spawned_at": "not-a-date"}))
+
+
 class CodexSignatureExtraKeysTests(unittest.TestCase):
     """The isolated-refresh keys must match what the signature actually folds in.
 

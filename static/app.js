@@ -25853,7 +25853,11 @@
       // A row without a first transcript message is a created-but-unused
       // conversation. Keep this beside the title so it remains visible in
       // compact lists, and exclude synthetic backlog / PR rows.
-      const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.first_message)
+      // spawn_recent means the session was spawned moments ago and its engine
+      // has not written a transcript YET — the row now reaches the list before
+      // the engine writes anything. That is "starting", not "created and never
+      // used", so the chip stays off until the grace window expires.
+      const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.first_message && !c.spawn_recent)
         ? '<span class="conv-empty-session-chip" title="This session has no transcript messages">[EMPTY]</span>'
         : '';
       const historySnippetHtml = c._historySnippet

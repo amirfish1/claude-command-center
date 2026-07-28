@@ -9066,6 +9066,22 @@ _ARCHIVE_SIDECAR_DEFAULTS = {
 }
 
 
+_SPAWN_RECENT_WINDOW_SEC = 120.0
+
+
+def _spawn_is_recent(spawn_entry, now=None):
+    """True while a spawn is new enough that an empty transcript means
+    "still starting", not "created and never used"."""
+    raw = str((spawn_entry or {}).get("spawned_at") or "").strip()
+    if not raw:
+        return False
+    try:
+        ts = time.mktime(time.strptime(raw, "%Y%m%dT%H%M%S"))
+    except (ValueError, OverflowError):
+        return False
+    return 0 <= ((now or time.time()) - ts) <= _SPAWN_RECENT_WINDOW_SEC
+
+
 def _rehydrate_archive_cached_rows(rows):
     """Apply fast-changing state to cached archive rows before responding."""
     try:
@@ -9150,6 +9166,28 @@ def _rehydrate_archive_cached_rows(rows):
                         row["ai_title"] = (
                             title if (title and title != first_message) else None
                         )
+
+            # A just-spawned session reaches the list BEFORE its engine has
+            # written the prompt anywhere we read it: the row lands at ~5s,
+            # Codex writes title and first_user_message at ~7s. For that window
+            # the row rendered as "(untitled)" wearing an [EMPTY] chip, which
+            # is a fair description of the transcript and a bad description of
+            # what is happening. CCC sent the prompt, so it can say so.
+            #
+            # display_name is filled in (nothing better exists yet, and the
+            # engine's own title overwrites it the moment it lands), but
+            # first_message is deliberately NOT faked: [EMPTY] must keep
+            # meaning "no transcript". The client suppresses the chip on
+            # spawn_recent instead, so a genuinely created-but-unused session
+            # still shows it.
+            if sid and not row.get("first_message"):
+                spawn = spawn_registry_by_sid.get(sid) or {}
+                prompt = str(spawn.get("prompt") or "").strip()
+                if prompt:
+                    if not row.get("display_name"):
+                        row["display_name"] = _truncate_session_name(prompt)
+                    if _spawn_is_recent(spawn, _now_rehydrate):
+                        row["spawn_recent"] = True
 
             row["archived"] = sid in archived_set
             row["trashed"] = sid in trashed_set
