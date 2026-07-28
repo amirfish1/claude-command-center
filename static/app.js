@@ -34918,8 +34918,9 @@
     } catch (_) {}
     _uxqResetHistoryPage();
   }
-  // Status filter for the Queue panel: 'all' or 'open' (open + in_progress,
-  // i.e. everything not closed). A simple global view pref, not per-session.
+  // Status filter for the Queue panel: 'all' or 'open'. Open keeps active
+  // work plus the last 12 hours of completed work for immediate context.
+  // A simple global view pref, not per-session.
   const _UXQ_FILTER_LS = 'ccc-uxq-filter';
   const _UXQ_HISTORY_PAGE_SIZE = 80;
   let _uxqHistoryPage = 0;
@@ -34965,8 +34966,13 @@
   // repo-derived queue on every refresh.
   function _uxqFilterItems(items, statusFilter, typeFilter) {
     const source = Array.isArray(items) ? items : [];
+    const recentClosedCutoff = Date.now() - 12 * 60 * 60 * 1000;
     const statusScoped = statusFilter === 'all'
-      ? source : source.filter(it => (it && it.status) !== 'closed');
+      ? source : source.filter(it => {
+          if (!it || it.status !== 'closed') return true;
+          const closedAt = Date.parse(it.closed_at || '');
+          return Number.isFinite(closedAt) && closedAt >= recentClosedCutoff;
+        });
     return typeFilter === 'all'
       ? statusScoped
       : statusScoped.filter(it => ((it && it.type) === 'feature' ? 'feature' : 'bug') === typeFilter);

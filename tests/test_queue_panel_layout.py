@@ -302,17 +302,19 @@ vm.createContext(context);
 vm.runInContext(%s, context);
 const items = [
   { id: 'open-bug', status: 'open', type: 'bug' },
-  { id: 'closed-bug', status: 'closed', type: 'bug' },
+  { id: 'closed-recent-bug', status: 'closed', type: 'bug', closed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+  { id: 'closed-old-bug', status: 'closed', type: 'bug', closed_at: new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString() },
   { id: 'open-feature', status: 'open', type: 'feature' },
-  { id: 'closed-feature', status: 'closed', type: 'feature' },
+  { id: 'closed-recent-feature', status: 'closed', type: 'feature', closed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+  { id: 'closed-old-feature', status: 'closed', type: 'feature', closed_at: new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString() },
 ];
 const cases = {
-  'all/all': ['open-bug', 'closed-bug', 'open-feature', 'closed-feature'],
-  'all/bug': ['open-bug', 'closed-bug'],
-  'all/feature': ['open-feature', 'closed-feature'],
-  'open/all': ['open-bug', 'open-feature'],
-  'open/bug': ['open-bug'],
-  'open/feature': ['open-feature'],
+  'all/all': ['open-bug', 'closed-recent-bug', 'closed-old-bug', 'open-feature', 'closed-recent-feature', 'closed-old-feature'],
+  'all/bug': ['open-bug', 'closed-recent-bug', 'closed-old-bug'],
+  'all/feature': ['open-feature', 'closed-recent-feature', 'closed-old-feature'],
+  'open/all': ['open-bug', 'closed-recent-bug', 'open-feature', 'closed-recent-feature'],
+  'open/bug': ['open-bug', 'closed-recent-bug'],
+  'open/feature': ['open-feature', 'closed-recent-feature'],
 };
 for (const [key, expected] of Object.entries(cases)) {
   const [status, type] = key.split('/');
