@@ -1,1 +1,0 @@
-Restart controls in Settings → Maintenance → System status: restart the execution worker or both services, not just the dashboard. After new code lands, **Restart all** is the one you want — a `server.py` change runs in both processes, and restarting only the dashboard leaves the old code live in the worker.

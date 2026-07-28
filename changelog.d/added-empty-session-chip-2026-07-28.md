@@ -1,1 +1,0 @@
-- Show an `[EMPTY]` chip beside conversation rows that have no transcript messages.

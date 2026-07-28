@@ -1,1 +1,0 @@
-- Rewrote the update modal's warning in plain language: clicking Update now runs the safety check automatically, downloads the new code, and restarts the dashboard and worker with no commands to run; a failed check changes nothing and shows the reason. It also points at Settings → Maintenance → Restart dashboard for a restart without updating.

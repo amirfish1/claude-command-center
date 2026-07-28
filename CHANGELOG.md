@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.17.0] - 2026-07-28
+
+### Added
+- **Automatic bug reports for spawn stalls.** When a new session fails to
+register within 30 seconds, CCC opens a pre-filled bug report for review.
+The Report a bug modal also gains a private-email destination (pre-filled
+draft to the maintainer, nothing posted publicly — the default), a public
+GitHub-issue option, optional name/contact fields, and a live "exactly what
+will be sent" preview. Auto-open can be disabled via a "don't show this
+automatically again" checkbox.
+- Show an `[EMPTY]` chip beside conversation rows that have no transcript messages.
+- Restart controls in Settings → Maintenance → System status: restart the execution worker or both services, not just the dashboard. After new code lands, **Restart all** is the one you want — a `server.py` change runs in both processes, and restarting only the dashboard leaves the old code live in the worker.
+- Added session start timing stats to the conversation — a collapsed panel showing how long each stage of a spawn took (engine thread creation, turn accepted, transcript written to disk, row visible in the sidebar, first paint). Turn it off with `CCC_SPAWN_STATS=0` or `localStorage["ccc-spawn-stats"]="0"`.
+
+### Changed
+- Codex sessions now start about 15x faster — a warm spawn returns in ~0.3s instead of ~7s. Naming the thread and confirming the prompt landed both moved off the critical path into a background step, so the session appears as soon as Codex has the work rather than after two diagnostics finish. The confirmation also got a realistic window, so it now reports accurately instead of almost always timing out.
+- One **STATUS** chip in the sidebar header replaces the separate WatchTower and Worker badges. It rolls up the dashboard, the execution worker and the WatchTower queue server into a single red / yellow / green verdict, and clicking it opens a rebuilt System status panel: per-service start time, pid / version / port, what a restart would actually cost right now, an inline queue list, and a Restart button on every row. A service that keeps dying under launchd KeepAlive is called out ("started 4 times in the last 10 minutes") instead of reading as healthy. The dashboard Restart arms with a five second Undo rather than firing on the click. Settings > Maintenance gains a **Restart worker** button that shares the panel's lock, so two restarts can never overlap. Backed by one new read endpoint, `GET /api/system/services`, with the WatchTower API probe cached off the request thread so a degraded queue server no longer costs 0.8s of a handler thread per poll.
+- Rewrote the update modal's warning in plain language: clicking Update now runs the safety check automatically, downloads the new code, and restarts the dashboard and worker with no commands to run; a failed check changes nothing and shows the reason. It also points at Settings → Maintenance → Restart dashboard for a restart without updating.
+
+### Fixed
+- Fixed a freshly spawned Codex session showing an empty pane for ~15s. CCC renders the transcript from the engine's rollout file, which does not carry your message until well after the turn starts; the prompt now echoes immediately from what CCC already holds.
+- Fixed a Codex session keeping a stale name after Codex renamed the thread. Codex names a thread a few seconds after the session starts and stores that name in its own database, which the list cache does not watch (its timestamp changes on every write from any live session, so watching it would force a full rebuild constantly). The name is now re-read at serve time instead, from one cached lookup shared by the whole list.
+- Fixed a new Codex session taking up to a minute to show up in the session list. Codex nests its transcripts by date, so a brand new thread reached the list cache only as a directory timestamp change, which was treated as "cannot tell what changed, rebuild everything". Full rebuilds are deliberately kept off the request path, so the row could not appear until a background rebuild finished and a later poll picked it up: measured at 49.6s on a loaded machine. Codex now rebuilds only its own rows for that case, the way the Hermes engine already did, and the row shows up in about 5s. The post-spawn refresh also stopped re-fetching the entire session corpus every 1.5s to look for one new row; it polls a small probe instead and does the expensive refresh once, when there is something new to show.
+- Fixed Codex sessions missing from the session list — new threads could sit in "spawning" indefinitely and then vanish, and existing Codex sessions appeared only after a UI reload. The list cache was gated on `~/.codex/sessions`, but Codex nests transcripts by date, so that directory's mtime never moved when a session was created. Codex-heavy users saw it worst, since the cache only refreshed when unrelated Claude activity happened to invalidate it.
+- Fixed a just-spawned session briefly showing as `(untitled)` with an `[EMPTY]` chip. Rows now reach the list before the engine has written a transcript, so both labels were accurate about the file and wrong about what was happening. The row borrows the prompt CCC already sent as its name until the engine's own title arrives. The `[EMPTY]` chip is suppressed for the first two minutes after a spawn rather than being faked away, so a session that really was created and never used still shows it.
+
 ## [5.16.0] - 2026-07-28
 
 ### Added
@@ -2324,7 +2350,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.16.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.17.0...HEAD
+[5.17.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.17.0
 [5.16.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.16.0
 [5.15.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.15.0
 [5.14.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.14.0

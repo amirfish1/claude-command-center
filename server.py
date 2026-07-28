@@ -15,7 +15,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.16.0"
+__version__ = "5.17.0"
 
 import ast
 import base64
@@ -631,8 +631,41 @@ def _watchtower_daemon_pid_path():
     )
 
 
+# Argv cannot change for a live pid, so the `ps -p` fallback below is worth
+# memoising: a single WatchTower restart used to cost ~130 forks because both
+# polling loops in _watchtower_service_action re-read the argv every 0.1s, and
+# /api/system/services polls the same status on a timer. Keyed by pid; cleared
+# whenever the pid we read from the pidfile is not the one we cached, and
+# explicitly after `wt stop` (pid reuse is the only way this can lie).
+_WT_ARGV_CACHE = {}
+
+
+def _watchtower_forget_process_argv(pid=None):
+    if pid is None:
+        _WT_ARGV_CACHE.clear()
+    else:
+        _WT_ARGV_CACHE.pop(int(pid), None)
+
+
 def _watchtower_process_argv(pid):
     """Best-effort argv for the daemon, without trusting the pidfile alone."""
+    try:
+        key = int(pid)
+    except (TypeError, ValueError):
+        return []
+    cached = _WT_ARGV_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
+    argv = _watchtower_process_argv_uncached(key)
+    # Only cache a real answer. An empty list means the probe failed (hidden
+    # argv, ps timeout) and caching it would freeze a wrong verdict in place.
+    if argv:
+        _WT_ARGV_CACHE.clear()
+        _WT_ARGV_CACHE[key] = list(argv)
+    return argv
+
+
+def _watchtower_process_argv_uncached(pid):
     try:
         raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
         if raw:
@@ -644,7 +677,9 @@ def _watchtower_process_argv(pid):
         pass
     try:
         proc = subprocess.run(
-            ["ps", "-p", str(int(pid)), "-o", "command="],
+            # _SYS_PS, never a bare "ps": the launchd daemon's PATH lacks
+            # /usr/sbin and bare tool names fail silently there.
+            [_SYS_PS, "-p", str(int(pid)), "-o", "command="],
             capture_output=True, text=True, timeout=2,
         )
         command = (proc.stdout or "").strip()
@@ -686,7 +721,8 @@ def _watchtower_endpoint_from_argv(argv):
     return host, port, f"http://{probe_host}:{port}"
 
 
-def _watchtower_api_up(base_url):
+def _watchtower_api_probe(base_url):
+    """The actual network call. Blocks up to 0.8s; never call it on a poll."""
     try:
         request = urllib.request.Request(
             base_url.rstrip("/") + "/api/status",
@@ -699,7 +735,67 @@ def _watchtower_api_up(base_url):
         return False
 
 
-def _watchtower_service_status(*, probe_api=True):
+# A degraded WatchTower makes urlopen() sit on the full 0.8s timeout, and the
+# System status panel polls this on a 5s cadence, so an uncached probe burned
+# 0.8s of an HTTP handler thread precisely in the state the panel exists to
+# report. Cache the verdict, and once we have any verdict, refresh it off the
+# request thread: the caller gets last-known instantly plus an age so it can
+# say how fresh that is.
+_WT_API_PROBE_TTL = 10.0
+_WT_API_PROBE_CACHE = {}   # base_url -> {"ts": float, "ok": bool, "probing": bool}
+_WT_API_PROBE_LOCK = threading.Lock()
+
+
+def _watchtower_forget_api_probe(base_url=None):
+    with _WT_API_PROBE_LOCK:
+        if base_url is None:
+            _WT_API_PROBE_CACHE.clear()
+        else:
+            _WT_API_PROBE_CACHE.pop(str(base_url), None)
+
+
+def _watchtower_api_probe_age(base_url):
+    with _WT_API_PROBE_LOCK:
+        entry = _WT_API_PROBE_CACHE.get(str(base_url or ""))
+        if not entry:
+            return None
+    return max(0.0, round(time.time() - entry["ts"], 1))
+
+
+def _watchtower_api_up(base_url, *, allow_stale=True):
+    key = str(base_url or "")
+    now = time.time()
+    with _WT_API_PROBE_LOCK:
+        entry = _WT_API_PROBE_CACHE.get(key)
+        if entry and now - entry["ts"] < _WT_API_PROBE_TTL:
+            return entry["ok"]
+        if entry is not None and allow_stale:
+            # Serve last-known and re-probe in the background, one at a time.
+            if not entry.get("probing"):
+                entry["probing"] = True
+                threading.Thread(
+                    target=_watchtower_api_refresh_worker,
+                    args=(key,),
+                    daemon=True,
+                    name="wt-api-probe",
+                ).start()
+            return entry["ok"]
+    ok = _watchtower_api_probe(key)
+    with _WT_API_PROBE_LOCK:
+        _WT_API_PROBE_CACHE[key] = {"ts": time.time(), "ok": ok, "probing": False}
+    return ok
+
+
+def _watchtower_api_refresh_worker(key):
+    try:
+        ok = _watchtower_api_probe(key)
+    except Exception:
+        ok = False
+    with _WT_API_PROBE_LOCK:
+        _WT_API_PROBE_CACHE[key] = {"ts": time.time(), "ok": ok, "probing": False}
+
+
+def _watchtower_service_status(*, probe_api=True, include_queues=False):
     pid = None
     pid_alive = False
     try:
@@ -715,7 +811,17 @@ def _watchtower_service_status(*, probe_api=True):
     running = bool(pid_alive and (command_verified or not argv))
     host, port, base_url = _watchtower_endpoint_from_argv(argv)
     api_ok = bool(running and probe_api and _watchtower_api_up(base_url))
-    return {
+    # WatchTower lives in another repo and reports no start time, so the pidfile
+    # mtime is the cheapest honest answer: one stat(), zero forks. It is "when
+    # the pid file was last written", not strictly process start, which is why
+    # callers surface it as approximate ("Started about 13h ago").
+    started_at = None
+    if running:
+        try:
+            started_at = _watchtower_daemon_pid_path().stat().st_mtime
+        except OSError:
+            started_at = None
+    status = {
         "ok": True,
         "installed": bool(shutil.which("wt")),
         "running": running,
@@ -727,6 +833,40 @@ def _watchtower_service_status(*, probe_api=True):
         "host": host,
         "port": port,
         "url": base_url,
+        "started_at": started_at,
+        "started_at_approx": bool(started_at),
+        "uptime_s": (
+            max(0, round(time.time() - started_at)) if started_at else None
+        ),
+        # How old the api_ok verdict is. None means "probed on this call".
+        "api_probe_age_s": (
+            _watchtower_api_probe_age(base_url) if probe_api else None
+        ),
+    }
+    if include_queues:
+        # Opt-in: the queue rollup rides the already-15s-coalesced health
+        # payload, but _watchtower_service_action polls this status dozens of
+        # times per restart and must never touch it.
+        status.update(_watchtower_queue_rollup())
+    return status
+
+
+def _watchtower_queue_rollup():
+    """Queue depth summary for the WatchTower row, from the coalesced payload."""
+    try:
+        payload = build_ux_fixes_health_payload()
+    except Exception:
+        payload = {}
+    queues = payload.get("queues") if isinstance(payload, dict) else None
+    queues = queues if isinstance(queues, list) else []
+    workers = payload.get("wt_workers") if isinstance(payload, dict) else None
+    return {
+        "queues_total": len(queues),
+        "open_total": sum(
+            int((queue or {}).get("depth") or 0) for queue in queues
+        ),
+        "stuck_total": sum(1 for queue in queues if (queue or {}).get("stuck")),
+        "workers_live": len(workers) if isinstance(workers, list) else 0,
     }
 
 
@@ -782,6 +922,10 @@ def _watchtower_service_action(action):
                         or f"WatchTower stop exited {stopped.returncode}"
                     ),
                 }
+            # The pid is dead now, so its memoised argv is the one thing that
+            # could survive into a pid-reuse false positive. Drop it.
+            _watchtower_forget_process_argv(before.get("pid"))
+            _watchtower_forget_api_probe()
             deadline = time.time() + 5
             while time.time() < deadline:
                 if not _watchtower_service_status(probe_api=False).get("running"):
@@ -810,7 +954,15 @@ def _watchtower_service_action(action):
         while time.time() < deadline and not current.get("running"):
             time.sleep(0.1)
             current = _watchtower_service_status(probe_api=False)
+        # The new daemon has a new socket, so any cached api_ok describes a
+        # process that no longer exists. Probe fresh: this path already spent
+        # ~30s, another 0.8s is free, and the answer is the one the panel
+        # renders as the restart outcome.
+        _watchtower_forget_api_probe()
         current = _watchtower_service_status()
+        # Also drop the coalesced services snapshot so the next poll after a
+        # restart cannot serve a pre-restart verdict for up to 3 more seconds.
+        _system_services_cache["ts"] = 0.0
         return {
             **current,
             "ok": bool(current.get("running")),
@@ -7461,6 +7613,15 @@ def find_all_conversations(
     seen_session_ids = set()
     _now = time.time()
 
+    # Full scans rebuild the workflow-owner map from scratch; incremental
+    # scans (only_jsonl_paths) update only the dirs they walk. A session that
+    # starts a workflow rewrites its parent transcript (Workflow tool_use +
+    # result), which flips the corpus signature and lands that dir in the
+    # next incremental scan — so the map never misses a new workflow owner
+    # for more than one refresh.
+    if only_jsonl_paths is None:
+        _ARCHIVE_WORKFLOW_SESSION_DIRS.clear()
+
     project_dirs = []
     if projects_root_exists:
         project_dirs = _archive_canonical_project_dirs(projects_root)
@@ -7495,6 +7656,14 @@ def find_all_conversations(
         try:
             jsonls = []
             for f in project_dir.iterdir():
+                # Session subdirs (<sid>/subagents/...) fall out of the same
+                # iterdir for free (DirEntry d_type, no extra stat). One
+                # is_dir probe each keeps _ARCHIVE_WORKFLOW_SESSION_DIRS to
+                # genuine workflow owners only.
+                if f.is_dir():
+                    if (f / "subagents" / "workflows").is_dir():
+                        _ARCHIVE_WORKFLOW_SESSION_DIRS[f.name] = f
+                    continue
                 if only_jsonl_paths is not None and str(f) not in only_jsonl_paths:
                     continue
                 if f.is_file() and f.name.endswith(".jsonl"):
@@ -7823,6 +7992,18 @@ def find_all_conversations(
                 "pending_tool": tail_meta.get("pending_tool"),
                 "pending_file": tail_meta.get("pending_file"),
                 "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
+                # Workflow runs (Workflow tool) — only computed for sessions
+                # the iterdir above proved own a subagents/workflows dir.
+                # Rehydrate recomputes these per serve, so live status does
+                # not depend on this build-time snapshot being fresh.
+                "workflows": (
+                    _session_workflow_runs(
+                        _ARCHIVE_WORKFLOW_SESSION_DIRS.get(session_id),
+                        session_id,
+                        now=_now,
+                    )
+                    if session_id in _ARCHIVE_WORKFLOW_SESSION_DIRS else []
+                ),
                 "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
                 "goal": tail_meta.get("goal") or "",
                 "goal_status": tail_meta.get("goal_status") or "",
@@ -8696,7 +8877,7 @@ _ARCHIVE_LIST_FIELDS = (
     "ended_blocked", "last_event_type", "last_event_ts", "pending_tool", "pending_file",
     "pending_tool_ts", "stale_tool_call", "stale_tool_age_s",
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
-    "subagent_in_flight_count", "subagent_recent", "session_state", "goal",
+    "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
     "goal_status", "parent_session_id", "hermes_parent_session_id",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
@@ -9234,6 +9415,19 @@ def _rehydrate_archive_cached_rows(rows):
                 # wire appends deliberately don't bust it. One stat per row.
                 try:
                     _restamp_kimi_row_tail_fields(row)
+                except Exception:
+                    pass
+            # Workflow runs: the corpus signature deliberately ignores
+            # journals (fast-changing live state), so recompute here per
+            # serve like the sidecar overlay. Gated to proven workflow
+            # owners; the journal parse itself is (mtime,size)-cached, so a
+            # quiet run costs a couple of stat calls and nothing else.
+            _wf_subdir = _ARCHIVE_WORKFLOW_SESSION_DIRS.get(sid)
+            if _wf_subdir is not None:
+                try:
+                    row["workflows"] = _session_workflow_runs(
+                        _wf_subdir, sid, now=_now_rehydrate
+                    )
                 except Exception:
                     pass
         hydrated.append(row)
@@ -10025,9 +10219,26 @@ def _build_bug_report_body(description, ccc_version, user_agent, session_id,
         f"| **Session** | `{session_id or '-'}` |",
         f"| **User agent** | `{user_agent or '-'}` |",
         "",
+    ]
+    if reporter_name or reporter_contact:
+        reporter = f"Reporter: {reporter_name or ''}"
+        if reporter_contact:
+            reporter += (" " if reporter_name else "") + f"({reporter_contact})"
+        lines += [reporter, ""]
+    lines += [
         "_Reported via the in-app Report a bug feature._",
     ]
     return "\n".join(lines)
+
+
+def _sanitize_reporter_field(value):
+    """Clamp a free-text reporter field for safe markdown embedding:
+    string-coerce, strip newlines/control chars (they would break the
+    single-line ``Reporter:`` format), cap at 200 chars."""
+    if not isinstance(value, str):
+        return ""
+    cleaned = "".join(ch for ch in value if ch == " " or (ch.isprintable() and not ch.isspace()))
+    return cleaned.strip()[:200]
 
 
 def _resolve_screencapture_bin():
@@ -10360,6 +10571,10 @@ def _create_bug_report_issue(payload):
     to the local path + drag-drop instructions, and the response carries
     `screenshot_needs_manual=true` so the client can `open -R` the file
     and surface the issue URL for manual attachment.
+
+    Optional `reporter_name` / `reporter_contact` fields: free-text
+    self-identification, sanitized and rendered as a `Reporter:` line in
+    the issue body when present.
     """
     # The modal collapsed Title+Description into a single Details field, so
     # we derive the issue title from the first non-empty line. We still
@@ -10386,6 +10601,10 @@ def _create_bug_report_issue(payload):
     ccc_version = (payload.get("ccc_version") or "").strip() or __version__
     user_agent = (payload.get("user_agent") or "").strip()
     session_id = (payload.get("session_id") or "").strip()
+    # Optional self-identification from the modal — sanitized to a single
+    # short line before it goes anywhere near the markdown body.
+    reporter_name = _sanitize_reporter_field(payload.get("reporter_name"))
+    reporter_contact = _sanitize_reporter_field(payload.get("reporter_contact"))
 
     # ── Screenshot pre-flight ──
     # Save first (always), then try to push, then build the body. The
@@ -10418,6 +10637,8 @@ def _create_bug_report_issue(payload):
         description, ccc_version, user_agent, session_id,
         screenshot_url=screenshot_url,
         screenshot_local_path=screenshot_local_path if screenshot_needs_manual else None,
+        reporter_name=reporter_name,
+        reporter_contact=reporter_contact,
     )
     fallback_md = f"## {title}\n\n{body}"
 
@@ -16709,6 +16930,208 @@ def _claude_subagent_parent_session_id(session_id):
     return None
 
 
+# Workflow-run visibility. Claude Code's Workflow tool writes runs to
+# <project>/<parent-sid>/subagents/workflows/<run-id>/ — four levels deep, so
+# neither the one-level conversation glob nor the plain-subagent glob reaches
+# them. Discovery piggybacks on find_conversations' existing project-dir
+# iterdir (subdirs are yielded for free), so the scan below only ever runs
+# for sessions that actually spawned subagents. The journal parse is cached
+# by (mtime_ns, size); per-agent status is re-stat'd each poll (a handful of
+# stat calls, only for workflow-owning sessions) because a running agent
+# keeps writing its transcript without touching the journal.
+_WORKFLOW_JOURNAL_CACHE = {}
+_WORKFLOW_JOURNAL_CACHE_LOCK = threading.Lock()
+# session_id -> <project>/<sid> dir, but ONLY for sessions that own a
+# subagents/workflows dir. Populated for free by the archive build's project
+# iterdir so _rehydrate_archive_cached_rows can recompute run status per
+# serve (journals change without any top-level transcript changing, so the
+# corpus signature deliberately ignores them) without scanning the corpus.
+# Replaced wholesale on each full build, so it cannot grow unboundedly.
+_ARCHIVE_WORKFLOW_SESSION_DIRS = {}
+# Agent descriptions come from the first user event of the agent transcript
+# (the task prompt). That head line never changes, so cache by path.
+_WORKFLOW_AGENT_DESC_CACHE = {}
+# An agent with no journal result whose transcript was written within this
+# window counts as running; past it, the run almost certainly died mid-flight
+# (the workflow runtime does not write a tombstone line).
+_WORKFLOW_RUNNING_FRESH_S = 5 * 60
+
+
+def _parse_workflow_journal(journal_path):
+    """Parse one run's journal.jsonl into per-agent completion state.
+
+    Returns {"order": [agent_id, ...], "agents": {agent_id: {"done": bool,
+    "failed": bool}}} or None when the journal is missing/unreadable. Cached
+    by (mtime_ns, size) so a poll only re-parses journals that changed.
+    """
+    try:
+        st = journal_path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    with _WORKFLOW_JOURNAL_CACHE_LOCK:
+        hit = _WORKFLOW_JOURNAL_CACHE.get(str(journal_path))
+        if hit and hit[0] == key:
+            return hit[1]
+    order = []
+    agents = {}
+    try:
+        with open(journal_path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                agent_id = ev.get("agentId") or ""
+                if not agent_id:
+                    continue
+                entry = agents.setdefault(agent_id, {"done": False, "failed": False})
+                if agent_id not in order:
+                    order.append(agent_id)
+                etype = ev.get("type")
+                if etype == "result":
+                    entry["done"] = True
+                elif etype == "error":
+                    entry["failed"] = True
+    except OSError:
+        return None
+    parsed = {"order": order, "agents": agents}
+    with _WORKFLOW_JOURNAL_CACHE_LOCK:
+        _WORKFLOW_JOURNAL_CACHE[str(journal_path)] = (key, parsed)
+        if len(_WORKFLOW_JOURNAL_CACHE) > 500:
+            _WORKFLOW_JOURNAL_CACHE.clear()
+    return parsed
+
+
+def _workflow_agent_description(agent_path):
+    """First user-message text of a workflow agent transcript, one line, <=80
+    chars. The task prompt is the transcript's first event and never changes,
+    so cache by path. Best-effort; '' on any failure."""
+    key = str(agent_path)
+    if key in _WORKFLOW_AGENT_DESC_CACHE:
+        return _WORKFLOW_AGENT_DESC_CACHE[key]
+    desc = ""
+    try:
+        with open(agent_path, "r", encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i >= 20:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("type") != "user":
+                    continue
+                content = (ev.get("message") or {}).get("content")
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    text = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                else:
+                    continue
+                desc = " ".join(text.split())[:80]
+                break
+    except (OSError, UnicodeDecodeError):
+        pass
+    _WORKFLOW_AGENT_DESC_CACHE[key] = desc
+    if len(_WORKFLOW_AGENT_DESC_CACHE) > 1000:
+        _WORKFLOW_AGENT_DESC_CACHE.clear()
+    return desc
+
+
+def _session_workflow_runs(session_dir, parent_sid, now=None):
+    """Workflow-run dicts for one session subdir, [] when the session has none.
+
+    ``session_dir`` is ``<project>/<parent-sid>`` — discovered for free during
+    find_conversations' project-dir iterdir, so this only runs for sessions
+    that actually spawned subagents.
+    """
+    wf_root = session_dir / "subagents" / "workflows"
+    if not wf_root.is_dir():
+        return []
+    now = now if now is not None else time.time()
+    try:
+        run_dirs = sorted(
+            (p for p in wf_root.iterdir() if p.is_dir()),
+            key=lambda p: p.name,
+        )
+    except OSError:
+        return []
+    runs = []
+    for run_dir in run_dirs:
+        parsed = _parse_workflow_journal(run_dir / "journal.jsonl")
+        order = list(parsed["order"]) if parsed else []
+        states = parsed["agents"] if parsed else {}
+        seen = set(order)
+        latest_mtime = 0.0
+        try:
+            # Agents missing from the journal (truncated/lost write) still
+            # surface from the transcript files on disk.
+            for f in run_dir.iterdir():
+                if not (f.name.startswith("agent-") and f.name.endswith(".jsonl")):
+                    continue
+                # Journal agentIds are the bare hex; file stems carry the
+                # "agent-" prefix. Normalize or every agent lists twice.
+                agent_id = f.name[:-6][len("agent-"):]
+                if agent_id not in seen:
+                    seen.add(agent_id)
+                    order.append(agent_id)
+        except OSError:
+            pass
+        agents = []
+        for agent_id in order:
+            agent_file = run_dir / f"agent-{agent_id}.jsonl"
+            try:
+                mtime = agent_file.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            latest_mtime = max(latest_mtime, mtime)
+            state = states.get(agent_id) or {}
+            if state.get("done"):
+                status = "done"
+            elif state.get("failed"):
+                status = "failed"
+            elif mtime and (now - mtime) < _WORKFLOW_RUNNING_FRESH_S:
+                status = "running"
+            else:
+                status = "interrupted"
+            agents.append({
+                "id": agent_id,
+                "conv_id": f"{parent_sid}:agent-{agent_id}",
+                "status": status,
+                "description": _workflow_agent_description(agent_file),
+            })
+        if not agents:
+            continue
+        statuses = {a["status"] for a in agents}
+        if "running" in statuses:
+            run_status = "running"
+        elif "failed" in statuses:
+            run_status = "failed"
+        elif "interrupted" in statuses:
+            run_status = "interrupted"
+        else:
+            run_status = "done"
+        runs.append({
+            "run_id": run_dir.name,
+            "status": run_status,
+            "mtime": latest_mtime,
+            "agents": agents,
+        })
+    # Most recent activity first.
+    runs.sort(key=lambda r: r["mtime"], reverse=True)
+    return runs
+
+
 def find_session_cwd(session_id):
     """Locate the .jsonl for a session_id across ~/.claude/projects/*/ and return its cwd.
 
@@ -18725,6 +19148,11 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
     # first one wins; project_dirs are ordered modern-first.
     seen_jsonl = set()
     jsonl_files = []
+    # Session subdirs (<sid>/subagents/...) fall out of the same iterdir for
+    # free (DirEntry.is_dir() uses the cached d_type, no extra stat). Only
+    # sessions that ever spawned subagents have one, so the workflow scan
+    # below pays its is_dir probe for those few, never per row.
+    session_subdirs = {}
     # Shared across the per-row loop below so identical cwd ancestors
     # collapse to one `git rev-parse --show-toplevel` instead of one per
     # session — for repos with hundreds of sessions this is the
@@ -18732,12 +19160,13 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
     git_top_cache = {}
     for project_dir in project_dirs:
         for f in project_dir.iterdir():
-            if not f.name.endswith(".jsonl") or not f.is_file():
-                continue
-            if f.name in seen_jsonl:
-                continue
-            seen_jsonl.add(f.name)
-            jsonl_files.append(f)
+            if f.name.endswith(".jsonl") and f.is_file():
+                if f.name in seen_jsonl:
+                    continue
+                seen_jsonl.add(f.name)
+                jsonl_files.append(f)
+            elif f.is_dir():
+                session_subdirs.setdefault(f.name, f)
     # Inject JSONLs for sessions pinned to this repo from other slug
     # dirs — so the single-repo list shows them as if launched here.
     if pinned_in_sids:
@@ -18763,6 +19192,19 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
         always_include_sids=scan_required_sids,
         last_interactions=last_interactions,
     )
+    # Workflow-run discovery, gated by candidacy: only sessions still in the
+    # scan list AND owning a session subdir get probed. With zero subagent
+    # subdirs (the common case) this does no filesystem work at all.
+    workflow_runs_by_sid = {}
+    if session_subdirs:
+        _now = time.time()
+        for f in jsonl_files:
+            subdir = session_subdirs.get(f.name[:-6])
+            if not subdir:
+                continue
+            runs = _session_workflow_runs(subdir, f.name[:-6], now=_now)
+            if runs:
+                workflow_runs_by_sid[f.name[:-6]] = runs
     if progress:
         progress(
             "repo",
@@ -19072,6 +19514,9 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "subagent_count": tail_meta.get("subagent_count", 0),
             "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
             "subagent_recent": tail_meta.get("subagent_recent", []),
+            # Workflow runs (Workflow tool) discovered from
+            # <sid>/subagents/workflows/<run>/ — see _session_workflow_runs.
+            "workflows": workflow_runs_by_sid.get(conv_id) or [],
             # Resolved PR state — filled in below via a parallel prime
             # pass. See find_all_conversations for the broader rationale.
             "pr_state": None,
@@ -19993,6 +20438,21 @@ def _resolve_conversation_path(conversation_id, repo_path=None):
             cand = d / parent / "subagents" / agent_name
             if cand.is_file():
                 return cand
+        # Workflow agents live one level deeper:
+        # <parent>/subagents/workflows/<run-id>/agent-<id>.jsonl. Scoped to
+        # the single parent dir, and only on this user-clicked open path —
+        # never on a list/scan path.
+        for d in dirs:
+            wf_root = d / parent / "subagents" / "workflows"
+            if not wf_root.is_dir():
+                continue
+            try:
+                for run_dir in wf_root.iterdir():
+                    cand = run_dir / agent_name
+                    if cand.is_file():
+                        return cand
+            except OSError:
+                continue
         return PROJECTS_ROOT / "_missing" / agent_name
     name = conversation_id + ".jsonl"
     if repo_path:
@@ -25269,6 +25729,266 @@ def _system_app_server_status():
         "miss_threshold": _CODEX_APP_SERVER_LIVENESS_MISS_THRESHOLD,
         "probe_timeout_s": _CODEX_APP_SERVER_LIVENESS_TIMEOUT,
     }
+
+
+def _app_server_status_preferring_worker():
+    """Codex app-server liveness, asked of the process that actually owns it.
+
+    _control_plane_routes_engines() defaults on, so the transport lives in the
+    worker's lazily-imported copy of `server`. Reading the dashboard's own
+    module global returned live:false on a healthy system and the System status
+    panel rendered "idle" while Codex sessions were mid-turn. One Unix-socket
+    round trip, no fork; falls back to the local view when no worker answers
+    (compatibility mode, where the dashboard really does own the transport).
+    """
+    try:
+        remote = _control_plane_request("system.app_server")
+    except Exception:
+        remote = {}
+    status = remote.get("status") if isinstance(remote, dict) and remote.get("ok") else None
+    return status if isinstance(status, dict) else _system_app_server_status()
+
+
+# ── /api/system/services ─────────────────────────────────────────────────────
+# One coalesced snapshot for the SERVER STATUS chip and the System status
+# panel. The chip polls every 20s and the open panel every 5s, so this must be
+# zero-fork on the warm path: no _ccc_last_updated_iso() (git log), no
+# build_system_health() (lsof/ps sweep), no per-row subprocess. Same
+# double-checked-lock shape as _system_health_snapshot.
+_SYSTEM_SERVICES_TTL = 3.0
+_system_services_cache = {"ts": 0.0, "payload": None}
+_system_services_lock = threading.Lock()
+
+# A single transient 500 should not paint the header yellow. The health bar
+# already treats 5 errors in the 15-minute window as critical; reuse that line
+# rather than inventing a second definition of "the dashboard is unhappy".
+_DASHBOARD_DEGRADED_ERRORS = 5
+
+# Crash-loop blindness: all three services are under launchd KeepAlive, so a
+# service that dies every 90s reads "online, started just now" forever and a
+# naive rollup calls that green. Remember the distinct start timestamps we have
+# observed and count how many landed in the last 10 minutes. Purely in-memory
+# and dashboard-side, which is honest about its own limit: it can see the
+# worker and WatchTower flap, and it cannot see itself flap, because its own
+# restart wipes this dict. Never claims a restart it did not observe.
+_SERVICE_START_WINDOW_S = 600.0
+_SERVICE_START_HISTORY_MAX = 24
+_SERVICE_START_HISTORY = {}
+_SERVICE_START_LOCK = threading.Lock()
+
+
+def _record_service_start(service_id, started_at):
+    """Log a distinct start timestamp; return how many landed in 10 minutes."""
+    try:
+        started_at = float(started_at)
+    except (TypeError, ValueError):
+        return 0
+    if started_at <= 0:
+        return 0
+    now = time.time()
+    with _SERVICE_START_LOCK:
+        seen = _SERVICE_START_HISTORY.setdefault(str(service_id), [])
+        # Second-level rounding: the worker reports float start times and the
+        # WatchTower pidfile mtime can wobble in the sub-second digits.
+        stamp = round(started_at)
+        if not seen or seen[-1] != stamp:
+            if stamp not in seen:
+                seen.append(stamp)
+                del seen[:-_SERVICE_START_HISTORY_MAX]
+        return sum(1 for s in seen if now - s <= _SERVICE_START_WINDOW_S)
+
+
+def _service_start_flap(service_id, started_at):
+    """`starts_10m` plus the threshold the UI paints yellow at."""
+    count = _record_service_start(service_id, started_at)
+    return {"starts_10m": count, "flap_threshold": 3}
+
+
+def _system_services_dashboard_entry():
+    now = time.time()
+    # O(live spawns) with Popen.poll(), never a fork and never O(all sessions).
+    busy = _dashboard_owned_active_executions()
+    # A Kimi turn owned by this process makes /api/restart answer 409, so say
+    # so up front instead of letting the user click into that wall.
+    blocking = any(
+        str((row or {}).get("engine") or "").lower() == "kimi" for row in busy
+    )
+    degraded = _recent_error_count() >= _DASHBOARD_DEGRADED_ERRORS
+    return {
+        "id": "dashboard",
+        "label": "Dashboard",
+        # If this handler ran at all, the dashboard is up. "offline" is not a
+        # verdict this row can ever honestly report about itself.
+        "state": "degraded" if degraded else "online",
+        "pid": os.getpid(),
+        "started_at": _SERVER_START_TS,
+        "started_at_approx": False,
+        "uptime_s": round(now - _SERVER_START_TS),
+        "version": __version__,
+        "recent_errors": _recent_error_count(),
+        "busy_count": len(busy),
+        "busy": busy,
+        "restart_endpoint": "/api/restart",
+        "restart_body": None,
+        "restart_blocking": blocking,
+    }
+
+
+def _system_services_worker_entry():
+    health = _control_plane_request("health")
+    health = health if isinstance(health, dict) else {}
+    worker = health.get("worker") if isinstance(health.get("worker"), dict) else {}
+    ok = bool(health.get("ok"))
+    available = bool(health.get("available", ok))
+    if ok:
+        state = "online"
+    elif available:
+        # Socket answered but health did not: the wedged shape that
+        # _retire_wedged_control_plane_worker exists for. A restart clears it.
+        state = "degraded"
+    else:
+        state = "offline"
+    started_at = worker.get("started_at")
+    try:
+        started_at = float(started_at) if started_at else None
+    except (TypeError, ValueError):
+        started_at = None
+    worker_version = worker.get("server_version")
+    active = int(health.get("active") or 0)
+    queued = int(health.get("queued") or 0)
+    drain = health.get("drain") if isinstance(health.get("drain"), dict) else {}
+    return {
+        "id": "worker",
+        "label": "Execution worker",
+        "state": state,
+        "pid": worker.get("pid"),
+        "started_at": started_at,
+        "started_at_approx": False,
+        "uptime_s": (
+            max(0, round(time.time() - started_at)) if started_at else None
+        ),
+        "version": worker_version,
+        # The classic "the fix did not work": server.py loaded in the worker is
+        # older than the one serving this page, so the worker still runs the
+        # bug. None means it never imported server, which is not stale.
+        "version_stale": bool(worker_version and worker_version != __version__),
+        "busy_count": active + queued,
+        "active": active,
+        "queued": queued,
+        "uncertain": int(health.get("uncertain") or 0),
+        "drain_enabled": bool(drain.get("enabled")),
+        "capabilities": worker.get("capabilities") or [],
+        "restart_endpoint": "/api/restart/worker",
+        "restart_body": None,
+        "restart_blocking": False,
+        **_service_start_flap("worker", started_at),
+    }
+
+
+def _system_services_watchtower_entry():
+    status = _watchtower_service_status(include_queues=True)
+    running = bool(status.get("running"))
+    state = status.get("state") or "stopped"
+    if state == "stopped":
+        state = "offline"
+    return {
+        "id": "watchtower",
+        "label": "WatchTower server",
+        "state": state,
+        "pid": status.get("pid"),
+        "started_at": status.get("started_at"),
+        "started_at_approx": bool(status.get("started_at_approx")),
+        "uptime_s": status.get("uptime_s"),
+        "port": status.get("port"),
+        "url": status.get("url"),
+        "installed": bool(status.get("installed")),
+        "api_ok": bool(status.get("api_ok")),
+        "command_verified": bool(status.get("command_verified")),
+        "pid_reused": bool(status.get("pid_reused")),
+        "queues_total": int(status.get("queues_total") or 0),
+        "open_total": int(status.get("open_total") or 0),
+        "stuck_total": int(status.get("stuck_total") or 0),
+        "workers_live": int(status.get("workers_live") or 0),
+        "busy_count": int(status.get("workers_live") or 0),
+        "api_probe_age_s": status.get("api_probe_age_s"),
+        "restart_endpoint": "/api/watchtower/service",
+        "restart_body": {"action": "restart" if running else "start"},
+        # This POST holds the HTTP thread under a global lock for up to ~33s,
+        # and it refuses outright when the pid could not be identity-checked.
+        "restart_blocking": bool(status.get("pid_reused")),
+        **_service_start_flap("watchtower", status.get("started_at")),
+    }
+
+
+def _system_services_app_server_entry(worker_entry):
+    status = _app_server_status_preferring_worker()
+    status = status if isinstance(status, dict) else {}
+    misses = int(status.get("consecutive_liveness_misses") or 0)
+    live = bool(status.get("live"))
+    if live:
+        state = "degraded" if misses > 0 else "online"
+    elif (worker_entry or {}).get("state") == "offline":
+        # No worker, no app-server. Saying "idle" there would imply a healthy
+        # lazy subprocess that simply has not been asked for anything yet.
+        state = "offline"
+    else:
+        # Lazily started on the first Codex request. Not a failure.
+        state = "idle"
+    return {
+        "id": "app_server",
+        "label": "Codex app-server",
+        "state": state,
+        "pid": status.get("pid"),
+        "started_at": None,
+        "started_at_approx": False,
+        "uptime_s": status.get("age_s"),
+        "kind": status.get("kind"),
+        "consecutive_liveness_misses": misses,
+        "miss_threshold": status.get("miss_threshold"),
+        "busy_count": 0,
+        # A subprocess of the worker, not a service: restarting it means
+        # restarting the worker, which the row above already offers.
+        "restart_endpoint": None,
+        "restart_body": None,
+        "restart_blocking": False,
+    }
+
+
+def _build_system_services_uncached():
+    worker = _system_services_worker_entry()
+    return {
+        "ok": True,
+        "generated_at": time.time(),
+        "dashboard_version": __version__,
+        "services": [
+            _system_services_dashboard_entry(),
+            worker,
+            _system_services_watchtower_entry(),
+            _system_services_app_server_entry(worker),
+        ],
+    }
+
+
+def build_system_services(force=False):
+    """Every service the System status panel renders, in one round trip."""
+    snap = _system_services_cache
+    now = time.time()
+    if (
+        not force and snap["payload"] is not None
+        and now - snap["ts"] < _SYSTEM_SERVICES_TTL
+    ):
+        return snap["payload"]
+    with _system_services_lock:
+        now = time.time()
+        if (
+            not force and snap["payload"] is not None
+            and now - snap["ts"] < _SYSTEM_SERVICES_TTL
+        ):
+            return snap["payload"]
+        payload = _build_system_services_uncached()
+        snap["payload"] = payload
+        snap["ts"] = time.time()
+        return payload
 
 
 def _schedule_codex_managed_app_server_warmup():
@@ -53225,9 +53945,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Cached 5s (build_system_health) so polling stays cheap.
             self.send_json(build_system_health())
         elif path == "/api/version":
+            # Additive only. Note _ccc_last_updated_iso() forks `git log -1`,
+            # so this endpoint must never be put on a timer — the System status
+            # panel polls /api/system/services instead, which is fork-free.
             self.send_json({
                 "version": __version__,
                 "last_updated": _ccc_last_updated_iso(),
+                "pid": os.getpid(),
+                "started_at": _SERVER_START_TS,
+                "uptime_s": round(time.time() - _SERVER_START_TS),
             })
         elif path == "/api/skills":
             # Read-only skills-ecosystem inventory (W86): CCC's own bundled
