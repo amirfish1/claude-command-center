@@ -1,0 +1,1 @@
+Added session start timing stats to the conversation — a collapsed panel showing how long each stage of a spawn took (engine thread creation, turn accepted, transcript written to disk, row visible in the sidebar, first paint). Turn it off with `CCC_SPAWN_STATS=0` or `localStorage["ccc-spawn-stats"]="0"`.

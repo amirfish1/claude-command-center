@@ -1,0 +1,1 @@
+Fixed a freshly spawned Codex session showing an empty pane for ~15s. CCC renders the transcript from the engine's rollout file, which does not carry your message until well after the turn starts; the prompt now echoes immediately from what CCC already holds.
