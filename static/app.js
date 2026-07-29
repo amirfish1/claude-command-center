@@ -47324,7 +47324,8 @@
     //   4. Close & announce (rarer)
     //   5. Jump / Pkood-kill (state-conditional)
     //   6. Footer cluster: Session ID + overflow menu
-    _captureRailEl(document.getElementById('cccBreadcrumb'));
+    // Keep the breadcrumb in the top bar so its pop-out action remains at
+    // the far right even while the status rail is open.
     _captureRailEl(document.getElementById('convStatus'));
     _captureRailEl(document.getElementById('liveBadgeConv'));
     _captureRailEl(document.getElementById('topbarTtsControl'));

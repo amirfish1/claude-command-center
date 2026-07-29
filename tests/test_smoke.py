@@ -5251,7 +5251,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_moveToHome('annotationNotesBtn', $settingsSlot);", app_js)
         self.assertIn("_moveToHome('cooPopButton',      $settingsSlot);", app_js)
         self.assertIn("cooMoveObserver.observe(document.body, { childList: true, subtree: true });", app_js)
-        self.assertIn("_captureRailEl(document.getElementById('cccBreadcrumb'));", app_js)
+        self.assertNotIn("_captureRailEl(document.getElementById('cccBreadcrumb'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('convStatus'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('topbarTtsControl'));", app_js)
         self.assertIn("_captureRailEl(document.getElementById('annotationStartBtn'));", app_js)
