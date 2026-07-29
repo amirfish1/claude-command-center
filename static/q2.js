@@ -2050,6 +2050,17 @@
     } catch (_) {}
   }
 
+  // On a phone the three panes become a swipeable master/detail sequence.
+  // Desktop retains the simultaneous three-column view, so keyboard and mouse
+  // workflows there never move the board unexpectedly.
+  function showMobileColumn(column) {
+    if (!window.matchMedia('(max-width: 700px)').matches) return;
+    var shell = document.querySelector('.q2-shell');
+    var pane = document.querySelector('.q2-col-' + column);
+    if (!shell || !pane) return;
+    shell.scrollTo({ left: pane.offsetLeft, behavior: 'smooth' });
+  }
+
   function selectQueue(name) {
     if (projectKey(name) === projectKey(state.queue)) return;
     state.queue = name;
@@ -2062,6 +2073,7 @@
     rememberSelection();
     state.log = [];
     renderAll();
+    showMobileColumn('tickets');
     loadQueueLearnings(name);
     loadLog(name).then(renderLogBar);
   }
@@ -2084,6 +2096,7 @@
     rememberSelection();
     renderQueues();
     renderTickets();
+    showMobileColumn('detail');
     loadDetail(ref);
   }
 

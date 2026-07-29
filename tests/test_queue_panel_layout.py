@@ -11,6 +11,18 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueuePanelLayout(unittest.TestCase):
+    def test_standalone_queue_uses_swipeable_master_detail_on_phone(self):
+        """A phone shows one readable Q2 pane and advances after selection."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn("function showMobileColumn(column)", q2_js)
+        self.assertIn("showMobileColumn('tickets');", q2_js)
+        self.assertIn("showMobileColumn('detail');", q2_js)
+        self.assertIn("@media (max-width: 700px)", q2_css)
+        self.assertIn("grid-template-columns: repeat(3, 100%);", q2_css)
+        self.assertIn("scroll-snap-type: x mandatory;", q2_css)
+
     def test_standalone_queue_keeps_recent_closed_tickets_visible(self):
         """Recent closes stay in context without expanding full history."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
