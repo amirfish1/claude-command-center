@@ -19,6 +19,11 @@ class TestQ2Annotate(unittest.TestCase):
         bridge = (ROOT / "static" / "q2-annotate-bridge.js").read_text(encoding="utf-8")
         self.assertIn("widgetButton.style.display = 'none';", bridge)
 
+    def test_widget_builds_selectors_by_traversing_to_a_stable_ancestor(self):
+        widget = (ROOT / "static" / "annotate-widget.js").read_text(encoding="utf-8")
+        self.assertIn("while (current && current !== document.body)", widget)
+        self.assertIn("segments.unshift", widget)
+
 
 if __name__ == "__main__":
     unittest.main()

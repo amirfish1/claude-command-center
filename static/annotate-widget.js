@@ -77,15 +77,28 @@
 
   // ---- element capture
   function bestSelector(el) {
-    if (el.id) return '#' + el.id;
-    var cls = Array.from(el.classList).slice(0, 2).join('.');
-    if (cls) return el.tagName.toLowerCase() + '.' + cls;
-    var parent = el.parentElement;
-    if (parent) {
-      var idx = Array.from(parent.children).indexOf(el) + 1;
-      return el.tagName.toLowerCase() + ':nth-child(' + idx + ')';
+    var segments = [];
+    var current = el;
+    while (current && current !== document.body) {
+      if (current.id) {
+        segments.unshift('#' + current.id);
+        break;
+      }
+      var cls = Array.from(current.classList).slice(0, 2).join('.');
+      var segment = current.tagName.toLowerCase() + (cls ? '.' + cls : '');
+      var parent = current.parentElement;
+      if (parent) {
+        var siblings = Array.from(parent.children).filter(function (sibling) {
+          return sibling.tagName === current.tagName;
+        });
+        if (siblings.length > 1) {
+          segment += ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')';
+        }
+      }
+      segments.unshift(segment);
+      current = parent;
     }
-    return el.tagName.toLowerCase();
+    return segments.join(' > ') || el.tagName.toLowerCase();
   }
 
   function captureElement(el) {
