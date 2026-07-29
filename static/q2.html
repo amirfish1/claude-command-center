@@ -17,6 +17,7 @@
     <span class="q2-spacer"></span>
     <span class="q2-note" id="q2Note" role="status" hidden></span>
     <span class="q2-stale" id="q2Stale" hidden>offline &mdash; retrying</span>
+    <button type="button" class="q2-btn" id="q2AnnotateBtn" title="Annotate an element and file it to the CCC queue">&#9873; Annotate</button>
     <button type="button" class="q2-btn" id="q2ThemeBtn" title="Toggle light / dark">Light</button>
   </header>
 
@@ -70,6 +71,12 @@
   <!-- Modal host: ticket composer and queue configuration both render here. -->
   <div class="q2-modal-host" id="q2Modal" hidden></div>
 
+  <script>
+    // q2 is a local CCC view, so annotations should feed its existing queue.
+    window.WT_ANNOTATE = { queue: 'CCC', endpoint: 'http://127.0.0.1:8787' };
+  </script>
+  <script src="/static/annotate-widget.js"></script>
+  <script src="/static/q2-annotate-bridge.js"></script>
   <script src="/static/q2.js"></script>
 </body>
 </html>
