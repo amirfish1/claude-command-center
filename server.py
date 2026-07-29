@@ -13261,6 +13261,15 @@ def _extract_tail_meta(path):
                                 tu_id = block.get("id")
                                 if tu_id:
                                     _pending_pr_ids.add(tu_id)
+                        elif name == "EnterWorktree":
+                            # Same drift signal as external_cd above, but for
+                            # the native worktree tool: it relocates
+                            # tool-execution cwd without ever running a Bash
+                            # `cd`/`git -C`, so the signal above never fires
+                            # for it on its own. Any call is enough to gate
+                            # _infer_effective_repo — see _scan_session_tool_paths
+                            # for how the resulting path itself gets resolved.
+                            meta["has_external_cd"] = True
                     # The last assistant message's tool_use is "pending" until
                     # a tool_result or user message clears it
                     if last_tool_name:

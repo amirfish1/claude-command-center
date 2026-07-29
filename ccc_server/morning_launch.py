@@ -408,6 +408,11 @@ def parse_conversation_by_sid(session_id, after_line=0):
 # false-positives as the session having relocated to that path.
 _BASH_CD_RE = re.compile(r"(?:^|\n|;|&&|\|\|)\s*cd\s+(?:--\s+)?([^\s;&|<>]+)")
 _BASH_GIT_C_RE = re.compile(r"(?:^|\n|;|&&|\|\|)\s*git\s+-C\s+([^\s;&|<>]+)")
+# The native EnterWorktree tool relocates tool-execution cwd without ever
+# running a Bash `cd`/`git -C`, so it needs its own relocation signal. A
+# bare `name` input doesn't tell us the resolved path up front — only the
+# tool_result text does ("Created worktree at <path> on branch <branch>").
+_ENTER_WORKTREE_RESULT_RE = re.compile(r"Created worktree at (\S+) on branch")
 
 _TIMELINE_COMMIT_RE = re.compile(r"\bgit\s+(?:-\w+\s+\S+\s+)*commit\b")
 _TIMELINE_COMMIT_MSG_RE = re.compile(r"-m\s+[\"']([^\"']{1,200})[\"']")
@@ -607,6 +612,7 @@ def _scan_session_tool_paths(session_id, max_events=400):
     file_paths = []
     cd_targets = []
     cd_seen = set()
+    pending_worktree_ids = set()
     seen_events = 0
     try:
         with open(jsonl, "r") as f:
@@ -620,37 +626,76 @@ def _scan_session_tool_paths(session_id, max_events=400):
                     ev = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if ev.get("type") != "assistant":
-                    continue
-                if ev.get("isSidechain"):
-                    continue
-                seen_events += 1
-                msg = _core._safe_parse_message(ev.get("message", {}))
-                for block in msg.get("content", []):
-                    if not isinstance(block, dict):
+                ev_type = ev.get("type")
+                if ev_type == "assistant":
+                    if ev.get("isSidechain"):
                         continue
-                    if block.get("type") != "tool_use":
-                        continue
-                    name = block.get("name", "")
-                    inp = block.get("input") or {}
-                    if name in ("Read", "Edit", "Write", "NotebookEdit"):
-                        fp = inp.get("file_path")
-                        if isinstance(fp, str) and fp.startswith("/"):
-                            file_paths.append(fp)
-                    elif name == "Bash":
-                        cmd = inp.get("command", "")
-                        if not isinstance(cmd, str):
+                    seen_events += 1
+                    msg = _core._safe_parse_message(ev.get("message", {}))
+                    for block in msg.get("content", []):
+                        if not isinstance(block, dict):
                             continue
-                        for m in _BASH_CD_RE.finditer(cmd):
-                            cd_path = m.group(1).strip("'\"")
-                            if (cd_path.startswith("/") or cd_path.startswith("~")) and cd_path not in cd_seen:
-                                cd_seen.add(cd_path)
-                                cd_targets.append(cd_path)
-                        for m in _BASH_GIT_C_RE.finditer(cmd):
-                            gc_path = m.group(1).strip("'\"")
-                            if (gc_path.startswith("/") or gc_path.startswith("~")) and gc_path not in cd_seen:
-                                cd_seen.add(gc_path)
-                                cd_targets.append(gc_path)
+                        if block.get("type") != "tool_use":
+                            continue
+                        name = block.get("name", "")
+                        inp = block.get("input") or {}
+                        if name in ("Read", "Edit", "Write", "NotebookEdit"):
+                            fp = inp.get("file_path")
+                            if isinstance(fp, str) and fp.startswith("/"):
+                                file_paths.append(fp)
+                        elif name == "Bash":
+                            cmd = inp.get("command", "")
+                            if not isinstance(cmd, str):
+                                continue
+                            for m in _BASH_CD_RE.finditer(cmd):
+                                cd_path = m.group(1).strip("'\"")
+                                if (cd_path.startswith("/") or cd_path.startswith("~")) and cd_path not in cd_seen:
+                                    cd_seen.add(cd_path)
+                                    cd_targets.append(cd_path)
+                            for m in _BASH_GIT_C_RE.finditer(cmd):
+                                gc_path = m.group(1).strip("'\"")
+                                if (gc_path.startswith("/") or gc_path.startswith("~")) and gc_path not in cd_seen:
+                                    cd_seen.add(gc_path)
+                                    cd_targets.append(gc_path)
+                        elif name == "EnterWorktree":
+                            # An explicit `path` input names the target
+                            # directly; a bare `name` only resolves once we
+                            # see the matching tool_result below.
+                            wt_path = inp.get("path")
+                            if isinstance(wt_path, str) and wt_path.startswith("/"):
+                                if wt_path not in cd_seen:
+                                    cd_seen.add(wt_path)
+                                    cd_targets.append(wt_path)
+                            else:
+                                tu_id = block.get("id")
+                                if tu_id:
+                                    pending_worktree_ids.add(tu_id)
+                elif ev_type == "user" and pending_worktree_ids:
+                    msg_content = ev.get("message", {}).get("content")
+                    if not isinstance(msg_content, list):
+                        continue
+                    for sub in msg_content:
+                        if not isinstance(sub, dict) or sub.get("type") != "tool_result":
+                            continue
+                        tu_id = sub.get("tool_use_id", "")
+                        if tu_id not in pending_worktree_ids:
+                            continue
+                        pending_worktree_ids.discard(tu_id)
+                        rc = sub.get("content")
+                        text = ""
+                        if isinstance(rc, str):
+                            text = rc
+                        elif isinstance(rc, list):
+                            text = "\n".join(
+                                b.get("text", "") for b in rc
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            )
+                        m = _ENTER_WORKTREE_RESULT_RE.search(text)
+                        if m:
+                            wt_path = m.group(1)
+                            if wt_path not in cd_seen:
+                                cd_seen.add(wt_path)
+                                cd_targets.append(wt_path)
     except OSError:
         return [], []
     return file_paths, cd_targets
