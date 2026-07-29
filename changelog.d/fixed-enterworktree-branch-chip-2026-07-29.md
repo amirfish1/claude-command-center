@@ -1,0 +1,1 @@
+Fixed the branch chip showing the launch-time branch (e.g. "main") for sessions that switched into a worktree via the native EnterWorktree tool instead of a shell `cd` — it now resolves the real worktree/branch.
