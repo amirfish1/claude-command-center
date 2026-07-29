@@ -8537,6 +8537,263 @@
   // collapsed by the tap before `click` fires (mobile/touch).
   let _ttsCapturedRange = null;
   let _ttsCapturedAt = 0;
+  // Selection-annotate: the Range + owning .event captured when the "+"
+  // trigger is shown, so its click handler doesn't need to re-read a
+  // possibly-already-collapsed selection.
+  let _annotateCapturedRange = null;
+  let _annotateCapturedEventEl = null;
+  let _annotateTriggerEl = null;
+  let _annotatePopoverEl = null;
+
+  function _selectionSingleEventInfo() {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    const text = String(sel).trim();
+    if (!text) return null;
+    const range = sel.getRangeAt(0);
+    const startNode = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer;
+    const endNode = range.endContainer.nodeType === 3 ? range.endContainer.parentElement : range.endContainer;
+    const startEvent = startNode && startNode.closest ? startNode.closest('.conv-pane .event') : null;
+    const endEvent = endNode && endNode.closest ? endNode.closest('.conv-pane .event') : null;
+    if (!startEvent || startEvent !== endEvent) return null;
+    if (startEvent.dataset.jsonlLine == null) return null;
+    return { range: range.cloneRange(), eventEl: startEvent, text: text };
+  }
+
+  function _hideAnnotateTrigger() {
+    if (_annotateTriggerEl && _annotateTriggerEl.parentNode) {
+      _annotateTriggerEl.parentNode.removeChild(_annotateTriggerEl);
+    }
+    _annotateTriggerEl = null;
+  }
+
+  function _showAnnotateTrigger(rect) {
+    _hideAnnotateTrigger();
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ccc-annotation-trigger';
+    btn.setAttribute('aria-label', 'Add annotation');
+    btn.textContent = '+';
+    btn.style.top = Math.max(4, rect.top - 28) + 'px';
+    btn.style.left = Math.min(window.innerWidth - 32, Math.max(4, rect.right - 8)) + 'px';
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const range = _annotateCapturedRange;
+      const eventEl = _annotateCapturedEventEl;
+      _hideAnnotateTrigger();
+      if (range && eventEl) _openAnnotatePopover(range, eventEl);
+    });
+    document.body.appendChild(btn);
+    _annotateTriggerEl = btn;
+  }
+
+  document.addEventListener('mouseup', (ev) => {
+    if (ev.target && ev.target.closest && ev.target.closest('.ccc-annotation-trigger, .ccc-annotation-popover')) return;
+    const info = _selectionSingleEventInfo();
+    if (!info) { _hideAnnotateTrigger(); return; }
+    const rect = info.range.getBoundingClientRect();
+    if (!rect || (!rect.width && !rect.height)) { _hideAnnotateTrigger(); return; }
+    _annotateCapturedRange = info.range;
+    _annotateCapturedEventEl = info.eventEl;
+    _showAnnotateTrigger(rect);
+  });
+
+  function _closeAnnotatePopover() {
+    document.removeEventListener('mousedown', _annotatePopoverOutsideHandler, true);
+    if (_annotatePopoverEl && _annotatePopoverEl.parentNode) {
+      _annotatePopoverEl.parentNode.removeChild(_annotatePopoverEl);
+    }
+    _annotatePopoverEl = null;
+  }
+
+  function _annotatePopoverOutsideHandler(ev) {
+    if (_annotatePopoverEl && !_annotatePopoverEl.contains(ev.target)) {
+      _closeAnnotatePopover();
+    }
+  }
+
+  function _openAnnotatePopover(range, eventEl) {
+    _closeAnnotatePopover();
+    const rect = range.getBoundingClientRect();
+    const pop = document.createElement('div');
+    pop.className = 'ccc-annotation-popover';
+    pop.style.top = Math.max(4, rect.bottom + 6) + 'px';
+    pop.style.left = Math.min(window.innerWidth - 260, Math.max(4, rect.left)) + 'px';
+    pop.innerHTML = '<textarea class="ccc-annotation-popover-input" placeholder="Add annotation…" rows="2"></textarea>';
+    document.body.appendChild(pop);
+    _annotatePopoverEl = pop;
+    const ta = pop.querySelector('textarea');
+    ta.focus();
+    ta.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        const note = ta.value.trim();
+        _closeAnnotatePopover();
+        if (note) _saveAnnotation(range, eventEl, note);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        _closeAnnotatePopover();
+      }
+    });
+    setTimeout(() => document.addEventListener('mousedown', _annotatePopoverOutsideHandler, true), 0);
+  }
+
+  const ANNOTATIONS_STORAGE_KEY = 'ccc-annotations';
+
+  function _annotationsForSession(sessionId) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(ANNOTATIONS_STORAGE_KEY) || '{}');
+      return (raw && typeof raw === 'object' && Array.isArray(raw[sessionId])) ? raw[sessionId] : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function _saveAnnotationsForSession(sessionId, list) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(ANNOTATIONS_STORAGE_KEY) || '{}');
+      const store = (raw && typeof raw === 'object') ? raw : {};
+      store[sessionId] = list;
+      localStorage.setItem(ANNOTATIONS_STORAGE_KEY, JSON.stringify(store));
+    } catch (_) {
+      // localStorage unavailable or quota exceeded — annotation still shows
+      // in-DOM and in the composer for this session; just won't survive reload.
+    }
+  }
+
+  function _annotationExcerpt(fullText) {
+    const trimmed = fullText.trim().replace(/\s+/g, ' ');
+    const LIMIT = 24;
+    if (trimmed.length <= LIMIT) return trimmed;
+    return trimmed.slice(0, LIMIT).trim() + '…';
+  }
+
+  function _annotationComposerText(jsonlLine, fullText, note) {
+    return '[L' + jsonlLine + '] "' + _annotationExcerpt(fullText) + '" — ' + note;
+  }
+
+  function _wrapRangeInAnnotationMark(range, id) {
+    const mark = document.createElement('span');
+    mark.className = 'ccc-annotation-mark';
+    mark.dataset.annotationId = id;
+    mark.appendChild(range.extractContents());
+    range.insertNode(mark);
+    return mark;
+  }
+
+  // Walks up from `node` until it finds an ancestor whose own computed
+  // display is not inline — used to find "the paragraph/block this
+  // selection lives in" so the note renders as its own block underneath
+  // it, not injected mid-sentence.
+  function _annotationBlockAnchor(node) {
+    let cur = node;
+    while (cur && cur.parentElement) {
+      if (window.getComputedStyle(cur).display !== 'inline') return cur;
+      cur = cur.parentElement;
+    }
+    return cur;
+  }
+
+  function _insertAnnotationNote(markEl, note, id, sessionId) {
+    const anchor = _annotationBlockAnchor(markEl);
+    const noteEl = document.createElement('div');
+    noteEl.className = 'ccc-annotation-note';
+    noteEl.dataset.annotationId = id;
+    noteEl.dataset.sessionId = sessionId;
+    const textEl = document.createElement('span');
+    textEl.className = 'ccc-annotation-note-text';
+    textEl.textContent = note;
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'ccc-annotation-note-delete';
+    delBtn.setAttribute('aria-label', 'Delete annotation');
+    delBtn.textContent = '×';
+    noteEl.appendChild(textEl);
+    noteEl.appendChild(delBtn);
+    anchor.parentNode.insertBefore(noteEl, anchor.nextSibling);
+    return noteEl;
+  }
+
+  function _saveAnnotation(range, eventEl, note) {
+    const paneEl = eventEl.closest('.conv-pane');
+    const paneId = paneEl ? paneEl.dataset.paneId : activePaneId();
+    const pane = paneByPaneId(paneId);
+    const sessionId = (pane && (sessionIdByConv[pane.conversationId] || pane.conversationId)) || paneId;
+    const jsonlLine = eventEl.dataset.jsonlLine;
+    const fullText = String(range);
+    const id = 'ann-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+
+    const markEl = _wrapRangeInAnnotationMark(range, id);
+    _insertAnnotationNote(markEl, note, id, sessionId);
+
+    const composerEl = (typeof composerInputForPane === 'function' && composerInputForPane(paneId)) || document.getElementById('convInput');
+    if (composerEl) insertAtCursor(composerEl, _annotationComposerText(jsonlLine, fullText, note));
+
+    const list = _annotationsForSession(sessionId);
+    list.push({ id: id, jsonlLine: jsonlLine, excerpt: _annotationExcerpt(fullText), note: note, createdAt: Date.now() });
+    _saveAnnotationsForSession(sessionId, list);
+  }
+
+  document.addEventListener('click', (ev) => {
+    const delBtn = ev.target && ev.target.closest && ev.target.closest('.ccc-annotation-note-delete');
+    if (!delBtn) return;
+    const noteEl = delBtn.closest('.ccc-annotation-note');
+    if (!noteEl) return;
+    _deleteAnnotation(noteEl.dataset.annotationId, noteEl.dataset.sessionId);
+  });
+
+  function _deleteAnnotation(id, sessionId) {
+    const escId = (window.CSS && CSS.escape) ? CSS.escape(id) : id;
+    const noteEl = document.querySelector('.ccc-annotation-note[data-annotation-id="' + escId + '"]');
+    if (noteEl && noteEl.parentNode) noteEl.parentNode.removeChild(noteEl);
+    const markEl = document.querySelector('.ccc-annotation-mark[data-annotation-id="' + escId + '"]');
+    if (markEl && markEl.parentNode) {
+      const parent = markEl.parentNode;
+      while (markEl.firstChild) parent.insertBefore(markEl.firstChild, markEl);
+      parent.removeChild(markEl);
+    }
+    const list = _annotationsForSession(sessionId).filter((a) => a.id !== id);
+    _saveAnnotationsForSession(sessionId, list);
+  }
+
+  function _findTextRangeInElement(root, needle) {
+    const clean = needle ? needle.replace(/…$/, '') : '';
+    if (!clean) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const idx = node.nodeValue.indexOf(clean);
+      if (idx !== -1) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + clean.length);
+        return range;
+      }
+    }
+    return null;
+  }
+
+  function _reconcileAnnotationsForPane(paneId) {
+    const pane = paneByPaneId(paneId);
+    if (!pane) return;
+    const sessionId = sessionIdByConv[pane.conversationId] || pane.conversationId;
+    if (!sessionId) return;
+    const list = _annotationsForSession(sessionId);
+    if (!list.length) return;
+    const $view = getConvViewForPane(paneId);
+    if (!$view) return;
+    for (const ann of list) {
+      const escId = (window.CSS && CSS.escape) ? CSS.escape(ann.id) : ann.id;
+      if ($view.querySelector('.ccc-annotation-mark[data-annotation-id="' + escId + '"]')) continue;
+      const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ann.jsonlLine)) : String(ann.jsonlLine);
+      const eventEl = $view.querySelector('.event[data-jsonl-line="' + escLine + '"]');
+      if (!eventEl) continue;
+      const found = _findTextRangeInElement(eventEl, ann.excerpt);
+      if (!found) continue;
+      const markEl = _wrapRangeInAnnotationMark(found, ann.id);
+      _insertAnnotationNote(markEl, ann.note, ann.id, sessionId);
+    }
+  }
   // Which conversation the active utterance belongs to. Decouples playback
   // from the focused pane: when the user navigates away mid-read we keep
   // speaking, and we only "rearm on new turn" (resetTtsOnNewTurn) when a
@@ -46229,6 +46486,11 @@
         followTail: _agentReplied && !(opts && (opts.initialLoad || opts.prepending)),
       });
     } catch (_) {}
+    try {
+      _reconcileAnnotationsForPane(paneId);
+    } catch (_) {
+      // Best-effort re-apply of stored annotations — never blocks rendering.
+    }
     return true;
   }
 

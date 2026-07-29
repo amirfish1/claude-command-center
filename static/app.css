@@ -13237,6 +13237,80 @@
   }
   .desktop-popover .pop-submenu[open] .pop-submenu-panel { display: flex; }
 
+  /* ── Selection annotate: "+" trigger, inline note popover, and the
+     persistent highlight + callout it produces in the transcript ── */
+  .ccc-annotation-trigger {
+    position: fixed;
+    z-index: 250;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  }
+  .ccc-annotation-trigger:hover { filter: brightness(1.1); }
+
+  .ccc-annotation-popover {
+    position: fixed;
+    z-index: 250;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px;
+    width: 240px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .ccc-annotation-popover-input {
+    width: 100%;
+    resize: none;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+
+  .ccc-annotation-mark {
+    background: rgba(255, 196, 0, 0.28);
+    border-bottom: 2px solid #ffc400;
+    border-radius: 2px;
+  }
+
+  .ccc-annotation-note {
+    margin: 6px 0;
+    padding: 6px 10px;
+    background: rgba(255, 196, 0, 0.12);
+    border-left: 3px solid #ffc400;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .ccc-annotation-note-text { flex: 1; white-space: pre-wrap; }
+  .ccc-annotation-note-delete {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .ccc-annotation-note-delete:hover { color: var(--text); }
+
   /* ── Cmd+K search modal (shares nsm-* visual language) ──
      A scrollable list of sessions filtered live by display_name /
      first_message. ↑/↓ to move, Enter to select, Esc to close. */
