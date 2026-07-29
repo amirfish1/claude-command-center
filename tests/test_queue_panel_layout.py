@@ -23,6 +23,18 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("grid-template-columns: repeat(3, 100%);", q2_css)
         self.assertIn("scroll-snap-type: x mandatory;", q2_css)
 
+    def test_phone_queue_navigation_has_explicit_back_controls(self):
+        """Swiping advances the master/detail panes, but phone users can also
+        return from tickets to queues and from a ticket to its list."""
+        q2_html = (PROJECT_ROOT / "static" / "q2.html").read_text(encoding="utf-8")
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-q2-mobile-back="queues"', q2_html)
+        self.assertIn('data-q2-mobile-back="tickets"', q2_html)
+        self.assertIn("showMobileColumn(back.getAttribute('data-q2-mobile-back'));", q2_js)
+        self.assertIn(".q2-mobile-back", q2_css)
+
     def test_standalone_queue_keeps_recent_closed_tickets_visible(self):
         """Recent closes stay in context without expanding full history."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")

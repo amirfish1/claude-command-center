@@ -2101,6 +2101,11 @@
   }
 
   document.addEventListener('click', function (e) {
+    var back = e.target.closest('[data-q2-mobile-back]');
+    if (back) {
+      showMobileColumn(back.getAttribute('data-q2-mobile-back'));
+      return;
+    }
     // The drain toggle sits INSIDE the queue row, so it has to be matched
     // first — otherwise the row's own handler swallows the click and the
     // toggle only ever selects the queue.
