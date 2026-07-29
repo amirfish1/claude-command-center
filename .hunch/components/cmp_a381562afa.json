@@ -1,0 +1,21 @@
+{
+  "id": "cmp_a381562afa",
+  "kind": "module",
+  "name": "Static",
+  "responsibility": "",
+  "paths": [
+    "static/**"
+  ],
+  "status": "active",
+  "owners": [],
+  "fragility": 0,
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.5,
+    "evidence": [
+      "static"
+    ]
+  },
+  "created_at": "2026-07-29T07:58:21.161Z",
+  "updated_at": "2026-07-29T07:58:21.161Z"
+}

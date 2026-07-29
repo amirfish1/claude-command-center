@@ -1,0 +1,41 @@
+{
+  "id": "dec_f078da38d5",
+  "title": "fix(codex): coalesce thread/list refresh globally, not per session",
+  "topic": null,
+  "status": "accepted",
+  "context": "thread/list is a global RPC -- one reply carries every thread the\napp-server knows -- but _codex_app_server_refresh_thread_status throttled\nit per session id. /api/session-status is polled once per visible Codex\nsession, so N open sessions meant N identical thread/list requests every\ncouple of seconds against the single serialized app-server stdio channel.\n\nThe backlog starves everything sharing that channel: activity.log shows\nthread/list replies landing 3-22s after their 3s timeout, plus PROBE",
+  "decision": "Changed server.py, tests/test_codex_thread_list_coalescing.py: added _codex_app_server_thread_is_known, ThreadListCoalescingTests, setUpClass, setUp, _reply, test_many_sessions_share_one_thread_list_call, fake_request, test_concurrent_pollers_do_not_queue_duplicate_requests; new dep(s): importlib, threading, time, unittest; 1 new file(s).",
+  "consequences": [
+    "Adds dependency: importlib, threading, time, unittest."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py",
+    "tests/test_codex_thread_list_coalescing.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "bb6e43fc",
+  "valid_from": "2026-07-28T07:17:34-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:bb6e43fc",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "tests/test_codex_thread_list_coalescing.py"
+    ],
+    "last_verified": "2026-07-29T07:57:42.481Z"
+  },
+  "date": "2026-07-28T07:17:34-07:00"
+}

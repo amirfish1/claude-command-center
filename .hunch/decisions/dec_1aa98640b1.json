@@ -1,0 +1,39 @@
+{
+  "id": "dec_1aa98640b1",
+  "title": "fix(annotate): preserve DOM context for picked targets",
+  "topic": null,
+  "status": "accepted",
+  "context": "What changed: added test_widget_builds_selectors_by_traversing_to_a_stable_ancestor.",
+  "decision": "Changed static/annotate-widget.js, tests/test_q2_annotate_static.py: added test_widget_builds_selectors_by_traversing_to_a_stable_ancestor.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "static/annotate-widget.js",
+    "tests/test_q2_annotate_static.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "e868c5c3",
+  "valid_from": "2026-07-28T19:50:46-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:e868c5c3",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/annotate-widget.js",
+      "tests/test_q2_annotate_static.py"
+    ],
+    "last_verified": "2026-07-29T07:57:41.620Z"
+  },
+  "date": "2026-07-28T19:50:46-07:00"
+}

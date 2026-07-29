@@ -1,0 +1,39 @@
+{
+  "id": "dec_5c600ac1cc",
+  "title": "fix(ui): add annotate to queue board",
+  "topic": null,
+  "status": "accepted",
+  "context": "What changed: added test_queue_first_topbar_has_annotate_action.",
+  "decision": "Changed static/app.js, tests/test_smoke.py: added test_queue_first_topbar_has_annotate_action.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "static/app.js",
+    "tests/test_smoke.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "2bd6f1ae",
+  "valid_from": "2026-07-28T18:47:33-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:2bd6f1ae",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js",
+      "tests/test_smoke.py"
+    ],
+    "last_verified": "2026-07-29T07:57:41.801Z"
+  },
+  "date": "2026-07-28T18:47:33-07:00"
+}

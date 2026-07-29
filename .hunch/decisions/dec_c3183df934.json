@@ -1,0 +1,39 @@
+{
+  "id": "dec_c3183df934",
+  "title": "feat(debug): spawn timeline stats on the conversation",
+  "topic": null,
+  "status": "accepted",
+  "context": "\"It took 60 seconds\" was unfalsifiable: a Codex spawn crosses CCC ->\napp-server -> Codex's rollout file on disk -> CCC's session list -> the\nbrowser, and the user-visible wait is the LAST boundary, not the first.\n\nRecords a mark at each boundary, in ms since CCC accepted the spawn, and\nrenders them as a collapsed panel at the top of the conversation. The\nsummary alone answers the question; expanding shows where the time went.\n\nThe browser posts the two marks the server cannot observe -- when the",
+  "decision": "Introduced server.py, static/app.js: added _spawn_timeline_enabled, _spawn_timeline_start, _spawn_timeline_mark, _spawn_timeline_get, _spawn_timeline_save, _spawn_timeline_load, watch_rollout, spawnStatsEnabled.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py",
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "abe70098",
+  "valid_from": "2026-07-28T10:44:15-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:abe70098",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "static/app.js"
+    ],
+    "last_verified": "2026-07-29T07:57:42.271Z"
+  },
+  "date": "2026-07-28T10:44:15-07:00"
+}

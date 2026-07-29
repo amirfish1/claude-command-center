@@ -1,0 +1,75 @@
+{
+  "id": "dec_25f921bb7b",
+  "title": "refactor(ui): remove queue-first board",
+  "topic": null,
+  "status": "accepted",
+  "context": "What changed: removed qFirstEnabled, _qfView, _qfActive, _qfSetEnabled, _qfShow, _qfHide, _qfOnConversationOpen, _qfQueueModels.",
+  "decision": "Refactored static/app.js, tests/test_qfirst_static.py, tests/test_smoke.py: removed qFirstEnabled, _qfView, _qfActive, _qfSetEnabled, _qfShow, _qfHide, _qfOnConversationOpen, _qfQueueModels.",
+  "consequences": [
+    "Removes qFirstEnabled, _qfView, _qfActive, _qfSetEnabled, _qfShow, _qfHide, _qfOnConversationOpen, _qfQueueModels, model, _qfQueueState, _qfItemsForQueue, _qfStatus, _qfTicketSession, _qfCrumbs, _qfTopbar, pinned, _qfStatePill, _qfQueuesHtml, _qfTicketRow, _qfTicketsHtml, _qfTimelineHtml, _qfPropSelect, _qfTicketHtml, _qfRender, _qfBust, _qfPost, _qfSaveField, _qfAddTicket, _qfWire, _qfEnsureChrome, _qfInit — potential breaking change for callers."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "static/app.js",
+    "tests/test_qfirst_static.py",
+    "tests/test_smoke.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "9d5f4dc0",
+  "valid_from": "2026-07-28T19:03:22-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [
+      "qFirstEnabled",
+      "_qfView",
+      "_qfActive",
+      "_qfSetEnabled",
+      "_qfShow",
+      "_qfHide",
+      "_qfOnConversationOpen",
+      "_qfQueueModels",
+      "model",
+      "_qfQueueState",
+      "_qfItemsForQueue",
+      "_qfStatus",
+      "_qfTicketSession",
+      "_qfCrumbs",
+      "_qfTopbar",
+      "pinned",
+      "_qfStatePill",
+      "_qfQueuesHtml",
+      "_qfTicketRow",
+      "_qfTicketsHtml",
+      "_qfTimelineHtml",
+      "_qfPropSelect",
+      "_qfTicketHtml",
+      "_qfRender",
+      "_qfBust",
+      "_qfPost",
+      "_qfSaveField",
+      "_qfAddTicket",
+      "_qfWire",
+      "_qfEnsureChrome",
+      "_qfInit"
+    ],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:9d5f4dc0",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js",
+      "tests/test_qfirst_static.py",
+      "tests/test_smoke.py"
+    ],
+    "last_verified": "2026-07-29T07:57:41.797Z"
+  },
+  "date": "2026-07-28T19:03:22-07:00"
+}

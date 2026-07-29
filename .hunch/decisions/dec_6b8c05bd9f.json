@@ -1,0 +1,37 @@
+{
+  "id": "dec_6b8c05bd9f",
+  "title": "chore(release): v5.17.1",
+  "topic": null,
+  "status": "accepted",
+  "context": "Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n",
+  "decision": "Changed code in server.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "1a027a56",
+  "valid_from": "2026-07-28T14:40:01-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:1a027a56",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py"
+    ],
+    "last_verified": "2026-07-29T07:57:41.849Z"
+  },
+  "date": "2026-07-28T14:40:01-07:00"
+}

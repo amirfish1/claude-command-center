@@ -1,0 +1,21 @@
+{
+  "id": "cmp_ebe51ab216",
+  "kind": "module",
+  "name": "Ingesters",
+  "responsibility": "",
+  "paths": [
+    "ingesters/**"
+  ],
+  "status": "active",
+  "owners": [],
+  "fragility": 0,
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.5,
+    "evidence": [
+      "ingesters"
+    ]
+  },
+  "created_at": "2026-07-29T07:58:21.161Z",
+  "updated_at": "2026-07-29T07:58:21.161Z"
+}
