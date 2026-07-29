@@ -71,12 +71,10 @@
   <!-- Modal host: ticket composer and queue configuration both render here. -->
   <div class="q2-modal-host" id="q2Modal" hidden></div>
 
-  <script>
-    // q2 is a local CCC view, so annotations should feed its existing queue.
-    window.WT_ANNOTATE = { queue: 'CCC', endpoint: 'http://127.0.0.1:8787' };
-  </script>
-  <script src="/static/annotate-widget.js"></script>
-  <script src="/static/q2-annotate-bridge.js"></script>
   <script src="/static/q2.js"></script>
+  <script src="/static/q2-annotation.js"></script>
+  <script>
+    window.Q2Annotation.attach(document.getElementById('q2AnnotateBtn'), {});
+  </script>
 </body>
 </html>
