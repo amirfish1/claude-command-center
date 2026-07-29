@@ -19,3 +19,10 @@ class TestWatchtowerActivityLogStatic(unittest.TestCase):
 
         self.assertIn("'<span class=\"wl-meta\">'", app_js)
         self.assertIn(".wl-meta {", app_css)
+
+    def test_activity_log_timestamps_are_formatted_in_the_browser_timezone(self):
+        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function _activityLogTimestampLocal", app_js)
+        self.assertIn("replace(' UTC', 'Z').replace(' ', 'T')", app_js)
+        self.assertIn("toLocaleString()", app_js)

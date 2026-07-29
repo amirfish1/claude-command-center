@@ -44348,10 +44348,16 @@
     REQUEST: 'is-info',
   };
 
+  function _activityLogTimestampLocal(ts) {
+    const raw = String(ts || '');
+    const parsed = new Date(raw.replace(' UTC', 'Z').replace(' ', 'T'));
+    return Number.isNaN(parsed.getTime()) ? raw.replace(' UTC', '') : parsed.toLocaleString();
+  }
+
   function _activityLogRowHtml(ev) {
     const cls = _ACTIVITY_LOG_VERB_CLASS[ev.verb] || '';
     return '<div class="activity-log-row">'
-      + '<span class="activity-log-ts">' + escapeHtml((ev.ts || '').replace(' UTC', '')) + '</span>'
+      + '<span class="activity-log-ts">' + escapeHtml(_activityLogTimestampLocal(ev.ts)) + '</span>'
       + '<span class="activity-log-verb ' + cls + '">' + escapeHtml(ev.verb || '') + '</span>'
       + '<span class="activity-log-detail">' + escapeHtml(ev.detail || '') + '</span>'
       + '</div>';
@@ -46504,6 +46510,7 @@
     const $statusRail = document.getElementById('statusRail');
     const $statusRailResizer = document.getElementById('statusRailResizer');
     const $statusRailRestore = document.getElementById('statusRailRestoreBtn');
+    const $popoutSidePanel = document.getElementById('popoutSidePanelBtn');
     const STATUS_RAIL_DEFAULT_WIDTH = 260;
     const STATUS_RAIL_MIN_WIDTH = 220;
     const FILE_VIEWER_RAIL_EXPAND_FACTOR = 2.5;
@@ -46624,6 +46631,11 @@
         if (typeof window._cccApplyToolbarRailLayout === 'function') {
           window._cccApplyToolbarRailLayout();
         }
+      });
+    }
+    if ($popoutSidePanel) {
+      $popoutSidePanel.addEventListener('click', () => {
+        if ($statusRailRestore) $statusRailRestore.click();
       });
     }
     if ($statusRail && $statusRailResizer) {
