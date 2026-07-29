@@ -4912,11 +4912,11 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 0 0 auto;", activity_css)
 
-    def test_queue_first_topbar_has_annotate_action(self):
-        """Queue-first keeps an annotation entry point when it hides the rail."""
+    def test_queue_first_board_is_removed(self):
+        """The retired Queue-first board must not remain reachable in the app."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn('data-qf-action="annotate-page"', app_js)
-        self.assertIn("if (act === 'annotate-page') { annStart(); return; }", app_js)
+        self.assertNotIn("Q-FIRST (W88)", app_js)
+        self.assertNotIn("ccc_mode=queues", app_js)
 
     def test_right_rail_hides_conversation_top_chrome(self):
         """Right-rail mode should not leave old top chrome above the
@@ -5201,7 +5201,7 @@ class TestServerImports(unittest.TestCase):
         """A submitted add stays visible as a spinner row until the canonical item arrives."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         add_start = app_js.index("async function _addQueueTicket()")
-        add_body = app_js[add_start:app_js.index("// ── Q-FIRST", add_start)]
+        add_body = app_js[add_start:]
 
         self.assertIn("const _uxqPendingQueueAdds = new Map();", app_js)
         self.assertIn("fq-pending-add", app_js)
@@ -5218,7 +5218,7 @@ class TestServerImports(unittest.TestCase):
         helper_end = app_js.index("async function _addQueueTicket()", helper_start)
         helper = app_js[helper_start:helper_end]
         add_start = helper_end
-        add_body = app_js[add_start:app_js.index("// ── Q-FIRST", add_start)]
+        add_body = app_js[add_start:]
 
         self.assertIn("_uxqSetScopeOverride(project);", helper)
         self.assertIn("_uxqSetFilter('open');", helper)
@@ -6424,16 +6424,6 @@ class TestRunScript(unittest.TestCase):
         self.assertIn("claude-command-center", text)
         self.assertIn("git clone", text)
         self.assertIn("run.ps1", text)
-
-
-class TestQFirstBootRestore(unittest.TestCase):
-    def test_qfirst_url_mode_survives_boot_restore(self):
-        """?ccc_mode=queues must win over the boot conversation restore — the
-        board vanished ~1s after load because restoreLastConversation opened a
-        conversation, which always closes the board."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("QFIRST_URL_MODE && _qfBootRestore", app_js)
-        self.assertIn("_qfBootRestore = true;", app_js)
 
 
 class TestPlatformDocs(unittest.TestCase):
