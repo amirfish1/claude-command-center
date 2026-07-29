@@ -1854,6 +1854,16 @@
     overflow-y: auto !important;
   }
   .conv-input-bar[data-composer-mode="minimize"] .expand-btn { color: var(--accent); }
+  /* Minimize collapses the whole composer area, not just the textarea: the
+     stale-session rail/panel (children of the bar) and the Goal pill (a
+     sibling before the bar, reached via the shared .conv-pane parent). */
+  .conv-input-bar.is-composer-minimized .f2c-rail,
+  .conv-input-bar.is-composer-minimized .f2c-panel {
+    display: none !important;
+  }
+  .conv-pane.is-composer-minimized > .conv-goal-strip {
+    display: none !important;
+  }
 
   /* Context ring (kimi-web ContextRing parity) inside the usage pill. */
   .ctx-ring { vertical-align: -2.5px; margin-right: 4px; }

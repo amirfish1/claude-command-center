@@ -9751,6 +9751,12 @@
     bar.dataset.composerMode = mode === 'regular' ? '' : mode;
     bar.classList.toggle('is-composer-expanded', mode === 'expand');
     bar.classList.toggle('is-composer-minimized', mode === 'minimize');
+    // Minimize means minimize — also collapse the stale-session rail/panel
+    // (inside the bar) and the Goal pill (a sibling before it, reached via
+    // the shared .conv-pane parent) so the whole composer area shrinks to
+    // just the textarea + icon row, not only the textarea itself.
+    const pane = bar.closest('.conv-pane');
+    if (pane) pane.classList.toggle('is-composer-minimized', mode === 'minimize');
     const btn = document.getElementById('convExpandBtn');
     if (btn) {
       btn.setAttribute('aria-pressed', mode !== 'regular' ? 'true' : 'false');
