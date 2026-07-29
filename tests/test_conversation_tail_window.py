@@ -6,7 +6,6 @@ json.loads + parses a slice — `tail=N` (last N lines, for the initial open) or
 {events,last_line} plus `first_line` and `truncated_before`.
 """
 import json
-from pathlib import Path
 
 import pytest
 

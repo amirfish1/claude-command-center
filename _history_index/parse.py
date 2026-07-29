@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator, Optional
+from typing import Iterator, Optional
 
 SEARCHABLE_TYPES = {"user", "assistant", "summary", "custom-title", "last-prompt"}
 

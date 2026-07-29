@@ -1681,33 +1681,6 @@ def _token_optimizer_quality_grade(score):
     return "F"
 
 
-def _token_optimizer_quality_summary(data):
-    breakdown = data.get("breakdown") if isinstance(data, dict) else {}
-    if not isinstance(breakdown, dict):
-        return ""
-    scored = []
-    neutral = []
-    for item in breakdown.values():
-        if not isinstance(item, dict):
-            continue
-        detail = str(item.get("detail") or "").strip()
-        if not detail:
-            continue
-        try:
-            score = float(item.get("score"))
-        except (TypeError, ValueError):
-            score = 100.0
-        if score < 100:
-            scored.append((score, detail))
-        else:
-            neutral.append(detail)
-    scored.sort(key=lambda x: x[0])
-    details = [detail for _score, detail in scored[:3]]
-    if not details:
-        details = neutral[:2]
-    return "; ".join(details)
-
-
 # _TOKEN_OPTIMIZER_QUALITY_INDEX / _RUNTIME_STATE live in server.py (tests
 # patch them through the server module); read and rebound via _core.
 _TOKEN_OPTIMIZER_QUALITY_INDEX_LOCK = threading.Lock()

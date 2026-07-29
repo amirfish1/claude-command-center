@@ -315,12 +315,6 @@
     };
   }
 
-  function countsLine(f, done, types) {
-    var c = countParts(f, done, types);
-    return [c.needsInput, c.wip, c.parked, c.open, c.done].filter(Boolean)
-      .join('<span class="q2-n-sep" aria-hidden="true">·</span>');
-  }
-
   // ── auto-drain toggle ────────────────────────────────────────────────────
   // /api/queue/status is cached server-side for 15s with stale-while-
   // revalidate, so for up to 15s after a successful write the poll still
@@ -385,32 +379,6 @@
       delete drainOverride[k];
       delete typesOverride[k];
       note('Could not change drain policy for ' + queue + ': ' + e.message);
-    } finally {
-      delete drainPending[k];
-      renderQueues();
-    }
-  }
-
-  async function setAutoDrain(queue, next) {
-    var k = projectKey(queue);
-    if (drainPending[k]) return;
-    drainPending[k] = true;
-    renderQueues();                       // paint the spinner immediately
-    try {
-      var res = await fetch('/api/queue/drain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queue: queue, auto_drain: next }),
-      });
-      var data = await res.json().catch(function () { return {}; });
-      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
-      // Trust the value the server echoes back, not the one we asked for.
-      drainOverride[k] = !!data.auto_drain;
-    } catch (e) {
-      // Leave no override: the row falls back to the server's value, which is
-      // the honest thing to show when the write did not land.
-      delete drainOverride[k];
-      note('Could not change auto-drain for ' + queue + ': ' + e.message);
     } finally {
       delete drainPending[k];
       renderQueues();
@@ -486,22 +454,6 @@
 
   // Row 1 carries only configuration (what this queue IS); the counts line
   // below carries state (what is in it right now).
-  function queueChips(q) {
-    var on = effectiveAutoDrain(q);
-    var types = Array.isArray(q.claim_types)
-      ? q.claim_types.filter(function (t) { return t === 'bug' || t === 'feature'; }) : [];
-    // "auto" alone hid the policy that matters most: WHAT it drains. A
-    // bugs-only queue full of features is doing exactly what it was told.
-    var suffix = types.length && types.length < 2
-      ? ' \u00b7 ' + (types[0] === 'bug' ? 'bugs' : 'features') : '';
-    return [on
-      ? { k: 'auto-on', label: 'auto' + suffix,
-          tip: 'Auto-drain is ON'
-            + (types.length ? ', claiming ' + types.join(' + ') + ' only' : ' for every ticket type')
-            + '. Click to turn it off.' }
-      : { k: 'auto-off', label: 'manual', tip: 'Auto-drain is OFF. Nothing runs here until you start a worker. Click to turn it on.' }];
-  }
-
   // "stuck" on its own tells the user nothing actionable. The server sets it
   // when a queue has claimable work, auto-drain on, and no live worker — but
   // there are two very different causes, and the fix differs per cause.
@@ -762,8 +714,6 @@
   var DONE_WINDOW_MS = 60 * 60 * 1000;
   var DONE_WINDOW_LABEL = '1h';
   var STACK_CAP = 14;                    // drawn cards before it becomes "+N"
-
-  var LS_CONV_OPEN = 'ccc-q2-conv-open';
   // Collapsed by default, and RESET on every ticket change. Persisting "open"
   // meant one expand made every subsequent ticket boot an embedded dashboard
   // on click; the preference is per-ticket, not global.
@@ -1377,11 +1327,6 @@
         + (item.claimed_by ? '<span class="q2-tl-who">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : ''), '');
     }
     return '<div class="q2-tl">' + rows + '</div>';
-  }
-
-  function propRow(k, valHtml) {
-    if (!valHtml) return '';
-    return '<div class="q2-prop-k">' + esc(k) + '</div><div class="q2-prop-v">' + valHtml + '</div>';
   }
 
   // Editable chips replace the property dropdowns. The values are already

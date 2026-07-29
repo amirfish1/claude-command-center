@@ -4134,8 +4134,6 @@
   }
 
   // Back-compat alias — older call sites may still reference the modal name.
-  function _relayedQuestionModalEl() { return _relayedQuestionInlineEl(); }
-
   function closeRelayedQuestionInline() {
     document.querySelectorAll('[data-role="ccc-inline-question"]').forEach(function (n) {
       n.remove();
@@ -9566,13 +9564,9 @@
   // for the next turn. Initialize from the persisted value.
   const $convTtsRate = document.getElementById('convTtsRate');
   const $convTtsRateLabel = document.getElementById('convTtsRateLabel');
-  const $convTtsRateControl = document.getElementById('convTtsRateControl');
   function _syncTtsRateUi() {
     if ($convTtsRate) $convTtsRate.value = String(_ttsRate);
     if ($convTtsRateLabel) $convTtsRateLabel.textContent = _ttsRate.toFixed(2) + '×';
-  }
-  function _setTtsRateControlVisible(visible) {
-    if ($convTtsRateControl) $convTtsRateControl.hidden = !visible;
   }
   function _restartTtsAtCurrentPosition() {
     // Only meaningful while playback is active. Cancel the in-flight
@@ -11887,7 +11881,6 @@
       return;
     }
     panel.style.display = '';
-    const wfRunning = workflows.filter(r => r && r.status === 'running').length;
     countEl.textContent = inFlight > 0 ? (inFlight + ' / ' + total) : String(total);
     countEl.title = inFlight > 0
       ? (inFlight + ' running, ' + total + ' total spawned this session')
@@ -16810,28 +16803,6 @@
     return repoPath ? (_pathLeaf(repoPath) || repoPath) : '';
   }
 
-  function flowDraftInspectorContent(draft) {
-    const title = flowDraftPrompt(draft) || 'Draft session';
-    const parentLabel = flowDraftParentLabel(draft);
-    const created = flowTimestampSec(draft && draft.created_at);
-    const updated = flowTimestampSec(draft && (draft.updated_at || draft.created_at));
-    const lines = [
-      '# ' + title,
-      '',
-      '- Type: Draft session',
-      '- Status: draft',
-      parentLabel ? '- Parent: ' + parentLabel : '',
-      draft && draft.repo_path ? '- Repo: ' + draft.repo_path : '',
-      created ? '- Created: ' + new Date(created * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '',
-      updated ? '- Updated: ' + new Date(updated * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '',
-      '',
-      '## Prompt',
-      '',
-      title,
-    ];
-    return lines.filter(line => line !== '').join('\n');
-  }
-
   function flowDraftInspectorPayload(draftId) {
     const draft = (flowDraftSessions || []).find(d => d && d.id === draftId);
     if (!draft) return null;
@@ -17316,15 +17287,6 @@
     }).sort((a, b) => (b.newest - a.newest) || a.label.localeCompare(b.label));
 
     const records = [];
-    // 5 grid cells past the rightmost / bottom-most node's edge is
-    // the "unreachable border" budget — anything past the canvas is
-    // the .flow-board background (visually distinct via the dashed
-    // border on .flow-canvas) and you can't pan into it. Per user
-    // request 2026-06-06: keep that border tight and marked so the
-    // canvas doesn't extend forever past content.
-    const FLOW_NODE_W_HINT = 260;
-    const FLOW_NODE_H_HINT = 96;
-    const FLOW_CANVAS_EDGE_PAD = 5 * 32;  // 5 grid cells
     // Helper used by the drop handler to nudge a just-dropped node
     // off any other node it overlaps. Pushes in the cheapest cardinal
     // direction each iteration; caps at 50 iters so degenerate cases
@@ -19312,7 +19274,6 @@
   let _gcReaderSessionIds = [];
   let _gcAgentFallbackNames = {};
   let _gcReplayData = null;
-  let _gcLastMessageCount = 0;
 
   let _gcReplayActive = false;
   let _gcReplaySpeed = 1;
@@ -28059,31 +28020,6 @@
     // Rows reuse _renderRow so live pills / branch badges / titles match the
     // rest of the list; folder chips follow the same suppress rule as the
     // other flat sections.
-    const _renderActionSection = (cards, { kind, label, collapseKey, hint }) => {
-      if (!cards.length) return '';
-      const collapsed = localStorage.getItem(collapseKey) === '1';
-      const arrow = collapsed ? '▸' : '▾';
-      const rows = _flatRowsWithSeparators(cards, { lifecycleContext: 'active', suppressFolderChip: _isSpecificFolderFilter });
-      // CCC-178: surface WHY a session lands here. The header carries the
-      // criteria as a tooltip, plus a small ⓘ glyph (its own tooltip) so the
-      // logic is discoverable instead of opaque.
-      const _hintAttr = hint ? ' title="' + escapeAttr(hint) + '"' : '';
-      const _hintGlyph = hint
-        ? '<span class="conv-' + kind + '-info" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '">&#9432;</span>'
-        : '';
-      return '<div class="conv-' + kind + '-section' + (collapsed ? ' collapsed' : '') + '"'
-        +   ' data-role="' + kind + '-section">'
-        + '<button type="button" class="conv-' + kind + '-header" data-role="' + kind + '-toggle"'
-        +   _hintAttr
-        +   ' aria-expanded="' + (!collapsed) + '">'
-        +   '<span class="conv-' + kind + '-arrow">' + arrow + '</span>'
-        +   '<span class="conv-' + kind + '-label">' + escapeHtml(label) + '</span>'
-        +   '<span class="conv-' + kind + '-count">' + cards.length + '</span>'
-        +   _hintGlyph
-        + '</button>'
-        + '<div class="conv-' + kind + '-list">' + rows + '</div>'
-        + '</div>';
-    };
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
     // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
     // MERGE the OTHER repos' OPEN issues into the section — do NOT replace
@@ -46115,7 +46051,6 @@
   function setStatusRailTab(tab) {
     const rail = document.getElementById('statusRail');
     if (!rail) return;
-    const filesPane = rail.querySelector('#statusRailFilesPane');
     const queuePane = rail.querySelector('#statusRailQueuePane');
     const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
@@ -47114,8 +47049,6 @@
     const sel = (window.CSS && CSS.escape) ? CSS.escape(repo) : repo.replace(/"/g, '\\"');
     return document.querySelector('.conv-folder-ship[data-ship-repo="' + sel + '"]');
   }
-
-  const _SHIP_DONE_PHASES = ['pushed', 'deployed', 'error', 'needs_you', 'deploy_error', 'diverged'];
 
   function _shipDismissLog() {
     _shipLogActive = false;
@@ -48787,10 +48720,6 @@
   let _uxFixesQueueMetaPromise = null;
   let _uxFixesQueueMetaLoadedAt = 0;
   const UX_FIXES_QUEUE_META_TTL_MS = 15 * 1000;
-
-  function _normalizeUxFixesSessionId(value) {
-    return String(value || '').trim().toLowerCase();
-  }
 
   // A worker may claim with EITHER its real session UUID or its made-up CCC
   // name (e.g. "BYM UX-fixes-queue"). To let the badge match either, reduce
@@ -53815,12 +53744,6 @@
         return null;
       });
     return annTabCapturePending;
-  }
-
-  async function annAcquireTabCaptureStream() {
-    const pending = annBeginTabCaptureRequest();
-    if (!pending) return null;
-    return pending;
   }
 
   async function annCaptureTabRegionB64(rect) {

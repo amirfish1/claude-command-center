@@ -6,9 +6,7 @@ full session spawn — we just want to prove the hook runs, exports the
 documented env vars, and tolerates absent/failing scripts.
 """
 
-import os
 import stat
-import subprocess
 import sys
 import tempfile
 from pathlib import Path

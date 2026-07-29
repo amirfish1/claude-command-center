@@ -4881,7 +4881,10 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn('id="filesViewToggle"', index_html)
         self.assertIn("function setStatusRailTab(tab)", app_js)
         self.assertIn("rail.querySelector('#statusRailMetadataPane')", app_js)
-        self.assertIn("rail.querySelector('#statusRailFilesPane')", app_js)
+        # No files-pane handle: panes are shown/hidden by the generic
+        # `[data-rail-pane]` loop, so only the panes with extra per-tab work
+        # (metadata, queue) get a named reference. The pane's existence is
+        # asserted against index.html above.
         self.assertIn("rail.querySelector('#statusRailQueuePane')", app_js)
         self.assertNotIn("rail.querySelector('#statusRailActivityPane')", app_js)
         self.assertIn("const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';", app_js)

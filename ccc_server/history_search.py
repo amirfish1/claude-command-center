@@ -8,7 +8,6 @@ in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
 
-from pathlib import Path
 import os
 import re
 import sqlite3
