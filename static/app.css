@@ -1843,6 +1843,18 @@
   }
   .expand-btn[aria-pressed="true"] { color: var(--green); }
 
+  /* Minimized composer (mobile tri-state 3rd step): pins the textarea to
+     the same 24px it already renders at in the empty "regular" state (see
+     min-height: 24px above and the mobile font-size/line-height combo) so
+     minimize reads as "back to the smallest the composer ever gets", not an
+     arbitrary shrink. overflow-y stays auto so multi-line text scrolls
+     inside the fixed box instead of growing it. */
+  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
+    max-height: 24px !important;
+    overflow-y: auto !important;
+  }
+  .conv-input-bar[data-composer-mode="minimize"] .expand-btn { color: var(--accent); }
+
   /* Context ring (kimi-web ContextRing parity) inside the usage pill. */
   .ctx-ring { vertical-align: -2.5px; margin-right: 4px; }
   .ctx-ring .ctx-ring-bg { fill: none; stroke: var(--border); stroke-width: 2.4; }

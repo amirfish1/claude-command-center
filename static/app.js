@@ -9637,9 +9637,9 @@
     _autosizeRaf = requestAnimationFrame(() => {
       _autosizeRaf = 0;
       $convInput.style.height = 'auto';
-      const expanded = $convInputBar && $convInputBar.classList.contains('is-composer-expanded');
-      const max = expanded
-        ? Math.round(window.innerHeight * 0.7)
+      const mode = ($convInputBar && $convInputBar.dataset.composerMode) || 'regular';
+      const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
+        : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
       $convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';
     });
@@ -9740,22 +9740,41 @@
     _autosizeConvInput();
   }
 
-  // Expanded composer (kimi-web maximize parity): 30-70vh multi-line mode.
-  function setComposerExpanded(on) {
+  // Composer sizing (kimi-web maximize parity, extended for mobile).
+  // Desktop: binary regular <-> expand (30-70vh multi-line mode), unchanged.
+  // Mobile (isMobile()): tri-state cycle regular -> expand -> minimize -> regular,
+  // where minimize pins the textarea to its smallest ("regular", empty) height —
+  // see the CSS comment on .is-composer-minimized for why 24px specifically.
+  function setComposerMode(mode) {
     const bar = $convInputBar;
     if (!bar) return;
-    bar.classList.toggle('is-composer-expanded', !!on);
+    bar.dataset.composerMode = mode === 'regular' ? '' : mode;
+    bar.classList.toggle('is-composer-expanded', mode === 'expand');
+    bar.classList.toggle('is-composer-minimized', mode === 'minimize');
     const btn = document.getElementById('convExpandBtn');
-    if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (btn) {
+      btn.setAttribute('aria-pressed', mode !== 'regular' ? 'true' : 'false');
+      btn.title = mode === 'expand'
+        ? 'Minimize composer'
+        : mode === 'minimize'
+          ? 'Back to normal size'
+          : 'Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)';
+    }
     _autosizeConvInput();
   }
+  // Back-compat wrapper — the send/clear hook above calls this by name.
+  function setComposerExpanded(on) { setComposerMode(on ? 'expand' : 'regular'); }
+  const _COMPOSER_MODE_CYCLE = { regular: 'expand', expand: 'minimize', minimize: 'regular' };
   const $convExpandBtn = document.getElementById('convExpandBtn');
   if ($convExpandBtn) {
     $convExpandBtn.addEventListener('click', () => {
       if (!$convInputBar) return;
-      const next = !$convInputBar.classList.contains('is-composer-expanded');
-      setComposerExpanded(next);
-      if (next && $convInput) { $convInput.focus(); }
+      const current = $convInputBar.dataset.composerMode || 'regular';
+      const next = isMobile()
+        ? _COMPOSER_MODE_CYCLE[current]
+        : (current === 'expand' ? 'regular' : 'expand');
+      setComposerMode(next);
+      if (next === 'expand' && $convInput) { $convInput.focus(); }
     });
   }
 
