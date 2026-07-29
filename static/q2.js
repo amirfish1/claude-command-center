@@ -38,6 +38,9 @@
     configsOwn: {},     // queue -> only the fields that queue SET itself
     log: [],            // reconciler activity lines for the selected queue
     logQueue: '',
+    learningsQueue: '',
+    learnings: null,    // selected queue's learnings file, loaded on demand
+    learningsError: '',
   };
   var newTicketExpires = {};
 
@@ -558,6 +561,10 @@
     return state.items.filter(function (it) { return projectKey(it && it.project) === key; });
   }
 
+  function queueLearningsPath(queue) {
+    return '/api/queue/learnings?queue=' + encodeURIComponent(String(queue || ''));
+  }
+
   // ── fetch ────────────────────────────────────────────────────────────────
   async function getJson(url) {
     var res = await fetch(url, { cache: 'no-store' });
@@ -622,6 +629,9 @@
       var withWork = state.queues.filter(function (q) { return q.depth > 0; });
       state.queue = (withWork[0] || state.queues[0]).queue;
     }
+    if (state.queue && projectKey(state.learningsQueue) !== projectKey(state.queue)) {
+      loadQueueLearnings(state.queue);
+    }
     // One extra tail per poll, only for the queue on screen.
     if (state.queue) await loadLog(state.queue);
     renderAll();
@@ -637,6 +647,22 @@
     } catch (e) {
       if (state.ref !== ref) return;
       state.detail = null;
+    }
+    renderDetail();
+  }
+
+  async function loadQueueLearnings(queue) {
+    state.learningsQueue = queue;
+    state.learnings = null;
+    state.learningsError = '';
+    renderDetail();
+    try {
+      var data = await getJson(queueLearningsPath(queue));
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.learnings = data;
+    } catch (e) {
+      if (projectKey(state.queue) !== projectKey(queue)) return;
+      state.learningsError = e.message || 'Could not load queue learnings.';
     }
     renderDetail();
   }
@@ -1387,10 +1413,28 @@
     if (!host) return;
 
     if (!state.ref) {
-      host.innerHTML = '<div class="q2-empty">'
-        + '<div class="q2-empty-title">No ticket selected</div>'
-        + 'Pick a ticket in the middle column to see its prompt, activity, and properties here.'
-        + '</div>';
+      var learnings = state.learnings;
+      if (!state.queue) {
+        host.innerHTML = '<div class="q2-empty"><div class="q2-empty-title">No ticket selected</div>'
+          + 'Pick a queue to see its learnings.</div>';
+      } else if (!learnings && !state.learningsError) {
+        host.innerHTML = '<div class="q2-empty">Loading queue learnings&hellip;</div>';
+      } else if (state.learningsError) {
+        host.innerHTML = '<div class="q2-empty"><div class="q2-empty-title">Queue learnings unavailable</div>'
+          + esc(state.learningsError) + '</div>';
+      } else {
+        var path = learnings.path || '';
+        host.innerHTML = '<div class="q2-detail-top q2-learnings">'
+          + '<div class="q2-detail-head"><span class="q2-detail-ref">' + esc(state.queue) + '</span>'
+          + '<span class="q2-spacer"></span>'
+          + '<button type="button" class="q2-btn" data-q2-learnings-open title="Open this learnings file in its default editor">Open &#8599;</button></div>'
+          + '<h1 class="q2-detail-title">Queue learnings</h1>'
+          + (learnings.exists
+            ? '<pre class="q2-pre q2-learnings-body">' + esc(learnings.content || '') + '</pre>'
+            : '<div class="q2-empty">No learnings file yet.<br><span class="q2-dim">'
+              + esc(path) + '</span></div>')
+          + '</div>';
+      }
       return;
     }
 
@@ -2073,7 +2117,18 @@
     rememberSelection();
     state.log = [];
     renderAll();
+    loadQueueLearnings(name);
     loadLog(name).then(renderLogBar);
+  }
+
+  async function openQueueLearnings() {
+    var learnings = state.learnings;
+    if (!learnings || !learnings.path) return;
+    try {
+      await postJson('/api/reveal-file', { path: learnings.path });
+    } catch (e) {
+      note('Could not open queue learnings: ' + e.message);
+    }
   }
 
   function selectTicket(ref) {
@@ -2105,6 +2160,7 @@
     }
     var act = e.target.closest('[data-q2-act]');
     if (act) { e.stopPropagation(); detailAction(act.getAttribute('data-q2-act'), act); return; }
+    if (e.target.closest('[data-q2-learnings-open]')) { openQueueLearnings(); return; }
     var qBtn = e.target.closest('[data-q2-queue]');
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');

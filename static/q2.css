@@ -998,6 +998,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   font-size: 11px;
 }
 .q2-detail-foot .q2-dim { flex: 1 1 auto; color: var(--text-muted); }
+.q2-learnings-body { max-height: none; margin: 0; }
 
 /* Assignment + origin, one wrapping strip instead of a sidebar. */
 .q2-meta-strip {

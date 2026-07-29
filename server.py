@@ -982,6 +982,14 @@ _QUEUE_CONFIG_DEFAULTS = {
 _QUEUE_CONFIG_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
 
 
+def _wt_queue_learnings_path(queue):
+    """Return the one learnings file belonging to a valid WatchTower queue."""
+    name = str(queue or "").strip().upper()
+    if not _QUEUE_CONFIG_NAME_RE.fullmatch(name):
+        return None
+    return _WT_HOME / "learnings" / (name + ".md")
+
+
 def _queue_config_from_payload(payload):
     """Validate and normalize the complete WatchTower queue form payload.
 
@@ -52192,6 +52200,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 items = _ux_fixes_list_items_cached(status_filter, lane_filter)
                 self.send_json({"ok": True, "items": items, "count": len(items)})
             except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/queue/learnings":
+            qs = urllib.parse.parse_qs(parsed.query)
+            queue = (qs.get("queue", [""])[0] or "").strip()
+            learnings_path = _wt_queue_learnings_path(queue)
+            if learnings_path is None:
+                self.send_json({"ok": False, "error": "invalid queue"}, 400)
+                return
+            try:
+                content = learnings_path.read_text(encoding="utf-8", errors="replace")
+                self.send_json({"ok": True, "queue": queue.upper(), "path": str(learnings_path),
+                                "exists": True, "content": content})
+            except FileNotFoundError:
+                self.send_json({"ok": True, "queue": queue.upper(), "path": str(learnings_path),
+                                "exists": False, "content": ""})
+            except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/ux-fixes/item":
             qs = urllib.parse.parse_qs(parsed.query)
