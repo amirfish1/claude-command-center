@@ -32829,6 +32829,9 @@
       });
     }
     if (input) {
+      // cloneNode does not copy listeners, so bind paste uploads explicitly
+      // for the independent right-hand composer.
+      attachImagePaste(input);
       input.addEventListener('input', () => {
         const pane = paneByPaneId(paneId);
         rememberInputDraft(input, pane && pane.conversationId);
