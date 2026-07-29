@@ -4912,6 +4912,12 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("overflow-y: visible;", activity_css)
         self.assertNotIn("flex: 0 0 auto;", activity_css)
 
+    def test_queue_first_topbar_has_annotate_action(self):
+        """Queue-first keeps an annotation entry point when it hides the rail."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        self.assertIn('data-qf-action="annotate-page"', app_js)
+        self.assertIn("if (act === 'annotate-page') { annStart(); return; }", app_js)
+
     def test_right_rail_hides_conversation_top_chrome(self):
         """Right-rail mode should not leave old top chrome above the
         conversation pane."""

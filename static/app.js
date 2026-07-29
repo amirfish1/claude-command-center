@@ -36958,6 +36958,7 @@
       + crumbHtml
       + '<div class="qf-topbar-actions">'
       + (actionsHtml || '')
+      + '<button type="button" class="qf-btn" data-qf-action="annotate-page" title="Annotate the visible queue board and save a local note for agent context.">&#9998; Annotate</button>'
       + modeBtn
       + '<button type="button" class="qf-btn qf-exit-btn" data-qf-action="leave-board" title="Back to the sessions view. Your pinned queue default will not change."><span aria-hidden="true">&larr;</span> Back to sessions</button>'
       + '</div></header>';
@@ -37305,6 +37306,7 @@
           try { if (isMobile()) mobileShowMain(false); } catch (_) {}
           return;
         }
+        if (act === 'annotate-page') { annStart(); return; }
         if (act === 'pin-mode') { _qfSetEnabled(true); showOpToast('Queue-first is now your default view', 'success'); _qfRender(); return; }
         if (act === 'unpin-mode') { _qfSetEnabled(false); showOpToast('Sessions view is the default again', 'success'); _qfRender(); return; }
         if (act === 'toggle-closed') { _qfShowClosed = !_qfShowClosed; _qfRender(); return; }
