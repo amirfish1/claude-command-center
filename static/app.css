@@ -1864,6 +1864,33 @@
   .conv-pane.is-composer-minimized > .conv-goal-strip {
     display: none !important;
   }
+  /* Minimize also merges the textarea row and the button row into one line
+     — "as short as it gets" means one row, not two. The expand-toggle
+     stops floating over the textarea (it joins the same row as the other
+     icon buttons instead) so the textarea reclaims the padding it used to
+     reserve for the toggle. */
+  .conv-input-bar.visible.is-composer-minimized {
+    flex-direction: row;
+    align-items: center;
+  }
+  .conv-input-bar.is-composer-minimized > .conv-input-row-top {
+    order: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
+    order: 1;
+    width: auto;
+    flex: 0 0 auto;
+    margin-top: 0;
+  }
+  .conv-input-bar.is-composer-minimized > .expand-btn {
+    order: 2;
+    position: static;
+  }
+  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
+    padding-right: 4px;
+  }
 
   /* Context ring (kimi-web ContextRing parity) inside the usage pill. */
   .ctx-ring { vertical-align: -2.5px; margin-right: 4px; }
