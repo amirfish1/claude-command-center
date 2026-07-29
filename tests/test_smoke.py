@@ -3569,17 +3569,20 @@ class TestServerImports(unittest.TestCase):
                 server.ANNOTATIONS_FILE = old_file
                 server.ANNOTATION_SCREENSHOT_DIR = old_dir
 
-    def test_breadcrumb_has_popout_button_wired_to_existing_helper(self):
-        """The conversation breadcrumb gains a pop-out button that reuses the
-        existing drag-to-out-of-window helper. The button is delegated so it
-        survives every updatePaneHeader innerHTML rewrite, and it is hidden
-        when the page is itself the popout (CONV_POPOUT_MODE)."""
+    def test_right_rail_topbar_has_popout_button_wired_to_existing_helper(self):
+        """The visible right-rail topbar owns the pop-out action, rather than
+        the hidden conversation toolbar or breadcrumb/status-rail row. It
+        reuses the delegated helper and is skipped in a popout."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-role="ccc-breadcrumb-popout"', app_js)
+        self.assertIn('class="status-rail-annotate status-rail-popout"', app_js)
         self.assertIn("CONV_POPOUT_MODE ? ''", app_js)
         self.assertIn("openConversationPopout(convId, null, null)", app_js)
-        self.assertIn(".ccc-breadcrumb-popout", app_css)
+        self.assertIn("const topbarEl = document.getElementById('statusRailTopbar');", app_js)
+        self.assertIn("topbarEl.insertAdjacentHTML('beforeend', popoutBtn);", app_js)
+        self.assertNotIn("+ popoutBtn;\n        breadcrumbEl.innerHTML", app_js)
+        self.assertIn(".status-rail-annotate", app_css)
 
     def test_global_breadcrumb_streaming_status_stays_compact(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")

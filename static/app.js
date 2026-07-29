@@ -32033,14 +32033,21 @@
     const breadcrumbEl = document.getElementById('cccBreadcrumb');
     if (breadcrumbEl) {
       const isActive = targetPaneId === activePaneId();
+      const topbarEl = document.getElementById('statusRailTopbar');
+      // This action is session-specific, so clear the previous session's
+      // control before rendering the active one into the visible rail topbar.
+      if (topbarEl) {
+        const previousPopout = topbarEl.querySelector('[data-role="ccc-breadcrumb-popout"]');
+        if (previousPopout) previousPopout.remove();
+      }
       if (isActive && (category || title)) {
         // Pop-out button mirrors the drag-out-of-window gesture for users
         // who prefer a click. Skipped inside the popout itself (no point
         // popping a popout). Click handler is delegated once at boot —
         // see the document listener for [data-role="ccc-breadcrumb-popout"].
         const popoutBtn = CONV_POPOUT_MODE ? ''
-          : '<button type="button" class="ccc-breadcrumb-popout" data-role="ccc-breadcrumb-popout"'
-            + ' title="Pop this conversation out to its own window" aria-label="Pop out">'
+          : '<button type="button" class="status-rail-annotate status-rail-popout" data-role="ccc-breadcrumb-popout"'
+            + ' title="Pop this conversation out to its own window" aria-label="Pop out conversation">'
             // Diagonal arrow-out-of-box glyph. Inline SVG so it inherits
             // currentColor and stays crisp at any zoom.
             + '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">'
@@ -32048,6 +32055,7 @@
             +   '<path d="M7 1h4v4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
             +   '<path d="M11 1L6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
             + '</svg>'
+            + '<span>Pop out</span>'
           + '</button>';
         // Process-presence indicator — shows whether this Claude session has a
         // CCC-spawned headless and/or a live terminal (TTY), plus when it was
@@ -32099,7 +32107,8 @@
           // Transcript size lives in the pane titlebar (.conv-pane-size) already;
           // duplicating it here just crowded the narrow breadcrumb and forced the
           // category/title to ellipsize to uselessness ("cod…", "C…"). (CCC-280)
-          + popoutBtn;
+          ;
+        if (popoutBtn && topbarEl) topbarEl.insertAdjacentHTML('beforeend', popoutBtn);
         breadcrumbEl.hidden = false;
         updateConvProcessIndicator();
         // Mirror the active session's name into the status-rail head, replacing
