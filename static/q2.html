@@ -17,6 +17,7 @@
     <span class="q2-spacer"></span>
     <span class="q2-note" id="q2Note" role="status" hidden></span>
     <span class="q2-stale" id="q2Stale" hidden>offline &mdash; retrying</span>
+    <button type="button" class="q2-btn" id="q2AnnotateBtn" title="Annotate an element and file it to the CCC queue">&#9873; Annotate</button>
     <button type="button" class="q2-btn" id="q2ThemeBtn" title="Toggle light / dark">Light</button>
   </header>
 
@@ -39,6 +40,7 @@
     <!-- Column 2: tickets of the selected queue (detail of col 1) -->
     <section class="q2-col q2-col-tickets" aria-label="Tickets">
       <div class="q2-col-head">
+        <button type="button" class="q2-mobile-back" data-q2-mobile-back="queues" aria-label="Back to queues">&#8592; Queues</button>
         <span class="q2-col-title" id="q2TicketsTitle">Tickets</span>
         <span class="q2-col-count" id="q2TicketCount"></span>
         <span class="q2-spacer"></span>
@@ -63,6 +65,7 @@
 
     <!-- Column 3: the selected ticket. Conversation pane goes here later. -->
     <section class="q2-col q2-col-detail" aria-label="Ticket">
+      <button type="button" class="q2-mobile-back q2-detail-mobile-back" data-q2-mobile-back="tickets" aria-label="Back to tickets">&#8592; Tickets</button>
       <div class="q2-detail" id="q2Detail"></div>
     </section>
   </main>
@@ -71,5 +74,9 @@
   <div class="q2-modal-host" id="q2Modal" hidden></div>
 
   <script src="/static/q2.js"></script>
+  <script src="/static/q2-annotation.js"></script>
+  <script>
+    window.Q2Annotation.attach(document.getElementById('q2AnnotateBtn'), {});
+  </script>
 </body>
 </html>

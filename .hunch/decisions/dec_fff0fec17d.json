@@ -1,0 +1,45 @@
+{
+  "id": "dec_fff0fec17d",
+  "title": "perf(codex): rebuild only codex rows when a new thread appears",
+  "topic": null,
+  "status": "accepted",
+  "context": "A newly spawned Codex thread reaches the corpus signature as a rollout\nday-dir mtime bump, because Codex nests rollouts by date. Dir-granular\nextras changes were routed to the full-rebuild path, which is\ndeliberately kept off the request path, so the new session could not\nappear until a background O(all-rows) rebuild finished and a later poll\npicked up the snapshot. Measured on a loaded machine: 49.6s from spawn\nto the row existing in a built list, with the sidebar showing \"spawning\"\nthe whole t",
+  "decision": "Changed server.py, tests/test_codex_title_freshness.py, tests/test_perf_budget.py: added _archive_codex_extra_keys, CodexSignatureExtraKeysTests, setUpClass, test_every_codex_key_is_one_the_signature_tracks, test_the_rollout_day_dirs_are_included, test_archive_signature_delta_engine_churn_is_engine_scoped_refresh; removed test_archive_signature_delta_hermes_churn_is_engine_scoped_refresh.",
+  "consequences": [
+    "Removes test_archive_signature_delta_hermes_churn_is_engine_scoped_refresh — potential breaking change for callers."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py",
+    "tests/test_codex_title_freshness.py",
+    "tests/test_perf_budget.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "bbdf29f3",
+  "valid_from": "2026-07-28T13:17:43-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [
+      "test_archive_signature_delta_hermes_churn_is_engine_scoped_refresh"
+    ],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:bbdf29f3",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "tests/test_codex_title_freshness.py",
+      "tests/test_perf_budget.py"
+    ],
+    "last_verified": "2026-07-29T07:57:42.049Z"
+  },
+  "date": "2026-07-28T13:17:43-07:00"
+}

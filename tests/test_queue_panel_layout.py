@@ -11,6 +11,30 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueuePanelLayout(unittest.TestCase):
+    def test_standalone_queue_uses_swipeable_master_detail_on_phone(self):
+        """A phone shows one readable Q2 pane and advances after selection."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn("function showMobileColumn(column)", q2_js)
+        self.assertIn("showMobileColumn('tickets');", q2_js)
+        self.assertIn("showMobileColumn('detail');", q2_js)
+        self.assertIn("@media (max-width: 700px)", q2_css)
+        self.assertIn("grid-template-columns: repeat(3, 100%);", q2_css)
+        self.assertIn("scroll-snap-type: x mandatory;", q2_css)
+
+    def test_phone_queue_navigation_has_explicit_back_controls(self):
+        """Swiping advances the master/detail panes, but phone users can also
+        return from tickets to queues and from a ticket to its list."""
+        q2_html = (PROJECT_ROOT / "static" / "q2.html").read_text(encoding="utf-8")
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-q2-mobile-back="queues"', q2_html)
+        self.assertIn('data-q2-mobile-back="tickets"', q2_html)
+        self.assertIn("showMobileColumn(back.getAttribute('data-q2-mobile-back'));", q2_js)
+        self.assertIn(".q2-mobile-back", q2_css)
+
     def test_standalone_queue_keeps_recent_closed_tickets_visible(self):
         """Recent closes stay in context without expanding full history."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
@@ -30,6 +54,26 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("q2-new-ticket", q2_js)
         self.assertIn(".q2-trow.q2-new-ticket", q2_css)
         self.assertIn("@keyframes q2-new-ticket-glow", q2_css)
+
+    def test_selected_queue_shows_its_learnings_when_no_ticket_is_selected(self):
+        """The detail pane makes queue guidance available before ticket work."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+
+        self.assertIn("function queueLearningsPath(queue)", q2_js)
+        self.assertIn("/api/queue/learnings?queue=", q2_js)
+        self.assertIn("data-q2-learnings-open", q2_js)
+        self.assertIn("Queue learnings", q2_js)
+
+    def test_queue_learnings_path_is_confined_to_watchtower_learnings(self):
+        """A queue name cannot turn the learnings viewer into a path reader."""
+        server = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.object(server, "_WT_HOME", pathlib.Path(temp_dir)):
+                self.assertEqual(
+                    server._wt_queue_learnings_path("CCC"),
+                    pathlib.Path(temp_dir, "learnings", "CCC.md"),
+                )
+                self.assertIsNone(server._wt_queue_learnings_path("../../private"))
 
     def test_past_codex_worker_chip_gets_its_session_id(self):
         """Codex exec logs use a plain session header, not stream-json."""

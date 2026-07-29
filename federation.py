@@ -625,13 +625,6 @@ class PeerClient:
             return {"status": 0, "error": "peer returned unparseable transport payload"}
 
 
-def peer_client(peer_node_id: str) -> PeerClient:
-    peer = get_peer(peer_node_id)
-    if not peer:
-        raise PeerError("unpaired_peer", f"no paired peer {peer_node_id}")
-    return PeerClient(peer)
-
-
 # ---------------------------------------------------------------------------
 # Session handoff — leases, bundle build, staged import
 # ---------------------------------------------------------------------------

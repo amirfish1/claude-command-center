@@ -1,0 +1,37 @@
+{
+  "id": "dec_2035cb0566",
+  "title": "fix(worker): answer the app-server status probe from the worker",
+  "topic": null,
+  "status": "accepted",
+  "context": "The Codex transport lives in the worker, not the dashboard, because\n_control_plane_routes_engines() defaults on. Routing system.app_server\nthrough the control plane means the status panel reports the app-server\nthe sessions actually use, instead of the dashboard's idle view of it.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>\n",
+  "decision": "Changed code in ccc_worker.py (1 file(s)).",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "ccc_worker.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "d15ada76",
+  "valid_from": "2026-07-28T14:39:27-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.3,
+    "evidence": [
+      "commit:d15ada76",
+      "synth:provider=deterministic",
+      "branch:main",
+      "ccc_worker.py"
+    ],
+    "last_verified": "2026-07-29T07:57:41.938Z"
+  },
+  "date": "2026-07-28T14:39:27-07:00"
+}

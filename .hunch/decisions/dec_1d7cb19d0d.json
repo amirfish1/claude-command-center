@@ -1,0 +1,41 @@
+{
+  "id": "dec_1d7cb19d0d",
+  "title": "fix(debug): make the spawn-timeline store additive across processes",
+  "topic": null,
+  "status": "accepted",
+  "context": "The worker records the engine marks and the dashboard records\nrow_in_session_list, because worker_engines.py lazily imports server, so\neach process runs its own copy of this module state and the JSON file is\nthe only thing they share. Two bugs made the panel useless.\n\nThe file was read once at startup, so the dashboard answered every query\nfrom a dict that predated the spawn being asked about. And a save wrote\nthe process's whole dict, so a freshly booted process that started one\nspawn and saved",
+  "decision": "Changed server.py, tests/test_spawn_timeline_store.py: added _spawn_timeline_sync, SpawnTimelineStoreTests, setUpClass, setUp, tearDown, reboot, on_disk, test_a_second_process_sees_what_the_first_one_wrote; new dep(s): importlib, json, tempfile, unittest, pathlib; 1 new file(s).",
+  "consequences": [
+    "Adds dependency: importlib, json, tempfile, unittest, pathlib."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py",
+    "tests/test_spawn_timeline_store.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "a9cd4b97",
+  "valid_from": "2026-07-28T12:45:33-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:a9cd4b97",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "tests/test_spawn_timeline_store.py"
+    ],
+    "last_verified": "2026-07-29T07:57:42.114Z"
+  },
+  "date": "2026-07-28T12:45:33-07:00"
+}

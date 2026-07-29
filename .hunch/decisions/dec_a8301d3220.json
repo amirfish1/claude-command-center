@@ -1,0 +1,43 @@
+{
+  "id": "dec_a8301d3220",
+  "title": "feat(q2): add annotate control",
+  "topic": null,
+  "status": "accepted",
+  "context": "What changed: added enterPick, exitPick, onEsc, onPick, bestSelector, captureElement, showModal, btnStyle; new dep(s): __future__, pathlib, unittest; 3 new file(s).",
+  "decision": "Introduced static/annotate-widget.js, static/q2-annotate-bridge.js, tests/test_q2_annotate_static.py: added enterPick, exitPick, onEsc, onPick, bestSelector, captureElement, showModal, btnStyle; new dep(s): __future__, pathlib, unittest; 3 new file(s).",
+  "consequences": [
+    "Adds dependency: __future__, pathlib, unittest."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "static/annotate-widget.js",
+    "static/q2-annotate-bridge.js",
+    "tests/test_q2_annotate_static.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "580297a4",
+  "valid_from": "2026-07-28T19:09:09-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:580297a4",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/annotate-widget.js",
+      "static/q2-annotate-bridge.js",
+      "tests/test_q2_annotate_static.py"
+    ],
+    "last_verified": "2026-07-29T07:57:41.624Z"
+  },
+  "date": "2026-07-28T19:09:09-07:00"
+}

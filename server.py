@@ -982,6 +982,14 @@ _QUEUE_CONFIG_DEFAULTS = {
 _QUEUE_CONFIG_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
 
 
+def _wt_queue_learnings_path(queue):
+    """Return the one learnings file belonging to a valid WatchTower queue."""
+    name = str(queue or "").strip().upper()
+    if not _QUEUE_CONFIG_NAME_RE.fullmatch(name):
+        return None
+    return _WT_HOME / "learnings" / (name + ".md")
+
+
 def _queue_config_from_payload(payload):
     """Validate and normalize the complete WatchTower queue form payload.
 
@@ -1880,20 +1888,6 @@ def _session_artifact_open_path(session_id, resolved_target):
         if root:
             roots.append(Path(root) / sid)
     return any(_path_is_within(target, root) for root in roots)
-
-
-def _non_repo_file_sandbox(session_id, resolved_target):
-    try:
-        target = Path(resolved_target).expanduser().resolve(strict=False)
-    except (OSError, ValueError, RuntimeError):
-        return False
-    return (
-        _resolve_pasted_image_path(target, require_file=True) is not None
-        or _path_is_within(target, Path.home() / ".claude")
-        or _path_is_within(target, COMMAND_CENTER_STATE_DIR)
-        or _session_artifact_open_path(session_id, target)
-        or _session_referenced_open_path(session_id, target)
-    )
 
 
 def _safe_local_file_open_path(resolved_target, *, categories=None):
@@ -5088,11 +5082,6 @@ def _harness_model_list_result(engine):
         if rows:
             return {"available": True, "records": rows, "command": cmd}
     return {"available": False, "records": []}
-
-
-def _harness_model_list_records(engine):
-    result = _harness_model_list_result(engine)
-    return result.get("records") or []
 
 
 def _codex_mark_model_availability(catalog, harness_result):
@@ -25008,15 +24997,6 @@ def _codex_app_server_request_to_transport(
                 _CODEX_APP_SERVER_INFLIGHT -= 1
 
 
-def _codex_app_server_request_to_proc(proc, method, params=None, timeout=20):
-    return _codex_app_server_request_to_transport(
-        _CodexAppServerTransport("stdio", proc=proc),
-        method,
-        params=params,
-        timeout=timeout,
-    )
-
-
 def _codex_context_window_args():
     """Opt every Codex invocation into the model's full context window.
 
@@ -32818,13 +32798,6 @@ def _acp_maybe_attach_on_view(harness, sid):
     return _acp_load(harness, sid, cwd)
 
 
-def _acp_list(harness, cwd=None):
-    if _acp_ensure(harness) is None:
-        return {"ok": False, "error": _acp_conn_error(harness)}
-    params = {"cwd": cwd} if cwd else {}
-    return _acp_request(harness, "session/list", params, timeout=15)
-
-
 def _acp_set_config(harness, sid, config_id, value):
     if harness == "kimi":
         routed = _control_plane_engine_call(
@@ -34014,51 +33987,6 @@ def _parse_codex_event(ev, line_num, token_usage=None, codex_turn_meta=None):
             result["images"] = images
         return result
     return None
-
-
-def _parse_codex_conversation(thread_id, after_line=0):
-    filepath = _resolve_codex_rollout_path(thread_id)
-    events = []
-    line_num = 0
-    codex_token_usage = None
-    codex_turn_meta = None
-    if not filepath:
-        return {"events": [], "last_line": 0}
-    try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line_num += 1
-                if line_num <= after_line:
-                    try:
-                        skipped_ev = json.loads(line.strip())
-                    except json.JSONDecodeError:
-                        skipped_ev = None
-                    if skipped_ev:
-                        turn_meta = _codex_turn_meta_from_event(skipped_ev)
-                        if turn_meta:
-                            codex_turn_meta = turn_meta
-                    continue
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                turn_meta = _codex_turn_meta_from_event(ev)
-                if turn_meta:
-                    codex_turn_meta = turn_meta
-                    continue
-                usage = _codex_token_usage_from_event(ev)
-                if usage:
-                    codex_token_usage = usage
-                    continue
-                parsed = _parse_codex_event(ev, line_num, codex_token_usage, codex_turn_meta=codex_turn_meta)
-                if parsed:
-                    events.append(parsed)
-    except FileNotFoundError:
-        pass
-    return {"events": events, "last_line": line_num}
 
 
 _pending_resume_queue: dict = {}   # session_id → [text, ...]
@@ -36511,28 +36439,6 @@ def _parse_copilotchat_conversation(session_id, after_line=0):
     else:
         visible = events
     return {"events": visible, "last_line": line}
-
-
-def _load_antigravity_transcript(session_id):
-    path = _antigravity_transcript_path(session_id)
-    if not path or not path.is_file():
-        return []
-    events = []
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(ev, dict):
-                    events.append(ev)
-    except OSError:
-        return []
-    return events
 
 
 def _antigravity_unquote(value):
@@ -41168,41 +41074,6 @@ def _live_claude_terminal_pids_by_session():
         for sid in pid_to_sids.get(pid, set()):
             out.setdefault(sid, set()).add(pid)
     return out
-
-
-def _session_has_live_terminal_uncached(session_id, exclude_pid=None):
-    if not session_id:
-        return False
-    if not SESSIONS_REGISTRY.is_dir():
-        return False
-    try:
-        session_files = list(SESSIONS_REGISTRY.iterdir())
-    except OSError:
-        return False
-    try:
-        exclude_pid = int(exclude_pid) if exclude_pid is not None else None
-    except (TypeError, ValueError):
-        exclude_pid = None
-    for f in session_files:
-        if not f.name.endswith(".json") or not f.is_file():
-            continue
-        try:
-            data = json.loads(f.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if data.get("sessionId") != session_id:
-            continue
-        try:
-            pid = int(data.get("pid"))
-        except (TypeError, ValueError):
-            continue
-        if exclude_pid is not None and pid == exclude_pid:
-            continue
-        if not _pid_is_engine_process(pid, "claude"):
-            continue
-        if _process_tty(pid):
-            return True
-    return False
 
 
 def _bg_pty_entry_for_session(session_id):
@@ -52201,6 +52072,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 items = _ux_fixes_list_items_cached(status_filter, lane_filter)
                 self.send_json({"ok": True, "items": items, "count": len(items)})
             except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/queue/learnings":
+            qs = urllib.parse.parse_qs(parsed.query)
+            queue = (qs.get("queue", [""])[0] or "").strip()
+            learnings_path = _wt_queue_learnings_path(queue)
+            if learnings_path is None:
+                self.send_json({"ok": False, "error": "invalid queue"}, 400)
+                return
+            try:
+                content = learnings_path.read_text(encoding="utf-8", errors="replace")
+                self.send_json({"ok": True, "queue": queue.upper(), "path": str(learnings_path),
+                                "exists": True, "content": content})
+            except FileNotFoundError:
+                self.send_json({"ok": True, "queue": queue.upper(), "path": str(learnings_path),
+                                "exists": False, "content": ""})
+            except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/ux-fixes/item":
             qs = urllib.parse.parse_qs(parsed.query)

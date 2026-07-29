@@ -1,0 +1,41 @@
+{
+  "id": "dec_6615f3681c",
+  "title": "fix(codex): detect new Codex threads in the archive corpus signature",
+  "topic": null,
+  "status": "accepted",
+  "context": "Reported by a user: new Codex sessions sat in \"spawning\" forever and then\nvanished, and existing Codex sessions showed up only after a UI reload,\nwhile Codex desktop listed all of them correctly.\n\n_archive_corpus_signature_parts gated the Codex corpus on the store root\n~/.codex/sessions. Codex nests rollouts by date\n(~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl), so that root only changes at\nyear rollover -- measured 50 days stale locally. Creating a Codex session\nleft the signature byte-identic",
+  "decision": "Changed server.py, tests/test_archive_signature_codex_rollouts.py: added _codex_rollout_day_dirs, CodexRolloutDayDirsTests, setUpClass, test_day_dirs_cover_today_and_yesterday, test_new_rollout_file_changes_the_corpus_signature, test_appending_to_an_existing_rollout_does_not_bust_the_cache, test_missing_day_dir_is_tolerated; new dep(s): importlib, time, unittest, pathlib, tempfile; 1 new file(s).",
+  "consequences": [
+    "Adds dependency: importlib, time, unittest, pathlib, tempfile."
+  ],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "server.py",
+    "tests/test_archive_signature_codex_rollouts.py"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "ae2002d9",
+  "valid_from": "2026-07-28T08:42:21-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:ae2002d9",
+      "synth:provider=deterministic",
+      "branch:main",
+      "server.py",
+      "tests/test_archive_signature_codex_rollouts.py"
+    ],
+    "last_verified": "2026-07-29T07:57:42.414Z"
+  },
+  "date": "2026-07-28T08:42:21-07:00"
+}

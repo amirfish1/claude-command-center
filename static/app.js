@@ -1773,20 +1773,7 @@
   if (GROUPCHAT_POPOUT_MODE && document.body) {
     document.body.classList.add('groupchat-popout');
     try { document.title = GROUPCHAT_POPOUT_TOPIC || 'Group Chat - CCC'; } catch (_) {}
-  }
-  // Q-FIRST (W88): queue-first mode - the landing surface is the queue board
-  // (queue cards, then a queue's tickets in the main view, then a full ticket
-  // detail panel) instead of the conversation list. Two activation paths,
-  // mirroring the flow popout's split: `?ccc_mode=queues` turns it on for
-  // this page load only (never persisted, so a shared link doesn't rewire
-  // someone's default), while the in-app toggle persists via localStorage.
-  const QFIRST_URL_MODE = _bootUrlParams.get('ccc_mode') === 'queues';
-  function qFirstEnabled() {
-    if (QFIRST_URL_MODE) return true;
-    try { return localStorage.getItem('ccc-q-first') === '1'; } catch (_) { return false; }
-  }
-  if (qFirstEnabled() && document.body) document.body.classList.add('qf-mode');
-  // A "reader-only" popout is a single-conversation OR single-group-chat reader
+  }  // A "reader-only" popout is a single-conversation OR single-group-chat reader
   // window: it renders and live-updates exactly one thing and must NOT run the
   // dashboard's background work (the conversation list / archive walk, issues,
   // ux-fixes queue, ship/status per repo, worktrees badge, live-activity poll,
@@ -4147,8 +4134,6 @@
   }
 
   // Back-compat alias — older call sites may still reference the modal name.
-  function _relayedQuestionModalEl() { return _relayedQuestionInlineEl(); }
-
   function closeRelayedQuestionInline() {
     document.querySelectorAll('[data-role="ccc-inline-question"]').forEach(function (n) {
       n.remove();
@@ -9836,13 +9821,9 @@
   // for the next turn. Initialize from the persisted value.
   const $convTtsRate = document.getElementById('convTtsRate');
   const $convTtsRateLabel = document.getElementById('convTtsRateLabel');
-  const $convTtsRateControl = document.getElementById('convTtsRateControl');
   function _syncTtsRateUi() {
     if ($convTtsRate) $convTtsRate.value = String(_ttsRate);
     if ($convTtsRateLabel) $convTtsRateLabel.textContent = _ttsRate.toFixed(2) + '×';
-  }
-  function _setTtsRateControlVisible(visible) {
-    if ($convTtsRateControl) $convTtsRateControl.hidden = !visible;
   }
   function _restartTtsAtCurrentPosition() {
     // Only meaningful while playback is active. Cancel the in-flight
@@ -9913,9 +9894,9 @@
     _autosizeRaf = requestAnimationFrame(() => {
       _autosizeRaf = 0;
       $convInput.style.height = 'auto';
-      const expanded = $convInputBar && $convInputBar.classList.contains('is-composer-expanded');
-      const max = expanded
-        ? Math.round(window.innerHeight * 0.7)
+      const mode = ($convInputBar && $convInputBar.dataset.composerMode) || 'regular';
+      const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
+        : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
       $convInput.style.height = Math.min($convInput.scrollHeight, max) + 'px';
     });
@@ -10016,22 +9997,47 @@
     _autosizeConvInput();
   }
 
-  // Expanded composer (kimi-web maximize parity): 30-70vh multi-line mode.
-  function setComposerExpanded(on) {
+  // Composer sizing (kimi-web maximize parity, extended for mobile).
+  // Desktop: binary regular <-> expand (30-70vh multi-line mode), unchanged.
+  // Mobile (isMobile()): tri-state cycle regular -> expand -> minimize -> regular,
+  // where minimize pins the textarea to its smallest ("regular", empty) height —
+  // see the CSS comment on .is-composer-minimized for why 24px specifically.
+  function setComposerMode(mode) {
     const bar = $convInputBar;
     if (!bar) return;
-    bar.classList.toggle('is-composer-expanded', !!on);
+    bar.dataset.composerMode = mode === 'regular' ? '' : mode;
+    bar.classList.toggle('is-composer-expanded', mode === 'expand');
+    bar.classList.toggle('is-composer-minimized', mode === 'minimize');
+    // Minimize means minimize — also collapse the stale-session rail/panel
+    // (inside the bar) and the Goal pill (a sibling before it, reached via
+    // the shared .conv-pane parent) so the whole composer area shrinks to
+    // just the textarea + icon row, not only the textarea itself.
+    const pane = bar.closest('.conv-pane');
+    if (pane) pane.classList.toggle('is-composer-minimized', mode === 'minimize');
     const btn = document.getElementById('convExpandBtn');
-    if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (btn) {
+      btn.setAttribute('aria-pressed', mode !== 'regular' ? 'true' : 'false');
+      btn.title = mode === 'expand'
+        ? 'Minimize composer'
+        : mode === 'minimize'
+          ? 'Back to normal size'
+          : 'Expand composer for long prompts (Enter then adds newlines; Ctrl+Enter sends)';
+    }
     _autosizeConvInput();
   }
+  // Back-compat wrapper — the send/clear hook above calls this by name.
+  function setComposerExpanded(on) { setComposerMode(on ? 'expand' : 'regular'); }
+  const _COMPOSER_MODE_CYCLE = { regular: 'expand', expand: 'minimize', minimize: 'regular' };
   const $convExpandBtn = document.getElementById('convExpandBtn');
   if ($convExpandBtn) {
     $convExpandBtn.addEventListener('click', () => {
       if (!$convInputBar) return;
-      const next = !$convInputBar.classList.contains('is-composer-expanded');
-      setComposerExpanded(next);
-      if (next && $convInput) { $convInput.focus(); }
+      const current = $convInputBar.dataset.composerMode || 'regular';
+      const next = isMobile()
+        ? _COMPOSER_MODE_CYCLE[current]
+        : (current === 'expand' ? 'regular' : 'expand');
+      setComposerMode(next);
+      if (next === 'expand' && $convInput) { $convInput.focus(); }
     });
   }
 
@@ -11393,7 +11399,7 @@
     return 'list';
   }
   // `?ccc_mode=kanban` opens the board for this page load only, never
-  // persisted - same contract as `?ccc_mode=queues`. The in-app control that
+  // persisted. The in-app control that
   // used to reach the board was repurposed into the Flow popout button, so
   // without this the view is only reachable by hand-editing localStorage.
   const KANBAN_URL_MODE = ['kanban', 'board'].includes(_bootUrlParams.get('ccc_mode'));
@@ -12157,7 +12163,6 @@
       return;
     }
     panel.style.display = '';
-    const wfRunning = workflows.filter(r => r && r.status === 'running').length;
     countEl.textContent = inFlight > 0 ? (inFlight + ' / ' + total) : String(total);
     countEl.title = inFlight > 0
       ? (inFlight + ' running, ' + total + ' total spawned this session')
@@ -17080,28 +17085,6 @@
     return repoPath ? (_pathLeaf(repoPath) || repoPath) : '';
   }
 
-  function flowDraftInspectorContent(draft) {
-    const title = flowDraftPrompt(draft) || 'Draft session';
-    const parentLabel = flowDraftParentLabel(draft);
-    const created = flowTimestampSec(draft && draft.created_at);
-    const updated = flowTimestampSec(draft && (draft.updated_at || draft.created_at));
-    const lines = [
-      '# ' + title,
-      '',
-      '- Type: Draft session',
-      '- Status: draft',
-      parentLabel ? '- Parent: ' + parentLabel : '',
-      draft && draft.repo_path ? '- Repo: ' + draft.repo_path : '',
-      created ? '- Created: ' + new Date(created * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '',
-      updated ? '- Updated: ' + new Date(updated * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '',
-      '',
-      '## Prompt',
-      '',
-      title,
-    ];
-    return lines.filter(line => line !== '').join('\n');
-  }
-
   function flowDraftInspectorPayload(draftId) {
     const draft = (flowDraftSessions || []).find(d => d && d.id === draftId);
     if (!draft) return null;
@@ -17586,15 +17569,6 @@
     }).sort((a, b) => (b.newest - a.newest) || a.label.localeCompare(b.label));
 
     const records = [];
-    // 5 grid cells past the rightmost / bottom-most node's edge is
-    // the "unreachable border" budget — anything past the canvas is
-    // the .flow-board background (visually distinct via the dashed
-    // border on .flow-canvas) and you can't pan into it. Per user
-    // request 2026-06-06: keep that border tight and marked so the
-    // canvas doesn't extend forever past content.
-    const FLOW_NODE_W_HINT = 260;
-    const FLOW_NODE_H_HINT = 96;
-    const FLOW_CANVAS_EDGE_PAD = 5 * 32;  // 5 grid cells
     // Helper used by the drop handler to nudge a just-dropped node
     // off any other node it overlaps. Pushes in the cheapest cardinal
     // direction each iteration; caps at 50 iters so degenerate cases
@@ -19582,7 +19556,6 @@
   let _gcReaderSessionIds = [];
   let _gcAgentFallbackNames = {};
   let _gcReplayData = null;
-  let _gcLastMessageCount = 0;
 
   let _gcReplayActive = false;
   let _gcReplaySpeed = 1;
@@ -28329,31 +28302,6 @@
     // Rows reuse _renderRow so live pills / branch badges / titles match the
     // rest of the list; folder chips follow the same suppress rule as the
     // other flat sections.
-    const _renderActionSection = (cards, { kind, label, collapseKey, hint }) => {
-      if (!cards.length) return '';
-      const collapsed = localStorage.getItem(collapseKey) === '1';
-      const arrow = collapsed ? '▸' : '▾';
-      const rows = _flatRowsWithSeparators(cards, { lifecycleContext: 'active', suppressFolderChip: _isSpecificFolderFilter });
-      // CCC-178: surface WHY a session lands here. The header carries the
-      // criteria as a tooltip, plus a small ⓘ glyph (its own tooltip) so the
-      // logic is discoverable instead of opaque.
-      const _hintAttr = hint ? ' title="' + escapeAttr(hint) + '"' : '';
-      const _hintGlyph = hint
-        ? '<span class="conv-' + kind + '-info" title="' + escapeAttr(hint) + '" aria-label="' + escapeAttr(hint) + '">&#9432;</span>'
-        : '';
-      return '<div class="conv-' + kind + '-section' + (collapsed ? ' collapsed' : '') + '"'
-        +   ' data-role="' + kind + '-section">'
-        + '<button type="button" class="conv-' + kind + '-header" data-role="' + kind + '-toggle"'
-        +   _hintAttr
-        +   ' aria-expanded="' + (!collapsed) + '">'
-        +   '<span class="conv-' + kind + '-arrow">' + arrow + '</span>'
-        +   '<span class="conv-' + kind + '-label">' + escapeHtml(label) + '</span>'
-        +   '<span class="conv-' + kind + '-count">' + cards.length + '</span>'
-        +   _hintGlyph
-        + '</button>'
-        + '<div class="conv-' + kind + '-list">' + rows + '</div>'
-        + '</div>';
-    };
     // Cross-repo source (CCC-159): once /api/issues/all has resolved,
     // crossRepoIssuesData holds OPEN+CLOSED issues from EVERY tracked repo.
     // MERGE the OTHER repos' OPEN issues into the section — do NOT replace
@@ -32342,14 +32290,21 @@
     const breadcrumbEl = document.getElementById('cccBreadcrumb');
     if (breadcrumbEl) {
       const isActive = targetPaneId === activePaneId();
+      const topbarEl = document.getElementById('statusRailTopbar');
+      // This action is session-specific, so clear the previous session's
+      // control before rendering the active one into the visible rail topbar.
+      if (topbarEl) {
+        const previousPopout = topbarEl.querySelector('[data-role="ccc-breadcrumb-popout"]');
+        if (previousPopout) previousPopout.remove();
+      }
       if (isActive && (category || title)) {
         // Pop-out button mirrors the drag-out-of-window gesture for users
         // who prefer a click. Skipped inside the popout itself (no point
         // popping a popout). Click handler is delegated once at boot —
         // see the document listener for [data-role="ccc-breadcrumb-popout"].
         const popoutBtn = CONV_POPOUT_MODE ? ''
-          : '<button type="button" class="ccc-breadcrumb-popout" data-role="ccc-breadcrumb-popout"'
-            + ' title="Pop this conversation out to its own window" aria-label="Pop out">'
+          : '<button type="button" class="status-rail-annotate status-rail-popout" data-role="ccc-breadcrumb-popout"'
+            + ' title="Pop this conversation out to its own window" aria-label="Pop out conversation">'
             // Diagonal arrow-out-of-box glyph. Inline SVG so it inherits
             // currentColor and stays crisp at any zoom.
             + '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">'
@@ -32357,6 +32312,7 @@
             +   '<path d="M7 1h4v4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
             +   '<path d="M11 1L6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
             + '</svg>'
+            + '<span>Pop out</span>'
           + '</button>';
         // Process-presence indicator — shows whether this Claude session has a
         // CCC-spawned headless and/or a live terminal (TTY), plus when it was
@@ -32408,7 +32364,8 @@
           // Transcript size lives in the pane titlebar (.conv-pane-size) already;
           // duplicating it here just crowded the narrow breadcrumb and forced the
           // category/title to ellipsize to uselessness ("cod…", "C…"). (CCC-280)
-          + popoutBtn;
+          ;
+        if (popoutBtn && topbarEl) topbarEl.insertAdjacentHTML('beforeend', popoutBtn);
         breadcrumbEl.hidden = false;
         updateConvProcessIndicator();
         // Mirror the active session's name into the status-rail head, replacing
@@ -33129,6 +33086,9 @@
       });
     }
     if (input) {
+      // cloneNode does not copy listeners, so bind paste uploads explicitly
+      // for the independent right-hand composer.
+      attachImagePaste(input);
       input.addEventListener('input', () => {
         const pane = paneByPaneId(paneId);
         rememberInputDraft(input, pane && pane.conversationId);
@@ -33887,9 +33847,6 @@
     paneId = paneId || activePaneId();
     const pane = paneByPaneId(paneId);
     if (!pane) return;
-    // Q-FIRST (W88): opening any conversation leaves the queue board so the
-    // reader is actually visible (the board overlays the conv split via CSS).
-    try { if (typeof _qfOnConversationOpen === 'function') _qfOnConversationOpen(); } catch (_) {}
     const staleQueuedTray = getConvInputBarForPane(paneId)?.querySelector('.queued-steer-tray');
     if (staleQueuedTray && staleQueuedTray.dataset.conversationId !== String(id || '')) {
       staleQueuedTray.remove();
@@ -37031,650 +36988,6 @@
       showOpToast('Add failed: ' + e);
     }
   }
-
-  // ── Q-FIRST (W88): queue-first mode ────────────────────────────────────────
-  // A main-view surface for people who drive CCC queue-first, session-second:
-  // land on the queues you have (cards with wt-status health), click a queue
-  // to open its tickets in the MAIN view with full room, drill into a ticket,
-  // manipulate it through the existing wt-backed endpoints, then jump into the
-  // worker's CCC session to converse with the agent. All reads come from the
-  // same two cached fetches the queue tab already makes (_fetchUxqItems /
-  // _fetchUxqHealth) and every write goes through /api/ux-fixes/* - no new
-  // endpoints, never a direct store write, so the wt ledger stays canonical.
-  let _qfNav = { screen: 'queues', queue: '', ref: '' };
-  let _qfShowClosed = false;
-  let _qfTimer = null;
-  let _qfTicketCache = { ref: '', item: null };
-  const _QF_CLOSED_PAGE = 50;
-  // True while the boot-time conversation restore runs. An explicit
-  // ?ccc_mode=queues URL must win over that restore: without this guard the
-  // board showed for ~1s, then vanished as the restore selected a
-  // conversation (which always closes the board).
-  let _qfBootRestore = false;
-
-  function _qfView() { return document.getElementById('qfirstView'); }
-  function _qfActive() { return !!(document.body && document.body.classList.contains('qf-active')); }
-
-  function _qfSetEnabled(on) {
-    try { localStorage.setItem('ccc-q-first', on ? '1' : '0'); } catch (_) {}
-    if (document.body) document.body.classList.toggle('qf-mode', !!on || QFIRST_URL_MODE);
-  }
-  // Exposed so the W93 settings modal's Q-First toggle (module-scoped click
-  // delegation, defined much later in this file) can flip the same state
-  // without duplicating the two lines above.
-  window._cccQfSetEnabled = _qfSetEnabled;
-
-  function _qfShow(nav) {
-    const $view = _qfView();
-    if (!$view || !document.body) return;
-    if (nav) _qfNav = Object.assign({}, _qfNav, nav);
-    document.body.classList.add('qf-active');
-    $view.hidden = false;
-    // Narrow viewports keep the sidebar full-screen until the main pane is
-    // explicitly raised; the board lives in main, so raise it.
-    try { if (isMobile()) mobileShowMain(true); } catch (_) {}
-    _qfRender();
-    if (!_qfTimer) {
-      _qfTimer = setInterval(() => {
-        if (!_qfActive() || document.hidden) return;
-        // Never repaint over in-progress typing: a focused field inside the
-        // board (comment, close note, title) survives until blur.
-        const ae = document.activeElement;
-        if (ae && $view.contains(ae) && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) return;
-        _qfRender();
-      }, 12000);
-    }
-  }
-
-  function _qfHide() {
-    const $view = _qfView();
-    if ($view) $view.hidden = true;
-    if (document.body) document.body.classList.remove('qf-active');
-    if (_qfTimer) { clearInterval(_qfTimer); _qfTimer = null; }
-  }
-
-  // Called from selectConversation: any conversation open leaves the board.
-  function _qfOnConversationOpen() {
-    // An explicit ?ccc_mode=queues URL wins over the boot-time restore: the
-    // user asked to land on the board, so a programmatic restore must not
-    // yank them out of it. Real user clicks on a conversation still close it.
-    if (QFIRST_URL_MODE && _qfBootRestore) return;
-    if (_qfActive()) _qfHide();
-  }
-
-  // ── data shaping ──────────────────────────────────────────────────────────
-  // Merge health.queues (durable per-queue rollup: drain state, workers,
-  // stuck, repo) with an open/wip/done/blocked fold over the one cached
-  // ticket-list snapshot. Both inputs are single cached GETs - the fold is
-  // client-side, so queue reads stay bounded no matter the ticket count.
-  function _qfQueueModels(items, health) {
-    const byName = new Map();
-    const model = (name) => {
-      const key = _uxqProjectKey(name);
-      if (!byName.has(key)) {
-        byName.set(key, {
-          name: key, open: 0, wip: 0, done: 0, blocked: 0, total: 0,
-          workers: 0, autoDrain: false, stuck: false, claimable: null,
-          oldestOpenAgeS: null, lastActivityS: null, repoPath: '', configured: false,
-        });
-      }
-      return byName.get(key);
-    };
-    ((health && health.queues) || []).forEach(q => {
-      if (!q || q.queue == null) return;
-      const m = model(q.queue);
-      m.workers = Number(q.workers) || 0;
-      m.autoDrain = !!q.auto_drain;
-      m.stuck = !!q.stuck;
-      m.claimable = (q.claimable != null) ? Number(q.claimable) : null;
-      m.oldestOpenAgeS = (q.oldest_open_age_seconds != null) ? Number(q.oldest_open_age_seconds) : null;
-      m.lastActivityS = (q.last_activity_seconds != null) ? Number(q.last_activity_seconds) : null;
-      m.repoPath = String(q.repo_path || '');
-      m.configured = !!q.configured;
-    });
-    (items || []).forEach(it => {
-      const proj = _uxqProjectKey(it && it.project);
-      if (!proj || proj === '?') return;
-      const m = model(proj);
-      m.total += 1;
-      const st = String((it && it.status) || 'open');
-      if (st === 'closed') { m.done += 1; return; }
-      if (it && it.needs_input) { m.blocked += 1; return; }
-      const claimed = !!(it && (it.claimed_by || it.claimed_at || it.claimed_session_id));
-      if (st === 'in_progress' || (st === 'open' && claimed)) m.wip += 1;
-      else m.open += 1;
-    });
-    const rows = Array.from(byName.values()).filter(m => m.name && m.name !== '?');
-    // Most urgent first: stuck, then most open work, then busiest, then name.
-    rows.sort((a, b) => (b.stuck - a.stuck)
-      || ((b.open + b.wip + b.blocked) - (a.open + a.wip + a.blocked))
-      || (b.workers - a.workers)
-      || a.name.localeCompare(b.name));
-    return rows;
-  }
-
-  // Display state, mirroring wt status semantics (health.py) + the strip's
-  // refinements: draining is the healthy green, stuck the red alarm, waiting
-  // amber (open work, nobody on it), parked for claim-filtered backlogs,
-  // clear when there is nothing open.
-  function _qfQueueState(m) {
-    const openWork = m.open + m.wip + m.blocked;
-    if (m.stuck) return { k: 'stuck', label: 'stuck', tip: 'Open claimable work and no live worker is making progress. Needs attention.' };
-    if (m.workers > 0) return { k: 'draining', label: 'draining', tip: (m.workers + ' live worker' + (m.workers > 1 ? 's' : '') + ' on this queue right now.') };
-    if (openWork === 0) return { k: 'clear', label: 'clear', tip: 'No open tickets.' };
-    if (m.claimable === 0) return { k: 'parked', label: 'parked', tip: 'Open tickets exist, but none match the claim-type filter. Idle by design.' };
-    if (m.autoDrain) return { k: 'draining', label: 'draining', tip: 'Auto-drain is on. A worker spawns for claimable work.' };
-    return { k: 'waiting', label: 'waiting', tip: 'Open tickets, auto-drain off, and no worker assigned yet.' };
-  }
-
-  function _qfItemsForQueue(items, queue) {
-    const key = _uxqProjectKey(queue);
-    return (items || []).filter(it => _uxqProjectKey(it && it.project) === key);
-  }
-
-  // Effective per-ticket status, same collapse as the queue tab rows.
-  function _qfStatus(it) {
-    if (it && it.needs_input) return 'blocked';
-    const raw = String((it && it.status) || 'open');
-    if (raw === 'open' && it && (it.claimed_by || it.claimed_at || it.claimed_session_id)) return 'in_progress';
-    return raw;
-  }
-
-  // Latest session id an agent used on this ticket: the claim binding first,
-  // else the newest timeline actor that carried one.
-  function _qfTicketSession(item) {
-    if (!item) return '';
-    if (item.claimed_session_id) return String(item.claimed_session_id);
-    const tl = Array.isArray(item.timeline) ? item.timeline : [];
-    for (let i = tl.length - 1; i >= 0; i--) {
-      const by = tl[i] && tl[i].by;
-      if (by && typeof by === 'object' && by.session_id) return String(by.session_id);
-    }
-    return '';
-  }
-
-  // ── shared chrome ─────────────────────────────────────────────────────────
-  function _qfCrumbs(parts) {
-    return '<nav class="qf-crumbs" aria-label="Queue board breadcrumbs">'
-      + parts.map((p, i) => {
-          const last = i === parts.length - 1;
-          const seg = last
-            ? '<span class="qf-crumb is-current">' + escapeHtml(p.label) + '</span>'
-            : '<button type="button" class="qf-crumb" data-qf-action="' + escapeAttr(p.action) + '">' + escapeHtml(p.label) + '</button>';
-          return seg + (last ? '' : '<span class="qf-crumb-sep" aria-hidden="true">&rsaquo;</span>');
-        }).join('')
-      + '</nav>';
-  }
-
-  function _qfTopbar(crumbHtml, actionsHtml) {
-    const pinned = (() => { try { return localStorage.getItem('ccc-q-first') === '1'; } catch (_) { return false; } })();
-    const modeBtn = pinned
-      ? '<button type="button" class="qf-btn qf-mode-btn is-on" data-qf-action="unpin-mode" title="Queue-first is your pinned default. Click to make the sessions view the default again." aria-pressed="true">Default: queues (pinned) · click to unpin</button>'
-      : '<button type="button" class="qf-btn qf-mode-btn" data-qf-action="pin-mode" title="Make this queue board the default landing view on every load." aria-pressed="false">Make default</button>';
-    return '<header class="qf-topbar">'
-      + crumbHtml
-      + '<div class="qf-topbar-actions">'
-      + (actionsHtml || '')
-      + modeBtn
-      + '<button type="button" class="qf-btn qf-exit-btn" data-qf-action="leave-board" title="Back to the sessions view. Your pinned queue default will not change."><span aria-hidden="true">&larr;</span> Back to sessions</button>'
-      + '</div></header>';
-  }
-
-  function _qfStatePill(state) {
-    return '<span class="qf-state-pill is-' + escapeAttr(state.k) + '" title="' + escapeAttr(state.tip) + '">' + escapeHtml(state.label) + '</span>';
-  }
-
-  // ── screen: queue cards ───────────────────────────────────────────────────
-  function _qfQueuesHtml(models) {
-    if (!models.length) {
-      return '<div class="qf-empty">'
-        + '<div class="qf-empty-title">No queues yet</div>'
-        + '<div class="qf-empty-body">A queue is a named backlog of tickets that WatchTower workers drain for you. Create one here, or from any terminal:</div>'
-        + '<code class="qf-empty-code">wt config -q MYQUEUE --auto-drain on</code>'
-        + '<button type="button" class="qf-btn qf-btn-primary" data-qf-action="add-queue">New queue</button>'
-        + '</div>';
-    }
-    const cards = models.map(m => {
-      const state = _qfQueueState(m);
-      const oldest = (m.oldestOpenAgeS != null && (m.open + m.wip + m.blocked) > 0)
-        ? 'oldest ' + _uxqFmtAge(m.oldestOpenAgeS) : '';
-      const metaBits = [
-        (m.workers > 0 ? (m.workers + ' worker' + (m.workers > 1 ? 's' : '')) : ''),
-        ('drain ' + (m.autoDrain ? 'on' : 'off')),
-        oldest,
-      ].filter(Boolean);
-      return '<article class="qf-qcard is-' + escapeAttr(state.k) + '" role="button" tabindex="0" data-qf-queue="' + escapeAttr(m.name) + '"'
-        + ' aria-label="Open the ' + escapeAttr(m.name) + ' queue">'
-        + '<div class="qf-qcard-head">'
-        + '<span class="qf-qcard-name">' + escapeHtml(m.name) + '</span>'
-        + _qfStatePill(state)
-        + '</div>'
-        + '<div class="qf-qcard-counts">'
-        + '<span class="qf-count is-open" title="Open, unclaimed tickets"><b>' + m.open + '</b> open</span>'
-        + '<span class="qf-count is-wip" title="Claimed / in progress"><b>' + m.wip + '</b> wip</span>'
-        + (m.blocked ? '<span class="qf-count is-blocked" title="Waiting on a human answer"><b>' + m.blocked + '</b> blocked</span>' : '')
-        + '<span class="qf-count is-done" title="Closed tickets, all time"><b>' + m.done + '</b> done</span>'
-        + '</div>'
-        + (metaBits.length ? '<div class="qf-qcard-meta">' + metaBits.map(escapeHtml).join(' · ') + '</div>' : '')
-        + (m.repoPath ? '<div class="qf-qcard-repo" title="' + escapeAttr(m.repoPath) + '">' + escapeHtml(m.repoPath) + '</div>' : '')
-        + '</article>';
-    }).join('');
-    return '<div class="qf-queues-grid">' + cards + '</div>';
-  }
-
-  // ── screen: one queue's tickets, full room ────────────────────────────────
-  function _qfTicketRow(it) {
-    const ref = _uxqItemRef(it);
-    const status = _qfStatus(it);
-    const title = _uxqItemTitle(it);
-    const parts = splitFirstSentence(title);
-    const hero = parts[0] || title;
-    const rest = parts[1] || '';
-    const sid = _qfTicketSession(it);
-    const blockedQ = (it && it.needs_input && it.block_question) ? String(it.block_question) : '';
-    const ageSrc = status === 'closed'
-      ? (it.closed_at || it.updated_at || it.created_at)
-      : (it.updated_at || it.created_at);
-    const ageMs = ageSrc ? Date.parse(ageSrc) : NaN;
-    const chips = [
-      (it.type ? '<span class="qf-chip">' + escapeHtml(it.type) + '</span>' : ''),
-      (it.priority ? '<span class="qf-chip is-' + escapeAttr(it.priority) + '">' + escapeHtml(it.priority) + '</span>' : ''),
-    ].filter(Boolean).join('');
-    return '<div class="qf-trow is-' + escapeAttr(status) + '" role="button" tabindex="0" data-qf-ref="' + escapeAttr(ref) + '">'
-      + '<span class="qf-tdot" title="' + escapeAttr(status) + '" aria-hidden="true"></span>'
-      + '<span class="qf-tref">' + escapeHtml(ref) + '</span>'
-      + '<span class="qf-ttitle">'
-      + '<span class="qf-ttitle-first">' + escapeHtml(hero) + '</span>'
-      + (rest ? '<span class="qf-ttitle-rest"> ' + escapeHtml(rest) + '</span>' : '')
-      + (blockedQ ? '<span class="qf-ttitle-blocked">needs input: ' + escapeHtml(blockedQ) + '</span>' : '')
-      + '</span>'
-      + chips
-      + (sid ? '<span class="qf-tsess" title="An agent session is attached. Open the ticket to converse.">&#9679; session</span>' : '')
-      + '<span class="qf-tstatus is-' + escapeAttr(status) + '">' + escapeHtml(status.replace('_', ' ')) + '</span>'
-      + (!isNaN(ageMs) ? '<span class="qf-tage" title="' + escapeAttr(ageSrc) + '">' + escapeHtml(timeAgo(ageMs)) + '</span>' : '')
-      + '</div>';
-  }
-
-  function _qfTicketsHtml(queue, items, models) {
-    const m = models.find(x => x.name === _uxqProjectKey(queue));
-    const state = m ? _qfQueueState(m) : null;
-    const mine = _qfItemsForQueue(items, queue);
-    const openish = mine.filter(it => _qfStatus(it) !== 'closed');
-    const closed = mine.filter(it => _qfStatus(it) === 'closed');
-    const rank = { blocked: 0, in_progress: 1, open: 2 };
-    const prio = { p0: 0, p1: 1, p2: 2, p3: 3 };
-    openish.sort((a, b) => (rank[_qfStatus(a)] - rank[_qfStatus(b)])
-      || ((prio[a.priority] != null ? prio[a.priority] : 2) - (prio[b.priority] != null ? prio[b.priority] : 2))
-      || ((a.number || 0) - (b.number || 0)));
-    closed.sort((a, b) => (Date.parse(b.closed_at || b.updated_at || 0) || 0) - (Date.parse(a.closed_at || a.updated_at || 0) || 0));
-    const closedShown = _qfShowClosed ? closed.slice(0, _QF_CLOSED_PAGE) : [];
-    let listHtml;
-    if (!openish.length && !closedShown.length) {
-      listHtml = '<div class="qf-empty">'
-        + '<div class="qf-empty-title">' + (closed.length ? 'All clear in ' + escapeHtml(queue) : 'No tickets in ' + escapeHtml(queue) + ' yet') + '</div>'
-        + '<div class="qf-empty-body">' + (closed.length
-            ? 'Every ticket is closed. File the next piece of work and a worker can pick it up.'
-            : 'File the first ticket - a short note is enough. Workers read the full text once they claim it.')
-        + '</div>'
-        + '<button type="button" class="qf-btn qf-btn-primary" data-qf-action="add-ticket">Add ticket</button>'
-        + '</div>';
-    } else {
-      listHtml = '<div class="qf-tlist">'
-        + openish.map(_qfTicketRow).join('')
-        + (closedShown.length
-            ? '<div class="qf-tlist-closed-label">Closed' + (closed.length > closedShown.length ? ' (newest ' + closedShown.length + ' of ' + closed.length + ')' : '') + '</div>'
-              + closedShown.map(_qfTicketRow).join('')
-            : '')
-        + '</div>';
-    }
-    const counts = m
-      ? '<span class="qf-hcounts"><b>' + m.open + '</b> open · <b>' + m.wip + '</b> wip'
-        + (m.blocked ? ' · <b>' + m.blocked + '</b> blocked' : '') + ' · <b>' + m.done + '</b> done</span>'
-      : '';
-    const head = '<div class="qf-screen-head">'
-      + '<span class="qf-screen-title qf-mono">' + escapeHtml(queue) + '</span>'
-      + (state ? _qfStatePill(state) : '')
-      + counts
-      + '<span class="qf-head-spacer"></span>'
-      + (closed.length ? '<button type="button" class="qf-btn qf-btn-ghost" data-qf-action="toggle-closed" aria-pressed="' + (_qfShowClosed ? 'true' : 'false') + '">'
-          + (_qfShowClosed ? 'Hide closed' : 'Show closed (' + closed.length + ')') + '</button>' : '')
-      + '<button type="button" class="qf-btn qf-btn-primary" data-qf-action="add-ticket">Add ticket</button>'
-      + '</div>';
-    return head + listHtml;
-  }
-
-  // ── screen: ticket detail, full room ──────────────────────────────────────
-  function _qfTimelineHtml(item) {
-    const tl = Array.isArray(item && item.timeline) ? item.timeline : [];
-    const verbs = {
-      filed: 'Filed', claim: 'Claimed', progress: 'Progress', block: 'Blocked',
-      answer: 'Answered', comment: 'Comment', reopen: 'Reopened', close: 'Closed',
-      move: 'Moved', edit: 'Edited',
-    };
-    const rows = tl.filter(ev => ev && ev.event !== 'edit').map(ev => {
-      const type = String(ev.event || '');
-      const by = (ev.by && typeof ev.by === 'object') ? ev.by : {};
-      const who = by.worker || by.kind || '';
-      const sid = by.session_id || '';
-      let body = '';
-      if (type === 'block') body = ev.question || '';
-      else if (type === 'reopen') body = ev.reason || '';
-      else if (type === 'close') {
-        const res = (ev.resolution && typeof ev.resolution === 'object') ? ev.resolution : {};
-        body = res.summary || (typeof ev.resolution === 'string' ? ev.resolution : '');
-      } else body = ev.text || '';
-      return '<div class="qf-tl-row is-' + escapeAttr(type || 'event') + '">'
-        + '<span class="qf-tl-dot" aria-hidden="true"></span>'
-        + '<div class="qf-tl-main">'
-        + '<div class="qf-tl-head">'
-        + '<span class="qf-tl-verb">' + escapeHtml(verbs[type] || type || 'Event') + '</span>'
-        + (ev.at ? '<span class="qf-tl-time" title="' + escapeAttr(ev.at) + '">' + escapeHtml(_uxqRelTime(ev.at)) + '</span>' : '')
-        + (who ? '<span class="qf-tl-who qf-mono">' + escapeHtml(String(who).slice(0, 24)) + '</span>' : '')
-        + (sid ? '<button type="button" class="qf-tl-open" data-qf-action="open-session" data-sid="' + escapeAttr(sid) + '">open session</button>' : '')
-        + '</div>'
-        + (body ? '<div class="qf-tl-body">' + escapeHtml(String(body)) + '</div>' : '')
-        + '</div></div>';
-    }).join('');
-    return rows ? '<div class="qf-tl">' + rows + '</div>' : '<div class="qf-dim">No activity yet.</div>';
-  }
-
-  function _qfPropSelect(label, field, options, current) {
-    return '<label class="qf-prop"><span class="qf-prop-k">' + escapeHtml(label) + '</span>'
-      + '<select class="qf-prop-select" data-field="' + escapeAttr(field) + '">'
-      + options.map(([v, l]) => '<option value="' + escapeAttr(v) + '"' + (v === current ? ' selected' : '') + '>' + escapeHtml(l) + '</option>').join('')
-      + '</select></label>';
-  }
-
-  function _qfTicketHtml(item) {
-    const ref = _uxqItemRef(item);
-    const status = _qfStatus(item);
-    const title = _uxqItemTitle(item);
-    const parts = splitFirstSentence(title);
-    const sid = _qfTicketSession(item);
-    const showPrompt = !!(item.text && String(item.text).trim() !== String(item.note || '').trim());
-    const sessionBtn = sid
-      ? '<button type="button" class="qf-btn qf-btn-primary" data-qf-action="open-session" data-sid="' + escapeAttr(sid) + '" title="Open this ticket\'s agent session in the conversation view.">Open agent session</button>'
-      : (status !== 'closed'
-          ? '<button type="button" class="qf-btn qf-btn-primary" data-qf-action="spawn-worker" data-ref="' + escapeAttr(ref) + '" title="Spawn a one-off WatchTower worker scoped to just this ticket.">Spawn worker on this ticket</button>'
-          : '');
-    const answerSec = item.needs_input
-      ? '<section class="qf-sec qf-sec-answer"><div class="qf-sec-label">The agent needs your decision</div>'
-        + (item.block_question ? '<div class="qf-block-q">' + escapeHtml(item.block_question) + '</div>' : '')
-        + '<div class="qf-actrow"><input type="text" class="qf-input qf-answer-input" placeholder="Your answer" aria-label="Answer this blocked ticket">'
-        + '<button type="button" class="qf-btn qf-btn-primary" data-qf-action="answer-ticket" data-ref="' + escapeAttr(ref) + '">Send answer</button></div></section>'
-      : '';
-    const closeSec = status !== 'closed'
-      ? '<section class="qf-sec"><div class="qf-sec-label">Close with a note</div>'
-        + '<textarea class="qf-input qf-close-input" rows="2" placeholder="Resolution summary (optional)" aria-label="Resolution summary"></textarea>'
-        + '<div class="qf-actrow"><button type="button" class="qf-btn" data-qf-action="close-ticket" data-ref="' + escapeAttr(ref) + '">Mark as closed</button></div></section>'
-      : '<section class="qf-sec"><div class="qf-sec-label">Reopen</div>'
-        + '<textarea class="qf-input qf-reopen-input" rows="2" placeholder="Reason for reopening (optional)" aria-label="Reason for reopening"></textarea>'
-        + '<div class="qf-actrow"><button type="button" class="qf-btn" data-qf-action="reopen-ticket" data-ref="' + escapeAttr(ref) + '">Reopen ticket</button></div></section>';
-    const commentSec = '<section class="qf-sec"><div class="qf-sec-label">Add comment</div>'
-      + '<textarea class="qf-input qf-comment-input" rows="2" placeholder="Log an update - not a resolution" aria-label="Add a comment"></textarea>'
-      + '<div class="qf-actrow"><button type="button" class="qf-btn" data-qf-action="comment-ticket" data-ref="' + escapeAttr(ref) + '">Add comment</button></div></section>';
-    const props = _qfPropSelect('Priority', 'priority', [['', '-'], ['p0', 'p0 - urgent'], ['p1', 'p1'], ['p2', 'p2'], ['p3', 'p3']], item.priority || '')
-      + _qfPropSelect('Type', 'type', [['', '-'], ['bug', 'bug'], ['feature', 'feature']], item.type || '')
-      + _qfPropSelect('Readiness', 'readiness', [['', '-'], ['shovel-ready', 'shovel-ready'], ['needs-spec', 'needs-spec'], ['needs-shaping', 'needs-shaping']], item.readiness || '')
-      + _qfPropSelect('Value', 'value', [['', '-'], ['H', 'High'], ['M', 'Med'], ['L', 'Low']], item.value || '')
-      + _qfPropSelect('Confidence', 'confidence', [['', '-'], ['H', 'High'], ['M', 'Med'], ['L', 'Low']], item.confidence || '');
-    const assign = '<div class="qf-prop"><span class="qf-prop-k">Worker</span><span class="qf-prop-v qf-mono">' + (item.claimed_by ? escapeHtml(String(item.claimed_by).slice(0, 28)) : '<span class="qf-dim">unassigned</span>') + '</span></div>'
-      + (sid ? '<div class="qf-prop"><span class="qf-prop-k">Session</span><button type="button" class="qf-linklike" data-qf-action="open-session" data-sid="' + escapeAttr(sid) + '">open in CCC</button></div>' : '')
-      + (item.claimed_at ? '<div class="qf-prop"><span class="qf-prop-k">Claimed</span><span class="qf-prop-v" title="' + escapeAttr(item.claimed_at) + '">' + escapeHtml(_uxqRelTime(item.claimed_at)) + '</span></div>' : '')
-      + (item.closed_at ? '<div class="qf-prop"><span class="qf-prop-k">Closed</span><span class="qf-prop-v" title="' + escapeAttr(item.closed_at) + '">' + escapeHtml(_uxqRelTime(item.closed_at)) + '</span></div>' : '');
-    const origin = (item.source ? '<div class="qf-prop"><span class="qf-prop-k">Source</span><span class="qf-prop-v">' + escapeHtml(item.source) + '</span></div>' : '')
-      + (item.lane ? '<div class="qf-prop"><span class="qf-prop-k">Lane</span><span class="qf-prop-v">' + escapeHtml(item.lane) + '</span></div>' : '')
-      + (item.repo_path ? '<div class="qf-prop"><span class="qf-prop-k">Repo</span><span class="qf-prop-v qf-mono" title="' + escapeAttr(item.repo_path) + '">' + escapeHtml(item.repo_path) + '</span></div>' : '')
-      + (item.url ? '<div class="qf-prop"><span class="qf-prop-k">URL</span><a class="qf-linklike" href="' + escapeAttr(item.url) + '" target="_blank" rel="noopener">' + escapeHtml(item.url) + '</a></div>' : '');
-    return '<div class="qf-ticket">'
-      + '<div class="qf-ticket-main">'
-      + '<div class="qf-ticket-head">'
-      + '<span class="qf-tref qf-tref-lg">' + escapeHtml(ref) + '</span>'
-      + '<span class="qf-tstatus is-' + escapeAttr(status) + '">' + escapeHtml(status.replace('_', ' ')) + '</span>'
-      + (item.priority ? '<span class="qf-chip is-' + escapeAttr(item.priority) + '">' + escapeHtml(item.priority) + '</span>' : '')
-      + (item.type ? '<span class="qf-chip">' + escapeHtml(item.type) + '</span>' : '')
-      + '<span class="qf-head-spacer"></span>'
-      + sessionBtn
-      + '</div>'
-      + '<h2 class="qf-ticket-title" contenteditable="true" spellcheck="false" data-qf-title-ref="' + escapeAttr(ref) + '" aria-label="Ticket title - click to edit">'
-      + '<span class="qf-ttitle-first">' + escapeHtml(parts[0] || title) + '</span>'
-      + (parts[1] ? '<span class="qf-ttitle-rest"> ' + escapeHtml(parts[1]) + '</span>' : '')
-      + '</h2>'
-      + '<div class="qf-ticket-meta">'
-      + (item.created_at ? 'filed ' + escapeHtml(_uxqRelTime(item.created_at)) : '')
-      + (item.updated_at ? ' · updated ' + escapeHtml(_uxqRelTime(item.updated_at)) : '')
-      + '</div>'
-      + answerSec
-      + (showPrompt ? '<section class="qf-sec"><div class="qf-sec-label">Full prompt</div><pre class="qf-pre">' + escapeHtml(item.text) + '</pre></section>' : '')
-      + '<section class="qf-sec"><div class="qf-sec-label">Activity</div>' + _qfTimelineHtml(item) + '</section>'
-      + commentSec
-      + closeSec
-      + '</div>'
-      + '<aside class="qf-ticket-side">'
-      + '<div class="qf-side-group"><div class="qf-sec-label">Properties</div>' + props + '</div>'
-      + '<div class="qf-side-group"><div class="qf-sec-label">Assignment</div>' + assign + '</div>'
-      + ((origin) ? '<div class="qf-side-group"><div class="qf-sec-label">Origin</div>' + origin + '</div>' : '')
-      + '</aside>'
-      + '</div>';
-  }
-
-  // ── render dispatch ───────────────────────────────────────────────────────
-  async function _qfRender() {
-    const $view = _qfView();
-    if (!$view || $view.hidden) return;
-    const body = $view.querySelector('.qf-body');
-    const scrollTop = body ? body.scrollTop : 0;
-    const [items, health] = await Promise.all([_fetchUxqItems(), _fetchUxqHealth()]);
-    if (!_qfActive()) return;
-    const models = _qfQueueModels(items, health);
-    let crumbHtml, actionsHtml = '', bodyHtml;
-    if (_qfNav.screen === 'tickets' || _qfNav.screen === 'ticket') {
-      const queue = _uxqProjectKey(_qfNav.queue);
-      if (_qfNav.screen === 'ticket') {
-        crumbHtml = _qfCrumbs([
-          { label: 'Queues', action: 'back-queues' },
-          { label: queue, action: 'back-tickets' },
-          { label: _qfNav.ref },
-        ]);
-        let item = (_qfTicketCache.ref === _qfNav.ref) ? _qfTicketCache.item : null;
-        try {
-          const res = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(_qfNav.ref), { cache: 'no-store' });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.ok && data.item) item = data.item;
-        } catch (_) { /* fall back to cache / list copy */ }
-        if (!item) item = _uxqItemForRef(_qfNav.ref);
-        if (!_qfActive() || _qfNav.screen !== 'ticket') return;
-        _qfTicketCache = { ref: _qfNav.ref, item };
-        bodyHtml = item ? _qfTicketHtml(item)
-          : '<div class="qf-empty"><div class="qf-empty-title">Ticket not found</div>'
-            + '<div class="qf-empty-body">' + escapeHtml(_qfNav.ref) + ' is not in this store anymore.</div>'
-            + '<button type="button" class="qf-btn" data-qf-action="back-tickets">Back to ' + escapeHtml(queue) + '</button></div>';
-      } else {
-        crumbHtml = _qfCrumbs([{ label: 'Queues', action: 'back-queues' }, { label: queue }]);
-        bodyHtml = _qfTicketsHtml(queue, items, models);
-      }
-    } else {
-      crumbHtml = _qfCrumbs([{ label: 'Queues' }]);
-      actionsHtml = '<button type="button" class="qf-btn" data-qf-action="add-queue" title="Create a WatchTower queue">New queue</button>';
-      bodyHtml = _qfQueuesHtml(models);
-    }
-    $view.innerHTML = _qfTopbar(crumbHtml, actionsHtml) + '<div class="qf-body">' + bodyHtml + '</div>';
-    const newBody = $view.querySelector('.qf-body');
-    if (newBody && scrollTop) newBody.scrollTop = scrollTop;
-  }
-
-  function _qfBust() { _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0; }
-
-  // ── actions ───────────────────────────────────────────────────────────────
-  async function _qfPost(url, payload, okMsg) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
-        if (okMsg) showOpToast(okMsg, 'success');
-        _qfBust();
-        _qfRender();
-        if (typeof _renderQueuePanel === 'function') _renderQueuePanel({ allowStale: true });
-        return data;
-      }
-      showOpToast('Failed: ' + (data.error || res.status), 'error');
-    } catch (e) {
-      showOpToast('Failed: ' + e, 'error');
-    }
-    return null;
-  }
-
-  async function _qfSaveField(ref, field, value) {
-    await _qfPost('/api/ux-fixes/edit', { ref, [field]: value }, 'Saved');
-  }
-
-  async function _qfAddTicket(queue) {
-    const note = await openQueueTicketComposer();
-    if (!note) return;
-    const data = await _qfPost('/api/ux-fixes/enqueue', { note, project: _uxqProjectKey(queue) }, null);
-    if (data && data.item) showOpToast('Added ' + (_uxqItemRef(data.item) || 'ticket'), 'success');
-  }
-
-  function _qfWire() {
-    const $view = _qfView();
-    if (!$view || $view.dataset.qfWired) return;
-    $view.dataset.qfWired = '1';
-    $view.addEventListener('click', async (ev) => {
-      const sessBtn = ev.target.closest('[data-qf-action="open-session"][data-sid]');
-      if (sessBtn) {
-        ev.preventDefault();
-        const sid = sessBtn.getAttribute('data-sid');
-        if (sid && typeof selectConversation === 'function') selectConversation(sid);
-        return;
-      }
-      const actBtn = ev.target.closest('[data-qf-action]');
-      if (actBtn) {
-        ev.preventDefault();
-        const act = actBtn.getAttribute('data-qf-action');
-        const ref = actBtn.getAttribute('data-ref') || _qfNav.ref;
-        if (act === 'back-queues') { _qfShow({ screen: 'queues', queue: '', ref: '' }); return; }
-        if (act === 'back-tickets') { _qfShow({ screen: 'tickets', ref: '' }); return; }
-        if (act === 'leave-board') {
-          _qfHide();
-          try { if (isMobile()) mobileShowMain(false); } catch (_) {}
-          return;
-        }
-        if (act === 'pin-mode') { _qfSetEnabled(true); showOpToast('Queue-first is now your default view', 'success'); _qfRender(); return; }
-        if (act === 'unpin-mode') { _qfSetEnabled(false); showOpToast('Sessions view is the default again', 'success'); _qfRender(); return; }
-        if (act === 'toggle-closed') { _qfShowClosed = !_qfShowClosed; _qfRender(); return; }
-        if (act === 'add-queue') {
-          if (typeof openQueueManager === 'function') await openQueueManager('');
-          _qfBust(); _qfRender();
-          return;
-        }
-        if (act === 'add-ticket') { await _qfAddTicket(_qfNav.queue); return; }
-        if (act === 'spawn-worker' && ref) {
-          actBtn.disabled = true;
-          const d = await _qfPost('/api/ux-fixes/run-once', { ref }, 'Spawned a worker for ' + ref);
-          if (!d) actBtn.disabled = false;
-          return;
-        }
-        if (act === 'answer-ticket' && ref) {
-          const input = $view.querySelector('.qf-answer-input');
-          const text = input ? input.value.trim() : '';
-          if (!text) { if (input) input.focus(); return; }
-          await _qfPost('/api/ux-fixes/answer', { ref, text }, 'Answered - block cleared');
-          return;
-        }
-        if (act === 'comment-ticket' && ref) {
-          const input = $view.querySelector('.qf-comment-input');
-          const text = input ? input.value.trim() : '';
-          if (!text) { if (input) input.focus(); return; }
-          await _qfPost('/api/ux-fixes/comment', { ref, text }, 'Comment added');
-          return;
-        }
-        if (act === 'close-ticket' && ref) {
-          const input = $view.querySelector('.qf-close-input');
-          await _qfPost('/api/ux-fixes/close', { ref, note: input ? input.value.trim() : '' }, 'Closed ' + ref);
-          return;
-        }
-        if (act === 'reopen-ticket' && ref) {
-          const input = $view.querySelector('.qf-reopen-input');
-          await _qfPost('/api/ux-fixes/reopen', { ref, note: input ? input.value.trim() : '' }, 'Reopened ' + ref);
-          return;
-        }
-        return;
-      }
-      const card = ev.target.closest('[data-qf-queue]');
-      if (card) { _qfShow({ screen: 'tickets', queue: card.getAttribute('data-qf-queue'), ref: '' }); return; }
-      const trow = ev.target.closest('[data-qf-ref]');
-      if (trow) { _qfShow({ screen: 'ticket', ref: trow.getAttribute('data-qf-ref') }); return; }
-    });
-    $view.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'Enter' && ev.key !== ' ') return;
-      const t = ev.target;
-      if (t && t.matches && (t.matches('[data-qf-queue]') || t.matches('[data-qf-ref]'))) {
-        ev.preventDefault();
-        t.click();
-      }
-    });
-    $view.addEventListener('change', (ev) => {
-      const sel = ev.target.closest && ev.target.closest('.qf-prop-select[data-field]');
-      if (sel && _qfNav.ref) _qfSaveField(_qfNav.ref, sel.getAttribute('data-field'), sel.value);
-    });
-    // Inline title edit: blur saves, Escape restores, Enter commits.
-    $view.addEventListener('focusout', (ev) => {
-      const h = ev.target.closest && ev.target.closest('[data-qf-title-ref]');
-      if (!h) return;
-      const ref = h.getAttribute('data-qf-title-ref');
-      const item = (_qfTicketCache.ref === ref) ? _qfTicketCache.item : _uxqItemForRef(ref);
-      const orig = item ? _uxqItemTitle(item) : '';
-      const val = h.textContent.trim();
-      if (val && val !== orig) _qfSaveField(ref, 'note', val);
-    });
-    $view.addEventListener('keydown', (ev) => {
-      const h = ev.target.closest && ev.target.closest('[data-qf-title-ref]');
-      if (!h) return;
-      if (ev.key === 'Enter') { ev.preventDefault(); h.blur(); }
-      if (ev.key === 'Escape') { _qfRender(); }
-    });
-  }
-
-  function _qfEnsureChrome() {
-    // Entry point from the regular queue tab: one button in the panel header.
-    const header = document.querySelector('#queuePanel .files-header');
-    if (header && !document.getElementById('qfEnterBtn')) {
-      const btn = document.createElement('button');
-      btn.id = 'qfEnterBtn';
-      btn.type = 'button';
-      btn.className = 'qf-enter-btn';
-      btn.title = 'Open the queue board - queues, tickets, and ticket detail in the main view with full room';
-      btn.textContent = 'Board';
-      btn.addEventListener('click', () => _qfShow({ screen: 'queues', queue: '', ref: '' }));
-      const boardSlot = document.getElementById('queueBoardMenuSlot');
-      if (boardSlot) boardSlot.appendChild(btn);
-      else header.appendChild(btn);
-    }
-    // Return pill: visible (via CSS) while queue-first mode is on but a
-    // conversation has taken over the main view.
-    if (!document.getElementById('qfReturnPill') && document.body) {
-      const pill = document.createElement('button');
-      pill.id = 'qfReturnPill';
-      pill.type = 'button';
-      pill.title = 'Back to the queue board';
-      pill.innerHTML = '<span aria-hidden="true">&#8678;</span> Queues';
-      pill.addEventListener('click', () => _qfShow({}));
-      document.body.appendChild(pill);
-    }
-  }
-
-  function _qfInit() {
-    if (CONV_POPOUT_MODE || GROUPCHAT_POPOUT_MODE || FLOW_POPOUT_MODE) return;
-    if (!_qfView()) return;
-    _qfWire();
-    _qfEnsureChrome();
-    if (qFirstEnabled()) _qfShow({ screen: 'queues', queue: '', ref: '' });
-  }
-  try { _qfInit(); } catch (e) { console.warn('q-first init failed', e); }
-  // ── end Q-FIRST (W88) ─────────────────────────────────────────────────────
 
   // Plan-to-fleet (W51): drop a plan/spec/mission-brief document, preview the
   // tickets `wt import` extracts, file them, and optionally drain with workers.
@@ -47037,7 +46350,6 @@
   function setStatusRailTab(tab) {
     const rail = document.getElementById('statusRail');
     if (!rail) return;
-    const filesPane = rail.querySelector('#statusRailFilesPane');
     const queuePane = rail.querySelector('#statusRailQueuePane');
     const next = (tab === 'files' || tab === 'queue') ? tab : 'metadata';
     rail.querySelectorAll('[data-rail-tab]').forEach(btn => {
@@ -47586,7 +46898,8 @@
     //   4. Close & announce (rarer)
     //   5. Jump / Pkood-kill (state-conditional)
     //   6. Footer cluster: Session ID + overflow menu
-    _captureRailEl(document.getElementById('cccBreadcrumb'));
+    // Keep the breadcrumb in the top bar so its pop-out action remains at
+    // the far right even while the status rail is open.
     _captureRailEl(document.getElementById('convStatus'));
     _captureRailEl(document.getElementById('liveBadgeConv'));
     _captureRailEl(document.getElementById('topbarTtsControl'));
@@ -48035,8 +47348,6 @@
     const sel = (window.CSS && CSS.escape) ? CSS.escape(repo) : repo.replace(/"/g, '\\"');
     return document.querySelector('.conv-folder-ship[data-ship-repo="' + sel + '"]');
   }
-
-  const _SHIP_DONE_PHASES = ['pushed', 'deployed', 'error', 'needs_you', 'deploy_error', 'diverged'];
 
   function _shipDismissLog() {
     _shipLogActive = false;
@@ -49708,10 +49019,6 @@
   let _uxFixesQueueMetaPromise = null;
   let _uxFixesQueueMetaLoadedAt = 0;
   const UX_FIXES_QUEUE_META_TTL_MS = 15 * 1000;
-
-  function _normalizeUxFixesSessionId(value) {
-    return String(value || '').trim().toLowerCase();
-  }
 
   // A worker may claim with EITHER its real session UUID or its made-up CCC
   // name (e.g. "BYM UX-fixes-queue"). To let the badge match either, reduce
@@ -54738,12 +54045,6 @@
     return annTabCapturePending;
   }
 
-  async function annAcquireTabCaptureStream() {
-    const pending = annBeginTabCaptureRequest();
-    if (!pending) return null;
-    return pending;
-  }
-
   async function annCaptureTabRegionB64(rect) {
     if (!rect || rect.width < 2 || rect.height < 2) return null;
     const pending = annBeginTabCaptureRequest();
@@ -59247,14 +58548,7 @@
     if ($liveToggle) {
       $liveToggle.classList.toggle('is-on', lv === 'B');
       $liveToggle.setAttribute('aria-checked', String(lv === 'B'));
-    }
-    const qf = qFirstEnabled();
-    const $qfToggle = document.getElementById('settingsQfirstToggle');
-    if ($qfToggle) {
-      $qfToggle.classList.toggle('is-on', qf);
-      $qfToggle.setAttribute('aria-checked', String(qf));
-    }
-  }
+    }  }
   // Live-update when the user has 'system' selected and OS theme flips.
   _systemThemeMQ.addEventListener && _systemThemeMQ.addEventListener('change', () => {
     if (getThemePref() === 'system') applyTheme('system');
@@ -59676,10 +58970,8 @@
     try {
       localStorage.removeItem('ccc-view-gh');
       localStorage.removeItem('ccc-hero-live-variant');
-      localStorage.removeItem('ccc-q-first');
     } catch (_) {}
     applyViewGh(getViewGhPref());
-    if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(false);
     refreshAppearanceChecks();
   }
 
@@ -59850,14 +59142,6 @@
         try { localStorage.setItem('ccc-hero-live-variant', lv === 'B' ? 'A' : 'B'); } catch (_) {}
         refreshAppearanceChecks();
         showSettingsSavedPulse(liveVariantToggle.closest('.settings-row'));
-        return;
-      }
-      const qfirstToggle = e.target.closest('[data-qfirst-toggle]');
-      if (qfirstToggle) {
-        const on = qFirstEnabled();
-        if (typeof window._cccQfSetEnabled === 'function') window._cccQfSetEnabled(!on);
-        refreshAppearanceChecks();
-        showSettingsSavedPulse(qfirstToggle.closest('.settings-row'));
         return;
       }
       const ffToggle = e.target.closest('[data-ff-toggle]');

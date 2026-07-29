@@ -1,9 +1,7 @@
 """Kimi (Moonshot "Kimi Code" CLI) usage + wire.jsonl throughput extraction."""
 
 import json
-from pathlib import Path
 
-import pytest
 
 import server
 

@@ -697,11 +697,6 @@
     <div class="issues-view" id="issuesView" style="display:none;">
       <div class="empty-state" style="height:auto;padding:40px;">Loading issues...</div>
     </div>
-    <!-- Q-FIRST (W88): queue-first main-view surface. Hidden unless the
-         queue-first mode is active (body.qf-active). Rendered entirely by
-         the _qf* section in app.js: queue cards, then a full-room ticket
-         list per queue, then a full-room ticket detail panel. -->
-    <div class="qfirst-view" id="qfirstView" aria-label="Queue-first workspace" hidden></div>
     <div class="conv-split" id="convSplit" data-orientation="">
       <div class="conv-pane" data-pane-id="p1">
         <div class="conv-pane-header" data-role="pane-header">
@@ -1850,18 +1845,6 @@
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-toggle" id="settingsLiveVariantToggle" data-live-variant-toggle role="switch" aria-checked="false" aria-label="Live updates on left">
-                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
-                </button>
-              </div>
-            </div>
-
-            <div class="settings-row" data-keywords="queue first mode q-first board main view">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Queue-first mode</div>
-                <div class="settings-row-desc">Open the main view straight into the queue board instead of the session list.</div>
-              </div>
-              <div class="settings-row-control">
-                <button type="button" class="settings-toggle" id="settingsQfirstToggle" data-qfirst-toggle role="switch" aria-checked="false" aria-label="Queue-first mode">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
               </div>

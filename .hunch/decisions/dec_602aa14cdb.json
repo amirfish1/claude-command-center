@@ -1,0 +1,37 @@
+{
+  "id": "dec_602aa14cdb",
+  "title": "fix(ui): keep chasing a spawned row until it actually lands",
+  "topic": null,
+  "status": "accepted",
+  "context": "After a spawn the client force-refreshed the session list at 0.6s, 1.5s and\n3s, then stopped. For Codex that entire burst is spent before the engine has\nwritten anything: measured, the rollout file appears at ~6.5s. So the row\nwaited for the next ordinary poll and the sidebar sat on \"spawning\" for\n22s from submit -- roughly 15s of it dead time, with CCC already holding the\nsession id since 6.3s.\n\nKeep nudging the list every 1.5s until the placeholder is reconciled, capped\nat 45s. Stops immediate",
+  "decision": "Changed static/app.js: added chasePendingSpawn.",
+  "consequences": [],
+  "alternatives_rejected": [],
+  "rejected_tripwires": [],
+  "related_components": [],
+  "related_files": [
+    "static/app.js"
+  ],
+  "supersedes": null,
+  "superseded_by": null,
+  "caused_by_bug": null,
+  "commit": "cea19b43",
+  "valid_from": "2026-07-28T11:08:42-07:00",
+  "valid_to": null,
+  "retired": {
+    "symbols": [],
+    "deps": []
+  },
+  "provenance": {
+    "source": "inferred",
+    "confidence": 0.45,
+    "evidence": [
+      "commit:cea19b43",
+      "synth:provider=deterministic",
+      "branch:main",
+      "static/app.js"
+    ],
+    "last_verified": "2026-07-29T07:57:42.168Z"
+  },
+  "date": "2026-07-28T11:08:42-07:00"
+}

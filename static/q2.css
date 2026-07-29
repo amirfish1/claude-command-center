@@ -188,6 +188,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   color: var(--text-muted);
   white-space: nowrap;
 }
+.q2-mobile-back { display: none; }
 .q2-col-count { flex: 0 1 auto; min-width: 0; overflow: hidden; font-size: 11px; color: var(--text-muted); }
 /* The ticket header reuses .q2-counts markup; inline it rather than stacking. */
 .q2-col-count .q2-counts { display: inline-flex; margin-top: 0; }
@@ -998,6 +999,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   font-size: 11px;
 }
 .q2-detail-foot .q2-dim { flex: 1 1 auto; color: var(--text-muted); }
+.q2-learnings-body { max-height: none; margin: 0; }
 
 /* Assignment + origin, one wrapping strip instead of a sidebar. */
 .q2-meta-strip {
@@ -1330,6 +1332,50 @@ body.q2-resizing .q2-col { pointer-events: none; }
    column, which is the least information-dense of the three. */
 @media (max-width: 1200px) {
   :root { --q2-queues-w: 200px; --q2-tickets-w: 360px; }
+}
+
+/* Phones keep Q2's master/detail relationship without squeezing three desktop
+   panes into one viewport. Each pane occupies the viewport and can be swiped;
+   choosing a queue or ticket advances to its detail pane. */
+@media (max-width: 700px) {
+  .q2-topbar {
+    height: auto;
+    min-height: 40px;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+  }
+  .q2-topbar .q2-spacer { display: none; }
+  .q2-topbar #q2AnnotateBtn { margin-left: auto; }
+  .q2-topbar .q2-note,
+  .q2-topbar .q2-stale { flex: 1 0 100%; }
+  .q2-shell {
+    grid-template-columns: repeat(3, 100%);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+  .q2-shell::-webkit-scrollbar { display: none; }
+  .q2-col { scroll-snap-align: start; }
+  .q2-mobile-back {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    height: 28px;
+    padding: 0 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .q2-detail-mobile-back {
+    margin: 6px 8px 0;
+    align-self: flex-start;
+  }
+  .q2-resizer { display: none; }
 }
 
 /* ── modals ───────────────────────────────────────────────────────────── */

@@ -1,0 +1,1 @@
+- Removed the retired Queue-first board; the normal queue tools and `q2` remain available.
