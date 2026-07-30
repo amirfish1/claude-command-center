@@ -36,6 +36,14 @@
     };
   }
 
+  function buildFixesQueueText(note, url, selector, elementText) {
+    var anchors = ['- URL: ' + url, '- Selector: ' + selector];
+    if (elementText) anchors.push('- Element: ' + elementText);
+    return 'Fix the following UX issue based on this annotation:\n\n'
+      + 'Annotation: ' + note + '\n\n'
+      + 'Anchors:\n' + anchors.join('\n');
+  }
+
   function addStyle() {
     if (document.getElementById('q2AnnotationStyle')) return;
     var style = document.createElement('style');
@@ -94,12 +102,39 @@
           var save = editor.querySelector('[data-action="save"]');
           save.disabled = true;
           var payload = { note: note, url: location.href, title: document.title, source: 'ccc', rect: info.rect, viewport_crop: info.rect, element: { tag: info.tag, id: info.id, role: info.role, selector: info.selector, text: info.text }, capture_screen: true };
+          var noteEl = document.getElementById('q2Note');
+          function showNote(text) {
+            if (!noteEl) return;
+            noteEl.textContent = text; noteEl.hidden = false;
+            setTimeout(function () { noteEl.hidden = true; }, 3000);
+          }
           try {
             var response = await fetch('/api/annotations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             if (!response.ok) throw new Error('Could not save annotation');
+            var data = await response.json().catch(function () { return {}; });
+            var saved = (data && data.annotation) || {};
             stop();
-            var noteEl = document.getElementById('q2Note');
-            if (noteEl) { noteEl.textContent = 'Annotation saved'; noteEl.hidden = false; setTimeout(function () { noteEl.hidden = true; }, 3000); }
+            try {
+              var queueResponse = await fetch('/api/annotations/ux-fixes-queue', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  annotation_id: saved.id || '',
+                  text: buildFixesQueueText(note, payload.url, info.selector, info.text),
+                  note: note,
+                  url: payload.url,
+                  title: payload.title,
+                  selector: info.selector,
+                  screenshot_path: saved.screenshot_path || '',
+                  source: 'ccc',
+                }),
+              });
+              var queueData = await queueResponse.json().catch(function () { return {}; });
+              if (!queueResponse.ok || !queueData.ok) throw new Error((queueData && queueData.error) || 'Could not file ticket');
+              showNote('Filed as ' + ((queueData.item && queueData.item.ref) || 'ticket'));
+            } catch (queueErr) {
+              showNote('Annotation saved, but could not file a ticket: ' + ((queueErr && queueErr.message) || 'unknown error'));
+            }
           } catch (err) { error.textContent = err.message || 'Could not save annotation.'; error.hidden = false; save.disabled = false; }
         });
       }

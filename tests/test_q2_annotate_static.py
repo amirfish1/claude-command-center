@@ -27,6 +27,8 @@ class TestQ2Annotate(unittest.TestCase):
         self.assertIn("source: 'ccc'", controller)
         self.assertIn("capture_screen: true", controller)
         self.assertIn("fetch('/api/annotations'", controller)
+        self.assertIn("fetch('/api/annotations/ux-fixes-queue'", controller)
+        self.assertIn("annotation_id:", controller)
 
 
 if __name__ == "__main__":
