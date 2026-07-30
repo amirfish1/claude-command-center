@@ -42975,7 +42975,14 @@ def _is_group_chat_wake_status_line(line: str) -> bool:
     """Return True for lines written by the managed wake-status block."""
     if line == "- (no participants)":
         return True
-    return bool(re.match(r"^- `.*` \([0-9a-fA-F]{8}\): ", line))
+    # Session ids are not uniformly UUIDs: Kimi uses a ``session_`` prefix.
+    # Restrict the tail to statuses emitted by the writer, rather than assuming
+    # the eight-character display prefix is hexadecimal, so each refresh can
+    # replace the whole managed block instead of preserving its later rows.
+    return bool(re.match(
+        r"^- `.*` \([^)]+\): (?:online|offline(?: \(last active \d{4}-\d{2}-\d{2}\))?)$",
+        line,
+    ))
 
 
 def _split_group_chat_header_for_rewrite(content: str) -> tuple[str, str, str]:

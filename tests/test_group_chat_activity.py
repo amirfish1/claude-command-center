@@ -117,3 +117,20 @@ def test_empty_group_chat_rows_do_not_reserve_participant_toggle_space():
 
     assert "conv-ingroupchat-collapse-spacer" not in collapse_control
     assert ": '';" in collapse_control
+
+
+def test_group_chat_header_parser_consumes_wake_status_for_non_hex_session_ids():
+    header = (
+        "# Group Chat — review\n"
+        "**Started:** today\n"
+        "**Mode:** topic\n"
+        "**Participants:** `Agent-1`\n"
+        "**Wake-status:**\n"
+        "- `Agent-1` (60ffe2f4): online\n"
+        "- `Agent-2` (session_): online\n"
+        "- `Agent-3` (019fb0cb): offline\n"
+    )
+
+    _, preserved, _ = server._split_group_chat_header_for_rewrite(header)
+
+    assert preserved == ""
