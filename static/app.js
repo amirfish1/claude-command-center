@@ -3065,7 +3065,12 @@
     const sid = st.sid;
     const ctx = Object.assign({}, st.ctx || {}, { text: f2ComposerText(paneId) });
     const launch = st.launch;
-    const subject = 'continue-' + String(sid).slice(0, 8);
+    // The parent row already has the human-facing title. Keep it on the
+    // continuation instead of exposing an opaque session-id fragment.
+    const parentTitle = sidebarRowDisplayTitle(
+      (ctx.row && (ctx.row.display_name || ctx.row.name || ctx.row.title)) || ''
+    ) || 'session';
+    const subject = 'Continue ' + parentTitle;
     const tempPid = 'tmp-f2-' + Date.now();
     try {
       const body = {
