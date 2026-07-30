@@ -8530,6 +8530,27 @@
   let _annotateTriggerEl = null;
   let _annotatePopoverEl = null;
 
+  // Kimi/Codex webui panes (`.kimi-turn`, see _kimiAppendAssistantEvent): the
+  // visible content blocks are appended as siblings of the hidden
+  // `.event.kimi-marker` that owns them, not descendants of it — a plain
+  // `.closest('.event')` never finds an ancestor there. Walk back through
+  // preceding siblings within the turn to find the marker that anchors this
+  // node's jsonl line.
+  function _closestAnnotatableEvent(node) {
+    if (!node || !node.closest) return null;
+    const direct = node.closest('.conv-pane .event');
+    if (direct) return direct;
+    const turn = node.closest('.conv-pane .kimi-turn');
+    if (!turn) return null;
+    let child = node;
+    while (child && child.parentElement !== turn) child = child.parentElement;
+    while (child) {
+      if (child.classList && child.classList.contains('event')) return child;
+      child = child.previousElementSibling;
+    }
+    return null;
+  }
+
   function _selectionSingleEventInfo() {
     const sel = window.getSelection && window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
@@ -8538,8 +8559,8 @@
     const range = sel.getRangeAt(0);
     const startNode = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer;
     const endNode = range.endContainer.nodeType === 3 ? range.endContainer.parentElement : range.endContainer;
-    const startEvent = startNode && startNode.closest ? startNode.closest('.conv-pane .event') : null;
-    const endEvent = endNode && endNode.closest ? endNode.closest('.conv-pane .event') : null;
+    const startEvent = _closestAnnotatableEvent(startNode);
+    const endEvent = _closestAnnotatableEvent(endNode);
     if (!startEvent || startEvent !== endEvent) return null;
     if (startEvent.dataset.jsonlLine == null) return null;
     return { range: range.cloneRange(), eventEl: startEvent, text: text };
@@ -8741,21 +8762,40 @@
     _saveAnnotationsForSession(sessionId, list);
   }
 
-  function _findTextRangeInElement(root, needle) {
+  function _findTextRangeInElement(roots, needle) {
     const clean = needle ? needle.replace(/…$/, '') : '';
     if (!clean) return null;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-    let node;
-    while ((node = walker.nextNode())) {
-      const idx = node.nodeValue.indexOf(clean);
-      if (idx !== -1) {
-        const range = document.createRange();
-        range.setStart(node, idx);
-        range.setEnd(node, idx + clean.length);
-        return range;
+    const list = Array.isArray(roots) ? roots : [roots];
+    for (const root of list) {
+      if (!root) continue;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      let node;
+      while ((node = walker.nextNode())) {
+        const idx = node.nodeValue.indexOf(clean);
+        if (idx !== -1) {
+          const range = document.createRange();
+          range.setStart(node, idx);
+          range.setEnd(node, idx + clean.length);
+          return range;
+        }
       }
     }
     return null;
+  }
+
+  // The kimi-marker itself is empty and display:none (see
+  // _kimiAppendAssistantEvent) — its content lives in the following sibling
+  // blocks up to the next marker/event. Plain (Claude) events just search
+  // themselves.
+  function _annotationSearchRoots(eventEl) {
+    if (!eventEl.classList.contains('kimi-marker')) return eventEl;
+    const roots = [];
+    let sib = eventEl.nextElementSibling;
+    while (sib && !(sib.classList && sib.classList.contains('event'))) {
+      roots.push(sib);
+      sib = sib.nextElementSibling;
+    }
+    return roots;
   }
 
   function _reconcileAnnotationsForPane(paneId) {
@@ -8773,7 +8813,7 @@
       const escLine = (window.CSS && CSS.escape) ? CSS.escape(String(ann.jsonlLine)) : String(ann.jsonlLine);
       const eventEl = $view.querySelector('.event[data-jsonl-line="' + escLine + '"]');
       if (!eventEl) continue;
-      const found = _findTextRangeInElement(eventEl, ann.excerpt);
+      const found = _findTextRangeInElement(_annotationSearchRoots(eventEl), ann.excerpt);
       if (!found) continue;
       const markEl = _wrapRangeInAnnotationMark(found, ann.id);
       _insertAnnotationNote(markEl, ann.note, ann.id, sessionId);
@@ -58049,7 +58089,10 @@
     let ticks = 0;
     let landed = false;
     (function tick() {
-      if (!pendingSpawns.has(pid)) return;      // reconciled: nothing to chase
+      // `adoptPendingSpawnPid` re-keys a continuation from its optimistic
+      // temporary id to the server pid. Its card intentionally retains the
+      // temporary DOM id until reconciliation, so check both representations.
+      if (!_pendingSpawnStillWaiting(pid, 'spawning-' + pid)) return;
       if (Date.now() > deadline) return;        // give up quietly; the normal
                                                 // poll and the not-acknowledged
                                                 // path still cover this
