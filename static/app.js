@@ -27792,7 +27792,11 @@
       const _currentSessionSource = _ipSearchActive
         ? (_visibleSessionConvs || []).slice()
         : (_visibleSessionConvs || []).filter(c => {
-          if (c.is_watchtower_worker) return false;
+          // A historical WT worker normally belongs out of Current sessions,
+          // but an active group-chat participant must remain reachable in both
+          // places.  The chat's indented participant row is context, not a
+          // replacement for the session card.
+          if (c.is_watchtower_worker && !_inGroupChatIds.has(c.session_id || c.id || '')) return false;
           if (_evergreenSessionIds.has(c.session_id || c.id || '')) return false;
           return true;
         });

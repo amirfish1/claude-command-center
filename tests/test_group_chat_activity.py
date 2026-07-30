@@ -119,6 +119,16 @@ def test_empty_group_chat_rows_do_not_reserve_participant_toggle_space():
     assert ": '';" in collapse_control
 
 
+def test_group_chat_participants_are_not_hidden_as_historical_workers():
+    """A session in a chat remains reachable even if WT previously used it."""
+    source = Path("static/app.js").read_text(encoding="utf-8")
+    start = source.index("const _currentSessionSource = _ipSearchActive")
+    end = source.index("const _currentSessionWindowed = _ipSearchActive", start)
+    current_sessions = source[start:end]
+
+    assert "if (c.is_watchtower_worker && !_inGroupChatIds.has(c.session_id || c.id || '')) return false;" in current_sessions
+
+
 def test_group_chat_header_parser_consumes_wake_status_for_non_hex_session_ids():
     header = (
         "# Group Chat — review\n"
