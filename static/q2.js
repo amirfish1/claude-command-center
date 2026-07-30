@@ -1102,6 +1102,7 @@
             + (queued ? ICON_TINY_STOP : ICON_TINY_PLAY)
             + '</span>'
           : '<span class="q2-tdot" title="' + esc(dotTitle) + '" aria-label="' + esc(dotTitle) + '"></span>')
+      + '<span class="q2-tstatus">' + esc(dotTitle) + '</span>'
       + '</span>'
       + '</button>';
   }

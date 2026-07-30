@@ -55,6 +55,14 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn(".q2-trow.q2-new-ticket", q2_css)
         self.assertIn("@keyframes q2-new-ticket-glow", q2_css)
 
+    def test_ticket_status_dot_has_a_matching_text_label(self):
+        """Queue status colour is accompanied by its readable meaning."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn('class="q2-tstatus"', q2_js)
+        self.assertIn(".q2-tstatus", q2_css)
+
     def test_selected_queue_shows_its_learnings_when_no_ticket_is_selected(self):
         """The detail pane makes queue guidance available before ticket work."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")

@@ -811,6 +811,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 /* Age then dot, pinned right. Mirrors .fq-row-signals in the main dashboard. */
 .q2-tsignals { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+.q2-tstatus { font-size: 11px; line-height: 1; color: var(--text-muted); white-space: nowrap; }
 
 /* Status palette. This DIVERGES from the main dashboard on purpose:
    blue = needs input, yellow = open, green = in progress, grey = closed.
@@ -830,11 +831,13 @@ body.q2-resizing .q2-col { pointer-events: none; }
   background: var(--orange);
   box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.16);
 }
+.q2-trow.is-open .q2-tstatus { color: var(--orange); }
 .q2-trow.is-in_progress .q2-tdot {
   background: var(--green);
   animation: q2-status-glow 1.5s ease-in-out infinite;
   will-change: opacity, box-shadow;
 }
+.q2-trow.is-in_progress .q2-tstatus { color: var(--green); }
 @keyframes q2-status-glow {
   0%, 100% { opacity: 0.82; box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.28), 0 0 7px rgba(63, 185, 80, 0.5); }
   50%      { opacity: 1;    box-shadow: 0 0 0 4px rgba(63, 185, 80, 0.45), 0 0 16px rgba(63, 185, 80, 0.95); }
@@ -849,6 +852,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   animation: none;
   box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.16);
 }
+.q2-trow.is-stale-claim .q2-tstatus { color: var(--orange); }
 /* A claim label with no durable session id: liveness is unprovable either way.
    A hollow ring, so it is legible against the solid open dot next to it. */
 .q2-trow.is-unverified-claim .q2-tdot {
@@ -858,6 +862,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   animation: none;
   box-shadow: 0 0 0 2px rgba(210, 153, 34, 0.16);
 }
+.q2-trow.is-unverified-claim .q2-tstatus { color: var(--orange); }
 /* Closed and blocked come last so they win over the claim-shape rules above:
    a needs-input ticket keeps its colour whatever its claim fields say. */
 .q2-trow.is-closed .q2-tdot {
@@ -867,6 +872,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border: 0;
   box-shadow: 0 0 0 2px rgba(139, 148, 158, 0.14);
 }
+.q2-trow.is-closed .q2-tstatus { color: var(--text-muted); opacity: 0.7; }
 /* Closed but the worker flagged unfinished follow-up: still worth noticing. */
 .q2-trow.is-closed.has-unresolved .q2-tdot { background: var(--orange); opacity: 1; }
 .q2-trow.is-blocked .q2-tdot {
@@ -876,6 +882,7 @@ body.q2-resizing .q2-col { pointer-events: none; }
   border: 0;
   box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.20);
 }
+.q2-trow.is-blocked .q2-tstatus { color: var(--wip-blue); }
 
 .q2-tref {
   flex: 0 0 auto;
