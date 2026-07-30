@@ -1153,6 +1153,35 @@ def _wt_read_workers():
     return out
 
 
+def _wt_worker_fifo_entry_for_session(session_id):
+    """A live WatchTower-tracked worker's FIFO channel for `session_id`, or None.
+
+    In-process only (reads workers.json via _wt_read_workers() -- zero
+    subprocess). A WT worker is a known, already-live channel with a proven
+    zero-loss record (see docs/messaging-design.md's engine matrix and the
+    receipts breakdown that motivated this: fifo 0 lost, ever), unlike CCC's
+    own spawn registry, which has no entry for a worker WT started instead of
+    CCC. stat.S_ISFIFO guards against a stale or repurposed path; the engine
+    check keeps this to the stream-json wire format it's written for."""
+    if not session_id:
+        return None
+    for w in _wt_read_workers():
+        if str(w.get("session_id") or "") != session_id:
+            continue
+        if (w.get("engine") or "claude") != "claude":
+            continue
+        fifo = str(w.get("fifo") or "")
+        if not fifo:
+            continue
+        try:
+            if not stat.S_ISFIFO(os.stat(fifo).st_mode):
+                continue
+        except OSError:
+            continue
+        return w
+    return None
+
+
 def _wt_live_worker_guard():
     """(pids, session_ids) of live WT-tracked workers, from workers.json.
 
@@ -35379,6 +35408,178 @@ _TERMINAL_DRAIN_RECEIPT_DEADLINE_S = 600.0
 _TERMINAL_DRAIN_RECEIPT_POLL_S = 15.0
 _terminal_drain_skip_wt = set()        # sids whose next drain attempt bypasses wt
 
+# P0b: scoped 2-tick escalation for the foreign-live-writer hold (a live
+# session with a pid CCC has no recognized channel to, after the WT-worker
+# fifo fast path above also found nothing). {(sid, pid): {"first_seen",
+# "escalated"}}. Keyed on pid too so a session whose process was replaced
+# starts a fresh incident rather than inheriting stale escalated state.
+_foreign_writer_hold_incidents = {}
+_foreign_writer_hold_lock = threading.Lock()
+
+
+def _note_foreign_writer_hold(sid, pid):
+    """Track consecutive watcher observations of `sid` being held as a
+    foreign live writer. Returns True exactly once per incident, on the
+    SECOND consecutive observation (the watcher ticks every 5s, so this
+    lands ~5-10s after the message was first queued, depending on tick
+    phase) -- never on the very first. The WT-129/WT-131 postmortem this
+    exists for was a message that queued for 15+ minutes with zero visible
+    signal; escalating on a single momentary read would also false-alarm on
+    a fresh worker whose workers.json entry hasn't landed on disk yet. A
+    second observation ~5s later costs almost nothing and rules that out."""
+    key = (sid, pid)
+    with _foreign_writer_hold_lock:
+        # A previous incident for this sid under a DIFFERENT pid (the
+        # process was replaced) must not leave the new one pre-escalated.
+        for stale in [k for k in _foreign_writer_hold_incidents if k[0] == sid and k[1] != pid]:
+            _foreign_writer_hold_incidents.pop(stale, None)
+        state = _foreign_writer_hold_incidents.get(key)
+        if state is None:
+            _foreign_writer_hold_incidents[key] = {
+                "first_seen": time.time(), "escalated": False,
+            }
+            return False
+        if state["escalated"]:
+            return False
+        state["escalated"] = True
+        return True
+
+
+def _clear_foreign_writer_hold(sid):
+    """Call once `sid` leaves the held state (delivered, queue drained, or a
+    channel became reachable) so a later, unrelated hold on the same sid
+    starts its own fresh 2-tick window instead of inheriting stale state."""
+    with _foreign_writer_hold_lock:
+        for key in [k for k in _foreign_writer_hold_incidents if k[0] == sid]:
+            _foreign_writer_hold_incidents.pop(key, None)
+
+
+# P0c: a global, server-backed incident feed for the delivery-health banner.
+# Two sources, both in-process (no `wt` subprocess anywhere in this path):
+#   (a) active P0b foreign-writer holds -- auto-resolve, no ack needed.
+#   (b) receipts.json rows newly transitioned to "lost" -- these are
+#       permanent historical facts, not self-resolving, so they need a
+#       durable per-ID ack. The very first read baselines every
+#       already-lost receipt as acked ONCE EVER (never per-restart, so a
+#       loss that happens while CCC is down still surfaces on the next
+#       start) -- otherwise every one of the ~73 pre-existing losses would
+#       paint the banner red immediately on first boot after this ships.
+def _wt_receipts_path():
+    """Mirrors watchtower.receipts._receipts_file(): lives next to the
+    outbox. WatchTower has no dedicated env var for this file of its own --
+    it derives the directory from $WATCHTOWER_OUTBOX_FILE, so honor that
+    override too when set, for the same reason WATCHTOWER_WORKERS_FILE is
+    honored above."""
+    outbox_env = os.environ.get("WATCHTOWER_OUTBOX_FILE")
+    if outbox_env:
+        return Path(outbox_env).expanduser().parent / "receipts.json"
+    return _WT_HOME / "receipts.json"
+
+
+def _wt_read_receipts():
+    """Receipt rows read straight from receipts.json, in-process. No
+    subprocess, no `wt receipts` CLI call -- WT's daemon remains the
+    sweeper/owner of this file; CCC only ever reads it."""
+    try:
+        with open(_wt_receipts_path()) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    rows = data.get("receipts") if isinstance(data, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+def _injection_health_state_path():
+    if "pytest" in sys.modules:
+        return Path(tempfile.gettempdir()) / "ccc-test-injection-health.json"
+    return COMMAND_CENTER_STATE_DIR / "injection-health.json"
+
+
+def _load_injection_health_state():
+    try:
+        with open(_injection_health_state_path()) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("receipts_baselined", False)
+    data.setdefault("acked_lost_receipt_ids", [])
+    return data
+
+
+def _save_injection_health_state(state):
+    path = _injection_health_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(path) + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, path)
+
+
+def _active_foreign_writer_holds():
+    """Escalated (2nd-consecutive-tick) P0b incidents still open. Auto-
+    resolving -- there's no ack list for these, _clear_foreign_writer_hold
+    already removes an entry the moment it stops being true."""
+    with _foreign_writer_hold_lock:
+        return [
+            {"sid": sid, "pid": pid, "first_seen": state["first_seen"]}
+            for (sid, pid), state in _foreign_writer_hold_incidents.items()
+            if state.get("escalated")
+        ]
+
+
+def _build_injection_health():
+    """The banner's single source of truth. Baselines historical losses on
+    its very first call ever (persisted, not per-restart), then reports only
+    NEWLY lost receipts (not yet acked) plus any active foreign-writer hold."""
+    state = _load_injection_health_state()
+    receipts = _wt_read_receipts()
+    lost = [r for r in receipts if r.get("status") == "lost"]
+    if not state["receipts_baselined"]:
+        state["acked_lost_receipt_ids"] = list({
+            str(r.get("id") or "") for r in lost if r.get("id")
+        })
+        state["receipts_baselined"] = True
+        _save_injection_health_state(state)
+    acked = set(state["acked_lost_receipt_ids"])
+    new_lost = [r for r in lost if str(r.get("id") or "") not in acked]
+    active_holds = _active_foreign_writer_holds()
+    return {
+        "active_holds": active_holds,
+        "new_lost_receipts": [
+            {
+                "id": r.get("id"),
+                "sid": r.get("sid"),
+                "transport": r.get("transport"),
+                "sent_at": r.get("sent_at"),
+                # A blank at_send.path means the receipt couldn't snapshot a
+                # baseline at send time -- that's a proof-path gap, not
+                # necessarily proof the message itself never landed.
+                "proof_available": bool((r.get("at_send") or {}).get("path")),
+            }
+            for r in new_lost
+        ],
+        "any_active": bool(active_holds or new_lost),
+    }
+
+
+def _ack_injection_health(receipt_id=None, ack_all=False):
+    """Durably dismiss one lost-receipt incident (or all currently known
+    ones) so it doesn't keep alarming across reloads. Active foreign-writer
+    holds aren't ack-able -- they clear themselves."""
+    state = _load_injection_health_state()
+    acked = set(state["acked_lost_receipt_ids"])
+    if ack_all:
+        for r in _wt_read_receipts():
+            if r.get("status") == "lost" and r.get("id"):
+                acked.add(str(r["id"]))
+    elif receipt_id:
+        acked.add(str(receipt_id))
+    state["acked_lost_receipt_ids"] = sorted(acked)
+    _save_injection_health_state(state)
+    return _build_injection_health()
+
 
 def _terminal_queue_retry_due(sid, now=None):
     now = time.time() if now is None else float(now)
@@ -35580,6 +35781,7 @@ def _start_resume_queue_watcher() -> None:
                             _save_pending_inputs()
                             for dropped_text in dropped:
                                 _complete_pending_input_handoff(dropped_text)
+                        _clear_foreign_writer_hold(sid)
                         continue
                     # Backoff gate (CCC-455): a sid whose last drain attempt
                     # failed or re-parked waits out its retry window before we
@@ -35621,11 +35823,31 @@ def _start_resume_queue_watcher() -> None:
                         spawn = _find_live_spawn_entry_for_session(sid)
                         if spawn is not None and _tool_child_blocks_inject(spawn):
                             continue
+                        # A live WatchTower-tracked worker's FIFO is a known,
+                        # in-process-reachable channel even though CCC never
+                        # spawned it itself. Recognizing it here keeps the
+                        # foreign-writer hold below from blocking a message
+                        # that _inject_text_into_session's own WT-worker fifo
+                        # fast path (below) is about to be able to deliver.
+                        wt_worker_reachable = (
+                            spawn is None
+                            and _wt_worker_fifo_entry_for_session(sid) is not None
+                        )
                         # Foreign live writer (not ours, no channel): hold the
                         # queue until that process exits — injecting now would
                         # spawn a parallel resume and fork the transcript.
-                        if spawn is None and status.get("kind") != "bg" and status.get("pid"):
+                        if (spawn is None and not wt_worker_reachable
+                                and status.get("kind") != "bg" and status.get("pid")):
+                            if _note_foreign_writer_hold(sid, status.get("pid")):
+                                _log_activity(
+                                    "inject", "INJECT_STALLED",
+                                    f"session={sid} pid={status.get('pid')} — "
+                                    "live process, no recognized delivery "
+                                    f"channel; wt send {sid} \"<text>\" reaches "
+                                    "it directly",
+                                )
                             continue
+                        _clear_foreign_writer_hold(sid)
                     with _pending_terminal_input_lock:
                         queue = _pending_terminal_input_queue.get(sid, [])
                         if not queue:
@@ -35676,6 +35898,7 @@ def _start_resume_queue_watcher() -> None:
                     else:
                         _complete_pending_input_handoff(text)
                         _pending_terminal_retry_after.pop(sid, None)
+                        _clear_foreign_writer_hold(sid)
                 except Exception:
                     if isinstance(text, _PendingInputHandoff):
                         try:
@@ -40683,6 +40906,31 @@ def _write_stream_json_user_message(target, text, timeout=0.25):
         return _write_via_pipe(target.get("proc"), line)
 
     return _write_via_pipe(target, line)
+
+
+def _write_fifo_line_once(fifo_path, text, timeout=0.25):
+    """One-shot stream-json user-line write to a FIFO CCC does not own
+    long-term (a WatchTower worker's FIFO). Always closes the fd it opens.
+
+    Deliberately does NOT go through _write_via_spawn_fd: that helper caches
+    the opened fd on its `target` dict for reuse across calls, which is
+    correct for a CCC-owned spawn entry that lives as long as the process, but
+    would leak one descriptor per call against a throwaway dict here -- there
+    is no long-lived entry to cache it on."""
+    text = _strip_lone_surrogates(str(text or ""))
+    if not fifo_path or not text:
+        return False
+    line = (json.dumps({
+        "type": "user",
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+    }) + "\n").encode("utf-8")
+    fd = _open_fifo_writer(fifo_path)
+    if fd is None:
+        return False
+    try:
+        return _write_fd_nonblocking(fd, line, timeout=timeout)
+    finally:
+        _close_fd_quiet(fd)
 
 
 def _write_stream_json_interrupt(target, timeout=0.25):
@@ -45745,6 +45993,27 @@ def _inject_text_into_session(
                 "via": "spawn-fifo",
                 "error": "session input pipe is busy",
             }
+        # WT-worker fifo fast path: a live WatchTower-tracked worker's FIFO is
+        # a known, in-process-reachable channel even when CCC never spawned
+        # it itself. Try this BEFORE the fork guard below concludes there's
+        # no channel and parks the message -- "no channel" for a live WT
+        # worker was exactly the incident that motivated this fast path.
+        # Bypasses CCC_MESSAGING_BACKEND by design: fifo-only + WT-tracked-
+        # only is a narrower, already-proven-safe risk class (zero fifo
+        # losses recorded, vs. real losses on the resume/delegate transports
+        # that flag also gates) than the general messaging-backend flag.
+        if status.get("live") and status.get("pid") and not has_tty:
+            wt_entry = _wt_worker_fifo_entry_for_session(session_id)
+            if wt_entry is not None:
+                if _write_fifo_line_once(str(wt_entry.get("fifo") or ""), text):
+                    return {
+                        "ok": True,
+                        "pid": wt_entry.get("pid"),
+                        "via": "wt-worker-fifo",
+                    }
+                # ENXIO / write failure (worker not listening right now)
+                # falls through to the fork guard below -- never a parallel
+                # resume.
         # Fork guard: a live claude we did NOT spawn and cannot drive (no
         # tty to keystroke, no FIFO, not the bg-pty shape handled above —
         # e.g. a daemon-hosted interactive session). Spawning a parallel
@@ -53847,6 +54116,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # hogs, and Claude session trees with last-activity + reapability.
             # Cached 5s (build_system_health) so polling stays cheap.
             self.send_json(build_system_health())
+        elif path == "/api/injection-health":
+            # The global delivery-health banner's feed: active foreign-writer
+            # holds (P0b, auto-resolving) plus newly-lost wt receipts not yet
+            # acked. Purely in-process reads (workers.json state, receipts.json)
+            # -- no `wt` subprocess call anywhere in this poll.
+            self.send_json(_build_injection_health())
         elif path == "/api/version":
             # Additive only. Note _ccc_last_updated_iso() forks `git log -1`,
             # so this endpoint must never be put on a timer — the System status
@@ -54441,6 +54716,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "error": "Morning view is disabled. Set CCC_ENABLE_MORNING=1 to enable."
             }, 404)
+            return
+
+        if path == "/api/injection-health/ack":
+            # Durably dismiss a lost-receipt incident (or all of them) so the
+            # banner doesn't keep alarming across reloads. Active
+            # foreign-writer holds aren't ack-able here -- they auto-resolve.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                data = json.loads(body) if body else {}
+                receipt_id = str(data.get("receipt_id") or "").strip()
+                ack_all = bool(data.get("all"))
+                self.send_json({
+                    "ok": True,
+                    **_ack_injection_health(receipt_id=receipt_id or None, ack_all=ack_all),
+                })
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             return
 
         if path == "/api/voice-focus":

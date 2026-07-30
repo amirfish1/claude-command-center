@@ -16301,6 +16301,45 @@ body.status-pos-right #convToolbar {
 }
 .pwa-install-banner__cta:hover { opacity: 0.9; }
 
+/* Global delivery-health banner (P0c) -- see index.html for why this is
+   deliberately page-global rather than scoped to the affected session. Top
+   of viewport, above everything, unmissable but not modal. */
+.injection-health-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 10000;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px;
+  background: #7a1f1f;
+  color: #fff;
+  font-size: 12.5px;
+  font-family: inherit;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  animation: injection-health-slide-down 0.25s ease-out;
+}
+@media (prefers-color-scheme: light) {
+  .injection-health-banner { background: #c0392b; }
+}
+:root[data-theme="light"] .injection-health-banner { background: #c0392b; }
+:root[data-theme="dark"] .injection-health-banner { background: #7a1f1f; }
+@keyframes injection-health-slide-down {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(0); }
+}
+.injection-health-banner__icon { font-size: 15px; flex: 0 0 auto; }
+.injection-health-banner__text { flex: 1 1 auto; line-height: 1.4; }
+.injection-health-banner__dismiss {
+  flex: 0 0 auto;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit;
+}
+.injection-health-banner__dismiss:hover { background: rgba(255,255,255,0.25); }
+
 /* Quote blocks — italic with a hairline left rule, à la Omnara: the italic
    reads as "this is the quoted source", and the rule signals structure
    without dominating. Text stays at the normal `--text` color (Omnara

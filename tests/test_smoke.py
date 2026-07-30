@@ -17706,6 +17706,453 @@ class TestWTMessagingBackendStage2(unittest.TestCase):
             run.assert_not_called()
 
 
+class TestWtWorkerFifoFastPath(unittest.TestCase):
+    """P0a: a live WatchTower-tracked worker's FIFO is a known,
+    in-process-reachable channel even though CCC never spawned it itself.
+    Before this, such a worker was indistinguishable from a genuinely foreign
+    live writer -- queued forever with no escalation (the WT-129/WT-131
+    incident: CCC reported "busy" for a session that was actually idle).
+
+    Unlike CCC_MESSAGING_BACKEND=wt (TestWTMessagingBackendStage2 above),
+    this path is flag-independent and subprocess-free by design: it reads
+    workers.json in-process (same helper _wt_read_workers() already used
+    elsewhere for the is_watchtower_worker display flag) and writes the FIFO
+    directly, on the reasoning that fifo-only + WT-tracked-only is a
+    narrower, already-proven-safe risk class than the general messaging
+    backend (receipts breakdown: 0 fifo losses ever, vs. real losses on the
+    resume/delegate transports that flag also gates)."""
+
+    def setUp(self):
+        import server
+        self.server = server
+
+    def _workers_file(self, td, rows):
+        path = pathlib.Path(td) / "workers.json"
+        path.write_text(json.dumps({"workers": rows}))
+        return path
+
+    def _live_row(self, **over):
+        row = {
+            "worker_id": "wt-abc123",
+            "pid": os.getpid(),  # our own test process: always a live pid
+            "queue": "WT",
+            "engine": "claude",
+            "session_id": "sid-live-1",
+            "fifo": "",
+        }
+        row.update(over)
+        return row
+
+    # ---- resolver -----------------------------------------------------
+
+    def test_resolver_matches_live_worker_by_session_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(td, [self._live_row(fifo=str(fifo))])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["fifo"], str(fifo))
+
+    def test_resolver_returns_none_for_unknown_session_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(td, [self._live_row(fifo=str(fifo))])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-someone-else")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_for_non_claude_engine(self):
+        """This fast path is only defined for the stream-json wire format;
+        a codex/kimi WT worker must fall through to their own delivery."""
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(
+                td, [self._live_row(fifo=str(fifo), engine="codex")]
+            )
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_when_fifo_field_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            wpath = self._workers_file(td, [self._live_row(fifo="")])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_when_path_is_not_actually_a_fifo(self):
+        """A stale/repurposed path (e.g. workers.json lagging reality) must
+        not be treated as a live channel just because a file exists there."""
+        with tempfile.TemporaryDirectory() as td:
+            not_a_fifo = pathlib.Path(td) / "not-a-fifo.txt"
+            not_a_fifo.write_text("hi")
+            wpath = self._workers_file(td, [self._live_row(fifo=str(not_a_fifo))])
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    def test_resolver_returns_none_for_dead_pid(self):
+        """_wt_read_workers() itself drops dead pids (os.kill liveness) --
+        confirm the resolver inherits that, not just liveness at read time."""
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            wpath = self._workers_file(
+                td, [self._live_row(fifo=str(fifo), pid=dead.pid)]
+            )
+            with mock.patch.object(self.server, "_wt_workers_path", return_value=wpath):
+                entry = self.server._wt_worker_fifo_entry_for_session("sid-live-1")
+        self.assertIsNone(entry)
+
+    # ---- transient writer -----------------------------------------------
+
+    def test_write_fifo_line_once_delivers_correct_stream_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                ok = self.server._write_fifo_line_once(str(fifo), "hello worker")
+                self.assertTrue(ok)
+                raw = os.read(reader_fd, 65536).decode("utf-8")
+            finally:
+                os.close(reader_fd)
+        payload = json.loads(raw)
+        self.assertEqual(payload["type"], "user")
+        self.assertEqual(payload["message"]["role"], "user")
+        self.assertEqual(payload["message"]["content"][0]["text"], "hello worker")
+
+    def test_write_fifo_line_once_strips_lone_surrogates(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                ok = self.server._write_fifo_line_once(
+                    str(fifo), "queued " + chr(0xD83D) + " message"
+                )
+                self.assertTrue(ok)
+                raw = os.read(reader_fd, 65536).decode("utf-8")
+            finally:
+                os.close(reader_fd)
+        self.assertNotIn(chr(0xD83D), raw)
+        json.loads(raw)  # must still be valid, parseable JSON
+
+    def test_write_fifo_line_once_returns_false_without_blocking_when_no_reader(self):
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            start = time.monotonic()
+            ok = self.server._write_fifo_line_once(str(fifo), "hello")
+            elapsed = time.monotonic() - start
+        self.assertFalse(ok)
+        self.assertLess(elapsed, 0.5)
+
+    def test_write_fifo_line_once_leaves_open_fd_count_flat(self):
+        """The fd-leak bug this replaces: _write_via_spawn_fd caches the
+        opened fd on its `target` dict for reuse, which is correct for a
+        long-lived CCC spawn entry but leaks one descriptor per call against
+        a throwaway dict. _write_fifo_line_once must always close its fd."""
+        with tempfile.TemporaryDirectory() as td:
+            fifo = pathlib.Path(td) / "wt.fifo"
+            os.mkfifo(fifo, 0o600)
+            reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                before = len(os.listdir("/dev/fd"))
+                for _ in range(5):
+                    self.assertTrue(
+                        self.server._write_fifo_line_once(str(fifo), "hello")
+                    )
+                    try:
+                        os.read(reader_fd, 65536)  # drain so the pipe never fills
+                    except BlockingIOError:
+                        pass
+                after = len(os.listdir("/dev/fd"))
+            finally:
+                os.close(reader_fd)
+        self.assertEqual(after, before)
+
+    # ---- wired into _inject_text_into_session's fork-guard branch -----
+
+    def _live_no_tty_status(self, pid=4268):
+        return {"live": True, "tty": None, "status": None, "pid": pid, "kind": None}
+
+    def test_inject_delivers_via_wt_worker_fifo_before_fork_guard(self):
+        """The resolver hits -> deliver directly, never reaching the fork
+        guard's queue-and-wait fallback and never touching resume."""
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/fake/cwd"), \
+             mock.patch.object(self.server, "session_live_status", return_value=self._live_no_tty_status()), \
+             mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=False), \
+             mock.patch.object(self.server, "_notification_blocks_inject", return_value=False), \
+             mock.patch.object(
+                 self.server, "_wt_worker_fifo_entry_for_session",
+                 return_value={"fifo": "/fake/wt.fifo", "pid": 4268},
+             ), \
+             mock.patch.object(self.server, "_write_fifo_line_once", return_value=True) as write, \
+             mock.patch.object(self.server, "_queue_terminal_input") as queued, \
+             mock.patch.object(self.server, "resume_session_headless") as resume:
+            result = self.server._inject_text_into_session("sid-live-1", "follow up")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "wt-worker-fifo")
+        self.assertEqual(result["pid"], 4268)
+        write.assert_called_once_with("/fake/wt.fifo", "follow up")
+        queued.assert_not_called()
+        resume.assert_not_called()
+
+    def test_inject_falls_back_to_hold_when_resolver_finds_nothing(self):
+        """No WT worker known for this session -> unchanged existing
+        behaviour, the fork guard's queue-and-wait, never a parallel resume."""
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/fake/cwd"), \
+             mock.patch.object(self.server, "session_live_status", return_value=self._live_no_tty_status()), \
+             mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=False), \
+             mock.patch.object(self.server, "_notification_blocks_inject", return_value=False), \
+             mock.patch.object(self.server, "_wt_worker_fifo_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "resume_session_headless") as resume:
+            result = self.server._inject_text_into_session("sid-unknown", "follow up")
+        self.assertTrue(result.get("foreign_live_writer"))
+        resume.assert_not_called()
+
+    def test_inject_falls_back_to_hold_when_fifo_write_fails(self):
+        """Resolver hits but the write fails (ENXIO -- worker not actually
+        listening right now): existing hold behaviour, never a resume."""
+        with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/fake/cwd"), \
+             mock.patch.object(self.server, "session_live_status", return_value=self._live_no_tty_status()), \
+             mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_cursor_session", return_value=False), \
+             mock.patch.object(self.server, "_is_hermes_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "_is_gemini_session", return_value=False), \
+             mock.patch.object(self.server, "_is_antigravity_session", return_value=False), \
+             mock.patch.object(self.server, "_find_live_spawn_entry_for_session", return_value=None), \
+             mock.patch.object(self.server, "_ask_question_blocking_inject", return_value=False), \
+             mock.patch.object(self.server, "_notification_blocks_inject", return_value=False), \
+             mock.patch.object(
+                 self.server, "_wt_worker_fifo_entry_for_session",
+                 return_value={"fifo": "/fake/wt.fifo", "pid": 4268},
+             ), \
+             mock.patch.object(self.server, "_write_fifo_line_once", return_value=False), \
+             mock.patch.object(self.server, "resume_session_headless") as resume:
+            result = self.server._inject_text_into_session("sid-live-1", "follow up")
+        self.assertTrue(result.get("foreign_live_writer"))
+        resume.assert_not_called()
+
+    # ---- wired into the terminal-queue watcher's hold gate ------------
+
+    def test_watcher_hold_gate_consults_wt_worker_resolver(self):
+        """Source pin (same convention as
+        TestTerminalQueueDrainSafety.test_drain_loop_requeues_on_failed_delivery):
+        the watcher's foreign-live-writer `continue` must not fire when the
+        WT-worker resolver already found a channel, else fixing only the
+        inject-side fork guard leaves the watcher holding forever -- it never
+        even calls _inject_text_into_session for a held sid."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "wt_worker_reachable = (\n"
+            "                            spawn is None\n"
+            "                            and _wt_worker_fifo_entry_for_session(sid) is not None\n"
+            "                        )",
+            server_py,
+        )
+        self.assertIn("and not wt_worker_reachable", server_py)
+
+    def test_watcher_escalates_and_clears_via_incident_helpers(self):
+        """Source pin: the watcher's hold branch must call
+        _note_foreign_writer_hold (the 2-tick gate) before continuing, and
+        _clear_foreign_writer_hold once it's past that branch -- otherwise
+        P0b's escalation state never gets set or reset by the loop that owns
+        the only timing information (consecutive 5s ticks) it needs."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn("if _note_foreign_writer_hold(sid, status.get(\"pid\")):", server_py)
+        self.assertIn('"inject", "INJECT_STALLED",', server_py)
+        self.assertIn("_clear_foreign_writer_hold(sid)", server_py)
+
+
+class TestForeignWriterHoldEscalation(unittest.TestCase):
+    """P0b: escalate a foreign-live-writer hold to a loud, logged incident on
+    the SECOND consecutive watcher observation (~5-10s after first queued,
+    tick-phase dependent) -- never the first, which could just be a
+    workers.json registration race. Scoped to (sid, pid) so a replaced
+    process starts its own fresh window."""
+
+    SID = "sid-hold-escalation-test"
+    PID = 424242
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._cleanup()
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        with self.server._foreign_writer_hold_lock:
+            for key in [
+                k for k in self.server._foreign_writer_hold_incidents if k[0] == self.SID
+            ]:
+                self.server._foreign_writer_hold_incidents.pop(key, None)
+
+    def test_first_observation_does_not_escalate(self):
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+
+    def test_second_observation_escalates_exactly_once(self):
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        # A third, fourth, ... observation must not re-escalate (emit once
+        # per incident, not every tick).
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+
+    def test_different_pid_starts_a_fresh_incident(self):
+        """The process behind `sid` was replaced -- the old escalated state
+        must not leak onto the new pid's own 2-tick window."""
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        # New pid for the same sid: fresh incident, first observation again.
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID + 1))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID + 1))
+
+    def test_clear_resets_the_incident(self):
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.assertTrue(self.server._note_foreign_writer_hold(self.SID, self.PID))
+        self.server._clear_foreign_writer_hold(self.SID)
+        # Cleared -> the next observation is a fresh incident's first, not
+        # an escalation.
+        self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
+
+
+class TestInjectionHealthBanner(unittest.TestCase):
+    """P0c: the global delivery-health banner's feed. Two sources, both
+    in-process reads (no `wt` subprocess anywhere in this path): active P0b
+    foreign-writer holds, and receipts.json rows newly transitioned to
+    lost. Historical losses must baseline ONCE EVER (not per test/restart)
+    so they don't immediately paint the banner red -- but must never
+    re-baseline, or a loss during a real outage would silently vanish."""
+
+    def setUp(self):
+        import server
+        self.server = server
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self._state_path = pathlib.Path(self._td.name) / "injection-health.json"
+        self._receipts_path = pathlib.Path(self._td.name) / "receipts.json"
+        self._state_patch = mock.patch.object(
+            self.server, "_injection_health_state_path", return_value=self._state_path,
+        )
+        self._receipts_patch = mock.patch.object(
+            self.server, "_wt_receipts_path", return_value=self._receipts_path,
+        )
+        self._state_patch.start()
+        self._receipts_patch.start()
+        self.addCleanup(self._state_patch.stop)
+        self.addCleanup(self._receipts_patch.stop)
+        # Isolate from any real P0b state a concurrently-running dev server
+        # (or an earlier test) may have left behind.
+        with self.server._foreign_writer_hold_lock:
+            self.server._foreign_writer_hold_incidents.clear()
+
+    def _write_receipts(self, rows):
+        self._receipts_path.write_text(json.dumps({"receipts": rows}))
+
+    def _lost_row(self, rid, **over):
+        row = {
+            "id": rid, "sid": "sid-x", "transport": "resume",
+            "sent_at": 1700000000.0, "at_send": {"path": "/tmp/t.jsonl"},
+            "status": "lost",
+        }
+        row.update(over)
+        return row
+
+    def test_missing_receipts_file_is_not_an_error(self):
+        health = self.server._build_injection_health()
+        self.assertEqual(health["new_lost_receipts"], [])
+        self.assertFalse(health["any_active"])
+
+    def test_first_read_baselines_historical_losses_silently(self):
+        self._write_receipts([self._lost_row("rcpt-1"), self._lost_row("rcpt-2")])
+        health = self.server._build_injection_health()
+        self.assertEqual(health["new_lost_receipts"], [])
+        self.assertFalse(health["any_active"])
+        # Baseline persisted -- a second read of the SAME data must also
+        # stay quiet, not just the first.
+        health2 = self.server._build_injection_health()
+        self.assertEqual(health2["new_lost_receipts"], [])
+
+    def test_never_rebaselines_a_loss_that_appears_after_first_read(self):
+        """The core guarantee: a loss during a real outage must surface, not
+        be swallowed by baselining again on the next call/restart."""
+        self._write_receipts([self._lost_row("rcpt-1")])
+        self.server._build_injection_health()  # baselines rcpt-1
+        self._write_receipts([self._lost_row("rcpt-1"), self._lost_row("rcpt-2")])
+        health = self.server._build_injection_health()
+        ids = [r["id"] for r in health["new_lost_receipts"]]
+        self.assertEqual(ids, ["rcpt-2"])
+        self.assertTrue(health["any_active"])
+
+    def test_proof_availability_reflects_blank_at_send_path(self):
+        self.server._build_injection_health()  # baseline (empty)
+        self._write_receipts([self._lost_row("rcpt-1", at_send={"path": ""})])
+        health = self.server._build_injection_health()
+        self.assertFalse(health["new_lost_receipts"][0]["proof_available"])
+
+    def test_ack_single_receipt_dismisses_it_durably(self):
+        self._write_receipts([self._lost_row("rcpt-1")])
+        self.server._build_injection_health()  # baseline (empty, since this is first read... )
+        self._write_receipts([self._lost_row("rcpt-1"), self._lost_row("rcpt-2")])
+        self.server._build_injection_health()
+        health = self.server._ack_injection_health(receipt_id="rcpt-2")
+        self.assertEqual(health["new_lost_receipts"], [])
+        # Durable: a fresh read (simulating a reload) stays acked.
+        health2 = self.server._build_injection_health()
+        self.assertEqual(health2["new_lost_receipts"], [])
+
+    def test_ack_all_dismisses_every_currently_lost_receipt(self):
+        self._write_receipts([
+            self._lost_row("rcpt-1"), self._lost_row("rcpt-2"), self._lost_row("rcpt-3"),
+        ])
+        health = self.server._ack_injection_health(ack_all=True)
+        self.assertEqual(health["new_lost_receipts"], [])
+
+    def test_active_holds_reflect_escalated_p0b_incidents(self):
+        self.assertFalse(self.server._note_foreign_writer_hold("sid-h", 999))
+        self.assertTrue(self.server._note_foreign_writer_hold("sid-h", 999))
+        health = self.server._build_injection_health()
+        self.assertEqual(len(health["active_holds"]), 1)
+        self.assertEqual(health["active_holds"][0]["sid"], "sid-h")
+        self.assertEqual(health["active_holds"][0]["pid"], 999)
+        self.assertTrue(health["any_active"])
+        self.server._clear_foreign_writer_hold("sid-h")
+        health2 = self.server._build_injection_health()
+        self.assertEqual(health2["active_holds"], [])
+
+    def test_endpoints_registered(self):
+        """Source pin: both routes exist in the actual dispatch chains."""
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('path == "/api/injection-health":', server_py)
+        self.assertIn('path == "/api/injection-health/ack":', server_py)
+
+
 class TestTerminalQueueDrainSafety(unittest.TestCase):
     """CCC-455: the terminal-queue drain must never silently consume an
     entry. A wt-send handoff is provisional until its receipt verifies
