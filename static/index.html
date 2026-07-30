@@ -118,6 +118,12 @@
   <button type="button" id="annotationFabBtn" class="annotation-fab" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">
     &#9998; Annotate
   </button>
+  <!-- A collapsed rail normally leaves only a slim edge chevron. In the
+       focused conversation popout that affordance is too easy to miss, so
+       expose a labeled restore control that delegates to that same action. -->
+  <button type="button" id="popoutSidePanelBtn" class="popout-side-panel-btn" title="Show the session side panel" aria-label="Show side panel">
+    Show side panel
+  </button>
   <!-- Floating TTS playback control. Fixed top-right; shown only while a
        Text-to-Speech read is playing for a conversation the user is NOT
        currently viewing (e.g. a Submit+ reply that landed after they

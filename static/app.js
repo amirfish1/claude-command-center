@@ -27953,12 +27953,16 @@
           });
           flushCards();
           const rowsHtml = chunks.join('');
-          return '<div class="conv-current-object-group" data-current-object-group="' + escapeAttr(group.key) + '" data-object-drop-zone="' + escapeAttr(group.key) + '">'
-            + '<div class="conv-current-object-heading">'
+          const collapseKey = 'ccc-current-object-group-collapsed:' + group.key;
+          let collapsed = false;
+          try { collapsed = localStorage.getItem(collapseKey) === '1'; } catch (_) {}
+          return '<div class="conv-current-object-group' + (collapsed ? ' is-collapsed' : '') + '" data-current-object-group="' + escapeAttr(group.key) + '" data-object-drop-zone="' + escapeAttr(group.key) + '">'
+            + '<div class="conv-current-object-heading" data-role="current-object-group-toggle" role="button" tabindex="0" aria-expanded="' + String(!collapsed) + '" title="Collapse or expand object group">'
+            +   '<span class="conv-section-collapse-chevron" aria-hidden="true">' + (collapsed ? '&#9656;' : '&#9662;') + '</span>'
             +   '<span class="conv-current-object-title">' + escapeHtml(group.title) + '</span>'
             +   '<span class="conv-current-object-count">' + group.cards.length + '</span>'
             + '</div>'
-            + rowsHtml
+            + '<div data-role="current-object-group-rows"' + (collapsed ? ' hidden' : '') + '>' + rowsHtml + '</div>'
             + '</div>';
         }).join('');
       }
@@ -29822,6 +29826,27 @@
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }
+    const $currentObjectGroupToggle = $convList.querySelectorAll('[data-role="current-object-group-toggle"]');
+    $currentObjectGroupToggle.forEach(toggle => {
+      const toggleCurrentObjectGroup = (ev) => {
+        if (ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const group = toggle.closest('[data-current-object-group]');
+        const rows = group && group.querySelector('[data-role="current-object-group-rows"]');
+        if (!group || !rows) return;
+        const collapsed = !rows.hidden;
+        rows.hidden = collapsed;
+        group.classList.toggle('is-collapsed', collapsed);
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        const arrow = toggle.querySelector('.conv-section-collapse-chevron');
+        if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
+        const key = group.getAttribute('data-current-object-group') || '';
+        try { localStorage.setItem('ccc-current-object-group-collapsed:' + key, collapsed ? '1' : '0'); } catch (_) {}
+      };
+      toggle.addEventListener('click', toggleCurrentObjectGroup);
+      toggle.addEventListener('keydown', toggleCurrentObjectGroup);
+    });
     $convList.querySelectorAll('[data-role="session-summary-toggle"]').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         ev.preventDefault();

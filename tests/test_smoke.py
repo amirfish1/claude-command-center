@@ -3584,6 +3584,18 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("+ popoutBtn;\n        breadcrumbEl.innerHTML", app_js)
         self.assertIn(".status-rail-annotate", app_css)
 
+    def test_collapsed_conversation_popout_has_labeled_side_panel_restore(self):
+        """A popout must not strand its right rail behind an icon-only edge
+        affordance: its labeled control delegates to the existing restorer."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="popoutSidePanelBtn"', index_html)
+        self.assertIn('Show side panel', index_html)
+        self.assertIn('body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn', app_css)
+        self.assertIn("const $popoutSidePanel = document.getElementById('popoutSidePanelBtn');", app_js)
+        self.assertIn('$statusRailRestore.click();', app_js)
+
     def test_global_breadcrumb_streaming_status_stays_compact(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")

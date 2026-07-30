@@ -452,6 +452,34 @@
     border-color: rgba(57,210,192,0.55);
     color: var(--text);
   }
+  /* Popouts can inherit a collapsed rail preference from the dashboard. The
+     standard edge chevron is intentionally compact there, but this focused
+     reader needs an explicit, discoverable way to restore its side panel. */
+  .popout-side-panel-btn { display: none; }
+  body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn {
+    display: inline-flex;
+    position: fixed;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 9000;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid rgba(57,210,192,0.55);
+    border-radius: 999px;
+    background: var(--panel, #161b22);
+    color: var(--text);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    cursor: pointer;
+    font: 600 12px/1 inherit;
+  }
+  body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn:hover,
+  body.conversation-popout.status-rail-collapsed #popoutSidePanelBtn:focus-visible {
+    background: rgba(57,210,192,0.16);
+    outline: none;
+  }
   /* ── Group-chat popout ───────────────────────────────────────────
      Same idea as conversation-popout: hide every chrome strip and the
      sidebar, let the .main pane (which hosts #conversationsView, where
