@@ -8068,6 +8068,12 @@ def find_all_conversations(
                 "model": model,
                 "latest_input_tokens": latest_tok,
                 "lifetime_tokens": tail_meta.get("lifetime_tokens") or 0,
+                "cost_usd": tail_meta.get("cost_usd") or 0.0,
+                "cost_breakdown_usd": tail_meta.get("cost_breakdown_usd") or {},
+                "total_input_tokens": tail_meta.get("total_input_tokens") or 0,
+                "total_cache_creation_tokens": tail_meta.get("total_cache_creation_tokens") or 0,
+                "total_cache_read_tokens": tail_meta.get("total_cache_read_tokens") or 0,
+                "total_output_tokens": tail_meta.get("total_output_tokens") or 0,
                 "live_context_tokens": tail_meta.get("live_context_tokens") or 0,
                 "live_context_limit": tail_meta.get("live_context_limit") or 0,
                 "live_context_percent": tail_meta.get("live_context_percent") or 0,
@@ -9006,7 +9012,9 @@ _ARCHIVE_LIST_FIELDS = (
     "goal_status", "parent_session_id", "hermes_parent_session_id",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
-    "model", "latest_input_tokens", "live_context_tokens", "live_context_limit",
+    "model", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
+    "total_input_tokens", "total_cache_creation_tokens", "total_cache_read_tokens",
+    "total_output_tokens", "live_context_tokens", "live_context_limit",
     "live_context_percent", "context_limit", "quality_score", "quality_grade",
     "quality_summary", "quality_timestamp", "sidecar_status", "sidecar_has_writes",
     "sidecar_tool", "sidecar_file", "sidecar_ts", "sidecar_in_flight",
@@ -12868,7 +12876,7 @@ PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 15
+_CONV_META_SCHEMA_VERSION = 16
 
 # In-memory cache of the head-parse (first ~20 lines: session_id, timestamp,
 # git_branch, first_message, head_cwd) keyed by str(path) -> (cache_key, tuple),
@@ -12883,7 +12891,7 @@ _conv_head_cache = {}
 # sharing one dict made the two scans clobber each other's entries and unpack
 # the wrong arity (ValueError: too many values to unpack).
 _conv_head5_cache = {}
-_CONV_META_COMPAT_SCHEMA_VERSIONS = {15}
+_CONV_META_COMPAT_SCHEMA_VERSIONS = {16}
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
@@ -13204,6 +13212,35 @@ _SIGNAL_MARKERS = (
 )
 
 
+def _claude_usage_cost_breakdown(model, usage):
+    """Return API-list-price cost components for one Claude assistant turn."""
+    zero = {"input": 0.0, "cache_creation": 0.0, "cache_read": 0.0,
+            "output": 0.0, "total": 0.0}
+    if not isinstance(usage, dict):
+        return zero
+    rates, known = _rates_for_model_known(model)
+    if not known:
+        return zero
+    rate_in, rate_cache_write, rate_cache_read, rate_out = rates
+    cache_creation = _codex_int(usage.get("cache_creation_input_tokens"))
+    cache_read = _codex_int(usage.get("cache_read_input_tokens"))
+    cache_meta = usage.get("cache_creation")
+    cache_1h = _codex_int(cache_meta.get("ephemeral_1h_input_tokens")) \
+        if isinstance(cache_meta, dict) else 0
+    cache_1h = min(cache_creation, cache_1h)
+    cache_5m = cache_creation - cache_1h
+    out = {
+        "input": _codex_int(usage.get("input_tokens")) * rate_in / 1_000_000,
+        "cache_creation": (
+            cache_5m * rate_cache_write + cache_1h * rate_in * 2.0
+        ) / 1_000_000,
+        "cache_read": cache_read * rate_cache_read / 1_000_000,
+        "output": _codex_int(usage.get("output_tokens")) * rate_out / 1_000_000,
+    }
+    out["total"] = sum(out.values())
+    return out
+
+
 def _extract_tail_meta(path):
     """Extract metadata + session signals from a jsonl in a single pass.
 
@@ -13255,6 +13292,13 @@ def _extract_tail_meta(path):
         "model": None,
         "latest_input_tokens": 0,
         "lifetime_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "total_output_tokens": 0,
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
         "live_context_tokens": 0,
         "live_context_limit": 0,
         "live_context_percent": 0,
@@ -13411,6 +13455,14 @@ def _extract_tail_meta(path):
                                 + _codex_int(tcr)
                                 + _codex_int(u.get("output_tokens"))
                             )
+                            meta["total_input_tokens"] += _codex_int(ti)
+                            meta["total_cache_creation_tokens"] += _codex_int(tcw)
+                            meta["total_cache_read_tokens"] += _codex_int(tcr)
+                            meta["total_output_tokens"] += _codex_int(u.get("output_tokens"))
+                            cost = _claude_usage_cost_breakdown(msg.get("model"), u)
+                            meta["cost_usd"] += cost["total"]
+                            for key in meta["cost_breakdown_usd"]:
+                                meta["cost_breakdown_usd"][key] += cost[key]
                             if mid:
                                 _usage_message_ids.add(mid)
                     content = msg.get("content", [])
@@ -19690,6 +19742,12 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "ai_title": (tail_meta.get("ai_title") or None),
             "latest_input_tokens": latest_tok,
             "lifetime_tokens": tail_meta.get("lifetime_tokens") or 0,
+            "cost_usd": tail_meta.get("cost_usd") or 0.0,
+            "cost_breakdown_usd": tail_meta.get("cost_breakdown_usd") or {},
+            "total_input_tokens": tail_meta.get("total_input_tokens") or 0,
+            "total_cache_creation_tokens": tail_meta.get("total_cache_creation_tokens") or 0,
+            "total_cache_read_tokens": tail_meta.get("total_cache_read_tokens") or 0,
+            "total_output_tokens": tail_meta.get("total_output_tokens") or 0,
             "live_context_tokens": tail_meta.get("live_context_tokens") or 0,
             "live_context_limit": tail_meta.get("live_context_limit") or 0,
             "live_context_percent": tail_meta.get("live_context_percent") or 0,
