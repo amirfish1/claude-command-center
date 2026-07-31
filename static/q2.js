@@ -1204,10 +1204,7 @@
       return (b.number || 0) - (a.number || 0);
     }
     if (state.viewAll) {
-      openish.sort(function (a, b) {
-        var priority = prioRank(a) - prioRank(b);
-        return priority || touchedAt(a) - touchedAt(b);
-      });
+      openish.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });
     } else {
       openish.sort(bySameOrderAsMainCcc);
     }

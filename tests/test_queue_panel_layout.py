@@ -82,6 +82,15 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("Select a ticket to triage it across queues.", q2_js)
         self.assertIn(".q2-tqueue", q2_css)
 
+    def test_all_queue_ticket_list_is_newest_first(self):
+        """ALL orders its non-closed tickets by reverse chronological touch."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "openish.sort(function (a, b) { return touchedAt(b) - touchedAt(a); });",
+            q2_js,
+        )
+
     def test_selected_queue_shows_its_learnings_when_no_ticket_is_selected(self):
         """The detail pane makes queue guidance available before ticket work."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
