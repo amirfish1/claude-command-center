@@ -44192,10 +44192,10 @@ def _group_chat_compute_waiting(real_path: str, session_ids: list, name_map: dic
 
 
 GROUP_CHAT_ACTIVE_WINDOW_S = 15 * 60
-# The Current sidebar's smallest window is one day. Keep lightweight summaries
-# for that period so an empty chat does not disappear as soon as its active
-# nudge window ends.
-GROUP_CHAT_SIDEBAR_WINDOW_S = 24 * 60 * 60
+# The All sidebar offers a seven-day window, so retain lightweight summaries
+# for that entire period. These rows read only sidecar metadata and file mtimes
+# (never messages or participant state), keeping the background poll cheap.
+GROUP_CHAT_SIDEBAR_WINDOW_S = 7 * 24 * 60 * 60
 
 
 def group_chat_activity_state(meta: dict, now: float | None = None) -> str:

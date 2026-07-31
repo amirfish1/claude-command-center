@@ -39,11 +39,11 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
     recent_inactive_md.write_text("recent inactive", encoding="utf-8")
     inactive_md.write_text("inactive", encoding="utf-8")
     (chats / "active.json").write_text(
-        '{"topic":"Active", "started_at": 99900, "last_message_at": 99900, "session_ids":["a"]}',
+        '{"topic":"Active", "started_at": 999900, "last_message_at": 999900, "session_ids":["a"]}',
         encoding="utf-8",
     )
     (chats / "recent-inactive.json").write_text(
-        '{"topic":"Recent inactive", "started_at": 98000, "session_ids":[]}',
+        '{"topic":"Recent inactive", "started_at": 998000, "session_ids":[]}',
         encoding="utf-8",
     )
     (chats / "inactive.json").write_text(
@@ -56,7 +56,7 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
         lambda sid: (_ for _ in ()).throw(AssertionError(f"probed {sid}")),
     )
 
-    summaries = server._list_active_group_chat_summaries(now=100_000)
+    summaries = server._list_active_group_chat_summaries(now=1_000_000)
 
     assert len(summaries) == 2
     summary = next(summary for summary in summaries if summary["topic"] == "Active")
@@ -67,7 +67,7 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
     assert summary["status"] == "active"
     # The Current/1d sidebar filter and sort require an activity timestamp.
     # Active summaries must retain it even when a chat has no participants.
-    assert summary["started_at"] == 99900
+    assert summary["started_at"] == 999900
     assert summary["last_mtime"] > 0
     assert summary["session_ids"] == ["a"]
     assert summary["path"] == str(active_md)
@@ -94,6 +94,23 @@ def test_recent_paused_chat_is_included_in_lightweight_sidebar_summary(tmp_path,
     assert summaries[0]["topic"] == "Paused review"
     assert summaries[0]["status"] == "paused"
     assert summaries[0]["state"] == "paused"
+
+
+def test_sidebar_summary_keeps_closed_chats_for_the_seven_day_filter(tmp_path, monkeypatch):
+    chats = tmp_path / "group-chats"
+    chats.mkdir()
+    chat_md = chats / "closed.md"
+    chat_md.write_text("closed", encoding="utf-8")
+    (chats / "closed.json").write_text(
+        '{"topic":"Recent closed review", "started_at":200000, "closed_at":200100, "session_ids":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server.os.path, "expanduser", lambda value: str(chats))
+
+    summaries = server._list_active_group_chat_summaries(now=300_000)
+
+    assert len(summaries) == 1
+    assert summaries[0]["status"] == "closed"
 
 
 def test_active_chat_route_uses_lightweight_active_summary():
