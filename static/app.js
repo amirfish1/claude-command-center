@@ -2640,7 +2640,7 @@
   // never asserts.
   // "Large" means a reload actually worth interrupting for. Below this the
   // gate stays silent and the composer keeps its ordinary Send.
-  const F2_TOKEN_THRESHOLD = 250000;  // ~250k+ estimated context
+  const F2_TOKEN_THRESHOLD = 200000;  // ~200k+ estimated context
 
   // Per-engine cache-decay profiles. These are measured, not guessed: 390,600
   // real turns. The previous code warned on Claude only, on a comment claiming
