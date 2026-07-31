@@ -1361,8 +1361,8 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 
 /* Phones keep Q2's master/detail relationship without squeezing three desktop
-   panes into one viewport. Each pane occupies the viewport and can be swiped;
-   choosing a queue or ticket advances to its detail pane. */
+   panes into one viewport. Only the active pane is shown; queue and ticket
+   choices drill forward, while the explicit Back buttons return one level. */
 @media (max-width: 700px) {
   .q2-topbar {
     height: auto;
@@ -1375,14 +1375,13 @@ body.q2-resizing .q2-col { pointer-events: none; }
   .q2-topbar .q2-note,
   .q2-topbar .q2-stale { flex: 1 0 100%; }
   .q2-shell {
-    grid-template-columns: repeat(3, 100%);
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x mandatory;
-    scrollbar-width: none;
+    display: block;
+    overflow: hidden;
   }
-  .q2-shell::-webkit-scrollbar { display: none; }
-  .q2-col { scroll-snap-align: start; }
+  .q2-col { display: none; height: 100%; border-right: 0; }
+  .q2-shell[data-mobile-panel="queues"] .q2-col-queues,
+  .q2-shell[data-mobile-panel="tickets"] .q2-col-tickets,
+  .q2-shell[data-mobile-panel="detail"] .q2-col-detail { display: flex; }
   .q2-mobile-back {
     display: inline-flex;
     flex: 0 0 auto;

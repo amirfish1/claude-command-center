@@ -11,17 +11,22 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestQueuePanelLayout(unittest.TestCase):
-    def test_standalone_queue_uses_swipeable_master_detail_on_phone(self):
-        """A phone shows one readable Q2 pane and advances after selection."""
+    def test_standalone_queue_uses_single_panel_master_detail_on_phone(self):
+        """A phone swaps one active Q2 pane at a time instead of panning columns."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
         q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+        q2_html = (PROJECT_ROOT / "static" / "q2.html").read_text(encoding="utf-8")
 
         self.assertIn("function showMobileColumn(column)", q2_js)
         self.assertIn("showMobileColumn('tickets');", q2_js)
         self.assertIn("showMobileColumn('detail');", q2_js)
+        self.assertIn("data-mobile-panel", q2_js)
         self.assertIn("@media (max-width: 700px)", q2_css)
-        self.assertIn("grid-template-columns: repeat(3, 100%);", q2_css)
-        self.assertIn("scroll-snap-type: x mandatory;", q2_css)
+        self.assertIn('data-mobile-panel="queues"', q2_css)
+        self.assertIn('data-mobile-panel="tickets"', q2_css)
+        self.assertIn('data-mobile-panel="detail"', q2_css)
+        self.assertNotIn("scroll-snap-type: x mandatory;", q2_css)
+        self.assertIn('class="q2-shell" data-mobile-panel="queues"', q2_html)
 
     def test_phone_queue_navigation_has_explicit_back_controls(self):
         """Swiping advances the master/detail panes, but phone users can also

@@ -2121,15 +2121,14 @@
     } catch (_) {}
   }
 
-  // On a phone the three panes become a swipeable master/detail sequence.
-  // Desktop retains the simultaneous three-column view, so keyboard and mouse
-  // workflows there never move the board unexpectedly.
+  // On a phone Q2 is a single-panel master/detail drill-down. Desktop retains
+  // the simultaneous three-column view, so keyboard and mouse workflows there
+  // never move the board unexpectedly.
   function showMobileColumn(column) {
     if (!window.matchMedia('(max-width: 700px)').matches) return;
     var shell = document.querySelector('.q2-shell');
-    var pane = document.querySelector('.q2-col-' + column);
-    if (!shell || !pane) return;
-    shell.scrollTo({ left: pane.offsetLeft, behavior: 'smooth' });
+    if (!shell || ['queues', 'tickets', 'detail'].indexOf(column) === -1) return;
+    shell.setAttribute('data-mobile-panel', column);
   }
 
   function selectQueue(name) {
