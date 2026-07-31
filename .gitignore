@@ -148,3 +148,27 @@ throughput_*.png
 
 # Product-story proof videos ship with the GitHub Pages site (exception to *.mp4)
 !docs/product-story/assets/video/*.mp4
+# >>> hunch (derived runtime index — regenerable from .hunch/*.json) >>>
+.hunch/*.sqlite
+.hunch/*.sqlite-shm
+.hunch/*.sqlite-wal
+.hunch/*.sqlite-journal
+.hunch/**/*.tmp*
+.hunch-cache/
+.hunch/local.json
+.hunch-private/
+# <<< hunch <<<
+
+# Hunch's multi-assistant scaffolding — only using the CLI + MCP + hook here,
+# not the per-tool wiring for other coding assistants.
+/.agents/
+/.codex/
+/.cursor/
+/.windsurf/
+/.github/hooks/
+/.mcp.json
+/.claude/commands/capture.md
+/.claude/commands/heal.md
+/.claude/commands/hunch-fix.md
+/.claude/commands/hunch-fragile.md
+/.claude/commands/hunch-why.md
