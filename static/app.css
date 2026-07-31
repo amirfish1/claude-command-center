@@ -4747,6 +4747,15 @@
     position: relative;
     z-index: 6;
   }
+  .conv-lifetime-tokens {
+    display: inline-flex; align-items: center; flex: 0 0 auto;
+    margin-right: 4px; padding: 1px 4px; line-height: 1.4;
+    border-radius: 3px; font-size: 10px; font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: rgba(139, 148, 158, 0.95);
+    background: rgba(139, 148, 158, 0.12);
+    white-space: nowrap;
+  }
   .conv-pct-badge.is-warn {
     color: #FBCA04;
     background: rgba(251, 202, 4, 0.15);

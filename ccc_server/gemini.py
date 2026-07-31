@@ -839,6 +839,7 @@ def _extract_gemini_tail_meta(path):
         "cwd": _gemini_project_root_for_chat(path),
         "model": None,
         "latest_input_tokens": 0,
+        "lifetime_tokens": 0,
         "context_limit": GEMINI_CONTEXT_LIMIT,
     }
     pr_url_re = re.compile(r"github\.com/([^/\s]+/[^/\s]+)/pull/(\d{1,7})")
@@ -868,6 +869,17 @@ def _extract_gemini_tail_meta(path):
         usage = _gemini_token_usage_from_message(msg)
         if usage and usage.get("input_tokens"):
             meta["latest_input_tokens"] = usage["input_tokens"]
+        if usage:
+            meta["lifetime_tokens"] += (
+                usage.get("total_tokens")
+                or sum(usage.get(key, 0) for key in (
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                    "tool_tokens",
+                ))
+            )
         for call in msg.get("toolCalls") or []:
             if not isinstance(call, dict):
                 continue
@@ -1190,6 +1202,7 @@ def find_gemini_conversations(
             "model": tail.get("model") or "",
             "reasoning_effort": "",
             "latest_input_tokens": tail.get("latest_input_tokens") or 0,
+            "lifetime_tokens": tail.get("lifetime_tokens") or 0,
             "context_limit": tail.get("context_limit") or GEMINI_CONTEXT_LIMIT,
         })
     seen_ids = {c.get("id") for c in out}
@@ -1548,4 +1561,3 @@ def _extract_gemini_timeline(session_id):
                     entry["pr_number"] = int(m.group(1))
             events.append(entry)
     return {"events": events, "total_turns": turn}
-

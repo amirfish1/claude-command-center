@@ -8043,6 +8043,7 @@ def find_all_conversations(
                 # session pane.
                 "model": model,
                 "latest_input_tokens": latest_tok,
+                "lifetime_tokens": tail_meta.get("lifetime_tokens") or 0,
                 "live_context_tokens": tail_meta.get("live_context_tokens") or 0,
                 "live_context_limit": tail_meta.get("live_context_limit") or 0,
                 "live_context_percent": tail_meta.get("live_context_percent") or 0,
@@ -12675,7 +12676,7 @@ PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 13
+_CONV_META_SCHEMA_VERSION = 14
 
 # In-memory cache of the head-parse (first ~20 lines: session_id, timestamp,
 # git_branch, first_message, head_cwd) keyed by str(path) -> (cache_key, tuple),
@@ -12690,7 +12691,7 @@ _conv_head_cache = {}
 # sharing one dict made the two scans clobber each other's entries and unpack
 # the wrong arity (ValueError: too many values to unpack).
 _conv_head5_cache = {}
-_CONV_META_COMPAT_SCHEMA_VERSIONS = {13}
+_CONV_META_COMPAT_SCHEMA_VERSIONS = {14}
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
@@ -13061,6 +13062,7 @@ def _extract_tail_meta(path):
         "last_assistant_text": None,  # last text block from an assistant message (the "outcome")
         "model": None,
         "latest_input_tokens": 0,
+        "lifetime_tokens": 0,
         "live_context_tokens": 0,
         "live_context_limit": 0,
         "live_context_percent": 0,
@@ -13100,6 +13102,7 @@ def _extract_tail_meta(path):
     # serialize the last 8 into meta["subagent_recent"] at the end.
     _subagent_by_id = {}
     _subagent_order = []  # insertion order so we can pull the last N
+    _usage_message_ids = set()
     _pos = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -13208,6 +13211,16 @@ def _extract_tail_meta(path):
                         tcr = u.get("cache_read_input_tokens") or 0
                         if ti or tcw or tcr:
                             meta["latest_input_tokens"] = ti + tcw + tcr
+                        mid = msg.get("id") if isinstance(msg.get("id"), str) else ""
+                        if not mid or mid not in _usage_message_ids:
+                            meta["lifetime_tokens"] += (
+                                _codex_int(ti)
+                                + _codex_int(tcw)
+                                + _codex_int(tcr)
+                                + _codex_int(u.get("output_tokens"))
+                            )
+                            if mid:
+                                _usage_message_ids.add(mid)
                     content = msg.get("content", [])
                     if not isinstance(content, list):
                         content = []
@@ -19484,6 +19497,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "display_name": display_name,
             "ai_title": (tail_meta.get("ai_title") or None),
             "latest_input_tokens": latest_tok,
+            "lifetime_tokens": tail_meta.get("lifetime_tokens") or 0,
             "live_context_tokens": tail_meta.get("live_context_tokens") or 0,
             "live_context_limit": tail_meta.get("live_context_limit") or 0,
             "live_context_percent": tail_meta.get("live_context_percent") or 0,
@@ -22675,7 +22689,7 @@ CODEX_GOALS_DB_CANDIDATES = (
 )
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 4
+_CODEX_META_VERSION = 5
 CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
@@ -30861,6 +30875,7 @@ def _extract_codex_tail_meta(path):
             "cwd": None,
             "model": None,
             "latest_input_tokens": 0,
+            "lifetime_tokens": 0,
             "context_limit": 0,
         }
         pending_calls = {}
@@ -30898,6 +30913,27 @@ def _extract_codex_tail_meta(path):
                     payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
                     info = payload.get("info") or {}
                     if isinstance(info, dict):
+                        total_usage = info.get("total_token_usage")
+                        if isinstance(total_usage, dict) and total_usage:
+                            reported_total = (
+                                _codex_int(total_usage.get("total_tokens"))
+                                or (
+                                    _codex_int(total_usage.get("input_tokens"))
+                                    + _codex_int(total_usage.get("output_tokens"))
+                                )
+                            )
+                            meta["lifetime_tokens"] = max(
+                                _codex_int(meta.get("lifetime_tokens")),
+                                reported_total,
+                            )
+                        else:
+                            meta["lifetime_tokens"] += (
+                                _codex_int(usage.get("total_tokens"))
+                                or (
+                                    _codex_int(usage.get("input_tokens"))
+                                    + _codex_int(usage.get("output_tokens"))
+                                )
+                            )
                         cl = _codex_int(info.get("model_context_window"))
                         if cl:
                             meta["context_limit"] = cl
@@ -33203,6 +33239,68 @@ def _kimi_wire_head(session_dir):
 
 _KIMI_WIRE_TAIL_BYTES = 65536
 _KIMI_WIRE_TAIL_CACHE = {}  # wire path -> ((mtime_ns, size), meta)
+_KIMI_WIRE_USAGE_CACHE = {}  # wire path -> incremental usage scan state
+
+
+def _kimi_wire_lifetime_tokens(session_dir):
+    """Return cumulative per-turn token usage without re-reading old rows."""
+    wire = Path(session_dir) / "agents" / "main" / "wire.jsonl" if session_dir else None
+    if wire is None:
+        return 0
+    try:
+        st = wire.stat()
+    except OSError:
+        return 0
+    cache_key = str(wire)
+    cached = _KIMI_WIRE_USAGE_CACHE.get(cache_key) or {}
+    can_resume = (
+        cached.get("inode") == st.st_ino
+        and st.st_size >= cached.get("offset", 0)
+    )
+    offset = cached.get("offset", 0) if can_resume else 0
+    total = cached.get("total", 0) if can_resume else 0
+    try:
+        with wire.open("rb") as handle:
+            if offset:
+                handle.seek(offset)
+            while True:
+                line_start = handle.tell()
+                raw = handle.readline()
+                if not raw:
+                    break
+                if not raw.endswith(b"\n"):
+                    offset = line_start
+                    break
+                offset = handle.tell()
+                if b'"usage.record"' not in raw and b'"usage"' not in raw:
+                    continue
+                try:
+                    record = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if record.get("type") != "usage.record":
+                    continue
+                if record.get("usageScope") not in (None, "turn"):
+                    continue
+                usage = record.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                total += sum(_codex_int(usage.get(key)) for key in (
+                    "inputOther",
+                    "inputCacheRead",
+                    "inputCacheCreation",
+                    "output",
+                ))
+    except OSError:
+        return total
+    if len(_KIMI_WIRE_USAGE_CACHE) > 512:
+        _KIMI_WIRE_USAGE_CACHE.clear()
+    _KIMI_WIRE_USAGE_CACHE[cache_key] = {
+        "inode": st.st_ino,
+        "offset": offset,
+        "total": total,
+    }
+    return total
 
 
 def _kimi_wire_tail_meta(session_dir):
@@ -33340,6 +33438,7 @@ def _restamp_kimi_row_tail_fields(row):
     sid = row.get("session_id") or row.get("id")
     idx = _kimi_session_index().get(sid) or {}
     tail_meta = _kimi_wire_tail_meta(idx.get("session_dir"))
+    row["lifetime_tokens"] = _kimi_wire_lifetime_tokens(idx.get("session_dir"))
     row["last_event_type"] = tail_meta.get("last_event_type")
     if tail_meta.get("wire_mtime"):
         row["last_event_ts"] = tail_meta["wire_mtime"]
@@ -33509,6 +33608,7 @@ def find_kimi_conversations(
         # (result + recent), a dangling tool names the Stuck pill, and the
         # stale fields light the same stuck indicators codex rows use.
         tail_meta = _kimi_wire_tail_meta(idx.get("session_dir"))
+        row["lifetime_tokens"] = _kimi_wire_lifetime_tokens(idx.get("session_dir"))
         row["last_event_type"] = tail_meta.get("last_event_type")
         if tail_meta.get("wire_mtime"):
             row["last_event_ts"] = tail_meta["wire_mtime"]
@@ -33779,6 +33879,7 @@ def find_codex_conversations(
             "model": row.get("model") or tail.get("model") or "",
             "reasoning_effort": row.get("reasoning_effort") or "",
             "latest_input_tokens": tail.get("latest_input_tokens") or 0,
+            "lifetime_tokens": tail.get("lifetime_tokens") or 0,
             "context_limit": tail.get("context_limit") or 0,
             **_token_optimizer_quality_for_session(sid),
             "goal": _goal.get("objective") or "",

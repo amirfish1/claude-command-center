@@ -2613,6 +2613,7 @@
     return {
       engine: c.engine || 'claude',
       latest_input_tokens: c.latest_input_tokens || 0,
+      lifetime_tokens: c.lifetime_tokens || 0,
       live_context_tokens: c.live_context_tokens || 0,
       live_context_limit: c.live_context_limit || 0,
       live_context_percent: c.live_context_percent || 0,
@@ -26198,6 +26199,11 @@
         : '';
 
       const ctxPct = _convRowContextPct(c);
+      const lifetimeTokens = Number(c.lifetime_tokens || 0);
+      const lifetimeTokensHtml = lifetimeTokens > 0
+        ? '<span class="conv-lifetime-tokens" title="Lifetime tokens used across this session">'
+          + _formatTokens(lifetimeTokens) + '</span>'
+        : '';
       let pctBadgeHtml = '';
       let pctBadgeRowActionHtml = '';
       if (ctxPct) {
@@ -26401,6 +26407,7 @@
         + cooStatusHtml
         + cooEscalatedHtml
         + (qcBadgeHtml || '')
+        + (lifetimeTokensHtml || '')
         + (pctBadgeHtml || '');
       const evergreenMetaRowHtml = (opts.evergreenAgent && !_egSingleLine)
         ? '<div class="conv-evergreen-meta-row">' + _evergreenBadgesInner + '</div>'
@@ -26480,6 +26487,7 @@
             // always-visible main row (not the hover row) — it's important enough
             // to read at a glance without hovering. (CCC-294, refines CCC-289)
             + (opts.evergreenAgent ? '' : (qcBadgeHtml || ''))
+            + (opts.evergreenAgent ? '' : (lifetimeTokensHtml || ''))
             + (opts.evergreenAgent ? '' : (pctBadgeHtml || ''))
             // Single-line evergreen variant: the badges that normally drop to a
             // second meta line sit inline here, just left of the time slot.
