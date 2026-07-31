@@ -31951,6 +31951,99 @@ def _acp_transcript_path(harness, sid):
     return _ACP_TRANSCRIPT_DIR / harness / f"{safe}.jsonl"
 
 
+def _kimi_wire_prompt_usages(wire_path):
+    """Ordered per-user-prompt usage totals from one Kimi wire log.
+
+    Durable ``usage.record`` rows and ``step.end.usage`` describe the same
+    model calls. Prefer durable records for a prompt and use step-end values
+    only when no durable record exists, so replay enrichment never doubles a
+    model step. ``None`` preserves alignment for prompts with no usage.
+    """
+    if not wire_path:
+        return []
+    try:
+        with Path(wire_path).open("rb") as handle:
+            lines = handle.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError, ValueError):
+        return []
+
+    def empty_usage():
+        return {
+            "input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+    def add_usage(total, raw):
+        if not isinstance(raw, dict):
+            return False
+        total["input_tokens"] += _codex_int(raw.get("inputOther"))
+        total["cache_read_input_tokens"] += _codex_int(raw.get("inputCacheRead"))
+        total["cache_creation_input_tokens"] += _codex_int(raw.get("inputCacheCreation"))
+        total["output_tokens"] += _codex_int(raw.get("output"))
+        return True
+
+    prompt_usages = []
+    current = None
+    awaiting_user_message = False
+
+    def new_prompt():
+        return {
+            "durable": empty_usage(),
+            "fallback": empty_usage(),
+            "saw_durable": False,
+        }
+
+    def finish_prompt():
+        nonlocal current, awaiting_user_message
+        if current is None:
+            return
+        chosen = current["durable"] if current["saw_durable"] else current["fallback"]
+        prompt_usages.append(chosen if any(chosen.values()) else None)
+        current = None
+        awaiting_user_message = False
+
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        record_type = record.get("type")
+        if record_type == "turn.prompt":
+            finish_prompt()
+            current = new_prompt()
+            awaiting_user_message = True
+            continue
+        if record_type == "context.append_message":
+            message = record.get("message") or {}
+            origin = message.get("origin") or {}
+            if message.get("role") == "user" and origin.get("kind") in (None, "user"):
+                if current is None:
+                    current = new_prompt()
+                elif awaiting_user_message:
+                    awaiting_user_message = False
+                else:
+                    finish_prompt()
+                    current = new_prompt()
+                continue
+        if current is None:
+            continue
+        if record_type == "usage.record" and record.get("usageScope") in (None, "turn"):
+            usage = record.get("usage")
+            if isinstance(usage, dict):
+                current["saw_durable"] = True
+                add_usage(current["durable"], usage)
+            continue
+        if record_type == "context.append_loop_event":
+            loop = record.get("event") or {}
+            if loop.get("type") == "step.end":
+                add_usage(current["fallback"], loop.get("usage"))
+
+    finish_prompt()
+    return prompt_usages
+
+
 def _acp_transcript_events_after(harness, sid, after_line):
     """Finalized conv events newer than `after_line`, read from the CCC-owned
     transcript (the replay source for SSE reconnects and CCC restarts)."""

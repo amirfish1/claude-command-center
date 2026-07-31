@@ -5,6 +5,14 @@ import json
 import server
 
 
+def _write_jsonl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
 def test_codex_usage_written_after_message_enriches_that_assistant_turn(tmp_path, monkeypatch):
     """Codex emits token_count after its agent_message, not before it."""
     rollout = tmp_path / "rollout.jsonl"
@@ -89,3 +97,70 @@ def test_kimi_turn_usage_sums_wire_steps_since_the_prompt_boundary(tmp_path):
         "cache_creation_input_tokens": 20,
         "output_tokens": 25,
     }
+
+
+def test_kimi_wire_prompt_usages_group_steps_and_prefer_durable_records(tmp_path):
+    wire = tmp_path / "wire.jsonl"
+    _write_jsonl(wire, [
+        {"type": "turn.prompt", "input": [{"type": "text", "text": "first"}]},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+            "content": [{"type": "text", "text": "first"}],
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "finishReason": "tool_use", "usage": {
+                "inputOther": 100, "inputCacheRead": 80,
+                "inputCacheCreation": 20, "output": 10,
+            },
+        }},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "inputOther": 100, "inputCacheRead": 80,
+            "inputCacheCreation": 20, "output": 10,
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "finishReason": "end_turn", "usage": {
+                "inputOther": 120, "inputCacheRead": 90,
+                "inputCacheCreation": 0, "output": 15,
+            },
+        }},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "inputOther": 120, "inputCacheRead": 90,
+            "inputCacheCreation": 0, "output": 15,
+        }},
+        {"type": "usage.record", "usageScope": "session", "usage": {
+            "inputOther": 9999, "inputCacheRead": 9999,
+            "inputCacheCreation": 9999, "output": 9999,
+        }},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "injection"},
+            "content": [{"type": "text", "text": "control"}],
+        }},
+        {"type": "turn.prompt", "input": [{"type": "text", "text": "second"}]},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": {"kind": "user"},
+            "content": [{"type": "text", "text": "second"}],
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "finishReason": "end_turn", "usage": {
+                "inputOther": 7, "inputCacheRead": 11,
+                "inputCacheCreation": 13, "output": 17,
+            },
+        }},
+    ])
+    with wire.open("a", encoding="utf-8") as handle:
+        handle.write("{malformed\n")
+
+    assert server._kimi_wire_prompt_usages(wire) == [
+        {
+            "input_tokens": 220,
+            "cache_read_input_tokens": 170,
+            "cache_creation_input_tokens": 20,
+            "output_tokens": 25,
+        },
+        {
+            "input_tokens": 7,
+            "cache_read_input_tokens": 11,
+            "cache_creation_input_tokens": 13,
+            "output_tokens": 17,
+        },
+    ]
