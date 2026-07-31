@@ -20684,6 +20684,7 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
             usage = _codex_token_usage_from_event(ev)
             if usage:
                 codex_token_usage = usage
+                _attach_codex_token_usage(events, usage)
                 continue
             parsed = parser(ev, ln, codex_token_usage, codex_turn_meta=codex_turn_meta)
         else:
@@ -20851,6 +20852,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                             usage = _codex_token_usage_from_event(ev)
                             if usage:
                                 codex_token_usage = usage
+                                _attach_codex_token_usage(events, usage)
                     continue
                 line = line.strip()
                 if not line:
@@ -20868,6 +20870,7 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
                     usage = _codex_token_usage_from_event(ev)
                     if usage:
                         codex_token_usage = usage
+                        _attach_codex_token_usage(events, usage)
                         continue
                     parsed = parser(ev, line_num, codex_token_usage, codex_turn_meta=codex_turn_meta)
                 else:
@@ -32290,6 +32293,80 @@ def _acp_message_event(state, speaker, text):
     }
 
 
+def _kimi_wire_turn_usage_since(wire_path, offset):
+    """Return aggregate Kimi usage records written after one prompt began.
+
+    Kimi's ACP adapter does not publish ``usage_update`` notifications, but
+    its append-only wire records one ``usage.record`` per model step.  A CCC
+    turn can make several tool-use steps, so aggregate the records between the
+    prompt's starting byte offset and its terminal response.
+    """
+    if not wire_path or offset is None:
+        return None
+    try:
+        start = max(0, int(offset))
+        with Path(wire_path).open("rb") as f:
+            f.seek(start)
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError, ValueError):
+        return None
+
+    totals = {
+        "input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 0,
+    }
+    saw_usage_record = False
+    fallback_steps = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("type") == "usage.record" and record.get("usageScope") in (None, "turn"):
+            usage = record.get("usage")
+            saw_usage_record = True
+        elif record.get("type") == "context.append_loop_event":
+            loop = record.get("event") or {}
+            usage = loop.get("usage") if loop.get("type") == "step.end" else None
+            if isinstance(usage, dict):
+                fallback_steps.append(usage)
+            continue
+        else:
+            continue
+        if not isinstance(usage, dict):
+            continue
+        totals["input_tokens"] += _codex_int(usage.get("inputOther"))
+        totals["cache_read_input_tokens"] += _codex_int(usage.get("inputCacheRead"))
+        totals["cache_creation_input_tokens"] += _codex_int(usage.get("inputCacheCreation"))
+        totals["output_tokens"] += _codex_int(usage.get("output"))
+    if not saw_usage_record:
+        for usage in fallback_steps:
+            totals["input_tokens"] += _codex_int(usage.get("inputOther"))
+            totals["cache_read_input_tokens"] += _codex_int(usage.get("inputCacheRead"))
+            totals["cache_creation_input_tokens"] += _codex_int(usage.get("inputCacheCreation"))
+            totals["output_tokens"] += _codex_int(usage.get("output"))
+    return totals if any(totals.values()) else None
+
+
+def _apply_kimi_turn_usage(event, usage):
+    """Set the engine-neutral token-chip fields on one assistant event."""
+    if not isinstance(event, dict) or not isinstance(usage, dict):
+        return False
+    fresh = _codex_int(usage.get("input_tokens"))
+    cached = _codex_int(usage.get("cache_read_input_tokens"))
+    created = _codex_int(usage.get("cache_creation_input_tokens"))
+    output = _codex_int(usage.get("output_tokens"))
+    if not (fresh or cached or created or output):
+        return False
+    event["tokens_in"] = fresh + cached + created
+    event["tokens_cached"] = cached
+    event["tokens_out"] = output
+    event["token_usage"] = dict(usage)
+    return True
+
+
 def _acp_finalize_turn(harness, sid, response, pending_entry):
     """A session/prompt response arrived: the turn is over (end_turn,
     cancelled, or error). Fold accumulated text into conv events."""
@@ -32305,6 +32382,11 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
         remote_busy = harness == "kimi" and _acp_remote_turn_busy_error(message)
         stop_reason = ((response.get("result") or {}).get("stopReason")) if not error else None
         if turn is not None:
+            turn_usage = None
+            if harness == "kimi":
+                turn_usage = _kimi_wire_turn_usage_since(
+                    _acp_wire_path("kimi", sid), turn.get("wire_offset"),
+                )
             # Flush tool rows not yet emitted (calls that never got rawInput,
             # or ended mid-flight) so every tool has exactly one rich row.
             for tid, tool in (turn.get("tools") or {}).items():
@@ -32317,9 +32399,16 @@ def _acp_finalize_turn(harness, sid, response, pending_entry):
             if turn.get("text"):
                 blocks.append({"kind": "text", "text": turn["text"]})
             if blocks:
-                _acp_emit_event_unlocked(harness, sid, {
+                assistant_event = {
                     "type": "assistant", "message_id": turn["msg_id"], "blocks": blocks,
-                })
+                }
+                _apply_kimi_turn_usage(assistant_event, turn_usage)
+                _acp_emit_event_unlocked(harness, sid, assistant_event)
+            elif turn_usage:
+                for event in reversed(list(state.get("events") or [])):
+                    if event.get("type") == "assistant":
+                        _apply_kimi_turn_usage(event, turn_usage)
+                        break
             # Synchronous-ask handoff: _acp_ask_and_wait reads this after the
             # pending event fires (set post-fold in _acp_handle_message).
             pending_entry["final_text"] = turn.get("text") or ""
@@ -32611,6 +32700,12 @@ def _acp_prompt(
         """
         state = _acp_session(harness, sid, create=True)
         state["turn_seq"] += 1
+        wire_offset = None
+        if harness == "kimi":
+            try:
+                wire_offset = _acp_wire_path("kimi", sid).stat().st_size
+            except (AttributeError, OSError):
+                pass
         state["active_turn"] = {
             "req_id": req_id,
             "msg_id": f"acp-{harness}-{state['turn_seq']}",
@@ -32622,6 +32717,7 @@ def _acp_prompt(
             "prompt": visible_text,
             "from_queue": bool(from_queue),
             "started_at": time.time(),
+            "wire_offset": wire_offset,
         }
         state["status"] = "active"
         state["deltas"].clear()
@@ -33717,6 +33813,34 @@ def _codex_token_usage_from_event(ev):
         "reasoning_output_tokens": _codex_int(usage.get("reasoning_output_tokens")),
         "total_tokens": _codex_int(usage.get("total_tokens")),
     }
+
+
+def _attach_codex_token_usage(events, usage):
+    """Apply a trailing Codex token_count to its preceding assistant row.
+
+    Codex writes ``token_count`` after ``agent_message``. The existing parser
+    retained that data for ``task_complete``, which leaves the visible message
+    row without the shared token chip.
+    """
+    if not isinstance(usage, dict):
+        return False
+    for event in reversed(events):
+        if event.get("type") != "assistant":
+            continue
+        tokens_in = _codex_int(usage.get("input_tokens"))
+        tokens_cached = _codex_int(usage.get("cached_input_tokens"))
+        tokens_out = _codex_int(usage.get("output_tokens"))
+        tokens_thinking = _codex_int(usage.get("reasoning_output_tokens"))
+        if not (tokens_in or tokens_cached or tokens_out or tokens_thinking):
+            return False
+        event["tokens_in"] = tokens_in
+        event["tokens_cached"] = tokens_cached
+        event["tokens_out"] = tokens_out + tokens_thinking
+        if tokens_thinking:
+            event["tokens_thinking"] = tokens_thinking
+        event["token_usage"] = dict(usage)
+        return True
+    return False
 
 
 def _codex_turn_meta_from_event(ev):

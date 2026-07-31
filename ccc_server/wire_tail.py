@@ -118,6 +118,43 @@ def _acp_wire_recent_texts(state, limit=_ACP_WIRE_DEDUP_WINDOW):
     return seen_user, seen_assistant, seen_tools
 
 
+def _kimi_wire_token_usage(raw):
+    """Normalize Kimi's durable wire usage into the shared chip shape."""
+    if not isinstance(raw, dict):
+        return None
+    fresh = _core._codex_int(raw.get("inputOther"))
+    cached = _core._codex_int(raw.get("inputCacheRead"))
+    created = _core._codex_int(raw.get("inputCacheCreation"))
+    output = _core._codex_int(raw.get("output"))
+    if not (fresh or cached or created or output):
+        return None
+    return {
+        "input_tokens": fresh,
+        "cache_read_input_tokens": cached,
+        "cache_creation_input_tokens": created,
+        "output_tokens": output,
+    }
+
+
+def _attach_kimi_wire_usage(state, usage):
+    """Attach one completed Kimi model-call's usage to its visible row."""
+    if not isinstance(usage, dict):
+        return False
+    for event in reversed(list(state.get("events") or [])):
+        if event.get("type") != "assistant":
+            continue
+        fresh = _core._codex_int(usage.get("input_tokens"))
+        cached = _core._codex_int(usage.get("cache_read_input_tokens"))
+        created = _core._codex_int(usage.get("cache_creation_input_tokens"))
+        output = _core._codex_int(usage.get("output_tokens"))
+        event["tokens_in"] = fresh + cached + created
+        event["tokens_cached"] = cached
+        event["tokens_out"] = output
+        event["token_usage"] = dict(usage)
+        return True
+    return False
+
+
 def _acp_wire_fold(harness, sid, events):
     """Fold a batch of wire.jsonl events into the conv stream (dedup'd)."""
     with _core._ACP_LOCK:
@@ -265,6 +302,7 @@ def _acp_wire_fold(harness, sid, events):
                         "blocks": [block],
                     }, save=True)
                 elif ltype == "step.end":
+                    _attach_kimi_wire_usage(state, _kimi_wire_token_usage(loop.get("usage")))
                     finish = str(loop.get("finishReason") or "end_turn")
                     # Dedup: step.end carries no content to key on — skip when
                     # the last folded row is the same result (re-fold of an
@@ -276,8 +314,10 @@ def _acp_wire_fold(harness, sid, events):
                     _core._acp_emit_event_unlocked(harness, sid, {
                         "type": "result", "subtype": finish,
                     }, save=True)
+            elif etype == "usage.record" and ev.get("usageScope") in (None, "turn"):
+                _attach_kimi_wire_usage(state, _kimi_wire_token_usage(ev.get("usage")))
             # turn.prompt duplicates context.append_message(user); unknown and
-            # observability records (llm.*, usage.record, config.update, …)
+            # observability records (llm.*, config.update, …)
             # are skipped by design.
         # Results whose call wasn't in this batch: attach to the already-folded
         # row when possible, else emit a Claude-shaped standalone tool_result.
@@ -384,4 +424,3 @@ def _acp_shutdown_all():
         conn = _core._ACP_CONNS.pop(harness, None)
         if conn and conn.get("transport"):
             conn["transport"].close()
-
