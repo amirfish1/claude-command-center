@@ -999,6 +999,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("_formatAntigravityTokenChips(ev.tokens_in, ev.tokens_out, ev.tokens_thinking, chipCached)", app_js)
         self.assertIn("Cached input:    ' + chipCached.toLocaleString() + ' tokens", app_js)
 
+    def test_antigravity_turn_token_chips_call_out_uncached_input(self):
+        """A partial cache read must visibly say how much input missed cache."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+        self.assertIn("function _cacheMissCallout(tIn, tCached)", app_js)
+        self.assertIn("CACHE MISS", app_js)
+        self.assertIn("event-token-chips cache-miss", app_js)
+        self.assertIn(".event-token-chips.cache-miss", app_css)
+
     def test_system_health_gui_app_contract(self):
         """GUI app-server engines are visible but never reapable. Their only
         server-side control is a fixed graceful AppleScript quit command."""

@@ -40239,6 +40239,13 @@
     return parts.join(' | ');
   }
 
+  // Cache reads can make a mostly-cold turn look healthy in the compact token
+  // line. State the missing portion explicitly so a cache miss is actionable.
+  function _cacheMissCallout(tIn, tCached) {
+    const missed = Math.max(0, (Number(tIn) || 0) - (Number(tCached) || 0));
+    return missed ? 'CACHE MISS — ' + _formatTokensAntigravity(missed) + ' input tokens uncached' : '';
+  }
+
   function _getCtxLimitOverride() {
     const v = parseInt(localStorage.getItem('ccc-context-limit') || '0', 10);
     return v === 1_000_000 || v === 200_000 ? v : 0;
@@ -45425,6 +45432,12 @@
             } else {
               blockParts.push('<div class="event-token-chips" title="' + escapeAttr(chipTitle) + '">' + escapeHtml(chipText) + '</div>');
             }
+          }
+          const cacheMiss = _cacheMissCallout(ev.tokens_in, chipCached);
+          if (cacheMiss) {
+            blockParts.push('<div class="event-token-chips cache-miss" title="' + escapeAttr(
+              'Cache read covered ' + chipCached.toLocaleString() + ' of ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' input tokens.'
+            ) + '">' + escapeHtml(cacheMiss) + '</div>');
           }
         }
         html += blockParts.join('');

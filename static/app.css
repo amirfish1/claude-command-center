@@ -1953,6 +1953,15 @@
     font-variant-numeric: tabular-nums;
     cursor: help;
   }
+  /* A missing cache read is a cost and latency signal, not quiet metadata. */
+  .event-token-chips.cache-miss {
+    margin-top: 5px;
+    color: #ff7b72;
+    opacity: 1;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.025em;
+  }
   .event-model-meta {
     margin: 3px 0 0;
     font-size: 10px;
