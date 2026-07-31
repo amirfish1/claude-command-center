@@ -1,0 +1,1 @@
+- Strip Conductor's injected `<system_instruction>` wrapper from session names across every engine, not just Codex — Conductor-launched Claude Code sessions were showing the wrapper as their title.

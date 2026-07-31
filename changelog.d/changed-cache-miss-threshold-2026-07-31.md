@@ -1,0 +1,1 @@
+- Only flag a per-turn cache miss when the uncached share exceeds 70% of total input, so a 99%-cached turn no longer reads as CACHE MISS.

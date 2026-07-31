@@ -40252,9 +40252,21 @@
 
   // Cache reads can make a mostly-cold turn look healthy in the compact token
   // line. State the missing portion explicitly so a cache miss is actionable.
+  //
+  // Only when the miss actually dominates the turn. Every turn carries a small
+  // uncached tail (the new user message, a tool result), so "any delta at all"
+  // lit the callout on turns that were 99% cache hits — 97.2k in / 96.4k cached
+  // read as CACHE MISS. A callout that fires on healthy turns teaches people to
+  // ignore it. Threshold: the uncached share must exceed
+  // CACHE_MISS_CALLOUT_MIN_SHARE of total input.
+  const CACHE_MISS_CALLOUT_MIN_SHARE = 0.70;
+
   function _cacheMissCallout(tIn, tCached) {
-    const missed = Math.max(0, (Number(tIn) || 0) - (Number(tCached) || 0));
-    return missed ? 'CACHE MISS — ' + _formatTokensAntigravity(missed) + ' input tokens uncached' : '';
+    const total = Number(tIn) || 0;
+    const missed = Math.max(0, total - (Number(tCached) || 0));
+    if (!missed || !total) return '';
+    if (missed / total <= CACHE_MISS_CALLOUT_MIN_SHARE) return '';
+    return 'CACHE MISS — ' + _formatTokensAntigravity(missed) + ' input tokens uncached';
   }
 
   function _getCtxLimitOverride() {
