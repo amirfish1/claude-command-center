@@ -8789,6 +8789,76 @@ _archive_serve_refreshing = set()  # keys with a background refresh in flight
 _archive_serve_generation = 0
 _archive_serve_version = 0       # monotonic per store; tags prebuilt response bodies
 
+# W84 follow-up: _archive_refresh_is_cheap predicts the fast TIER (unchanged
+# signature -> rehydrate, or a small transcript delta) but says nothing about
+# how long that tier actually costs. The rehydrate is O(all rows), so on a
+# large corpus "cheap" is several seconds — and because it ran synchronously
+# on any poll past the serve TTL, roughly every other sidebar poll stalled.
+# Measured on a 3,643-row corpus: alternating 0.08s / 4-7s, forever.
+#
+# So don't trust the structural prediction alone: time the sync refresh, and
+# when it blows the budget demote that key to the background refresh (stale
+# serve, same as the full-rebuild tier) for a while. The block expires so a
+# corpus that becomes cheap again — fewer rows, archived sessions — returns to
+# synchronous, fresher serves on its own. One slow poll per re-probe window
+# instead of one per serve TTL.
+try:
+    _ARCHIVE_SYNC_REFRESH_BUDGET = max(
+        0.0, float(os.environ.get("CCC_ARCHIVE_SYNC_REFRESH_BUDGET_SEC", "1.0"))
+    )
+except ValueError:
+    _ARCHIVE_SYNC_REFRESH_BUDGET = 1.0
+try:
+    _ARCHIVE_SYNC_REFRESH_REPROBE = max(
+        5.0, float(os.environ.get("CCC_ARCHIVE_SYNC_REFRESH_REPROBE_SEC", "60"))
+    )
+except ValueError:
+    _ARCHIVE_SYNC_REFRESH_REPROBE = 60.0
+# Each consecutive over-budget re-probe doubles the window, so a corpus that is
+# simply large (and will stay expensive) stops paying a multi-second poll every
+# minute forever. Reset to the base window the moment a run comes in on budget.
+try:
+    _ARCHIVE_SYNC_REFRESH_REPROBE_MAX = max(
+        _ARCHIVE_SYNC_REFRESH_REPROBE,
+        float(os.environ.get("CCC_ARCHIVE_SYNC_REFRESH_REPROBE_MAX_SEC", "900")),
+    )
+except ValueError:
+    _ARCHIVE_SYNC_REFRESH_REPROBE_MAX = max(_ARCHIVE_SYNC_REFRESH_REPROBE, 900.0)
+_archive_sync_refresh_block = {}   # key -> {"until": ts, "window": sec}
+
+
+def _archive_sync_refresh_allowed(key, now=None):
+    """False while this key is serving its post-budget-blowout cooldown."""
+    if _ARCHIVE_SYNC_REFRESH_BUDGET <= 0:
+        return False
+    with _archive_serve_lock:
+        entry = _archive_sync_refresh_block.get(key)
+    if not entry:
+        return True
+    return (time.time() if now is None else now) >= entry.get("until", 0)
+
+
+def _archive_note_sync_refresh_cost(key, seconds):
+    """Record what a synchronous refresh actually cost and gate the next one."""
+    if _ARCHIVE_SYNC_REFRESH_BUDGET <= 0:
+        return
+    if seconds <= _ARCHIVE_SYNC_REFRESH_BUDGET:
+        with _archive_serve_lock:
+            _archive_sync_refresh_block.pop(key, None)
+        return
+    with _archive_serve_lock:
+        previous = (_archive_sync_refresh_block.get(key) or {}).get("window", 0)
+        window = min(
+            _ARCHIVE_SYNC_REFRESH_REPROBE_MAX,
+            previous * 2 if previous else _ARCHIVE_SYNC_REFRESH_REPROBE,
+        )
+        _archive_sync_refresh_block[key] = {"until": time.time() + window, "window": window}
+    print(
+        f"  [archive-serve] sync refresh took {seconds:.2f}s "
+        f"(budget {_ARCHIVE_SYNC_REFRESH_BUDGET:.2f}s) — backgrounding refreshes "
+        f"for {window:.0f}s"
+    )
+
 
 def _archive_serve_cache_store(key, rows, generation):
     """Store rows only if no lifecycle mutation invalidated their build."""
@@ -9158,11 +9228,18 @@ def _archive_serve_refresh(key, cache_options, serve_generation):
 def _archive_refresh_is_cheap(key, cache_options):
     """True when refreshing this key now would take the fast path in
     _archive_compute_rows: corpus signature unchanged (rehydrate-only) or a
-    known-small transcript delta (incremental merge). Both are sub-second;
+    known-small transcript delta (incremental merge);
     everything else means a full O(all-rows) rebuild that must stay off the
     request path. Signature is memoized (TTL) and the cache probe is an
     in-memory dict read, so this predicate is cheap enough per poll.
+
+    The fast tier is not automatically FAST: the rehydrate is O(all rows), so
+    on a large corpus it costs seconds. _archive_sync_refresh_allowed carries
+    the measured verdict from the last synchronous run and vetoes this
+    prediction when that run blew the budget.
     """
+    if not _archive_sync_refresh_allowed(key):
+        return False
     try:
         entry_sig = _archive_response_cache_signature(key)
         if not entry_sig:
@@ -9238,13 +9315,18 @@ def _archive_serve_rows_versioned(key, cache_options):
             # a full poll cycle even after the rebuild itself got cheap. The
             # slow cases (unknown signature, engine-source change, bulk delta
             # → full rebuild) keep the stale-serve + background refresh.
+            # "Cheap" is a prediction about the TIER, not the clock. Time the
+            # run and let _archive_note_sync_refresh_cost demote this key to
+            # the background path when the prediction turns out expensive.
             if _archive_refresh_is_cheap(key, cache_options):
+                started = time.time()
                 try:
                     new_rows, from_cache = _archive_compute_rows(key, cache_options, serve_generation)
                     return new_rows, from_cache, _archive_serve_ver_for_rows(key, new_rows)
                 except Exception as e:
                     print(f"  [archive-serve] sync refresh failed, serving stale: {e}")
                 finally:
+                    _archive_note_sync_refresh_cost(key, time.time() - started)
                     with _archive_serve_lock:
                         _archive_serve_refreshing.discard(key)
                 return rows, True, snap_ver
