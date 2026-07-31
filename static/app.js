@@ -28962,6 +28962,9 @@
           + '</div>';
       }
     }
+    // The Group chats lane is a dedicated chat list. Keep the general All
+    // view's mixed session/chat Trash section out of it.
+    const _trashHtmlForAllTabView = _allTabView === 'group-chats' ? '' : _trashHtml;
 
     if (_allTabUnfilteredCount > 0) {
       const _arcGroupingToggle = _arcHasFolderChips && !_isSpecificFolderFilter
@@ -29021,7 +29024,7 @@
         + _arcTools
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
-        + _trashHtml
+        + _trashHtmlForAllTabView
         + '</div>';
     }
     // Tabs (CCC-85): Active / All / GH Issues / WatchTower queues

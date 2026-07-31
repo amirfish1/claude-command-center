@@ -1461,6 +1461,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('data-all-hermes-tab="group-chats"', app_js)
         self.assertIn("'Group chats<span class=\"conv-tab-count\">'", app_js)
         self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
+        self.assertIn("const _trashHtmlForAllTabView = _allTabView === 'group-chats' ? '' : _trashHtml;", app_js)
         self.assertIn("const _savedAllTabView = (() => {", app_js)
         self.assertIn("const _allTabUnfilteredLanes = new Set(", app_js)
         self.assertIn("|| _allTabUnfilteredLanes.has('workers')", app_js)
