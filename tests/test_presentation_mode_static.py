@@ -115,6 +115,22 @@ process.stdout.write(JSON.stringify({ path, resolved: resolved && resolved.name 
 
 
 class TestPresentationModeStatic(unittest.TestCase):
+    def test_presentation_is_an_opt_in_preview_feature(self):
+        server_source = (PROJECT_ROOT / "server.py").read_text(encoding="utf-8")
+        app_js = APP_JS.read_text(encoding="utf-8")
+
+        self.assertIn('"presentation": {', server_source)
+        self.assertIn('"default": False', server_source)
+        self.assertIn("function presentationFeatureEnabled()", app_js)
+        self.assertIn("return ff('presentation');", app_js)
+
+        toolbar = _javascript_function_source("syncPresentationToolbar")
+        refresh = _javascript_function_source("refreshPresentationForPane")
+        setter = _javascript_function_source("setPresentationMode")
+        self.assertIn("!presentationFeatureEnabled() || !hasAnswers", toolbar)
+        self.assertIn("presentationFeatureEnabled()\n      ?", refresh)
+        self.assertIn("presentationFeatureEnabled() ? normalizePresentationMode(mode) : 'off'", setter)
+
     def test_selector_exposes_off_present_and_mode_three(self):
         html = INDEX.read_text(encoding="utf-8")
 

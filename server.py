@@ -12586,6 +12586,11 @@ SPAWN_DEFAULTS_FILE = COMMAND_CENTER_STATE_DIR / "spawn-defaults.json"
 # `_feature_flag('name')`. The Settings "Experimental" section renders itself
 # from this registry — no extra markup per flag.
 _PREVIEW_FLAGS = {
+    "presentation": {
+        "default": False,
+        "label": "Conversation presentation",
+        "desc": "Show the Present controls that turn assistant answers into local slides.",
+    },
     # "flow_v2": {
     #     "default": False,
     #     "label": "Flow v2 canvas",

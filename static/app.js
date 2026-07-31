@@ -42430,6 +42430,10 @@
   const PRESENTATION_MODE_BY_SESSION_KEY = 'ccc-conv-presentation-mode-by-session';
   const _mode3BootstrapByAnswer = new Map();
 
+  function presentationFeatureEnabled() {
+    return ff('presentation');
+  }
+
   function normalizePresentationMode(mode) {
     const value = String(mode == null ? '' : mode).toLowerCase();
     if (value === '3' || value === 'mode3' || value === 'mode-3') return '3';
@@ -43221,7 +43225,7 @@
   function syncPresentationToolbar(pane, mode, hasAnswers) {
     const toolbar = pane && pane.querySelector('[data-role="presentation-toolbar"]');
     if (!toolbar) return;
-    toolbar.hidden = !hasAnswers;
+    toolbar.hidden = !presentationFeatureEnabled() || !hasAnswers;
     toolbar.querySelectorAll('[data-presentation-mode]').forEach(button => {
       const active = button.dataset.presentationMode === mode;
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
@@ -43791,9 +43795,9 @@
       pane.dataset.presentationSessionId = sessionId;
       pane.dataset.presentationMode = presentationModeForSession(sessionId);
     }
-    const mode = normalizePresentationMode(
-      pane.dataset.presentationMode || presentationModeForSession(sessionId)
-    );
+    const mode = presentationFeatureEnabled()
+      ? normalizePresentationMode(pane.dataset.presentationMode || presentationModeForSession(sessionId))
+      : 'off';
     pane.dataset.presentationMode = mode;
     const hasAnswers = !!view.querySelector('.event.assistant .assistant-text, .stream-bubble .assistant-text');
     syncPresentationToolbar(pane, mode, hasAnswers);
@@ -43838,7 +43842,7 @@
     const pane = presentationPaneElement(targetPaneId);
     const view = getConvViewForPane(targetPaneId);
     if (!pane || !view) return;
-    const normalized = normalizePresentationMode(mode);
+    const normalized = presentationFeatureEnabled() ? normalizePresentationMode(mode) : 'off';
     const conversationId = presentationConversationIdForPane(targetPaneId);
     const oldMode = normalizePresentationMode(pane.dataset.presentationMode || 'off');
     const sessionId = presentationSessionIdForPane(targetPaneId);
