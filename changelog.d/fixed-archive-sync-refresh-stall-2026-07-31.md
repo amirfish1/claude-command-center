@@ -1,0 +1,1 @@
+- Sidebar list polls no longer stall for seconds on large session archives: a synchronous cache refresh that outruns its time budget now falls back to the background refresh.
