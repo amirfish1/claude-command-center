@@ -31978,6 +31978,11 @@ def _kimi_wire_prompt_usages(wire_path):
     def add_usage(total, raw):
         if not isinstance(raw, dict):
             return False
+        usage_keys = (
+            "inputOther", "inputCacheRead", "inputCacheCreation", "output",
+        )
+        if not any(key in raw for key in usage_keys):
+            return False
         total["input_tokens"] += _codex_int(raw.get("inputOther"))
         total["cache_read_input_tokens"] += _codex_int(raw.get("inputCacheRead"))
         total["cache_creation_input_tokens"] += _codex_int(raw.get("inputCacheCreation"))
@@ -32009,6 +32014,8 @@ def _kimi_wire_prompt_usages(wire_path):
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(record, dict):
+            continue
         record_type = record.get("type")
         if record_type == "turn.prompt":
             finish_prompt()
@@ -32016,8 +32023,12 @@ def _kimi_wire_prompt_usages(wire_path):
             awaiting_user_message = True
             continue
         if record_type == "context.append_message":
-            message = record.get("message") or {}
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
             origin = message.get("origin") or {}
+            if not isinstance(origin, dict):
+                continue
             if message.get("role") == "user" and origin.get("kind") in (None, "user"):
                 if current is None:
                     current = new_prompt()
@@ -32031,12 +32042,13 @@ def _kimi_wire_prompt_usages(wire_path):
             continue
         if record_type == "usage.record" and record.get("usageScope") in (None, "turn"):
             usage = record.get("usage")
-            if isinstance(usage, dict):
+            if add_usage(current["durable"], usage):
                 current["saw_durable"] = True
-                add_usage(current["durable"], usage)
             continue
         if record_type == "context.append_loop_event":
-            loop = record.get("event") or {}
+            loop = record.get("event")
+            if not isinstance(loop, dict):
+                continue
             if loop.get("type") == "step.end":
                 add_usage(current["fallback"], loop.get("usage"))
 

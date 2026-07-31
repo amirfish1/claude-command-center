@@ -164,3 +164,52 @@ def test_kimi_wire_prompt_usages_group_steps_and_prefer_durable_records(tmp_path
             "output_tokens": 17,
         },
     ]
+
+
+def test_kimi_wire_prompt_usages_ignores_valid_json_malformed_shapes(tmp_path):
+    wire = tmp_path / "wire.jsonl"
+    _write_jsonl(wire, [
+        {"type": "turn.prompt"},
+        "not a wire record",
+        {"type": "context.append_message", "message": "not a message"},
+        {"type": "context.append_message", "message": {
+            "role": "user", "origin": "not an origin",
+        }},
+        {"type": "context.append_loop_event", "event": "not an event"},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "usage": {
+                "inputOther": 4, "inputCacheRead": 3,
+                "inputCacheCreation": 2, "output": 1,
+            },
+        }},
+    ])
+
+    assert server._kimi_wire_prompt_usages(wire) == [{
+        "input_tokens": 4,
+        "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 2,
+        "output_tokens": 1,
+    }]
+
+
+def test_kimi_wire_prompt_usages_uses_fallback_after_incomplete_durable_usage(tmp_path):
+    wire = tmp_path / "wire.jsonl"
+    _write_jsonl(wire, [
+        {"type": "turn.prompt"},
+        {"type": "usage.record", "usageScope": "turn", "usage": {
+            "unrecognized": 99,
+        }},
+        {"type": "context.append_loop_event", "event": {
+            "type": "step.end", "usage": {
+                "inputOther": 40, "inputCacheRead": 30,
+                "inputCacheCreation": 20, "output": 10,
+            },
+        }},
+    ])
+
+    assert server._kimi_wire_prompt_usages(wire) == [{
+        "input_tokens": 40,
+        "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 20,
+        "output_tokens": 10,
+    }]
