@@ -3626,20 +3626,28 @@ class TestServerImports(unittest.TestCase):
                 server.ANNOTATIONS_FILE = old_file
                 server.ANNOTATION_SCREENSHOT_DIR = old_dir
 
-    def test_right_rail_topbar_has_popout_button_wired_to_existing_helper(self):
-        """The visible right-rail topbar owns the pop-out action, rather than
-        the hidden conversation toolbar or breadcrumb/status-rail row. It
-        reuses the delegated helper and is skipped in a popout."""
+    def test_pane_sticky_topbar_owns_popout_button(self):
+        """The conversation pane's own sticky top bar owns the pop-out action.
+        It must NOT live in the status rail (collapses) nor the conversation
+        toolbar/breadcrumb (hidden in right-rail mode) — both homes were tried
+        and re-filed as "pop-out button disappeared". It reuses the delegated
+        helper and is skipped inside a popout window."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-role="ccc-breadcrumb-popout"', app_js)
-        self.assertIn('class="status-rail-annotate status-rail-popout"', app_js)
+        self.assertIn('class="conv-sticky-header__popout"', app_js)
         self.assertIn("CONV_POPOUT_MODE ? ''", app_js)
         self.assertIn("openConversationPopout(convId, null, null)", app_js)
-        self.assertIn("const topbarEl = document.getElementById('statusRailTopbar');", app_js)
-        self.assertIn("topbarEl.insertAdjacentHTML('beforeend', popoutBtn);", app_js)
-        self.assertNotIn("+ popoutBtn;\n        breadcrumbEl.innerHTML", app_js)
-        self.assertIn(".status-rail-annotate", app_css)
+        # The old homes must stay retired.
+        self.assertNotIn("topbarEl.insertAdjacentHTML('beforeend', popoutBtn);", app_js)
+        self.assertNotIn('class="status-rail-annotate status-rail-popout"', app_js)
+        self.assertIn(".conv-sticky-header .conv-sticky-header__popout", app_css)
+        # Right-rail mode keeps the pane's sticky bar visible (only a
+        # genuinely empty bar collapses) so Pop out survives a closed rail.
+        self.assertIn(
+            "body.status-pos-right .conv-sticky-header.is-earlier-empty,", app_css)
+        self.assertNotIn(
+            "body.status-pos-right .conv-sticky-header,\nbody.status-pos-right #convToolbar", app_css)
 
     def test_collapsed_conversation_popout_has_labeled_side_panel_restore(self):
         """A popout must not strand its right rail behind an icon-only edge

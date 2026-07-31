@@ -1370,6 +1370,22 @@
     opacity: 0.6; z-index: 10;
   }
   .conv-sticky-header .conv-sticky-header__close:hover { opacity: 1; color: var(--red); }
+  /* Pop out — pinned to the pane's own top bar, left of the × close.
+     Deliberately NOT in the status rail: the rail collapses, this must not
+     (it kept getting re-filed as "pop-out button disappeared"). */
+  .conv-sticky-header .conv-sticky-header__popout {
+    position: absolute; top: 8px; right: 34px;
+    display: inline-flex; align-items: center; gap: 4px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted); font-size: 11px; cursor: pointer;
+    line-height: 1; padding: 3px 7px;
+    z-index: 10;
+  }
+  .conv-sticky-header .conv-sticky-header__popout:hover {
+    color: var(--text); border-color: var(--text-muted);
+  }
 
   /* RTL support — `unicode-bidi: plaintext` lets each block (paragraph,
      blockquote, code block) detect its own direction from its first
@@ -16184,7 +16200,7 @@ body.status-pos-right .conv-sticky-header .csh-row {
 body.status-pos-right .conv-sticky-header .csh-col-ask {
   border-right: none;
   flex: 1 1 auto;
-  padding: 6px 36px 6px 12px;  /* right padding clears the × button */
+  padding: 6px 118px 6px 12px;  /* right padding clears Pop out + × buttons */
 }
 /* The dashed top-divider on `.csh-ask-earlier` is only relevant when
    stacked under `.csh-ask-original`. With the original gone, drop it.
@@ -16282,17 +16298,20 @@ body.is-issue-view .conv-input-context { display: none !important; }
 body.status-pos-right .conv-sticky-header { max-height: 60px; }
 body.status-pos-right .conv-sticky-header .csh-row { padding: 0; }
 body.status-pos-right .conv-sticky-header .csh-col-ask {
-  padding: 4px 36px 4px 12px;
+  padding: 4px 118px 4px 12px;  /* clears Pop out + × at top-right */
 }
 
-/* In right-rail mode the original-ask and activity are in the side rail;
-   the sticky header has nothing left to show. Hide it entirely — the
-   earlier-ask slot that lived here was already removed once; this rule
-   keeps the regression from surfacing again (CCC-332).
-   The main convToolbar is also hidden: all its controls (launch, announce,
+/* In right-rail mode the original-ask and activity are in the side rail,
+   but the sticky top bar STAYS on the conversation pane: it carries the
+   last/earlier ask (seeded by _railSeedLastAsk — the bar is never empty)
+   and hosts the Pop out button, which must survive a collapsed rail.
+   This supersedes CCC-332, which hid the sticky entirely; per later user
+   direction the pane keeps its own top bar. Only a genuinely empty bar
+   (no user message at all) collapses.
+   The main convToolbar is still hidden: all its controls (launch, announce,
    breadcrumb, live badge) were moved into the rail by _applyToolbarRailLayout;
    the bar itself should not occupy vertical space. */
-body.status-pos-right .conv-sticky-header,
+body.status-pos-right .conv-sticky-header.is-earlier-empty,
 body.status-pos-right #convToolbar {
   display: none !important;
 }

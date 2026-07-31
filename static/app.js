@@ -32383,30 +32383,14 @@
     const breadcrumbEl = document.getElementById('cccBreadcrumb');
     if (breadcrumbEl) {
       const isActive = targetPaneId === activePaneId();
-      const topbarEl = document.getElementById('statusRailTopbar');
-      // This action is session-specific, so clear the previous session's
-      // control before rendering the active one into the visible rail topbar.
-      if (topbarEl) {
-        const previousPopout = topbarEl.querySelector('[data-role="ccc-breadcrumb-popout"]');
-        if (previousPopout) previousPopout.remove();
-      }
+      // NOTE: the Pop out button used to be injected here — first into the
+      // breadcrumb, then into #statusRailTopbar. Both homes vanish in some
+      // layout (toolbar hidden in right-rail mode; rail hidden when
+      // collapsed), which is why "the pop-out button disappeared" kept
+      // getting re-filed. It now lives on the conversation pane's own
+      // sticky top bar (see the .conv-sticky-header build), which exists
+      // in every mode and never sits inside the rail. Do NOT move it back.
       if (isActive && (category || title)) {
-        // Pop-out button mirrors the drag-out-of-window gesture for users
-        // who prefer a click. Skipped inside the popout itself (no point
-        // popping a popout). Click handler is delegated once at boot —
-        // see the document listener for [data-role="ccc-breadcrumb-popout"].
-        const popoutBtn = CONV_POPOUT_MODE ? ''
-          : '<button type="button" class="status-rail-annotate status-rail-popout" data-role="ccc-breadcrumb-popout"'
-            + ' title="Pop this conversation out to its own window" aria-label="Pop out conversation">'
-            // Diagonal arrow-out-of-box glyph. Inline SVG so it inherits
-            // currentColor and stays crisp at any zoom.
-            + '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">'
-            +   '<path d="M5 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
-            +   '<path d="M7 1h4v4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
-            +   '<path d="M11 1L6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
-            + '</svg>'
-            + '<span>Pop out</span>'
-          + '</button>';
         // Process-presence indicator — shows whether this Claude session has a
         // CCC-spawned headless and/or a live terminal (TTY), plus when it was
         // last checked. (The Compact button lives in the input box now.) Filled
@@ -32458,7 +32442,6 @@
           // duplicating it here just crowded the narrow breadcrumb and forced the
           // category/title to ellipsize to uselessness ("cod…", "C…"). (CCC-280)
           ;
-        if (popoutBtn && topbarEl) topbarEl.insertAdjacentHTML('beforeend', popoutBtn);
         breadcrumbEl.hidden = false;
         updateConvProcessIndicator();
         // Mirror the active session's name into the status-rail head, replacing
@@ -39411,7 +39394,34 @@
     st.currentIdx = idx;
     item.classList.add('is-dynamic-pinned-in-sticky');
     if (st.earlierFirst) st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(cleanIssuePrompt(text)));
+    _setEarlierAskLabel('Earlier ask');
     _updateStickyAskSlots();
+  }
+  function _setEarlierAskLabel(text) {
+    const st = _dynamicAskState;
+    const lbl = st && st.earlierBox && st.earlierBox.querySelector('.label');
+    if (lbl) lbl.textContent = text;
+  }
+  // Right-rail mode: the pane's sticky top bar must never be empty — when
+  // no earlier ask has been scrolled past, it shows the LAST user ask
+  // ("Last ask") so the current intent is always one glance away. In top
+  // mode the Original-ask panel already fills that role, so this is a
+  // no-op there. Runs from _updateStickyAskSlots, so any scroll-pinned
+  // earlier ask (currentIdx > 0) takes precedence.
+  function _railSeedLastAsk() {
+    const st = _dynamicAskState;
+    if (!st || st.currentIdx > 0 || !st.earlierFirst) return;
+    if (!document.body.classList.contains('status-pos-right') || isMobile()) return;
+    const items = _dynAskItems();
+    for (let i = items.length - 1; i >= 0; i--) {
+      const msgEl = items[i].querySelector('.user-msg');
+      const text = msgEl ? ((msgEl.dataset && msgEl.dataset.rawText) || msgEl.textContent || '').trim() : '';
+      if (text) {
+        st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(cleanIssuePrompt(text)));
+        _setEarlierAskLabel('Last ask');
+        return;
+      }
+    }
   }
   // Coordinator: decides where the .csh-ask-earlier block lives based on
   // whether (a) the earlier slot has any text and (b) the activity column
@@ -39429,6 +39439,10 @@
   function _updateStickyAskSlots() {
     const sticky = document.querySelector('.conv-sticky-header');
     if (!sticky) return;
+    // Right-rail mode keeps the bar populated with the last ask whenever
+    // scroll hasn't pinned an earlier one — must run before earlierHasText
+    // is measured below.
+    _railSeedLastAsk();
     const rail = document.getElementById('statusRail');
     const inRightRail = document.body.classList.contains('status-pos-right');
     const askCol = sticky.querySelector('.csh-col-ask');
@@ -44730,7 +44744,24 @@
           // node, and resets every time the user switches conversations.
           const mobileOriginalAskText = cleanIssuePrompt(originalAskTextForEvent(ev, paneId));
           if (paneId === activePaneId()) syncMobileOriginalAsk(mobileOriginalAskText);
+          // Pop-out lives HERE — on the pane's own top bar — not in the
+          // status rail. The rail can be collapsed (or repositioned) and
+          // the pop-out action must survive that; it is pane chrome, not
+          // rail chrome. Click handling is delegated at boot via
+          // [data-role="ccc-breadcrumb-popout"], so the button needs no
+          // per-conversation wiring and survives sticky rebuilds.
+          const stickyPopoutBtn = CONV_POPOUT_MODE ? ''
+            : '<button type="button" class="conv-sticky-header__popout" data-role="ccc-breadcrumb-popout"'
+              + ' title="Pop this conversation out to its own window" aria-label="Pop out conversation">'
+              + '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">'
+              +   '<path d="M5 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+              +   '<path d="M7 1h4v4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
+              +   '<path d="M11 1L6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+              + '</svg>'
+              + '<span>Pop out</span>'
+            + '</button>';
           sticky.innerHTML = resolveBtn + issueBtn
+            + stickyPopoutBtn
             + '<button type="button" class="conv-sticky-header__close" data-csh-close title="Hide this panel completely">×</button>'
             + '<div class="csh-row">'
             +   '<div class="csh-col csh-col-ask">'
