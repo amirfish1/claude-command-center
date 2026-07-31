@@ -50,6 +50,7 @@ class EngineHost:
                 # silent no-ops in the one process that actually owns Codex
                 # app-server execution and liveness churn.
                 server._install_python_stack_dump_handler()
+                server._schedule_claude_spawn_capability_probe()
                 # A worker restart can inherit still-live CLI children. Reopen
                 # their durable FIFOs here, in the process that owns engine
                 # execution, rather than in the restartable dashboard.

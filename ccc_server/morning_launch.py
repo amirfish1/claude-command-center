@@ -218,6 +218,66 @@ def _pid_alive(pid):
         return False
 
 
+class _SpawnEventNormalizer:
+    """Stateful stream-json normalizer for one spawn-log connection.
+
+    Claude's partial stream events do not repeat the message id on every
+    token, while the later completed ``assistant`` event contains the whole
+    text again. Remembering the active message lets CCC paint each delta as
+    it arrives and suppress only the duplicated finalized text. Tool blocks
+    in that finalized event remain visible.
+    """
+
+    def __init__(self):
+        self._message_id = ""
+        self._partial_text_message_ids = set()
+
+    def normalize(self, ev):
+        if not isinstance(ev, dict):
+            return None
+        if ev.get("type") == "stream_event":
+            stream_event = ev.get("event") or {}
+            if not isinstance(stream_event, dict):
+                return None
+            event_type = stream_event.get("type")
+            if event_type == "message_start":
+                message = stream_event.get("message") or {}
+                if isinstance(message, dict):
+                    self._message_id = str(message.get("id") or "")
+                return None
+            if event_type != "content_block_delta":
+                return None
+            delta = stream_event.get("delta") or {}
+            if not isinstance(delta, dict) or delta.get("type") != "text_delta":
+                return None
+            text = delta.get("text") or ""
+            if not text:
+                return None
+            message_id = self._message_id or str(ev.get("message_id") or "claude-stream")
+            self._partial_text_message_ids.add(message_id)
+            return {
+                "type": "assistant_block",
+                "message_id": message_id,
+                "blocks": [{"type": "text", "text": text}],
+                "partial": True,
+            }
+
+        if ev.get("type") == "assistant":
+            message = ev.get("message") or {}
+            message_id = str(message.get("id") or "") if isinstance(message, dict) else ""
+            if message_id in self._partial_text_message_ids:
+                content = message.get("content") or []
+                remaining = [
+                    block for block in content
+                    if not isinstance(block, dict) or block.get("type") != "text"
+                ]
+                if not remaining:
+                    return None
+                ev = dict(ev)
+                ev["message"] = dict(message, content=remaining)
+        return _normalize_spawn_event(ev)
+
+
 def _normalize_spawn_event(ev):
     """Boil a stream-json event down to the minimum the UI needs.
 
@@ -2203,5 +2263,4 @@ def extract_session_usage(session_id):
             "output": round(cost_out, 4),
         },
     }, session_id)
-
 

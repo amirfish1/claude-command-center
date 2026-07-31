@@ -9828,6 +9828,87 @@ def _resolve_claude_bin():
     }
 
 
+_CLAUDE_SPAWN_CAPABILITIES_LOCK = threading.Lock()
+_CLAUDE_SPAWN_CAPABILITIES = {}
+_CLAUDE_SPAWN_CAPABILITY_PROBES = set()
+
+
+def _probe_claude_spawn_capabilities(bin_path=None):
+    """Probe spawn flags once, outside the warm request path.
+
+    Older Claude Code releases must retain CCC's existing log-discovery and
+    completed-block stream behavior, so a failed probe deliberately publishes
+    an all-false (but ready) record rather than guessing.
+    """
+    if not bin_path:
+        resolved = _resolve_claude_bin()
+        bin_path = resolved.get("bin") if resolved.get("available") else None
+    record = {
+        "ready": True,
+        "bin": str(bin_path or ""),
+        "session_id": False,
+        "partial_messages": False,
+    }
+    if bin_path:
+        try:
+            completed = subprocess.run(
+                [str(bin_path), "--help"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            help_text = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+            if completed.returncode == 0:
+                record["session_id"] = "--session-id" in help_text
+                record["partial_messages"] = "--include-partial-messages" in help_text
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+    with _CLAUDE_SPAWN_CAPABILITIES_LOCK:
+        _CLAUDE_SPAWN_CAPABILITIES[str(bin_path or "")] = dict(record)
+    return record
+
+
+def _claude_spawn_capabilities(bin_path):
+    """Return only already-probed capabilities; never block a warm spawn."""
+    key = str(bin_path or "")
+    with _CLAUDE_SPAWN_CAPABILITIES_LOCK:
+        record = _CLAUDE_SPAWN_CAPABILITIES.get(key)
+    if record:
+        return dict(record)
+    return {
+        "ready": False,
+        "bin": key,
+        "session_id": False,
+        "partial_messages": False,
+    }
+
+
+def _schedule_claude_spawn_capability_probe():
+    """Warm the flag cache once in each process that may own a spawn."""
+    resolved = _resolve_claude_bin()
+    if not resolved.get("available"):
+        return False
+    bin_path = str(resolved.get("bin") or "")
+    with _CLAUDE_SPAWN_CAPABILITIES_LOCK:
+        if bin_path in _CLAUDE_SPAWN_CAPABILITIES or bin_path in _CLAUDE_SPAWN_CAPABILITY_PROBES:
+            return False
+        _CLAUDE_SPAWN_CAPABILITY_PROBES.add(bin_path)
+
+    def worker():
+        try:
+            _probe_claude_spawn_capabilities(bin_path)
+        finally:
+            with _CLAUDE_SPAWN_CAPABILITIES_LOCK:
+                _CLAUDE_SPAWN_CAPABILITY_PROBES.discard(bin_path)
+
+    threading.Thread(
+        target=worker,
+        daemon=True,
+        name="ccc-claude-spawn-capabilities",
+    ).start()
+    return True
+
+
 # ── In-app update: version check + self-update ─────────────────────────────
 # The UI pings /api/version/check on load; if the local __version__ is behind
 # the latest GitHub release tag, it shows a "Update available" pill. Clicking
@@ -22939,17 +23020,26 @@ def _spawn_timeline_enabled():
     return os.environ.get("CCC_SPAWN_STATS", "1") not in ("0", "false", "no")
 
 
-def _spawn_timeline_start(session_id, **fields):
+def _spawn_timeline_start(session_id, t0_epoch_ms=None, **fields):
     """Open a timeline for a spawn. t0 is when CCC accepted the request."""
     if not _spawn_timeline_enabled() or not session_id:
         return
     # Adopt the shared history before adding to it, so a freshly booted
     # process does not hold a dict that knows only about its own spawns.
     _spawn_timeline_sync()
+    now = time.time()
+    try:
+        requested_t0 = float(t0_epoch_ms) / 1000.0
+    except (TypeError, ValueError):
+        requested_t0 = now
+    # The browser and server share the local machine clock. Accept its click
+    # timestamp only inside a tight sanity window so a malformed/stale client
+    # cannot produce absurd or negative timing rows.
+    t0 = requested_t0 if abs(now - requested_t0) <= 60.0 else now
     with _SPAWN_TIMELINE_LOCK:
         _SPAWN_TIMELINE[str(session_id)] = {
             "session_id": str(session_id),
-            "t0": time.time(),
+            "t0": t0,
             "marks": {},
             **fields,
         }
@@ -29257,6 +29347,8 @@ def _session_landed(session_id):
     try:
         for path in PROJECTS_ROOT.glob(f"*/{sid}.jsonl"):
             if path.is_file():
+                if _spawn_timeline_mark(sid, "claude_transcript_created"):
+                    _spawn_timeline_save()
                 return {"ok": True, "landed": True, "known": True, "engine": "claude"}
     except OSError:
         pass
@@ -39954,7 +40046,12 @@ def _finalize_spawn_response(resp, entry, ctx, *, wait_for_session_id=True):
             resp["parent_session_id"] = entry["parent_session_id"]
     sid = (
         _wait_for_spawn_session_id(entry)
-        if wait_for_session_id else _spawn_session_id_from_entry(entry)
+        if wait_for_session_id
+        else (
+            (entry.get("session_id") or entry.get("resumed_sid"))
+            if isinstance(entry, dict)
+            else None
+        ) or _spawn_session_id_from_entry(entry)
     )
     resp["session_id"] = sid
     resp["session_id_pending"] = not bool(sid)
@@ -40212,7 +40309,8 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None):
     return prompt + footer
 
 
-def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
+                  parent_session_id=None, timeline_t0_epoch_ms=None):
     """Spawn a headless Claude Code session and return tracking info.
 
     The spawned subprocess requires an explicit cwd or repo_path.
@@ -40231,6 +40329,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "worktree": bool(worktree),
             "model": model,
             "parent_session_id": parent_session_id,
+            "timeline_t0_epoch_ms": timeline_t0_epoch_ms,
         },
         idempotency_key=_take_control_plane_action_id(),
     )
@@ -40272,6 +40371,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         }
 
     model_to_use = _cli_model_flag(_spawn_model_for_engine("claude", model) or "opus")
+    capabilities = _claude_spawn_capabilities(claude_bin["bin"])
+    session_id = str(uuid.uuid4()) if capabilities.get("session_id") else None
     cmd = [
         claude_bin["bin"], "-p", "--verbose",
         "--input-format", "stream-json",
@@ -40280,6 +40381,10 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "--dangerously-skip-permissions",
         "--name", session_name,
     ]
+    if session_id:
+        cmd.extend(["--session-id", session_id])
+    if capabilities.get("partial_messages"):
+        cmd.append("--include-partial-messages")
     cmd.extend(_claude_session_state_args())
 
     worktree_path = None
@@ -40306,6 +40411,14 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         env=_question_relay_env(),
     )
     popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
+    if session_id:
+        _spawn_timeline_start(
+            session_id,
+            t0_epoch_ms=timeline_t0_epoch_ms,
+            engine="claude",
+            model=model_to_use,
+            cwd=spawn_cwd,
+        )
     try:
         proc = subprocess.Popen(cmd, **popen_kwargs)
     except (FileNotFoundError, OSError) as e:
@@ -40319,6 +40432,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "error": f"Claude Code CLI failed to start: {e}",
             "code": "claude_unavailable",
         }
+    if session_id:
+        _spawn_timeline_mark(session_id, "process_started")
     # Keep a parent-owned writer open before dropping the local RDWR fd.
     # If this open fails, the prompt write below fails closed instead of
     # reporting a live session that never received its initial task.
@@ -40341,6 +40456,9 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "repo_path": ctx["repo_path"],
         "model": model_to_use,
         "parent_session_id": parent_session_id or "",
+        "session_id": session_id,
+        "partial_messages": bool(capabilities.get("partial_messages")),
+        "command": list(cmd),
     }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
@@ -40360,6 +40478,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "log": str(log_path),
             "engine": "claude",
         }
+    if session_id:
+        _spawn_timeline_mark(session_id, "initial_prompt_written")
 
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -40371,6 +40491,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         command_summary=prompt[:200],
         fifo=fifo_path,
         engine="claude",
+        session_id=session_id,
         repo_path=ctx["repo_path"],
         model=model_to_use,
         parent_session_id=parent_session_id,
@@ -40379,6 +40500,9 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     # logs to, which is how the kanban groups it by repo. Print it so
     # mis-routed sessions are debuggable from the server log.
     print(f"  [spawn] PID {proc.pid} ({session_name}) in cwd {spawn_cwd}")
+
+    if session_id:
+        _schedule_claude_desktop_visibility_retry(session_id, spawn_entry=entry)
 
     resp = {
         "ok": True,
@@ -40391,7 +40515,15 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
-    return _finalize_spawn_response(resp, entry, ctx)
+    if session_id:
+        _spawn_timeline_mark(session_id, "spawn_response_sent")
+        _spawn_timeline_save()
+    return _finalize_spawn_response(
+        resp,
+        entry,
+        ctx,
+        wait_for_session_id=not bool(session_id),
+    )
 
 
 def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None):
@@ -53855,7 +53987,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(e.as_payload(), e.status)
         elif re.match(r"^/api/session/[^/]+/spawn-stream$", path):
             sid = path.split("/")[-2]
-            self._stream_spawn_deltas(sid)
+            qs = urllib.parse.parse_qs(parsed.query)
+            replay = qs.get("replay", [""])[0].lower() in ("1", "true", "yes")
+            self._stream_spawn_deltas(sid, replay=replay)
         elif re.match(r"^/api/conversations/(?!all$|list$|order$)[^/]+$", path):
             conv_id = path.split("/")[-1]
             qs = urllib.parse.parse_qs(parsed.query)
@@ -57653,6 +57787,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             worktree=worktree_flag,
                             model=model,
                             parent_session_id=parent_session_id,
+                            timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                         )
                     result.setdefault("engine", engine)
                     if report_to and isinstance(result, dict):
@@ -59958,7 +60093,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_json({"error": "Not found"}, 404)
 
-    def _stream_spawn_deltas(self, session_id):
+    def _stream_spawn_deltas(self, session_id, replay=False):
         """SSE: tail a CCC-spawned session's stream-json log and forward
         block-level events to the browser.
 
@@ -59973,7 +60108,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if _is_kimi_session(session_id):
             self._stream_acp_deltas("kimi", session_id)
             return
-        self._stream_spawn_deltas_log(session_id)
+        self._stream_spawn_deltas_log(session_id, replay=replay)
 
     def _stream_acp_deltas(self, harness, session_id):
         """SSE: live bubble deltas for an ACP session, fed straight from the
@@ -60074,15 +60209,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
-    def _stream_spawn_deltas_log(self, session_id):
-        """The original spawn-log tail: block-level deltas parsed from the
-        spawned CLI's stream-json log file (0.25s size poll)."""
+    def _stream_spawn_deltas_log(self, session_id, replay=False):
+        """Tail normalized spawn output, optionally replaying from byte zero.
+
+        Replay closes the request/subscribe race for an optimistic card: the
+        preassigned Claude session id lets the browser connect immediately,
+        and any bytes written before EventSource opens are still delivered.
+        """
         log_path, _alive = _resolve_spawn_log_for_session(session_id)
         if not log_path:
             self.send_json({"error": "no spawn log for this session"}, 404)
             return
         try:
-            start_offset = os.path.getsize(log_path)
+            start_offset = 0 if replay else os.path.getsize(log_path)
         except OSError:
             self.send_json({"error": "spawn log unreadable"}, 500)
             return
@@ -60096,6 +60235,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         offset = start_offset
         leftover = ""
         last_keepalive = time.time()
+        normalizer = _SpawnEventNormalizer()
+        first_visible_sent = False
         try:
             while True:
                 events_to_send = []
@@ -60124,7 +60265,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             ev = json.loads(s)
                         except json.JSONDecodeError:
                             continue
-                        norm = _normalize_spawn_event(ev)
+                        timeline_dirty = False
+                        event_type = ev.get("type") if isinstance(ev, dict) else None
+                        if event_type == "system" and ev.get("subtype") == "init":
+                            timeline_dirty = _spawn_timeline_mark(
+                                session_id, "claude_system_init"
+                            ) or timeline_dirty
+                        if event_type == "stream_event":
+                            timeline_dirty = _spawn_timeline_mark(
+                                session_id, "claude_first_stream_event"
+                            ) or timeline_dirty
+                        norm = normalizer.normalize(ev)
+                        if norm and norm.get("partial") and any(
+                            block.get("type") == "text" and block.get("text")
+                            for block in norm.get("blocks") or []
+                            if isinstance(block, dict)
+                        ):
+                            timeline_dirty = _spawn_timeline_mark(
+                                session_id, "claude_first_text_delta"
+                            ) or timeline_dirty
+                        if timeline_dirty:
+                            _spawn_timeline_save()
                         if norm:
                             events_to_send.append(norm)
 
@@ -60133,6 +60294,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     try:
                         self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
                         self.wfile.flush()
+                        first_visible_sent = True
                     except (BrokenPipeError, ConnectionResetError, OSError):
                         break
 
@@ -60145,7 +60307,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         break
                     last_keepalive = now
 
-                time.sleep(0.25)
+                time.sleep(0.25 if first_visible_sent else 0.05)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
@@ -65681,6 +65843,7 @@ def main():
     # cause of warm processes dying.
     _resume_ledger_append("server_start", pid=os.getpid())
     ensure_hooks_installed()
+    _schedule_claude_spawn_capability_probe()
     install_orchestration_skill()
     worker_health = _control_plane_request("health")
     worker_capabilities = set(
