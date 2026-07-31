@@ -1,1 +1,0 @@
-- Allow the Throughput session sidebar to expand beyond its initial 20-session summary.

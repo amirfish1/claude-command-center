@@ -1,1 +1,0 @@
-- Let the throughput sidebar expand beyond its top 20 sessions so recent lower-volume sessions remain accessible.

@@ -1,1 +1,0 @@
-- ESC now interrupts live Claude headless sessions identified by the session registry.

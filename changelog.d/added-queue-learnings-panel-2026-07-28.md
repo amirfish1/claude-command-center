@@ -1,1 +1,0 @@
-- Show the selected WatchTower queue's learnings in the Q2 detail pane, with an action to open the source file for editing.

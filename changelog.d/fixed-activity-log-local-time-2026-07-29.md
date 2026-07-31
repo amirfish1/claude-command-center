@@ -1,1 +1,0 @@
-- Activity-log timestamps now display in your local timezone.

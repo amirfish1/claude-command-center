@@ -11,6 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed CCC silently holding a message forever when a live WatchTower-tracked worker session had no channel CCC recognized as its own (a "foreign live writer" — CCC didn't spawn it, so the existing fork guard would neither deliver nor fail loudly). CCC now recognizes a live WT worker's FIFO in-process (reading `workers.json` directly, zero subprocess) and delivers through it before falling back to the hold, wired into both the watcher's hold gate and the inject fork guard; a write failure (ENXIO, no reader) still falls back to the existing hold, never to a parallel `claude --resume`. A hold that persists past two consecutive watcher ticks (~5-10s) now logs an actionable incident instead of staying invisible, and the queue's user-facing note stops claiming the message "sends when it finishes" for a headless worker that never will.
 - Added a global delivery-health banner fed by a new `/api/injection-health` endpoint: surfaces active foreign-writer holds and newly-lost WatchTower receipts, read in-process from `receipts.json` (no `wt` subprocess). Historical losses are baselined once, ever — not per restart — so a loss that happens while CCC is down still surfaces on the next start; dismissible per-incident or all-at-once, durably acked across reloads.
 
+## [5.18.0] - 2026-07-31
+
+### Added
+- Added a Group chats lane to the All sidebar view, keeping cross-repo chats out of Coding.
+- Object groups in the Current sessions list can now be collapsed and expanded, with the state remembered per group across reloads.
+- Conversation popout gains a labeled "Show side panel" button when the side rail is collapsed, so the restore control isn't hidden behind an icon-only edge chevron.
+- Add an ALL queues inbox for globally triaging non-closed tickets and live workers.
+- Added an Annotate control to the q2 queue view that files element feedback to the CCC WatchTower queue.
+- Show the selected WatchTower queue's learnings in the Q2 detail pane, with an action to open the source file for editing.
+- Select text in a session transcript to add an annotation — a "+" appears near the selection, the note stays visible inline, and a short reference is inserted into the composer.
+
+### Changed
+- Make per-turn cache misses explicit with a high-contrast uncached-token callout.
+- Only flag a per-turn cache miss when the uncached share exceeds 70% of total input, so a 99%-cached turn no longer reads as CACHE MISS.
+- History search results now identify whether they matched the local or semantic history index.
+
+### Removed
+- Removed the retired Queue-first board; the normal queue tools and `q2` remain available.
+
+### Fixed
+- Activity-log timestamps now display in your local timezone.
+- Strip Conductor's injected `<system_instruction>` wrapper from session names across every engine, not just Codex — Conductor-launched Claude Code sessions were showing the wrapper as their title.
+- Fixed the branch chip showing the launch-time branch (e.g. "main") for sessions that switched into a worktree via the native EnterWorktree tool instead of a shell `cd` — it now resolves the real worktree/branch.
+- Fixed group-chat wake-status rows accumulating when a participant uses a non-UUID session identifier.
+- Group-chat participants remain visible in Current sessions even when they were previously recorded as WatchTower workers.
+- Fixed the Group chats lane showing unrelated session Trash entries.
+- ESC now interrupts live Claude headless sessions identified by the session registry.
+- Fixed recent paused group chats being omitted from the sidebar and All view.
+- Moved the conversation pop-out action to the right-hand status-rail top bar, where it stays visible and labeled.
+- Fixed the Queues board so it is usable on phones with swipeable master/detail panes.
+- Added explicit Back controls for phone navigation between Q2 queues, ticket lists, and ticket details.
+- Q2 annotations now visibly target selected elements and save CCC-native context.
+- Show Queue 2 ticket status names beside their colored dots.
+- Fixed seven-day Group chats views omitting recent paused and closed chats.
+- Allow the Throughput session sidebar to expand beyond its initial 20-session summary.
+- Let the throughput sidebar expand beyond its top 20 sessions so recent lower-volume sessions remain accessible.
+
 ## [5.17.1] - 2026-07-28
 
 ### Fixed
@@ -2359,7 +2396,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.17.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.18.0...HEAD
+[5.18.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.18.0
 [5.17.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.17.1
 [5.17.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.17.0
 [5.16.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.16.0

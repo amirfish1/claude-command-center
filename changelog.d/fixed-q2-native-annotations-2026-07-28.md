@@ -1,1 +1,0 @@
-- Q2 annotations now visibly target selected elements and save CCC-native context.

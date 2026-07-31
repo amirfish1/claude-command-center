@@ -1,1 +1,0 @@
-- History search results now identify whether they matched the local or semantic history index.
