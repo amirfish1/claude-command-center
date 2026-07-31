@@ -2877,6 +2877,7 @@ def _get_session_override(session_id):
 # Codex's `-c model_reasoning_effort=<value>` config override (confirmed via
 # `codex --help` / the user's own ~/.codex/config.toml) accepts these values.
 CODEX_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh"}
+CLAUDE_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
 
 
 def _set_session_override(session_id, model, context_1m, engine, reasoning_effort=""):
@@ -41754,6 +41755,9 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None):
             cmd.extend(["--model", alias])
         if override.get("context_1m"):
             cmd.extend(["--betas", "context-1m-2025-08-07"])
+        effort = str(override.get("reasoning_effort") or "").strip().lower()
+        if effort in CLAUDE_REASONING_EFFORTS and effort:
+            cmd.extend(["--effort", effort])
 
     # Diagnostic: we reached the fresh-spawn path, so no live warm process was
     # reused for this sid. Log the miss and stamp the spawn epoch for lifetime.
@@ -46319,7 +46323,7 @@ def _maybe_queue_on_invalid_cwd(session_id, text, status, result):
     return queued
 
 
-def _set_session_model(session_id, model, context_1m, reasoning_effort=None):
+def _set_session_model(session_id, model, context_1m, reasoning_effort=None, effort_only=False):
     """Apply a model+context choice to a session.
 
     Live Claude (TTY or spawned) gets a real `/model <alias>[1m]` slash
@@ -46353,6 +46357,11 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None):
             }
     if reasoning_effort is None:
         reasoning_effort = (_get_session_override(session_id) or {}).get("reasoning_effort") or ""
+    else:
+        reasoning_effort = str(reasoning_effort).strip().lower()
+        allowed_efforts = CLAUDE_REASONING_EFFORTS if engine == "claude" else CODEX_REASONING_EFFORTS
+        if reasoning_effort not in allowed_efforts:
+            return {"ok": False, "error": "unsupported reasoning effort", "engine": engine}
     if engine == "kimi":
         # Kimi's ACP harness supports a live ``model`` config option. Unlike
         # the other non-Claude engines, it has no resume path that consumes a
@@ -46401,7 +46410,8 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None):
     if not (status.get("live") and has_tty) and spawn is None:
         payload["applied"] = "queued"
         return payload
-    slash = _build_slash_model_command(model, context_1m)
+    slash = (f"/effort {reasoning_effort}" if effort_only and reasoning_effort
+             else _build_slash_model_command(model, context_1m))
     if not slash:
         payload["applied"] = "queued"
         return payload
@@ -59684,15 +59694,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             model = (payload.get("model") or "").strip()
             context_1m = bool(payload.get("context_1m", False))
             reasoning_effort = payload.get("reasoning_effort")
-            if reasoning_effort is not None:
-                reasoning_effort = str(reasoning_effort).strip().lower()
-                if reasoning_effort not in CODEX_REASONING_EFFORTS:
-                    reasoning_effort = ""
             if not model:
                 self.send_json({"ok": False, "error": "model is required"}, 400)
             else:
                 _record_interaction(sid)
-                self.send_json(_set_session_model(sid, model, context_1m, reasoning_effort))
+                self.send_json(_set_session_model(
+                    sid, model, context_1m, reasoning_effort,
+                    effort_only=bool(payload.get("effort_only")),
+                ))
         elif path == "/api/inject-esc":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

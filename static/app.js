@@ -40656,6 +40656,9 @@
     { id: 'high',   label: 'High' },
     { id: 'xhigh',  label: 'Extra High' },
   ];
+  const CLAUDE_REASONING_LEVELS = CODEX_REASONING_LEVELS.concat([
+    { id: 'max', label: 'Max' },
+  ]);
 
   function _normalizeModelId(s) {
     return (s || '').replace(/^claude-/, '').replace(/\[1m\]/i, '').trim().toLowerCase();
@@ -40978,7 +40981,7 @@
     }));
   }
 
-  function _buildClaudeModelMenuHtml(currentNorm, currentIs1M) {
+  function _buildClaudeModelMenuHtml(currentNorm, currentIs1M, currentReasoning) {
     const defNorm = _normalizeModelId(CLAUDE_DEFAULT_MODEL);
     const defaultActive = currentNorm === defNorm && !currentIs1M;
     const defLabel = _claudeFriendlyModelName(CLAUDE_DEFAULT_MODEL);
@@ -41005,6 +41008,12 @@
         + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span>'
         + '<span class="mp-num">' + escapeHtml(opt.num) + '</span>'
         + '</button>';
+    });
+    html += '<div class="mp-divider"></div><div class="mp-section">Reasoning effort</div>';
+    CLAUDE_REASONING_LEVELS.forEach((lvl) => {
+      const isActive = lvl.id === currentReasoning;
+      html += '<button type="button" class="mp-row mp-reasoning-row' + (isActive ? ' active' : '') + '" data-reasoning="' + escapeHtml(lvl.id) + '">'
+        + escapeHtml(lvl.label) + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span></button>';
     });
     html += '<div class="mp-divider"></div>'
       + '<div class="mp-other">'
@@ -41060,7 +41069,7 @@
     pop.className = 'model-picker-pop open' + (engine === 'claude' ? ' mp-claude' : '');
     let html;
     if (engine === 'claude') {
-      html = _buildClaudeModelMenuHtml(currentNorm, currentIs1M);
+      html = _buildClaudeModelMenuHtml(currentNorm, currentIs1M, btn.dataset.reasoning || '');
     } else {
       html = '<div class="mp-header">Switch model - ' + escapeHtml(engine) + '</div>';
       options.forEach((opt) => {
@@ -41133,12 +41142,13 @@
       statusEl.className = 'mp-status' + (kind ? ' ' + kind : '');
     };
 
-    async function applyModel(model, context_1m, reasoning_effort) {
+    async function applyModel(model, context_1m, reasoning_effort, effortOnly) {
       if (!model) return;
       setStatus('Applying…');
       try {
         const body = { model, context_1m: !!context_1m };
         if (reasoning_effort !== undefined) body.reasoning_effort = reasoning_effort;
+        if (effortOnly) body.effort_only = true;
         const r2 = await fetch('/api/session/' + encodeURIComponent(sid) + '/model', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -41226,7 +41236,7 @@
     }
     pop.querySelectorAll('.mp-reasoning-row[data-reasoning]').forEach((row) => {
       row.addEventListener('click', () => {
-        applyModel(currentModel, currentIs1M, row.dataset.reasoning);
+        applyModel(currentModel, currentIs1M, row.dataset.reasoning, engine === 'claude');
       });
     });
     const otherInput = pop.querySelector('[data-mp-other-input]');
