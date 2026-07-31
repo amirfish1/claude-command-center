@@ -7292,6 +7292,28 @@ def _apply_claude_goal_command(meta, command_text):
         meta["goal_status"] = "active"
 
 
+_HOST_SYSTEM_INSTRUCTION_RE = re.compile(
+    r"^\s*<system_instruction>.*?</system_instruction>\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_host_system_instruction(text):
+    """Drop a host wrapper prepended to a user prompt by the launching app.
+
+    Conductor prefixes the first prompt of every workspace it starts with a
+    <system_instruction> block ("You are working inside Conductor..."). It is
+    machine provenance, not something the user typed, so every CCC surface
+    that answers "what was asked" — sidebar title, kanban card, last_prompt —
+    wants the text after the closing tag. Stripping happens here, at the one
+    place transcript user text is read, so it applies to Claude, Codex and
+    anything else Conductor launches rather than to one engine's title path.
+    """
+    if text is None:
+        return ""
+    return _HOST_SYSTEM_INSTRUCTION_RE.sub("", str(text), count=1)
+
+
 def _extract_user_prompt_text(ev):
     """Extract user-visible prompt text from a JSONL event.
 
@@ -7305,6 +7327,7 @@ def _extract_user_prompt_text(ev):
     text = _extract_text_from_content(msg.get("content", ""))
     if _is_transcript_control_text(text):
         return ""
+    text = _strip_host_system_instruction(text)
     return _strip_ccc_session_state_instruction(text).strip()
 
 
@@ -12677,7 +12700,7 @@ PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 14
+_CONV_META_SCHEMA_VERSION = 15
 
 # In-memory cache of the head-parse (first ~20 lines: session_id, timestamp,
 # git_branch, first_message, head_cwd) keyed by str(path) -> (cache_key, tuple),
@@ -12692,7 +12715,7 @@ _conv_head_cache = {}
 # sharing one dict made the two scans clobber each other's entries and unpack
 # the wrong arity (ValueError: too many values to unpack).
 _conv_head5_cache = {}
-_CONV_META_COMPAT_SCHEMA_VERSIONS = {14}
+_CONV_META_COMPAT_SCHEMA_VERSIONS = {15}
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
@@ -29204,14 +29227,11 @@ def _codex_agent_task_label(row):
 def _codex_display_name(row, override=None, title="", first_message=""):
     # Conductor prepends a machine-only system wrapper to its first Codex
     # prompt. It is useful transcript provenance but not a session name; keep
-    # the actual user ask that follows the closing tag.
+    # the actual user ask that follows the closing tag. Codex titles come
+    # straight off the thread row rather than through
+    # _extract_user_prompt_text, so the shared stripper is applied here.
     def visible_prompt(value):
-        return re.sub(
-            r"^\s*<system_instruction>.*?</system_instruction>\s*",
-            "",
-            str(value or ""),
-            flags=re.DOTALL,
-        )
+        return _strip_host_system_instruction(value)
 
     return (
         _truncate_session_name(override)
@@ -33720,14 +33740,14 @@ def find_codex_conversations(
         if not include_old and max_rows > 0 and len(out) >= max_rows:
             continue
         row_first_message = _strip_ccc_session_state_instruction(
-            row.get("first_user_message") or ""
+            _strip_host_system_instruction(row.get("first_user_message"))
         ).strip()
         tail_first_message = _strip_ccc_session_state_instruction(
-            tail.get("first_message") or ""
+            _strip_host_system_instruction(tail.get("first_message"))
         ).strip()
         first_message = row_first_message or tail_first_message
         title = _strip_ccc_session_state_instruction(
-            (row.get("title") or "").strip()
+            _strip_host_system_instruction(row.get("title")).strip()
         ).strip()
         # Codex sometimes stores the verbatim first user message as the
         # "title" when the prompt is too short to summarize. Only treat the
