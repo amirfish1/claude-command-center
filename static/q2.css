@@ -769,6 +769,9 @@ body.q2-resizing .q2-col { pointer-events: none; }
 /* `stuck` is a queue-level alarm, not a fact chip — it stays up on the name
    line so it can never be lost in a wrapped chip row. */
 .q2-qrow.is-stuck { box-shadow: inset 2px 0 0 var(--red); }
+.q2-all-row { border-left-color: var(--accent); }
+.q2-all-row .q2-qname { color: var(--accent); letter-spacing: 0.08em; }
+.q2-all-workers { color: var(--green); font-size: 10.5px; white-space: nowrap; }
 /* Why a queue is stuck, on the row itself. A cause you have to hover to find
    is a cause nobody reads, so this is plain visible text at the bottom of the
    box. Only stuck rows carry it, so it stays rare enough to mean something. */
@@ -890,6 +893,22 @@ body.q2-resizing .q2-col { pointer-events: none; }
   font-size: 11px;
   color: var(--text-muted);
 }
+.q2-tqueue {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 11ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--cyan);
+  white-space: nowrap;
+}
+.q2-live-workers { padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.q2-live-workers-head { font-size: 11px; font-weight: 650; color: var(--text-muted); }
+.q2-live-workers-head span { color: var(--green); }
+.q2-live-workers-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.q2-live-worker { display: inline-flex; align-items: center; gap: 4px; font: 10.5px var(--font-mono); color: var(--text); }
+.q2-live-worker b { font: inherit; color: var(--cyan); }
 /* Triage chips: type/priority, readiness, value/confidence. Fixed width, never
    shrink — the title yields the space instead, since it is truncated anyway. */
 .q2-tchips { flex: 0 0 auto; display: inline-flex; gap: 2px; }

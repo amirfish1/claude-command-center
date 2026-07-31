@@ -25,6 +25,7 @@
     workers: [],        // live WatchTower workers — the only proof a claim is real
     items: [],
     queue: '',
+    viewAll: false,     // global inbox mode; never overloaded onto a queue name
     ref: '',
     detail: null,       // full item payload for state.ref
     showClosed: false,
@@ -555,15 +556,22 @@
     // the board on an empty column with no way back.
     if (!state.booted && state.queues.length) {
       state.booted = true;
-      var savedQueue = '', savedRef = '';
+      var savedQueue = '', savedRef = '', savedAll = false;
       try {
         savedQueue = localStorage.getItem(LS_QUEUE) || '';
         savedRef = localStorage.getItem(LS_REF) || '';
+        savedAll = localStorage.getItem(LS_VIEW_ALL) === '1';
       } catch (_) {}
       var match = state.queues.filter(function (q) {
         return projectKey(q.queue) === projectKey(savedQueue);
       })[0];
-      if (match) {
+      if (savedAll) {
+        state.viewAll = true;
+        if (savedRef && state.items.some(function (it) { return it.ref === savedRef; })) {
+          state.ref = savedRef;
+          loadDetail(savedRef);
+        }
+      } else if (match) {
         state.queue = match.queue;
         // The ticket is only restored if it is still in that queue. Validating
         // against the item list rather than trusting the id avoids a detail
@@ -581,11 +589,11 @@
       var withWork = state.queues.filter(function (q) { return q.depth > 0; });
       state.queue = (withWork[0] || state.queues[0]).queue;
     }
-    if (state.queue && projectKey(state.learningsQueue) !== projectKey(state.queue)) {
+    if (!state.viewAll && state.queue && projectKey(state.learningsQueue) !== projectKey(state.queue)) {
       loadQueueLearnings(state.queue);
     }
     // One extra tail per poll, only for the queue on screen.
-    if (state.queue) await loadLog(state.queue);
+    if (!state.viewAll && state.queue) await loadLog(state.queue);
     renderAll();
   }
 
@@ -663,7 +671,26 @@
       return String(a.queue).localeCompare(String(b.queue));
     });
 
-    host.innerHTML = ordered.map(function (q) {
+    var allItems = (state.items || []).filter(function (it) { return statusOf(it) !== 'closed'; });
+    var allFacts = { waiting: 0, wip: 0, needsInput: 0 };
+    allItems.forEach(function (it) {
+      var st = statusOf(it);
+      if (st === 'blocked') allFacts.needsInput++;
+      else if (st === 'in_progress') allFacts.wip++;
+      else allFacts.waiting++;
+    });
+    var allCounts = countParts(allFacts, 0, []);
+    var allRow = '<div class="q2-qrow q2-all-row' + (state.viewAll ? ' is-selected' : '') + '"'
+      + ' role="button" tabindex="0" data-q2-all-queues>'
+      + '<span class="q2-qrow-main"><span class="q2-qrow-head">'
+      + '<span class="q2-qname">ALL</span><span class="q2-qrepo">Every queue</span>'
+      + '<span class="q2-qrow-tr">' + allCounts.wip + allCounts.open + '</span></span>'
+      + '<span class="q2-qrow-foot"><span class="q2-qrow-bl">'
+      + '<span class="q2-all-workers">' + (state.workers || []).length + ' live worker'
+      + ((state.workers || []).length === 1 ? '' : 's') + '</span></span>'
+      + '<span class="q2-qrow-br">' + allCounts.needsInput + '</span></span></span></div>';
+
+    host.innerHTML = allRow + ordered.map(function (q) {
       var f = facts[projectKey(q.queue)];
       var isSel = projectKey(q.queue) === selected;
       var c = countParts(f, q.closed, claimTypesFor(projectKey(q.queue)));
@@ -842,6 +869,7 @@
   function renderDiagram() {
     var host = $('q2Diagram');
     if (!host) return;
+    if (state.viewAll) { renderLiveWorkersStrip(host); return; }
     if (!state.queue) { host.innerHTML = ''; return; }
 
     var m = flowModel();
@@ -950,10 +978,31 @@
       + '</div>';
   }
 
+  // ALL is a triage view, not a synthetic queue. Its summary therefore shows
+  // only real, live workers and does not imply that an armed queue is working.
+  function renderLiveWorkersStrip(host) {
+    var workers = state.workers || [];
+    var sig = 'all|' + workers.map(function (w) {
+      return String(w.worker_id || '') + '|' + String(w.queue || '');
+    }).join(',');
+    if (host.getAttribute('data-sig') === sig) return;
+    host.setAttribute('data-sig', sig);
+    host.innerHTML = '<div class="q2-live-workers">'
+      + '<div class="q2-live-workers-head">Live workers <span>' + workers.length + '</span></div>'
+      + (workers.length
+          ? '<div class="q2-live-workers-list">' + workers.map(function (w) {
+              return '<span class="q2-live-worker"><span class="q2-dg-spin" aria-hidden="true"></span>'
+                + esc(w.worker_id || 'worker') + '<b>' + esc(w.queue || 'unknown queue') + '</b></span>';
+            }).join('') + '</div>'
+          : '<div class="q2-dg-empty">No workers are live.</div>')
+      + '</div>';
+  }
+
   // Chronological, pinned to the newest line unless the user has scrolled up.
   function renderLogBar() {
     var host = $('q2LogBar');
     if (!host) return;
+    if (state.viewAll) { host.innerHTML = ''; host.removeAttribute('data-log-queue'); return; }
     var open = logOpen();
     host.classList.toggle('is-collapsed', !open);
 
@@ -1087,6 +1136,7 @@
       + (unresolved ? ' has-unresolved' : '') + '"'
       + ' data-q2-ref="' + esc(ref) + '">'
       + '<span class="q2-tref">' + esc(ref) + '</span>'
+      + (state.viewAll ? '<span class="q2-tqueue" title="Queue">' + esc(it.project || 'unknown') + '</span>' : '')
       + ticketChips(it)
       + '<span class="q2-ttitle">' + esc(title) + '</span>'
       // Age then dot: the status marker sits to the RIGHT of the age, matching
@@ -1111,24 +1161,29 @@
     var host = $('q2Tickets');
     if (!host) return;
 
-    $('q2TicketsTitle').textContent = state.queue || 'Tickets';
+    $('q2TicketsTitle').textContent = state.viewAll ? 'All queues' : (state.queue || 'Tickets');
     var closedBtn = $('q2ClosedBtn');
+    var newTicketBtn = $('q2NewTicketBtn');
+    var settingsBtn = $('q2QueueSettingsBtn');
+    if (newTicketBtn) newTicketBtn.hidden = state.viewAll;
+    if (settingsBtn) settingsBtn.hidden = state.viewAll;
     if (closedBtn) {
+      closedBtn.hidden = state.viewAll;
       closedBtn.setAttribute('aria-pressed', state.showClosed ? 'true' : 'false');
       closedBtn.textContent = state.showClosed ? 'Hide closed' : 'Show closed';
     }
 
-    if (!state.queue) {
+    if (!state.viewAll && !state.queue) {
       host.innerHTML = '<div class="q2-empty">Pick a queue on the left.</div>';
       $('q2TicketCount').textContent = '';
       return;
     }
 
-    var mine = itemsForQueue(state.queue);
+    var mine = state.viewAll ? (state.items || []).slice() : itemsForQueue(state.queue);
     var needle = state.search.trim().toLowerCase();
     if (needle) {
       mine = mine.filter(function (it) {
-        return (String(it.ref || '') + ' ' + titleOf(it)).toLowerCase().indexOf(needle) !== -1;
+        return (String(it.ref || '') + ' ' + String(it.project || '') + ' ' + titleOf(it)).toLowerCase().indexOf(needle) !== -1;
       });
     }
 
@@ -1148,7 +1203,14 @@
       }
       return (b.number || 0) - (a.number || 0);
     }
-    openish.sort(bySameOrderAsMainCcc);
+    if (state.viewAll) {
+      openish.sort(function (a, b) {
+        var priority = prioRank(a) - prioRank(b);
+        return priority || touchedAt(a) - touchedAt(b);
+      });
+    } else {
+      openish.sort(bySameOrderAsMainCcc);
+    }
     // Closed rows sort by last TOUCH, not by ref number. Ticket ids are
     // creation order, so a ticket reopened and re-closed an hour ago sank to
     // wherever it was filed (CCC-625 landed 37 rows down despite being the
@@ -1182,7 +1244,10 @@
             + (isOwn ? ' (set on this queue)' : ' (inherited default)') + ' - click to edit') + '">'
         + esc(v || fallback) + '</button>';
     }
-    $('q2TicketCount').innerHTML = '<span class="q2-spec">'
+    $('q2TicketCount').innerHTML = state.viewAll
+      ? '<span class="q2-spec">' + openish.length + ' non-closed &middot; '
+        + (state.workers || []).length + ' live workers</span>'
+      : '<span class="q2-spec">'
       + specPart('engine', 'default engine')
       + '<span class="q2-spec-sep">&middot;</span>' + specPart('model', 'default model')
       + '<span class="q2-spec-sep">&middot;</span>' + specPart('effort', 'default effort')
@@ -1194,14 +1259,14 @@
     if (!openish.length && !(state.showClosed ? closed.length : recentClosed.length)) {
       host.innerHTML = '<div class="q2-empty">'
         + '<div class="q2-empty-title">'
-        + (needle ? 'No match' : (closed.length ? 'All clear in ' + esc(state.queue) : 'No tickets in ' + esc(state.queue)))
+        + (needle ? 'No match' : (state.viewAll ? 'All queues are clear' : (closed.length ? 'All clear in ' + esc(state.queue) : 'No tickets in ' + esc(state.queue))) )
         + '</div>'
-        + (closed.length && !needle ? 'Every ticket here is closed. Use Show closed to review them.' : '')
+        + (closed.length && !needle && !state.viewAll ? 'Every ticket here is closed. Use Show closed to review them.' : '')
         + '</div>';
       return;
     }
 
-    var shownClosed = state.showClosed ? closed.slice(0, state.closedCap) : recentClosed;
+    var shownClosed = state.viewAll ? [] : (state.showClosed ? closed.slice(0, state.closedCap) : recentClosed);
     var html = openish.map(ticketRow).join('');
     if (shownClosed.length) {
       var label = state.showClosed
@@ -1360,7 +1425,10 @@
 
     if (!state.ref) {
       var learnings = state.learnings;
-      if (!state.queue) {
+      if (state.viewAll) {
+        host.innerHTML = '<div class="q2-empty"><div class="q2-empty-title">All queues</div>'
+          + 'Select a ticket to triage it across queues.</div>';
+      } else if (!state.queue) {
         host.innerHTML = '<div class="q2-empty"><div class="q2-empty-title">No ticket selected</div>'
           + 'Pick a queue to see its learnings.</div>';
       } else if (!learnings && !state.learningsError) {
@@ -2042,12 +2110,14 @@
   // means losing your place on every code change.
   var LS_QUEUE = 'ccc-q2-queue';
   var LS_REF = 'ccc-q2-ref';
+  var LS_VIEW_ALL = 'ccc-q2-view-all';
   function rememberSelection() {
     try {
       if (state.queue) localStorage.setItem(LS_QUEUE, state.queue);
       else localStorage.removeItem(LS_QUEUE);
       if (state.ref) localStorage.setItem(LS_REF, state.ref);
       else localStorage.removeItem(LS_REF);
+      localStorage.setItem(LS_VIEW_ALL, state.viewAll ? '1' : '0');
     } catch (_) {}
   }
 
@@ -2063,7 +2133,8 @@
   }
 
   function selectQueue(name) {
-    if (projectKey(name) === projectKey(state.queue)) return;
+    if (!state.viewAll && projectKey(name) === projectKey(state.queue)) return;
+    state.viewAll = false;
     state.queue = name;
     state.ref = '';
     state.detail = null;
@@ -2077,6 +2148,21 @@
     showMobileColumn('tickets');
     loadQueueLearnings(name);
     loadLog(name).then(renderLogBar);
+  }
+
+  function selectAllQueues() {
+    if (state.viewAll) return;
+    state.viewAll = true;
+    state.ref = '';
+    state.detail = null;
+    state.search = '';
+    state.showClosed = false;
+    var search = $('q2Search');
+    if (search) search.value = '';
+    state.log = [];
+    rememberSelection();
+    renderAll();
+    showMobileColumn('tickets');
   }
 
   async function openQueueLearnings() {
@@ -2125,6 +2211,7 @@
     var act = e.target.closest('[data-q2-act]');
     if (act) { e.stopPropagation(); detailAction(act.getAttribute('data-q2-act'), act); return; }
     if (e.target.closest('[data-q2-learnings-open]')) { openQueueLearnings(); return; }
+    if (e.target.closest('[data-q2-all-queues]')) { selectAllQueues(); return; }
     var qBtn = e.target.closest('[data-q2-queue]');
     if (qBtn) { selectQueue(qBtn.getAttribute('data-q2-queue')); return; }
     var tBtn = e.target.closest('[data-q2-ref]');
@@ -2197,6 +2284,8 @@
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
     var row = e.target.closest && e.target.closest('.q2-qrow[data-q2-queue]');
+    var all = e.target.closest && e.target.closest('.q2-all-row[data-q2-all-queues]');
+    if (all && e.target === all) { e.preventDefault(); selectAllQueues(); return; }
     if (!row || e.target !== row) return;
     e.preventDefault();
     selectQueue(row.getAttribute('data-q2-queue'));

@@ -63,6 +63,20 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn('class="q2-tstatus"', q2_js)
         self.assertIn(".q2-tstatus", q2_css)
 
+    def test_all_queue_view_is_a_read_first_global_inbox(self):
+        """ALL combines live work without pretending to be a real queue."""
+        q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+        q2_css = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+
+        self.assertIn("viewAll: false", q2_js)
+        self.assertIn("function selectAllQueues()", q2_js)
+        self.assertIn("All queues", q2_js)
+        self.assertIn("function renderLiveWorkersStrip(host)", q2_js)
+        self.assertIn("statusOf(it) !== 'closed'", q2_js)
+        self.assertIn("q2-tqueue", q2_js)
+        self.assertIn("Select a ticket to triage it across queues.", q2_js)
+        self.assertIn(".q2-tqueue", q2_css)
+
     def test_selected_queue_shows_its_learnings_when_no_ticket_is_selected(self):
         """The detail pane makes queue guidance available before ticket work."""
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
