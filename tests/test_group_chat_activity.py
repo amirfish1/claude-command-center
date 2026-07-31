@@ -77,6 +77,25 @@ def test_active_chat_summary_skips_inactive_participant_probes(tmp_path, monkeyp
     assert recent_inactive["status"] == "closed"
 
 
+def test_recent_paused_chat_is_included_in_lightweight_sidebar_summary(tmp_path, monkeypatch):
+    chats = tmp_path / "group-chats"
+    chats.mkdir()
+    chat_md = chats / "paused.md"
+    chat_md.write_text("paused", encoding="utf-8")
+    (chats / "paused.json").write_text(
+        '{"topic":"Paused review", "started_at":99900, "paused":true, "session_ids":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server.os.path, "expanduser", lambda value: str(chats))
+
+    summaries = server._list_active_group_chat_summaries(now=100_000)
+
+    assert len(summaries) == 1
+    assert summaries[0]["topic"] == "Paused review"
+    assert summaries[0]["status"] == "paused"
+    assert summaries[0]["state"] == "paused"
+
+
 def test_active_chat_route_uses_lightweight_active_summary():
     source = Path(server.__file__).read_text(encoding="utf-8")
     route = source[source.index('elif path == "/api/group-chats/active":'):

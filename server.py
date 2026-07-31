@@ -44248,7 +44248,7 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             float(meta.get("participant_changed_at") or 0),
         )
         chat_state = group_chat_activity_state(meta, now)
-        if chat_state in {"archived", "paused"}:
+        if chat_state == "archived":
             continue
         if chat_state != "active" and (not last_activity or now - last_activity >= GROUP_CHAT_SIDEBAR_WINDOW_S):
             continue
@@ -44270,7 +44270,7 @@ def _list_active_group_chat_summaries(now: float | None = None) -> list:
             # `status` to count/render active chats. Keep `state` for
             # compatibility while exposing the same active state under the
             # established field name.
-            "status": "active" if chat_state == "active" else "closed",
+            "status": chat_state if chat_state in {"active", "paused"} else "closed",
             "session_ids": meta.get("session_ids") or [],
             # Current-session filtering and ordering use these timestamps.
             # They are available from the sidecar/stat call, so including them
