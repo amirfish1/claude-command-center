@@ -5372,6 +5372,7 @@ def _load_spawn_defaults():
         "engine": "claude",
         "reasoning_effort": "",
         "worker_engine": "",
+        "worker_model": "",
         "worker_reasoning_effort": "",
         "models": {
             engine: _spawn_fallback_model_for_engine(engine)
@@ -5418,9 +5419,13 @@ def _load_spawn_defaults():
     )
     if worker_engine not in _ORCHESTRATION_SPAWN_ENGINES:
         worker_engine = ""
+    worker_model = _clean_spawn_default_model(raw.get("worker_model"))
+    if len(worker_model) > 200:
+        worker_model = ""
     return {
         "engine": engine, "models": models,
         "reasoning_effort": reasoning_effort, "worker_engine": worker_engine,
+        "worker_model": worker_model,
         "worker_reasoning_effort": worker_reasoning_effort,
     }
 
@@ -5451,6 +5456,12 @@ def _save_spawn_defaults(config):
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
             }
         current["worker_engine"] = worker_engine
+
+    if "worker_model" in config:
+        worker_model = _clean_spawn_default_model(config.get("worker_model"))
+        if len(worker_model) > 200:
+            return {"ok": False, "error": "worker_model is too long"}
+        current["worker_model"] = worker_model
 
     if "reasoning_effort" in config or "effort" in config:
         reasoning_effort = str((
@@ -5497,6 +5508,7 @@ def _save_spawn_defaults(config):
         "engine": current["engine"],
         "reasoning_effort": current.get("reasoning_effort", ""),
         "worker_engine": current.get("worker_engine", ""),
+        "worker_model": current.get("worker_model", ""),
         "worker_reasoning_effort": current.get("worker_reasoning_effort", ""),
         "models": {
             engine: current["models"].get(engine, "")

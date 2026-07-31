@@ -1687,6 +1687,14 @@
             WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).
           </div>
         </div>
+        <div id="spawnDefaultsWorkerModelField">
+          <label class="bug-label" for="spawnDefaultsWorkerModel">Worker model</label>
+          <select id="spawnDefaultsWorkerModel" class="bug-input"></select>
+          <input id="spawnDefaultsWorkerOtherModel" class="bug-input" type="text" style="display:none;margin-top:8px;" placeholder="Model id">
+          <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
+            The default model for WatchTower workers using the selected Worker engine. Queue-specific models still win.
+          </div>
+        </div>
         <div>
           <label class="bug-label" for="spawnDefaultsWorkerEffort">Worker reasoning effort</label>
           <select id="spawnDefaultsWorkerEffort" class="bug-input">

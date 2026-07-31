@@ -2957,6 +2957,48 @@ class TestServerImports(unittest.TestCase):
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
 
+    def test_spawn_defaults_worker_model_round_trips_independently(self):
+        """Workers need their own model fallback, distinct from New session."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as td:
+            old_file = server.SPAWN_DEFAULTS_FILE
+            server.SPAWN_DEFAULTS_FILE = pathlib.Path(td) / "spawn-defaults.json"
+            try:
+                defaults = server._load_spawn_defaults()
+                self.assertEqual(defaults["worker_model"], "")
+
+                saved = server._save_spawn_defaults({
+                    "worker_engine": "claude",
+                    "worker_model": "sonnet-4-8",
+                    "models": {"claude": "opus-5"},
+                })
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_model"], "sonnet-4-8")
+                self.assertEqual(saved["models"]["claude"], "opus-5")
+
+                defaults = server._load_spawn_defaults()
+                self.assertEqual(defaults["worker_model"], "sonnet-4-8")
+
+                # An ordinary New-session save must retain the worker choice.
+                saved = server._save_spawn_defaults({"engine": "codex"})
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_model"], "sonnet-4-8")
+            finally:
+                server.SPAWN_DEFAULTS_FILE = old_file
+
+    def test_spawn_defaults_worker_model_reuses_the_model_picker(self):
+        html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+
+        self.assertIn('id="spawnDefaultsWorkerModel"', html)
+        self.assertIn('id="spawnDefaultsWorkerOtherModel"', html)
+        self.assertIn("function renderSpawnDefaultsWorkerModelDraft()", js)
+        self.assertIn("modelOptionsForSpawnEngine(engine, currentModel, true)", js)
+        self.assertIn("worker_model: spawnDefaultsState.worker_model || ''", js)
+
     def test_spawn_defaults_worker_effort_is_independent_and_validated(self):
         """WatchTower workers retain their own global Codex effort default."""
         for mod in ("server", "morning", "morning_store"):
