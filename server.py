@@ -32056,28 +32056,93 @@ def _kimi_wire_prompt_usages(wire_path):
     return prompt_usages
 
 
+def _kimi_event_has_token_usage(event):
+    return any(
+        key in event
+        for key in ("tokens_in", "tokens_cached", "tokens_out", "token_usage")
+    )
+
+
+def _kimi_assistant_has_visible_reply(event):
+    for block in event.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("kind") in ("text", "thinking") and str(block.get("text") or "").strip():
+            return True
+    return False
+
+
+def _enrich_kimi_transcript_token_usage(sid, events):
+    """Attach one wire-derived aggregate to each prompt's final reply."""
+    try:
+        wire_path = _acp_wire_path("kimi", sid)
+    except Exception:
+        return events
+    prompt_usages = _kimi_wire_prompt_usages(wire_path)
+    if not prompt_usages:
+        return events
+
+    prompt_index = -1
+    assistants = []
+
+    def finish_prompt():
+        if not assistants or not (0 <= prompt_index < len(prompt_usages)):
+            return
+        usage = prompt_usages[prompt_index]
+        if not usage or any(_kimi_event_has_token_usage(event) for event in assistants):
+            return
+        target = next(
+            (event for event in reversed(assistants) if _kimi_assistant_has_visible_reply(event)),
+            assistants[-1],
+        )
+        _apply_kimi_turn_usage(target, usage)
+
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "user_text":
+            finish_prompt()
+            prompt_index += 1
+            assistants = []
+        elif event_type == "assistant" and prompt_index >= 0:
+            assistants.append(event)
+    finish_prompt()
+    return events
+
+
 def _acp_transcript_events_after(harness, sid, after_line):
     """Finalized conv events newer than `after_line`, read from the CCC-owned
     transcript (the replay source for SSE reconnects and CCC restarts)."""
-    events = []
+    all_events = []
     try:
-        with _acp_transcript_path(harness, sid).open() as f:
-            for raw in f:
+        with _acp_transcript_path(harness, sid).open() as handle:
+            for raw in handle:
                 raw = raw.strip()
                 if not raw:
                     continue
                 try:
-                    ev = json.loads(raw)
+                    event = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                try:
-                    line = int(ev.get("line") or 0)
-                except (TypeError, ValueError):
-                    line = 0
-                if line > after_line:
-                    events.append(ev)
+                all_events.append(event)
     except OSError:
         return []
+
+    if harness == "kimi" and all_events:
+        try:
+            _enrich_kimi_transcript_token_usage(sid, all_events)
+        except Exception:
+            # Usage enrichment is optional metadata; transcript rendering is
+            # still authoritative when a wire log is missing or malformed.
+            pass
+
+    events = []
+    for event in all_events:
+        try:
+            line = int(event.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0
+        if line > after_line:
+            events.append(event)
     return events
 
 
