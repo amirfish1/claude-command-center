@@ -46455,8 +46455,8 @@ def _interrupt_session(session_id):
       * Live Codex process → SIGINT directly to the process.
       * Live TTY (non-Codex) → AppleScript Esc keystroke (cancels the in-flight stream
         when Claude is mid-response, clears the input buffer otherwise).
-      * Live CCC-spawned headless session (no TTY, non-Codex) → SIGINT to the spawned
-        pid. NOTE: this terminates the headless `claude -p` subprocess —
+      * Live headless session (no TTY, non-Codex) → SIGINT to its
+        identity-verified pid. NOTE: this terminates the headless `claude -p` subprocess —
         you cannot resume mid-conversation, the spawn is over.
       * Dormant session with no live spawn → no-op error; nothing is running
         to interrupt.
@@ -46495,6 +46495,18 @@ def _interrupt_session(session_id):
         result = interrupt_input_via_keystroke(tty, term_app or "Terminal")
         result["via"] = "tty-esc"
         return result
+    if status.get("live") and status.get("pid"):
+        pid = status["pid"]
+        try:
+            os.kill(pid, signal.SIGINT)
+        except (ProcessLookupError, PermissionError, OSError) as e:
+            return {"ok": False, "via": "headless-sigint", "pid": pid, "error": str(e)}
+        return {
+            "ok": True,
+            "via": "headless-sigint",
+            "pid": pid,
+            "note": "headless process interrupted",
+        }
     spawn = _find_live_spawn_entry_for_session(session_id)
     if spawn is not None:
         pid = spawn["pid"]

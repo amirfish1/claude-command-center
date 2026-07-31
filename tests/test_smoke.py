@@ -16883,6 +16883,25 @@ class TestCodexEsc(unittest.TestCase):
             self.assertFalse(res["ok"])
             self.assertEqual(res["error"], "Codex session is not live — nothing to interrupt")
 
+    def test_interrupt_live_headless_claude_session_sends_sigint(self):
+        with mock.patch.object(self.server, "_is_codex_session", return_value=False), \
+             mock.patch.object(self.server, "_is_kimi_session", return_value=False), \
+             mock.patch.object(self.server, "find_session_cwd", return_value="/tmp"), \
+             mock.patch.object(self.server, "session_live_status", return_value={
+                 "live": True,
+                 "pid": 12345,
+                 "tty": None,
+                 "terminal_app": None,
+             }), \
+             mock.patch.object(self.server.os, "kill") as mock_kill:
+
+            res = self.server._interrupt_session("live-headless-claude-session")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["via"], "headless-sigint")
+        self.assertEqual(res["pid"], 12345)
+        mock_kill.assert_called_once_with(12345, self.server.signal.SIGINT)
+
     def test_no_active_turn_interrupt_clears_phantom_writer_and_pumps_queue(self):
         sid = "phantom-interrupt-session"
         with self.server._CODEX_APP_SERVER_LOCK:
