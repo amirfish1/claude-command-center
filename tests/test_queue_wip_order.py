@@ -52,6 +52,25 @@ class TestQueueWipOrder(unittest.TestCase):
         self.assertIn("stale claim - no current live worker", queue_render)
         self.assertIn(": staleClaim", queue_render)
 
+    def test_reopen_does_not_flag_a_stale_claim_from_a_leftover_session_handle(self):
+        """`wt reopen` clears claimed_by/claimed_at but intentionally keeps
+        claimed_session_id as a `wt discuss` resume handle (see
+        watchtower/queue.py). That leftover field alone must not make a
+        normal reopened ticket look like a stale claim."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        queue_render = app_js[
+            app_js.index("function _renderQueuePanel(options)"):
+            app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
+        ]
+
+        isstale_start = queue_render.index("const _isStaleClaim = it => {")
+        isstale_end = queue_render.index("};", isstale_start)
+        isstale_body = queue_render[isstale_start:isstale_end]
+
+        self.assertIn("const hasClaimant = !!(it && (it.claimed_by || it.claimed_at));", isstale_body)
+        self.assertIn("return hasClaimant && !_hasLiveClaim(it);", isstale_body)
+        self.assertNotIn("_hasClaimMetadata(it) && !_hasLiveClaim(it)", isstale_body)
+
     def test_live_claim_status_uses_a_conspicuous_blue_marker(self):
         """A live claim must remain visibly distinct from an unclaimed row."""
         app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")

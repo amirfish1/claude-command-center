@@ -36190,9 +36190,14 @@
       };
       const _isStaleClaim = it => {
         const rawStatus = String((it && it.status) || 'open');
-        return rawStatus === 'in_progress'
-          ? !_hasLiveClaim(it)
-          : _hasClaimMetadata(it) && !_hasLiveClaim(it);
+        if (rawStatus === 'in_progress') return !_hasLiveClaim(it);
+        // Reopen intentionally clears claimed_by/claimed_at but preserves
+        // claimed_session_id as a resume handle for `wt discuss` (see
+        // watchtower/queue.py reopen). A lingering claimed_session_id alone
+        // is not an active claim, so it must not flag a normal reopened
+        // ticket as a stale claim.
+        const hasClaimant = !!(it && (it.claimed_by || it.claimed_at));
+        return hasClaimant && !_hasLiveClaim(it);
       };
       const _effectiveStatus = it => {
         const rawStatus = (it && it.status) || 'open';
@@ -50633,6 +50638,7 @@
     models: Object.assign({}, _defaultModelsByEngine),
     reasoning_effort: '',
     worker_engine: '',
+    worker_model: '',
     worker_reasoning_effort: '',
     codex_context_1m: true,
   };
@@ -50752,6 +50758,7 @@
     spawnDefaultsState.worker_engine = SPAWN_DEFAULT_ENGINES.includes(data.worker_engine)
       ? data.worker_engine
       : '';
+    spawnDefaultsState.worker_model = String(data.worker_model == null ? '' : data.worker_model).trim();
     spawnDefaultsState.worker_reasoning_effort = CODEX_REASONING_LEVELS.some(level => level.id === data.worker_reasoning_effort)
       ? data.worker_reasoning_effort
       : '';
@@ -55674,6 +55681,9 @@
   const $spawnDefaultsBackdrop = document.getElementById('spawnDefaultsBackdrop');
   const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
   const $spawnDefaultsWorkerEngine = document.getElementById('spawnDefaultsWorkerEngine');
+  const $spawnDefaultsWorkerModelField = document.getElementById('spawnDefaultsWorkerModelField');
+  const $spawnDefaultsWorkerModel = document.getElementById('spawnDefaultsWorkerModel');
+  const $spawnDefaultsWorkerOtherModel = document.getElementById('spawnDefaultsWorkerOtherModel');
   const $spawnDefaultsWorkerEffort = document.getElementById('spawnDefaultsWorkerEffort');
   const $spawnDefaultsModel = document.getElementById('spawnDefaultsModel');
   const $spawnDefaultsOtherModel = document.getElementById('spawnDefaultsOtherModel');
@@ -55690,6 +55700,7 @@
       models: Object.assign({}, spawnDefaultsState.models || {}),
       reasoning_effort: spawnDefaultsState.reasoning_effort,
       worker_engine: spawnDefaultsState.worker_engine || '',
+      worker_model: spawnDefaultsState.worker_model || '',
       worker_reasoning_effort: spawnDefaultsState.worker_reasoning_effort || '',
     };
   }
@@ -55723,12 +55734,41 @@
       $spawnDefaultsOtherModel.value = other ? currentModel : '';
     }
   }
+  function renderSpawnDefaultsWorkerModelDraft() {
+    if (!$spawnDefaultsWorkerModel || !spawnDefaultsDraft) return;
+    const engine = spawnDefaultsDraft.worker_engine || '';
+    if ($spawnDefaultsWorkerModelField) $spawnDefaultsWorkerModelField.style.display = engine ? '' : 'none';
+    if (!engine) return;
+    const inheritedModel = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
+    const currentModel = String(spawnDefaultsDraft.worker_model || inheritedModel).trim();
+    const options = modelOptionsForSpawnEngine(engine, currentModel, true);
+    $spawnDefaultsWorkerModel.innerHTML = '';
+    options.forEach(opt => {
+      const el = document.createElement('option');
+      el.value = opt.id;
+      el.textContent = opt.label || opt.id;
+      if (opt.disabled) {
+        el.disabled = true;
+        if (opt.reason) el.title = opt.reason;
+      }
+      $spawnDefaultsWorkerModel.appendChild(el);
+    });
+    const currentOpt = options.find(opt => opt.id === currentModel && !opt.disabled);
+    const fallbackOpt = options.find(opt => !opt.disabled);
+    $spawnDefaultsWorkerModel.value = currentOpt ? currentModel : (fallbackOpt ? fallbackOpt.id : SPAWN_DEFAULT_OTHER);
+    if ($spawnDefaultsWorkerOtherModel) {
+      const other = $spawnDefaultsWorkerModel.value === SPAWN_DEFAULT_OTHER;
+      $spawnDefaultsWorkerOtherModel.style.display = other ? '' : 'none';
+      $spawnDefaultsWorkerOtherModel.value = other ? currentModel : '';
+    }
+  }
   function renderSpawnDefaultsDraft() {
     if (!spawnDefaultsDraft) return;
     if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.value = spawnDefaultsDraft.worker_engine || '';
     if ($spawnDefaultsWorkerEffort) $spawnDefaultsWorkerEffort.value = spawnDefaultsDraft.worker_reasoning_effort || '';
     renderSpawnDefaultsModelDraft();
+    renderSpawnDefaultsWorkerModelDraft();
     const isCodex = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine) === 'codex';
     if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = isCodex ? '' : 'none';
     if ($spawnDefaultsEffort) $spawnDefaultsEffort.value = spawnDefaultsDraft.reasoning_effort || '';
@@ -55760,17 +55800,37 @@
     if (engine === 'cursor' && !model) model = 'auto';
     spawnDefaultsDraft.models[engine] = model;
   }
+  function updateSpawnDefaultsDraftWorkerModelFromControls() {
+    if (!spawnDefaultsDraft || !$spawnDefaultsWorkerModel) return;
+    if (!spawnDefaultsDraft.worker_engine) {
+      spawnDefaultsDraft.worker_model = '';
+      return;
+    }
+    let model = $spawnDefaultsWorkerModel.value;
+    if (model === SPAWN_DEFAULT_OTHER) {
+      model = ($spawnDefaultsWorkerOtherModel && $spawnDefaultsWorkerOtherModel.value || '').trim();
+    }
+    spawnDefaultsDraft.worker_model = model;
+  }
   async function saveSpawnDefaultsDraft() {
     if (!$spawnDefaultsSaveBtn || !spawnDefaultsDraft) return;
     updateSpawnDefaultsDraftModelFromControls();
-    if ($spawnDefaultsEffort) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
     if ($spawnDefaultsWorkerEngine) spawnDefaultsDraft.worker_engine = $spawnDefaultsWorkerEngine.value || '';
+    updateSpawnDefaultsDraftWorkerModelFromControls();
+    if ($spawnDefaultsEffort) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
     if ($spawnDefaultsWorkerEffort) spawnDefaultsDraft.worker_reasoning_effort = $spawnDefaultsWorkerEffort.value || '';
     spawnDefaultsModalError('');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
     if ((engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
       spawnDefaultsModalError('Claude, Codex, and Cursor need an explicit default model.');
+      return;
+    }
+    const workerEngine = spawnDefaultsDraft.worker_engine || '';
+    const workerModel = String(spawnDefaultsDraft.worker_model || '').trim();
+    const workerUnavailableReason = workerEngine && _modelUnavailableReason(workerEngine, workerModel);
+    if (workerUnavailableReason) {
+      spawnDefaultsModalError(workerUnavailableReason);
       return;
     }
     const unavailableReason = _modelUnavailableReason(engine, model);
@@ -55965,7 +56025,21 @@
     }
     updateSpawnDefaultsDraftModelFromControls();
   });
+  if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.addEventListener('change', () => {
+    if (!spawnDefaultsDraft) return;
+    spawnDefaultsDraft.worker_engine = $spawnDefaultsWorkerEngine.value || '';
+    spawnDefaultsDraft.worker_model = '';
+    renderSpawnDefaultsWorkerModelDraft();
+  });
+  if ($spawnDefaultsWorkerModel) $spawnDefaultsWorkerModel.addEventListener('change', () => {
+    if ($spawnDefaultsWorkerOtherModel) {
+      $spawnDefaultsWorkerOtherModel.style.display = $spawnDefaultsWorkerModel.value === SPAWN_DEFAULT_OTHER ? '' : 'none';
+      if ($spawnDefaultsWorkerModel.value === SPAWN_DEFAULT_OTHER) $spawnDefaultsWorkerOtherModel.focus();
+    }
+    updateSpawnDefaultsDraftWorkerModelFromControls();
+  });
   if ($spawnDefaultsOtherModel) $spawnDefaultsOtherModel.addEventListener('input', updateSpawnDefaultsDraftModelFromControls);
+  if ($spawnDefaultsWorkerOtherModel) $spawnDefaultsWorkerOtherModel.addEventListener('input', updateSpawnDefaultsDraftWorkerModelFromControls);
   if ($spawnDefaultsEffort) $spawnDefaultsEffort.addEventListener('change', () => {
     if (spawnDefaultsDraft) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
   });
