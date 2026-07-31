@@ -28633,7 +28633,7 @@
     const _savedAllTabView = (() => {
       try {
         const v = localStorage.getItem('ccc-all-hermes-tab');
-        return (v === 'workers' || v === 'messages') ? v : 'coding';
+        return (v === 'workers' || v === 'messages' || v === 'group-chats') ? v : 'coding';
       } catch (_) { return 'coding'; }
     })();
     const _allTabHasLaneOverride = _allTabUnfilteredConvs.some(c => !!_allTabLaneOverride(c));
@@ -28641,14 +28641,16 @@
       _allTabHasLaneOverride
       || _allTabUnfilteredLanes.has('workers')
       || _allTabUnfilteredLanes.has('messages')
+      || _allTabGroupChatItems.length > 0
       || _savedAllTabView !== 'coding'
     );
-    const _allTabView = _allTabHasHermesSplit ? _savedAllTabView : 'coding';
+    const _allTabGroupChatView = _savedAllTabView === 'group-chats' ? 'group-chats' : _savedAllTabView;
+    const _allTabView = _allTabHasHermesSplit ? _allTabGroupChatView : 'coding';
     const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
       ? _allTabWorkerConvs
       : ((_allTabHasHermesSplit && _allTabView === 'messages')
         ? _allTabHermesMessageConvs
-        : _allTabCodingConvs);
+        : (_allTabView === 'group-chats' ? [] : _allTabCodingConvs));
     const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
@@ -28713,6 +28715,7 @@
               : []));
     const _trashGroupChats = _archivedGroupChatsForRender.filter(gc => !!gc.trashed);
     const _mainArchivedGroupChats = _archivedGroupChatsForRender.filter(gc => !gc.trashed);
+    const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;
     const _arcGrouping = (() => {
       try { return localStorage.getItem('ccc-archived-grouping') || 'time'; }
       catch (_) { return 'time'; }
@@ -28797,7 +28800,7 @@
           + _renderAllTabClusters(clusters, true)
           + '</div>';
       }).join('');
-      _arcRows = _folderRowsHtml + (_allTabView === 'coding'
+      _arcRows = _folderRowsHtml + (_allTabView === 'group-chats'
         ? _allTabGroupChatItems.map(it => it.allHtml || it.html).join('') + _mainArchivedGroupChats.map(gc => _renderArchivedGcRow(gc, 'all-main')).join('')
         : '');
       _arcCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
@@ -28815,7 +28818,7 @@
       // Archived group chats live in the Trash section (CCC-468).
       // Active/paused/closed (unarchived) group chats still interleave here
       // so they appear in the All view, not just in Current Sessions.
-      if (_allTabView === 'coding') {
+      if (_allTabView === 'group-chats') {
         for (const gci of _allTabGroupChatItems) {
           _archivedItems.push({ pinRank: Infinity, mtime: gci.mtime || 0, html: gci.allHtml || gci.html });
         }
@@ -28908,13 +28911,16 @@
     const _allHermesTabBarHtml = _allTabHasHermesSplit
       ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '" title="Drop a session here to show it under Coding">'
-        +   'Coding<span class="conv-tab-count">' + (_allTabCodingConvs.length + _allTabGroupChatItems.length) + '</span>'
+        +   'Coding<span class="conv-tab-count">' + _allTabCodingConvs.length + '</span>'
         + '</button>'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '" title="Drop a session here to show it under Workers">'
         +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
         + '</button>'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '" title="Drop a session here to show it under Messages">'
         +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
+        + '</button>'
+        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'group-chats' ? ' is-active' : '') + '" data-all-hermes-tab="group-chats" role="tab" aria-selected="' + (_allTabView === 'group-chats') + '">'
+        +   'Group chats<span class="conv-tab-count">' + _allTabGroupChatCount + '</span>'
         + '</button>'
         + '</div>'
       : '';
@@ -29415,7 +29421,7 @@
         const opt = ev.target.closest('[data-all-hermes-tab]');
         if (!opt) return;
         const raw = opt.getAttribute('data-all-hermes-tab');
-        const value = raw === 'workers' || raw === 'messages' ? raw : 'coding';
+        const value = raw === 'workers' || raw === 'messages' || raw === 'group-chats' ? raw : 'coding';
         try { localStorage.setItem('ccc-all-hermes-tab', value); } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
@@ -29423,6 +29429,7 @@
         if (!dragSourceId) return;
         const opt = ev.target.closest('[data-all-hermes-tab]');
         if (!opt) return;
+        if (opt.getAttribute('data-all-hermes-tab') === 'group-chats') return;
         ev.preventDefault();
         try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
         clearTabDropTargets();
@@ -29436,6 +29443,7 @@
         if (!dragSourceId) return;
         const opt = ev.target.closest('[data-all-hermes-tab]');
         if (!opt) return;
+        if (opt.getAttribute('data-all-hermes-tab') === 'group-chats') return;
         ev.preventDefault();
         ev.stopPropagation();
         const raw = opt.getAttribute('data-all-hermes-tab');

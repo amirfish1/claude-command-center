@@ -1443,8 +1443,8 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_all_tab_splits_hermes_workers_from_messages(self):
         """When Hermes rows exist, All should expose Coding, Workers, and
-        Messages lanes so plain WhatsApp/router conversations do not bury
-        agentic Hermes work."""
+        Messages, and Group chats lanes so plain WhatsApp/router conversations
+        and cross-repo chats do not bury agentic Hermes work."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -1457,6 +1457,10 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
         self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
+        self.assertIn("const _allTabGroupChatView = _savedAllTabView === 'group-chats' ? 'group-chats' : _savedAllTabView;", app_js)
+        self.assertIn('data-all-hermes-tab="group-chats"', app_js)
+        self.assertIn("'Group chats<span class=\"conv-tab-count\">'", app_js)
+        self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
         self.assertIn("const _savedAllTabView = (() => {", app_js)
         self.assertIn("const _allTabUnfilteredLanes = new Set(", app_js)
         self.assertIn("|| _allTabUnfilteredLanes.has('workers')", app_js)
@@ -1467,6 +1471,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-all-hermes-tab=\"coding\"", app_js)
         self.assertIn("data-all-hermes-tab=\"workers\"", app_js)
         self.assertIn("data-all-hermes-tab=\"messages\"", app_js)
+        self.assertIn("data-all-hermes-tab=\"group-chats\"", app_js)
         self.assertIn("localStorage.setItem('ccc-all-hermes-tab', value)", app_js)
         self.assertIn("/all-lane", app_js)
         self.assertIn(".conv-all-hermes-tabs", app_css)
