@@ -6,6 +6,15 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestSearchUiStatic(unittest.TestCase):
+    def test_history_drawer_labels_each_result_with_its_retrieval_source(self):
+        html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function historySearchSourceUi(source) {", html)
+        self.assertIn("source === 'vec' || source === 'fused'", html)
+        self.assertIn("const source = historySearchSourceUi(r._source);", html)
+        self.assertIn('class="hsd-source-badge${source.className}"', html)
+        self.assertIn("Matched by local history index", html)
+
     def test_recall_matches_are_prioritized_after_title_matches(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 

@@ -13648,6 +13648,23 @@
   }
   .hsd-result-meta .role { font-weight: 600; color: var(--text, #e6e6e6); }
   .hsd-result-meta .ts { font-variant-numeric: tabular-nums; }
+  .hsd-source-badge {
+    padding: 1px 5px;
+    border: 1px solid rgba(120, 168, 255, 0.35);
+    border-radius: 3px;
+    color: rgba(120, 168, 255, 0.95);
+    background: rgba(120, 168, 255, 0.12);
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    text-transform: uppercase;
+  }
+  .hsd-source-badge.is-semantic {
+    color: rgba(180, 140, 255, 0.95);
+    background: rgba(180, 140, 255, 0.14);
+    border-color: rgba(180, 140, 255, 0.40);
+  }
   .hsd-result-cwd {
     font-size: 11px; color: var(--text-muted, #9aa0aa);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

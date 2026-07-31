@@ -3116,6 +3116,15 @@
     return out;
   }
 
+  function historySearchSourceUi(source) {
+    const semantic = source === 'vec' || source === 'fused';
+    return {
+      className: semantic ? ' is-semantic' : '',
+      label: semantic ? 'semantic history' : 'history',
+      title: semantic ? 'Matched by semantic history search' : 'Matched by local history index',
+    };
+  }
+
   function renderResults(results) {
     if (!results || !results.length) {
       $results.innerHTML = '<li class="hsd-empty-state">No matches.</li>';
@@ -3127,10 +3136,12 @@
       const cwd = shortCwd(r.cwd || '');
       const snippet = renderSnippet(r.snippet);
       const uuid = escapeHtml(r.uuid || '');
+      const source = historySearchSourceUi(r._source);
       return `
         <li class="hsd-result" data-uuid="${uuid}">
           <div class="hsd-result-meta">
             <span class="role">${role}</span>
+            <span class="hsd-source-badge${source.className}" title="${escapeHtml(source.title)}">${escapeHtml(source.label)}</span>
             <span class="ts">${escapeHtml(ts)}</span>
           </div>
           <div class="hsd-result-cwd" title="${escapeHtml(r.cwd || '')}">${escapeHtml(cwd)}</div>
