@@ -2424,8 +2424,9 @@
     border-radius: 3px;
   }
   .conv-pane-close:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
-  /* Per-pane header actions — Annotate + Clear (CCC-474). Ride the header's
-     visibility gate, so they only appear in split mode / popouts. */
+  /* Per-pane header actions ride the header visibility gate, so they only
+     appear in split mode / popouts. Keep the header compact: Annotate is a
+     direct icon and less-frequent recording controls share an overflow menu. */
   .conv-pane-actions {
     display: inline-flex;
     align-items: center;
@@ -2444,12 +2445,55 @@
     white-space: nowrap;
   }
   .conv-pane-action:hover { color: var(--text, #eee); background: var(--bg-hover, rgba(255,255,255,0.06)); }
+  .conv-pane-icon-action,
+  .conv-pane-more-trigger {
+    width: 27px;
+    min-height: 25px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    font-size: 16px;
+  }
+  .conv-pane-more { position: relative; }
+  .conv-pane-more-trigger { list-style: none; }
+  .conv-pane-more-trigger::-webkit-details-marker { display: none; }
+  .conv-pane-more-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 30;
+    min-width: 174px;
+    padding: 4px;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 6px;
+    background: var(--surface, #161b22);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  }
+  .conv-pane-more[open] .conv-pane-more-menu { display: grid; gap: 2px; }
+  .conv-pane-more-item {
+    border: 0;
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: var(--text, #eee);
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+  }
+  .conv-pane-more-item:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
   /* Per-pane Verbose toggle (CCC-475) — same pressed treatment as the rail
      topbar's .verbose-toggle-btn. */
   .conv-pane-action[aria-pressed="true"] {
     background: rgba(88,166,255,0.18);
     color: var(--text);
     border-color: rgba(88,166,255,0.45);
+  }
+  .conv-pane-more-item[aria-checked="true"] {
+    color: var(--text);
+    background: rgba(88,166,255,0.18);
   }
   /* Visual-only "Clear" (CCC-474): everything rendered at or below the
      watermark is hidden for a clean recording surface; the transcript on
