@@ -21,6 +21,9 @@
     --accent: #ffb930;
     --ccc: #8fb3ff;
     --multica: #bd9bff;
+    --good: #7ee2a0;
+    --bad: #ff7a66;
+    --win-bg: rgba(126, 226, 160, 0.07);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -36,17 +39,26 @@
   h1 .amp { color: var(--dim); font-weight: 400; }
   .sub { color: var(--dim); font-size: 15px; max-width: 640px; }
   .sub b { color: var(--text); font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; margin: 24px 0 8px; font-size: 14px; }
+  .legend { margin-top: 14px; font-size: 12.5px; color: var(--dim); }
+  .legend .swatch {
+    display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+    background: var(--win-bg); border: 1px solid rgba(126, 226, 160, 0.35);
+    margin: 0 6px 0 14px; vertical-align: -1px;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 20px 0 8px; font-size: 14px; }
   th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
   thead th { font-size: 15px; padding-bottom: 12px; border-bottom: 2px solid var(--line); }
-  thead th.dim { color: var(--dim); font-weight: 500; width: 26%; }
+  thead th.dim { color: var(--dim); font-weight: 500; width: 24%; }
   th.ccc { color: var(--ccc); }
   th.multica { color: var(--multica); }
   td.k { color: var(--dim); font-weight: 600; }
-  td b { font-weight: 600; }
-  .yes { color: #7ee2a0; font-weight: 600; }
-  .no { color: #ff7a66; font-weight: 600; }
-  .part { color: var(--accent); font-weight: 600; }
+  td.win { background: var(--win-bg); box-shadow: inset 2px 0 0 rgba(126, 226, 160, 0.45); }
+  .icon { font-weight: 700; margin-right: 6px; }
+  .yes { color: var(--good); }
+  .no { color: var(--bad); }
+  .part { color: var(--accent); }
+  .big { font-size: 17px; font-weight: 700; }
+  .detail { display: block; color: var(--dim); font-size: 12.5px; margin-top: 3px; }
   .verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 28px; }
   .card {
     background: var(--panel);
@@ -68,6 +80,7 @@
     h1 { font-size: 23px; }
     table { font-size: 12.5px; }
     th, td { padding: 8px 7px; }
+    .big { font-size: 15px; }
     .verdicts { grid-template-columns: 1fr; }
   }
 </style>
@@ -79,6 +92,7 @@
     <p class="sub">Two open-source answers to the same problem — <b>you have more coding agents than you can watch</b>.
     Multica bets on a managed-agent platform where agents are teammates.
     <b>CCC</b> bets on a local-first command center that attaches to the sessions you already run. Compared August 2026, from both projects' READMEs.</p>
+    <p class="legend"><span class="swatch"></span>green cell = clear edge on that row</p>
   </header>
 
   <table>
@@ -92,68 +106,68 @@
     <tbody>
       <tr>
         <td class="k">Model</td>
-        <td><b>Local command center.</b> Attaches to agent sessions on your machine; the engines' on-disk state is the source of truth.</td>
-        <td><b>Managed agents platform.</b> Agents are teammates you assign issues to on a shared board.</td>
+        <td><b>Local command center</b><span class="detail">Attaches to agent sessions on your machine; the engines' on-disk state is the source of truth.</span></td>
+        <td><b>Managed agents platform</b><span class="detail">Agents are teammates you assign issues to on a shared board.</span></td>
       </tr>
       <tr>
         <td class="k">Sees sessions you launched by hand</td>
-        <td><span class="yes">Yes</span> — terminal, headless, or dashboard-spawned; if it's running on your machine, it's on the board.</td>
-        <td><span class="no">No</span> — tracks work dispatched through its own board and daemon.</td>
+        <td class="win"><span class="icon yes">✓</span><b>Yes</b><span class="detail">Terminal, headless, or dashboard-spawned — if it's running on your machine, it's on the board.</span></td>
+        <td><span class="icon no">✕</span><b>No</b><span class="detail">Tracks only work dispatched through its own board and daemon.</span></td>
       </tr>
       <tr>
         <td class="k">Account / login</td>
-        <td><span class="yes">None</span> — no account, no cloud, no telemetry by default.</td>
-        <td><span class="part">Required</span> — Multica Cloud login, or self-host the full stack.</td>
+        <td class="win"><span class="icon yes">✓</span><b>None</b><span class="detail">No account, no cloud, no telemetry by default.</span></td>
+        <td><span class="icon no">✕</span><b>Required</b><span class="detail">Multica Cloud login, or self-host the full stack.</span></td>
       </tr>
       <tr>
         <td class="k">Install footprint</td>
-        <td>One curl line, brew, or DMG. <b>Python stdlib only, zero dependencies, no build.</b></td>
-        <td>CLI + background daemon. Self-hosting needs Docker: Go backend, Next.js frontend, Postgres + pgvector.</td>
+        <td class="win"><span class="icon yes">✓</span><b>Zero deps</b><span class="detail">One curl line, brew, or DMG. Python stdlib only, no build step.</span></td>
+        <td><span class="icon part">~</span><b>Daemon + stack</b><span class="detail">CLI + background daemon. Self-hosting needs Docker: Go, Next.js, Postgres + pgvector.</span></td>
       </tr>
       <tr>
         <td class="k">Agent CLIs</td>
-        <td><b>6:</b> Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code. Spawn + monitor all six, steer five.</td>
-        <td><b>14:</b> Claude Code, Codex, Cursor Agent, Kimi, Antigravity + CodeBuddy, Copilot CLI, OpenCode, OpenClaw, Hermes, Pi, Kiro, Qoder, Trae.</td>
+        <td><span class="big">6</span><span class="detail">Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code. Spawn + monitor all six, steer five.</span></td>
+        <td class="win"><span class="big">14</span><span class="detail">Adds CodeBuddy, Copilot CLI, OpenCode, OpenClaw, Hermes, Pi, Kiro, Qoder, Trae.</span></td>
       </tr>
       <tr>
         <td class="k">Session-to-session coordination</td>
-        <td><b>Group chats + sibling-ask API</b> — sessions exchange context directly instead of you relaying between terminals.</td>
-        <td><b>Squads</b> — a leader agent routes assigned work to the right member; agents comment and report blockers.</td>
+        <td><span class="icon yes">✓</span><b>Group chats + sibling-ask</b><span class="detail">Sessions exchange context directly instead of you relaying between terminals.</span></td>
+        <td><span class="icon yes">✓</span><b>Squads</b><span class="detail">A leader agent routes assigned work to members; agents comment and report blockers.</span></td>
       </tr>
       <tr>
         <td class="k">Cost / token visibility</td>
-        <td><span class="yes">Built in</span> — pace vs plan limits, per-session spend attribution, cheaper-route suggestions for stale sessions.</td>
-        <td>Not advertised in the README.</td>
+        <td class="win"><span class="icon yes">✓</span><b>Built in</b><span class="detail">Pace vs plan limits, per-session spend attribution, cheaper-route suggestions for stale sessions.</span></td>
+        <td><span class="icon no">✕</span><b>Not advertised</b><span class="detail">No cost tracking mentioned in the README.</span></td>
       </tr>
       <tr>
         <td class="k">Recurring / queued work</td>
-        <td>Periodic triggers + WatchTower queues whose workers compound shared learnings over time.</td>
-        <td>Autopilots — cron, webhooks, manual runs.</td>
+        <td><span class="icon yes">✓</span><b>Triggers + queues</b><span class="detail">Periodic triggers + WatchTower queues whose workers compound shared learnings.</span></td>
+        <td><span class="icon yes">✓</span><b>Autopilots</b><span class="detail">Cron, webhooks, manual runs.</span></td>
       </tr>
       <tr>
         <td class="k">Multi-user teams</td>
-        <td><span class="no">No</span> — single-operator tool by design; multi-user is explicitly out of scope.</td>
-        <td><span class="yes">Yes</span> — workspaces, human + agent teams, assignment and routing.</td>
+        <td><span class="icon no">✕</span><b>No</b><span class="detail">Single-operator tool by design; multi-user is explicitly out of scope.</span></td>
+        <td class="win"><span class="icon yes">✓</span><b>Yes</b><span class="detail">Workspaces, human + agent teams, assignment and routing.</span></td>
       </tr>
       <tr>
         <td class="k">Data / privacy</td>
-        <td><b>100% local</b> — loopback bind by default; works fully offline. Opt-in phone/LAN access over your trusted network.</td>
-        <td>Cloud control plane by default; self-hosting supported for full control.</td>
+        <td class="win"><span class="icon yes">✓</span><b>100% local</b><span class="detail">Loopback bind by default; works fully offline. Opt-in phone/LAN access over your trusted network.</span></td>
+        <td><span class="icon part">~</span><b>Cloud default</b><span class="detail">Cloud control plane; self-hosting supported for full control.</span></td>
       </tr>
       <tr>
         <td class="k">Mobile</td>
-        <td>Phone browser over your trusted network (e.g. Tailscale).</td>
-        <td>Dedicated iOS app in the repo.</td>
+        <td><span class="icon part">~</span><b>Phone browser</b><span class="detail">Over your trusted network (e.g. Tailscale).</span></td>
+        <td class="win"><span class="icon yes">✓</span><b>iOS app</b><span class="detail">Dedicated mobile client in the repo.</span></td>
       </tr>
       <tr>
         <td class="k">License</td>
-        <td>Source-available; free for non-commercial use.</td>
-        <td>Apache 2.0 + conditions (commercial license for hosted resale; branding retention).</td>
+        <td><span class="icon part">~</span><b>Source-available</b><span class="detail">Free for non-commercial use.</span></td>
+        <td><span class="icon part">~</span><b>Apache 2.0 + conditions</b><span class="detail">Commercial license for hosted resale; branding retention.</span></td>
       </tr>
       <tr>
         <td class="k">Age / stars (Aug 2026)</td>
-        <td>~3.5 months old · <b>112 stars</b></td>
-        <td>~6.5 months old · <b>43.1k stars</b></td>
+        <td><span class="big">112</span><span class="detail">~3.5 months old</span></td>
+        <td class="win"><span class="big">43.1k</span><span class="detail">~6.5 months old</span></td>
       </tr>
     </tbody>
   </table>
