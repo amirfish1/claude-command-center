@@ -55540,6 +55540,8 @@
       ? ev.target.closest('[data-role="pane-annotate"], [data-role="pane-clear"], [data-role="pane-verbose"], [data-role="pane-replay"]') : null;
     if (!btn) return;
     ev.stopPropagation();
+    const menu = btn.closest('.conv-pane-more[open]');
+    if (menu) menu.removeAttribute('open');
     const pane = btn.closest('.conv-pane[data-pane-id]');
     const paneId = (pane && pane.dataset.paneId) || activePaneId();
     if (btn.dataset.role === 'pane-annotate') { annStart(); return; }
@@ -55555,7 +55557,12 @@
   // convVerboseOn()).
   function _syncVerboseButtons(on) {
     document.querySelectorAll('#verboseToggleBtn, [data-role="pane-verbose"]')
-      .forEach((b) => b.setAttribute('aria-pressed', on ? 'true' : 'false'));
+      .forEach((b) => {
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (b.getAttribute('role') === 'menuitemcheckbox') {
+          b.setAttribute('aria-checked', on ? 'true' : 'false');
+        }
+      });
   }
   function toggleConvVerbose() {
     const on = !convVerboseOn();

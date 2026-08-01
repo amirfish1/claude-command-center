@@ -730,23 +730,19 @@
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
             <span class="conv-pane-title" data-role="pane-title"></span>
           </div>
-          <!-- Per-pane header actions (CCC-474). The header is only visible in
-               split mode / popouts, so these ride that same gate. Annotate
-               reuses the global annStart flow; Clear visually wipes this
-               pane's rendered transcript (watermark, no history mutation). -->
+          <!-- Per-pane header actions are compact in split mode / popouts:
+               Annotate remains one-click, while recording controls live in
+               the adjacent overflow menu. -->
           <span class="conv-pane-actions" data-role="pane-actions">
-            <!-- Verbose rides here too (CCC-475): its rail-topbar home
-                 disappears whenever the status rail is collapsed (e.g. Flow
-                 session-click auto-collapses it), so split mode gets its own
-                 always-reachable toggle. Same global mode as #verboseToggleBtn. -->
-            <button type="button" class="conv-pane-action" data-role="pane-verbose" aria-pressed="false" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views.">&#8801; Verbose</button>
-            <!-- Replay's other home (topbar #convReplayBtn) only exists in
-                 single-pane mode with the right rail closed — split mode
-                 hides the topbar entirely, so it needs its own reachable
-                 copy here, same pattern as Verbose above (CCC-475). -->
-            <button type="button" class="conv-pane-action" data-role="pane-replay" title="Replay this conversation message by message">&#9654; Replay</button>
-            <button type="button" class="conv-pane-action" data-role="pane-annotate" title="Annotate the visible page and save a local note for agent context">&#9998; Annotate</button>
-            <button type="button" class="conv-pane-action" data-role="pane-clear" title="Clear the screen visually (transcript history is untouched)">Clear</button>
+            <button type="button" class="conv-pane-action conv-pane-icon-action" data-role="pane-annotate" aria-label="Annotate visible page" title="Annotate the visible page and save a local note for agent context">&#9998;</button>
+            <details class="conv-pane-more">
+              <summary class="conv-pane-action conv-pane-more-trigger" data-role="pane-more" aria-label="More pane actions" title="More pane actions">&#8230;</summary>
+              <div class="conv-pane-more-menu" data-role="pane-more-menu" role="menu" aria-label="Pane actions">
+                <button type="button" class="conv-pane-more-item" data-role="pane-verbose" role="menuitemcheckbox" aria-checked="false" aria-pressed="false" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views.">&#8801; Verbose</button>
+                <button type="button" class="conv-pane-more-item" data-role="pane-replay" role="menuitem" title="Replay this conversation message by message">&#9654; Replay</button>
+                <button type="button" class="conv-pane-more-item" data-role="pane-clear" role="menuitem" title="Clear the screen visually (transcript history is untouched)">Clear screen</button>
+              </div>
+            </details>
           </span>
           <button class="conv-pane-close" data-role="pane-close" title="Close pane" aria-label="Close pane" style="display:none;">&times;</button>
         </div>

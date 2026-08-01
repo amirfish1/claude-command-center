@@ -34,6 +34,19 @@ sys.path.insert(0, PROJECT_ROOT)
 class TestWebuiPaneRegressionGuards(unittest.TestCase):
     """Regression guards for the kimi/codex webui-pane bug fixes."""
 
+    def test_pane_header_secondary_actions_use_overflow_menu(self):
+        """Split-pane chrome stays compact without losing recording controls."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        pane_header = index_html[index_html.index('data-role="pane-actions"'):index_html.index('data-role="pane-close"')]
+
+        self.assertIn('data-role="pane-more"', pane_header)
+        self.assertIn('data-role="pane-more-menu"', pane_header)
+        self.assertIn('data-role="pane-annotate" aria-label="Annotate visible page"', pane_header)
+        self.assertNotIn('&#9998; Annotate</button>', pane_header)
+        self.assertIn("btn.closest('.conv-pane-more[open]')", app_js)
+        self.assertIn("menu.removeAttribute('open')", app_js)
+
     def test_codex_busy_turn_error_is_queued_not_exec_fallback(self):
         """"Cannot launch a new turn while another turn is active" must take
         the durable-queue fallback — the exec fallback spawned a second writer
