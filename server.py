@@ -7377,6 +7377,20 @@ def _is_generated_helper_session(first_message):
     )
 
 
+def _is_unclaimed_claude_prewarm(
+    first_message, tail_meta, session_id=None, spawn_registry_by_sid=None,
+):
+    """Hide an internal reservation until it receives its first real prompt."""
+    if str(first_message or "").strip():
+        return False
+    registry_entry = (
+        (spawn_registry_by_sid or {}).get(str(session_id or "")) or {}
+    )
+    return bool(registry_entry.get("prewarm")) or (
+        str((tail_meta or {}).get("agent_name") or "").strip() == "ccc-prewarm"
+    )
+
+
 def _registry_epoch_seconds(value):
     try:
         ts = float(value)
@@ -7805,6 +7819,10 @@ def find_all_conversations(
                 tail_meta = _extract_tail_meta(f) or {}
             except Exception:
                 tail_meta = {}
+            if _is_unclaimed_claude_prewarm(
+                first_message, tail_meta, session_id, spawn_registry_by_sid,
+            ):
+                continue
 
             # Tool-call inference — match what extract_session_workspace
             # does for active sessions. The JSONL's first-event cwd /
@@ -12628,6 +12646,10 @@ def _normalize_ccc_hook_command(command):
 
 # Spawned headless Claude sessions
 _spawned_sessions = []  # [{pid, name, log, proc}]
+_CLAUDE_PREWARM_LOCK = threading.Lock()
+_CLAUDE_PREWARMS = {}
+_CLAUDE_PREWARM_TTL_S = 120
+_CLAUDE_PREWARM_MAX = 4
 
 
 # ---------------------------------------------------------------------------
@@ -19639,6 +19661,8 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             if head_cwd:
                 _session_cwd_cache[sid] = cwd
             tail_meta = _extract_tail_meta(f)
+        if _is_unclaimed_claude_prewarm(first_message, tail_meta):
+            continue
         override = name_overrides.get(sid) or name_overrides.get(conv_id)
         # Display value priority: side-car override > jsonl > None.
         # The sidecar is set ONLY by CCC's pencil rename — it's a
@@ -40367,8 +40391,284 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None):
     return prompt + footer
 
 
+def _claude_spawn_command(claude_bin, model, session_name, session_id, capabilities):
+    cmd = [
+        claude_bin, "-p", "--verbose",
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
+        "--model", model,
+        "--dangerously-skip-permissions",
+        "--name", session_name,
+    ]
+    if session_id:
+        cmd.extend(["--session-id", session_id])
+    if capabilities.get("partial_messages"):
+        cmd.append("--include-partial-messages")
+    cmd.extend(_claude_session_state_args())
+    return cmd
+
+
+def _discard_claude_prewarm(entry):
+    """Retire one unclaimed reservation and remove only its private artifacts."""
+    if not isinstance(entry, dict):
+        return
+    _retire_unresponsive_spawn_entry(entry, terminate=True, reason="prewarm_expired")
+    _unlink_quiet(entry.get("log"))
+    sid = str(entry.get("session_id") or "").strip()
+    cwd = entry.get("cwd")
+    if sid and cwd:
+        try:
+            _canonical_conversation_path(cwd, sid).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _prune_claude_prewarms(now=None):
+    now = float(now if now is not None else time.time())
+    expired = []
+    with _CLAUDE_PREWARM_LOCK:
+        for prewarm_id, entry in list(_CLAUDE_PREWARMS.items()):
+            proc = entry.get("proc") if isinstance(entry, dict) else None
+            try:
+                alive = proc is not None and proc.poll() is None
+            except Exception:
+                alive = False
+            age = now - float(entry.get("created_at_epoch") or 0)
+            if not alive or age > _CLAUDE_PREWARM_TTL_S:
+                expired.append(_CLAUDE_PREWARMS.pop(prewarm_id))
+    for entry in expired:
+        _discard_claude_prewarm(entry)
+
+
+def _store_claude_prewarm(entry):
+    """Install one bounded, tab-owned reservation and retire superseded ones."""
+    evicted = []
+    client_id = str(entry.get("client_id") or "").strip()
+    with _CLAUDE_PREWARM_LOCK:
+        if client_id:
+            for existing_id, existing in list(_CLAUDE_PREWARMS.items()):
+                if str(existing.get("client_id") or "").strip() == client_id:
+                    evicted.append(_CLAUDE_PREWARMS.pop(existing_id))
+        while len(_CLAUDE_PREWARMS) >= _CLAUDE_PREWARM_MAX:
+            oldest_id = min(
+                _CLAUDE_PREWARMS,
+                key=lambda key: float(
+                    (_CLAUDE_PREWARMS.get(key) or {}).get("created_at_epoch") or 0
+                ),
+            )
+            evicted.append(_CLAUDE_PREWARMS.pop(oldest_id))
+        _CLAUDE_PREWARMS[entry["prewarm_id"]] = entry
+    for old_entry in evicted:
+        _discard_claude_prewarm(old_entry)
+
+
+def _start_claude_prewarm(cwd=None, repo_path=None, model=None, name=None, client_id=None):
+    """Start a prompt-less Claude stream process for the new-session composer.
+
+    Claude performs its SessionStart hooks and MCP setup before the first
+    stream-json user message arrives. Reserving that exact process while the
+    user types moves the expensive initialization off the submit-to-text path.
+    """
+    routed = _control_plane_engine_call(
+        "claude", "prewarm", {
+            "cwd": cwd,
+            "repo_path": repo_path,
+            "model": model,
+            "name": name,
+            "client_id": client_id,
+        },
+    )
+    if routed is not None:
+        return routed
+    _prune_claude_prewarms()
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    model_to_use = _cli_model_flag(_spawn_model_for_engine("claude", model) or "opus")
+    session_name = _slugify(name or "")
+    if not session_name:
+        return {"ok": False, "available": False, "code": "prewarm_name_required"}
+    claude_bin = _resolve_claude_bin()
+    if not claude_bin.get("available"):
+        return {
+            "ok": False,
+            "error": claude_bin.get("reason") or "Claude Code CLI not found",
+            "code": claude_bin.get("code", "claude_unavailable"),
+        }
+    capabilities = _claude_spawn_capabilities(claude_bin["bin"])
+    if not capabilities.get("ready"):
+        capabilities = _probe_claude_spawn_capabilities(claude_bin["bin"])
+    if not capabilities.get("session_id"):
+        return {"ok": False, "available": False, "code": "prewarm_unsupported"}
+
+    prewarm_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    log_dir = repo_log_dir(ctx["repo_path"])
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f".ccc-prewarm-{prewarm_id}.log"
+    log_fh = open(log_path, "w")
+    fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
+    cmd = _claude_spawn_command(
+        claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
+    )
+    popen_kwargs = dict(
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        cwd=spawn_cwd,
+        start_new_session=True,
+        env=_question_relay_env(),
+    )
+    popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
+    try:
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+    except (FileNotFoundError, OSError) as exc:
+        log_fh.close()
+        if child_stdin_fd is not None:
+            _close_fd_quiet(child_stdin_fd)
+        _unlink_quiet(fifo_path)
+        _unlink_quiet(log_path)
+        return {"ok": False, "error": str(exc), "code": "claude_unavailable"}
+    stdin_fd = _open_fifo_writer(fifo_path) if fifo_path else None
+    if child_stdin_fd is not None:
+        _close_fd_quiet(child_stdin_fd)
+    entry = {
+        "prewarm_id": prewarm_id,
+        "created_at_epoch": time.time(),
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "prompt": "",
+        "started": time.strftime("%Y%m%dT%H%M%S"),
+        "proc": proc,
+        "log_fh": log_fh,
+        "fifo": fifo_path,
+        "stdin_fd": stdin_fd,
+        "engine": "claude",
+        "cwd": spawn_cwd,
+        "repo_path": ctx["repo_path"],
+        "model": model_to_use,
+        "parent_session_id": "",
+        "session_id": session_id,
+        "partial_messages": bool(capabilities.get("partial_messages")),
+        "command": list(cmd),
+        "prewarmed": True,
+        "client_id": str(client_id or "").strip(),
+    }
+    _store_claude_prewarm(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=spawn_cwd,
+        spawned_at=entry["started"],
+        command_summary="",
+        fifo=fifo_path,
+        engine="claude",
+        session_id=session_id,
+        repo_path=ctx["repo_path"],
+        model=model_to_use,
+        prewarm=True,
+        prewarm_id=prewarm_id,
+        client_id=entry["client_id"],
+    )
+    expiry_timer = threading.Timer(
+        _CLAUDE_PREWARM_TTL_S + 1, _prune_claude_prewarms,
+    )
+    expiry_timer.daemon = True
+    expiry_timer.start()
+    return {
+        "ok": True,
+        "prewarm_id": prewarm_id,
+        "session_id": session_id,
+        "pid": proc.pid,
+        "cwd": spawn_cwd,
+        "repo_path": ctx["repo_path"],
+        "model": model_to_use,
+    }
+
+
+def _take_claude_prewarm(prewarm_id, cwd, model, name=None):
+    if not prewarm_id:
+        return None
+    _prune_claude_prewarms()
+    with _CLAUDE_PREWARM_LOCK:
+        entry = _CLAUDE_PREWARMS.get(str(prewarm_id))
+        if not entry:
+            return None
+        if (
+            entry.get("cwd") != cwd
+            or entry.get("model") != model
+            or (name is not None and entry.get("name") != name)
+        ):
+            return None
+        entry = _CLAUDE_PREWARMS.pop(str(prewarm_id))
+    try:
+        if entry["proc"].poll() is not None:
+            _discard_claude_prewarm(entry)
+            return None
+    except Exception:
+        _discard_claude_prewarm(entry)
+        return None
+    return entry
+
+
+def _take_claude_prewarm_for_request(
+    prewarm_id, cwd=None, repo_path=None, model=None, name=None,
+):
+    """Claim a reservation using its already-validated launch context.
+
+    The prewarm endpoint resolved and allowed both paths before creating the
+    opaque id. Re-validating the caller's concrete paths against that stored
+    context is sufficient and avoids repeating the full repo registry lookup
+    on the click-to-ack path. A mismatch leaves the reservation untouched and
+    the caller falls back to the normal cold validation path.
+    """
+    if not prewarm_id or not (cwd or repo_path):
+        return None
+    _prune_claude_prewarms()
+
+    def same_path(requested, expected):
+        if not requested:
+            return True
+        try:
+            candidate = Path(str(requested)).expanduser().resolve()
+            return candidate.is_dir() and candidate == Path(str(expected)).expanduser().resolve()
+        except (OSError, ValueError, RuntimeError):
+            return False
+
+    with _CLAUDE_PREWARM_LOCK:
+        entry = _CLAUDE_PREWARMS.get(str(prewarm_id))
+        if not entry:
+            return None
+        if entry.get("model") != model:
+            return None
+        if name is not None and entry.get("name") != name:
+            return None
+        if not same_path(cwd, entry.get("cwd")):
+            return None
+        if not same_path(repo_path, entry.get("repo_path")):
+            return None
+        entry = _CLAUDE_PREWARMS.pop(str(prewarm_id))
+    try:
+        if entry["proc"].poll() is not None:
+            _discard_claude_prewarm(entry)
+            return None
+    except Exception:
+        _discard_claude_prewarm(entry)
+        return None
+    return entry
+
+
+def _schedule_session_model_update(session_id, model, context_1m):
+    """Persist non-critical model UI metadata after the first-response window."""
+    timer = threading.Timer(
+        12, _set_session_model, args=(session_id, model, context_1m),
+    )
+    timer.daemon = True
+    timer.start()
+
+
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
-                  parent_session_id=None, timeline_t0_epoch_ms=None):
+                  parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None):
     """Spawn a headless Claude Code session and return tracking info.
 
     The spawned subprocess requires an explicit cwd or repo_path.
@@ -40388,6 +40688,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "model": model,
             "parent_session_id": parent_session_id,
             "timeline_t0_epoch_ms": timeline_t0_epoch_ms,
+            "prewarm_id": prewarm_id,
         },
         idempotency_key=_take_control_plane_action_id(),
     )
@@ -40404,46 +40705,50 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         except Exception:
             pass
     prompt = _strip_ccc_session_state_instruction(prompt)
-    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
-    spawn_cwd = ctx["cwd"]
-    repo_for_logs = ctx["repo_path"]
-    # Always slugify — name may come from firstSentence(body) and contain
-    # filesystem-hostile chars like quotes, colons, slashes.
+    model_to_use = _cli_model_flag(_spawn_model_for_engine("claude", model) or "opus")
+    # The reservation launches with this exact native Claude name. Claiming is
+    # therefore name-sensitive as well as cwd/model-sensitive: a stale process
+    # must never surface under the wrong title in Claude's own resume picker or
+    # SessionStart hook context.
     session_name = _slugify(name or prompt)
     if not session_name:
         session_name = "unnamed"
+    entry = None if worktree else _take_claude_prewarm_for_request(
+        prewarm_id,
+        cwd=cwd,
+        repo_path=repo_path,
+        model=model_to_use,
+        name=session_name,
+    )
+    if entry is not None:
+        ctx = {"cwd": entry["cwd"], "repo_path": entry["repo_path"]}
+    else:
+        ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_filename = f"spawn-{session_name}-{timestamp}.log"
-    if model:
-        _set_session_model(log_filename[:-4], model, False)
     log_dir = repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
 
-    claude_bin = _resolve_claude_bin()
-    if not claude_bin.get("available"):
-        return {
-            "ok": False,
-            "error": claude_bin.get("reason") or "Claude Code CLI not found",
-            "code": claude_bin.get("code", "claude_unavailable"),
-        }
-
-    model_to_use = _cli_model_flag(_spawn_model_for_engine("claude", model) or "opus")
-    capabilities = _claude_spawn_capabilities(claude_bin["bin"])
-    session_id = str(uuid.uuid4()) if capabilities.get("session_id") else None
-    cmd = [
-        claude_bin["bin"], "-p", "--verbose",
-        "--input-format", "stream-json",
-        "--output-format", "stream-json",
-        "--model", model_to_use,
-        "--dangerously-skip-permissions",
-        "--name", session_name,
-    ]
-    if session_id:
-        cmd.extend(["--session-id", session_id])
-    if capabilities.get("partial_messages"):
-        cmd.append("--include-partial-messages")
-    cmd.extend(_claude_session_state_args())
+    if entry is not None:
+        capabilities = {"partial_messages": bool(entry.get("partial_messages"))}
+        session_id = entry.get("session_id")
+        cmd = list(entry.get("command") or [])
+    else:
+        claude_bin = _resolve_claude_bin()
+        if not claude_bin.get("available"):
+            return {
+                "ok": False,
+                "error": claude_bin.get("reason") or "Claude Code CLI not found",
+                "code": claude_bin.get("code", "claude_unavailable"),
+            }
+        capabilities = _claude_spawn_capabilities(claude_bin["bin"])
+        session_id = str(uuid.uuid4()) if capabilities.get("session_id") else None
+        cmd = _claude_spawn_command(
+            claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
+        )
 
     worktree_path = None
     worktree_branch = None
@@ -40455,69 +40760,126 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             spawn_cwd = worktree_path
         except RuntimeError as e:
             return {"ok": False, "error": f"worktree creation failed: {e}"}
-    log_fh = open(log_path, "w")
-    # Run a per-repo env-setup hook in fresh worktrees, before the
-    # Claude process starts. No-op when not a worktree spawn. See #47.
-    if worktree_path:
-        _run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
-    fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
-    popen_kwargs = dict(
-        stdout=log_fh,
-        stderr=subprocess.STDOUT,
-        cwd=spawn_cwd,
-        start_new_session=True,
-        env=_question_relay_env(),
-    )
-    popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
-    if session_id:
-        _spawn_timeline_start(
-            session_id,
-            t0_epoch_ms=timeline_t0_epoch_ms,
-            engine="claude",
-            model=model_to_use,
+    if entry is not None:
+        old_log_path = entry.get("log")
+        try:
+            os.replace(old_log_path, log_path)
+        except OSError:
+            _discard_claude_prewarm(entry)
+            entry = None
+            # Adoption failed before the reserved process became user-visible.
+            # Rebuild every identity-bearing cold-spawn value; reusing the
+            # reservation's command here would silently launch another hidden
+            # `ccc-prewarm` session with the already-consumed UUID.
+            claude_bin = _resolve_claude_bin()
+            if not claude_bin.get("available"):
+                return {
+                    "ok": False,
+                    "error": claude_bin.get("reason") or "Claude Code CLI not found",
+                    "code": claude_bin.get("code", "claude_unavailable"),
+                }
+            capabilities = _claude_spawn_capabilities(claude_bin["bin"])
+            session_id = str(uuid.uuid4()) if capabilities.get("session_id") else None
+            cmd = _claude_spawn_command(
+                claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
+            )
+        else:
+            session_id = entry.get("session_id")
+            proc = entry["proc"]
+            log_fh = entry["log_fh"]
+            fifo_path = entry.get("fifo")
+            stdin_fd = entry.get("stdin_fd")
+            cmd = list(entry.get("command") or cmd)
+            prewarm_age_ms = round(
+                max(0.0, time.time() - float(entry.get("created_at_epoch") or time.time())) * 1000,
+                1,
+            )
+            entry.update({
+                "name": session_name,
+                "log": str(log_path),
+                "prompt": prompt[:200],
+                "started": timestamp,
+                "parent_session_id": parent_session_id or "",
+                "prewarm_age_ms": prewarm_age_ms,
+            })
+            _spawn_timeline_start(
+                session_id,
+                t0_epoch_ms=timeline_t0_epoch_ms,
+                engine="claude",
+                model=model_to_use,
+                cwd=spawn_cwd,
+                prewarmed=True,
+                prewarm_age_ms=prewarm_age_ms,
+            )
+            _spawn_timeline_mark(session_id, "process_started", 0)
+            _spawn_timeline_mark(session_id, "prewarm_claimed")
+
+    if entry is None:
+        log_fh = open(log_path, "w")
+        # Run a per-repo env-setup hook in fresh worktrees, before the
+        # Claude process starts. No-op when not a worktree spawn. See #47.
+        if worktree_path:
+            _run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+        fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
+        popen_kwargs = dict(
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
             cwd=spawn_cwd,
+            start_new_session=True,
+            env=_question_relay_env(),
         )
-    try:
-        proc = subprocess.Popen(cmd, **popen_kwargs)
-    except (FileNotFoundError, OSError) as e:
-        log_fh.close()
+        popen_kwargs["stdin"] = child_stdin_fd if child_stdin_fd is not None else subprocess.PIPE
+        if session_id:
+            _spawn_timeline_start(
+                session_id,
+                t0_epoch_ms=timeline_t0_epoch_ms,
+                engine="claude",
+                model=model_to_use,
+                cwd=spawn_cwd,
+                prewarmed=False,
+            )
+        try:
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+        except (FileNotFoundError, OSError) as e:
+            log_fh.close()
+            if child_stdin_fd is not None:
+                _close_fd_quiet(child_stdin_fd)
+            if fifo_path:
+                _unlink_quiet(fifo_path)
+            return {
+                "ok": False,
+                "error": f"Claude Code CLI failed to start: {e}",
+                "code": "claude_unavailable",
+            }
+        if session_id:
+            _spawn_timeline_mark(session_id, "process_started")
+        # Keep a parent-owned writer open before dropping the local RDWR fd.
+        # If this open fails, the prompt write below fails closed instead of
+        # reporting a live session that never received its initial task.
+        stdin_fd = _open_fifo_writer(fifo_path) if fifo_path else None
         if child_stdin_fd is not None:
             _close_fd_quiet(child_stdin_fd)
-        if fifo_path:
-            _unlink_quiet(fifo_path)
-        return {
-            "ok": False,
-            "error": f"Claude Code CLI failed to start: {e}",
-            "code": "claude_unavailable",
-        }
-    if session_id:
-        _spawn_timeline_mark(session_id, "process_started")
-    # Keep a parent-owned writer open before dropping the local RDWR fd.
-    # If this open fails, the prompt write below fails closed instead of
-    # reporting a live session that never received its initial task.
-    stdin_fd = _open_fifo_writer(fifo_path) if fifo_path else None
-    if child_stdin_fd is not None:
-        _close_fd_quiet(child_stdin_fd)
 
-    entry = {
-        "pid": proc.pid,
-        "name": session_name,
-        "log": str(log_path),
-        "prompt": prompt[:200],
-        "started": timestamp,
-        "proc": proc,
-        "log_fh": log_fh,
-        "fifo": fifo_path,
-        "stdin_fd": stdin_fd,
-        "engine": "claude",
-        "cwd": spawn_cwd,
-        "repo_path": ctx["repo_path"],
-        "model": model_to_use,
-        "parent_session_id": parent_session_id or "",
-        "session_id": session_id,
-        "partial_messages": bool(capabilities.get("partial_messages")),
-        "command": list(cmd),
-    }
+        entry = {
+            "pid": proc.pid,
+            "name": session_name,
+            "log": str(log_path),
+            "prompt": prompt[:200],
+            "started": timestamp,
+            "proc": proc,
+            "log_fh": log_fh,
+            "fifo": fifo_path,
+            "stdin_fd": stdin_fd,
+            "engine": "claude",
+            "cwd": spawn_cwd,
+            "repo_path": ctx["repo_path"],
+            "model": model_to_use,
+            "parent_session_id": parent_session_id or "",
+            "session_id": session_id,
+            "partial_messages": bool(capabilities.get("partial_messages")),
+            "command": list(cmd),
+            "prewarmed": False,
+        }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
     # or /color — they're treated as unknown skills. Tab naming/coloring only
@@ -40538,6 +40900,12 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         }
     if session_id:
         _spawn_timeline_mark(session_id, "initial_prompt_written")
+    if model:
+        model_session_id = session_id or log_filename[:-4]
+        if entry.get("prewarmed"):
+            _schedule_session_model_update(model_session_id, model, False)
+        else:
+            _set_session_model(model_session_id, model, False)
 
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -40561,6 +40929,8 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
 
     if session_id:
         _schedule_claude_desktop_visibility_retry(session_id, spawn_entry=entry)
+        if entry.get("prewarmed") and session_name:
+            _save_session_name_override(session_id, session_name)
 
     resp = {
         "ok": True,
@@ -40569,6 +40939,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "log": str(log_path),
         "engine": "claude",
         "initial_prompt_written": True,
+        "prewarmed": bool(entry.get("prewarmed")),
     }
     if worktree_path:
         resp["worktree_path"] = worktree_path
@@ -42381,7 +42752,7 @@ def _save_spawn_registry(entries):
 def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
-    parent_session_id=None,
+    parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -42394,8 +42765,11 @@ def _record_spawn_to_registry(
     only — Codex/Gemini/Cursor headless runs are one-shot).
     `engine` ("claude", "codex", "gemini", "cursor", or "antigravity") tells the boot-time reattach sweep
     which ps-grep to use and which JSONL ingestion path to skip."""
-    entries = _load_spawn_registry()
-    entries.append({
+    entries = [
+        entry for entry in _load_spawn_registry()
+        if str(entry.get("pid") or "") != str(pid)
+    ]
+    record = {
         "pid": pid,
         "session_id": session_id,
         "name": name,
@@ -42408,8 +42782,43 @@ def _record_spawn_to_registry(
         "engine": engine,
         "model": model or "",
         "parent_session_id": parent_session_id or "",
-    })
+    }
+    if prewarm:
+        record.update({
+            "prewarm": True,
+            "prewarm_id": str(prewarm_id or ""),
+            "client_id": str(client_id or ""),
+        })
+    entries.append(record)
     _save_spawn_registry(entries)
+
+
+def _reap_orphaned_claude_prewarms():
+    """Terminate disposable reservations left behind by a dead owner."""
+    entries = _load_spawn_registry()
+    survivors = []
+    reaped = 0
+    for entry in entries:
+        if entry.get("engine") != "claude" or not entry.get("prewarm"):
+            survivors.append(entry)
+            continue
+        pid = entry.get("pid")
+        if pid is not None:
+            try:
+                os.killpg(int(pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except (PermissionError, OSError, ValueError):
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError, ValueError):
+                    pass
+        _unlink_quiet(entry.get("fifo"))
+        _unlink_quiet(entry.get("log"))
+        reaped += 1
+    if reaped:
+        _save_spawn_registry(survivors)
+    return reaped
 
 
 def _remove_spawn_from_registry(pid):
@@ -57633,6 +58042,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({"ok": True, "path": str(rp)})
                 except Exception as e:
                     self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/prewarm-claude":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                result = _start_claude_prewarm(
+                    cwd=payload.get("cwd"),
+                    repo_path=payload.get("repo_path"),
+                    model=payload.get("model"),
+                    name=payload.get("name"),
+                    client_id=payload.get("client_id"),
+                )
+                self.send_json(result, 200 if result.get("ok") else 503)
+            except RepoContextError as exc:
+                self.send_json(exc.as_payload(), exc.status)
         elif path == "/api/sessions/spawned/backfill-parents":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -57846,6 +58275,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                             timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
+                            prewarm_id=payload.get("prewarm_id"),
                         )
                     result.setdefault("engine", engine)
                     if report_to and isinstance(result, dict):
@@ -65917,6 +66347,7 @@ def main():
             f"(pid {((worker_health.get('worker') or {}).get('pid'))})"
         )
     else:
+        _reap_orphaned_claude_prewarms()
         _reattach_spawned_orphans()
         if worker_health.get("ok"):
             print(

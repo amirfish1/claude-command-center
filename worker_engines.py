@@ -50,7 +50,16 @@ class EngineHost:
                 # silent no-ops in the one process that actually owns Codex
                 # app-server execution and liveness churn.
                 server._install_python_stack_dump_handler()
-                server._schedule_claude_spawn_capability_probe()
+                # The first prewarm request can arrive immediately after this
+                # lazy import. Finish the tiny one-time help probe now so that
+                # request cannot observe a false "unsupported" result and
+                # cache it for the entire composer lifetime.
+                resolved = server._resolve_claude_bin()
+                if resolved.get("available"):
+                    server._probe_claude_spawn_capabilities(resolved.get("bin"))
+                # Reservations are disposable and are persisted only so a
+                # replacement worker can kill any process the old owner left.
+                server._reap_orphaned_claude_prewarms()
                 # A worker restart can inherit still-live CLI children. Reopen
                 # their durable FIFOs here, in the process that owns engine
                 # execution, rather than in the restartable dashboard.
@@ -477,6 +486,8 @@ class EngineHost:
                     "codex", args.get("session_id")
                 )
         if engine == "claude":
+            if operation == "prewarm":
+                return legacy._start_claude_prewarm(**args)
             if operation == "spawn":
                 return legacy.spawn_session(**args)
             if operation == "inject":

@@ -628,7 +628,9 @@ class TestPresentationModeStatic(unittest.TestCase):
         app_js = APP_JS.read_text(encoding="utf-8")
         durable_start = app_js.index("function renderConversationEvents(events, paneId, opts)")
         durable_end = app_js.index("\n  // CCC-185:", durable_start)
-        streaming_start = app_js.index("function handleSpawnEvents(events, paneId, convId)")
+        streaming_start = app_js.index(
+            "function handleSpawnEvents(events, paneId, convId, streamSid)"
+        )
         streaming_end = app_js.index("\n  function stopPkoodTailPoller", streaming_start)
 
         self.assertIn("refreshPresentationForPane(paneId", app_js[durable_start:durable_end])

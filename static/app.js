@@ -224,7 +224,7 @@
     const metric = host.querySelector('#cccStuckPill');
     if (!metric) return;
     const tick = _gated('stuckSessions', function () {
-      return fetch('/api/codex/stuck-summary', { cache: 'no-store' })
+      return backgroundApiFetch('/api/codex/stuck-summary', { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null))
         .then((summary) => {
           if (!summary || typeof summary.count !== 'number') return;
@@ -1635,6 +1635,30 @@
     }
   })();
 
+  // A busy dashboard can have several slow list reads queued at once. Only
+  // callers that explicitly identify themselves as background work enter this
+  // pool; transcript loads, exports, split-pane reads, and other user actions
+  // retain their own lifetime.
+  const _backgroundApiReadControllers = new Set();
+  function backgroundApiFetch(input, init) {
+    const options = Object.assign({}, init || {});
+    if (options.signal) return fetch(input, options);
+    const controller = new AbortController();
+    options.signal = controller.signal;
+    _backgroundApiReadControllers.add(controller);
+    return fetch(input, options).finally(() => {
+      _backgroundApiReadControllers.delete(controller);
+    });
+  }
+  window.__cccBackgroundApiFetch = backgroundApiFetch;
+
+  function abortBackgroundApiReadsForSpawn() {
+    for (const controller of _backgroundApiReadControllers) {
+      try { controller.abort(); } catch (_) {}
+    }
+    _backgroundApiReadControllers.clear();
+  }
+
   // Pause periodic sidebar/poller work while the user is in a text field or
   // the Cmd+F find bar is open (find steals focus into the transcript when
   // pollers re-render the list mid-search).
@@ -1652,6 +1676,11 @@
     if (isText) _lastTextKeyTs = Date.now();
   }, true);
   function shouldPausePeriodicUiWork() {
+    const activeConversation = window.currentConversation;
+    if (activeConversation === '__new__'
+        || String(activeConversation || '').startsWith('spawning-')
+        || (typeof claudeFastSpawnAwaitingPaint === 'function'
+            && claudeFastSpawnAwaitingPaint())) return true;
     const findModal = document.getElementById('chatFindModal');
     if (findModal && findModal.style.display !== 'none') return true;
     const ae = document.activeElement;
@@ -3253,7 +3282,7 @@
       const blockerRequest = fetch('/api/bridge-recovery/blockers?_=' + Date.now())
         .then(response => response.ok ? response.json() : { sessions: [] })
         .catch(() => ({ sessions: [] }));
-      const res = await fetch('/api/sessions/live-activity?_=' + Date.now());
+      const res = await backgroundApiFetch('/api/sessions/live-activity?_=' + Date.now());
       if (!res.ok) return _liveSessionsActivityLast;
       const data = await res.json();
       const blockerData = await blockerRequest;
@@ -9972,6 +10001,7 @@
       rememberInputDraft($convInput, currentConversation);
       _autosizeConvInput();
       refreshSlashCommandMenu($convInput);
+      if (currentConversation === '__new__') scheduleClaudePrewarm();
     });
     $convInput.addEventListener('focus', () => refreshSlashCommandMenu($convInput));
     $convInput.addEventListener('click', () => refreshSlashCommandMenu($convInput));
@@ -12089,6 +12119,13 @@
     if (CONV_POPOUT_MODE) { return; }
     if (_suppressRestoreLastView) return;  // mid-transition, not a real boot/refresh (CCC-508)
     if (_gcReaderPath || _gcReaderId) return;  // a reader is open - leave it
+    // Archive/session boot can finish long after the page became interactive.
+    // Once the user has opened New Session—or submitted a fast Claude spawn—
+    // that explicit intent owns the pane; a late restore must not replace it
+    // with yesterday's row and steal the first-response stream.
+    if (currentConversation === '__new__'
+        || String(currentConversation || '').startsWith('spawning-')
+        || claudeFastSpawnAwaitingPaint()) return;
     try {
       const raw = localStorage.getItem('ccc-last-view');
       const view = raw ? JSON.parse(raw) : null;
@@ -12612,6 +12649,33 @@
 
   // Pending spawn placeholders (optimistic UI) — keyed by pid.
   const pendingSpawns = new Map();
+  const claudeSpawnAwaitingFirstPaint = new Set();
+
+  function claudeFastSpawnAwaitingPaint() {
+    if (claudeSpawnAwaitingFirstPaint.size) return true;
+    return Array.from(pendingSpawns.values()).some((card) => card
+      && card.fast_path && !card.fast_path_visible);
+  }
+
+  function releaseClaudeSpawnPaintGate(sessionId, pendingPid) {
+    if (sessionId) claudeSpawnAwaitingFirstPaint.delete(sessionId);
+    for (const [pid, card] of pendingSpawns.entries()) {
+      if (!card || !card.fast_path) continue;
+      const matchesSession = sessionId
+        && String(card.expected_session_id || '') === String(sessionId);
+      const matchesPending = pendingPid && String(pid) === String(pendingPid);
+      if (matchesSession || matchesPending) card.fast_path_visible = true;
+    }
+    setTimeout(refreshConversationList, 0);
+  }
+
+  function markClaudeFirstVisibleOutput(sessionId) {
+    if (!sessionId) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      spawnStatsMark(sessionId, 'first_visible_output');
+      releaseClaudeSpawnPaintGate(sessionId);
+    }));
+  }
 
   function carryFlowPendingSpawnNode(placeholder, realCard) {
     if (!placeholder || !realCard) return;
@@ -12709,7 +12773,7 @@
     }
     pendingSpawns.delete(tempPid);
     pendingSpawns.set(realPid, placeholder);
-    renderSidebar(filterConversations($convSearch.value));
+    if (!placeholder.fast_path) renderSidebar(filterConversations($convSearch.value));
     return placeholder;
   }
 
@@ -12729,6 +12793,15 @@
 
   function pendingSpawnMatchesRow(pid, placeholder, row) {
     if (!placeholder || !row) return false;
+    // Claude's fast placeholder receives an exact preassigned session UUID
+    // in the POST response. Before that arrives, never fuzzy-match on prompt:
+    // repeated prompts (benchmarks, "continue", etc.) can otherwise bind the
+    // brand-new placeholder to an older session while the POST is in flight.
+    if (placeholder.fast_path && !placeholder.expected_session_id) return false;
+    if (placeholder.fast_path && placeholder.expected_session_id) {
+      return !!row.session_id
+        && String(row.session_id) === String(placeholder.expected_session_id);
+    }
     if (row.session_id && placeholder.expected_session_id
         && String(row.session_id) === String(placeholder.expected_session_id)) return true;
     if (row.spawn_pid && String(row.spawn_pid) === String(pid)) return true;
@@ -12789,8 +12862,16 @@
       }
     } catch (_) {}
     saveSplitState();
+    // The optimistic stream is already following this exact preassigned
+    // Claude UUID. Keep it alive while the placeholder becomes a durable row:
+    // stopping and reopening the SSE here creates a connection-pool gap right
+    // at first token, and under a busy dashboard the replacement can lose the
+    // only visible response even though Claude completed successfully.
+    const keepFirstResponseStream = !!(sid
+      && _spawnLiveSid === sid
+      && claudeSpawnAwaitingFirstPaint.has(sid));
     if (typeof stopConvStream === 'function') stopConvStream();
-    if (typeof stopSpawnStream === 'function') stopSpawnStream();
+    if (!keepFirstResponseStream) stopSpawnStream();
     setCurrentSession(
       real.source || 'interactive',
       sid,
@@ -12806,7 +12887,14 @@
     setCopyableSessionId($cpSessionId, sid || '');
     fetchConversationEvents();
     startConvStream();
-    if (sid && real.source !== 'codex' && real.source !== 'cursor') startSpawnStream(sid);
+    if (!keepFirstResponseStream
+        && sid && real.source !== 'codex' && real.source !== 'cursor') {
+      startSpawnStream(
+        sid,
+        activePaneId(),
+        claudeSpawnAwaitingFirstPaint.has(sid) ? { replay: true } : undefined
+      );
+    }
     updateSplitInputBar();
     updateSplitToolbar();
   }
@@ -12887,13 +12975,22 @@
     // Pin to Working column for the moment
     columnOverrides[id] = 'working';
     try { localStorage.setItem('ccc-column-overrides', JSON.stringify(columnOverrides)); } catch (_) {}
-    renderSidebar(filterConversations($convSearch.value));
     // Auto-select the placeholder so the right pane lands on the new
     // session immediately. Once the real session materializes, the
     // placeholder→real swap in loadConversationList re-binds the right
     // pane in place — selection follows the spawn end-to-end.
-    if (typeof selectConversation === 'function') {
-      selectConversation(id);
+    const selectPending = () => {
+      if (typeof selectConversation === 'function') selectConversation(id);
+    };
+    if (card.fast_path) {
+      // Rebuilding a sidebar with thousands of sessions can occupy the main
+      // thread for a full second. Claude's main pane is the useful immediate
+      // feedback, so select it now and let the complete sidebar rebuild run
+      // only after the first assistant text has painted.
+      selectPending();
+    } else {
+      renderSidebar(filterConversations($convSearch.value));
+      selectPending();
     }
     // Registration watch for Claude placeholders. Fire-and-watch placeholders
     // stick around until the durable thread row appears, with the spawn log
@@ -13028,9 +13125,10 @@
         renderArchiveList($convSearch.value);
         return;
       }
-      const res = await fetch(repoUrl('/api/sessions', repoPath));
+      const res = await backgroundApiFetch(repoUrl('/api/sessions', repoPath));
       const fresh = await res.json();
       if (!res.ok) throw new Error((fresh && fresh.error) || ('HTTP ' + res.status));
+      if (claudeFastSpawnAwaitingPaint()) return;
       currentRepoBacklogData = Array.isArray(fresh)
         ? fresh.filter(c => c && c.source === 'backlog').map(c => Object.assign({}, c))
         : [];
@@ -13116,10 +13214,13 @@
       // place so the right pane reads as the same conversation throughout.
       if (_selectionSwap) {
         const real = _selectionSwap.realCard;
+        const keepFirstResponseStream = !!(real.session_id
+          && _spawnLiveSid === real.session_id
+          && claudeSpawnAwaitingFirstPaint.has(real.session_id));
         currentConversation = real.id;
         try { if (!CONV_POPOUT_MODE) localStorage.setItem('ccc-last-conv', real.id); } catch (_) {}
         if (typeof stopConvStream === 'function') stopConvStream();
-        if (typeof stopSpawnStream === 'function') stopSpawnStream();
+        if (!keepFirstResponseStream) stopSpawnStream();
         setCurrentSession(
           real.source || 'interactive',
           real.session_id,
@@ -13139,7 +13240,14 @@
         setCopyableSessionId($cpSessionId, real.session_id || '');
         fetchConversationEvents();
         startConvStream();
-        if (real.session_id && real.source !== 'codex' && real.source !== 'cursor') startSpawnStream(real.session_id);
+        if (!keepFirstResponseStream
+            && real.session_id && real.source !== 'codex' && real.source !== 'cursor') {
+          startSpawnStream(
+            real.session_id,
+            activePaneId(),
+            claudeSpawnAwaitingFirstPaint.has(real.session_id) ? { replay: true } : undefined
+          );
+        }
         updateSplitInputBar();
         updateSplitToolbar();
       }
@@ -13188,7 +13296,7 @@
       const url = crossRepo
         ? ('/api/attention?scope=' + (_wantAll ? 'all' : 'live'))
         : repoUrl('/api/attention', repoPath, _wantAll ? { all: '1' } : null);
-      const res = await fetch(url);
+      const res = await backgroundApiFetch(url);
       const data = await res.json();
       const allItems = (data && data.items) || [];
       // Inline cache: the FULL set so the Details toggle can render a block
@@ -16757,6 +16865,7 @@
       cwd: repoPath,
       session_cwd: repoPath,
       session_cwd_exists: true,
+      fast_path: engine === 'claude',
       flow_parent_node_id: savedParent,
       flow_node_position: savedPos ? { x: savedPos.x, y: savedPos.y } : null,
     });
@@ -26576,6 +26685,9 @@
       const groupArchiveAction = opts.lifecycleContext === 'active'
         ? '<button type="button" class="conv-repeat-group-archive" data-role="repeat-row-group-archive" data-session-ids="' + sessionIdsAttr + '" title="Archive ' + cards.length + ' sessions">Archive</button>'
         : '';
+      const groupTrashAction = opts.lifecycleContext === 'all-main'
+        ? '<button type="button" class="conv-repeat-group-trash" data-role="repeat-row-group-trash" data-session-ids="' + sessionIdsAttr + '" title="Move ' + cards.length + ' sessions to Trash">Trash</button>'
+        : '';
       return '<div class="conv-repeat-group' + (expanded ? '' : ' is-collapsed') + '"'
         + ' data-role="repeat-row-group" data-repeat-key="' + keyAttr + '">'
         + '<div class="conv-repeat-group-header">'
@@ -26589,6 +26701,7 @@
         + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
         + '</button>'
         + groupArchiveAction
+        + groupTrashAction
         + '</div>'
         + '<div class="conv-repeat-group-body">'
         + cards.map(c => _renderRow(c, opts)).join('')
@@ -29261,6 +29374,29 @@
           showOpToast('Archived ' + sessionIds.length + ' sessions');
         } catch (err) {
           showOpToast('Archive failed (' + err.message + ')', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+    $convList.querySelectorAll('[data-role="repeat-row-group-trash"]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        let sessionIds = [];
+        try { sessionIds = JSON.parse(btn.dataset.sessionIds || '[]'); } catch (_) {}
+        if (!Array.isArray(sessionIds) || !sessionIds.length) return;
+        if (!confirm('Move ' + sessionIds.length + ' sessions to Trash? You can restore them later.')) return;
+        btn.disabled = true;
+        try {
+          for (const sessionId of sessionIds) {
+            const data = await ccPostJson('/api/conversations/' + encodeURIComponent(sessionId) + '/trash', { trashed: true });
+            if (!data.ok) throw new Error(data.error || 'trash failed');
+          }
+          await refreshArchiveData({ force: true });
+          renderSidebar(filterConversations($convSearch.value));
+          showOpToast('Moved ' + sessionIds.length + ' sessions to Trash');
+        } catch (err) {
+          showOpToast('Move to Trash failed (' + err.message + ')', 'error');
           btn.disabled = false;
         }
       });
@@ -32076,11 +32212,13 @@
   }
 
   async function refreshConversationList() {
+    if (claudeFastSpawnAwaitingPaint()) return;
     if (isInlineRenameInProgress()) return;
     if (deferSidebarRenderIfDragging()) return;
     if ($convRefreshBtn) $convRefreshBtn.classList.add('spinning');
     conversationsLoaded = false;
     await refreshArchiveData({ force: true });
+    if (claudeFastSpawnAwaitingPaint()) return;
     renderArchiveList($convSearch ? $convSearch.value : '');
     if (popoutRepoPath()) await loadConversationList();
     setTimeout(() => {
@@ -34171,6 +34309,11 @@
         stopPkoodTailPoller();
         if ($pkoodKillBtn) $pkoodKillBtn.style.display = 'none';
         await fetchConversationEvents(paneId);
+        // A boot restore can still be awaiting this fetch when the user opens
+        // New Session or another card. fetchConversationEvents discards its
+        // stale render, and this companion guard prevents the old selection
+        // from reopening its canonical/spawn streams afterward.
+        if (pane.conversationId !== id) return;
         if (source !== 'backlog' && source !== 'hermes' && !isPendingSpawn) startConvStream(paneId);
         // Block-level streaming from the spawn log — only succeeds if the
         // backend finds a CCC-spawned headless process for this session.
@@ -34180,7 +34323,7 @@
       }
     } finally {
       finishConversationPaneLoad();
-      if (source !== 'backlog') {
+      if (source !== 'backlog' && pane.conversationId === id) {
         const timelineSid = (selectedRow || selectedConv || {}).session_id || id;
         scheduleSessionMetadataFetches(id, timelineSid, paneId);
       }
@@ -34567,7 +34710,7 @@
     const requestVersion = _uxqItemsVersion;
     _uxqItemsPromise = (async () => {
     try {
-      const res = await fetch('/api/queue/list', { cache: 'no-store' });
+      const res = await backgroundApiFetch('/api/queue/list', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const items = Array.isArray(data && data.items) ? data.items : [];
       if (requestVersion !== _uxqItemsVersion) return _uxqItemsCache.items;
@@ -34617,7 +34760,7 @@
     if (_sysServicesPromise) return _sysServicesPromise;
     _sysServicesPromise = (async () => {
       try {
-        const res = await fetch('/api/system/services', { cache: 'no-store' });
+        const res = await backgroundApiFetch('/api/system/services', { cache: 'no-store' });
         const data = await res.json();
         if (!res.ok || !data || !Array.isArray(data.services)) {
           throw new Error('bad payload');
@@ -34651,7 +34794,7 @@
     if (_uxqHealthPromise) return _uxqHealthPromise;
     _uxqHealthPromise = (async () => {
     try {
-      const res = await fetch('/api/queue/status', { cache: 'no-store' });
+      const res = await backgroundApiFetch('/api/queue/status', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data && data.projects) ? data.projects
         : (Array.isArray(data) ? data : []);
@@ -37670,36 +37813,70 @@
     setTimeout(() => { try { updateConvProcessIndicator(); } catch (_) {} }, 0);
   }
 
-  async function startSpawnStream(sid, paneId) {
-    stopSpawnStream();
+  async function startSpawnStream(sid, paneId, opts) {
+    opts = opts || {};
     if (!sid) return;
     const streamPaneId = paneId || activePaneId();
     const streamPane = paneByPaneId(streamPaneId);
     const streamConvId = streamPane ? streamPane.conversationId : currentConversation;
+    const pendingConversationId = opts.pendingConversationId || '';
+    const streamStillSelected = (pane) => {
+      if (!pane) return false;
+      if (pendingConversationId) {
+        if (pane.currentSession && pane.currentSession.id === sid) return true;
+        return pane.conversationId === streamConvId
+          && Array.from(pendingSpawns.values()).some((card) => card
+          && card.id === pendingConversationId
+          && String(card.expected_session_id || '') === String(sid));
+      }
+      return pane.conversationId === streamConvId
+        && !!(pane.currentSession && pane.currentSession.id === sid);
+    };
     let info;
-    try {
-      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/spawn-info');
-      info = await res.json();
-    } catch (_) { return; }
+    if (opts.knownLog) {
+      info = { has_log: true, alive: true };
+    } else {
+      try {
+        const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/spawn-info');
+        info = await res.json();
+      } catch (_) { return; }
+    }
+    if (spawnStatsEnabled()) console.debug('[spawn-perf] spawn-info', sid, info);
+    if (claudeSpawnAwaitingFirstPaint.size
+        && !claudeSpawnAwaitingFirstPaint.has(sid)) return;
     // Race guard: user may have switched panes while we were fetching.
     // The stream still belongs in the pane that requested it, as long as
     // that pane is still showing the same conversation/session.
     const latestPane = paneByPaneId(streamPaneId);
-    if (!latestPane || latestPane.conversationId !== streamConvId || latestPane.currentSession.id !== sid) return;
-    if (!info || !info.has_log || !info.alive) return;
+    if (!streamStillSelected(latestPane)) return;
+    if (!info || !info.has_log || (!info.alive && !opts.replay)) return;
+    // Do not tear down the current stream until this async candidate has
+    // proved it still owns the selected pane. A stale spawn-info request from
+    // the previously viewed session may resolve after a new spawn begins.
+    stopSpawnStream();
     setLiveBadgeVisible(true);
     _spawnLiveSid = sid;
-    const url = '/api/session/' + encodeURIComponent(sid) + '/spawn-stream';
+    const url = '/api/session/' + encodeURIComponent(sid) + '/spawn-stream'
+      + (opts.replay ? '?replay=1' : '');
     spawnEventSource = new EventSource(url);
     spawnEventSource.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data);
         const pane = paneByPaneId(streamPaneId);
-        if (!pane || pane.conversationId !== streamConvId || pane.currentSession.id !== sid) {
+        if (!streamStillSelected(pane)) {
+          if (spawnStatsEnabled()) console.debug(
+            '[spawn-perf] stream selection changed', sid,
+            pane && pane.conversationId,
+            pane && pane.currentSession && pane.currentSession.id,
+            streamConvId,
+            pendingConversationId
+          );
           stopSpawnStream();
           return;
         }
-        if (data && Array.isArray(data.events)) handleSpawnEvents(data.events, streamPaneId, streamConvId);
+        if (data && Array.isArray(data.events)) {
+          handleSpawnEvents(data.events, streamPaneId, pane.conversationId, sid);
+        }
       } catch (_) {}
     };
     spawnEventSource.onerror = () => {
@@ -38180,20 +38357,24 @@
     return node.querySelector('.stream-bubble-blocks');
   }
 
-  function handleSpawnEvents(events, paneId, convId) {
+  function handleSpawnEvents(events, paneId, convId, streamSid) {
     if (!Array.isArray(events)) return;
     const pane = paneId ? paneByPaneId(paneId) : null;
     if (paneId && (!pane || (convId && pane.conversationId !== convId))) return;
     const $view = paneId ? getConvViewForPane(paneId) : getConvView();
     const wasAtBottom = $view && isConversationAtBottom($view);
     const _kimiStream = _viewIsWebUiPane($view);
+    let visibleContentAdded = false;
     for (const ev of events) {
       if (!ev || typeof ev !== 'object') continue;
       if (ev.type === 'result') {
         // Turn finished. The JSONL hand-off (in renderConversationEvents)
         // is the primary trigger that drops the bubble; this is the
-        // fallback when JSONL is slow or never publishes.
-        clearStreamingBubble();
+        // fallback when JSONL is slow or never publishes. A replay can batch
+        // text and result into the same JS task; linger for one visible beat
+        // so the just-appended response actually reaches a browser paint.
+        clearStreamingBubble({ lingerMs: visibleContentAdded ? 250 : 0 });
+        if (streamSid && !visibleContentAdded) releaseClaudeSpawnPaintGate(streamSid);
         continue;
       }
       if (ev.type !== 'assistant_block') continue;
@@ -38220,6 +38401,7 @@
             div.innerHTML = renderMarkdown(raw);
             slot.appendChild(div);
           }
+          if (b.text) visibleContentAdded = true;
         } else if (b.type === 'tool_use') {
           const div = document.createElement('div');
           div.dataset.renderTs = nowStamp();
@@ -38243,6 +38425,7 @@
               + '<span style="opacity:0.8;">' + escapeHtml(summary) + '</span>';
           }
           slot.appendChild(div);
+          visibleContentAdded = true;
           // If this is a Task tool_use from the master (no parent_tool_use_id
           // on the event), seed the subagent tab label so the tab gets a
           // meaningful name when its first block arrives.
@@ -38264,6 +38447,7 @@
               div.innerHTML = planHtml;
               slot.appendChild(div.firstElementChild);
             }
+            visibleContentAdded = true;
           }
         } else if (b.type === 'thinking') {
           if (_kimiStream) {
@@ -38301,6 +38485,12 @@
     }
     if (wasAtBottom && $view) scrollConversationToEnd($view);
     else if ($view) updateConversationEndAffordance($view);
+    if (visibleContentAdded && streamSid) {
+      if (spawnStatsEnabled()) console.debug('[spawn-perf] visible content appended', streamSid);
+      // Two frames makes this an honest browser-paint mark rather than merely
+      // the instant the text node was appended to the DOM.
+      markClaudeFirstVisibleOutput(streamSid);
+    }
     try { refreshPresentationForPane(paneId || activePaneId(), { followTail: true }); } catch (_) {}
   }
 
@@ -39002,8 +39192,8 @@
     }).catch(() => {});
   }
 
-  // Ordered for reading top-to-bottom as a story: what CCC did, what Codex
-  // did on disk, then what the user actually saw.
+  // Ordered for reading top-to-bottom as a story: what CCC did, what the
+  // selected engine did, then what the user actually saw.
   const SPAWN_STAT_ROWS = [
     ['thread_start_done',        'Codex created the thread'],
     ['turn_accepted',            'Turn accepted by Codex'],
@@ -39018,6 +39208,21 @@
     ['confirm_finished',         'Durability check done'],
     ['name_set_finished',        'Thread named'],
     ['finalize_done',            'Background finalize done'],
+  ];
+  const CLAUDE_SPAWN_STAT_ROWS = [
+    ['process_started',             'Claude process started'],
+    ['prewarm_claimed',             'Warm Claude process claimed'],
+    ['initial_prompt_written',      'Prompt written to Claude'],
+    ['spawn_response_sent',         'CCC answered the browser'],
+    ['client_response_received',    'Browser got the response'],
+    ['claude_system_init',          'Claude initialized the session'],
+    ['claude_first_stream_event',   'Claude emitted its first stream event'],
+    ['claude_first_text_delta',     'Claude emitted its first text'],
+    ['client_first_visible_output', 'First assistant text painted'],
+    ['claude_transcript_created',   'Claude transcript created'],
+    ['client_row_rendered',         'Row rendered in sidebar'],
+    ['client_row_resolved',         'Row left "spawning"'],
+    ['client_first_paint',          'Canonical transcript painted'],
   ];
 
   function fmtStatMs(ms) {
@@ -39036,22 +39241,25 @@
     if (!data || !data.ok || !data.timeline) return;
     const marks = (data.timeline.marks) || {};
     if (!Object.keys(marks).length) return;
-    const rows = SPAWN_STAT_ROWS
+    const statRows = data.timeline.engine === 'claude'
+      ? CLAUDE_SPAWN_STAT_ROWS : SPAWN_STAT_ROWS;
+    const rows = statRows
       .filter(([k]) => marks[k] != null)
       .map(([k, label]) => '<div class="spawn-stat-row"><span class="spawn-stat-label">'
         + escapeHtml(label) + '</span><span class="spawn-stat-val">'
         + fmtStatMs(marks[k]) + '</span></div>').join('');
     // "Visible" is the honest headline: the number the user actually felt.
-    const visible = marks.client_first_paint != null ? marks.client_first_paint
+    const visible = marks.client_first_visible_output != null ? marks.client_first_visible_output
+      : marks.client_first_paint != null ? marks.client_first_paint
       : (marks.rollout_has_user_message != null ? marks.rollout_has_user_message : null);
     const existing = $view.querySelector('.spawn-stats');
     const html = '<details class="spawn-stats"' + (existing && existing.open ? ' open' : '') + '>'
       + '<summary class="spawn-stats-summary">&#9201; Session start: '
-      + '<strong>' + fmtStatMs(visible) + '</strong> to first paint'
+      + '<strong>' + fmtStatMs(visible) + '</strong> to first visible output'
       + '<span class="spawn-stats-sub"> &middot; accepted in '
       + fmtStatMs(marks.spawn_response_sent) + '</span></summary>'
       + '<div class="spawn-stats-body">' + rows
-      + '<div class="spawn-stats-note">Times are from when CCC accepted the spawn. '
+      + '<div class="spawn-stats-note">Times are from the browser submit action. '
       + 'Hide with <code>localStorage[\'ccc-spawn-stats\']=\'0\'</code>.</div></div></details>';
     if (existing) {
       existing.outerHTML = html;
@@ -39219,6 +39427,13 @@
         // wait actually ends from the user's point of view.
         if (Array.isArray(data.events) && data.events.length) {
           spawnStatsMark(id, 'first_paint');
+          const renderedPane = paneByPaneId(fetchPaneId);
+          const renderedSid = (renderedPane && renderedPane.currentSession
+            && renderedPane.currentSession.id) || id;
+          if (claudeSpawnAwaitingFirstPaint.has(renderedSid)
+              && $view.querySelector('.event.assistant .assistant-text')) {
+            markClaudeFirstVisibleOutput(renderedSid);
+          }
         }
         renderSpawnStatsPanel(id, $view);
       } finally {
@@ -39951,7 +40166,7 @@
       return;
     }
     try {
-      const res = await fetch(repoUrl('/api/repo/worktrees', repoPath));
+      const res = await backgroundApiFetch(repoUrl('/api/repo/worktrees', repoPath));
       const data = await res.json();
       const agentN = (data && data.agent_count) || 0;
       $btn.classList.toggle('has-agent-worktrees', agentN > 0);
@@ -46433,7 +46648,7 @@
 
   async function _hiRefreshStatus() {
     try {
-      const r = await fetch('/api/history/status');
+      const r = await backgroundApiFetch('/api/history/status');
       if (!r.ok) return;
       const st = await r.json();
       window._historyIndexStatus = st;
@@ -47450,7 +47665,7 @@
       return;
     }
     try {
-      const res = await fetch(repoUrl('/api/vercel-deploy', repoPath));
+      const res = await backgroundApiFetch(repoUrl('/api/vercel-deploy', repoPath));
       const d = await res.json();
       if (d.disabled) {
         // No .vercel/project.json (and no $VERCEL_PROJECT env override).
@@ -47746,7 +47961,7 @@
     if (pending) return pending;
     const p = (async () => {
       try {
-        const res = await fetch('/api/repo/ship/status?repo_path=' + encodeURIComponent(repo));
+        const res = await backgroundApiFetch('/api/repo/ship/status?repo_path=' + encodeURIComponent(repo));
         const data = await res.json().catch(() => ({}));
         _renderShipStatus(_shipBox(repo) || box, data);
         // Drive the live log panel when this repo is shipping, or keep it
@@ -47978,7 +48193,7 @@
     }
     let res;
     try {
-      res = await fetch(localhostUrl('/api/nextjs/status', ctx));
+      res = await backgroundApiFetch(localhostUrl('/api/nextjs/status', ctx));
     } catch (e) {
       _localhostState = 'unreachable';
       setLocalhostPill({
@@ -48796,7 +49011,7 @@
     if (_gcActivePollPromise) return _gcActivePollPromise;
     _gcActivePollPromise = (async () => {
     try {
-      const data = await fetch('/api/group-chats/active').then(r => r.json());
+      const data = await backgroundApiFetch('/api/group-chats/active').then(r => r.json());
       // Compare a metadata key, not just length, so renames, participant
       // changes, and activity updates redraw the group-chat rows.
       const prevKey = _gcChatsKey(_gcActiveChats);
@@ -49466,7 +49681,7 @@
     if (!opts.force && fresh) return uxFixesQueueMeta;
     _uxFixesQueueMetaPromise = (async () => {
       try {
-        const res = await fetch('/api/queue/list', { cache: 'no-store' });
+        const res = await backgroundApiFetch('/api/queue/list', { cache: 'no-store' });
         if (!res.ok) return uxFixesQueueMeta;
         const data = await res.json().catch(() => ({}));
         const meta = _setUxFixesQueueMeta(Array.isArray(data.items) ? data.items : []);
@@ -49669,7 +49884,10 @@
     const p = (async () => {
       try {
         const prevEtag = _archiveAllEtag.get(url);
-        const r = await fetch(url, prevEtag ? { headers: { 'If-None-Match': prevEtag } } : undefined);
+        const r = await backgroundApiFetch(
+          url,
+          prevEtag ? { headers: { 'If-None-Match': prevEtag } } : undefined,
+        );
         // 304 → the server confirms our cached payload is still current, so we
         // skip re-parsing ~500KB and reuse the last conversations as-is. The
         // caller re-renders, but the flicker guard skips the rebuild since the
@@ -49710,7 +49928,7 @@
   let ghIssuesRefreshing = false;
   async function loadCrossRepoIssues() {
     try {
-      const r = await fetch('/api/issues/all');
+      const r = await backgroundApiFetch('/api/issues/all');
       if (!r.ok) return [];
       const d = await r.json();
       const all = Array.isArray(d.issues) ? d.issues : [];
@@ -49877,7 +50095,7 @@
     if (_archiveProgressPollId) return;
     const tick = async () => {
       try {
-        const r = await fetch('/api/archive/loading-status');
+        const r = await backgroundApiFetch('/api/archive/loading-status');
         if (!r.ok) return;
         const snap = await r.json();
         _renderArchiveLoadingStages(snap);
@@ -50625,7 +50843,7 @@
   // repoListState powers repo labels, the spawn-cwd suggestions, and
   // rowBelongsToKnownRepo. Loaded lazily by _hydrateArchiveSideData.
   async function loadRepoList() {
-    const r = await fetch('/api/repo/list');
+    const r = await backgroundApiFetch('/api/repo/list');
     const d = await r.json();
     repoListState = {
       repos: d.repos || [],
@@ -50679,7 +50897,7 @@
     const $banner = document.getElementById('setupBanner');
     if (!$banner) return;
     try {
-      const r = await fetch('/api/healthcheck');
+      const r = await backgroundApiFetch('/api/healthcheck');
       const d = await r.json();
       const checks = d.checks || [];
       const iconFor = (s) => s === 'ok' ? '✓' : (s === 'warn' ? '⚠' : '✗');
@@ -51036,6 +51254,7 @@
         return;
       }
       setSpawnDefaultModel(engine, $convInputModelSelect.value);
+      if (currentConversation === '__new__') scheduleClaudePrewarm();
     });
   }
   if ($convInputEffortSelect) {
@@ -53658,7 +53877,7 @@
   async function refreshWatchtowerServiceStatus() {
     if (!$watchtowerServiceStatus) return;
     try {
-      const response = await fetch('/api/watchtower/service/status', {
+      const response = await backgroundApiFetch('/api/watchtower/service/status', {
         cache: 'no-store',
       });
       renderWatchtowerServiceStatus(await response.json());
@@ -57728,7 +57947,10 @@
         b.classList.toggle('is-current',
           normalizeSpawnCwdPath(b.getAttribute('data-ns-repo') || '') === _cwdNow);
       });
-      if (currentConversation === '__new__') updateInputBar();
+      if (currentConversation === '__new__') {
+        updateInputBar();
+        scheduleClaudePrewarm();
+      }
     }
   }
   document.addEventListener('change', persistSpawnCwdPickerValue);
@@ -57773,6 +57995,77 @@
   function getSpawnCwd() {
     const sel = document.getElementById('spawnCwdPicker');
     return normalizeSpawnCwdPath(sel && sel.value);
+  }
+
+  let _claudePrewarmKey = '';
+  let _claudePrewarmPromise = null;
+  let _claudePrewarmDebounce = null;
+  const _claudePrewarmClientId = (window.crypto && window.crypto.randomUUID)
+    ? window.crypto.randomUUID()
+    : ('tab-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+
+  function spawnFirstSentence(text) {
+    const value = String(text || '');
+    const chunks = value.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
+    const first = chunks[0] || value.trim();
+    return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
+  }
+
+  function claudePrewarmSpec() {
+    if (getSpawnEngine() !== 'claude') return null;
+    const worktree = document.getElementById('inlineWorktreeToggle');
+    if (worktree && worktree.checked) return null;
+    const cwd = getSpawnCwd();
+    if (!cwd) return null;
+    const name = spawnFirstSentence($convInput ? $convInput.value : '');
+    if (!name) return null;
+    let model = '';
+    if ($convInputModelSelect) {
+      const picked = $convInputModelSelect.value;
+      if (picked && picked !== SPAWN_DEFAULT_OTHER && _modelAllowedForEngine('claude', picked)) {
+        model = picked;
+      }
+    }
+    return {
+      cwd,
+      model,
+      name,
+      client_id: _claudePrewarmClientId,
+    };
+  }
+
+  function requestClaudePrewarm() {
+    const spec = claudePrewarmSpec();
+    if (!spec) return Promise.resolve(null);
+    const key = JSON.stringify(spec);
+    if (_claudePrewarmPromise && _claudePrewarmKey === key) return _claudePrewarmPromise;
+    _claudePrewarmKey = key;
+    const request = fetch('/api/sessions/prewarm-claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      priority: 'low',
+      body: JSON.stringify(spec),
+    }).then(async (response) => {
+      const data = await response.json().catch(() => null);
+      return response.ok && data && data.ok ? data : null;
+    }).catch(() => null);
+    _claudePrewarmPromise = request;
+    request.then((result) => {
+      // Unsupported/pending probes and transient worker failures must not be
+      // memoized for the full composer lifetime. A later input/submit retries.
+      if (!result && _claudePrewarmPromise === request) {
+        _claudePrewarmKey = '';
+        _claudePrewarmPromise = null;
+      }
+    });
+    return request;
+  }
+
+  function scheduleClaudePrewarm() {
+    clearTimeout(_claudePrewarmDebounce);
+    _claudePrewarmDebounce = setTimeout(() => {
+      if (currentConversation === '__new__') requestClaudePrewarm();
+    }, 250);
   }
 
   // CCC-86: adopt the REAL spawn-cwd controls (input + ▾ menu + 📁 browse,
@@ -58045,6 +58338,7 @@
     if (typeof stopPkoodTailPoller === 'function') stopPkoodTailPoller();
     if (typeof closeStatusRailFileViewer === 'function') closeStatusRailFileViewer();
     currentConversation = '__new__';
+    if (getSpawnEngine() === 'claude') abortBackgroundApiReadsForSpawn();
     refreshConversationBackgroundForPane(paneId);
     syncActivePaneChrome('__new__');
     setCurrentSession(null, null, null, false, null);
@@ -58112,6 +58406,7 @@
       _cic.classList.add('visible');
     }
     if (typeof mobileShowForCurrentMode === 'function') mobileShowForCurrentMode();
+    requestClaudePrewarm();
     setTimeout(() => {
       const input = composerInputForPane(paneId) || $convInput;
       if (input) {
@@ -58315,12 +58610,8 @@
   }
 
   async function spawnFromInlineInput(body) {
-    function firstSentence(text) {
-      const chunks = text.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
-      const first = chunks[0] || text.trim();
-      return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
-    }
-    const subject = firstSentence(body);
+    const spawnAskedAt = Date.now();
+    const subject = spawnFirstSentence(body);
     const prompt = body;
     const engine = getSpawnEngine();
     const spawnCwd = (typeof getSpawnCwd === 'function') ? getSpawnCwd() : '';
@@ -58337,6 +58628,9 @@
       }
       return;
     }
+    const claudePrewarmPromise = engine === 'claude'
+      ? requestClaudePrewarm()
+      : Promise.resolve(null);
     if ($convSendBtn) $convSendBtn.disabled = true;
     const flashRed = () => {
       if (!$convInput) return;
@@ -58353,6 +58647,7 @@
       cwd: launchCwd,
       session_cwd: launchCwd,
       session_cwd_exists: true,
+      fast_path: engine === 'claude',
     });
     if ($convInput) $convInput.value = '';
     clearInputDraftForConversation('__new__');
@@ -58383,6 +58678,7 @@
         name: subject,
         cwd: launchCwd,
         engine,
+        timeline_t0_epoch_ms: spawnAskedAt,
         idempotency_key: durableActionId('spawn'),
       };
       if (repoPath) spawnBody.repo_path = repoPath;
@@ -58406,9 +58702,16 @@
       if (engine === 'codex' && $convInputEffortSelect && ($convInputEffortSelect.value || spawnEffortChoiceDirty)) {
         spawnBody.reasoning_effort = $convInputEffortSelect.value;
       }
-      const spawnAskedAt = Date.now();
+      if (engine === 'claude') abortBackgroundApiReadsForSpawn();
+      if (engine === 'claude' && !useWorktree) {
+        const prewarm = await claudePrewarmPromise;
+        if (prewarm && prewarm.prewarm_id) spawnBody.prewarm_id = prewarm.prewarm_id;
+        _claudePrewarmKey = '';
+        _claudePrewarmPromise = null;
+      }
       const res = await fetch(endpoint, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
+        priority: 'high',
         body: JSON.stringify(spawnBody),
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
@@ -58419,6 +58722,20 @@
         }
         const placeholder = adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id);
         assignSpawnedSessionToDefaultObject(data);
+        if (placeholder && engine === 'claude' && data.session_id) {
+          claudeSpawnAwaitingFirstPaint.add(data.session_id);
+          setTimeout(() => releaseClaudeSpawnPaintGate(data.session_id), 30000);
+          // The placeholder's canonical conversation stream has no durable
+          // transcript yet and competes for the same HTTP/1.1 connection pool
+          // as the useful spawn-log replay. Give the first-response stream the
+          // slot; canonical polling resumes when the real row is rebound.
+          stopConvStream(activePaneId());
+          startSpawnStream(data.session_id, activePaneId(), {
+            pendingConversationId: placeholder.id,
+            replay: true,
+            knownLog: !!data.log,
+          });
+        }
         // Fire-and-watch engines can stream their spawn log once the real pid
         // is known. Re-select the same placeholder id so fetchConversationEvents
         // starts the log poller without making the user click the sidebar row.
@@ -58427,18 +58744,20 @@
         }
         if (engine === 'cursor') showOpToast('Cursor headless run started.', 'ok');
         if (engine === 'antigravity') showOpToast('Antigravity headless run started.', 'ok');
-        setTimeout(refreshConversationList, 600);
+        if (engine !== 'claude') setTimeout(refreshConversationList, 600);
         // ...then chase with a cheap probe rather than two more full-corpus
         // refreshes: for Codex the engine has written nothing at 3s, and each
         // of those refreshes is a multi-megabyte fetch of every row we have.
         chasePendingSpawn(tempPid, { sessionId: data && data.session_id });
       } else {
+        releaseClaudeSpawnPaintGate('', tempPid);
         restoreDraftAfterFailure();
         flashRed();
         showOpToast('Spawn failed: ' + (data.error || 'HTTP ' + res.status), 'error');
         console.error('[New session] spawn failed', data);
       }
     } catch (err) {
+      releaseClaudeSpawnPaintGate('', tempPid);
       restoreDraftAfterFailure();
       flashRed();
       showOpToast('Spawn failed: ' + (err && err.message || 'network'), 'error');
@@ -61216,7 +61535,9 @@
   function refresh() {
     if (document.hidden || busy || !mount()) return;
     busy = true;
-    fetch('/api/throughput/daily?date=today', { cache: 'no-store' })
+    (window.__cccBackgroundApiFetch || window.fetch.bind(window))(
+      '/api/throughput/daily?date=today', { cache: 'no-store' }
+    )
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(render)
       .catch(function () {})

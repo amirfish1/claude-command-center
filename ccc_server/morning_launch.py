@@ -145,7 +145,9 @@ def _resolve_spawn_log_for_session(session_id):
         log = s.get("log")
         if not log:
             continue
-        if s.get("resumed_sid") == session_id:
+        if s.get("session_id") == session_id:
+            matches = True
+        elif s.get("resumed_sid") == session_id:
             matches = True
         elif s.get("engine") == "codex":
             matches = _core._extract_codex_thread_id_from_log(log) == session_id
@@ -229,8 +231,19 @@ class _SpawnEventNormalizer:
     """
 
     def __init__(self):
-        self._message_id = ""
+        self._message_ids_by_stream = {}
         self._partial_text_message_ids = set()
+        self._partial_text_stream_keys = set()
+
+    @staticmethod
+    def _parent_tool_use_id(ev, stream_event=None, message=None):
+        for candidate in (ev, stream_event, message):
+            if not isinstance(candidate, dict):
+                continue
+            parent_id = candidate.get("parent_tool_use_id")
+            if parent_id:
+                return str(parent_id)
+        return ""
 
     def normalize(self, ev):
         if not isinstance(ev, dict):
@@ -240,10 +253,12 @@ class _SpawnEventNormalizer:
             if not isinstance(stream_event, dict):
                 return None
             event_type = stream_event.get("type")
+            message = stream_event.get("message") or {}
+            parent_tool_use_id = self._parent_tool_use_id(ev, stream_event, message)
+            stream_key = parent_tool_use_id or "__root__"
             if event_type == "message_start":
-                message = stream_event.get("message") or {}
                 if isinstance(message, dict):
-                    self._message_id = str(message.get("id") or "")
+                    self._message_ids_by_stream[stream_key] = str(message.get("id") or "")
                 return None
             if event_type != "content_block_delta":
                 return None
@@ -253,28 +268,44 @@ class _SpawnEventNormalizer:
             text = delta.get("text") or ""
             if not text:
                 return None
-            message_id = self._message_id or str(ev.get("message_id") or "claude-stream")
+            message_id = (
+                self._message_ids_by_stream.get(stream_key)
+                or str(ev.get("message_id") or stream_event.get("message_id") or "claude-stream")
+            )
             self._partial_text_message_ids.add(message_id)
-            return {
+            self._partial_text_stream_keys.add(stream_key)
+            normalized = {
                 "type": "assistant_block",
                 "message_id": message_id,
                 "blocks": [{"type": "text", "text": text}],
                 "partial": True,
             }
+            if parent_tool_use_id:
+                normalized["parent_tool_use_id"] = parent_tool_use_id
+            return normalized
 
         if ev.get("type") == "assistant":
             message = ev.get("message") or {}
             message_id = str(message.get("id") or "") if isinstance(message, dict) else ""
-            if message_id in self._partial_text_message_ids:
+            parent_tool_use_id = self._parent_tool_use_id(ev, message=message)
+            stream_key = parent_tool_use_id or "__root__"
+            if (
+                message_id in self._partial_text_message_ids
+                or stream_key in self._partial_text_stream_keys
+            ):
                 content = message.get("content") or []
                 remaining = [
                     block for block in content
                     if not isinstance(block, dict) or block.get("type") != "text"
                 ]
                 if not remaining:
+                    self._partial_text_stream_keys.discard(stream_key)
+                    self._partial_text_message_ids.discard(message_id)
                     return None
                 ev = dict(ev)
                 ev["message"] = dict(message, content=remaining)
+                self._partial_text_stream_keys.discard(stream_key)
+                self._partial_text_message_ids.discard(message_id)
         return _normalize_spawn_event(ev)
 
 
@@ -2263,4 +2294,3 @@ def extract_session_usage(session_id):
             "output": round(cost_out, 4),
         },
     }, session_id)
-

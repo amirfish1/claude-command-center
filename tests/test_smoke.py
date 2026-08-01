@@ -9932,7 +9932,10 @@ class TestRepoContextHelpers(unittest.TestCase):
         server = importlib.import_module("server")
         import inspect
         sig = inspect.signature(server.spawn_session)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "parent_session_id"])
+        self.assertEqual(list(sig.parameters), [
+            "prompt", "name", "cwd", "repo_path", "worktree", "model",
+            "parent_session_id", "timeline_t0_epoch_ms", "prewarm_id",
+        ])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)
         self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "reasoning_effort", "parent_session_id"])
