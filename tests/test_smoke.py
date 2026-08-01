@@ -18507,6 +18507,38 @@ class TestAcpKimiEngine(unittest.TestCase):
         self.assertEqual(rows[0]["original_ask"], "The actual original request")
         self.assertEqual(rows[0]["last_prompt"], "Continue")
 
+    def test_kimi_conversation_recency_uses_wire_activity(self):
+        """A completed Kimi turn updates wire.jsonl, not necessarily state.json."""
+        server = self.server
+        sid = "session_recent_wire"
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = pathlib.Path(tmp, sid)
+            wire_dir = session_dir / "agents" / "main"
+            wire_dir.mkdir(parents=True)
+            state = session_dir / "state.json"
+            state.write_text(json.dumps({
+                "title": "Session title",
+                "workDir": tmp,
+                "createdAt": "2023-11-14T22:13:20Z",
+            }))
+            wire = wire_dir / "wire.jsonl"
+            wire.write_text(json.dumps({"type": "turn.prompt", "input": []}) + "\n")
+            old = 1_700_000_000
+            recent = old + 7_200
+            os.utime(state, (old, old))
+            os.utime(wire, (recent, recent))
+            with mock.patch.object(server, "_ACP_SESSION_STATE", {"kimi": {}}), \
+                 mock.patch.object(server, "_ACP_STATE_LOADED", {"kimi"}), \
+                 mock.patch.object(server, "_kimi_session_index", return_value={
+                     sid: {"session_dir": str(session_dir), "work_dir": tmp},
+                 }), \
+                 mock.patch.object(server, "_load_repo_pins", return_value={}), \
+                 mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+                 mock.patch.object(server, "_load_conversation_lifecycle_sets", return_value=(set(), set())), \
+                 mock.patch.object(server, "_load_verified_conversations", return_value=[]):
+                rows = server.find_kimi_conversations(repo_only=False, include_old=True)
+        self.assertEqual(rows[0]["modified"], recent)
+
     def test_kimi_wire_state_prevents_early_prompt(self):
         server = self.server
         sid = "session_external_turn"

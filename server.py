@@ -33816,6 +33816,16 @@ def find_kimi_conversations(
                 modified = (Path(idx.get("session_dir") or "") / "state.json").stat().st_mtime
             except OSError:
                 modified = 0.0
+        # Kimi records each completed conversation turn in wire.jsonl, while
+        # state.json can retain an older timestamp. Use the newest durable
+        # activity source so session cards do not report a stale age.
+        try:
+            modified = max(
+                modified,
+                (Path(idx.get("session_dir") or "") / "agents" / "main" / "wire.jsonl").stat().st_mtime,
+            )
+        except OSError:
+            pass
         if cutoff and modified and modified < cutoff:
             continue
         title = _strip_ccc_session_state_instruction(str(meta.get("title") or "")).strip()
