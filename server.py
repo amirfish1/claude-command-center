@@ -40677,6 +40677,15 @@ def _schedule_session_model_update(session_id, model, context_1m):
     timer.start()
 
 
+def _is_claude_prewarm_keyword_compatibility_error(result):
+    """Whether an older worker rejected only the optional prewarm argument."""
+    if not isinstance(result, dict) or result.get("ok"):
+        return False
+    return "spawn_session() got an unexpected keyword argument 'prewarm_id'" in str(
+        result.get("error") or ""
+    )
+
+
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
                   parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None):
     """Spawn a headless Claude Code session and return tracking info.
@@ -40688,21 +40697,37 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     + branch are returned in the response under
       `worktree_path` / `worktree_branch` so the UI can show them.
     """
+    route_args = {
+        "prompt": prompt,
+        "name": name,
+        "cwd": cwd,
+        "repo_path": repo_path,
+        "worktree": bool(worktree),
+        "model": model,
+        "parent_session_id": parent_session_id,
+        "timeline_t0_epoch_ms": timeline_t0_epoch_ms,
+        "prewarm_id": prewarm_id,
+    }
     routed = _control_plane_engine_call(
         "claude", "spawn", {
-            "prompt": prompt,
-            "name": name,
-            "cwd": cwd,
-            "repo_path": repo_path,
-            "worktree": bool(worktree),
-            "model": model,
-            "parent_session_id": parent_session_id,
-            "timeline_t0_epoch_ms": timeline_t0_epoch_ms,
-            "prewarm_id": prewarm_id,
+            **route_args,
         },
         idempotency_key=_take_control_plane_action_id(),
     )
     if routed is not None:
+        if _is_claude_prewarm_keyword_compatibility_error(routed):
+            # A legacy worker rejected the call before executing it. Retry once
+            # without the optional fast-start field; a fresh action id avoids
+            # replaying that worker's durable failed work item.
+            cold_route_args = dict(route_args)
+            cold_route_args.pop("prewarm_id", None)
+            cold = _control_plane_engine_call(
+                "claude", "spawn", cold_route_args,
+                idempotency_key=str(uuid.uuid4()),
+            )
+            if isinstance(cold, dict) and cold.get("ok"):
+                cold["prewarm_fallback"] = True
+                return cold
         return routed
     if os.environ.get("CCC_SSH_HOST"):
         try:

@@ -9,6 +9,35 @@ server = importlib.import_module("server")
 morning_launch = importlib.import_module("ccc_server.morning_launch")
 
 
+def test_legacy_worker_retries_claude_spawn_without_prewarm_keyword(monkeypatch):
+    calls = []
+    replies = [
+        {
+            "ok": False,
+            "code": "engine_dispatch_failed",
+            "error": "spawn_session() got an unexpected keyword argument 'prewarm_id'",
+        },
+        {"ok": True, "pid": 42, "session_id": "cold-session"},
+    ]
+
+    def routed(engine, operation, args, **kwargs):
+        calls.append((engine, operation, args, kwargs))
+        return replies.pop(0)
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", routed)
+
+    result = server.spawn_session(
+        "Reply READY", name="retry cold", cwd="/tmp", repo_path="/tmp",
+        prewarm_id="warm-1",
+    )
+
+    assert result["ok"] is True
+    assert result["prewarm_fallback"] is True
+    assert calls[0][2]["prewarm_id"] == "warm-1"
+    assert "prewarm_id" not in calls[1][2]
+    assert calls[0][3]["idempotency_key"] != calls[1][3]["idempotency_key"]
+
+
 def test_capability_probe_finds_session_id_and_partial_messages(tmp_path):
     fake = tmp_path / "claude"
     fake.write_text("#!/bin/sh\n", encoding="utf-8")

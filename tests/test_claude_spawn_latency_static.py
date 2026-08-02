@@ -180,6 +180,17 @@ def test_claude_composer_prewarms_and_claims_the_reserved_process():
     assert "_claudePrewarmPromise = null" in _function_source("requestClaudePrewarm", 1800)
 
 
+def test_cold_spawn_fallback_offers_a_worker_restart_action():
+    source = APP_JS.read_text(encoding="utf-8")
+    spawn = _function_source("spawnFromInlineInput", 12000)
+
+    assert "data.prewarm_fallback" in spawn
+    assert "showClaudePrewarmFallbackRecovery()" in spawn
+    assert "function showClaudePrewarmFallbackRecovery()" in source
+    assert "Restart worker" in source
+    assert "sysRestartWorker()" in source
+
+
 def test_latency_benchmark_reports_distribution_and_always_cleans_up():
     source = BENCHMARK_JS.read_text(encoding="utf-8")
 
