@@ -1,0 +1,1 @@
+Added gentle audible feedback when the open session finishes a turn or goes idle; toggle on/off via the new sound/mute button in the footer.

@@ -129,6 +129,68 @@
     }
   } catch (_) {}
 
+  // ── Session-completion sounds ────────────────────────────────────────────
+  // Lightweight Web-Audio beeps when the agent finishes a turn or goes idle.
+  // Gated by localStorage `ccc-sounds-enabled` (defaults on) and only fires
+  // for the currently-open conversation so background rows do not chirp.
+  const _CCC_SOUNDS_LS = 'ccc-sounds-enabled';
+  let _audioCtx = null;
+  function _ensureAudioCtx() {
+    if (_audioCtx) return _audioCtx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try { _audioCtx = new AC(); } catch (_) { return null; }
+    return _audioCtx;
+  }
+  function _cccSoundsEnabled() {
+    try { return localStorage.getItem(_CCC_SOUNDS_LS) !== '0'; } catch (_) { return true; }
+  }
+  function _setCccSoundsEnabled(on) {
+    try { localStorage.setItem(_CCC_SOUNDS_LS, on ? '1' : '0'); } catch (_) {}
+    _renderSoundToggle();
+  }
+  function _renderSoundToggle() {
+    if (!_soundToggleBtn) return;
+    const on = _cccSoundsEnabled();
+    _soundToggleBtn.textContent = on ? 'sound' : 'mute';
+    _soundToggleBtn.style.opacity = on ? '0.85' : '0.5';
+  }
+  function _cccBeep(freq, durationMs, type, delayMs) {
+    if (!_cccSoundsEnabled()) return;
+    const ctx = _ensureAudioCtx();
+    if (!ctx) return;
+    // Resume context on user-interacted pages; browsers may start it suspended.
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime + (delayMs || 0) / 1000;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.setValueAtTime(freq, t0);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durationMs / 1000);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + durationMs / 1000 + 0.05);
+  }
+  function _cccPlayTurnEnd() {
+    // Two quick rising notes: "agent handed back".
+    _cccBeep(523, 90, 'sine', 0);
+    _cccBeep(784, 110, 'sine', 70);
+  }
+  function _cccPlayDone() {
+    // Gentle descending pair: "session is idle / work complete".
+    _cccBeep(880, 120, 'sine', 0);
+    _cccBeep(659, 180, 'sine', 100);
+  }
+  window.cccSounds = {
+    enabled: _cccSoundsEnabled,
+    enable: _setCccSoundsEnabled,
+    playTurnEnd: _cccPlayTurnEnd,
+    playDone: _cccPlayDone,
+  };
+
   // ── Periodic-trigger transparency strip ─────────────────────────────────
   // A live chip per poller in the bottom-left footer. Each chip blinks the
   // instant its poller fires (_pollerTick), shows its interval, and counts up
@@ -1117,7 +1179,23 @@
       if (_stripOpen && window.__refreshPollerStrip) window.__refreshPollerStrip();
     };
     _applyToggle();
+    // Sound toggle: small footer button to enable/disable session-completion chirps.
+    const soundToggle = document.createElement('div');
+    soundToggle.id = 'cccSoundToggle';
+    soundToggle.style.cssText = 'flex:0 0 auto;cursor:pointer;user-select:none;' +
+      'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;' +
+      'padding:2px 6px;border-radius:5px;border:1px solid transparent;' +
+      'color:var(--text-secondary,#9aa);';
+    soundToggle.title = 'Toggle session-completion sounds (turn end / work done).';
+    soundToggle.onclick = () => {
+      _setCccSoundsEnabled(!_cccSoundsEnabled());
+      // Play a tiny preview so the user hears the change immediately.
+      if (_cccSoundsEnabled()) _cccPlayTurnEnd();
+    };
+    _soundToggleBtn = soundToggle;
+    _renderSoundToggle();
     wrap.appendChild(health);
+    wrap.appendChild(soundToggle);
     // Model Advisor pill: opens the drift/savings monitor; badge shows how many
     // live sessions are on the wrong model right now.
     const advPill = document.createElement('div');
@@ -2608,6 +2686,11 @@
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
   let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
   let liveStatusTimer = null;
+  // Snapshot of liveStatus before the most recent refresh, used to detect
+  // transitions (working -> idle, running -> idle) for audible feedback.
+  let _liveStatusPrev = null;
+  // Footer sound-toggle button element; updated when preference changes.
+  let _soundToggleBtn = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
   // Separate 1s tick that just re-renders the live-tool strip + inline
   // indicator from the cached liveStatus. The 5s poller refreshes the
@@ -3936,6 +4019,7 @@
   }
 
   async function refreshLiveStatus() {
+    _liveStatusPrev = liveStatus;
     if (!currentSession.id) {
       liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
       updateJumpButton();
@@ -4020,6 +4104,20 @@
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
       _lastStatusCheckedAt = Date.now();
+      // Audible feedback when the agent stops working for this conversation.
+      // Only fire while this page is visible and the status still belongs to
+      // the open session, so background tabs / switched conversations don't chirp.
+      if (!document.hidden && _fetchedFor === currentSession.id && _liveStatusPrev && _liveStatusPrev.forSessionId === _fetchedFor) {
+        const wasLive = !!_liveStatusPrev.live;
+        const isLive = !!liveStatus.live;
+        const wasRunning = (_liveStatusPrev.status === 'running') || !!_liveStatusPrev.sidecarInFlight;
+        const isRunning = (liveStatus.status === 'running') || !!liveStatus.sidecarInFlight;
+        if (wasRunning && !isRunning) {
+          _cccPlayTurnEnd();
+        } else if (wasLive && !isLive) {
+          _cccPlayDone();
+        }
+      }
       maybeCatchUpCodexConversationFromAppServer(_fetchedFor, data);
       // Detect server-side spawns we didn't initiate from this client
       // (e.g. agent calls /api/sessions/spawn for a sibling Codex /
