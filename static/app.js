@@ -13020,15 +13020,10 @@
     renderSidebar(filterConversations($convSearch.value));
     if (currentConversation === id) renderPendingSpawnConversation(card, activePaneId());
     if (typeof showOpToast === 'function') showOpToast('Session did not register within 30s - placeholder kept. Dismiss if the session opened.', 'warn');
-    // Offer a pre-filled bug report for the stall. bugMaybeAutoOpen guards
-    // on modal-already-open and the user's localStorage opt-out.
-    if (typeof bugMaybeAutoOpen === 'function') {
-      bugMaybeAutoOpen({
-        engine: card.source || '',
-        name: card.display_name || '',
-        waitedSeconds: 30,
-      });
-    }
+    // The bugMaybeAutoOpen "Report a problem" popup used to fire here. Turned
+    // off: it triggered on almost every slow spawn, was almost never useful,
+    // and interrupted whatever the user was doing. The placeholder card and
+    // toast above keep the failure visible without the modal ambush.
   }
 
   function insertPendingSpawnCard(pid, subject, sourceOrEngine, logPath, meta) {

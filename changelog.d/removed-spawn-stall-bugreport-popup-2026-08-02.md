@@ -1,0 +1,1 @@
+- Removed the automatic "Report a problem" popup that fired whenever a new session hadn't registered within 30s. It interrupted whatever you were doing and almost never led anywhere useful; slow spawns still get the visible placeholder card and a toast, and the popup may return once spawn registration is better understood.
