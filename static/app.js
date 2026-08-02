@@ -7154,6 +7154,7 @@
     const isAntigravity = currentSession.source === 'antigravity';
     const isHermes = currentSession.source === 'hermes';
     const isKimi = currentSession.source === 'kimi';
+    const isOpencode = currentSession.source === 'opencode';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll; until it matches
     // the open conversation, treat the session as not-live so we never show the
@@ -7227,6 +7228,9 @@
       } else if (isHermes) {
         activeInputControls.ttyLabel.textContent = 'hermes';
         if (activeInput) activeInput.placeholder = 'Resume Hermes and send...';
+      } else if (isOpencode) {
+        activeInputControls.ttyLabel.textContent = 'opencode';
+        if (activeInput) activeInput.placeholder = 'Resume OpenCode and send...';
       } else if (isKimi) {
         activeInputControls.ttyLabel.textContent = 'kimi';
         if (activeInput) activeInput.placeholder = liveStatus.live ? 'Send to Kimi session…' : 'Resume Kimi and send…';
@@ -8584,6 +8588,10 @@
         } else if (data.via === 'hermes-resume') {
           markPendingSendDelivered(pendingSend, data);
           showOpToast('Hermes follow-up started.');
+          scheduleFireAndWatchRefresh(paneId || activePaneId());
+        } else if (data.via === 'opencode-resume') {
+          markPendingSendDelivered(pendingSend, data);
+          showOpToast('OpenCode follow-up started.');
           scheduleFireAndWatchRefresh(paneId || activePaneId());
         } else if (data.via === 'wt-send' && !compactCommand) {
           // Routed through WatchTower (dormant session). Stage the echo copy
@@ -13110,7 +13118,7 @@
   // reconciliation; if it never appears, reuse the visible failed-card state
   // rather than leaving a selected ghost session in the sidebar.
   function _watchF2CodexSpawnRegistration(pid, fallbackId, expectedSessionId) {
-    const deadline = Date.now() + 30000;
+    const deadline = Date.now() + 3 * 60 * 1000;
     const tick = async () => {
       if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
       let durable = false;
@@ -13151,12 +13159,21 @@
   // asks stale_ok and the server serves a 5-min-fresh cache, so a brand-new
   // session's row routinely arrives minutes after the CLI registered — long
   // past a fixed 30s deadline. That made every healthy spawn end in the
-  // "did not register within 30s" placeholder. Instead, poll FORCED archive
-  // refreshes while the placeholder is pending (renderArchiveList runs the
-  // placeholder→real reconcile), and only declare failure once a fresh
-  // fetch past the deadline still has no matching row.
+  // "did not register within 30s" placeholder. The chase therefore has two
+  // phases: while the session_id is known (Claude spawns get it in the POST
+  // response), poll the CHEAP /api/session/landed probe (engine-store
+  // direct, no 8MB archive payload per tick); only once the session has
+  // landed do we pay for forced archive refreshes until the row reconciles.
+  // Failure is declared only after 3 minutes of never landing — a healthy
+  // cold spawn measures ~27s to register, so 30s was structurally racy.
   function _watchPendingSpawnRegistration(pid, fallbackId) {
-    const deadline = Date.now() + 30000;
+    const deadline = Date.now() + 3 * 60 * 1000;
+    const card = pendingSpawns.get(pid)
+      || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId)
+      || conversationsData.find(x => x && x.id === fallbackId);
+    const expectedSid = (card && card.expected_session_id) || '';
+    let landed = !expectedSid;  // no id to probe -> straight to the heavy phase
+    let landedAt = 0;
     const tick = async () => {
       if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
       // Mid-drag renders clash with the pointer; try again next tick.
@@ -13164,19 +13181,45 @@
         setTimeout(tick, 6000);
         return;
       }
-      const overdue = Date.now() >= deadline;
+      if (!landed) {
+        let isLanded = false;
+        try {
+          const r = await fetch('/api/session/landed?session_id=' + encodeURIComponent(expectedSid), { cache: 'no-store' });
+          const d = await r.json().catch(() => ({}));
+          isLanded = !!(r.ok && d && d.landed);
+        } catch (_) {}
+        if (isLanded) {
+          landed = true;
+          landedAt = Date.now();
+        } else {
+          if (Date.now() >= deadline) {
+            markPendingSpawnNotAcknowledged(pid, fallbackId);
+            return;
+          }
+          setTimeout(tick, 2500);
+          return;
+        }
+      }
+      // Landed (or no id to probe): the expensive refresh happens only now,
+      // until the placeholder→real reconcile binds the row.
       try {
         await refreshArchiveData({ force: true });
         renderArchiveList($convSearch ? $convSearch.value : '');
       } catch (_) {}
       if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
-      if (overdue) {
+      if (expectedSid && landedAt && Date.now() - landedAt > 90000) {
+        // In the engine store but the archive never surfaced it: stop
+        // chasing without declaring failure — the session IS registered;
+        // the next natural archive refresh binds it.
+        return;
+      }
+      if (!expectedSid && Date.now() >= deadline) {
         markPendingSpawnNotAcknowledged(pid, fallbackId);
         return;
       }
       setTimeout(tick, 6000);
     };
-    setTimeout(tick, 5000);
+    setTimeout(tick, 2500);
   }
 
   // Hide the loading overlay once we've actually rendered a sessions response.
@@ -34464,6 +34507,7 @@
     const isAntigravity = currentSession.source === 'antigravity';
     const isHermes = currentSession.source === 'hermes';
     const isKimi = currentSession.source === 'kimi';
+    const isOpencode = currentSession.source === 'opencode';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll — ignore it until
     // it matches the open conversation so we never show the prior session's tty.
@@ -34472,7 +34516,7 @@
     const hasSession = !!currentSession.id;
     if (hasSession && kanbanView) {
       $convPanelInput.classList.add('visible');
-      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (ls.tty || 'codex') : (isGemini ? (ls.tty || 'gemini') : (isCursor ? (ls.tty || 'cursor') : (isAntigravity ? (ls.tty || 'antigravity') : (isHermes ? 'hermes' : (isKimi ? 'kimi' : (ls.tty || (live ? '' : 'offline'))))))));
+      if ($cpTtyLabel) $cpTtyLabel.textContent = isPkood ? 'pkood' : (isCodex ? (ls.tty || 'codex') : (isGemini ? (ls.tty || 'gemini') : (isCursor ? (ls.tty || 'cursor') : (isAntigravity ? (ls.tty || 'antigravity') : (isHermes ? 'hermes' : (isOpencode ? 'opencode' : (isKimi ? 'kimi' : (ls.tty || (live ? '' : 'offline')))))))));
       if ($cpInput) {
         if (isPkood) $cpInput.placeholder = 'Send to pkood agent...';
         else if (isCodex) $cpInput.placeholder = live ? 'Send to Codex terminal...' : 'Resume Codex and send...';
@@ -34480,6 +34524,7 @@
         else if (isCursor) $cpInput.placeholder = live ? 'Send to Cursor terminal...' : 'Resume Cursor and send...';
         else if (isAntigravity) $cpInput.placeholder = antigravityInputPlaceholder(currentSession);
         else if (isHermes) $cpInput.placeholder = 'Resume Hermes and send...';
+        else if (isOpencode) $cpInput.placeholder = 'Resume OpenCode and send...';
         else if (isKimi) $cpInput.placeholder = ls.live ? 'Send to Kimi session…' : 'Resume Kimi and send…';
         else if (live) $cpInput.placeholder = 'Send to terminal...';
         else $cpInput.placeholder = 'Send to terminal (offline)...';
@@ -52221,6 +52266,10 @@
           } else if (data.via === 'hermes-resume') {
             markPendingSendDelivered(pendingSend, data);
             showOpToast('Hermes follow-up started.');
+            scheduleFireAndWatchRefresh(activePaneId());
+          } else if (data.via === 'opencode-resume') {
+            markPendingSendDelivered(pendingSend, data);
+            showOpToast('OpenCode follow-up started.');
             scheduleFireAndWatchRefresh(activePaneId());
           } else if (data.via === 'wt-send') {
             // Routed through WatchTower (dormant session). Stage the echo
