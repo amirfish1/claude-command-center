@@ -50262,7 +50262,9 @@
     _clientLog('[ARCHIVE-DIAG] alive hidden=' + document.hidden
       + ' archiveLoaded=' + archiveLoaded
       + ' rows=' + (Array.isArray(archiveData) ? archiveData.length : -1)
-      + ' loader=' + _archiveListStillShowsLoader());
+      + ' loader=' + _archiveListStillShowsLoader()
+      + ' pause=' + (typeof shouldPauseSidebarRender === 'function' ? shouldPauseSidebarRender() : '?')
+      + ' conv=' + String(window.currentConversation || ''));
   }, 60 * 1000);
   function _recoverArchiveRenderIfStuck() {
     if (!_archiveListStillShowsLoader()) {
@@ -50271,12 +50273,19 @@
     }
     if (archiveLoaded && Array.isArray(archiveData) && archiveData.length) {
       _archiveStuckRetryCount = 0;
-      renderArchiveList(_archiveQuery());
+      // force: the pause-sidebar guard (typing recency, find bar, a restored
+      // '__new__'/spawning conversation state) defers renders indefinitely,
+      // which is precisely how a fully-loaded archive stays on the placeholder
+      // forever. Recovery is not a periodic re-render; it must paint.
+      renderArchiveList(_archiveQuery(), { force: true });
       return Promise.resolve();
     }
     _clientLog('[ARCHIVE-DIAG] recoverIfStuck: loader showing, archiveLoaded=' + archiveLoaded
       + ' rows=' + (Array.isArray(archiveData) ? archiveData.length : -1)
-      + ' retry=' + _archiveStuckRetryCount);
+      + ' retry=' + _archiveStuckRetryCount
+      + ' pause=' + (typeof shouldPauseSidebarRender === 'function' ? shouldPauseSidebarRender() : '?')
+      + ' conv=' + String(window.currentConversation || '')
+      + ' hidden=' + document.hidden);
     if (_archiveStuckRenderRecoveryPromise) return _archiveStuckRenderRecoveryPromise;
     _archiveStuckRenderRecoveryPromise = loadArchiveAll({ staleOk: true }).then(convs => {
       if (!Array.isArray(convs) || !convs.length || !_archiveListStillShowsLoader()) return;
@@ -50284,7 +50293,7 @@
       archiveDataWindow = _archiveWindow();
       archiveLoaded = true;
       _archiveStuckRetryCount = 0;
-      renderArchiveList(_archiveQuery());
+      renderArchiveList(_archiveQuery(), { force: true });
     }).finally(() => {
       _archiveStuckRenderRecoveryPromise = null;
       // One-shot recovery used to give up here: if the fetch failed (or, before
