@@ -46896,8 +46896,10 @@ def _inject_text_into_session(
         if (
             result.get("code") == "busy"
             and not _from_terminal_queue
-            and mode != "steer"
         ):
+            # ACP transports do not support Codex-style turn steering.  A
+            # queued-row Steer from the shared UI must therefore wait in Kimi's
+            # durable FIFO instead of surfacing the transport's busy failure.
             return _queue_terminal_input(session_id, text, {"status": "running"})
         return result
     if _is_gemini_session(session_id):

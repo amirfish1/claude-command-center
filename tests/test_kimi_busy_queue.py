@@ -80,6 +80,37 @@ class KimiBusyQueueTests(unittest.TestCase):
                 server._pending_terminal_input_queue.clear()
                 server._pending_terminal_input_queue.update(original_queue)
 
+    def test_busy_kimi_queued_steer_waits_in_the_durable_input_queue(self):
+        """A queued-row Steer must not send a second ACP turn while Kimi is busy."""
+        server = importlib.import_module("server")
+        sid = "kimi-busy-steer-session"
+        with server._pending_terminal_input_lock:
+            original_queue = dict(server._pending_terminal_input_queue)
+            server._pending_terminal_input_queue.clear()
+        try:
+            with mock.patch.object(server, "_is_codex_session", return_value=False), \
+                 mock.patch.object(server, "_is_kimi_session", return_value=True), \
+                 mock.patch.object(server, "find_session_cwd", return_value="/tmp"), \
+                 mock.patch.object(server, "session_live_status", return_value={
+                     "live": True, "status": "running", "kind": "acp",
+                     "tty": None, "terminal_app": None,
+                 }), \
+                 mock.patch.object(server, "_acp_prompt", return_value={
+                     "ok": False, "code": "busy", "error": "turn already in progress",
+                 }), \
+                 mock.patch.object(server, "_save_pending_inputs"):
+                result = server._inject_text_into_session(sid, "follow up", mode="steer")
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["queued"])
+            self.assertEqual(result["via"], "terminal-queued")
+            with server._pending_terminal_input_lock:
+                self.assertEqual(server._pending_terminal_input_queue[sid], ["follow up"])
+        finally:
+            with server._pending_terminal_input_lock:
+                server._pending_terminal_input_queue.clear()
+                server._pending_terminal_input_queue.update(original_queue)
+
 
     def test_available_kimi_acp_session_counts_as_live_for_pending_input_drain(self):
         server = importlib.import_module("server")
