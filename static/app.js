@@ -19226,7 +19226,7 @@
     // periodic pause guard exists to keep pollers from yanking the
     // sidebar around while the user types; it must NOT also suppress
     // explicit "the user just did something, paint it now" updates.
-    if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
+    if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
     const $kanbanBoard = document.getElementById('kanbanBoard');
     const $flow = document.getElementById('flowBoard');
     const $convList = document.getElementById('convList');
@@ -50519,7 +50519,7 @@
     loadCooEscalated();
     if (_renameInProgress) return;
     if (deferSidebarRenderIfDragging()) return;
-    if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
+    if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
     const q = (filter || '').trim().toLowerCase();
     if (q && archiveDataWindow && archiveDataWindow !== 'all' && !_archiveRefreshPromise) {
       refreshArchiveData({ staleOk: true, window: 'all' })
