@@ -4660,11 +4660,13 @@
     box-sizing: border-box;
   }
   .conv-repeat-group-toggle:focus-visible,
-  .conv-repeat-group-archive:focus-visible {
+  .conv-repeat-group-archive:focus-visible,
+  .conv-repeat-group-trash:focus-visible {
     outline: none;
     box-shadow: inset 0 0 0 1px var(--accent);
   }
-  .conv-repeat-group-archive {
+  .conv-repeat-group-archive,
+  .conv-repeat-group-trash {
     flex: 0 0 auto;
     margin: 4px 8px 4px 4px;
     padding: 3px 7px;
@@ -4678,7 +4680,8 @@
     font-weight: 600;
     line-height: 1;
   }
-  .conv-repeat-group-archive:hover {
+  .conv-repeat-group-archive:hover,
+  .conv-repeat-group-trash:hover {
     border-color: var(--accent);
     color: var(--text);
   }

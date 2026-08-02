@@ -93,6 +93,15 @@ class TestSidebarRowLayout(unittest.TestCase):
         self.assertIn("session_ids: sessionIds, archived: true", app_js)
         self.assertIn("refreshArchiveData({ force: true })", app_js)
 
+    def test_repeated_archived_rows_offer_confirmed_bulk_trash(self):
+        """An archived cluster can move its exact session set to Trash."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-role="repeat-row-group-trash"', app_js)
+        self.assertIn("confirm('Move ' + sessionIds.length + ' sessions to Trash?", app_js)
+        self.assertIn("'/trash', { trashed: true }", app_js)
+        self.assertIn("showOpToast('Moved ' + sessionIds.length + ' sessions to Trash')", app_js)
+
     def test_group_chat_emoji_uses_the_session_icon_rail(self):
         """A chat marker should align with model icons, not reserve a leading gutter."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
