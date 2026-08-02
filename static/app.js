@@ -2382,10 +2382,7 @@
   // ── Repo selection state ──
   // The repo dropdown is a local archive filter, not a server-side switch.
   const _ARCHIVE_MODE_KEY = 'ccc-archive-mode';
-  // Time-window filter for the Archived view (1d | 7d | all). Mirrors the In
-  // Progress list's `_ipWindow`/`ccc-inprogress-window` pattern, but archived
-  // gets its own key and defaults to '1d' so the view opens scoped to recent
-  // activity instead of dumping every session on disk.
+  // Time-window filter shared by the Active and All views (1d | 7d | all).
   const ARCHIVE_WINDOW_KEY = 'ccc-archive-window';
   const ARCHIVE_ENGINE_FILTER_KEY = 'ccc-archive-engine-filter';
   function _archiveEngineFilter() {
@@ -2403,16 +2400,10 @@
       const value = localStorage.getItem(ARCHIVE_WINDOW_KEY);
       if (value === '1d' || value === '7d' || value === 'all') return value;
     } catch (_) {}
-    // Default to 'all' (CCC-168). The sidebar is ALWAYS in archive mode, so
-    // this window caps the ENTIRE dataset (Active + Archived) before it is
-    // partitioned — a tight '1d' default silently dropped every repo whose
-    // newest session was older than 24h, so a user with 100+ repos saw only
-    // the ~5 touched today and read it as "where are all my projects?". The
-    // 1d/7d/All toggle in the Archived header still narrows on demand. NOTE:
-    // this is the UPSTREAM window; the Active tab's own toggle
-    // (ccc-inprogress-window, defaulted 'all' in CCC-165) is downstream and
-    // cannot recover rows this one already hid — hence the "invisible toggle".
-    return 'all';
+    // Default to seven days on a fresh install. This is the shared upstream
+    // window for both Active and All; a saved choice above always takes
+    // precedence, and either view can widen the window to All on demand.
+    return '7d';
   }
   function _archiveWindowCutoff() {
     const win = _archiveWindow();
@@ -22860,7 +22851,7 @@
     return withRepoPath(payload, rowRepoPath(row));
   }
 
-  function showOpToast(msg, kind) {
+  function showOpToast(msg, kind, action) {
     const toast = document.createElement('div');
     const color = kind === 'error' ? 'var(--red)'
       : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
@@ -22870,6 +22861,18 @@
     body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
     body.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
     toast.appendChild(body);
+    if (action && action.label && typeof action.onClick === 'function') {
+      const actionBtn = document.createElement('button');
+      actionBtn.type = 'button';
+      actionBtn.textContent = action.label;
+      actionBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:var(--accent, #5b8def);border:1px solid var(--accent, #5b8def);color:var(--button-text, #fff);border-radius:4px;padding:2px 7px;font-size:11px;line-height:1.4;';
+      actionBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toast.remove();
+        action.onClick();
+      });
+      toast.appendChild(actionBtn);
+    }
     // Error AND info toasts carry text the user often needs verbatim (a
     // "restart with ./run.sh" hint, a "pick a repo" instruction, a stack-ish
     // reason). Give them a Copy + close affordance and pause auto-dismiss on
@@ -22909,6 +22912,19 @@
     // Errors linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
     arm(kind === 'error' ? 15000 : (kind === 'info' ? 10000 : 3000));
+  }
+
+  function showClaudePrewarmFallbackRecovery() {
+    showOpToast(
+      'Started normally. Restart the execution worker to restore fast Claude launches.',
+      'info',
+      {
+        label: 'Restart worker',
+        onClick: () => {
+          if (typeof sysRestartWorker === 'function') sysRestartWorker({ toastErrors: true });
+        },
+      },
+    );
   }
 
   async function moveCardToColumn(cardId, targetCol) {
@@ -58906,6 +58922,7 @@
       });
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
       if (data.ok) {
+        if (data.prewarm_fallback) showClaudePrewarmFallbackRecovery();
         if (data.session_id) {
           spawnStatsBegin(data.session_id, spawnAskedAt);
           spawnStatsMark(data.session_id, 'response_received');

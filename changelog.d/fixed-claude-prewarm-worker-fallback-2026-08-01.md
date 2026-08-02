@@ -1,0 +1,1 @@
+- Claude sessions now fall back to a normal launch and offer an execution-worker restart when an older worker cannot use fast launch.
