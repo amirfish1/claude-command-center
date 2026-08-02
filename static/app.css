@@ -14993,6 +14993,25 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   line-height: 1.3;
   font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
 }
+/* Accumulated token usage for the selected conversation — the RHS headline
+   number. Populated by _renderRailTokens() from the /usage payload. */
+.status-rail-tokens {
+  margin-top: 8px;
+}
+.status-rail-tokens .rail-tokens-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.status-rail-tokens .rail-tokens-label {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
 .status-rail-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

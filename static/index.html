@@ -872,6 +872,10 @@
                 <!-- Transcript size (CCC-475) — moved out of the pane
                      titlebar; filled by updatePaneHeader for the active pane. -->
                 <div class="status-rail-size" id="statusRailSize" hidden></div>
+                <!-- Accumulated token usage for the selected conversation,
+                     shown big. Filled by _renderRailTokens() from the same
+                     /usage payload the composer strip already fetches. -->
+                <div class="status-rail-tokens" id="statusRailTokens" hidden></div>
               </div>
             </div>
             <div class="status-rail-tabs" role="tablist" aria-label="Session utility panes">

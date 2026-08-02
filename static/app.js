@@ -32720,6 +32720,8 @@
         const railTitleRestEl = document.getElementById('statusRailTitleRest');
         if (railTitleRestEl) { railTitleRestEl.textContent = ''; railTitleRestEl.hidden = true; }
         _statusRailActiveRow = null;
+        const railTokensEl = document.getElementById('statusRailTokens');
+        if (railTokensEl) { railTokensEl.innerHTML = ''; railTokensEl.hidden = true; }
         const railRenameBtn = document.getElementById('statusRailTitleRenameBtn');
         if (railRenameBtn) railRenameBtn.style.display = 'none';
         const railActivityLogBtn = document.getElementById('statusRailActivityLogBtn');
@@ -40491,6 +40493,7 @@
     const uSlot = slot && slot.querySelector('[data-usage]');
     if (uSlot) uSlot.innerHTML = '';
     syncInputContextVisibility(slot);
+    _renderRailTokens(pid);
     if (!sid) return;
     try {
       // cache-buster: usage rollups land sporadically in the JSONL, so the
@@ -40503,6 +40506,7 @@
       if (_usageSessionIdByPane[pid] !== sid) return;
       _usageDataByPane[pid] = data;
       renderSessionUsageIntoStrip(pid);
+      _renderRailTokens(pid);
     } catch (_) {}
   }
 
@@ -40522,6 +40526,40 @@
     if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
     if (n >= 1_000) return Math.round(n / 1_000) + 'k';
     return String(n);
+  }
+
+  // Big accumulated-token headline in the status rail head. The rail is global,
+  // so only the active pane drives it. Reuses the /usage payload the composer
+  // strip already fetched (_usageDataByPane) — no extra request per selection.
+  function _renderRailTokens(paneId) {
+    const el = document.getElementById('statusRailTokens');
+    if (!el) return;
+    const active = (typeof activePaneId === 'function') ? activePaneId() : '';
+    if (paneId && active && paneId !== active) return;
+    const pid = paneId || active;
+    const u = pid ? _usageDataByPane[pid] : null;
+    const inTok = u
+      ? (Number(u.total_input_tokens) || 0)
+        + (Number(u.total_cache_creation_tokens) || 0)
+        + (Number(u.total_cache_read_tokens) || 0)
+      : 0;
+    const outTok = u ? (Number(u.total_output_tokens) || 0) : 0;
+    const total = inTok + outTok;
+    if (!total) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+    const cost = u ? (Number(u.cost_usd) || 0) : 0;
+    el.innerHTML =
+      '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
+      + '<div class="rail-tokens-label">tokens this conversation'
+      + (cost ? ' &middot; $' + cost.toFixed(2) : '') + '</div>';
+    el.title = total.toLocaleString() + ' tokens ('
+      + _formatTokens(inTok) + ' in incl. cache, '
+      + _formatTokens(outTok) + ' out)'
+      + (cost ? ' · $' + cost.toFixed(4) : '');
+    el.hidden = false;
   }
 
   // Circular context gauge (kimi-web ContextRing parity): an SVG ring whose
