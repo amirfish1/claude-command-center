@@ -49962,6 +49962,9 @@
   const _archiveAllInflight = new Map();
   const _archiveAllEtag = new Map();  // url -> last ETag from the server
   const _archiveAllData = new Map();  // url -> last conversations[] (reused on 304)
+  // Generous: cold-cache scans take ~12s; a healthy response is <1s. This only
+  // fires when the request is truly wedged.
+  const ARCHIVE_ALL_FETCH_TIMEOUT_MS = 45 * 1000;
 
   async function loadArchiveAll(opts = {}) {
     const params = new URLSearchParams();
@@ -49982,10 +49985,22 @@
     const p = (async () => {
       try {
         const prevEtag = _archiveAllEtag.get(url);
-        const r = await backgroundApiFetch(
-          url,
-          prevEtag ? { headers: { 'If-None-Match': prevEtag } } : undefined,
-        );
+        // Hard timeout: without one, a wedged request (accepted connection,
+        // response never arrives) hangs this promise forever — and every
+        // caller dedups onto it (_archiveAllInflight, _archiveRefreshPromise),
+        // so the sidebar stays on "Archive loaded" with no path to recovery.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          try { controller.abort(); } catch (_) {}
+        }, ARCHIVE_ALL_FETCH_TIMEOUT_MS);
+        let r;
+        try {
+          const init = { signal: controller.signal };
+          if (prevEtag) init.headers = { 'If-None-Match': prevEtag };
+          r = await backgroundApiFetch(url, init);
+        } finally {
+          clearTimeout(timeoutId);
+        }
         // 304 → the server confirms our cached payload is still current, so we
         // skip re-parsing ~500KB and reuse the last conversations as-is. The
         // caller re-renders, but the flicker guard skips the rebuild since the
@@ -50001,13 +50016,16 @@
         }
         if (!r.ok) return [];
         const etag = r.headers.get('ETag');
-        if (etag) _archiveAllEtag.set(url, etag);
         const d = await r.json();
         if (d && d.cached && d.stale && d.refreshing) {
           _scheduleArchiveStaleRetry();
         }
         const convs = Array.isArray(d.conversations) ? d.conversations : [];
+        // Cache the ETag only after the body parsed and landed — otherwise a
+        // truncated/aborted download leaves an ETag whose next 304 replays
+        // an empty list.
         _archiveAllData.set(url, convs);
+        if (etag) _archiveAllEtag.set(url, etag);
         return convs;
       } catch (_) { return []; }
     })();
@@ -50121,13 +50139,33 @@
     renderArchiveList(_archiveQuery());
   }
   let _archiveStuckRenderRecoveryPromise = null;
+  let _archiveStuckRetryId = null;
+  let _archiveStuckRetryCount = 0;
+  // Bounded so a genuinely empty archive (or a server that stays down) doesn't
+  // retry forever; ~5s cadence for 10 minutes covers a wedged request +
+  // slow rescan without spamming.
+  const ARCHIVE_STUCK_RETRY_MAX = 120;
+  const ARCHIVE_STUCK_RETRY_MS = 5 * 1000;
   function _archiveListStillShowsLoader() {
     const $list = document.getElementById('convList');
     return !!($list && $list.querySelector('.archive-loading-placeholder, .archive-loading-stages'));
   }
+  function _scheduleArchiveStuckRetry() {
+    if (_archiveStuckRetryId) return;
+    if (_archiveStuckRetryCount >= ARCHIVE_STUCK_RETRY_MAX) return;
+    _archiveStuckRetryCount++;
+    _archiveStuckRetryId = setTimeout(() => {
+      _archiveStuckRetryId = null;
+      _recoverArchiveRenderIfStuck();
+    }, ARCHIVE_STUCK_RETRY_MS);
+  }
   function _recoverArchiveRenderIfStuck() {
-    if (!_archiveListStillShowsLoader()) return Promise.resolve();
+    if (!_archiveListStillShowsLoader()) {
+      _archiveStuckRetryCount = 0;
+      return Promise.resolve();
+    }
     if (archiveLoaded && Array.isArray(archiveData) && archiveData.length) {
+      _archiveStuckRetryCount = 0;
       renderArchiveList(_archiveQuery());
       return Promise.resolve();
     }
@@ -50137,9 +50175,18 @@
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
       archiveDataWindow = _archiveWindow();
       archiveLoaded = true;
+      _archiveStuckRetryCount = 0;
       renderArchiveList(_archiveQuery());
     }).finally(() => {
       _archiveStuckRenderRecoveryPromise = null;
+      // One-shot recovery used to give up here: if the fetch failed (or, before
+      // the loadArchiveAll timeout, hung forever) the sidebar stayed on the
+      // "Archive loaded" checklist permanently. Retry on a slow cadence while
+      // the loader is still on screen.
+      if (_archiveListStillShowsLoader()
+          && !(archiveLoaded && Array.isArray(archiveData) && archiveData.length)) {
+        _scheduleArchiveStuckRetry();
+      }
     });
     return _archiveStuckRenderRecoveryPromise;
   }
