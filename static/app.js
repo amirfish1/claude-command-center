@@ -50068,20 +50068,27 @@
           }
           return cached;
         }
-        if (!r.ok) return [];
+        if (!r.ok) {
+          _clientLog('[ARCHIVE-DIAG] conversations/list not-ok: HTTP ' + r.status + ' ' + url.split('?')[1]);
+          return [];
+        }
         const etag = r.headers.get('ETag');
         const d = await r.json();
         if (d && d.cached && d.stale && d.refreshing) {
           _scheduleArchiveStaleRetry();
         }
         const convs = Array.isArray(d.conversations) ? d.conversations : [];
+        _clientLog('[ARCHIVE-DIAG] conversations/list ok: ' + convs.length + ' rows');
         // Cache the ETag only after the body parsed and landed — otherwise a
         // truncated/aborted download leaves an ETag whose next 304 replays
         // an empty list.
         _archiveAllData.set(url, convs);
         if (etag) _archiveAllEtag.set(url, etag);
         return convs;
-      } catch (_) { return []; }
+      } catch (e) {
+        _clientLog('[ARCHIVE-DIAG] conversations/list threw: ' + ((e && e.name) || '?') + ' ' + String((e && e.message) || '').slice(0, 120));
+        return [];
+      }
     })();
     _archiveAllInflight.set(url, p);
     p.finally(() => _archiveAllInflight.delete(url));
@@ -50213,6 +50220,16 @@
       _recoverArchiveRenderIfStuck();
     }, ARCHIVE_STUCK_RETRY_MS);
   }
+  // An occluded WKWebView window (another Space, display asleep) gets its
+  // timers clamped to ~1/min, so the 120-retry budget above can drain while
+  // nobody is looking: the user returns to a loader the page gave up on hours
+  // ago. Becoming visible is exactly when the stuck state matters, so re-arm
+  // recovery with a fresh budget. No-op when the loader is already gone.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    _archiveStuckRetryCount = 0;
+    _recoverArchiveRenderIfStuck();
+  });
   function _recoverArchiveRenderIfStuck() {
     if (!_archiveListStillShowsLoader()) {
       _archiveStuckRetryCount = 0;
@@ -50223,6 +50240,9 @@
       renderArchiveList(_archiveQuery());
       return Promise.resolve();
     }
+    _clientLog('[ARCHIVE-DIAG] recoverIfStuck: loader showing, archiveLoaded=' + archiveLoaded
+      + ' rows=' + (Array.isArray(archiveData) ? archiveData.length : -1)
+      + ' retry=' + _archiveStuckRetryCount);
     if (_archiveStuckRenderRecoveryPromise) return _archiveStuckRenderRecoveryPromise;
     _archiveStuckRenderRecoveryPromise = loadArchiveAll({ staleOk: true }).then(convs => {
       if (!Array.isArray(convs) || !convs.length || !_archiveListStillShowsLoader()) return;
@@ -50295,14 +50315,19 @@
     const tick = async () => {
       try {
         const r = await backgroundApiFetch('/api/archive/loading-status');
-        if (!r.ok) return;
+        if (!r.ok) {
+          _clientLog('[ARCHIVE-DIAG] loading-status not-ok: HTTP ' + r.status);
+          return;
+        }
         const snap = await r.json();
         _renderArchiveLoadingStages(snap);
         if (!snap.active) {
           _stopArchiveProgressPoll();
           _recoverArchiveRenderIfStuck();
         }
-      } catch (_) { /* polling is best-effort; ignore */ }
+      } catch (e) {
+        _clientLog('[ARCHIVE-DIAG] loading-status fetch threw: ' + ((e && e.name) || '?') + ' ' + ((e && e.message) || ''));
+      }
     };
     tick();  // immediate first paint
     _archiveProgressPollId = setInterval(_gated('archiveProgress', tick), 250);
@@ -50316,8 +50341,12 @@
 
   let _archiveRefreshPromise = null;
   async function refreshArchiveData(opts = {}) {
-    if (_archiveRefreshPromise) return _archiveRefreshPromise;
+    if (_archiveRefreshPromise) {
+      _clientLog('[ARCHIVE-DIAG] refreshArchiveData deduped onto in-flight promise');
+      return _archiveRefreshPromise;
+    }
     _startArchiveProgressPoll();
+    _clientLog('[ARCHIVE-DIAG] refreshArchiveData start window=' + (opts.window || _archiveWindow()) + ' staleOk=' + (opts.staleOk !== false && !opts.force));
     _archiveRefreshPromise = (async () => {
       try {
       const requestedWindow = opts.window || _archiveWindow();
@@ -50325,6 +50354,7 @@
       archiveData = _mergeArchivePrSnapshot(convs, archiveData);
       archiveDataWindow = requestedWindow;
         archiveLoaded = true;
+        _clientLog('[ARCHIVE-DIAG] refreshArchiveData merged ' + (Array.isArray(archiveData) ? archiveData.length : -1) + ' rows, archiveLoaded=true');
         // The sidebar must learn worker-owned approval blockers even before a
         // conversation is selected (startLiveStatusPolling begins on select).
         // Await the cheap overlay here so the first full archive render can
@@ -50952,7 +50982,10 @@
       // snapshot now so the scope selector is ready even when the cross-repo
       // archive scan takes much longer than the selected-repo session load.
       if (_sharedQueuePanelHost === 'sidebar') _renderQueuePanel();
-      _firstSessionsLoaded.then(() => setArchiveMode());
+      _firstSessionsLoaded.then(() => {
+        _clientLog('[ARCHIVE-DIAG] first sessions loaded -> setArchiveMode');
+        setArchiveMode();
+      });
     }
     // Periodic archive refresh. archiveData carries last_interacted /
     // modified / mtime for every session row, but used to only refresh
