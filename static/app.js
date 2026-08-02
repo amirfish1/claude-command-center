@@ -29,6 +29,11 @@
   // watch. Identical messages (numbers collapsed) are deduped for 5s so a
   // recurring overrun logs once per window, not every tick.
   const _clientLogLast = {};
+  // Per-page-load nonce. Multiple CCC webviews (main window + conversation
+  // popouts) boot the full app and post the same telemetry; without an id
+  // there is no way to tell which instance a line came from — or that a
+  // wedged instance is posting nothing at all.
+  const _cccBootId = Math.random().toString(36).slice(2, 8);
   function _clientLog(msg) {
     try { console.warn(msg); } catch (_) {}
     try {
@@ -36,10 +41,13 @@
       const key = String(msg).replace(/\d+/g, '#');
       if (_clientLogLast[key] && now - _clientLogLast[key] < 5000) return;
       _clientLogLast[key] = now;
+      const tagged = String(msg).startsWith('[ARCHIVE-DIAG]')
+        ? '[ARCHIVE-DIAG][' + _cccBootId + ']' + String(msg).slice(14)
+        : String(msg);
       fetch('/api/client-log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ msg: String(msg) }),
+        body: JSON.stringify({ msg: tagged }),
         keepalive: true,
       }).catch(() => {});
     } catch (_) {}
@@ -2768,7 +2776,7 @@
   //            graded. Warning at 35 min catches the rising tail of loss
   //            without nagging the still-warm short-idle sessions.
   //
-  // Everything else (gemini, cursor, antigravity, hermes, kilo) has no
+  // Everything else (gemini, cursor, antigravity, hermes, kilo, opencode) has no
   // measurement behind it. Absent evidence we stay silent rather than warn —
   // an unfounded warning trains the user to dismiss the founded ones.
   const F2_STALE_MINUTES = 60;         // claude: the cliff
@@ -4753,6 +4761,7 @@
     if (values.includes('copilot')) return 'copilot';
     if (values.includes('copilotchat')) return 'copilotchat';
     if (values.includes('grok')) return 'grok';
+    if (values.includes('opencode')) return 'opencode';
     return 'claude';
   }
 
@@ -4804,6 +4813,7 @@
       claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
       antigravity: 'Antigravity', hermes: 'Hermes', kimi: 'Kimi',
       copilot: 'Copilot', grok: 'Grok', copilotchat: 'Copilot Chat',
+      opencode: 'OpenCode',
     };
     const tierLabels = {
       premium: 'Premium', high: 'High', medium: 'Medium', low: 'Low',
@@ -12800,6 +12810,7 @@
       : card.source === 'cursor' ? 'Cursor'
       : card.source === 'antigravity' ? 'Antigravity'
       : card.source === 'kilo' ? 'Kilo'
+      : card.source === 'opencode' ? 'OpenCode'
       : card.source === 'pkood' ? 'pkood'
       : 'Claude';
     const cwd = card.spawn_cwd || card.repo_path || card.folder_path || card.cwd || '';
@@ -12856,7 +12867,7 @@
     if (!placeholder) return null;
     placeholder.spawn_pid = realPid;
     placeholder.expected_session_id = sessionId || '';
-    if ((placeholder.source === 'codex' || placeholder.source === 'gemini' || placeholder.source === 'cursor' || placeholder.source === 'antigravity' || placeholder.source === 'kilo') && logPath) {
+    if ((placeholder.source === 'codex' || placeholder.source === 'gemini' || placeholder.source === 'cursor' || placeholder.source === 'antigravity' || placeholder.source === 'kilo' || placeholder.source === 'opencode') && logPath) {
       placeholder.agent_log_path = logPath;
       if (placeholder.source === 'codex') placeholder.codex_log_path = logPath;
     }
@@ -13046,7 +13057,7 @@
       name_overridden: false,
       // Fire-and-watch engines also get durable engine-native sessions; the
       // log path is only a fallback while the real row is materializing.
-      agent_log_path: (source === 'codex' || source === 'gemini' || source === 'cursor' || source === 'antigravity' || source === 'kilo') ? (logPath || null) : null,
+      agent_log_path: (source === 'codex' || source === 'gemini' || source === 'cursor' || source === 'antigravity' || source === 'kilo' || source === 'opencode') ? (logPath || null) : null,
       codex_log_path: source === 'codex' ? (logPath || null) : null,
     };
     if (meta && typeof meta === 'object') {
@@ -13084,7 +13095,7 @@
     // Registration watch for Claude placeholders. Fire-and-watch placeholders
     // stick around until the durable thread row appears, with the spawn log
     // as a fallback if the CLI exits before creating a thread.
-    if (source !== 'codex' && source !== 'gemini' && source !== 'cursor' && source !== 'antigravity' && source !== 'kilo') {
+    if (source !== 'codex' && source !== 'gemini' && source !== 'cursor' && source !== 'antigravity' && source !== 'kilo' && source !== 'opencode') {
       _watchPendingSpawnRegistration(pid, id);
     }
   }
@@ -32515,6 +32526,7 @@
     if (source === 'copilot') return 'copilot';
     if (source === 'copilotchat') return 'copilotchat';
     if (source === 'grok') return 'grok';
+    if (source === 'opencode') return 'opencode';
     if (source === 'pkood') return 'pkood';
     if (source === 'backlog') return row && row.issue_number ? 'issue' : 'backlog';
     if (source === 'github_pr') return 'pull request';
@@ -32541,6 +32553,7 @@
       claude: 'Claude', codex: 'Codex', gemini: 'Gemini',
       cursor: 'Cursor', antigravity: 'Antigravity', hermes: 'Hermes',
       kimi: 'Kimi', copilot: 'Copilot', grok: 'Grok', copilotchat: 'Copilot Chat',
+      opencode: 'OpenCode',
     };
     const key = sourceLabelForPane(row);
     const label = named[key];
@@ -38710,6 +38723,12 @@
         + '<path d="M12 8l.9 2.1L15 11l-2.1.9L12 14l-.9-2.1L9 11l2.1-.9L12 8Z" fill="currentColor" stroke="none" />'
         + '</svg>';
     }
+    if (engine === 'opencode') {
+      return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="m5 7 5 5-5 5" />'
+        + '<path d="M12 19h7" />'
+        + '</svg>';
+    }
     return '<svg class="conv-session-svg" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">'
       + '<path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" />'
       + '</svg>';
@@ -41046,6 +41065,11 @@
       { id: 'kimi-code/kimi-for-coding',             label: 'K2.7 Coding' },
       { id: 'kimi-code/kimi-for-coding-highspeed',   label: 'K2.7 Coding Highspeed' },
     ],
+    opencode: [
+      { id: 'anthropic/claude-sonnet-4-5', label: 'claude-sonnet-4-5 (default)' },
+      { id: 'anthropic/claude-opus-4-1',   label: 'claude-opus-4-1' },
+      { id: 'openai/gpt-5',                label: 'gpt-5' },
+    ],
   };
 
   const ENGINE_SUPPORTS_CUSTOM_MODEL = {
@@ -41056,6 +41080,7 @@
     kilo: true,
     hermes: true,
     kimi: true,
+    opencode: true,
   };
 
   // Codex's own switcher pairs a Model choice with a separate Reasoning
@@ -50230,6 +50255,15 @@
     _archiveStuckRetryCount = 0;
     _recoverArchiveRenderIfStuck();
   });
+  // Slow heartbeat: proves which page instances are alive and in what archive
+  // state. A wedged webview goes silent; comparing ids across windows tells a
+  // healthy boot's trace apart from a corpse that can no longer even post.
+  setInterval(() => {
+    _clientLog('[ARCHIVE-DIAG] alive hidden=' + document.hidden
+      + ' archiveLoaded=' + archiveLoaded
+      + ' rows=' + (Array.isArray(archiveData) ? archiveData.length : -1)
+      + ' loader=' + _archiveListStillShowsLoader());
+  }, 60 * 1000);
   function _recoverArchiveRenderIfStuck() {
     if (!_archiveListStillShowsLoader()) {
       _archiveStuckRetryCount = 0;
@@ -51160,7 +51194,7 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi', 'opencode'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
@@ -51170,7 +51204,7 @@
     try { return normalizeSpawnDefaultEngine(localStorage.getItem('ccc.spawnEngine')); }
     catch (_) { return 'claude'; }
   }
-  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3' };
+  let _defaultModelsByEngine = { claude: 'fable-5', codex: 'gpt-5.5', cursor: 'auto', antigravity: '', kilo: 'kilo/stepfun/step-3.7-flash:free', hermes: 'auto', kimi: 'kimi-code/k3', opencode: 'anthropic/claude-sonnet-4-5' };
   let _spawnDefaultsLoaded = false;
   let spawnDefaultsState = {
     engine: readLegacySpawnEnginePref(),
@@ -51209,6 +51243,7 @@
     if (engine === 'kilo') return 'Kilo';
     if (engine === 'hermes') return 'Hermes';
     if (engine === 'kimi') return 'Kimi';
+    if (engine === 'opencode') return 'OpenCode';
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
@@ -51220,6 +51255,7 @@
     if (engine === 'kilo') return 'kilo';
     if (engine === 'hermes') return 'hermes';
     if (engine === 'kimi') return 'kimi';
+    if (engine === 'opencode') return 'opencode';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
   }
@@ -51232,6 +51268,7 @@
     if (engine === 'kilo') return '/api/sessions/spawn-kilo';
     if (engine === 'hermes') return '/api/sessions/spawn-hermes';
     if (engine === 'kimi') return '/api/sessions/spawn-kimi';
+    if (engine === 'opencode') return '/api/sessions/spawn-opencode';
     return '/api/sessions/spawn';
   }
   function durableActionId(kind) {
@@ -51245,10 +51282,10 @@
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
-    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'kimi';
+    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'kimi' || engine === 'opencode';
   }
   function spawnUsesLogPlaceholder(engine) {
-    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes';
+    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes' || engine === 'opencode';
   }
 
   function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
@@ -51326,6 +51363,7 @@
     if (engine === 'codex' && !value) value = 'gpt-5.5';
     if (engine === 'cursor' && !value) value = 'auto';
     if (engine === 'kilo' && !value) value = 'kilo/stepfun/step-3.7-flash:free';
+    if (engine === 'opencode' && !value) value = 'anthropic/claude-sonnet-4-5';
     if (engine === 'hermes' && !value) value = 'auto';
     const unavailableReason = _modelUnavailableReason(engine, value);
     if (value && unavailableReason) {
@@ -51538,6 +51576,7 @@
       probe('antigravity', '/api/sessions/spawn-antigravity/availability', 'Antigravity'),
       probe('kilo', '/api/sessions/spawn-kilo/availability', 'Kilo'),
       probe('hermes', '/api/sessions/spawn-hermes/availability', 'Hermes'),
+      probe('opencode', '/api/sessions/spawn-opencode/availability', 'OpenCode'),
     ]);
     syncSpawnEngineDependentUi();
   }
@@ -52115,6 +52154,7 @@
           && currentSession.source !== 'cursor'
           && currentSession.source !== 'antigravity'
           && currentSession.source !== 'kilo'
+          && currentSession.source !== 'opencode'
           && currentSession.source !== 'hermes'
         ) {
           // Headless session we spawned — push via stdin pipe
