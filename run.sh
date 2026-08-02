@@ -648,7 +648,7 @@ raise SystemExit(0 if "engine-execution-v1" in caps else 1)
     # A worker that never imported server (server_version null) needs nothing:
     # its first RPC loads the new code from disk.
     if [ "${worker_compatible:-0}" = "1" ]; then
-      read -r worker_server_version repo_version <<EOF
+      read -r worker_server_version worker_content_hash repo_version repo_content_hash <<EOF
 $(printf '%s' "$worker_health" | "$PYTHON" -c '
 import json, sys
 try:
@@ -659,12 +659,37 @@ worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
 # Key ABSENT means a pre-version-reporting worker -- definitionally stale.
 # Key present but null means a current worker that never imported server.
 sv = "absent" if "server_version" not in worker else (worker.get("server_version") or "")
-print(sv, end=" ")
-' 2>/dev/null; sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$HERE/server.py" | head -1)
+sh = worker.get("server_content_hash") or ""
+print(sv, sh, end=" ")
+' 2>/dev/null; "$PYTHON" -c '
+import hashlib, pathlib, re, sys
+try:
+    p = pathlib.Path(sys.argv[1]).resolve()
+    text = p.read_text(encoding="utf-8")
+    m = re.search(r"^__version__\s*=\s*\"([^\"]+)\"", text, re.M)
+    version = m.group(1) if m else ""
+    h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    print(version + " " + h, end="")
+except Exception:
+    print(" ", end="")
+' "$HERE/server.py")
 EOF
+      worker_stale_version=0
+      worker_stale_hash=0
       if [ -n "$repo_version" ] && { [ "$worker_server_version" = "absent" ] \
         || { [ -n "$worker_server_version" ] && [ "$worker_server_version" != "$repo_version" ]; }; }; then
-        echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
+        worker_stale_version=1
+      fi
+      if [ -n "$repo_content_hash" ] && [ -n "$worker_content_hash" ] \
+        && [ "$worker_content_hash" != "$repo_content_hash" ]; then
+        worker_stale_hash=1
+      fi
+      if [ "$worker_stale_version" = "1" ] || [ "$worker_stale_hash" = "1" ]; then
+        if [ "$worker_stale_version" = "1" ]; then
+          echo "→ Worker runs server.py ${worker_server_version:-never-imported} but the repo is v$repo_version — restarting worker"
+        else
+          echo "→ Worker runs an older copy of server.py — restarting worker"
+        fi
         echo "  Queued work will show as 'needs reconciliation' in Settings → Maintenance."
         if ! launchctl kickstart -k "$(worker_service_target)" >/dev/null 2>&1; then
           # No launchd worker service on this install path (brew service or

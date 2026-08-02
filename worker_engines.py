@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
+from pathlib import Path
 
 
 ASYNC_OPERATIONS = {
@@ -43,6 +45,16 @@ class EngineHost:
                 os.environ["CCC_WORKER_PROCESS"] = "1"
                 import server
                 self._module = server
+                # Capture a fingerprint of the server.py this process actually
+                # loaded.  run.sh compares it to the file on disk so code changes
+                # that do not bump __version__ still trigger a worker restart.
+                try:
+                    server_path = Path(server.__file__).resolve()
+                    server._ccc_content_hash = hashlib.sha256(
+                        server_path.read_bytes()
+                    ).hexdigest()[:16]
+                except Exception:
+                    server._ccc_content_hash = None
                 # server.main() installs this for the dashboard process, but
                 # the worker never calls main() -- it only imports server as
                 # a library here. Without this, SIGUSR2-triggered dumps (used

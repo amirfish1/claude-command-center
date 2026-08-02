@@ -81,6 +81,7 @@ class WorkerRuntime:
                     "started_at": self.started_at,
                     "recovered_uncertain": len(self.recovered),
                     "server_version": getattr(server_mod, "__version__", None) if server_mod else None,
+                    "server_content_hash": getattr(server_mod, "_ccc_content_hash", None) if server_mod else None,
                     "capabilities": [
                         "engine-execution-v1",
                         "work-graph-v1",

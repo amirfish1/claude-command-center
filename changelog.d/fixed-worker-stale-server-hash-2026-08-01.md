@@ -1,0 +1,1 @@
+Fixed stale persistent workers continuing to run old `server.py` code when a change did not bump `__version__`; `run.sh` now restarts the worker when the loaded `server.py` content hash differs from the repo file.
