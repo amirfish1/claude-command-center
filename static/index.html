@@ -9,6 +9,32 @@
      WKWebView ignore it — there we drive body height from
      `visualViewport` in app.js instead. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<script>
+// Diagnostics: the Mac app is a WKWebView with no devtools, so page JS errors
+// are invisible there. Mirror them to /api/client-log (same endpoint app.js
+// uses for perf warnings) so they land in service.out.log. Registered before
+// app.js loads so boot-time throws are caught too.
+(function () {
+  function post(msg) {
+    try {
+      fetch('/api/client-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msg: String(msg).slice(0, 600) }),
+        keepalive: true,
+      }).catch(function () {});
+    } catch (_) {}
+  }
+  window.addEventListener('error', function (e) {
+    post('[JSERROR] ' + (e.message || '?') + ' @ '
+      + String(e.filename || '?').split('/').pop() + ':' + (e.lineno || 0) + ':' + (e.colno || 0));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    post('[JSREJECT] ' + String((r && (r.stack || r.message)) || r).slice(0, 500));
+  });
+})();
+</script>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%23d97757'>%E2%8C%98</text></svg>">
 <!-- Installable-app metadata. The manifest + service worker turn CCC into a
      PWA so users can "Add to Dock" (Safari) or "Install app" (Chrome/Edge)
@@ -3300,10 +3326,26 @@
      installable. Deferred behind `load` so it never competes with the
      initial render. -->
 <script>
+  // The service worker only exists so browsers can offer "Install app" —
+  // it is a transparent passthrough with no caching. The native Mac app's
+  // WKWebView (UA tag "CCC-macOS", set in scripts/macapp/main.swift) must
+  // NOT keep one: once the SW claims the page, every fetch routes through
+  // the SW thread, and when that thread wedges (a WKWebView failure mode
+  // we hit repeatedly) every API call silently dies while the page looks
+  // merely stuck on "Loading archive…". Skip registration there and sweep
+  // any registration left over from before this guard, so affected
+  // installs self-heal on the next load.
+  const _isCccMacApp = /CCC-macOS/.test(navigator.userAgent);
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
-    });
+    if (_isCccMacApp) {
+      navigator.serviceWorker.getRegistrations()
+        .then((rs) => rs.forEach((r) => r.unregister()))
+        .catch(() => {});
+    } else {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+      });
+    }
   }
 </script>
 
