@@ -1,0 +1,23 @@
+name = "support"
+main = "index.js"
+compatibility_date = "2026-08-03"
+workers_dev = true
+
+[[send_email]]
+name = "EMAIL"
+
+[[durable_objects.bindings]]
+name = "REPORT_SUBMISSIONS"
+class_name = "ReportSubmission"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ReportSubmission"]
+
+[[ratelimits]]
+name = "REPORT_RATE_LIMITER"
+namespace_id = "43017"
+
+[ratelimits.simple]
+limit = 5
+period = 60
