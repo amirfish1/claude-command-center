@@ -4922,10 +4922,17 @@
   // the age frozen at "0s" for the whole spawn. Keep counting while the
   // conversation the indicator belongs to is unchanged.
   let _optimisticAgentStartKey = '';
+  // Re-render race: innerHTML swaps destroy the indicator for a moment. If
+  // the 1s tick lands in that gap it used to stop the ticker and zero the
+  // start, so the re-created indicator began again at 0s — every couple of
+  // seconds, forever. Tolerate short absences; only a sustained disappearance
+  // (~10s, i.e. a real removal) stops the ticker.
+  let _optimisticAgentMisses = 0;
   function _stopOptimisticAgeTicker() {
     if (_optimisticAgentTick) { clearInterval(_optimisticAgentTick); _optimisticAgentTick = null; }
     _optimisticAgentStart = 0;
     _optimisticAgentStartKey = '';
+    _optimisticAgentMisses = 0;
   }
   function _optimisticAgeLabel(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -4934,9 +4941,14 @@
   }
   function _startOptimisticAgeTicker($view) {
     if (_optimisticAgentTick) clearInterval(_optimisticAgentTick);
+    _optimisticAgentMisses = 0;
     _optimisticAgentTick = setInterval(() => {
       const el = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
-      if (!el) { _stopOptimisticAgeTicker(); return; }
+      if (!el) {
+        if (++_optimisticAgentMisses >= 10) _stopOptimisticAgeTicker();
+        return;
+      }
+      _optimisticAgentMisses = 0;
       const ms = Date.now() - _optimisticAgentStart;
       const age = el.querySelector('.cl-age');
       if (age) age.textContent = _optimisticAgeLabel(ms);
@@ -12933,15 +12945,18 @@
       // process started → prompt written → session initialized → first stream
       // — instead of a blank screen with a typing dot. Polls the same
       // endpoint the post-completion stats banner reads, rendered expanded.
-      const liveSid = card.expected_session_id || '';
-      if (liveSid && spawnStatsEnabled()) {
+      // The id arrives with the POST response AFTER this view first renders,
+      // so read it lazily from the card on every tick.
+      if (spawnStatsEnabled()) {
         const livePaneId = paneId || activePaneId();
+        let liveSid = '';
         let liveTicks = 0;
         const liveTimer = setInterval(() => {
+          if (!liveSid) liveSid = card.expected_session_id || '';
           const pane = paneByPaneId(livePaneId);
-          const stillThisCard = pane && (pane.conversationId === card.id || pane.conversationId === liveSid);
+          const stillThisCard = pane && (pane.conversationId === card.id || (liveSid && pane.conversationId === liveSid));
           if (!stillThisCard || ++liveTicks > 90) { clearInterval(liveTimer); return; }
-          renderSpawnStatsPanel(liveSid, $view, { open: true });
+          if (liveSid) renderSpawnStatsPanel(liveSid, $view, { open: true });
         }, 2000);
       }
     }
