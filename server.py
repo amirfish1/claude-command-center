@@ -1105,6 +1105,36 @@ def _wt_read_queue_deletions():
         return {}
 
 
+def _wt_worker_idle_fields(worker):
+    """Return bounded idle evidence from WatchTower's release clock.
+
+    WatchTower owns engine-specific activity discovery. Older WatchTower
+    installs may not expose the compatibility hook, in which case unknown is
+    safer than inventing an age from process uptime.
+    """
+    evidence_fn = getattr(_wt_workers, "_activity_evidence", None)
+    if not callable(evidence_fn):
+        return {"idle_seconds": None, "idle_source": "unknown"}
+    try:
+        evidence = evidence_fn(worker)
+        effective = evidence.get("effective") if isinstance(evidence, dict) else None
+        age = effective.get("age_s") if isinstance(effective, dict) else None
+        source = effective.get("source") if isinstance(effective, dict) else None
+        if isinstance(age, bool) or not isinstance(age, (int, float)):
+            raise ValueError("invalid effective age")
+        if not math.isfinite(age) or age < 0:
+            raise ValueError("invalid effective age")
+        safe_source = str(source or "unknown").strip().lower()
+        if safe_source not in {
+            "claude_transcript", "codex_rollout", "kimi_wire",
+            "watchtower_stdout", "started_at",
+        }:
+            safe_source = "unknown"
+        return {"idle_seconds": int(age), "idle_source": safe_source}
+    except Exception:
+        return {"idle_seconds": None, "idle_source": "unknown"}
+
+
 def _wt_read_workers():
     """Live WatchTower worker records read straight from workers.json.
 
@@ -1138,6 +1168,7 @@ def _wt_read_workers():
             continue
         row = dict(w)
         row["alive"] = True
+        row.update(_wt_worker_idle_fields(row))
         # Self-heal: if WT hasn't backfilled this worker's cloud session_id into
         # the file yet, resolve it from the worker's stream-json log in-memory
         # (no file write -> no race with WT's own writer) so the dashboard can
