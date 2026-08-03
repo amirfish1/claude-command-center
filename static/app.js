@@ -4881,9 +4881,15 @@
   // running, not frozen. Counts from when the indicator first appeared.
   let _optimisticAgentTick = null;
   let _optimisticAgentStart = 0;
+  // The pending-conversation view re-renders (and recreates the indicator
+  // element) on every placeholder update; resetting the start each time left
+  // the age frozen at "0s" for the whole spawn. Keep counting while the
+  // conversation the indicator belongs to is unchanged.
+  let _optimisticAgentStartKey = '';
   function _stopOptimisticAgeTicker() {
     if (_optimisticAgentTick) { clearInterval(_optimisticAgentTick); _optimisticAgentTick = null; }
     _optimisticAgentStart = 0;
+    _optimisticAgentStartKey = '';
   }
   function _optimisticAgeLabel(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -4934,7 +4940,11 @@
       + '<span class="cl-tool">Sending&hellip;</span>'
       + '<span class="cl-age">0s</span>';
     $view.appendChild(el);
-    if (fresh || !_optimisticAgentStart) _optimisticAgentStart = Date.now();
+    const _optKey = String(window.currentConversation || '');
+    if (_optKey !== _optimisticAgentStartKey || !_optimisticAgentStart) {
+      _optimisticAgentStart = Date.now();
+      _optimisticAgentStartKey = _optKey;
+    }
     _startOptimisticAgeTicker($view);
     _armOptimisticAgentSafetyTimer($view, 60000);
     // CCC-79: only ONE of the many inject ACK branches advanced this to
@@ -13202,11 +13212,15 @@
   // cold spawn measures ~27s to register, so 30s was structurally racy.
   function _watchPendingSpawnRegistration(pid, fallbackId) {
     const deadline = Date.now() + 3 * 60 * 1000;
-    const card = pendingSpawns.get(pid)
+    // Read the card lazily on every tick: at arm time the POST response has
+    // not arrived, so expected_session_id is empty — capturing it once here
+    // would skip the cheap probe entirely and hammer forced 8MB archive
+    // refreshes until the canonical row appears (~12-30s), which is exactly
+    // the gap this watcher exists to close.
+    const getCard = () => pendingSpawns.get(pid)
       || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId)
       || conversationsData.find(x => x && x.id === fallbackId);
-    const expectedSid = (card && card.expected_session_id) || '';
-    let landed = !expectedSid;  // no id to probe -> straight to the heavy phase
+    let landed = false;
     let landedAt = 0;
     const tick = async () => {
       if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
@@ -13215,7 +13229,8 @@
         setTimeout(tick, 6000);
         return;
       }
-      if (!landed) {
+      const expectedSid = ((getCard() || {}).expected_session_id) || '';
+      if (!landed && expectedSid) {
         let isLanded = false;
         try {
           const r = await fetch('/api/session/landed?session_id=' + encodeURIComponent(expectedSid), { cache: 'no-store' });
@@ -13231,8 +13246,7 @@
           // the pane lands on the live conversation and the row stops pulsing
           // as "spawning" — the reconcile below still swaps in the canonical
           // row when the archive catches up.
-          const ph = pendingSpawns.get(pid)
-            || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId);
+          const ph = getCard();
           if (ph && !ph._landedResolved) {
             ph._landedResolved = true;
             ph.pending_spawn = false;
@@ -40656,6 +40670,60 @@
     return String(n);
   }
 
+  const CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY = 'ccc-monthly-claude-plan-usd';
+  const WEEKLY_CLAUDE_USAGE_REFRESH_MS = 60_000;
+  let _weeklyClaudeUsage = null;
+  let _weeklyClaudeUsageRequest = null;
+
+  function _monthlyClaudePlanUsd() {
+    try {
+      const price = Number(localStorage.getItem(CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY));
+      return Number.isFinite(price) && price > 0 ? price : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function _refreshWeeklyClaudeUsage() {
+    if (_weeklyClaudeUsageRequest) return _weeklyClaudeUsageRequest;
+    // /api/weekly_usage warms the per-transcript turn cache. Request rankings
+    // after it completes so a first use does not race the cache-only rankings
+    // endpoint and return an empty contribution for the selected session.
+    _weeklyClaudeUsageRequest = fetch('/api/weekly_usage', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(weekly => fetch('/api/throughput/week-rankings', { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null)
+        .then(rankings => [weekly, rankings]))
+      .then(([weekly, rankings]) => {
+      const totalTokens = Number(weekly && weekly.claude_tokens) || 0;
+      const bySession = Object.create(null);
+      (rankings && Array.isArray(rankings.rankings) ? rankings.rankings : []).forEach(row => {
+        if (row && row.session_id) bySession[row.session_id] = Number(row.week_tokens) || 0;
+      });
+      _weeklyClaudeUsage = { totalTokens, bySession, loadedAt: Date.now() };
+      _renderRailTokens();
+      return _weeklyClaudeUsage;
+    }).catch(() => null).finally(() => {
+      _weeklyClaudeUsageRequest = null;
+    });
+    return _weeklyClaudeUsageRequest;
+  }
+
+  function _subscriptionCostThisWeek(sessionId) {
+    const monthlyPlan = _monthlyClaudePlanUsd();
+    const weekly = _weeklyClaudeUsage;
+    const sessionTokens = weekly && sessionId ? Number(weekly.bySession[sessionId]) || 0 : 0;
+    const weeklyTokens = weekly ? Number(weekly.totalTokens) || 0 : 0;
+    if (!monthlyPlan || !sessionTokens || !weeklyTokens) return null;
+    const share = sessionTokens / weeklyTokens;
+    return {
+      cost: monthlyPlan * 12 / 52 * share,
+      share,
+      sessionTokens,
+      weeklyTokens,
+    };
+  }
+
   // Big accumulated-token headline in the status rail head. The rail is global,
   // so only the active pane drives it. Reuses the /usage payload the composer
   // strip already fetched (_usageDataByPane) — no extra request per selection.
@@ -40679,15 +40747,27 @@
       return;
     }
     const cost = u ? (Number(u.cost_usd) || 0) : 0;
+    const sessionId = pid ? _usageSessionIdByPane[pid] : '';
+    const subscription = _subscriptionCostThisWeek(sessionId);
     el.innerHTML =
       '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
       + '<div class="rail-tokens-label">tokens this conversation'
-      + (cost ? ' &middot; $' + cost.toFixed(2) : '') + '</div>';
+      + (subscription ? ' &middot; $' + subscription.cost.toFixed(2) + ' subscription cost this week' : '')
+      + '</div>';
     el.title = total.toLocaleString() + ' tokens ('
       + _formatTokens(inTok) + ' in incl. cache, '
       + _formatTokens(outTok) + ' out)'
-      + (cost ? ' · $' + cost.toFixed(4) : '');
+      + (subscription
+        ? ' · ' + (subscription.share * 100).toFixed(1) + '% of '
+          + _formatTokens(subscription.weeklyTokens) + ' Claude tokens this week'
+        : '')
+      + (cost ? ' · API list-price equivalent: $' + cost.toFixed(4) : '');
     el.hidden = false;
+    const weeklyUsageIsStale = !_weeklyClaudeUsage
+      || Date.now() - _weeklyClaudeUsage.loadedAt >= WEEKLY_CLAUDE_USAGE_REFRESH_MS;
+    if (_monthlyClaudePlanUsd() && weeklyUsageIsStale && !_weeklyClaudeUsageRequest) {
+      _refreshWeeklyClaudeUsage();
+    }
   }
 
   // Circular context gauge (kimi-web ContextRing parity): an SVG ring whose
@@ -59519,6 +59599,13 @@
     el.textContent = v ? v : 'Not set';
   }
 
+  function refreshMonthlyClaudePlanInput() {
+    const input = document.getElementById('settingsMonthlyClaudePlanInput');
+    if (!input) return;
+    const value = _monthlyClaudePlanUsd();
+    if (document.activeElement !== input) input.value = value ? String(value) : '';
+  }
+
   // ── Engines section: automatic harness updates ─────────────────────
   let _engineUpdatePollTimer = null;
   function _engineUpdateSummary(data) {
@@ -59998,6 +60085,7 @@
     renderExperimentalFlags();
     buildSettingsSearchIndex();
     refreshAppearanceChecks();
+    refreshMonthlyClaudePlanInput();
     refreshSpawnEngineValue();
     refreshEngineUpdateStatus();
     refreshKimiSetupStatus();
@@ -60138,6 +60226,23 @@
         return;
       }
     });
+
+    const monthlyPlanInput = document.getElementById('settingsMonthlyClaudePlanInput');
+    if (monthlyPlanInput) {
+      monthlyPlanInput.addEventListener('change', () => {
+        const value = Number(monthlyPlanInput.value);
+        try {
+          if (Number.isFinite(value) && value > 0) {
+            localStorage.setItem(CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY, String(value));
+          } else {
+            localStorage.removeItem(CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY);
+          }
+        } catch (_) {}
+        _weeklyClaudeUsage = null;
+        _renderRailTokens();
+        showSettingsSavedPulse(monthlyPlanInput.closest('.settings-row'));
+      });
+    }
 
     $settingsModal.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
