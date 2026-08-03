@@ -40676,9 +40676,46 @@
   // limit, with a peak indicator if it's higher than the latest.
   let _usageSessionIdByPane = {};  // paneId -> sid whose usage that pane's strip shows
   let _usageDataByPane = {};       // paneId -> latest /usage payload for that sid
+  let _usageRequestByPane = {};    // paneId -> current {sid, generation, promise}
+  let _usageRequestGenerationByPane = {}; // paneId -> stale-response guard
+  let _usageLastFetchByPane = {};  // paneId -> most recent {sid, at}
+  const SESSION_USAGE_REFRESH_MIN_MS = 5000;
   const _deferredStreamBatches = [];
   let _deferredUsageSid = null;
   let _deferredUsagePaneId = '';
+
+  // SESSION_USAGE_REFRESH_POLICY_START
+  function sessionUsageRefreshDecision(currentSid, requestedSid, paneVisible, documentVisible, inFlightSid, recentlyFetchedSid) {
+    if (!requestedSid) {
+      return { shouldFetch: false, shouldClear: true, shouldCoalesce: false };
+    }
+    const visible = !!paneVisible && !!documentVisible;
+    if (!visible) {
+      return { shouldFetch: false, shouldClear: false, shouldCoalesce: false };
+    }
+    const duplicate = inFlightSid === requestedSid;
+    const recentlyFetched = recentlyFetchedSid === requestedSid;
+    return {
+      shouldFetch: !duplicate && !recentlyFetched,
+      shouldClear: currentSid !== requestedSid,
+      shouldCoalesce: duplicate,
+    };
+  }
+  // SESSION_USAGE_REFRESH_POLICY_END
+
+  function _sessionUsagePaneIsVisible(pid, sid) {
+    if (!sid || document.hidden) return false;
+    const pane = (typeof paneByPaneId === 'function') ? paneByPaneId(pid) : null;
+    if (!pane || !pane.currentSession || pane.currentSession.id !== sid) return false;
+    const paneEl = document.querySelector('.conv-pane[data-pane-id="' + pid + '"]');
+    if (!paneEl || !paneEl.isConnected) return false;
+    const style = window.getComputedStyle(paneEl);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = paneEl.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0
+      && rect.right > 0 && rect.bottom > 0
+      && rect.left < window.innerWidth && rect.top < window.innerHeight;
+  }
 
   function _isComposerElement(el) {
     if (!el) return false;
@@ -40705,33 +40742,67 @@
   }
 
   async function fetchSessionUsage(sid, paneId) {
-    if (_isComposerFocused()) {
+    if (sid && _isComposerFocused()) {
       _deferredUsageSid = sid;
       _deferredUsagePaneId = paneId || '';
       return;
     }
     const pid = paneId || paneIdForSessionId(sid);
-    _usageSessionIdByPane[pid] = sid;
-    _usageDataByPane[pid] = null;
-    const slot = getInputContextSlot(pid);
-    const uSlot = slot && slot.querySelector('[data-usage]');
-    if (uSlot) uSlot.innerHTML = '';
-    syncInputContextVisibility(slot);
-    _renderRailTokens(pid);
-    if (!sid) return;
-    try {
-      // cache-buster: usage rollups land sporadically in the JSONL, so the
-      // first fetch after selection often returns latest=0 and the browser
-      // would happily serve that zero response on every subsequent call.
-      // Forcing a fresh request each time is fine — the server-side
-      // computation is fast and uses no cache.
-      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage?_t=' + Date.now(), { cache: 'no-store' });
-      const data = await res.json();
-      if (_usageSessionIdByPane[pid] !== sid) return;
-      _usageDataByPane[pid] = data;
-      renderSessionUsageIntoStrip(pid);
+    const currentSid = _usageSessionIdByPane[pid] || null;
+    const inFlight = _usageRequestByPane[pid] || null;
+    const lastFetch = _usageLastFetchByPane[pid] || null;
+    const recentlyFetchedSid = lastFetch && (Date.now() - lastFetch.at < SESSION_USAGE_REFRESH_MIN_MS)
+      ? lastFetch.sid : '';
+    const paneVisible = sid ? _sessionUsagePaneIsVisible(pid, sid) : false;
+    const decision = sessionUsageRefreshDecision(
+      currentSid,
+      sid,
+      paneVisible,
+      !document.hidden,
+      inFlight && inFlight.sid,
+      recentlyFetchedSid,
+    );
+
+    if (decision.shouldClear) {
+      _usageRequestGenerationByPane[pid] = (_usageRequestGenerationByPane[pid] || 0) + 1;
+      _usageSessionIdByPane[pid] = sid;
+      _usageDataByPane[pid] = null;
+      delete _usageLastFetchByPane[pid];
+      const slot = getInputContextSlot(pid);
+      const uSlot = slot && slot.querySelector('[data-usage]');
+      if (uSlot) uSlot.innerHTML = '';
+      syncInputContextVisibility(slot);
       _renderRailTokens(pid);
-    } catch (_) {}
+    }
+    if (decision.shouldCoalesce) return inFlight.promise;
+    if (!decision.shouldFetch) return;
+
+    const generation = (_usageRequestGenerationByPane[pid] || 0) + 1;
+    _usageRequestGenerationByPane[pid] = generation;
+    _usageLastFetchByPane[pid] = { sid, at: Date.now() };
+    const request = (async () => {
+      try {
+        // cache-buster: usage rollups land sporadically in the JSONL, so the
+        // first fetch after selection often returns latest=0 and the browser
+        // would happily serve that zero response on every subsequent call.
+        // Keep this request uncached, but visibility, single-flight, and refresh-
+        // interval guards above prevent repeated background transcript scans.
+        const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/usage?_t=' + Date.now(), { cache: 'no-store' });
+        const data = await res.json();
+        if (_usageRequestGenerationByPane[pid] !== generation) return;
+        if (_usageSessionIdByPane[pid] !== sid) return;
+        if (!_sessionUsagePaneIsVisible(pid, sid)) return;
+        _usageDataByPane[pid] = data;
+        renderSessionUsageIntoStrip(pid);
+        _renderRailTokens(pid);
+      } catch (_) {
+      } finally {
+        const latest = _usageRequestByPane[pid];
+        if (latest && latest.generation === generation) delete _usageRequestByPane[pid];
+      }
+    })();
+    _usageRequestByPane[pid] = { sid, generation, promise: request };
+    return request;
   }
 
   function scheduleCompactUsageRefresh(sid) {
@@ -40767,15 +40838,18 @@
   }
 
   function _refreshWeeklyClaudeUsage() {
+    if (document.hidden) return Promise.resolve(null);
     if (_weeklyClaudeUsageRequest) return _weeklyClaudeUsageRequest;
     // /api/weekly_usage warms the per-transcript turn cache. Request rankings
     // after it completes so a first use does not race the cache-only rankings
     // endpoint and return an empty contribution for the selected session.
     _weeklyClaudeUsageRequest = fetch('/api/weekly_usage', { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
-      .then(weekly => fetch('/api/throughput/week-rankings?fresh=1', { cache: 'no-store' })
-        .then(r => r.ok ? r.json() : null)
-        .then(rankings => [weekly, rankings]))
+      .then(weekly => document.hidden
+        ? [weekly, null]
+        : fetch('/api/throughput/week-rankings?fresh=1', { cache: 'no-store' })
+          .then(r => r.ok ? r.json() : null)
+          .then(rankings => [weekly, rankings]))
       .then(([weekly, rankings]) => {
       const totalTokens = Number(weekly && weekly.claude_tokens) || 0;
       const bySession = Object.create(null);
@@ -40786,7 +40860,7 @@
         if (row && row.session_id) bySession[row.session_id] = Number(row.week_tokens) || 0;
       });
       _weeklyClaudeUsage = { totalTokens, bySession, rankingsAvailable, loadedAt: Date.now() };
-      _renderRailTokens();
+      if (!document.hidden) _renderRailTokens();
       return _weeklyClaudeUsage;
     }).catch(() => null).finally(() => {
       _weeklyClaudeUsageRequest = null;
@@ -40850,6 +40924,7 @@
   // so only the active pane drives it. Reuses the /usage payload the composer
   // strip already fetched (_usageDataByPane) — no extra request per selection.
   function _renderRailTokens(paneId) {
+    if (document.hidden) return;
     const el = document.getElementById('statusRailTokens');
     if (!el) return;
     const active = (typeof activePaneId === 'function') ? activePaneId() : '';
@@ -40891,6 +40966,18 @@
       _refreshWeeklyClaudeUsage();
     }
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    _renderRailTokens();
+    if (typeof splitState === 'undefined') return;
+    (splitState.panes || []).forEach(pane => {
+      const sid = pane && pane.currentSession && pane.currentSession.id;
+      if (sid && _sessionUsagePaneIsVisible(pane.id, sid)) {
+        fetchSessionUsage(sid, pane.id);
+      }
+    });
+  });
 
   // Circular context gauge (kimi-web ContextRing parity): an SVG ring whose
   // arc fills with the context-% — sits inside the composer's usage pill.
