@@ -415,6 +415,22 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-dg-worker + .q2-dg-worker { margin-top: 4px; }
 .q2-dg-worker.is-live { border-color: var(--green); }
+.q2-dg-worker.is-live.is-idle-pending {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg) 92%, var(--text-muted));
+}
+.q2-dg-worker.is-live.is-idle-warning {
+  border-color: var(--orange);
+  background: color-mix(in srgb, var(--bg) 90%, var(--orange));
+}
+.q2-dg-worker.is-live.is-idle-stale {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--bg) 90%, var(--red));
+}
+.q2-dg-worker.is-idle-warning .q2-dg-spin { border-color: var(--orange); border-right-color: transparent; }
+.q2-dg-worker.is-idle-stale .q2-dg-spin { border-color: var(--red); border-right-color: transparent; }
+.q2-dg-worker.is-idle-warning .q2-dg-worker-idle { color: var(--orange); opacity: 1; }
+.q2-dg-worker.is-idle-stale .q2-dg-worker-idle { color: var(--red); opacity: 1; }
 .q2-dg-worker.is-empty {
   border-style: dashed;
   flex-direction: row;

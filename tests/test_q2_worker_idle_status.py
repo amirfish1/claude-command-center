@@ -80,3 +80,17 @@ def test_read_workers_adds_only_bounded_idle_fields(server, tmp_path):
     assert rows[0]["idle_seconds"] == 12
     assert rows[0]["idle_source"] == "watchtower_stdout"
     assert "/private/leak" not in str(rows[0])
+
+
+def test_q2_renders_idle_presentation_and_signature_bucket():
+    source = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
+    assert "Q2WorkerIdle.presentation(w.idle_seconds)" in source
+    assert "Q2WorkerIdle.signatureBucket(w.idle_seconds)" in source
+    assert "holding nothing" not in source
+    assert "data-idle-severity" in source
+
+
+def test_q2_idle_severity_styles_exist():
+    source = (PROJECT_ROOT / "static" / "q2.css").read_text(encoding="utf-8")
+    assert ".q2-dg-worker.is-idle-warning" in source
+    assert ".q2-dg-worker.is-idle-stale" in source

@@ -861,7 +861,9 @@
       projectKey(state.queue), m.auto ? 1 : 0, m.github ? 1 : 0, m.stuck ? 1 : 0,
       m.waiting.length, m.parked.length, m.blocked.length,
       m.working.map(function (it) { return it.ref; }).join(','),
-      m.workers.map(function (w) { return w.worker_id; }).join(','),
+      m.workers.map(function (w) {
+        return w.worker_id + ':' + Q2WorkerIdle.signatureBucket(w.idle_seconds);
+      }).join(','),
       m.doneRecent.map(function (it) { return it.ref; }).join(','),
     ].join('|');
   }
@@ -897,7 +899,12 @@
           var s = String(it.claimed_session_id || '').trim(), by = String(it.claimed_by || '').trim();
           return (s && s === w.session_id) || (by && (by === w.session_id || by === w.worker_id));
         })[0];
-        return '<div class="q2-dg-worker is-live">'
+        var idle = Q2WorkerIdle.presentation(w.idle_seconds);
+        var idleClass = idle.severity === 'pending' ? ' is-idle-pending'
+          : idle.severity === 'warning' ? ' is-idle-warning'
+          : idle.severity === 'stale' ? ' is-idle-stale' : '';
+        return '<div class="q2-dg-worker is-live' + (on ? '' : idleClass) + '"'
+          + (on ? '' : ' data-idle-severity="' + esc(idle.severity) + '"') + '>'
           + '<div class="q2-dg-worker-head">'
           + '<span class="q2-dg-spin" aria-hidden="true"></span>'
           + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
@@ -911,7 +918,8 @@
               ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
                 + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
                 + '<span class="q2-dg-worker-title">' + esc(titleOf(on).split('\n')[0].slice(0, 60)) + '</span></div>'
-              : '<div class="q2-dg-worker-idle">holding nothing</div>')
+              : '<div class="q2-dg-worker-idle" title="' + esc(idle.title) + '">'
+                + esc(idle.label) + '</div>')
           + '</div>';
       }).join('');
     } else {
