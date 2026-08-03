@@ -6913,6 +6913,11 @@
     color: #818cf8;
     --icon-shadow-color: rgba(129, 140, 248, 0.42);
   }
+  .conv-session-icon.opencode,
+  .conv-pane-cat-icon.opencode {
+    color: #fb923c;
+    --icon-shadow-color: rgba(251, 146, 60, 0.42);
+  }
   /* Unified session cost palette */
   :is(.conv-session-icon, .conv-pane-cat-icon).cost-premium .session-tier-cost {
     color: #d6b94a;
@@ -7090,6 +7095,7 @@
   .conv-item .source-badge.copilot { background: rgba(86,211,100,0.14); color: #56d364; }
   .conv-item .source-badge.grok { background: rgba(244,114,182,0.14); color: #f472b6; }
   .conv-item .source-badge.copilotchat { background: rgba(129,140,248,0.14); color: #818cf8; }
+  .conv-item .source-badge.opencode { background: rgba(251,146,60,0.14); color: #fb923c; }
   .pkood-tail-output {
     white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono',SFMono-Regular,Consolas,monospace;
     font-size: 13px; line-height: 1.5; padding: 16px 20px; color: var(--text);

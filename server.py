@@ -2581,6 +2581,7 @@ def _archive_load_begin():
         "cursor":      {"key": "cursor",      "label": "Cursor conversations",             "state": "pending", "detail": "Scanning ~/.cursor/projects/."},
         "antigravity": {"key": "antigravity", "label": "Antigravity conversations",        "state": "pending", "detail": "Scanning ~/.gemini/antigravity/brain/."},
         "kilo":        {"key": "kilo",        "label": "Kilo Code conversations",          "state": "pending", "detail": "Scanning ~/.local/share/kilo/kilo.db."},
+        "opencode":    {"key": "opencode",    "label": "OpenCode conversations",           "state": "pending", "detail": "Scanning ~/.local/share/opencode/opencode.db."},
         "hermes":      {"key": "hermes",      "label": "Hermes conversations",             "state": "pending", "detail": "Scanning ~/.hermes/state.db."},
         "kimi":        {"key": "kimi",        "label": "Kimi conversations",               "state": "pending", "detail": "Scanning ~/.kimi-code/sessions/."},
         "copilot":     {"key": "copilot",     "label": "Copilot conversations",            "state": "pending", "detail": "Scanning ~/.copilot/."},
@@ -2599,7 +2600,7 @@ def _archive_load_begin():
             "started_at": now,
             "updated_at": now,
             "steps": steps,
-            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "hermes", "pr_states", "issues", "group_chats"],
+            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "pr_states", "issues", "group_chats"],
         })
 
 
@@ -3655,10 +3656,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes", "kimi"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "hermes", "kimi"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -3670,6 +3671,8 @@ def _detect_session_engine_uncached(session_id):
         return "gemini"
     if _is_kilo_session(session_id):
         return "kilo"
+    if _is_opencode_session(session_id):
+        return "opencode"
     if _is_hermes_session(session_id):
         return "hermes"
     if _is_kimi_session(session_id):
@@ -4664,7 +4667,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "hermes", "kimi")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -4681,6 +4684,9 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "kilo": "kilo",
     "kilo-code": "kilo",
     "kilo_code": "kilo",
+    "opencode": "opencode",
+    "open-code": "opencode",
+    "open_code": "opencode",
     "hermes": "hermes",
     "kimi": "kimi",
     "kimi-code": "kimi",
@@ -4728,6 +4734,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_ANTIGRAVITY_MODEL") or _antigravity_cli_configured_model()
     if engine == "kilo":
         return os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
+    if engine == "opencode":
+        return os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
     if engine == "hermes":
         return os.environ.get("CCC_HERMES_MODEL", "auto")
     if engine == "kimi":
@@ -4784,6 +4792,11 @@ _ENGINE_CURATED_MODELS = {
         {"id": "kilo/openai/gpt-6.0", "label": "gpt-6.0"},
         {"id": "kilo/openai/gpt-5.5", "label": "gpt-5.5"},
     ),
+    "opencode": (
+        {"id": "anthropic/claude-sonnet-4-5", "label": "claude-sonnet-4-5"},
+        {"id": "anthropic/claude-opus-4-1", "label": "claude-opus-4-1"},
+        {"id": "openai/gpt-5", "label": "gpt-5"},
+    ),
     "hermes": (
         {"id": "auto", "label": "Auto (default)"},
         {"id": "hermes-3-llama-3.1-405b", "label": "hermes-3-llama-3.1-405b"},
@@ -4809,6 +4822,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "cursor": True,
     "antigravity": True,
     "kilo": True,
+    "opencode": True,
     "hermes": True,
     "kimi": True,
 }
@@ -5361,6 +5375,7 @@ def _build_engine_model_catalog(force_refresh=False):
         "cursor": os.environ.get("CCC_CURSOR_MODEL"),
         "antigravity": os.environ.get("CCC_ANTIGRAVITY_MODEL"),
         "kilo": os.environ.get("CCC_KILO_MODEL"),
+        "opencode": os.environ.get("CCC_OPENCODE_MODEL"),
         "hermes": os.environ.get("CCC_HERMES_MODEL"),
         "kimi": os.environ.get("CCC_KIMI_MODEL"),
     }
@@ -6079,6 +6094,7 @@ def _archive_session_is_live_uncached(session_id):
         or _is_gemini_session(session_id)
         or _is_antigravity_session(session_id)
         or _is_kilo_session(session_id)
+        or _is_opencode_session(session_id)
     )
     if not is_non_claude_engine and SIDECAR_STATE_DIR.is_dir():
         # Only a FRESH sidecar proves liveness — a stale one is a dead session's
@@ -8295,6 +8311,16 @@ def find_all_conversations(
         pass
     try:
         out.extend(find_kilo_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+            resolve_pr_states=resolve_pr_states,
+            resolve_worktree_dirty=resolve_worktree_dirty,
+        ))
+    except Exception:
+        pass
+    try:
+        out.extend(find_opencode_conversations(
             include_old=True,
             repo_only=False,
             limit=limit_per_folder,
@@ -11736,6 +11762,8 @@ def enqueue_annotation_ux_fixes_queue(
             spawned = spawn_session_gemini(text, name=queue_name, repo_path=repo_path)
         elif engine == "kilo":
             spawned = spawn_session_kilo(text, name=queue_name, repo_path=repo_path)
+        elif engine == "opencode":
+            spawned = spawn_session_opencode(text, name=queue_name, repo_path=repo_path)
         elif engine == "cursor":
             spawned = spawn_session_cursor(text, name=queue_name, repo_path=repo_path)
         else:
@@ -17612,6 +17640,12 @@ def find_session_cwd(session_id):
             cwd = _resolve_session_cwd(session_id, cwd)
             _session_cwd_cache[session_id] = cwd
             return cwd
+    if _is_opencode_session(session_id):
+        cwd = _opencode_session_cwd(session_id)
+        if cwd:
+            cwd = _resolve_session_cwd(session_id, cwd)
+            _session_cwd_cache[session_id] = cwd
+            return cwd
     if not PROJECTS_ROOT.is_dir():
         return None
 
@@ -20532,6 +20566,21 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             progress("kilo", state="error", detail=f"Kilo session scan failed: {exc}")
 
     if progress:
+        progress("opencode", state="running", detail="Reading OpenCode sessions.")
+    try:
+        conversations.extend(find_opencode_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("opencode", state="done")
+    except Exception as exc:
+        if progress:
+            progress("opencode", state="error", detail=f"OpenCode session scan failed: {exc}")
+
+    if progress:
         progress("hermes", state="running", detail="Reading Hermes sessions.")
     try:
         conversations.extend(find_hermes_conversations(
@@ -21158,6 +21207,12 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "kilo":
         result = _parse_kilo_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "opencode":
+        result = _parse_opencode_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
@@ -35514,7 +35569,7 @@ def _resume_queue_engine_busy(sid):
     if any(
         s.get("resumed_sid") == sid and _poll_spawn_entry(s) is None
         for s in _spawned_sessions
-        if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes")
+        if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes", "opencode")
     ):
         return True
     if _is_codex_session(sid):
@@ -36371,6 +36426,8 @@ def _start_resume_queue_watcher() -> None:
                         result = resume_session_antigravity(sid, text)
                     elif _is_hermes_session(sid):
                         result = resume_session_hermes(sid, text)
+                    elif _is_opencode_session(sid):
+                        result = resume_session_opencode(sid, text)
                 except Exception:
                     result = {"ok": False}
                 if not result or not result.get("ok"):
@@ -36684,6 +36741,8 @@ _adopt_ccc_module("hermes")
 
 _adopt_ccc_module("kilo")
 
+_adopt_ccc_module("opencode")
+
 _adopt_ccc_module("copilot_cli")
 
 _adopt_ccc_module("grok")
@@ -36738,6 +36797,7 @@ def _detect_engines_installed():
         ("cursor", "Cursor", _resolve_cursor_bin),
         ("antigravity", "Antigravity", _resolve_antigravity_bin),
         ("kilo", "Kilo Code", _resolve_kilo_bin),
+        ("opencode", "OpenCode", _resolve_opencode_bin),
         ("kimi", "Kimi Code", _resolve_kimi_bin),
         ("hermes", "Hermes", _resolve_hermes_bin),
     ):
@@ -41368,6 +41428,71 @@ def spawn_session_kilo(prompt, name=None, cwd=None, repo_path=None, worktree=Fal
         parent_session_id=parent_session_id,
     )
     resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "kilo-spawn"}
+    if worktree_path:
+        resp["worktree_path"] = worktree_path
+        resp["worktree_branch"] = worktree_branch
+    return _finalize_spawn_response(resp, entry, ctx)
+
+
+def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+    """Spawn a headless OpenCode CLI run and return tracking info."""
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    resolved = _resolve_opencode_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-opencode-{session_name}-{timestamp}.log"
+    model_to_use = _spawn_model_for_engine("opencode", model) or os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
+    if model_to_use:
+        _set_session_model(log_filename[:-4], model_to_use, False)
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+    worktree_path = None
+    worktree_branch = None
+    if worktree:
+        try:
+            worktree_path, worktree_branch = _create_worktree_for_spawn(spawn_cwd, session_name)
+            spawn_cwd = worktree_path
+        except RuntimeError as e:
+            return {"ok": False, "error": f"worktree creation failed: {e}"}
+    cmd = [resolved["bin"], "run", "--auto"]
+    if model_to_use:
+        cmd.extend(["--model", model_to_use])
+    cmd.extend([prompt])
+    log_fh = open(log_path, "w")
+    if worktree_path:
+        _run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
+    try:
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
+            cwd=spawn_cwd, start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "code": "opencode_launch_failed", "via": "opencode-spawn"}
+    failure = _spawn_early_failure_payload(proc, log_path, log_fh, engine="opencode", via="opencode-spawn")
+    if failure:
+        return failure
+    entry = {
+        "pid": proc.pid, "name": session_name, "log": str(log_path),
+        "prompt": prompt[:200], "started": timestamp, "proc": proc,
+        "log_fh": log_fh, "fifo": None, "stdin_fd": None,
+        "engine": "opencode", "cwd": spawn_cwd, "repo_path": repo_for_logs,
+        "model": model_to_use or "", "parent_session_id": parent_session_id or "",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid, name=session_name, log_path=log_path, cwd=spawn_cwd,
+        spawned_at=timestamp, command_summary=prompt[:200],
+        fifo=None, engine="opencode", repo_path=repo_for_logs, model=model_to_use,
+        parent_session_id=parent_session_id,
+    )
+    resp = {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path), "via": "opencode-spawn"}
     if worktree_path:
         resp["worktree_path"] = worktree_path
         resp["worktree_branch"] = worktree_branch
@@ -46735,11 +46860,13 @@ def _inject_text_into_session(
     is_cursor = _is_cursor_session(session_id)
     is_hermes = _is_hermes_session(session_id)
     is_kimi = _is_kimi_session(session_id)
+    is_opencode = _is_opencode_session(session_id)
     if (
         not is_codex
         and not is_kimi
         and not is_cursor
         and not is_hermes
+        and not is_opencode
         and not _is_gemini_session(session_id)
         and not _is_antigravity_session(session_id)
         and not has_tty
@@ -47015,6 +47142,8 @@ def _inject_text_into_session(
         return resume_session_antigravity(session_id, text)
     if is_hermes:
         return resume_session_hermes(session_id, text)
+    if is_opencode:
+        return resume_session_opencode(session_id, text)
     if not status.get("live") or not has_tty:
         spawn = _find_live_spawn_entry_for_session(session_id)
         if spawn is not None:
@@ -48098,6 +48227,8 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
         spawn_result = resume_session_antigravity(session_id, text)
     elif engine == "hermes":
         spawn_result = resume_session_hermes(session_id, text)
+    elif engine == "opencode":
+        spawn_result = resume_session_opencode(session_id, text)
     else:
         return {"ok": False, "error": f"unsupported ask engine: {engine}", "source": "engine-resume"}
     source = f"{engine}-resume"
@@ -48175,7 +48306,7 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
                         ev = json.loads(stripped)
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         raw = stripped.decode("utf-8", "replace")
-                        if engine in ("antigravity", "hermes"):
+                        if engine in ("antigravity", "hermes", "opencode"):
                             raw_chunks.append(raw)
                         continue
                     text_piece = _engine_stream_event_text(engine, ev)
@@ -48203,14 +48334,14 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
                         try:
                             ev = json.loads(stripped)
                         except (json.JSONDecodeError, UnicodeDecodeError):
-                            if engine in ("antigravity", "hermes"):
+                            if engine in ("antigravity", "hermes", "opencode"):
                                 raw_chunks.append(stripped.decode("utf-8", "replace"))
                             continue
                         text_piece = _engine_stream_event_text(engine, ev)
                         if text_piece:
                             text_chunks.append(text_piece)
                     text_out = "\n".join(text_chunks).strip()
-                    if not text_out and engine in ("antigravity", "hermes"):
+                    if not text_out and engine in ("antigravity", "hermes", "opencode"):
                         text_out = "\n".join(raw_chunks).strip()
                     if poll == 0:
                         return {
@@ -48245,9 +48376,9 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
 def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
     """Synchronously inject `text` into a session and wait for its reply.
 
-    Non-claude engines route first: codex/gemini/antigravity/hermes go to
-    ask_engine_session_and_wait (engine resume + stream tail); kimi goes to
-    _acp_ask_and_wait (ACP session/prompt, blocks for the turn-end response).
+    Non-claude engines route first: codex/gemini/antigravity/hermes/opencode
+    go to ask_engine_session_and_wait (engine resume + stream tail); kimi goes
+    to _acp_ask_and_wait (ACP session/prompt, blocks for the turn-end response).
     Claude sessions then pick between two paths, chosen from live status:
 
     - **Live target** (the user has `claude` open in a terminal for this
@@ -48277,7 +48408,7 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None):
         }, timeout=min(660.0, max(60.0, timeout_ms / 1000.0 + 45.0)))
 
     engine = _detect_session_engine(session_id)
-    if engine in ("codex", "gemini", "antigravity", "hermes"):
+    if engine in ("codex", "gemini", "antigravity", "hermes", "opencode"):
         return ask_engine_session_and_wait(session_id, text, timeout_ms, engine)
     if engine == "kimi":
         return _acp_ask_and_wait("kimi", session_id, text, timeout_ms)
@@ -49020,7 +49151,7 @@ def _throughput_normalize_usage(usage, *, engine="", model=""):
     )
     if raw_context:
         fresh_input = max(raw_context - cache_read - cache_write, 0)
-    elif has_subset_cached or engine_l in ("codex", "gemini", "cursor", "kilo"):
+    elif has_subset_cached or engine_l in ("codex", "gemini", "cursor", "kilo", "opencode"):
         raw_context = input_tokens
         fresh_input = max(input_tokens - cache_read - cache_write, 0)
     else:
@@ -53815,6 +53946,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info = _resolve_kilo_bin()
             info["model"] = os.environ.get("CCC_KILO_MODEL", "kilo/stepfun/step-3.7-flash:free")
             self.send_json(info)
+        elif path == "/api/sessions/spawn-opencode/availability":
+            info = _resolve_opencode_bin()
+            info["model"] = os.environ.get("CCC_OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
+            self.send_json(info)
         elif path == "/api/sessions/spawn-kimi/availability":
             routed = _control_plane_engine_call(
                 "kimi", "availability", {}, mutate=False,
@@ -58402,6 +58537,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                         )
+                    elif engine == "opencode":
+                        result = spawn_session_opencode(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                        )
                     elif engine == "hermes":
                         result = spawn_session_hermes(
                             prompt,
@@ -58788,6 +58933,67 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         model=model,
                     )
                     if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
+                        self.send_json(result, 503)
+                    else:
+                        self.send_json(result)
+                except RepoContextError as e:
+                    self.send_json(e.as_payload(), e.status)
+                except Exception as e:
+                    self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/sessions/spawn-opencode":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            prompt = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
+            name = (payload.get("name") or "").strip() or None
+            cwd_raw = payload.get("cwd")
+            cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
+            cwd_resolved = None
+            cwd_error = None
+            if cwd_input:
+                try:
+                    expanded = os.path.expanduser(cwd_input)
+                    candidate = Path(expanded).resolve()
+                except (OSError, RuntimeError) as e:
+                    cwd_error = f"could not resolve path ({e})"
+                else:
+                    home = Path.home().resolve()
+                    try:
+                        st = os.stat(candidate)
+                    except OSError as e:
+                        cwd_error = f"path does not exist ({e.strerror or e})"
+                    else:
+                        if not stat.S_ISDIR(st.st_mode):
+                            cwd_error = f"not a directory: {candidate}"
+                        else:
+                            try:
+                                candidate.relative_to(home)
+                            except ValueError:
+                                if _spawn_cwd_outside_home_allowed(candidate):
+                                    cwd_resolved = candidate
+                                else:
+                                    cwd_error = f"path is not an accessible directory: {candidate}"
+                            else:
+                                cwd_resolved = candidate
+            model = payload.get("model")
+            if not prompt:
+                self.send_json({"ok": False, "error": "missing prompt"}, 400)
+            elif cwd_error:
+                self.send_json({"ok": False, "error": f"invalid cwd: {cwd_error}"}, 400)
+            else:
+                try:
+                    result = spawn_session_opencode(
+                        prompt,
+                        name=name,
+                        cwd=str(cwd_resolved) if cwd_resolved else None,
+                        repo_path=payload.get("repo_path"),
+                        worktree=bool(payload.get("worktree")),
+                        model=model,
+                    )
+                    if result.get("code") in ("opencode_unavailable", "opencode_launch_failed"):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
@@ -66104,6 +66310,11 @@ def _telemetry_detect_engines():
     try:
         if _resolve_kilo_bin().get("available"):
             out.append("kilo")
+    except Exception:
+        pass
+    try:
+        if _resolve_opencode_bin().get("available"):
+            out.append("opencode")
     except Exception:
         pass
     return out

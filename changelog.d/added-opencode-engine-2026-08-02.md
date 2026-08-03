@@ -1,0 +1,1 @@
+- OpenCode is now a seventh supported engine: spawn, monitor, and ingest OpenCode sessions alongside Claude, Codex, Cursor, Antigravity, Kilo Code, and Kimi Code, with its own curated model list (claude-sonnet-4-5, claude-opus-4-1, gpt-5) and engine iconography.

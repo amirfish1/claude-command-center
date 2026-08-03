@@ -323,6 +323,46 @@ class TestServerImports(unittest.TestCase):
         self.assertIsInstance(server.__version__, str)
         self.assertRegex(server.__version__, r"^\d+\.\d+\.\d+")
 
+    def test_opencode_engine_surfaces_exist(self):
+        """OpenCode engine must be wired for resolve, spawn, resume, is_,
+        discovery and parse. Uses mocks so it works even without the opencode
+        binary."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "_resolve_opencode_bin"))
+        self.assertTrue(hasattr(server, "spawn_session_opencode"))
+        self.assertTrue(hasattr(server, "_is_opencode_session"))
+        self.assertTrue(hasattr(server, "find_opencode_conversations"))
+        self.assertTrue(hasattr(server, "_parse_opencode_conversation"))
+        self.assertTrue(hasattr(server, "resume_session_opencode"))
+
+        # resolve shape (no real opencode needed)
+        with mock.patch.object(server.shutil, "which", return_value=None):
+            with mock.patch.object(server.Path, "home", return_value=server.Path("/tmp/fakehome")):
+                info = server._resolve_opencode_bin()
+                self.assertIsInstance(info, dict)
+                self.assertIn("available", info)
+                self.assertIsInstance(info["available"], bool)
+                self.assertFalse(info["available"])  # no binary in the fake env
+
+        # is_opencode on a spawned entry
+        server._spawned_sessions[:] = []  # reset for test
+        server._spawned_sessions.append({"engine": "opencode", "session_id": "test-osid-123", "name": "osid"})
+        self.assertTrue(server._is_opencode_session("test-osid-123"))
+        self.assertFalse(server._is_opencode_session("not-an-opencode-id"))
+        server._spawned_sessions[:] = []
+
+        # route wiring (mirrors the kimi/kilo route assertions)
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('"/api/sessions/spawn-opencode"', server_py)
+        self.assertIn('"/api/sessions/spawn-opencode/availability"', server_py)
+        self.assertIn("if _is_opencode_session(session_id):", server_py)
+
+        # follow-up steering lives in the adapter (mirrors the hermes resume)
+        opencode_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "opencode.py").read_text(encoding="utf-8")
+        self.assertIn("opencode-resume", opencode_py)
+
     def test_repo_kind_classifier(self):
         """Production vs dev/test classification respects explicit overrides
         and common path-name heuristics."""
