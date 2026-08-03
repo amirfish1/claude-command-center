@@ -28168,7 +28168,14 @@
       const _currentSessionsWindowS = _ipWindowDays ? (_ipWindowDays * 24 * 3600) : null;
       const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all' : (_ipWindow === '7d' ? 'last 7d' : 'last 1d');
       const _nowS = Date.now() / 1000;
-      const _sessionTs = (c) => (c.modified || c.mtime || 0);
+      // Keep Current-session ordering and gap dividers aligned with the row's
+      // displayed age: a CCC interaction can be newer than the transcript
+      // file's mtime, so using only `modified` can hide an obvious work break.
+      const _currentSessionActivityTs = (c) => Math.max(
+        Number(c && c.last_interacted || 0),
+        Number(c && c.modified || c && c.mtime || 0)
+      );
+      const _sessionTs = _currentSessionActivityTs;
       // Stable order: without this the 5s poll reshuffles the list every time a
       // live session's mtime ticks (it jumps). Mirror the flat/folder views —
       // 5-min hysteresis + remembered order so near-simultaneous rows hold their
@@ -28420,7 +28427,7 @@
         // preserved by merging rather than re-sorting.
         const _currentSessionsFlatRowsWithSeparators = (items, gcItems) => {
           const clusters = _subagentRowsToClusters(items).map(cluster => Object.assign(cluster, {
-            mtime: (cluster.rows[0] && cluster.rows[0].card && cluster.rows[0].card.modified) || 0,
+            mtime: Math.max(...cluster.rows.map(row => _currentSessionActivityTs(row.card))),
           }));
           const entries = [];
           let pendingSingles = [];
@@ -28428,7 +28435,7 @@
             if (!pendingSingles.length) return;
             const cards = pendingSingles.map(item => item.card);
             entries.push({
-              mtime: (cards[0] && cards[0].modified) || 0,
+              mtime: _currentSessionActivityTs(cards[0]),
               html: _renderRowsWithRepeatGroups(cards, { lifecycleContext: 'active', suppressFolderChip: false, quietTitleChrome: true }),
             });
             pendingSingles = [];
