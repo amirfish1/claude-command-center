@@ -5226,6 +5226,15 @@
     margin-bottom: 0;
     border-radius: 6px;
   }
+  /* A long timestamp gap is a new keyboard work session. Give that existing
+     boundary a full-width rule here: the generic, low-opacity divider was
+     easy to miss inside this compact panel. */
+  .conv-current-sessions-scroll .conv-gap-separator {
+    margin: 9px 8px 7px;
+    padding-top: 5px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 78%, var(--text-muted));
+    opacity: 0.88;
+  }
   .conv-current-sessions-scroll .conv-item:hover {
     background: rgba(255, 255, 255, 0.045);
   }

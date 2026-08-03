@@ -2444,6 +2444,14 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item[data-hb]", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover:not(.active) > .conv-outcome", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within:not(.active) > .conv-outcome", current_css)
+
+    def test_current_sessions_gap_divider_is_visually_distinct(self):
+        """A long inactivity gap should read as a new keyboard work session."""
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        current_css = app_css[app_css.index(".conv-current-sessions-scroll {"):app_css.index("/* ===========================================================", app_css.index(".conv-current-sessions-scroll {"))]
+        self.assertIn(".conv-current-sessions-scroll .conv-gap-separator {", current_css)
+        self.assertIn("border-top: 1px solid color-mix(in srgb, var(--border) 78%, var(--text-muted));", current_css)
         self.assertNotIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item:hover > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item:focus-within > :not(.conv-title-row),\n  .conv-current-sessions-scroll:not(.is-search-results) .conv-item.active > :not(.conv-title-row) { display: none; }", current_css)
 
     def test_by_objects_current_sessions_nest_parented_sessions(self):
