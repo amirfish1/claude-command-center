@@ -12144,7 +12144,7 @@
    * dark page wondering if the app is broken. Fades out once the first
    * /api/sessions response renders. */
   .ccc-loading-overlay {
-    position: fixed; inset: 0; z-index: 1000;
+    position: fixed; inset: 0; z-index: 100001;
     background: var(--bg);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 14px;
