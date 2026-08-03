@@ -25578,10 +25578,12 @@ def _codex_app_server_track_thread_health(method, thread_id, response):
     _CODEX_APP_SERVER_FALSE_MISSES += 1
     if _CODEX_APP_SERVER_FALSE_MISSES >= _CODEX_APP_SERVER_FALSE_MISS_LIMIT:
         _CODEX_APP_SERVER_FALSE_MISSES = 0
-        _log_codex_app_server(
+        _log_activity(
+            "app-server",
+            "RECYCLE",
             f"{_CODEX_APP_SERVER_FALSE_MISS_LIMIT} verified"
             " false 'thread not found' misses with rollouts on disk;"
-            " recycling app-server child"
+            " recycling app-server child",
         )
         _codex_app_server_shutdown()
 

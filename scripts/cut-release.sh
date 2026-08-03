@@ -78,14 +78,14 @@ step "Preflight checks"
 # Both happened on v5.17.0 (2026-07-28): the server-status endpoint shipped
 # without the chip that renders it, and 5.17.1 had to follow immediately.
 # The old behaviour here was warn-and-continue, which is how it got missed.
-DIRTY="$(git status --porcelain --untracked-files=no | grep -vE 'README.md|docs/images' || true)"
+DIRTY="$(git status --porcelain --untracked-files=all | grep -vE 'README.md|docs/images' || true)"
 if [ -n "$DIRTY" ]; then
   if [ "$ALLOW_DIRTY" = 1 ]; then
     warn "working tree is dirty and --allow-dirty was passed; these files ride along:"
     echo "$DIRTY" | sed 's/^/     /'
     warn "anything outside CHANGELOG.md/pyproject.toml/server.py/changelog.d will NOT be staged"
   else
-    echo "${RED}working tree has uncommitted tracked changes; refusing to cut a release${NC}" >&2
+    echo "${RED}working tree has uncommitted or untracked changes; refusing to cut a release${NC}" >&2
     echo "$DIRTY" | sed 's/^/     /' >&2
     echo "" >&2
     echo "Commit them first. Only CHANGELOG.md, pyproject.toml, server.py and" >&2

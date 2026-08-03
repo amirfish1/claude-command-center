@@ -4760,7 +4760,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("renderSidebar(filterConversations($convSearch.value), { force: true });", app_js)
         self.assertIn("function renderSidebar(convs, opts)", app_js)
-        self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
+        self.assertIn("if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
 
     def test_composer_uses_js_autosize_not_native_field_sizing(self):
         """The composer must avoid native field-sizing in WKWebView.
@@ -4948,7 +4948,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("$convList.addEventListener('scroll', noteConversationListScrollActivity, { passive: true, capture: true });", app_js)
         self.assertIn("$convList.addEventListener('touchmove', noteConversationListScrollActivity, { passive: true, capture: true });", app_js)
         self.assertIn("if (isConversationListScrollActive()) return true;", app_js)
-        self.assertIn("if (!(opts && opts.force) && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
+        self.assertIn("if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
         self.assertIn("const _skipFlipForTouchScroll = shouldUseTouchRowMode();", app_js)
         self.assertIn("&& !_skipFlipForTouchScroll", app_js)
         self.assertNotIn("el.classList.add('mobile-active-tap')", app_js)
@@ -5092,7 +5092,7 @@ class TestServerImports(unittest.TestCase):
             app_css.index("PWA install banner", right_rail_start)
         ]
         self.assertIn(
-            "body.status-pos-right .conv-sticky-header,\nbody.status-pos-right #convToolbar {\n  display: none !important;\n}",
+            "body.status-pos-right .conv-sticky-header.is-earlier-empty,\nbody.status-pos-right #convToolbar {\n  display: none !important;\n}",
             right_rail_css,
         )
 
@@ -11149,7 +11149,8 @@ class TestRepoContextHelpers(unittest.TestCase):
         server._CODEX_APP_SERVER_FALSE_MISSES = 0
         error = {"error": {"message": f"thread not found: {sid}"}}
         try:
-            with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+            with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
+                 mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
                  mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error), \
                  mock.patch.object(server, "_codex_rollout_exists_on_disk", return_value=rollout_exists), \
                  mock.patch.object(server, "_codex_app_server_shutdown") as recycle:
@@ -12787,6 +12788,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             try:
                 with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
                      mock.patch.object(server, "_connect_codex_managed_app_server", side_effect=OSError("nope")), \
+                     mock.patch.object(server, "_codex_app_server_reap_stray_children"), \
                      mock.patch.object(server, "_resolve_codex_bin", return_value={"available": True, "bin": "/usr/bin/codex-test"}), \
                      mock.patch.object(server.subprocess, "Popen", return_value=proc), \
                      mock.patch.object(server, "_codex_app_server_request_to_transport", return_value={"result": {}}), \

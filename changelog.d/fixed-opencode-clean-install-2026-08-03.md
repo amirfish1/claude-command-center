@@ -1,0 +1,1 @@
+- Fixed clean installs of v5.19.0 crashing because the OpenCode adapter was missing from the release, hardened release preflight to reject untracked files, and restored Codex app-server recycling after verified false misses.
