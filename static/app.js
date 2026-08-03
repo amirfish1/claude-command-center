@@ -4982,17 +4982,20 @@
       el = document.createElement('div');
       el.className = 'conv-live-tool-inline optimistic';
     }
-    // kimi panes: moon-phases spinner while waiting for the first delta
-    // (kimi-web MoonSpinner.vue) instead of the generic pulse dot.
-    el.innerHTML = (_viewIsWebUiPane($view) ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
-      + '<span class="cl-tool">Sending&hellip;</span>'
-      + '<span class="cl-age">0s</span>';
-    $view.appendChild(el);
     const _optKey = String(window.currentConversation || '');
     if (_optKey !== _optimisticAgentStartKey || !_optimisticAgentStart) {
       _optimisticAgentStart = Date.now();
       _optimisticAgentStartKey = _optKey;
     }
+    // kimi panes: moon-phases spinner while waiting for the first delta
+    // (kimi-web MoonSpinner.vue) instead of the generic pulse dot. The age
+    // span is seeded with the CURRENT age: spawn-time re-renders recreate
+    // this element several times a second, and seeding "0s" made every
+    // recreation flash the counter back to zero between 1s ticks.
+    el.innerHTML = (_viewIsWebUiPane($view) ? _kimiMoonHtml() : '<span class="cl-pulse"></span>')
+      + '<span class="cl-tool">Sending&hellip;</span>'
+      + '<span class="cl-age">' + _optimisticAgeLabel(Date.now() - _optimisticAgentStart) + '</span>';
+    $view.appendChild(el);
     _startOptimisticAgeTicker($view);
     _armOptimisticAgentSafetyTimer($view, 60000);
     // CCC-79: only ONE of the many inject ACK branches advanced this to
@@ -13075,6 +13078,18 @@
       && claudeSpawnAwaitingFirstPaint.has(sid));
     if (typeof stopConvStream === 'function') stopConvStream();
     if (!keepFirstResponseStream) stopSpawnStream();
+    // Drop spawn-optimistic artifacts before the canonical transcript paints:
+    // the pending view's user bubble and any in-flight stream bubble render
+    // the SAME early events the transcript is about to deliver, and neither
+    // carries the data-jsonl-line / data-msg-id the canonical dedup keys on —
+    // so the spawn landing showed every early event twice. The kept stream
+    // (keepFirstResponseStream) re-paints subsequent deltas on its own.
+    try {
+      const $v = (typeof getConvViewForPane === 'function' ? getConvViewForPane(activePaneId()) : null)
+        || (typeof getConvView === 'function' ? getConvView() : null);
+      if ($v) $v.querySelectorAll('.event.user_text.pending, .stream-bubble').forEach(n => n.remove());
+      if (typeof _streamingBubble !== 'undefined') _streamingBubble = null;
+    } catch (_) {}
     setCurrentSession(
       real.source || 'interactive',
       sid,
