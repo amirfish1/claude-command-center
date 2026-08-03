@@ -1,6 +1,7 @@
 """Regression coverage for cache-aware Claude session cost estimates."""
 
 import json
+import time
 
 import pytest
 
@@ -61,3 +62,15 @@ def test_claude_tail_meta_exposes_cache_aware_session_cost(tmp_path):
     assert meta["cost_breakdown_usd"]["cache_read"] == pytest.approx(0.5)
     assert meta["total_cache_creation_tokens"] == 1_000_000
     assert meta["total_cache_read_tokens"] == 1_000_000
+
+
+def test_week_rankings_force_refresh_bypasses_cached_rows(monkeypatch):
+    cached = [{"session_id": "stale", "week_tokens": 99}]
+    monkeypatch.setattr(server, "_THROUGHPUT_RANKINGS_CACHE", {
+        "week": {"ts": time.time(), "rankings": cached},
+    })
+    monkeypatch.setattr(server, "_live_weekly_usage", lambda: None)
+    monkeypatch.setattr(server, "_throughput_recent_conversations", lambda *_: [])
+
+    assert server._throughput_week_rankings() == cached
+    assert server._throughput_week_rankings(force_refresh=True) == []

@@ -51382,7 +51382,7 @@ def _throughput_turn_after_cutoff(turn, cutoff_epoch):
     return t_end.timestamp() >= cutoff_epoch
 
 
-def _throughput_week_rankings():
+def _throughput_week_rankings(force_refresh=False):
     """Return per-session token contribution for the current weekly period.
 
     Uses the same week-start derivation as _weekly_usage_block (live
@@ -51393,7 +51393,8 @@ def _throughput_week_rankings():
     sessions with week_tokens > 0 are included.  Results are sorted
     descending by week_tokens."""
     _rk = _THROUGHPUT_RANKINGS_CACHE.get("week")
-    if _rk and (time.time() - _rk["ts"] < _THROUGHPUT_RANKINGS_CACHE_TTL):
+    if (not force_refresh and _rk
+            and time.time() - _rk["ts"] < _THROUGHPUT_RANKINGS_CACHE_TTL):
         return _rk["rankings"]
     # Derive week_start_epoch the same way _weekly_usage_block does.
     live = _live_weekly_usage()
@@ -54467,7 +54468,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # uncached sessions so the response returns quickly. The frontend
             # can call this non-blocking right after loadSessions().
             try:
-                rankings = _throughput_week_rankings()
+                qs = urllib.parse.parse_qs(parsed.query)
+                force_refresh = qs.get("fresh", ["0"])[0] in ("1", "true", "yes")
+                rankings = _throughput_week_rankings(force_refresh=force_refresh)
             except Exception as e:
                 self.send_json({"error": str(e), "rankings": []}, 200)
                 return

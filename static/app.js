@@ -40773,16 +40773,19 @@
     // endpoint and return an empty contribution for the selected session.
     _weeklyClaudeUsageRequest = fetch('/api/weekly_usage', { cache: 'no-store' })
       .then(r => r.ok ? r.json() : null)
-      .then(weekly => fetch('/api/throughput/week-rankings', { cache: 'no-store' })
+      .then(weekly => fetch('/api/throughput/week-rankings?fresh=1', { cache: 'no-store' })
         .then(r => r.ok ? r.json() : null)
         .then(rankings => [weekly, rankings]))
       .then(([weekly, rankings]) => {
       const totalTokens = Number(weekly && weekly.claude_tokens) || 0;
       const bySession = Object.create(null);
-      (rankings && Array.isArray(rankings.rankings) ? rankings.rankings : []).forEach(row => {
+      const rankingsAvailable = !!(
+        rankings && !rankings.error && Array.isArray(rankings.rankings)
+      );
+      (rankingsAvailable ? rankings.rankings : []).forEach(row => {
         if (row && row.session_id) bySession[row.session_id] = Number(row.week_tokens) || 0;
       });
-      _weeklyClaudeUsage = { totalTokens, bySession, loadedAt: Date.now() };
+      _weeklyClaudeUsage = { totalTokens, bySession, rankingsAvailable, loadedAt: Date.now() };
       _renderRailTokens();
       return _weeklyClaudeUsage;
     }).catch(() => null).finally(() => {
@@ -40791,20 +40794,57 @@
     return _weeklyClaudeUsageRequest;
   }
 
-  function _subscriptionCostThisWeek(sessionId) {
-    const monthlyPlan = _monthlyClaudePlanUsd();
-    const weekly = _weeklyClaudeUsage;
-    const sessionTokens = weekly && sessionId ? Number(weekly.bySession[sessionId]) || 0 : 0;
-    const weeklyTokens = weekly ? Number(weekly.totalTokens) || 0 : 0;
-    if (!monthlyPlan || !sessionTokens || !weeklyTokens) return null;
-    const share = sessionTokens / weeklyTokens;
+  // RAIL_SESSION_COST_PRESENTATION_START
+  function railSessionUsageEngine(usage) {
+    return String((usage && usage.engine) || '').trim().toLowerCase();
+  }
+
+  function railSessionCostPresentation(usage, sessionId, monthlyPlan, weeklyUsage) {
+    if (railSessionUsageEngine(usage) !== 'claude') return null;
+    const plan = Number(monthlyPlan) || 0;
+    const weeklyTokens = weeklyUsage ? Number(weeklyUsage.totalTokens) || 0 : 0;
+    if (plan > 0 && weeklyUsage && weeklyUsage.rankingsAvailable === true && weeklyTokens > 0) {
+      const sessionTokens = sessionId
+        ? Number((weeklyUsage.bySession || {})[sessionId]) || 0
+        : 0;
+      const share = sessionTokens / weeklyTokens;
+      return {
+        cost: plan * 12 / 52 * share,
+        basis: 'subscription',
+        label: 'subscription cost this week',
+        share,
+        sessionTokens,
+        weeklyTokens,
+      };
+    }
+    const rawApiCost = Number(usage && usage.cost_usd);
     return {
-      cost: monthlyPlan * 12 / 52 * share,
-      share,
-      sessionTokens,
-      weeklyTokens,
+      cost: Number.isFinite(rawApiCost) && rawApiCost >= 0 ? rawApiCost : 0,
+      basis: 'api',
+      label: 'API list-price equivalent',
+      share: 0,
+      sessionTokens: 0,
+      weeklyTokens: 0,
     };
   }
+
+  function railSessionCostText(presentation) {
+    if (!presentation) return { cost: '', label: '', tooltip: '' };
+    const cost = '$' + (
+      presentation.basis === 'subscription' || presentation.cost >= 1
+        ? presentation.cost.toFixed(2)
+        : presentation.cost.toFixed(4)
+    );
+    return {
+      cost,
+      label: cost + ' ' + presentation.label,
+      tooltip: presentation.basis === 'subscription'
+        ? (presentation.share * 100).toFixed(1) + '% of '
+          + presentation.weeklyTokens.toLocaleString() + ' Claude tokens this week'
+        : presentation.label + ': ' + cost,
+    };
+  }
+  // RAIL_SESSION_COST_PRESENTATION_END
 
   // Big accumulated-token headline in the status rail head. The rail is global,
   // so only the active pane drives it. Reuses the /usage payload the composer
@@ -40828,26 +40868,26 @@
       el.innerHTML = '';
       return;
     }
-    const cost = u ? (Number(u.cost_usd) || 0) : 0;
     const sessionId = pid ? _usageSessionIdByPane[pid] : '';
-    const subscription = _subscriptionCostThisWeek(sessionId);
+    const monthlyPlan = _monthlyClaudePlanUsd();
+    const presentation = railSessionCostPresentation(
+      u, sessionId, monthlyPlan, _weeklyClaudeUsage
+    );
+    const costText = railSessionCostText(presentation);
     el.innerHTML =
       '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
       + '<div class="rail-tokens-label">tokens this conversation'
-      + (subscription ? ' &middot; $' + subscription.cost.toFixed(2) + ' subscription cost this week' : '')
+      + (presentation ? ' &middot; ' + costText.label : '')
       + '</div>';
     el.title = total.toLocaleString() + ' tokens ('
       + _formatTokens(inTok) + ' in incl. cache, '
       + _formatTokens(outTok) + ' out)'
-      + (subscription
-        ? ' · ' + (subscription.share * 100).toFixed(1) + '% of '
-          + _formatTokens(subscription.weeklyTokens) + ' Claude tokens this week'
-        : '')
-      + (cost ? ' · API list-price equivalent: $' + cost.toFixed(4) : '');
+      + (presentation ? ' · ' + costText.tooltip : '');
     el.hidden = false;
     const weeklyUsageIsStale = !_weeklyClaudeUsage
       || Date.now() - _weeklyClaudeUsage.loadedAt >= WEEKLY_CLAUDE_USAGE_REFRESH_MS;
-    if (_monthlyClaudePlanUsd() && weeklyUsageIsStale && !_weeklyClaudeUsageRequest) {
+    if (railSessionUsageEngine(u) === 'claude'
+        && monthlyPlan && weeklyUsageIsStale && !_weeklyClaudeUsageRequest) {
       _refreshWeeklyClaudeUsage();
     }
   }

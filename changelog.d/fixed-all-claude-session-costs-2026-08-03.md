@@ -1,0 +1,1 @@
+- Claude conversations now always show a dollar cost beside their total tokens, including zero weekly allocation and API-equivalent fallback states.
