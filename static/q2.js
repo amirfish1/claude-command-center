@@ -970,7 +970,9 @@
       + '<span class="q2-dg-dot"></span><span class="q2-dg-dot"></span><span class="q2-dg-dot"></span></div>'
       // 3. Worker
       + '<div class="q2-dg-stage is-worker">'
-      + '<div class="q2-dg-label">Worker<span class="q2-dg-n">' + m.workers.length + '</span></div>'
+      + '<div class="q2-dg-label">Worker<span class="q2-dg-n">' + m.workers.length + '</span>'
+      + '<button type="button" class="q2-dg-report" data-q2-report-diagnostics'
+      + ' title="Review sanitized queue diagnostics before privately sending">Report diagnostics</button></div>'
       + workerBody
       + '</div>'
       // link: worker -> done
@@ -2232,6 +2234,12 @@
     if (releaseWorkerBtn) {
       e.stopPropagation();
       releaseWorker(releaseWorkerBtn.getAttribute('data-q2-release-worker'));
+      return;
+    }
+    var reportDiagnosticsBtn = e.target.closest('[data-q2-report-diagnostics]');
+    if (reportDiagnosticsBtn) {
+      e.stopPropagation();
+      window.location.assign('/?report_diagnostics=' + encodeURIComponent(state.queue));
       return;
     }
     var act = e.target.closest('[data-q2-act]');

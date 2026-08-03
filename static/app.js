@@ -56145,11 +56145,18 @@
   const $bugPreview = document.getElementById('bugPreview');
   const $bugAutoBanner = document.getElementById('bugAutoBanner');
   const $bugAutoOptOut = document.getElementById('bugAutoOptOut');
-  const $bugShotSection = document.getElementById('bugReportShotSection');
+  const $bugShotSection = document.getElementById('bugReportScreenshotSection');
   const $bugShotEmailNote = document.getElementById('bugShotEmailNote');
   let bugCachedVersion = null;
   let bugFallbackMarkdown = '';
   let bugShotB64 = '';  // raw base64 PNG (no data: prefix), '' when no screenshot
+  let bugDiagnosticMode = false;
+  let bugDiagnosticRequestId = '';
+  const bugDiagnosticSections = [
+    'bugReportDestinationSection', 'bugReportIdentitySection',
+    'bugReportScreenshotSection', 'bugReportContextSection',
+    'bugReportPreviewSection', 'bugShotEmailNote',
+  ].map((id) => document.getElementById(id));
   // localStorage opt-out for the auto-opened spawn-stall bug report.
   const BUG_AUTO_OPTOUT_KEY = 'ccc-bug-report-auto-optout';
 
@@ -56157,6 +56164,25 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     })[c]);
+  }
+
+  function bugApplyMode(diagnostic) {
+    bugDiagnosticMode = !!diagnostic;
+    bugDiagnosticSections.forEach((el) => {
+      if (el) el.style.display = diagnostic ? 'none' : '';
+    });
+    const title = document.getElementById('bugReportTitle');
+    const intro = document.getElementById('bugReportIntro');
+    const privacy = document.getElementById('bugReportPrivacyCopy');
+    if (title) title.textContent = diagnostic ? 'Report diagnostics' : 'Report a bug';
+    if (intro) intro.innerHTML = diagnostic
+      ? 'Review the complete report below, edit it if needed, then send it directly to private support.'
+      : 'Tell us what broke — privately by email (recommended) or as a public GitHub issue against <strong>amirfish1/claude-command-center</strong>.';
+    if (privacy) privacy.textContent = diagnostic
+      ? 'Only the text visible in Details will be sent. Prompts, ticket text, files, paths, and raw logs are never included.'
+      : 'Only the data shown in the preview below is sent. No code, no file contents, no personal data is included.';
+    if ($bugDescInput) $bugDescInput.style.minHeight = diagnostic ? '360px' : '';
+    if ($bugSubmitBtn) $bugSubmitBtn.textContent = diagnostic ? 'Send privately' : 'Send report';
   }
 
   async function bugFetchVersion() {
@@ -56254,7 +56280,7 @@
     bugFallbackMarkdown = '';
     if ($bugSubmitBtn) {
       $bugSubmitBtn.disabled = false;
-      $bugSubmitBtn.textContent = 'Send report';
+      $bugSubmitBtn.textContent = bugDiagnosticMode ? 'Send privately' : 'Send report';
     }
     if ($bugCancelBtn) { $bugCancelBtn.disabled = false; $bugCancelBtn.textContent = 'Cancel'; }
   }
@@ -56324,6 +56350,8 @@
       try { if (localStorage.getItem(BUG_AUTO_OPTOUT_KEY) === '1') return; } catch (_) {}
     }
     bugResetState();
+    bugDiagnosticRequestId = '';
+    bugApplyMode(false);
     if ($bugAutoBanner) $bugAutoBanner.style.display = auto ? '' : 'none';
     if ($bugAutoOptOut) $bugAutoOptOut.checked = false;
     if ($bugDescInput) {
@@ -56350,6 +56378,41 @@
   }
   function bugCloseModal() {
     if ($bugModal) $bugModal.classList.remove('open');
+    bugDiagnosticRequestId = '';
+    bugApplyMode(false);
+  }
+
+  async function bugOpenDiagnosticReport(queue) {
+    if (!$bugModal) return;
+    bugResetState();
+    bugApplyMode(true);
+    bugDiagnosticRequestId = '';
+    if ($bugAutoBanner) $bugAutoBanner.style.display = 'none';
+    if ($bugDescInput) $bugDescInput.value = 'Generating sanitized queue diagnostics…';
+    $bugModal.classList.add('open');
+    try {
+      const response = await fetch('/api/bug-report/diagnostics-preview?queue=' + encodeURIComponent(queue), { cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || 'snapshot generation failed');
+      bugDiagnosticRequestId = String(data.request_id || '');
+      if ($bugDescInput) $bugDescInput.value = String(data.report_text || '');
+    } catch (error) {
+      if ($bugDescInput) {
+        $bugDescInput.value = 'Diagnostic generation failed: ' +
+          ((error && error.message) || 'unknown error') +
+          '\n\nDescribe what you observed here before sending.';
+      }
+    }
+    if ($bugDescInput) $bugDescInput.focus();
+  }
+
+  function bugOpenDiagnosticFromLocation() {
+    const url = new URL(window.location.href);
+    const queue = url.searchParams.get('report_diagnostics');
+    if (!queue) return;
+    url.searchParams.delete('report_diagnostics');
+    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    bugOpenDiagnosticReport(queue);
   }
 
   if ($bugLink) $bugLink.addEventListener('click', bugOpenModal);
@@ -56406,6 +56469,51 @@
     bugCloseModal();
   }
 
+  async function bugSubmitPrivateDiagnostic(desc) {
+    if ($bugSubmitBtn) {
+      $bugSubmitBtn.disabled = true;
+      $bugSubmitBtn.textContent = 'Sending privately…';
+    }
+    if ($bugCancelBtn) $bugCancelBtn.disabled = true;
+    const version = await bugFetchVersion();
+    const requestId = bugDiagnosticRequestId ||
+      (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : '00000000-0000-4000-8000-' + Date.now().toString(16).padStart(12, '0').slice(-12));
+    let data;
+    try {
+      const response = await fetch('/api/bug-report/private', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          schema_version: 1,
+          request_id: requestId,
+          ccc_version: version || '',
+          report_text: desc,
+        }),
+      });
+      data = await response.json().catch(() => ({}));
+    } catch (error) {
+      data = { ok: false, error: (error && error.message) || 'network error' };
+    }
+    if (data && data.ok && data.report_id) {
+      if ($bugSuccess) {
+        $bugSuccess.textContent = 'Sent privately as ' + String(data.report_id);
+        $bugSuccess.classList.add('visible');
+      }
+      if ($bugSubmitBtn) $bugSubmitBtn.textContent = 'Sent';
+      if ($bugCancelBtn) { $bugCancelBtn.disabled = false; $bugCancelBtn.textContent = 'Close'; }
+      return;
+    }
+    if ($bugError) {
+      $bugError.textContent = 'Could not send diagnostics: ' +
+        ((data && data.error) || 'private support is unavailable');
+      $bugError.classList.add('visible');
+    }
+    if ($bugSubmitBtn) { $bugSubmitBtn.disabled = false; $bugSubmitBtn.textContent = 'Send privately'; }
+    if ($bugCancelBtn) $bugCancelBtn.disabled = false;
+  }
+
   async function bugSubmit() {
     if (!$bugDescInput) return;
     const desc = $bugDescInput.value.trim();
@@ -56415,6 +56523,10 @@
     if (!desc) {
       if ($bugError) { $bugError.textContent = 'Please describe the bug.'; $bugError.classList.add('visible'); }
       $bugDescInput.focus();
+      return;
+    }
+    if (bugDiagnosticMode) {
+      await bugSubmitPrivateDiagnostic(desc);
       return;
     }
     if (bugDestination() === 'email') { bugSubmitEmail(desc); return; }
@@ -56526,6 +56638,8 @@
       try { showOpToast('Copy failed - select the text and copy manually', 'error'); } catch (__) {}
     }
   });
+
+  bugOpenDiagnosticFromLocation();
 
   // Spawn defaults modal — the ONLY writer of /api/spawn-defaults. New
   // session / Kanban toolbar dropdowns read this default on load but only

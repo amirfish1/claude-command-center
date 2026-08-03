@@ -1581,7 +1581,7 @@
     <div class="upd-backdrop" id="bugReportBackdrop"></div>
     <div class="upd-dialog" style="width:min(560px,92vw); max-height:92vh; overflow-y:auto;">
       <div class="upd-title" id="bugReportTitle">Report a bug</div>
-      <div class="upd-versions">
+      <div class="upd-versions" id="bugReportIntro">
         Tell us what broke — privately by email (recommended) or as a public
         GitHub issue against <strong>amirfish1/claude-command-center</strong>.
       </div>
@@ -1593,7 +1593,7 @@
           Don't show this automatically again
         </label>
       </div>
-      <div class="bug-privacy-note">
+      <div class="bug-privacy-note" id="bugReportPrivacyCopy">
         Only the data shown in the preview below is sent. No code, no file
         contents, no personal data is included.
       </div>
@@ -1602,7 +1602,7 @@
         <textarea id="bugReportDescInput" class="bug-input bug-textarea"
                   placeholder="What did you see? What did you expect? Steps to reproduce… The first line becomes the issue title."></textarea>
       </div>
-      <div class="bug-field-row">
+      <div class="bug-field-row" id="bugReportIdentitySection">
         <div>
           <label class="bug-label" for="bugName">Your name (optional)</label>
           <input id="bugName" class="bug-input" type="text" autocomplete="name">
@@ -1612,7 +1612,7 @@
           <input id="bugContact" class="bug-input" type="text" autocomplete="email">
         </div>
       </div>
-      <div class="bug-dest-group" id="bugDestGroup" role="radiogroup" aria-label="Send via">
+      <div class="bug-dest-group" id="bugReportDestinationSection" role="radiogroup" aria-label="Send via">
         <label class="bug-label">Send via</label>
         <label class="bug-dest-option">
           <input type="radio" name="bugDest" value="email" checked>
@@ -1629,7 +1629,7 @@
           </span>
         </label>
       </div>
-      <div id="bugReportShotSection">
+      <div id="bugReportScreenshotSection">
         <label class="bug-label">Screenshot (optional)</label>
         <div class="bug-shot-row">
           <button type="button" class="bug-shot-btn" id="bugReportShotBtn">
@@ -1654,11 +1654,11 @@
         Screenshots can't be attached to an email draft — choose the GitHub
         issue option above if you want to include one.
       </div>
-      <div>
+      <div id="bugReportContextSection">
         <label class="bug-label">Auto-attached context</label>
         <div class="bug-meta" id="bugReportMeta">Loading…</div>
       </div>
-      <div>
+      <div id="bugReportPreviewSection">
         <label class="bug-label" for="bugPreview">Exactly what will be sent</label>
         <textarea id="bugPreview" class="bug-input bug-preview" readonly tabindex="-1"></textarea>
       </div>

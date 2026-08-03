@@ -251,6 +251,21 @@ body.q2-resizing .q2-col { pointer-events: none; }
   letter-spacing: 0.7px;
   color: var(--text-muted);
 }
+.q2-dg-report {
+  margin-left: auto;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 8px;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+.q2-dg-report:hover,
+.q2-dg-report:focus-visible { border-color: var(--accent); color: var(--text); }
 .q2-dg-hint { display: none; }   /* no room for it in a column */
 .q2-dg-n {
   font-size: 11px;
