@@ -12882,6 +12882,22 @@
       });
     } else {
       showOptimisticAgentIndicator($view);
+      // The wait is the interesting part: while the engine spins up (often
+      // 10-30s on a cold launch), show the live spawn timeline in the pane —
+      // process started → prompt written → session initialized → first stream
+      // — instead of a blank screen with a typing dot. Polls the same
+      // endpoint the post-completion stats banner reads, rendered expanded.
+      const liveSid = card.expected_session_id || '';
+      if (liveSid && spawnStatsEnabled()) {
+        const livePaneId = paneId || activePaneId();
+        let liveTicks = 0;
+        const liveTimer = setInterval(() => {
+          const pane = paneByPaneId(livePaneId);
+          const stillThisCard = pane && (pane.conversationId === card.id || pane.conversationId === liveSid);
+          if (!stillThisCard || ++liveTicks > 90) { clearInterval(liveTimer); return; }
+          renderSpawnStatsPanel(liveSid, $view, { open: true });
+        }, 2000);
+      }
     }
     scrollConversationToEnd($view);
   }
@@ -13209,6 +13225,24 @@
         if (isLanded) {
           landed = true;
           landedAt = Date.now();
+          // Bridge the archive-cache gap: the canonical archive row lags the
+          // engine store by ~15-30s (corpus scan + serve cooldown), but the
+          // transcript is already streaming. Resolve the placeholder NOW so
+          // the pane lands on the live conversation and the row stops pulsing
+          // as "spawning" — the reconcile below still swaps in the canonical
+          // row when the archive catches up.
+          const ph = pendingSpawns.get(pid)
+            || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId);
+          if (ph && !ph._landedResolved) {
+            ph._landedResolved = true;
+            ph.pending_spawn = false;
+            ph.session_id = expectedSid;
+            const placeholderId = ph.id || ('spawning-' + pid);
+            if (currentConversation === placeholderId || currentConversation === ('spawning-' + pid)) {
+              rebindCurrentSelectionToRealCard(Object.assign({}, ph, { id: expectedSid }));
+            }
+            renderArchiveList($convSearch ? $convSearch.value : '', { force: true });
+          }
         } else {
           if (Date.now() >= deadline) {
             markPendingSpawnNotAcknowledged(pid, fallbackId);
@@ -39423,7 +39457,7 @@
     return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
   }
 
-  async function renderSpawnStatsPanel(sid, $view) {
+  async function renderSpawnStatsPanel(sid, $view, opts) {
     if (!sid || !$view || !spawnStatsEnabled()) return;
     let data = null;
     try {
@@ -39446,7 +39480,8 @@
       : marks.client_first_paint != null ? marks.client_first_paint
       : (marks.rollout_has_user_message != null ? marks.rollout_has_user_message : null);
     const existing = $view.querySelector('.spawn-stats');
-    const html = '<details class="spawn-stats"' + (existing && existing.open ? ' open' : '') + '>'
+    const forceOpen = !!(opts && opts.open);
+    const html = '<details class="spawn-stats"' + ((forceOpen || (existing && existing.open)) ? ' open' : '') + '>'
       + '<summary class="spawn-stats-summary">&#9201; Session start: '
       + '<strong>' + fmtStatMs(visible) + '</strong> to first visible output'
       + '<span class="spawn-stats-sub"> &middot; accepted in '

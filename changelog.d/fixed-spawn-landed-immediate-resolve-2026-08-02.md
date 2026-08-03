@@ -1,0 +1,1 @@
+- New sessions land on the live conversation as soon as the session registers (~10-15s) instead of waiting for the archive row (~31s): once the engine store confirms the session exists, the placeholder resolves immediately and the pane rebinds; the canonical archive row still swaps in when the corpus scan catches up.
