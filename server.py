@@ -5247,6 +5247,62 @@ def _observed_model_records():
     return rows
 
 
+_CLAUDE_TIER_FAMILIES = ("fable", "opus", "sonnet", "haiku")
+_CLAUDE_TIER_DATE_SUFFIX_RE = re.compile(r"-\d{8}$")
+
+
+def _claude_model_family(model_id):
+    """Tier family of a Claude model id ('opus' in 'claude-opus-4-8' / 'opus-4-8'),
+    or None for anything that is not a Claude tier model — cross-engine ids
+    observed in sessions (gemini-*, gpt-*) and router sentinels like
+    '<synthetic>' must not pollute the Claude picker."""
+    mid = str(model_id or "").strip().lower()
+    if mid.startswith("claude-"):
+        mid = mid[len("claude-"):]
+    fam = mid.split("-", 1)[0]
+    return fam if fam in _CLAUDE_TIER_FAMILIES else None
+
+
+def _claude_model_version(model_id):
+    """Numeric version parts for tier comparison, ignoring an 8-digit date
+    suffix ('haiku-4-5-20251001' and 'haiku-4-5' are the same tier)."""
+    mid = _CLAUDE_TIER_DATE_SUFFIX_RE.sub("", str(model_id or "").strip().lower())
+    if mid.startswith("claude-"):
+        mid = mid[len("claude-"):]
+    fam = mid.split("-", 1)
+    ver = fam[1] if len(fam) > 1 else ""
+    parts = []
+    for piece in re.split(r"[-.]", ver):
+        if piece.isdigit():
+            parts.append(int(piece))
+    return tuple(parts)
+
+
+def _prune_claude_models_to_latest_tiers(models):
+    """Keep only the newest entry of each tier family in the Claude picker.
+    The Anthropic overview catalog lists every historical version
+    (opus-4-8/4-7/4-6, sonnet-4-8/4-6, dated haiku aliases); the picker
+    should offer the latest of each tier, not a museum. Dated aliases fold
+    into their clean id. Order follows first appearance."""
+    best = {}   # family -> (version tuple, entry)
+    order = []
+    for entry in models:
+        fid = (entry or {}).get("id")
+        fam = _claude_model_family(fid)
+        if not fam:
+            continue
+        ver = _claude_model_version(fid)
+        cur = best.get(fam)
+        if cur is None:
+            best[fam] = (ver, entry)
+            order.append(fam)
+        elif ver > cur[0] or (ver == cur[0]
+                              and _CLAUDE_TIER_DATE_SUFFIX_RE.search(str((cur[1] or {}).get("id") or ""))
+                              and not _CLAUDE_TIER_DATE_SUFFIX_RE.search(str(fid))):
+            best[fam] = (ver, entry)
+    return [best[fam][1] for fam in order]
+
+
 def _build_engine_model_catalog(force_refresh=False):
     now = time.monotonic()
     if (
@@ -5353,6 +5409,11 @@ def _build_engine_model_catalog(force_refresh=False):
             row.get("id"),
             label=row.get("label"),
             source=row.get("source") or "observed",
+        )
+
+    if "claude" in catalog:
+        catalog["claude"]["models"] = _prune_claude_models_to_latest_tiers(
+            catalog["claude"].get("models") or []
         )
 
     for bucket in catalog.values():
