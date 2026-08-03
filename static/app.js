@@ -11578,6 +11578,28 @@
   const $convKanbanToggle = document.getElementById('convKanbanToggle');
   const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';
 
+  // The sidebar list is rebuilt wholesale on archive refreshes. Delegate this
+  // control from the stable list container so a redraw cannot leave the model
+  // filter's newly-rendered buttons without their click behavior.
+  function _handleArchiveEngineFilterClick(ev) {
+    const opt = ev.target.closest('[data-archive-engine]');
+    if (!opt || !$convList.contains(opt)) return;
+    ev.stopPropagation();
+    const value = String(opt.getAttribute('data-archive-engine') || '').toLowerCase();
+    if (value !== 'claude' && value !== 'codex' && value !== 'kimi') return;
+    const current = _archiveEngineFilter();
+    const next = current === value ? '' : value;
+    try {
+      if (next) localStorage.setItem(ARCHIVE_ENGINE_FILTER_KEY, next);
+      else localStorage.removeItem(ARCHIVE_ENGINE_FILTER_KEY);
+    } catch (_) {}
+    renderArchiveList(document.getElementById('convSearch')?.value || '');
+  }
+  if ($convList && !$convList._archiveEngineFilterWired) {
+    $convList._archiveEngineFilterWired = true;
+    $convList.addEventListener('click', _handleArchiveEngineFilterClick);
+  }
+
   function readConversationSearchHistory() {
     try {
       const raw = JSON.parse(localStorage.getItem(CONV_SEARCH_HISTORY_KEY) || '[]');
@@ -29759,23 +29781,6 @@
         if (!opt) return;
         const value = opt.getAttribute('data-grouping') === 'time' ? 'time' : 'project';
         try { localStorage.setItem('ccc-archived-grouping', value); } catch (_) {}
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
-      });
-    }
-    const $archivedEngineFilter = $convList.querySelector('[data-role="archived-engine-filter"]');
-    if ($archivedEngineFilter) {
-      $archivedEngineFilter.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const opt = ev.target.closest('[data-archive-engine]');
-        if (!opt) return;
-        const value = String(opt.getAttribute('data-archive-engine') || '').toLowerCase();
-        if (value !== 'claude' && value !== 'codex' && value !== 'kimi') return;
-        const current = _archiveEngineFilter();
-        const next = current === value ? '' : value;
-        try {
-          if (next) localStorage.setItem(ARCHIVE_ENGINE_FILTER_KEY, next);
-          else localStorage.removeItem(ARCHIVE_ENGINE_FILTER_KEY);
-        } catch (_) {}
         renderArchiveList(document.getElementById('convSearch')?.value || '');
       });
     }

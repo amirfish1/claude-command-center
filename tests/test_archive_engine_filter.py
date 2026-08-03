@@ -31,6 +31,13 @@ def test_archive_engine_filter_is_exclusive_reversible_and_persistent():
     assert "localStorage.setItem(ARCHIVE_ENGINE_FILTER_KEY, next)" in app_js
 
 
+def test_archive_engine_filter_uses_stable_list_delegation():
+    app_js = _source(APP_JS)
+
+    assert "$convList._archiveEngineFilterWired" in app_js
+    assert "$convList.addEventListener('click', _handleArchiveEngineFilterClick)" in app_js
+
+
 def test_archive_engine_filter_applies_before_all_tab_grouping():
     app_js = _source(APP_JS)
 
