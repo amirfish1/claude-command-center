@@ -36138,6 +36138,21 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
             _save_codex_app_server_state_unlocked()
         return {"ok": False, "interrupted": False, "result": interrupted}
 
+    if has_user_input and silent_turn:
+        # Turn is already idle and a real user message is waiting: deliver
+        # that instead of the synthetic "went silent" nudge. Mirrors the
+        # queue_handoff done above when an active stalled turn had to be
+        # interrupted first.
+        with _CODEX_APP_SERVER_LOCK:
+            state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+            recovery = state.get("compaction_recovery")
+            if not isinstance(recovery, dict):
+                return {"ok": False, "waiting": "not-armed"}
+            _codex_compaction_recovery_suppress_unlocked(state, "queued-user-input", now)
+            _save_codex_app_server_state_unlocked()
+        _schedule_codex_queue_pump(sid)
+        return {"ok": True, "suppressed": "queued-user-input", "queue_handoff": True}
+
     with _CODEX_APP_SERVER_LOCK:
         recovery_snapshot = dict(
             (_CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}).get("compaction_recovery")
