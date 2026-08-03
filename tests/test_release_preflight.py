@@ -3,6 +3,7 @@
 from pathlib import Path
 import subprocess
 import unittest
+import uuid
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -10,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class TestReleasePreflight(unittest.TestCase):
     def test_rejects_untracked_files(self):
-        sentinel = PROJECT_ROOT / ".release-preflight-untracked-sentinel"
+        sentinel = PROJECT_ROOT / f".release-preflight-untracked-{uuid.uuid4().hex}"
         sentinel.write_text("must not be omitted from a release\n", encoding="utf-8")
         try:
             result = subprocess.run(
