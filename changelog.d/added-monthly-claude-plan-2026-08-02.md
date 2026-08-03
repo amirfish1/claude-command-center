@@ -1,0 +1,1 @@
+- Add a configurable monthly Claude plan setting for weekly per-session subscription cost estimates.

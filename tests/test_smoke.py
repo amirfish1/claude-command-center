@@ -34,6 +34,15 @@ sys.path.insert(0, PROJECT_ROOT)
 class TestWebuiPaneRegressionGuards(unittest.TestCase):
     """Regression guards for the kimi/codex webui-pane bug fixes."""
 
+    def test_monthly_claude_plan_setting_is_available(self):
+        """The subscription estimate has a discoverable settings control."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="settingsMonthlyClaudePlanInput"', index_html)
+        self.assertIn("ccc-monthly-claude-plan-usd", app_js)
+        self.assertIn("subscription cost this week", app_js)
+
     def test_turn_completion_glows_the_matching_conversation_row(self):
         """A completion cue must identify the same sidebar row as its sound."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
