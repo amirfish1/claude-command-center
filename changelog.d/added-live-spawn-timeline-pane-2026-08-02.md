@@ -1,1 +1,0 @@
-- The pending-session pane now shows the live spawn timeline while you wait (process started → prompt written → session initialized → first stream event), refreshed every 2s from the same data as the post-completion "Session start" banner — no more staring at a blank conversation during cold launches.

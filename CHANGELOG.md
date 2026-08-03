@@ -11,6 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed CCC silently holding a message forever when a live WatchTower-tracked worker session had no channel CCC recognized as its own (a "foreign live writer" — CCC didn't spawn it, so the existing fork guard would neither deliver nor fail loudly). CCC now recognizes a live WT worker's FIFO in-process (reading `workers.json` directly, zero subprocess) and delivers through it before falling back to the hold, wired into both the watcher's hold gate and the inject fork guard; a write failure (ENXIO, no reader) still falls back to the existing hold, never to a parallel `claude --resume`. A hold that persists past two consecutive watcher ticks (~5-10s) now logs an actionable incident instead of staying invisible, and the queue's user-facing note stops claiming the message "sends when it finishes" for a headless worker that never will.
 - Added a global delivery-health banner fed by a new `/api/injection-health` endpoint: surfaces active foreign-writer holds and newly-lost WatchTower receipts, read in-process from `receipts.json` (no `wt` subprocess). Historical losses are baselined once, ever — not per restart — so a loss that happens while CCC is down still surfaces on the next start; dismissible per-incident or all-at-once, durably acked across reloads.
 
+## [5.19.0] - 2026-08-03
+
+### Added
+- Conversation rows now glow briefly when their agent finishes a turn.
+- The pending-session pane now shows the live spawn timeline while you wait (process started → prompt written → session initialized → first stream event), refreshed every 2s from the same data as the post-completion "Session start" banner — no more staring at a blank conversation during cold launches.
+- Add a configurable monthly Claude plan setting for weekly per-session subscription cost estimates.
+- OpenCode is now a seventh supported engine: spawn, monitor, and ingest OpenCode sessions alongside Claude, Codex, Cursor, Antigravity, Kilo Code, and Kimi Code, with its own curated model list (claude-sonnet-4-5, claude-opus-4-1, gpt-5) and engine iconography.
+- Added gentle audible feedback when the open session finishes a turn or goes idle; toggle on/off via the new sound/mute button in the footer.
+- Add a Release control to queue worker cards that requeues their active ticket.
+
+### Changed
+- The Claude model picker now offers only the latest model of each tier (fable-5, opus-5, sonnet-5, haiku-4-5) instead of every historical version the Anthropic overview catalog lists (opus-4-8/4-7/4-6, sonnet-4-8/4-6, dated haiku aliases). Cross-engine ids observed in sessions (gemini-*, gpt-*) and router sentinels like `<synthetic>` no longer pollute the Claude menu. Other versions remain reachable via "Other…".
+- New Claude sessions now reserve the selected CLI environment while the composer
+is open, acknowledge with a durable session ID immediately, and stream generated
+text into the selected placeholder before the canonical transcript row lands.
+The startup timeline and Puppeteer benchmark expose end-to-end acknowledgement,
+engine, and first-visible-paint timings.
+- Conversation pane headers now keep Annotate as a compact icon and group Clear, Replay, and Verbose under a three-dot menu.
+- New CCC installs show the last seven days in Active and All sessions by default; the selected window remains shared and persistent.
+
+### Removed
+- Removed the automatic "Report a problem" popup that fired whenever a new session hadn't registered within 30s. It interrupted whatever you were doing and almost never led anywhere useful; slow spawns still get the visible placeholder card and a toast, and the popup may return once spawn registration is better understood.
+
+### Fixed
+- Sidebar no longer sticks on the "Archive loaded" checklist forever: the archive list fetch now has a 45s timeout (a wedged request previously hung every caller that deduped onto it), and the stuck-render recovery retries on a slow cadence instead of giving up after one attempt.
+- Sidebar archive recovery no longer gives up permanently: an occluded window (another Space, display asleep) clamps timers to ~1/min, so the 10-minute stuck-retry budget used to drain while nobody was looking — the user returned to a "Loading archive…" the page had abandoned hours earlier. Recovery now re-arms with a fresh budget whenever the window becomes visible. Archive boot also logs breadcrumbs to the server log (`[ARCHIVE-DIAG]` in `service.out.log`) so future wedges name themselves.
+- Sidebar list polls no longer stall for seconds on large session archives: a synchronous cache refresh that outruns its time budget now falls back to the background refresh.
+- Claude sessions now fall back to a normal launch and offer an execution-worker restart when an older worker cannot use fast launch.
+- Fresh conversations no longer show a spurious "Load earlier messages" banner: transcripts open with non-rendered records (title/system lines), so the first visible event often sits at JSONL line 3+ and `truncated_before` fired even when the whole file was already loaded. The banner now only appears when the window genuinely excludes earlier content.
+- The native Mac app no longer registers the PWA service worker (and unregisters any leftover one on load): when the SW thread wedged in WKWebView, every dashboard fetch silently died and the sidebar sat on "Loading archive…" forever. Browsers and installed PWAs keep the service worker. Page JS errors are now mirrored to the server log (`/api/client-log`) so WKWebView failures are visible without devtools.
+- The "Sending…/Thinking…" age counter finally counts: the 1s ticker stopped itself whenever it fired during the milliseconds the indicator element was destroyed by a re-render, resetting the start time — so it showed `0s` forever. The ticker now tolerates brief absences and only stops on a sustained (~10s) removal. The live spawn timeline in the pending pane now actually appears too: it read the session id once at render time (always empty pre-response) instead of lazily per tick.
+- Hide Conversation presentation controls by default and make them opt-in from Settings.
+- New sessions land on the live conversation as soon as the session registers (~10-15s) instead of waiting for the archive row (~31s): once the engine store confirms the session exists, the placeholder resolves immediately and the pane rebinds; the canonical archive row still swaps in when the corpus scan catches up.
+- The spawn landing no longer paints early events twice: the pending view's user bubble and any in-flight stream bubble render the same lines the canonical transcript is about to deliver, and neither carries the keys the transcript dedup uses. They're dropped at rebind (the live stream re-paints new deltas itself). The "Sending…/Thinking…" age counter is also seeded with the current age on every recreation, so spawn-time re-renders no longer flash it back to `0s` between ticks.
+- New sessions now land you on the live conversation and update the list immediately. While a `spawning-*` placeholder was selected, the sidebar's render-pause guard deferred every render — including the one that reconciles the placeholder into the real session — so the row never appeared and the pane never jumped until a manual reload. Renders now proceed while a spawn is pending (the pause exists for typing/find-in-page, which a pending spawn is not).
+- New Claude sessions no longer end in the "Session did not register within 30s" ghost placeholder. The post-spawn chase now polls the cheap `/api/session/landed` probe (engine-store direct) instead of forcing the full 8MB archive list every few seconds against a deadline that healthy cold spawns routinely miss. Measured: a cold spawn lands in ~9s while its archive row takes ~31s to appear — previously a guaranteed false failure. Failure is only declared after 3 minutes of the session never landing at all.
+- New sessions now actually use the fast landing path: the spawn watcher read `expected_session_id` once at arm time — before the POST response arrived — so it silently skipped the cheap `/api/session/landed` probe and fell back to hammering full archive refreshes until the canonical row appeared (~12-30s). The card is now read lazily each tick; measured expectation is a pane landing at ~5s on warm spawns. Also fixed the pending-pane "Sending…" age counter freezing at `0s` (the indicator element is recreated on every placeholder re-render and the start time reset with it; it now survives while the conversation is unchanged).
+- Stale 200k-token sessions now offer the cache-aware “Continue new” action.
+- Fixed stale persistent workers continuing to run old `server.py` code when a change did not bump `__version__`; `run.sh` now restarts the worker when the loaded `server.py` content hash differs from the repo file.
+
 ## [5.18.0] - 2026-07-31
 
 ### Added
@@ -2396,7 +2436,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.18.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.19.0...HEAD
+[5.19.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.19.0
 [5.18.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.18.0
 [5.17.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.17.1
 [5.17.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.17.0

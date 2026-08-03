@@ -1,1 +1,0 @@
-- Sidebar no longer sticks on the "Archive loaded" checklist forever: the archive list fetch now has a 45s timeout (a wedged request previously hung every caller that deduped onto it), and the stuck-render recovery retries on a slow cadence instead of giving up after one attempt.

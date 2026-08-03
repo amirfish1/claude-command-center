@@ -1,1 +1,0 @@
-- Hide Conversation presentation controls by default and make them opt-in from Settings.
