@@ -11933,12 +11933,14 @@
   .ship-act-reject:hover:not(:disabled) { background: rgba(139,148,158,0.14); color: var(--text); }
   .ship-act-approve:disabled, .ship-act-reject:disabled { opacity: 0.4; cursor: default; }
   #convList .conv-folder-group.collapsed > .conv-item,
+  #convList .conv-folder-group.collapsed > .conv-subagent-cluster,
   #convList .conv-folder-group.collapsed > .conv-gap-separator,
   #convList .conv-folder-group.collapsed > .conv-draft-row,
   #convList .conv-folder-group.collapsed > .conv-object-empty-hint,
   #convList .conv-folder-group.collapsed > .conv-ghissues-more { display: none; }
   .conv-folder-group.is-subtree-hidden { display: none; }
   #convList .conv-folder-group.sessions-collapsed > .conv-item,
+  #convList .conv-folder-group.sessions-collapsed > .conv-subagent-cluster,
   #convList .conv-folder-group.sessions-collapsed > .conv-gap-separator,
   #convList .conv-folder-group.sessions-collapsed > .conv-draft-row,
   #convList .conv-folder-group.sessions-collapsed > .conv-object-empty-hint,

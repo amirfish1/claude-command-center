@@ -1,0 +1,1 @@
+- Fixed collapsed project groups in All sessions so contained agent clusters collapse with the project.
