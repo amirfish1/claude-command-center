@@ -2981,6 +2981,42 @@
     } catch (_) {}
   }
 
+  // F2 continuations are deliberately the inverse of a spawn relationship:
+  // the fresh session is the primary row and its older origin belongs beneath
+  // it.  The server keeps parent_session_id as provenance (new -> origin), so
+  // sidebar trees need this small presentation-only inversion instead of
+  // treating a continuation as an ordinary subagent spawn.
+  let _f2ContinuationEdgesCache = { raw: null, edges: {} };
+  function _f2ContinuationEdges() {
+    let raw = '';
+    try { raw = localStorage.getItem('ccc-f2-continuation-edges') || ''; } catch (_) {}
+    if (raw === _f2ContinuationEdgesCache.raw) return _f2ContinuationEdgesCache.edges;
+    let edges = {};
+    try { edges = JSON.parse(raw) || {}; } catch (_) {}
+    _f2ContinuationEdgesCache = { raw, edges };
+    return edges;
+  }
+  function f2EffectiveParentSessionId(sessionId, recordedParentId) {
+    const sid = String(sessionId || '').trim();
+    const parentId = String(recordedParentId || '').trim();
+    if (!sid) return parentId;
+    const _continuationEdges = _f2ContinuationEdges();
+    let newestContinuation = '';
+    let newestTs = -1;
+    for (const [newSid, edge] of Object.entries(_continuationEdges)) {
+      if (!edge || String(edge.continued_from || '').trim() !== sid) continue;
+      const ts = Number(edge.ts) || 0;
+      if (ts >= newestTs) {
+        newestTs = ts;
+        newestContinuation = String(newSid || '').trim();
+      }
+    }
+    if (newestContinuation && newestContinuation !== sid) return newestContinuation;
+    const edge = _continuationEdges[sid];
+    if (edge && String(edge.continued_from || '').trim() === parentId) return '';
+    return parentId;
+  }
+
   // ── composer plumbing ──────────────────────────────────────────────────
   // The composer lives inside .conv-input-bar (two slots, added in
   // index.html), so it is cloned along with the pane in split mode and every
@@ -25721,9 +25757,9 @@
     const _nowSec = Math.floor(Date.now() / 1000);
     const _openAskCutoff = _nowSec - OPEN_ASK_RECENT_S;
     const _actionSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
-    const _actionParentId = (c) => String((c && (
-      c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from
-    )) || '').trim();
+    const _actionParentId = (c) => f2EffectiveParentSessionId(
+      _actionSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+    );
     const _actionSessionById = new Map();
     _sessionConvs.forEach(c => {
       const id = _actionSessionId(c);
@@ -26963,9 +26999,9 @@
       return chunks.join('');
     };
     const _subagentRowId = (c) => String((c && (c.session_id || c.id)) || '').trim();
-    const _subagentRowParentId = (c) => String((c && (
-      c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from
-    )) || '').trim();
+    const _subagentRowParentId = (c) => f2EffectiveParentSessionId(
+      _subagentRowId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+    );
     const _subagentRowIsRecentBlocked = (c) => !!(c && c.ended_blocked
       && (c.modified || c.last_interacted || 0) >= _openAskCutoff);
     const _subagentRowIsActive = (c) => {
@@ -28096,8 +28132,9 @@
       const _CUR_HYST_S = 5 * 60;
       const _CUR_ORDER_KEY = 'ccc-current-sessions-order';
       const _currentSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
-      const _currentSessionParentId = (c) =>
-        String((c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)) || '').trim();
+      const _currentSessionParentId = (c) => f2EffectiveParentSessionId(
+        _currentSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+      );
       const _currentSessionIsEndedSpawnChild = (c) => {
         if (!_currentSessionParentId(c)) return false;
         const source = String((c && c.source) || '').trim().toLowerCase();
@@ -28871,8 +28908,9 @@
       + ((_gcItems || []).length || 0)
       + ((Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []).length || 0);
     const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
-    const _allTabParentId = (c) =>
-      String((c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)) || '').trim();
+    const _allTabParentId = (c) => f2EffectiveParentSessionId(
+      _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from)
+    );
     const _allTabTreeRowsFor = (rows) => {
       const byId = new Map();
       (rows || []).forEach(c => {
