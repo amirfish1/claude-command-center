@@ -192,6 +192,22 @@
     _cccBeep(880, 120, 'sine', 0);
     _cccBeep(659, 180, 'sine', 100);
   }
+  function _cccGlowCompletedConversation(sessionId) {
+    if (!sessionId) return;
+    const escaped = window.CSS && CSS.escape
+      ? CSS.escape(sessionId) : String(sessionId).replace(/"/g, '\\"');
+    const row = document.querySelector('.conv-item[data-session-id="' + escaped + '"]');
+    if (!row) return;
+    if (row._cccCompletionGlowTimer) clearTimeout(row._cccCompletionGlowTimer);
+    row.classList.remove('conv-item-completion-glow');
+    // Restart the animation if two turns finish within the cue window.
+    void row.offsetWidth;
+    row.classList.add('conv-item-completion-glow');
+    row._cccCompletionGlowTimer = setTimeout(() => {
+      row.classList.remove('conv-item-completion-glow');
+      row._cccCompletionGlowTimer = null;
+    }, 1800);
+  }
   window.cccSounds = {
     enabled: _cccSoundsEnabled,
     enable: _setCccSoundsEnabled,
@@ -4113,8 +4129,10 @@
         const isRunning = (liveStatus.status === 'running') || !!liveStatus.sidecarInFlight;
         if (wasRunning && !isRunning) {
           _cccPlayTurnEnd();
+          _cccGlowCompletedConversation(_fetchedFor);
         } else if (wasLive && !isLive) {
           _cccPlayDone();
+          _cccGlowCompletedConversation(_fetchedFor);
         }
       }
       maybeCatchUpCodexConversationFromAppServer(_fetchedFor, data);

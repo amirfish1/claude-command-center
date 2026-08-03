@@ -34,6 +34,16 @@ sys.path.insert(0, PROJECT_ROOT)
 class TestWebuiPaneRegressionGuards(unittest.TestCase):
     """Regression guards for the kimi/codex webui-pane bug fixes."""
 
+    def test_turn_completion_glows_the_matching_conversation_row(self):
+        """A completion cue must identify the same sidebar row as its sound."""
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function _cccGlowCompletedConversation(sessionId)", app_js)
+        self.assertIn("_cccGlowCompletedConversation(_fetchedFor)", app_js)
+        self.assertIn("conv-item-completion-glow", app_css)
+        self.assertIn("animation: conv-completion-glow", app_css)
+
     def test_pane_header_secondary_actions_use_overflow_menu(self):
         """Split-pane chrome stays compact without losing recording controls."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
