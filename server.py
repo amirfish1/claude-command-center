@@ -21034,11 +21034,17 @@ def _parse_conversation_windowed(conversation_id, filepath, tail, before, parser
         events = _enrich_codex_no_agent_output_events(conversation_id, events)
 
     first_line = events[0]["line"] if events else (buf[0][0] if buf else total)
+    # A window that already covers the whole file has no earlier history at
+    # all, no matter which JSONL line the first *renderable* event sits on.
+    # Fresh transcripts open with non-rendered records (custom-title, system
+    # init), so first_line > 1 there produced a spurious "Load earlier
+    # messages" banner on brand-new sessions.
+    truncated = (first_line > 1) and not (before is None and total <= window)
     result = {
         "events": events,
         "last_line": total,
         "first_line": first_line,
-        "truncated_before": first_line > 1,
+        "truncated_before": truncated,
     }
     if before is None:
         # The live tail also carries any optimistic queued events, same as the

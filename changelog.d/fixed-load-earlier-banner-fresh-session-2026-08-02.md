@@ -1,0 +1,1 @@
+- Fresh conversations no longer show a spurious "Load earlier messages" banner: transcripts open with non-rendered records (title/system lines), so the first visible event often sits at JSONL line 3+ and `truncated_before` fired even when the whole file was already loaded. The banner now only appears when the window genuinely excludes earlier content.
