@@ -4943,12 +4943,25 @@
     if (_optimisticAgentTick) clearInterval(_optimisticAgentTick);
     _optimisticAgentMisses = 0;
     _optimisticAgentTick = setInterval(() => {
-      const el = $view && $view.querySelector('.conv-live-tool-inline.optimistic');
+      // Query the whole document, not the captured view: pane remounts during
+      // spawn handoffs replace the .conversations-view node, and a ticker
+      // bound to the detached node missed forever and stopped — freezing the
+      // age at 0s. There is only ever one optimistic indicator app-wide.
+      const el = document.querySelector('.conv-live-tool-inline.optimistic');
       if (!el) {
-        if (++_optimisticAgentMisses >= 10) _stopOptimisticAgeTicker();
+        _optimisticAgentMisses++;
+        if (_optimisticAgentMisses === 1 || _optimisticAgentMisses === 10) {
+          _clientLog('[OPT-DIAG] tick miss n=' + _optimisticAgentMisses
+            + ' viewConnected=' + !!($view && $view.isConnected)
+            + ' key=' + _optimisticAgentStartKey);
+        }
+        if (_optimisticAgentMisses >= 10) _stopOptimisticAgeTicker();
         return;
       }
-      _optimisticAgentMisses = 0;
+      if (_optimisticAgentMisses > 0) {
+        _clientLog('[OPT-DIAG] tick found el again after ' + _optimisticAgentMisses + ' misses');
+        _optimisticAgentMisses = 0;
+      }
       const ms = Date.now() - _optimisticAgentStart;
       const age = el.querySelector('.cl-age');
       if (age) age.textContent = _optimisticAgeLabel(ms);
@@ -4986,6 +4999,7 @@
     if (_optKey !== _optimisticAgentStartKey || !_optimisticAgentStart) {
       _optimisticAgentStart = Date.now();
       _optimisticAgentStartKey = _optKey;
+      _clientLog('[OPT-DIAG] start reset key=' + (_optKey || '(empty)'));
     }
     // kimi panes: moon-phases spinner while waiting for the first delta
     // (kimi-web MoonSpinner.vue) instead of the generic pulse dot. The age
