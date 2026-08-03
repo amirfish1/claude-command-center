@@ -479,6 +479,18 @@ body.q2-resizing .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
 }
 .q2-dg-worker-idle { font-size: 10.5px; color: var(--text-muted); opacity: 0.7; }
+.q2-dg-worker-release {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.q2-dg-worker-release:hover { border-color: var(--red); color: var(--red); }
 .q2-dg-slot {
   flex: 0 0 auto;
   width: 22px; height: 22px;

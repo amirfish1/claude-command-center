@@ -902,6 +902,10 @@
           + '<span class="q2-dg-spin" aria-hidden="true"></span>'
           + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
           + (w.session_id ? sessionBtn(w.session_id, 'open') : '')
+          + '<button type="button" class="q2-dg-worker-release"'
+          + ' data-q2-release-worker="' + esc(w.worker_id || '') + '"'
+          + ' title="Release this worker and requeue its ticket"'
+          + ' aria-label="Release ' + esc(w.worker_id || 'worker') + ' and requeue its ticket">Release</button>'
           + '</div>'
           + (on
               ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
@@ -2090,6 +2094,18 @@
     }
   }
 
+  async function releaseWorker(workerId) {
+    if (!workerId) return;
+    if (!window.confirm('Release this worker? Its claimed ticket will be requeued.')) return;
+    try {
+      var data = await postJson('/api/queue/release-worker', { worker_id: workerId });
+      note('Released ' + workerId + '; requeued ' + ((data.item && data.item.ref) || 'ticket'));
+      await refresh();
+    } catch (e) {
+      note('Could not release ' + workerId + ': ' + e.message);
+    }
+  }
+
   function renderAll() {
     renderChrome();
     renderQueues();
@@ -2202,6 +2218,12 @@
     if (runDot) {
       e.stopPropagation();
       runTicket(runDot.getAttribute('data-q2-run'), runDot.getAttribute('data-q2-queued') === '1');
+      return;
+    }
+    var releaseWorkerBtn = e.target.closest('[data-q2-release-worker]');
+    if (releaseWorkerBtn) {
+      e.stopPropagation();
+      releaseWorker(releaseWorkerBtn.getAttribute('data-q2-release-worker'));
       return;
     }
     var act = e.target.closest('[data-q2-act]');

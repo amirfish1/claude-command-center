@@ -1645,6 +1645,44 @@ def _uxq_set_run_requested(ref, requested):
     )
 
 
+def _release_queue_worker(worker_id):
+    """Release one live WatchTower worker and immediately requeue its ticket."""
+    worker_id = str(worker_id or "").strip()
+    if not worker_id:
+        raise ValueError("worker_id required")
+    if not _WT_WORKERS_AVAILABLE or _wt_workers is None:
+        raise ValueError("WatchTower worker control unavailable")
+    worker = next(
+        (row for row in _wt_read_workers()
+         if str(row.get("worker_id") or "") == worker_id), None)
+    if not worker:
+        raise ValueError("worker is not live")
+    session_id = str(worker.get("session_id") or "").strip()
+    try:
+        items = _q.list_items(fresh=True) or []
+    except TypeError:
+        items = _q.list_items() or []
+    ticket = next(
+        (item for item in items
+         if str(item.get("status") or "") == "in_progress"
+         and (str(item.get("claimed_by") or "") == worker_id
+              or (session_id and str(item.get("claimed_session_id") or "") == session_id))),
+        None)
+    if not ticket:
+        raise ValueError("worker has no claimed ticket to requeue")
+    release = getattr(_q, "release", None)
+    if not callable(release):
+        raise ValueError("WatchTower ticket release unavailable")
+    released = release(str(ticket.get("ref") or ""), session_id=worker_id)
+    if not released or str(released.get("status") or "") != "open":
+        raise ValueError("ticket could not be requeued")
+    _wt_workers.request_stop(worker_id)
+    queue = str(released.get("project") or worker.get("queue") or "").strip()
+    if queue:
+        _wt_workers.dispatch_after_enqueue(queue, str(released.get("ref") or ""))
+    return {"worker_id": worker_id, "item": released}
+
+
 def _uxq_item_payload(item):
     if not item:
         return item
@@ -56865,6 +56903,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "queued": bool(item.get("run_requested")),
                 "warning": warning,
             })
+            return
+        if path == "/api/queue/release-worker":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            worker_id = str(payload.get("worker_id") or "").strip() if isinstance(payload, dict) else ""
+            if not worker_id:
+                self.send_json({"ok": False, "error": "worker_id required"}, 400)
+                return
+            try:
+                result = _release_queue_worker(worker_id)
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             return
         if path == "/api/ux-fixes/run-once":
             # Per-ticket "drain once" play button (CCC-437): spawn exactly one
