@@ -10,9 +10,9 @@ name = "EMAIL"
 name = "REPORT_SUBMISSIONS"
 class_name = "ReportSubmission"
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["ReportSubmission"]
+[exports.ReportSubmission]
+type = "durable-object"
+storage = "sqlite"
 
 [[ratelimits]]
 name = "REPORT_RATE_LIMITER"
