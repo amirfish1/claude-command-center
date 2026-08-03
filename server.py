@@ -1135,6 +1135,190 @@ def _wt_worker_idle_fields(worker):
         return {"idle_seconds": None, "idle_source": "unknown"}
 
 
+_DIAGNOSTIC_SCHEMA_VERSION = 1
+_DIAGNOSTIC_TEXT_MAX_CHARS = 48_000
+_DIAGNOSTIC_EVENT_VERBS = frozenset({
+    "SPAWN", "DISPATCH", "CLAIM", "RELEASE", "REAP", "STOP", "RUN", "CANCEL",
+})
+
+
+def _diagnostic_worker_id(worker_id):
+    digest = hashlib.sha256(str(worker_id or "").encode("utf-8")).hexdigest()[:8]
+    return "w-" + digest
+
+
+def _wt_diagnostic_events(queue_name, now=None, limit=20):
+    """Return bounded lifecycle verbs/times, never raw WatchTower details."""
+    now = time.time() if now is None else now
+    try:
+        lines = (_WT_HOME / "activity.log").read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except OSError:
+        return []
+    rows = []
+    pattern = re.compile(
+        r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s+UTC\s+(\S+)\s+(\S+)"
+    )
+    for line in reversed(lines):
+        match = pattern.match(line)
+        verb = match.group(4).upper() if match else ""
+        if not match or match.group(3).upper() != queue_name or verb not in _DIAGNOSTIC_EVENT_VERBS:
+            continue
+        try:
+            stamp = datetime.strptime(
+                match.group(1) + " " + match.group(2), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+        rows.append({"verb": verb, "seconds_ago": max(0, int(now - stamp))})
+        if len(rows) == limit:
+            break
+    return list(reversed(rows))
+
+
+def _diagnostic_lifecycle_decision(matched, idle_seconds):
+    if matched:
+        return "working"
+    if not isinstance(idle_seconds, (int, float)) or isinstance(idle_seconds, bool):
+        return "unknown"
+    if idle_seconds < 30 * 60:
+        return "warm"
+    if idle_seconds < 60 * 60:
+        return "release pending"
+    if idle_seconds < 120 * 60:
+        return "release overdue"
+    return "likely stale"
+
+
+def _build_queue_diagnostic_snapshot(queue_name, *, now=None):
+    """Build a closed-schema support snapshot from authoritative local state."""
+    queue_name = str(queue_name or "").strip().upper()
+    if not _QUEUE_CONFIG_NAME_RE.fullmatch(queue_name):
+        raise ValueError("invalid queue")
+    now = time.time() if now is None else float(now)
+    configs = _wt_read_config()
+    config = next(
+        (value for key, value in configs.items()
+         if str(key).strip().upper() == queue_name and isinstance(value, dict)),
+        {},
+    )
+    try:
+        all_items = _q.list_items() or []
+    except Exception:
+        all_items = []
+    items = [
+        item for item in all_items if isinstance(item, dict)
+        and str(item.get("project") or "").strip().upper() == queue_name
+    ]
+    live_workers = [
+        worker for worker in _wt_read_workers()
+        if str(worker.get("queue") or "").strip().upper() == queue_name
+    ]
+    in_progress = [item for item in items if item.get("status") == "in_progress"]
+    worker_rows = []
+    engines = set()
+    for worker in live_workers:
+        worker_id = str(worker.get("worker_id") or "")
+        session_id = str(worker.get("session_id") or "")
+        matched = any(
+            str(item.get("claimed_by") or "") in {worker_id, session_id}
+            or str(item.get("claimed_session_id") or "") in {worker_id, session_id}
+            for item in in_progress
+        )
+        engine = str(worker.get("engine") or config.get("engine") or "unknown").lower()
+        engines.add(engine)
+        idle = worker.get("idle_seconds")
+        idle = int(idle) if isinstance(idle, (int, float)) and not isinstance(idle, bool) and math.isfinite(idle) and idle >= 0 else None
+        audit = worker.get("lifecycle_audit")
+        audit_decision = str(audit.get("decision") or "") if isinstance(audit, dict) else ""
+        decision = audit_decision if audit_decision in {
+            "working", "warm", "release pending", "release overdue", "likely stale", "unknown"
+        } else _diagnostic_lifecycle_decision(matched, idle)
+        worker_rows.append({
+            "id": _diagnostic_worker_id(worker_id),
+            "engine": engine,
+            "idle_seconds": idle,
+            "idle_source": str(worker.get("idle_source") or "unknown"),
+            "lifecycle_decision": decision,
+            "released": bool(worker.get("released_at")),
+            "matched_ticket": matched,
+        })
+    counts = {
+        "open": sum(item.get("status") not in {"closed", "in_progress"} for item in items),
+        "in_progress": len(in_progress),
+        "closed": sum(item.get("status") == "closed" for item in items),
+        "claimable": sum(item.get("status") == "open" and item.get("claimable") is not False for item in items),
+        "needs_input": sum(item.get("status") == "blocked" or bool(item.get("needs_input")) for item in items),
+        "run_requested": sum(bool(item.get("run_requested")) for item in items),
+    }
+    try:
+        service = _watchtower_service_status(probe_api=False)
+        service_label = "running" if service.get("running") else "stopped"
+    except Exception:
+        service_label = "unknown"
+    wt_version = str(getattr(_wt_workers, "__version__", "unknown") or "unknown")
+    generated = datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "schema_version": _DIAGNOSTIC_SCHEMA_VERSION,
+        "generated_at": generated,
+        "request_id": str(uuid.uuid4()),
+        "ccc": {"version": __version__, "build": "unknown"},
+        "watchtower": {"version": wt_version, "service": service_label},
+        "platform": {"os": sys.platform, "engine": next(iter(engines)) if len(engines) == 1 else ("mixed" if engines else "unknown")},
+        "queue": {
+            "auto_drain": bool(config.get("auto_drain", False)),
+            "desired_workers": int(config.get("desired_workers", 1) or 1),
+            "claim_types": [value for value in config.get("claim_types", []) if value in {"bug", "feature"}],
+            "backend": "github" if config.get("github_repo") or config.get("backend") == "github" else "local",
+        },
+        "ticket_counts": counts,
+        "workers": worker_rows,
+        "events": _wt_diagnostic_events(queue_name, now=now),
+    }
+
+
+def _render_queue_diagnostic_text(snapshot):
+    """Render only the closed snapshot schema as inspectable plain text."""
+    lines = [
+        "CCC private queue diagnostics", "",
+        "Schema: %s" % snapshot["schema_version"],
+        "Generated: %s" % snapshot["generated_at"],
+        "Request: %s" % snapshot["request_id"], "",
+        "Versions",
+        "CCC: %s (%s)" % (snapshot["ccc"]["version"], snapshot["ccc"]["build"]),
+        "WatchTower: %s · service %s" % (snapshot["watchtower"]["version"], snapshot["watchtower"]["service"]), "",
+        "Platform", "OS: %s" % snapshot["platform"]["os"],
+        "Engine: %s" % snapshot["platform"]["engine"], "",
+        "Queue policy",
+        "Auto-drain: %s" % ("on" if snapshot["queue"]["auto_drain"] else "off"),
+        "Desired workers: %s" % snapshot["queue"]["desired_workers"],
+        "Claim types: %s" % (", ".join(snapshot["queue"]["claim_types"]) or "all"),
+        "Backend: %s" % snapshot["queue"]["backend"], "",
+        "Ticket counts",
+    ]
+    lines.extend("%s: %s" % (key.replace("_", " ").title(), value) for key, value in snapshot["ticket_counts"].items())
+    lines += ["", "Workers"]
+    if snapshot["workers"]:
+        for worker in snapshot["workers"]:
+            age = str(worker["idle_seconds"]) + "s" if worker["idle_seconds"] is not None else "unknown"
+            lines.append("- %s · %s · idle %s via %s · %s · released %s · matched ticket %s" % (
+                worker["id"], worker["engine"], age, worker["idle_source"], worker["lifecycle_decision"],
+                str(worker["released"]).lower(), str(worker["matched_ticket"]).lower(),
+            ))
+    else:
+        lines.append("- none live")
+    lines += ["", "Recent lifecycle events"]
+    lines.extend("- %s · %ss ago" % (event["verb"], event["seconds_ago"]) for event in snapshot["events"])
+    if not snapshot["events"]:
+        lines.append("- none")
+    lines += ["", "Privacy", "This report excludes prompts, ticket text, transcripts, files, paths, repository identity, session IDs, and raw logs."]
+    text = "\n".join(lines)
+    if len(text) > _DIAGNOSTIC_TEXT_MAX_CHARS:
+        raise ValueError("diagnostic report exceeds size limit")
+    return text
+
+
 def _wt_read_workers():
     """Live WatchTower worker records read straight from workers.json.
 
@@ -10571,6 +10755,66 @@ _BUG_REPORT_REPO = "amirfish1/claude-command-center"
 _BUG_SCREENSHOT_DIR = Path.home() / ".claude" / "command-center" / "bug-screenshots"
 _BUG_SCREENSHOT_WT = Path.home() / ".claude" / "command-center" / "bug-screenshots-wt"
 _BUG_SCREENSHOT_BRANCH = "bug-screenshots"
+_PRIVATE_SUPPORT_ENDPOINT = (
+    "https://support.claude-command-center.workers.dev/v1/report"
+)
+_UUID4_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_REPORT_ID_RE = re.compile(r"^RPT-[0-9A-F]{8}$")
+
+
+def _send_private_diagnostic(payload, endpoint=None):
+    """Validate and relay exactly the report text the user reviewed."""
+    allowed = {"schema_version", "request_id", "ccc_version", "report_text"}
+    if not isinstance(payload, dict) or set(payload) != allowed:
+        return {"ok": False, "error": "invalid diagnostic envelope"}
+    request_id = str(payload.get("request_id") or "").lower()
+    report_text = payload.get("report_text")
+    if payload.get("schema_version") != 1 or not _UUID4_RE.fullmatch(request_id):
+        return {"ok": False, "error": "invalid diagnostic envelope"}
+    if (not isinstance(report_text, str) or not report_text.strip()
+            or len(report_text) > _DIAGNOSTIC_TEXT_MAX_CHARS):
+        return {
+            "ok": False,
+            "error": "diagnostic text must be 1 to 48000 characters",
+        }
+    outbound = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "ccc_version": str(payload.get("ccc_version") or ""),
+        "report_text": report_text,
+    }
+    target = (
+        endpoint or os.environ.get("CCC_PRIVATE_SUPPORT_ENDPOINT")
+        or _PRIVATE_SUPPORT_ENDPOINT
+    )
+    request = urllib.request.Request(
+        target,
+        data=json.dumps(outbound).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            result = json.loads(response.read(4096))
+    except urllib.error.HTTPError as error:
+        return {
+            "ok": False,
+            "error": "private support rejected the report (HTTP %d)" % error.code,
+        }
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        return {
+            "ok": False,
+            "error": "private support is unavailable: %s" % error,
+        }
+    report_id = str(result.get("report_id") or "") if isinstance(result, dict) else ""
+    if not isinstance(result, dict) or result.get("ok") is not True or not _REPORT_ID_RE.fullmatch(report_id):
+        return {
+            "ok": False,
+            "error": "private support returned an invalid response",
+        }
+    return {"ok": True, "report_id": report_id}
 
 
 def _build_bug_report_body(description, ccc_version, user_agent, session_id,
@@ -53604,6 +53848,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 limit = 100
             self.send_json(list_annotations(limit=limit))
+        elif path == "/api/bug-report/diagnostics-preview":
+            qs = urllib.parse.parse_qs(parsed.query)
+            queue_name = (qs.get("queue", [""])[0] or "").strip()
+            try:
+                snapshot = _build_queue_diagnostic_snapshot(queue_name)
+                self.send_json({
+                    "ok": True,
+                    "schema_version": _DIAGNOSTIC_SCHEMA_VERSION,
+                    "request_id": snapshot["request_id"],
+                    "report_text": _render_queue_diagnostic_text(snapshot),
+                })
+            except ValueError as error:
+                self.send_json({"ok": False, "error": str(error)}, 400)
+            except Exception:
+                self.send_json({
+                    "ok": False,
+                    "error": "could not generate queue diagnostics",
+                }, 500)
         elif path == "/api/queue/list" or path == "/api/ux-fixes/list":
             # /api/queue/list is the canonical name; /api/ux-fixes/list is the
             # legacy alias kept for compatibility (both serve the same memo).
@@ -57707,6 +57969,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "queue": matched or queue_name})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/bug-report/private":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except (TypeError, ValueError):
+                length = 0
+            if length > 64 * 1024:
+                self.send_json({"ok": False, "error": "request too large"}, 413)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            result = _send_private_diagnostic(payload)
+            if result.get("ok"):
+                self.send_json(result)
+            elif result.get("error", "").startswith(("invalid", "diagnostic text")):
+                self.send_json(result, 400)
+            else:
+                self.send_json(result, 502)
             return
         if path == "/api/bug-report":
             # Submit a bug report as a GitHub issue against the CCC repo.
