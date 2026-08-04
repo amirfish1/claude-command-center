@@ -1319,19 +1319,23 @@ def _extract_codex_usage(session_id):
     total_input = _core._codex_int(totals.get("input_tokens"))
     cache_read = _core._codex_int(totals.get("cached_input_tokens"))
     total_output = _core._codex_int(totals.get("output_tokens"))
+    normalized_totals = {
+        "total_input_tokens": max(total_input - cache_read, 0),
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": cache_read,
+        "total_output_tokens": total_output,
+    }
+    cost = _core._session_usage_cost("codex", model, normalized_totals)
     return {
         **empty,
         "latest_input_tokens": latest_input,
         "peak_input_tokens": peak,
-        "total_output_tokens": total_output,
-        "total_input_tokens": max(total_input - cache_read, 0),
-        "total_cache_creation_tokens": 0,
-        "total_cache_read_tokens": cache_read,
+        **normalized_totals,
         "model": model,
         "reasoning_effort": reasoning_effort,
         "context_limit": context_limit,
-        "cost_usd": 0.0,
         "override": _core._get_session_override(session_id),
+        **cost,
     }
 
 
@@ -1409,5 +1413,4 @@ def _extract_codex_timeline(session_id):
     except OSError:
         return {"events": [], "total_turns": 0}
     return {"events": events, "total_turns": turn}
-
 

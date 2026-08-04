@@ -2136,6 +2136,7 @@ def _extract_kimi_usage(session_id):
                 result["peak_input_tokens"], result["latest_input_tokens"])
     except OSError:
         pass
+    result.update(_session_usage_cost("kimi", result.get("model"), result))
     return result
 
 
