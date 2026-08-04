@@ -192,27 +192,53 @@
     _cccBeep(880, 120, 'sine', 0);
     _cccBeep(659, 180, 'sine', 100);
   }
+  // The beep is useless if you can't see WHICH row just finished. A one-shot
+  // classList.add() loses that cue the moment the list re-renders — and the
+  // completion itself usually triggers a refresh, so the glow was routinely
+  // wiped within a few hundred ms of being applied. State-backed instead:
+  // mark the session, then repaint every matching row/card on a short ticker
+  // until the window expires, so the cue survives any number of re-renders
+  // and shows up in every view that renders the session (list, grouped list,
+  // kanban).
+  const _CCC_GLOW_MS = 6000;
+  const _cccGlowUntil = new Map();  // session id → epoch ms the glow expires
+  let _cccGlowTicker = null;
+  function _cccGlowTargets(sessionId) {
+    const esc = window.CSS && CSS.escape
+      ? CSS.escape(sessionId) : String(sessionId).replace(/"/g, '\\"');
+    return document.querySelectorAll(
+      '.conv-item[data-session-id="' + esc + '"], .conv-item[data-id="' + esc + '"],'
+      + ' .kanban-card[data-session-id="' + esc + '"], .kanban-card[data-id="' + esc + '"]',
+    );
+  }
+  function _cccPaintCompletionGlow() {
+    const now = Date.now();
+    for (const [sid, until] of Array.from(_cccGlowUntil)) {
+      const expired = until <= now;
+      if (expired) _cccGlowUntil.delete(sid);
+      for (const el of _cccGlowTargets(sid)) {
+        el.classList.toggle('conv-item-completion-glow', !expired);
+      }
+    }
+    if (!_cccGlowUntil.size && _cccGlowTicker) {
+      clearInterval(_cccGlowTicker);
+      _cccGlowTicker = null;
+    }
+  }
   function _cccGlowCompletedConversation(sessionId) {
     if (!sessionId) return;
-    const escaped = window.CSS && CSS.escape
-      ? CSS.escape(sessionId) : String(sessionId).replace(/"/g, '\\"');
-    const row = document.querySelector('.conv-item[data-session-id="' + escaped + '"]');
-    if (!row) return;
-    if (row._cccCompletionGlowTimer) clearTimeout(row._cccCompletionGlowTimer);
-    row.classList.remove('conv-item-completion-glow');
-    // Restart the animation if two turns finish within the cue window.
-    void row.offsetWidth;
-    row.classList.add('conv-item-completion-glow');
-    row._cccCompletionGlowTimer = setTimeout(() => {
-      row.classList.remove('conv-item-completion-glow');
-      row._cccCompletionGlowTimer = null;
-    }, 1800);
+    _cccGlowUntil.set(sessionId, Date.now() + _CCC_GLOW_MS);
+    _cccPaintCompletionGlow();
+    if (!_cccGlowTicker) _cccGlowTicker = setInterval(_cccPaintCompletionGlow, 250);
   }
   window.cccSounds = {
     enabled: _cccSoundsEnabled,
     enable: _setCccSoundsEnabled,
     playTurnEnd: _cccPlayTurnEnd,
     playDone: _cccPlayDone,
+    // Exposed so the completion cue can be triggered/verified without waiting
+    // for a real turn to end.
+    glow: _cccGlowCompletedConversation,
   };
 
   // ── Periodic-trigger transparency strip ─────────────────────────────────
@@ -1189,6 +1215,7 @@
     const _triggerCount = Object.keys(_POLLER_META).length;
     // Trigger strip starts collapsed; the toggle preserves full access.
     let _stripOpen = false;
+    let _stripTickTimer = null;
     try { _stripOpen = localStorage.getItem('ccc-triggers-open') === '1'; } catch (_) {}
     function _applyToggle() {
       strip.hidden = !_stripOpen;
@@ -1200,7 +1227,7 @@
       _stripOpen = !_stripOpen;
       try { localStorage.setItem('ccc-triggers-open', _stripOpen ? '1' : '0'); } catch (_) {}
       _applyToggle();
-      if (_stripOpen && window.__refreshPollerStrip) window.__refreshPollerStrip();
+      _syncStripTicker();
     };
     _applyToggle();
     // Sound toggle: small footer button to enable/disable session-completion chirps.
@@ -1322,6 +1349,7 @@
     _startStuckSessionsPoll(health);
 
     function _refreshStripState() {
+      if (!_stripOpen || document.hidden) return;
       const now = Date.now();
       Object.keys(chips).forEach((name) => {
         const chip = chips[name];
@@ -1332,23 +1360,27 @@
         const ago = s && s.last ? now - s.last : 0;
         const agoEl = chip.querySelector('.pstrip-ago');
         if (s && s.last) {
-          agoEl.textContent = _agoStr(ago);
+          const nextAgo = _agoStr(ago);
+          if (agoEl.textContent !== nextAgo) agoEl.textContent = nextAgo;
           // Stale = past 2.5× its own interval without firing (and not off).
           const stale = !off && meta.ms && ago > meta.ms * 2.5;
           chip.classList.toggle('stale', !!stale);
         } else {
           // Never fired this session — show its interval, no stale flag.
-          agoEl.textContent = off ? 'off' : (meta.ms ? (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : '~');
+          const nextAgo = off ? 'off' : (meta.ms ? (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : '~');
+          if (agoEl.textContent !== nextAgo) agoEl.textContent = nextAgo;
           chip.classList.remove('stale');
         }
-        chip.title = meta.label + ' · ' + (meta.ms ? 'every ' + (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : 'variable') +
+        const nextTitle = meta.label + ' · ' + (meta.ms ? 'every ' + (meta.ms >= 1000 ? (meta.ms / 1000) + 's' : meta.ms + 'ms') : 'variable') +
           (s ? ' · ' + s.count + ' fires · last ' + _agoStr(ago) + ' ago' : ' · idle') +
           (off ? ' · OFF (click to enable)' : ' · click to disable') +
           '\nSurface: ' + (meta.surface || '-') + '\n' + meta.desc;
+        if (chip.title !== nextTitle) chip.title = nextTitle;
       });
     }
     // Blink on real fire.
     _onPollerTick = (name) => {
+      if (!_stripOpen || document.hidden) return;
       const chip = chips[name];
       if (!chip) return;
       const dot = chip.querySelector('.pstrip-dot');
@@ -1359,13 +1391,21 @@
       if (agoEl) agoEl.textContent = '0s';
       chip.classList.remove('stale');
     };
-    // 1s "ago" counter. setTimeout is NOT muted-while-typing (only setInterval
-    // is wrapped), so the strip keeps counting up even with a field focused —
-    // which is exactly when you want to see that the timers went quiet.
-    (function _tickLabels() {
+    // The one-second "ago" counter is diagnostic UI, so it owns no timer while
+    // the strip is collapsed or the page is hidden.
+    function _tickStripLabels() {
+      _stripTickTimer = null;
+      if (!_stripOpen || document.hidden) return;
       _refreshStripState();
-      setTimeout(_tickLabels, 1000);
-    })();
+      _stripTickTimer = setTimeout(_tickStripLabels, 1000);
+    }
+    function _syncStripTicker() {
+      if (_stripTickTimer !== null) clearTimeout(_stripTickTimer);
+      _stripTickTimer = null;
+      if (_stripOpen && !document.hidden) _tickStripLabels();
+    }
+    document.addEventListener('visibilitychange', _syncStripTicker);
+    _syncStripTicker();
     window.__refreshPollerStrip = _refreshStripState;
   }
   // ── Frame-health / jank monitor (engine-agnostic) ───────────────────────
@@ -6650,12 +6690,11 @@
     }
     // The localhost / dev-server pill is bound to the open session's repo. Its
     // cached probe result and target path belong to the PREVIOUS session until
-    // the next 15s poll lands — forget them now and re-probe against the new
-    // context so the pill never reflects the prior conversation's repo
-    // (CCC-137).
+    // the next poll lands. Forget them immediately, but let selectConversation
+    // start the subprocess-backed probe only after the transcript is painted;
+    // the status pill must never compete with the foreground session open.
     try {
       if (typeof resetLocalhostPill === 'function') resetLocalhostPill();
-      if (typeof pollLocalhost === 'function') pollLocalhost();
     } catch (_) {}
   }
 
@@ -34653,6 +34692,7 @@
       if (source !== 'backlog' && pane.conversationId === id) {
         const timelineSid = (selectedRow || selectedConv || {}).session_id || id;
         scheduleSessionMetadataFetches(id, timelineSid, paneId);
+        try { if (typeof pollLocalhost === 'function') pollLocalhost(); } catch (_) {}
       }
     }
   }
@@ -39923,7 +39963,10 @@
       // `_updateStickyAskSlots` can collapse it and let the original
       // ask take the full left column.
       st.currentIdx = 0;
-      if (st.earlierFirst) st.earlierFirst.innerHTML = '';
+      if (st.earlierFirst) {
+        st.earlierFirst.innerHTML = '';
+        delete st.earlierFirst.dataset.rawText;
+      }
       _updateStickyAskSlots();
       return;
     }
@@ -39944,7 +39987,10 @@
     // so scrollHeight does not change mid-scroll.
     st.currentIdx = idx;
     item.classList.add('is-dynamic-pinned-in-sticky');
-    if (st.earlierFirst) st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(cleanIssuePrompt(text)));
+    if (st.earlierFirst) {
+      st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(cleanIssuePrompt(text)));
+      st.earlierFirst.dataset.rawText = text;
+    }
     _setEarlierAskLabel('Earlier ask');
     _updateStickyAskSlots();
   }
@@ -39968,7 +40014,12 @@
       const msgEl = items[i].querySelector('.user-msg');
       const text = msgEl ? ((msgEl.dataset && msgEl.dataset.rawText) || msgEl.textContent || '').trim() : '';
       if (text) {
+        // This runs from every sticky/timeline refresh. Replacing identical
+        // markup resets the painted text layer in WebKit, which reads as a
+        // visible flash in the right-rail "Last ask" panel.
+        if (st.earlierFirst.dataset.rawText === text) return;
         st.earlierFirst.innerHTML = linkifyPastedImages(escapeHtml(cleanIssuePrompt(text)));
+        st.earlierFirst.dataset.rawText = text;
         _setEarlierAskLabel('Last ask');
         return;
       }
@@ -48315,6 +48366,8 @@
   // ship is live (or just finished, until dismissed) its step log takes over
   // the "Needs your attention" panel as a terminal-style feed.
   const _shipPollTimers = {};   // repo_path -> intervalId
+  const _SHIP_STATUS_CLIENT_TTL_MS = 15000;
+  const _shipStatusCache = new Map();  // repo_path -> { ts, data }
   // Dedupe concurrent status GETs per repo (CCC-614): overlapping conv-list
   // re-renders each hydrate every folder header, and without sharing the
   // in-flight promise the same repo_path is fetched multiple times at once.
@@ -48452,7 +48505,7 @@
       const data = await res.json().catch(() => ({}));
       if (data && data.job) _renderShipLogPanel(repo, data);
       else await _openShipLog(repo);
-      _refreshShipStatus(repo);
+      _refreshShipStatus(repo, null, true);
     } catch (_) {
       await _openShipLog(repo);
     }
@@ -48469,7 +48522,7 @@
       const data = await res.json().catch(() => ({}));
       if (data && data.job) _renderShipLogPanel(repo, data);
       else await _openShipLog(repo);
-      _refreshShipStatus(repo);   // update the folder chip too
+      _refreshShipStatus(repo, null, true);   // update the folder chip too
     } catch (_) {
       await _openShipLog(repo);
     }
@@ -48488,13 +48541,16 @@
     if (!statusEl) return;
     const job = data && data.job;
     if (job && job.running) {
-      statusEl.className = 'conv-folder-ship-status is-busy';
-      statusEl.textContent = _SHIP_PHASE_LABELS[job.phase] || job.phase || 'Working…';
-      statusEl.title = job.message || '';
-      if (btn) btn.disabled = true;
+      const cls = 'conv-folder-ship-status is-busy';
+      const txt = _SHIP_PHASE_LABELS[job.phase] || job.phase || 'Working…';
+      const title = job.message || '';
+      if (statusEl.className !== cls) statusEl.className = cls;
+      if (statusEl.textContent !== txt) statusEl.textContent = txt;
+      if (statusEl.title !== title) statusEl.title = title;
+      if (btn && !btn.disabled) btn.disabled = true;
       return;
     }
-    if (btn) btn.disabled = false;
+    if (btn && btn.disabled) btn.disabled = false;
     let cls = 'conv-folder-ship-status', txt = '', title = '';
     const phase = job && job.phase;
     // A terminal phase is only worth showing while it's still true. If the repo
@@ -48522,9 +48578,9 @@
       cls += ' is-clean';
       txt = 'clean';
     }
-    statusEl.className = cls;
-    statusEl.textContent = txt;
-    statusEl.title = title;
+    if (statusEl.className !== cls) statusEl.className = cls;
+    if (statusEl.textContent !== txt) statusEl.textContent = txt;
+    if (statusEl.title !== title) statusEl.title = title;
   }
 
   async function _openShipLog(repo) {
@@ -48532,20 +48588,26 @@
     // refresh, when the chip shows "Needs you" and you want the steps back.
     if (!repo) return;
     _shipLogRepo = repo;
-    const data = await _refreshShipStatus(repo);
+    const data = await _refreshShipStatus(repo, null, true);
     if (data && data.job) _renderShipLogPanel(repo, data);
   }
 
-  async function _refreshShipStatus(repo, box) {
+  async function _refreshShipStatus(repo, box, force) {
     if (!repo) return null;
     box = box || _shipBox(repo);
     if (!box) return null;
+    const cached = _shipStatusCache.get(repo);
+    if (!force && cached && Date.now() - cached.ts < _SHIP_STATUS_CLIENT_TTL_MS) {
+      _renderShipStatus(_shipBox(repo) || box, cached.data);
+      return cached.data;
+    }
     const pending = _shipStatusInflight.get(repo);
     if (pending) return pending;
     const p = (async () => {
       try {
         const res = await backgroundApiFetch('/api/repo/ship/status?repo_path=' + encodeURIComponent(repo));
         const data = await res.json().catch(() => ({}));
+        if (res.ok) _shipStatusCache.set(repo, { ts: Date.now(), data: data });
         _renderShipStatus(_shipBox(repo) || box, data);
         // Drive the live log panel when this repo is shipping, or keep it
         // updated if it already owns the panel (until the user dismisses it).
@@ -48566,7 +48628,7 @@
   function _startShipPolling(repo) {
     if (_shipPollTimers[repo]) return;
     const tick = async () => {
-      const data = await _refreshShipStatus(repo);
+      const data = await _refreshShipStatus(repo, null, true);
       const running = data && data.job && data.job.running;
       if (!running) {
         clearInterval(_shipPollTimers[repo]);
@@ -48614,7 +48676,7 @@
     }
     // Take over the attention panel with the live log immediately.
     _shipLogRepo = repo;
-    await _refreshShipStatus(repo);
+    await _refreshShipStatus(repo, null, true);
     _startShipPolling(repo);
   }
 
@@ -61918,7 +61980,7 @@
       .catch(function () { return { ids: [], sessions: {} }; });
   }
   function loadConversations() {
-    return fetchJSON('/api/conversations?all=1', 14000).then(function (data) {
+    return fetchJSON('/api/conversations/list?window=all&stale_ok=1', 14000).then(function (data) {
       var rows = Array.isArray(data && data.conversations) ? data.conversations : [];
       var cutoff = Date.now() / 1000 - 86400;
       var recent = rows.filter(function (r) { return Number(r.mtime || r.modified || 0) >= cutoff; });

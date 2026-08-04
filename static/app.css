@@ -4627,10 +4627,27 @@
   }
   .conv-item:hover { background: var(--surface-2); }
   .conv-item.active { background: var(--surface-2); border-left-color: var(--purple); }
-  .conv-item.conv-item-completion-glow { animation: conv-completion-glow 1.8s ease-out; }
+  /* Completion cue. Pulses for as long as the class is on (JS removes it after
+     ~6s) rather than running a single 1.8s fade — a one-shot animation restarts
+     from zero on every sidebar re-render, which either swallowed the cue or
+     replayed it as a flicker. A pulse is re-render-safe and reads as "look
+     here" from across the room, which is the whole point of pairing it with
+     the beep. */
+  .conv-item.conv-item-completion-glow,
+  .kanban-card.conv-item-completion-glow {
+    animation: conv-completion-glow 1.1s ease-in-out infinite;
+  }
   @keyframes conv-completion-glow {
-    0%, 18% { background: rgba(57, 210, 192, 0.28); box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.75), 0 0 18px rgba(57, 210, 192, 0.34); }
-    100% { background: transparent; box-shadow: none; }
+    0%, 100% { background: rgba(57, 210, 192, 0.10); box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.35), 0 0 8px rgba(57, 210, 192, 0.16); }
+    50% { background: rgba(57, 210, 192, 0.30); box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.85), 0 0 20px rgba(57, 210, 192, 0.40); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .conv-item.conv-item-completion-glow,
+    .kanban-card.conv-item-completion-glow {
+      animation: none;
+      background: rgba(57, 210, 192, 0.24);
+      box-shadow: inset 0 0 0 1px rgba(57, 210, 192, 0.7);
+    }
   }
   .conv-item.is-history-match { border-left-color: rgba(120, 168, 255, 0.5); }
   .conv-repeat-group {
@@ -6199,7 +6216,7 @@
     border-left: 2px solid rgba(251,202,4,0.6);
     padding: 1px 4px; border-radius: 3px;
     white-space: nowrap;
-    animation: pulse 2s infinite;
+    animation: none;
   }
   .conv-item .conv-live-tool .conv-live-name {
     font-weight: 600;
@@ -6214,7 +6231,7 @@
     color: #58a6ff;
     background: rgba(88,166,255,0.10);
     border-left-color: rgba(88,166,255,0.6);
-    animation: pulse 1.2s infinite;
+    animation: none;
   }
   .conv-item .conv-live-tool.is-question {
     color: #58a6ff;
@@ -6309,6 +6326,28 @@
     .conv-item .conv-row-meta {
       grid-template-columns: max-content max-content 12px;
     }
+  }
+  /* CCC-724: preserve a useful slice of the session title before spending a
+     narrow sidebar row on secondary session metadata. The disclosure is the
+     aggregate "3 agents · 1 running" label, while the signal chips cover
+     standalone task/workflow counts in the same role. */
+  @container sidebar (max-width: 740px) {
+    .conv-item .conv-subagent-cluster-toggle,
+    .conv-item .conv-signal.subagents,
+    .conv-item .conv-signal.workflows { display: none; } /* ccc-724: agent counts yield before the conversation title */
+  }
+  @container sidebar (max-width: 700px) {
+    .conv-item .conv-signal-sub-flight { display: none; } /* ccc-724: running indicators yield after agent counts */
+  }
+  @container sidebar (max-width: 660px) {
+    .conv-item .conv-live-tool,
+    .conv-item .conv-signal.codex-stuck,
+    .conv-item .conv-signal.pkood-stuck,
+    .conv-item .conv-signal.activity-working { display: none; } /* ccc-724: stale and working state yield after running indicators */
+  }
+  @container sidebar (max-width: 620px) {
+    .conv-item .conv-lifetime-tokens,
+    .conv-item .conv-row-size { display: none; } /* ccc-724: token and size-like metrics yield last */
   }
   @container sidebar (max-width: 640px) {
     .conv-item .conv-engine-slot {
@@ -6785,7 +6824,7 @@
     margin-right: 4px;
     font-size: 11px; line-height: 1;
     color: var(--orange);
-    animation: pulse 1.2s ease-in-out infinite;
+    animation: none;
   }
   @media (prefers-reduced-motion: reduce) {
     .conv-item .conv-needs-you { animation: none; }
@@ -6798,7 +6837,7 @@
   }
   .conv-item .live-dot {
     width: 7px; height: 7px; border-radius: 50%;
-    background: var(--green); animation: pulse 2s infinite;
+    background: var(--green); animation: none;
     display: inline-block; flex-shrink: 0;
   }
   .conv-session-icon {
@@ -6858,7 +6897,7 @@
     border-color: #49dc88;
     background: #49dc88;
     box-shadow: 0 0 4px rgba(73, 220, 136, 0.72);
-    animation: ccc-activity-dot-pulse 1.6s ease-in-out infinite;
+    animation: none;
   }
   .is-not-working .session-activity-dot {
     border-color: #657180;
@@ -6990,7 +7029,7 @@
   .conv-signal.pr-closed  { background: rgba(139,148,158,0.15); color: var(--text-muted); }
   .conv-signal.pr-note { background: rgba(251,202,4,0.15); color: #FBCA04; }
   .conv-signal.pr-note-danger { background: rgba(248,81,73,0.16); color: var(--red); }
-  .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: pulse 2s infinite; }
+  .conv-signal.activity-working { background: rgba(251,202,4,0.15); color: #FBCA04; animation: none; }
   /* Distinct from .activity-working — cyan, no pulse. Surfaces "agent
      has stopped and is blocked on the user" (QUESTION, APPROVE?,
      WAITING). Previously these all rendered as yellow pulsing WIP and
@@ -9795,12 +9834,15 @@
   .upd-pill .upd-pill-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--accent); box-shadow: 0 0 0 0 rgba(88,166,255,0.4);
-    animation: upd-pulse 2.4s ease-out infinite;
+    animation: upd-arrive 700ms ease-out 2;
   }
-  @keyframes upd-pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(88,166,255,0.5); }
-    70%  { box-shadow: 0 0 0 6px rgba(88,166,255,0); }
-    100% { box-shadow: 0 0 0 0 rgba(88,166,255,0); }
+  @keyframes upd-arrive {
+    0%   { transform: scale(0.75); opacity: 0.55; }
+    70%  { transform: scale(1.35); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .upd-pill .upd-pill-dot { animation: none; }
   }
   .upd-overlay { position: fixed; inset: 0; z-index: 9999;
     display: none; align-items: center; justify-content: center; }
