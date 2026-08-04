@@ -107,6 +107,11 @@
 
   function hasLiveClaim(it) {
     if (!hasClaimMetadata(it)) return false;
+    // `wt reopen` intentionally preserves claimed_session_id as a resume
+    // handle for `wt discuss`, but clears the actual claim. Do not turn that
+    // historical handle back into WIP when its prior worker remains live.
+    var hasClaimant = !!(it && (it.claimed_by || it.claimed_at));
+    if (!hasClaimant) return false;
     var project = projectKey(it && it.project);
     var claimedSession = String((it && it.claimed_session_id) || '').trim();
     var claimedBy = String((it && it.claimed_by) || '').trim();
