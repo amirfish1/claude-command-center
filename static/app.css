@@ -17660,6 +17660,14 @@ body.status-pos-right #convToolbar {
 .gc-message.gc-system {
   opacity: 0.62;
 }
+.gc-message-number {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
 /* Ping messages: the user wants every orchestrator ping visible, so don't
    bury these in the muted lifecycle log — full opacity + a 📨 marker. */
 .gc-message.gc-system.gc-system-ping-msg {
@@ -20482,6 +20490,13 @@ body:has(.gc-reader) .pwa-install-banner {
 .gco-part-spokentime {
   font-size: 11px;
   color: var(--text-muted);
+}
+.gco-part-ping-link {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.gco-part-ping-link:not(.is-never) {
+  color: var(--accent);
 }
 .gco-part-card .gco-nudge-btn {
   margin-top: 0;

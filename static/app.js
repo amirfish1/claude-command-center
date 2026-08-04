@@ -21996,6 +21996,25 @@
     return out;
   }
 
+  function gcExtractPingedNames(rawBody) {
+    const names = [];
+    const re = /^>\s*_(.+?)\s+—\s+system:\s*pinged\s+(.+?)_?\s*$/gm;
+    let m;
+    while ((m = re.exec(rawBody || ''))) {
+      const pinged = (m[2] || '')
+        .replace(/\s*\([0-9a-fA-F]{8}\)/g, '')
+        .replace(/`/g, '')
+        .replace(/_+\s*$/, '')
+        .trim();
+      if (pinged) {
+        pinged.split(/,\s*/).forEach(name => {
+          if (name && !names.includes(name)) names.push(name);
+        });
+      }
+    }
+    return names;
+  }
+
   function renderGroupChatMarkdown(content) {
     const text = String(content || '');
     const matches = Array.from(text.matchAll(
@@ -22079,23 +22098,7 @@
     };
 
     const _gcAlertsHtml = (rawBody, idx, when) => {
-      const parsedNudges = [];
-      const re = /^>\s*_(.+?)\s+—\s+system:\s*pinged\s+(.+?)_?\s*$/gm;
-      let m;
-      while ((m = re.exec(rawBody))) {
-        const names = (m[2] || '')
-          .replace(/\s*\([0-9a-fA-F]{8}\)/g, '')
-          .replace(/`/g, '')
-          .replace(/_+\s*$/, '')
-          .trim();
-        if (names) {
-          names.split(/,\s*/).forEach(name => {
-            if (name && !parsedNudges.includes(name)) {
-              parsedNudges.push(name);
-            }
-          });
-        }
-      }
+      const parsedNudges = gcExtractPingedNames(rawBody);
 
       if (_gcReplayData && _gcReplayData.nudge_log) {
         const logEntries = _gcReplayData.nudge_log[idx] || _gcReplayData.nudge_log[when] || [];
@@ -22175,6 +22178,7 @@
 
       html += '<article class="gc-message' + (isSystem ? ' gc-system' : '') + (isPing ? ' gc-system-ping-msg' : '') + '" data-speaker-side="' + side + '" data-speaker-color="' + color + '">'
         + '<div class="gc-message-meta">'
+          + '<span class="gc-message-number" title="Message L' + (i + 1) + '">L' + (i + 1) + '</span>'
           + '<span class="gc-message-speaker" title="' + escapeAttr(speakerHash) + '">' + escapeHtml(displayName) + '</span>'
           + (when ? '<span class="gc-message-time">' + gcTimeChip(when) + '</span>' : '')
         + '</div>'
@@ -22702,6 +22706,7 @@
 
     const lastSpoken = {};
     const lastMentioned = {};
+    const lastPinged = {};
 
     const text = String(content || '');
     const matches = Array.from(text.matchAll(
@@ -22728,6 +22733,21 @@
       const authorHash = rawHash ? rawHash.substring(0, 8).toLowerCase() : '';
       if (authorHash) {
         lastSpoken[authorHash] = when;
+      }
+
+      const pingedNames = gcExtractPingedNames(bodyText);
+      if (pingedNames.length) {
+        for (const [fullSid, name] of Object.entries(nm)) {
+          const short = fullSid.substring(0, 8).toLowerCase();
+          const displayName = gcDisplayName(fullSid).toLowerCase();
+          if (pingedNames.some(ping => {
+            const candidate = ping.toLowerCase();
+            return candidate.includes(displayName) || candidate.includes(name.toLowerCase())
+              || candidate.includes('@' + short);
+          })) {
+            lastPinged[short] = { number: i + 1, when };
+          }
+        }
       }
 
       for (const [fullSid, name] of Object.entries(nm)) {
@@ -22768,6 +22788,11 @@
         mentionText = '<span class="gco-part-mention-link is-never">Never mentioned</span>';
       }
 
+      const ping = lastPinged[short];
+      const pingText = ping
+        ? `<span class="gco-part-ping-link" title="Last pinged ${gcRelativeTime(ping.when)}">Last pinged L${ping.number}</span>`
+        : '<span class="gco-part-ping-link is-never">Never pinged</span>';
+
       html += `<div class="gco-part-card" data-gc-part-sid="${escapeAttr(sid)}">`;
       html += `  <div class="gco-part-header">`;
       html += `    <span class="gco-part-swatch" style="background-color: var(--${color})"></span>`;
@@ -22780,6 +22805,8 @@
       html += `      <span class="gco-part-spokentime">${escapeHtml(lastSpokeText)}</span>`;
       html += `      <span class="gco-part-divider">·</span>`;
       html += `      ${mentionText}`;
+      html += `      <span class="gco-part-divider">·</span>`;
+      html += `      ${pingText}`;
       html += `    </div>`;
       html += `    <button type="button" class="gco-nudge-btn" data-gc-nudge="${escapeAttr(sid)}" data-gc-nudge-name="${escapeAttr(name)}" title="Re-inject the /group-chat prompt into ${escapeAttr(name)}'s session - wakes this agent specifically.">Nudge</button>`;
       html += `  </div>`;

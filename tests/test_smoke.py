@@ -14105,6 +14105,15 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn(".conversations-view .gc-message-body.assistant-text", css)
         self.assertIn(".gc-reader-input-row .tts-btn", css)
 
+    def test_group_chat_reader_labels_messages_and_last_pings(self):
+        """Group-chat messages and participant cards expose stable L-number links."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
+        self.assertIn('class="gc-message-number"', js)
+        self.assertIn("lastPinged[short]", js)
+        self.assertIn("Last pinged", js)
+        self.assertIn(".gc-message-number", css)
+
     # ── Codex desktop↔CCC single-writer coordination ────────────────────────
     def test_parse_lsof_open_rollouts_maps_pids_and_filters(self):
         """`lsof -Fpn` field output → {rollout path: pid}. Only paths under
