@@ -1672,12 +1672,28 @@ _MODEL_RATES = {
     "claude-sonnet-4-20250514": (3.00, 3.75, 0.30, 15.00),
     "claude-haiku-4-5-20251001": (1.00, 1.25, 0.10, 5.00),
     "gpt-5.5": (5.00, 0.00, 0.50, 30.00),
+    # GPT-5.6 cache writes are 1.25x input and cache reads are 10% of input.
+    # https://openai.com/index/gpt-5-6/ (checked 2026-08)
+    "gpt-5.6-sol": (5.00, 6.25, 0.50, 30.00),
+    "gpt-5.6-terra": (2.50, 3.125, 0.25, 15.00),
+    "gpt-5.6-luna": (1.00, 1.25, 0.10, 6.00),
     "gpt-5.4": (2.50, 0.00, 0.00, 15.00),
     "gpt-5.3-codex": (1.75, 0.00, 0.00, 14.00),
     "gpt-5.2-codex": (1.75, 0.00, 0.00, 14.00),
     "gpt-5.1-codex-max": (1.25, 0.00, 0.00, 10.00),
     "gpt-5.4-mini": (0.75, 0.00, 0.00, 4.50),
     "gpt-5.4-nano": (0.20, 0.00, 0.00, 1.25),
+    # Kimi lists cache misses, cache hits, and output separately. Kimi's
+    # inputCacheCreation bucket is priced as a cache miss.
+    # https://www.kimi.com/resources/kimi-k3-pricing
+    # https://www.kimi.com/resources/kimi-k2-7-code-pricing (checked 2026-08)
+    "k3": (3.00, 3.00, 0.30, 15.00),
+    "k3-256k": (3.00, 3.00, 0.30, 15.00),
+    "kimi-k3": (3.00, 3.00, 0.30, 15.00),
+    "kimi-for-coding": (0.95, 0.95, 0.19, 4.00),
+    "kimi-k2.7-code": (0.95, 0.95, 0.19, 4.00),
+    "kimi-for-coding-highspeed": (1.90, 1.90, 0.38, 8.00),
+    "kimi-k2.7-code-highspeed": (1.90, 1.90, 0.38, 8.00),
     # Older families kept for archival sessions.
     "claude-opus-4-20250514": (15.00, 18.75, 1.50, 75.00),
     "claude-opus-3": (15.00, 18.75, 1.50, 75.00),
@@ -1712,6 +1728,61 @@ def _rates_for_model_known(model):
         ):
             return list(rates), True
     return list(_FALLBACK_RATES), False
+
+
+_SESSION_COST_FALLBACK_MODELS = {
+    "claude": "claude-sonnet-4-6",
+    "codex": "gpt-5.5",
+    "kimi": "kimi-code/k3",
+}
+
+
+def _session_usage_cost(engine, model, totals):
+    """Price normalized lifetime token buckets without any additional I/O."""
+    engine = str(engine or "").strip().lower()
+    model = str(model or "").strip()
+    configured = ""
+    try:
+        configured = _core._spawn_fallback_model_for_engine(engine)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    resolved_model = ""
+    rates = (0.0, 0.0, 0.0, 0.0)
+    direct = False
+    candidates = (
+        model,
+        configured,
+        _SESSION_COST_FALLBACK_MODELS.get(engine, ""),
+    )
+    for candidate in candidates:
+        if not candidate:
+            continue
+        candidate_rates, known = _rates_for_model_known(candidate)
+        if known:
+            resolved_model = candidate
+            rates = candidate_rates
+            direct = candidate == model and bool(model)
+            break
+    rate_in, rate_cw, rate_cr, rate_out = rates
+
+    def tokens(key):
+        return max(_core._codex_int((totals or {}).get(key)), 0)
+
+    breakdown = {
+        "input": tokens("total_input_tokens") * rate_in / 1_000_000,
+        "cache_creation": (
+            tokens("total_cache_creation_tokens") * rate_cw / 1_000_000
+        ),
+        "cache_read": tokens("total_cache_read_tokens") * rate_cr / 1_000_000,
+        "output": tokens("total_output_tokens") * rate_out / 1_000_000,
+    }
+    rounded = {key: round(value, 6) for key, value in breakdown.items()}
+    return {
+        "cost_usd": round(sum(breakdown.values()), 6),
+        "cost_breakdown_usd": rounded,
+        "cost_basis": "api_list_price" if direct else "engine_fallback",
+        "cost_model": resolved_model,
+    }
 
 
 def _rates_for_model(model):
