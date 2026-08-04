@@ -1,4 +1,4 @@
-"""Behavior coverage for the status-rail Claude cost presentation."""
+"""Behavior coverage for cross-engine status-rail cost presentation."""
 
 import json
 import pathlib
@@ -38,8 +38,8 @@ process.stdout.write(JSON.stringify(result));
     return json.loads(completed.stdout)
 
 
-def test_every_claude_session_gets_a_numeric_cost():
-    ranked, unranked, loading, failed, noPlan, normalized, codex = _run_helper("""[
+def test_every_target_engine_session_gets_a_numeric_cost():
+    ranked, unranked, loading, failed, noPlan, normalized, codex, kimi, gemini = _run_helper("""[
       railSessionCostPresentation(
         {engine:'claude', cost_usd:12.5}, 'ranked', 200,
         {totalTokens:1000, bySession:{ranked:250}, rankingsAvailable:true}
@@ -64,8 +64,18 @@ def test_every_claude_session_gets_a_numeric_cost():
         {totalTokens:1000, bySession:{normalized:100}, rankingsAvailable:true}
       ),
       railSessionCostPresentation(
-        {engine:'codex', cost_usd:9.25}, 'codex', 200,
+        {engine:'codex', model:'gpt-5.6-sol', cost_usd:9.25,
+         cost_basis:'api_list_price', cost_model:'gpt-5.6-sol'}, 'codex', 200,
         {totalTokens:1000, bySession:{codex:250}, rankingsAvailable:true}
+      ),
+      railSessionCostPresentation(
+        {engine:'kimi', model:'future-model', cost_usd:1.25,
+         cost_basis:'engine_fallback', cost_model:'kimi-code/k3'}, 'kimi', 200,
+        {totalTokens:1000, bySession:{kimi:500}, rankingsAvailable:true}
+      ),
+      railSessionCostPresentation(
+        {engine:'gemini', cost_usd:4.5}, 'gemini', 200,
+        {totalTokens:1000, bySession:{gemini:500}, rankingsAvailable:true}
       )
     ]""")
 
@@ -80,6 +90,8 @@ def test_every_claude_session_gets_a_numeric_cost():
         "share": 0,
         "sessionTokens": 0,
         "weeklyTokens": 0,
+        "pricingBasis": "api_list_price",
+        "costModel": "",
     }
     assert failed["basis"] == "api"
     assert failed["cost"] == 8.75
@@ -87,17 +99,30 @@ def test_every_claude_session_gets_a_numeric_cost():
     assert noPlan["cost"] == 7.5
     assert normalized["basis"] == "subscription"
     assert normalized["cost"] == pytest.approx(200 * 12 / 52 * 0.1)
-    assert codex is None
+    assert codex["basis"] == "api"
+    assert codex["cost"] == 9.25
+    assert codex["pricingBasis"] == "api_list_price"
+    assert codex["costModel"] == "gpt-5.6-sol"
+    assert kimi["basis"] == "api"
+    assert kimi["cost"] == 1.25
+    assert kimi["pricingBasis"] == "engine_fallback"
+    assert kimi["costModel"] == "kimi-code/k3"
+    assert gemini is None
 
 
 def test_visible_cost_text_and_tooltip_execute_production_formatter():
-    subscription, api = _run_helper("""[
+    subscription, api, fallback = _run_helper("""[
       railSessionCostText(railSessionCostPresentation(
         {engine:'claude', cost_usd:9.25}, 'unranked', 200,
         {totalTokens:1000, bySession:{ranked:250}, rankingsAvailable:true}
       )),
       railSessionCostText(railSessionCostPresentation(
         {engine:'claude', cost_usd:0.2911}, 'loading', 200, null
+      )),
+      railSessionCostText(railSessionCostPresentation(
+        {engine:'kimi', model:'future-model', cost_usd:1.25,
+         cost_basis:'engine_fallback', cost_model:'kimi-code/k3'},
+        'kimi', 200, null
       ))
     ]""")
 
@@ -110,6 +135,14 @@ def test_visible_cost_text_and_tooltip_execute_production_formatter():
         "cost": "$0.2911",
         "label": "$0.2911 API list-price equivalent",
         "tooltip": "API list-price equivalent: $0.2911",
+    }
+    assert fallback == {
+        "cost": "$1.25",
+        "label": "$1.25 API list-price equivalent",
+        "tooltip": (
+            "API list-price equivalent: $1.25"
+            " · estimated using kimi-code/k3 rates"
+        ),
     }
 
 

@@ -40886,10 +40886,12 @@
   }
 
   function railSessionCostPresentation(usage, sessionId, monthlyPlan, weeklyUsage) {
-    if (railSessionUsageEngine(usage) !== 'claude') return null;
+    const engine = railSessionUsageEngine(usage);
+    if (!['claude', 'codex', 'kimi'].includes(engine)) return null;
     const plan = Number(monthlyPlan) || 0;
     const weeklyTokens = weeklyUsage ? Number(weeklyUsage.totalTokens) || 0 : 0;
-    if (plan > 0 && weeklyUsage && weeklyUsage.rankingsAvailable === true && weeklyTokens > 0) {
+    if (engine === 'claude' && plan > 0 && weeklyUsage
+        && weeklyUsage.rankingsAvailable === true && weeklyTokens > 0) {
       const sessionTokens = sessionId
         ? Number((weeklyUsage.bySession || {})[sessionId]) || 0
         : 0;
@@ -40901,6 +40903,8 @@
         share,
         sessionTokens,
         weeklyTokens,
+        pricingBasis: 'subscription',
+        costModel: String((usage && usage.model) || ''),
       };
     }
     const rawApiCost = Number(usage && usage.cost_usd);
@@ -40911,6 +40915,8 @@
       share: 0,
       sessionTokens: 0,
       weeklyTokens: 0,
+      pricingBasis: String((usage && usage.cost_basis) || 'api_list_price'),
+      costModel: String((usage && (usage.cost_model || usage.model)) || ''),
     };
   }
 
@@ -40921,13 +40927,17 @@
         ? presentation.cost.toFixed(2)
         : presentation.cost.toFixed(4)
     );
+    const fallbackNote = presentation.pricingBasis === 'engine_fallback'
+      && presentation.costModel
+      ? ' · estimated using ' + presentation.costModel + ' rates'
+      : '';
     return {
       cost,
       label: cost + ' ' + presentation.label,
       tooltip: presentation.basis === 'subscription'
         ? (presentation.share * 100).toFixed(1) + '% of '
           + presentation.weeklyTokens.toLocaleString() + ' Claude tokens this week'
-        : presentation.label + ': ' + cost,
+        : presentation.label + ': ' + cost + fallbackNote,
     };
   }
   // RAIL_SESSION_COST_PRESENTATION_END
@@ -41299,10 +41309,10 @@
       + liveWhen
       + liveNote
       + (canToggleContextLimit ? '\n\nClick to toggle between 200k and 1M.' : '');
-    // Cost pill — Anthropic API list-price equivalent. Subscription users
-    // (Pro/Max) pay flat, but the figure is still the cleanest cross-model
-    // comparison of "how expensive was this session" so we surface it.
-    const cost = u.cost_usd || 0;
+    // Cost pill — API list-price equivalent across supported engines. It is
+    // derived from token buckets already read for this strip, so it adds no
+    // request or transcript work.
+    const cost = Number(u.cost_usd) || 0;
     const breakdown = u.cost_breakdown_usd || {};
     let costPill = '';
     if (cost > 0) {
@@ -41311,9 +41321,11 @@
         + '  Input:        ' + fmt(breakdown.input || 0) + '  (' + (u.total_input_tokens || 0).toLocaleString() + ' tok)\n'
         + '  Cache write:  ' + fmt(breakdown.cache_creation || 0) + '  (' + (u.total_cache_creation_tokens || 0).toLocaleString() + ' tok)\n'
         + '  Cache read:   ' + fmt(breakdown.cache_read || 0) + '  (' + (u.total_cache_read_tokens || 0).toLocaleString() + ' tok)\n'
-        + '  Output:       ' + fmt(breakdown.output || 0) + '  (' + (u.total_output_tokens || 0).toLocaleString() + ' tok)\n\n'
-        + 'Subscription users (Claude Pro/Max) pay flat - this is the\n'
-        + 'list-price equivalent if metered against the API directly.';
+        + '  Output:       ' + fmt(breakdown.output || 0) + '  (' + (u.total_output_tokens || 0).toLocaleString() + ' tok)'
+        + (u.cost_basis === 'engine_fallback' && u.cost_model
+          ? '\n\nEstimated using ' + u.cost_model + ' rates because this session model is unknown.'
+          : '')
+        + '\n\nActual charges may differ for subscriptions or negotiated pricing; this is the list-price equivalent if metered through the API.';
       costPill = ' <span class="wp-cost-pill" title="' + escapeHtml(costTip) + '">' + fmt(cost) + '</span>';
     }
     // Antigravity-only: running per-session totals in the exact format
