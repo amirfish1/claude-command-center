@@ -9984,12 +9984,15 @@
   /* Undo, for the armed dashboard restart. A cheap action does not deserve a
      confirm dialog, but it does deserve a way out now that it is two clicks
      from an always-visible header chip. */
-  .sys-svc-result .sys-undo-btn { margin-left: 8px; padding: 2px 9px;
+  .sys-svc-result .sys-undo-btn,
+  .sys-svc-result .sys-now-btn { margin-left: 8px; padding: 2px 9px;
     border: 1px solid color-mix(in srgb, var(--text) 32%, transparent);
     border-radius: 999px; background: transparent; color: inherit;
     font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
   .sys-svc-result .sys-undo-btn:hover,
-  .sys-svc-result .sys-undo-btn:focus-visible {
+  .sys-svc-result .sys-undo-btn:focus-visible,
+  .sys-svc-result .sys-now-btn:hover,
+  .sys-svc-result .sys-now-btn:focus-visible {
     border-color: var(--accent); color: var(--accent); outline: none; }
 
   .sys-keepalive-note { margin: 2px 0 0; font-size: 11px;

@@ -53909,6 +53909,24 @@
     return true;
   }
 
+  // Fires the actual restart, whether the countdown ran out or the user
+  // skipped it with "Restart now". Idempotent against the timer: whichever
+  // path gets here first clears it, so the other is a no-op.
+  async function sysFireDashRestart() {
+    if (_sysDashArmTimer) { clearInterval(_sysDashArmTimer); _sysDashArmTimer = null; }
+    _sysArmedRestart = null;
+    // restartServerRun takes over the screen with a full-page overlay and
+    // reloads when the port answers again. It closes this modal itself, so
+    // do not fight it.
+    sysSetRestartInFlight('dashboard', 'Restarting the dashboard…');
+    try {
+      await restartServerRun('/api/restart');
+    } finally {
+      // Only reached when the POST failed: on success the page reloads.
+      sysClearRestartInFlight('dashboard');
+    }
+  }
+
   function sysArmDashRestart() {
     let left = SYS_DASH_ARM_SECONDS;
     _sysArmedRestart = 'dashboard';
@@ -53920,6 +53938,12 @@
       el.hidden = false;
       el.className = 'sys-svc-result is-busy';
       el.textContent = 'Restarting the dashboard in ' + left + 's. ';
+      const now = document.createElement('button');
+      now.type = 'button';
+      now.className = 'sys-now-btn';
+      now.textContent = 'Restart now';
+      now.addEventListener('click', () => sysFireDashRestart());
+      el.appendChild(now);
       const undo = document.createElement('button');
       undo.type = 'button';
       undo.className = 'sys-undo-btn';
@@ -53929,25 +53953,13 @@
     };
 
     sysSay('Restarting the dashboard in ' + SYS_DASH_ARM_SECONDS
-      + ' seconds. Choose Undo to cancel.');
+      + ' seconds. Choose Restart now to skip the wait, or Undo to cancel.');
     paint();
     if (_sysDashArmTimer) clearInterval(_sysDashArmTimer);
-    _sysDashArmTimer = setInterval(async () => {
+    _sysDashArmTimer = setInterval(() => {
       left -= 1;
       if (left > 0) { paint(); return; }
-      clearInterval(_sysDashArmTimer);
-      _sysDashArmTimer = null;
-      _sysArmedRestart = null;
-      // restartServerRun takes over the screen with a full-page overlay and
-      // reloads when the port answers again. It closes this modal itself, so
-      // do not fight it.
-      sysSetRestartInFlight('dashboard', 'Restarting the dashboard…');
-      try {
-        await restartServerRun('/api/restart');
-      } finally {
-        // Only reached when the POST failed: on success the page reloads.
-        sysClearRestartInFlight('dashboard');
-      }
+      sysFireDashRestart();
     }, 1000);
   }
 
