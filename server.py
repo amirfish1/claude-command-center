@@ -28929,25 +28929,11 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
             "code": "codex_steer_unavailable",
             "error": "Codex app-server disabled",
         }
-    # A turn running in the DESKTOP's app-server cannot be steered from CCC's
-    # app-server — the resumed replica isn't the executing turn. Fail fast
-    # with the code the frontend already maps to its send-mode retry, which
-    # then hits the write-gate and queues durably.
-    try:
-        snap = _codex_thread_writer_snapshot(session_id)
-    except Exception:
-        snap = {}
-    if snap.get("external_active"):
-        _codex_note_external_writer_transition(session_id, snap)
-        writer = snap.get("writer")
-        label = "Codex desktop" if writer == "desktop" else "another Codex process"
-        return {
-            "ok": False,
-            "via": "codex-steer",
-            "code": "codex_steer_unavailable",
-            "writer": writer,
-            "error": f"Active turn belongs to {label}; steering from CCC is not possible",
-        }
+    # Writer attribution is useful for status display and queue coordination,
+    # but it is not authoritative for steering. An active thread can be marked
+    # external/unknown merely because CCC has not observed its owning client.
+    # Ask Codex to resume the thread and use its actual turn id below; the
+    # native RPC is the authority on whether the active turn can be steered.
     resume_params = {
         "threadId": session_id,
         "excludeTurns": False,
