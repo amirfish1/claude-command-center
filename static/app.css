@@ -16641,6 +16641,42 @@ body.status-pos-right #convToolbar {
   font-size: 13px;
 }
 .injection-health-details__ack:hover { color: var(--red, #f85149); border-color: var(--red, #f85149); }
+.injection-health-details__lost-row {
+  padding: 6px 0;
+  border-top: 1px solid rgba(139,148,158,0.12);
+}
+.injection-health-details__lost-row:first-of-type,
+.injection-health-details__group-label + .injection-health-details__lost-row {
+  border-top: none;
+}
+.injection-health-details__lost-row .injection-health-details__row {
+  border-top: none;
+  padding: 0 0 4px;
+}
+.injection-health-details__engine {
+  flex: 0 0 auto;
+  text-transform: uppercase;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--text-muted, #8b949e);
+  border: 1px solid rgba(139,148,158,0.3);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.injection-health-details__preview {
+  padding: 2px 0 4px;
+  color: var(--text, #e6edf3);
+  opacity: 0.85;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.injection-health-details__explain {
+  color: var(--text-muted, #8b949e);
+  line-height: 1.4;
+}
 
 /* Quote blocks — italic with a hairline left rule, à la Omnara: the italic
    reads as "this is the quoted source", and the rule signals structure

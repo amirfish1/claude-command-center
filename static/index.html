@@ -3535,7 +3535,34 @@
   function sidLinkHtml(sid) {
     if (!sid) return '<span class="injection-health-details__sid">(unknown session)</span>';
     return '<button type="button" class="injection-health-details__sid" data-open-sid="' +
-      escapeHtml(sid) + '" title="Open this session">' + escapeHtml(sid) + '</button>';
+      escapeHtml(sid) + '" title="Open this session (' + escapeHtml(sid) + ')">' + escapeHtml(sid) + '</button>';
+  }
+
+  // Plain-language gloss for each WatchTower delivery method — "delegate"
+  // etc mean nothing to a reader who hasn't read WT's adapter chain.
+  const TRANSPORT_EXPLAIN = {
+    fifo: 'a direct pipe into the running process',
+    resume: "a CLI resume of the session's process",
+    'gemini-resume': "a Gemini CLI resume of the session's process",
+    delegate: "handed off to CCC's own delivery API (WatchTower's own delivery methods weren't available for this session)",
+    'codex-app-server': "Codex's managed app server",
+    'antigravity-language-server': "Antigravity's language server",
+  };
+  function transportExplainHtml(transport) {
+    const key = String(transport || '').trim();
+    const known = TRANSPORT_EXPLAIN[key];
+    return known ? (escapeHtml(key) + ' — ' + escapeHtml(known)) : (escapeHtml(key) || 'an unknown transport');
+  }
+
+  // The two "lost" cases mean very different things: with a captured
+  // baseline, ten silent minutes is a real, confirmed non-delivery. Without
+  // one, WatchTower never even found the session's transcript file to
+  // compare against, so "lost" here just means "never verified" -- it may
+  // well have landed.
+  function proofExplain(proofAvailable) {
+    return proofAvailable
+      ? "WatchTower recorded this session's transcript at send time and it never grew in the 10-minute wait window that followed — the message did not land."
+      : "WatchTower couldn't find this session's transcript file, either at send time or since — there was nothing to check the message against, so this is unverified rather than a confirmed loss.";
   }
 
   function renderText(health) {
@@ -3550,10 +3577,17 @@
       );
     }
     if (lost.length) {
+      // "Lost" bundles two different certainty levels (see proofExplain
+      // below) -- say so up front instead of a flat "confirmed lost" that
+      // overstates the unverified ones.
+      const proven = lost.filter((r) => r.proof_available).length;
+      const unproven = lost.length - proven;
+      const bits = [];
+      if (proven) bits.push(proven + ' confirmed lost');
+      if (unproven) bits.push(unproven + ' unverified');
       parts.push(
-        lost.length + ' message' + (lost.length === 1 ? '' : 's') +
-        ' confirmed lost in transit (transport: ' +
-        Array.from(new Set(lost.map((r) => r.transport || 'unknown'))).join(', ') + ')'
+        lost.length + ' message' + (lost.length === 1 ? '' : 's') + ' in transit trouble — ' +
+        bits.join(', ') + ' · click Details'
       );
     }
     $text.textContent = parts.join(' · ');
@@ -3575,14 +3609,17 @@
     if (lost.length) {
       html += '<div class="injection-health-details__group-label">Lost messages</div>'
         + lost.map((r) => (
-          '<div class="injection-health-details__row" data-receipt-id="' + escapeHtml(r.id) + '">'
-          + sidLinkHtml(r.sid)
-          + '<span class="injection-health-details__meta">'
-          +   'transport ' + escapeHtml(r.transport || 'unknown')
-          +   ' · sent ' + fmtWhen(r.sent_at)
-          +   ' · ' + (r.proof_available ? 'send confirmed, delivery unproven' : 'no send proof captured')
-          + '</span>'
-          + '<button type="button" class="injection-health-details__ack" data-ack-id="' + escapeHtml(r.id) + '" title="Dismiss this one incident">&times;</button>'
+          '<div class="injection-health-details__lost-row" data-receipt-id="' + escapeHtml(r.id) + '">'
+          + '<div class="injection-health-details__row">'
+          +   sidLinkHtml(r.sid)
+          +   (r.engine ? '<span class="injection-health-details__engine">' + escapeHtml(r.engine) + '</span>' : '')
+          +   '<span class="injection-health-details__meta">sent ' + fmtWhen(r.sent_at) + '</span>'
+          +   '<button type="button" class="injection-health-details__ack" data-ack-id="' + escapeHtml(r.id) + '" title="Dismiss this one incident">&times;</button>'
+          + '</div>'
+          + (r.preview
+            ? '<div class="injection-health-details__preview" title="The first part of the message text, so you can tell which send this was">&ldquo;' + escapeHtml(r.preview) + '&hellip;&rdquo;</div>'
+            : '')
+          + '<div class="injection-health-details__explain">Sent via ' + transportExplainHtml(r.transport) + '. ' + escapeHtml(proofExplain(r.proof_available)) + '</div>'
           + '</div>'
         )).join('');
     }
