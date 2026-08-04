@@ -7555,7 +7555,10 @@ def _is_transcript_control_text(text):
     """Return True for Claude Code bookkeeping stored as user transcript text."""
     normalized = (text or "").strip()
     return (
-        normalized == "[Request interrupted by user]"
+        (
+            normalized.startswith("[Request interrupted by user")
+            and normalized.endswith("]")
+        )
         or normalized.startswith(_TRANSCRIPT_CONTROL_PREFIXES)
     )
 
