@@ -1,0 +1,1 @@
+- Fixed the new-session object picker so it lists all objects and prioritizes ones associated with the chosen repository.

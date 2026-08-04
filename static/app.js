@@ -14858,6 +14858,7 @@
   const NEW_SESSION_OBJECT_BY_CWD_KEY = 'ccc-new-session-object-by-cwd';
   let _newSessionObjectMenuItems = [];
   let _newSessionObjectMenuIndex = 0;
+  let _newSessionObjectMenuQuery = '';
   let _newSessionObjectDocWired = false;
 
   function _objectsApiPost(path, body) {
@@ -14907,6 +14908,30 @@
     if (!objectId) return null;
     return (flowCustomObjects || []).find(o =>
       o && o.id === objectId && !o.archived && !isArchivedFlowObjectId(o.id)) || null;
+  }
+
+  function newSessionObjectRepoMatchIds() {
+    const repoPath = newSessionObjectScopeKey();
+    const matches = new Set();
+    if (!repoPath || repoPath === '__default__') return matches;
+    const addObjectAndAncestors = (nodeId) => {
+      const seen = new Set();
+      for (let node = nodeId; node && !seen.has(node); node = flowNodeParents[node] || '') {
+        seen.add(node);
+        if (node.indexOf('object:') === 0) matches.add(node.slice(7));
+      }
+    };
+    (conversationsData || []).forEach(row => {
+      const sid = row && (row.session_id || row.id);
+      if (!sid || normalizeSpawnCwdPath(rowRepoPath(row)) !== repoPath) return;
+      addObjectAndAncestors(flowNodeParents[flowNodeKey('session', sid)]);
+    });
+    (flowDraftSessions || []).forEach(draft => {
+      if (!draft || normalizeSpawnCwdPath(draft.repo_path) !== repoPath) return;
+      const nodeId = flowNodeKey('draft-session', draft.id || '');
+      addObjectAndAncestors(flowNodeParents[nodeId] || draft.parent_node_id);
+    });
+    return matches;
   }
 
   function getNewSessionSelectedObject() {
@@ -14974,8 +14999,10 @@
   function renderNewSessionObjectMenu(query) {
     const menu = document.getElementById('newSessionObjectMenu');
     if (!menu) return;
-    const q = String(query || '').trim().toLowerCase();
+    _newSessionObjectMenuQuery = String(query || '');
+    const q = _newSessionObjectMenuQuery.trim().toLowerCase();
     const selected = getNewSessionSelectedObject();
+    const repoMatchIds = newSessionObjectRepoMatchIds();
     const tree = flowAssignableObjectTree();
     const matchingIds = new Set();
     const ancestorIds = new Set();
@@ -14998,8 +15025,13 @@
       .map(o => Object.assign({}, o, {
         matchesSearch: !q || matchingIds.has(o.id),
         hasMatchingDescendant: q && ancestorIds.has(o.id),
+        repoMatched: repoMatchIds.has(o.id),
       }))
-      .filter(o => !q || o.matchesSearch || o.hasMatchingDescendant);
+      .filter(o => !q || o.matchesSearch || o.hasMatchingDescendant)
+      .sort((a, b) => {
+        if (a.repoMatched === b.repoMatched) return 0;
+        return a.repoMatched ? -1 : 1;
+      });
     const exact = q && tree.some(o => o.title.toLowerCase() === q);
     _newSessionObjectMenuItems = objects.map(o => ({ type: 'object', id: o.id }));
     if (q && !exact) _newSessionObjectMenuItems.push({ type: 'create', title: String(query || '').trim() });
@@ -15045,7 +15077,7 @@
     input.dataset.wired = '1';
     input.addEventListener('focus', () => {
       _newSessionObjectMenuIndex = 0;
-      renderNewSessionObjectMenu(input.value);
+      renderNewSessionObjectMenu('');
       input.select();
     });
     input.addEventListener('input', () => {
@@ -15361,6 +15393,8 @@
         try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
         try { localStorage.setItem('ccc-flow-draft-sessions', JSON.stringify(flowDraftSessions)); } catch (_) {}
         try { renderSidebar(filterConversations($convSearch ? $convSearch.value : '')); } catch (_) {}
+        updateNewSessionObjectPickerValue();
+        if (isNewSessionObjectMenuOpen()) renderNewSessionObjectMenu(_newSessionObjectMenuQuery);
       }
     }
     // Heal accidental empty duplicates, then push the (possibly trimmed) state
