@@ -10483,6 +10483,86 @@ def _restart_worker_process(worker=None, *, was=None, now=None):
     return outcome
 
 
+def _safe_worker_restart_precheck(reason_prefix="worker-restart"):
+    """Shared safety gate before killing the worker process.
+
+    Originally lived only inline in the /api/restart/all handler, which is
+    why a worker-only restart (/api/restart/worker) used to skip straight to
+    launchctl kickstart with none of it: no check for a Kimi turn this
+    dashboard still owns (Kimi has no adopt path, so a kill mid-turn loses
+    it outright), no attempt to hand live sessions to the worker before it
+    dies, no drain so a turn in flight gets a clean stopping point instead
+    of being cut off. That asymmetry was the actual answer to "when is it
+    safe to restart the worker" -- the safe sequence existed, it just wasn't
+    attached to the button people actually use for a worker-only restart.
+
+    Returns (ok, error_response_or_None, adopted, protected). `adopted` and
+    `protected` are the raw control-plane responses, worth threading into
+    the final response so a caller can see how much was actually saved.
+    """
+    local_active = _dashboard_owned_active_executions()
+    active_kimi = [item for item in local_active if item.get("engine") == "kimi"]
+    if active_kimi:
+        return False, {
+            "ok": False,
+            "error": (
+                "A Kimi turn is still owned by this dashboard. "
+                "Wait for it to finish before restarting."
+            ),
+            "active": active_kimi,
+        }, None, None
+    adopted = _control_plane_request("engine.adopt", {}, engine_timeout=True)
+    if adopted.get("code") == "method_not_found":
+        adopted = {"ok": False, "available": False}
+    if adopted.get("available") and not adopted.get("ok"):
+        return False, {
+            "ok": False,
+            "error": adopted.get("error") or "worker could not adopt sessions",
+        }, adopted, None
+    if not adopted.get("available") and local_active:
+        return False, {
+            "ok": False,
+            "error": (
+                "Agent work is still owned by this dashboard and the "
+                "persistent worker is unavailable. Start the worker or "
+                "wait for the active turn before restarting."
+            ),
+            "active": local_active,
+        }, adopted, None
+    protected = _control_plane_request("drain.set", {
+        "enabled": True,
+        "reason": f"{reason_prefix}:{uuid.uuid4()}",
+    })
+    if protected.get("available") and not protected.get("ok"):
+        return False, {
+            "ok": False,
+            "error": protected.get("error") or "worker refused safe drain",
+        }, adopted, protected
+    return True, None, adopted, protected
+
+
+def _wait_worker_healthy(timeout_s=20.0, interval_s=0.5):
+    """Poll control-plane health until the restarted worker answers again.
+
+    launchctl kickstart (and the kill+respawn fallback) both return before
+    the new process has finished booting and re-bound its control-plane
+    listener -- calling work.reconcile immediately after would just race a
+    process that isn't there yet. Bounded at 20s so a worker that fails to
+    come back doesn't hang the restart response indefinitely; the caller
+    still reports what it knows either way.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            health = _control_plane_request("health")
+        except Exception:
+            health = {}
+        if isinstance(health, dict) and health.get("ok"):
+            return True
+        time.sleep(interval_s)
+    return False
+
+
 def _ccc_last_updated_iso():
     """ISO-8601 timestamp of the most recent change to this install.
 
@@ -57093,12 +57173,41 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # server.py fix: worker_engines.py lazily imports server, so the
             # worker keeps running the old code until this happens, which
             # reads to the user as "the fix didn't work".
+            #
+            # Shares the drain/adopt safety /api/restart/all already had --
+            # this endpoint used to skip straight to launchctl kickstart
+            # with none of it, which is exactly why "when is it safe to
+            # restart the worker" had no good answer: the safe sequence
+            # existed, just not here. Also waits for the worker to answer
+            # again and auto-runs reconcile, so a queue item that needed
+            # "needs reconciliation" fixed doesn't wait on a human to
+            # remember the button in Settings -> Maintenance.
+            ok, precheck_err, adopted, protected = _safe_worker_restart_precheck()
+            if not ok:
+                self.send_json(precheck_err, 409)
+                return
             outcome = _restart_worker_process()
+            healthy = False
+            reconciled = None
+            if outcome.get("restarted"):
+                healthy = _wait_worker_healthy()
+                if healthy:
+                    recon = _control_plane_request("work.reconcile", {})
+                    if isinstance(recon, dict) and recon.get("ok"):
+                        reconciled = int(recon.get("reconciled") or 0)
             self.send_json({
                 "ok": bool(outcome.get("restarted")),
                 "worker": outcome,
+                "adopted": int((adopted or {}).get("adopted") or 0),
+                "drain_queued": int((protected or {}).get("queued") or 0),
+                "worker_reachable": healthy,
+                "reconciled": reconciled,
                 "note": (
-                    "Running queue items may show as needs reconciliation."
+                    ("Worker restarted and reconciled ("
+                        + str(reconciled) + " item(s) reclaimed).") if healthy
+                    else "Worker restarted, but hasn't answered yet -- "
+                         "reconcile once it comes back." if outcome.get("restarted")
+                    else "Worker restart failed."
                 ),
             }, 200 if outcome.get("restarted") else 500)
             return
@@ -57109,52 +57218,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # the handoff below succeeds: adopt/drain need a live worker, so
             # restarting it first would strand this dashboard's sessions.
             restart_all = path.endswith("/all")
-            restart_id = str(uuid.uuid4())
-            local_active = _dashboard_owned_active_executions()
-            active_kimi = [
-                item for item in local_active if item.get("engine") == "kimi"
-            ]
-            if active_kimi:
-                self.send_json({
-                    "ok": False,
-                    "error": (
-                        "A Kimi turn is still owned by this dashboard. "
-                        "Wait for it to finish before restarting."
-                    ),
-                    "active": active_kimi,
-                }, 409)
-                return
-            adopted = _control_plane_request(
-                "engine.adopt", {}, engine_timeout=True,
+            ok, precheck_err, adopted, protected = _safe_worker_restart_precheck(
+                reason_prefix="dashboard-restart",
             )
-            if adopted.get("code") == "method_not_found":
-                adopted = {"ok": False, "available": False}
-            if adopted.get("available") and not adopted.get("ok"):
-                self.send_json({
-                    "ok": False,
-                    "error": adopted.get("error") or "worker could not adopt sessions",
-                }, 409)
-                return
-            if not adopted.get("available") and local_active:
-                self.send_json({
-                    "ok": False,
-                    "error": (
-                        "Agent work is still owned by this dashboard and the "
-                        "persistent worker is unavailable. Start the worker "
-                        "or wait for the active turn before restarting."
-                    ),
-                    "active": local_active,
-                }, 409)
-                return
-            protected = _control_plane_request("drain.set", {
-                "enabled": True,
-                "reason": f"dashboard-restart:{restart_id}",
-            })
-            if protected.get("available") and not protected.get("ok"):
-                self.send_json({
-                    "ok": False,
-                    "error": protected.get("error") or "worker refused safe drain",
-                }, 409)
+            if not ok:
+                self.send_json(precheck_err, 409)
                 return
             # Worker first, then this process: the dashboard's own restart is
             # scheduled after the response flushes, so kicking the worker here

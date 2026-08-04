@@ -102,13 +102,76 @@ class RestartRoutingTests(unittest.TestCase):
         """adopt/drain need a live worker; kicking it first strands sessions."""
         import pathlib
         src = pathlib.Path(self.server.__file__).read_text()
-        handoff = src.index('"reason": f"dashboard-restart:{restart_id}"')
-        kick = src.index("worker_outcome = _restart_worker_process() if restart_all else None")
+        block = src[src.index('if path in ("/api/restart", "/api/restart/all"):'):]
+        handoff = block.index("_safe_worker_restart_precheck(")
+        kick = block.index("worker_outcome = _restart_worker_process() if restart_all else None")
         self.assertLess(
             handoff, kick,
-            "the worker restart must come after drain.set, or the dashboard "
-            "hands its sessions to a worker that is already going down",
+            "the worker restart must come after the safety precheck (which "
+            "runs drain.set before returning ok), or the dashboard hands "
+            "its sessions to a worker that is already going down",
         )
+
+
+class SafeWorkerRestartPrecheckTests(unittest.TestCase):
+    """/api/restart/worker used to skip this precheck entirely -- straight
+    to launchctl kickstart, no drain, no adopt, no check for a Kimi turn
+    this dashboard still owned. That asymmetry with /api/restart/all was
+    the actual answer to "when is it safe to restart the worker": the safe
+    sequence existed, it just wasn't wired to the worker-only button."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = importlib.import_module("server")
+
+    def test_blocks_on_active_kimi_work_without_touching_the_worker(self):
+        server = self.server
+        with mock.patch.object(
+            server, "_dashboard_owned_active_executions",
+            return_value=[{"engine": "kimi", "session_id": "s1"}],
+        ), mock.patch.object(server, "_control_plane_request") as cpr:
+            ok, err, adopted, protected = server._safe_worker_restart_precheck()
+        self.assertFalse(ok)
+        self.assertIn("Kimi", err["error"])
+        self.assertIsNone(adopted)
+        self.assertIsNone(protected)
+        cpr.assert_not_called()
+
+    def test_happy_path_adopts_then_drains_in_order(self):
+        server = self.server
+        calls = []
+
+        def fake_cpr(method, params=None, *, engine_timeout=False):
+            calls.append(method)
+            if method == "engine.adopt":
+                return {"ok": True, "available": True, "adopted": 2}
+            if method == "drain.set":
+                return {"ok": True, "available": True, "queued": 1}
+            raise AssertionError(f"unexpected control-plane method {method!r}")
+
+        with mock.patch.object(
+            server, "_dashboard_owned_active_executions", return_value=[],
+        ), mock.patch.object(server, "_control_plane_request", side_effect=fake_cpr):
+            ok, err, adopted, protected = server._safe_worker_restart_precheck()
+        self.assertTrue(ok)
+        self.assertIsNone(err)
+        self.assertEqual(calls, ["engine.adopt", "drain.set"])
+        self.assertEqual(adopted["adopted"], 2)
+        self.assertEqual(protected["queued"], 1)
+
+    def test_worker_restart_endpoint_waits_for_health_then_reconciles(self):
+        """The endpoint itself: precheck -> kickstart -> wait -> reconcile."""
+        import pathlib
+        src = pathlib.Path(self.server.__file__).read_text()
+        block = src[src.index('if path == "/api/restart/worker":'):
+                     src.index('if path in ("/api/restart", "/api/restart/all"):')]
+        precheck = block.index("_safe_worker_restart_precheck(")
+        kick = block.index("_restart_worker_process()")
+        wait = block.index("_wait_worker_healthy(")
+        reconcile = block.index('"work.reconcile"')
+        self.assertLess(precheck, kick)
+        self.assertLess(kick, wait)
+        self.assertLess(wait, reconcile)
 
 
 if __name__ == "__main__":

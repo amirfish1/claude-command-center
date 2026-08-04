@@ -53204,9 +53204,10 @@
   // consequence is described identically wherever you click Restart worker.
   const WORKER_RESTART_CONFIRM =
     'Restart the execution worker?\n\n'
-    + 'Running queue items will be marked "needs reconciliation" and you clear '
-    + 'them with one click on Reconcile. Agent turns already in flight may be '
-    + 'interrupted.';
+    + 'CCC hands off ownership of any live sessions first and reconciles the '
+    + 'queue automatically once the worker answers again — no manual Reconcile '
+    + 'needed. A turn already mid-response when the worker dies is still '
+    + 'interrupted (draining stops new dispatch, it does not wait one out).';
   const WT_RESTART_CONFIRM =
     'Restart the WatchTower server?\n\n'
     + 'In-flight queue workers are stopped mid task and queue draining pauses '
@@ -54012,14 +54013,12 @@
       if (typeof o.echo === 'function') o.echo(text, kind);
       sysSay(text);
     };
-    // _restart_worker_process returns restarted:true on launchctl rc 0
-    // WITHOUT verifying the worker answered, so compare start times rather
-    // than trusting the POST.
-    const before = Number(
-      ((_sysServiceMap(_sysServicesCache.payload).get('worker')) || {}).started_at || 0
-    );
     sysSetRestartInFlight('worker', 'Restarting the execution worker…');
     if (typeof o.echo === 'function') o.echo('Restarting the execution worker…', 'busy');
+    // The server now runs the whole safe sequence itself before responding
+    // (drain, adopt, kickstart, wait for the worker to answer again,
+    // reconcile) -- so the response is the authoritative outcome, not a
+    // guess from comparing timestamps a few seconds later.
     let ok = false;
     try {
       const r = await fetch('/api/restart/worker', {
@@ -54028,9 +54027,9 @@
       const d = await r.json().catch(() => ({}));
       if (r.ok && d.ok) {
         ok = true;
-        say('Worker restarted. Re-checking…', 'ok');
+        say(d.note || 'Worker restarted.', d.worker_reachable ? 'ok' : 'error');
       } else {
-        const msg = (d && d.error) || 'Worker restart failed.';
+        const msg = (d && (d.error || d.note)) || 'Worker restart failed.';
         say(msg, 'error');
         if (o.toastErrors) showOpToast(msg, 'error');
       }
@@ -54042,24 +54041,8 @@
     }
     sysClearRestartInFlight('worker');
     if (ok) {
-      setTimeout(() => sysRefresh(true), 1500);
-      if (typeof refreshControlPlaneStatus === 'function') {
-        setTimeout(refreshControlPlaneStatus, 1500);
-        setTimeout(refreshControlPlaneStatus, 5000);
-      }
-      setTimeout(async () => {
-        await sysRefresh(true);
-        const now = Number(
-          ((_sysServiceMap(_sysServicesCache.payload).get('worker')) || {}).started_at || 0
-        );
-        if (now > before) {
-          say('Worker restarted. Running queue items may show as needs '
-            + 'reconciliation.', 'ok');
-        } else {
-          say('Worker restart was requested but the worker has not come '
-            + 'back yet. Check Settings then Maintenance.', 'error');
-        }
-      }, 5000);
+      sysRefresh(true);
+      if (typeof refreshControlPlaneStatus === 'function') refreshControlPlaneStatus();
     }
     if (typeof o.onDone === 'function') o.onDone(ok);
     return ok;
