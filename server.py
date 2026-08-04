@@ -26943,8 +26943,44 @@ def _codex_wait_for_turn_activity(session_id, turn_id=None, *, baseline_state=No
     }
 
 
+def _wt_register_codex_agent(thread_id, cwd=""):
+    """Best-effort: tell WatchTower's agents registry that this thread is a
+    Codex session, right when CCC spawns it.
+
+    Without this, `wt`'s own `resolve_target` has no way to learn the engine
+    for a codex-app-spawn thread -- CCC never goes through `wt spawn`, so
+    WT's codex_registry (which only gets populated by a WT-initiated
+    delivery that already reached the thread as Codex) stays empty for it.
+    A later WT-side send to the bare thread UUID then falls back to WT's
+    documented "claude" assumption, searches for a Claude transcript that
+    will never exist, and the receipt sits "lost, unverified" forever even
+    when the message actually landed via the delegate adapter. Registering
+    the name here closes that gap from the CCC side, which is exactly what
+    `resolve_target`'s own docstring asks callers holding a non-claude UUID
+    to do. Silent no-op if `wt` isn't installed or the call fails -- this is
+    a delivery-reliability nicety, not something a spawn should ever block
+    or fail on.
+    """
+    wt_cli = shutil.which("wt")
+    if not wt_cli:
+        return
+    # `_` (not `-`) before the id: WT rejects any name ending in
+    # "-<8 lowercase hex chars>" as colliding with its worker-id shape
+    # ("<queue>-<8 hex>"), and an 8-char thread-id prefix hits that exactly.
+    name = "codex_" + str(thread_id)
+    try:
+        subprocess.run(
+            [wt_cli, "agents", "register", name, "--session", str(thread_id),
+             "--engine", "codex", "--cwd", str(cwd or "")],
+            capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+
+
 def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
-                                log_path, baseline_state, baseline_rollout):
+                                log_path, baseline_state, baseline_rollout,
+                                cwd=""):
     """Do the post-acceptance spawn work off the caller's critical path.
 
     Once turn/start is accepted the turn is already running inside Codex, so
@@ -26968,6 +27004,7 @@ def _codex_finalize_spawn_async(thread_id, turn_id, *, session_name, prompt,
     on the same write.
     """
     def worker():
+        _wt_register_codex_agent(thread_id, cwd=cwd)
         # Watch the rollout appear/fill alongside the confirmation. These are
         # the marks that explain a "slow" session: CCC renders the transcript
         # FROM this file, so nothing can reach the screen before it exists and
@@ -28270,6 +28307,7 @@ def _codex_spawn_via_app_server(
             log_path=log_path,
             baseline_state=baseline_state,
             baseline_rollout=baseline_rollout,
+            cwd=spawn_cwd,
         )
         total_ms = _codex_elapsed_ms(total_start)
         _codex_telemetry_append(
@@ -36533,8 +36571,14 @@ def _build_injection_health():
             {
                 "id": r.get("id"),
                 "sid": r.get("sid"),
+                "engine": r.get("engine"),
                 "transport": r.get("transport"),
                 "sent_at": r.get("sent_at"),
+                # The message's own first ~60 chars, so a lost receipt reads
+                # as "this specific message to this session" instead of a
+                # bare id -- needed to tell which of several sends is at
+                # fault when the same session shows up more than once.
+                "preview": r.get("needle"),
                 # A blank at_send.path means the receipt couldn't snapshot a
                 # baseline at send time -- that's a proof-path gap, not
                 # necessarily proof the message itself never landed.
