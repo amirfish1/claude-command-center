@@ -195,8 +195,10 @@
   <div id="injectionHealthBanner" class="injection-health-banner" hidden role="alert" aria-live="assertive">
     <span class="injection-health-banner__icon" aria-hidden="true">&#9888;</span>
     <span class="injection-health-banner__text" id="injectionHealthBannerText"></span>
+    <button type="button" class="injection-health-banner__details" id="injectionHealthBannerDetailsBtn" aria-expanded="false" aria-controls="injectionHealthBannerDetails" title="Show the full list of affected sessions">Details</button>
     <button type="button" class="injection-health-banner__dismiss" id="injectionHealthBannerDismissAll" title="Dismiss the lost-receipt incidents shown above (active holds clear on their own)">Dismiss</button>
   </div>
+  <div id="injectionHealthBannerDetails" class="injection-health-banner-details" hidden></div>
   <!-- PWA install banner (tab-mode only). Hidden by default; surfaced after
        a short delay if the page is NOT running standalone, with copy
        tailored to the current platform. Dismissal is persisted for 14
@@ -3511,8 +3513,30 @@
 (function() {
   const $banner = document.getElementById('injectionHealthBanner');
   const $text   = document.getElementById('injectionHealthBannerText');
+  const $detailsBtn = document.getElementById('injectionHealthBannerDetailsBtn');
+  const $details = document.getElementById('injectionHealthBannerDetails');
   const $dismiss = document.getElementById('injectionHealthBannerDismissAll');
-  if (!$banner || !$text || !$dismiss) return;
+  if (!$banner || !$text || !$dismiss || !$detailsBtn || !$details) return;
+
+  let _lastHealth = null;
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  function fmtWhen(epochSeconds) {
+    const n = Number(epochSeconds);
+    if (!n) return 'unknown time';
+    try { return new Date(n * 1000).toLocaleString(); } catch (_) { return 'unknown time'; }
+  }
+
+  function sidLinkHtml(sid) {
+    if (!sid) return '<span class="injection-health-details__sid">(unknown session)</span>';
+    return '<button type="button" class="injection-health-details__sid" data-open-sid="' +
+      escapeHtml(sid) + '" title="Open this session">' + escapeHtml(sid) + '</button>';
+  }
 
   function renderText(health) {
     const holds = health.active_holds || [];
@@ -3535,22 +3559,88 @@
     $text.textContent = parts.join(' · ');
   }
 
+  function renderDetails(health) {
+    const holds = health.active_holds || [];
+    const lost = health.new_lost_receipts || [];
+    let html = '';
+    if (holds.length) {
+      html += '<div class="injection-health-details__group-label">Stuck sessions</div>'
+        + holds.map((h) => (
+          '<div class="injection-health-details__row">'
+          + sidLinkHtml(h.sid)
+          + '<span class="injection-health-details__meta">pid ' + escapeHtml(h.pid) + ' · stuck since ' + fmtWhen(h.first_seen) + '</span>'
+          + '</div>'
+        )).join('');
+    }
+    if (lost.length) {
+      html += '<div class="injection-health-details__group-label">Lost messages</div>'
+        + lost.map((r) => (
+          '<div class="injection-health-details__row" data-receipt-id="' + escapeHtml(r.id) + '">'
+          + sidLinkHtml(r.sid)
+          + '<span class="injection-health-details__meta">'
+          +   'transport ' + escapeHtml(r.transport || 'unknown')
+          +   ' · sent ' + fmtWhen(r.sent_at)
+          +   ' · ' + (r.proof_available ? 'send confirmed, delivery unproven' : 'no send proof captured')
+          + '</span>'
+          + '<button type="button" class="injection-health-details__ack" data-ack-id="' + escapeHtml(r.id) + '" title="Dismiss this one incident">&times;</button>'
+          + '</div>'
+        )).join('');
+    }
+    $details.innerHTML = html || '<div class="injection-health-details__row">Nothing to show.</div>';
+  }
+
+  function closeDetails() {
+    $details.hidden = true;
+    $detailsBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  $detailsBtn.addEventListener('click', function () {
+    const opening = $details.hidden;
+    if (opening && _lastHealth) renderDetails(_lastHealth);
+    $details.hidden = !opening;
+    $detailsBtn.setAttribute('aria-expanded', String(opening));
+  });
+
+  $details.addEventListener('click', function (ev) {
+    const openBtn = ev.target.closest('[data-open-sid]');
+    if (openBtn) {
+      const sid = openBtn.getAttribute('data-open-sid');
+      if (sid && typeof window.cccOpenSession === 'function') window.cccOpenSession(sid);
+      return;
+    }
+    const ackBtn = ev.target.closest('[data-ack-id]');
+    if (ackBtn) {
+      const receiptId = ackBtn.getAttribute('data-ack-id');
+      fetch('/api/injection-health/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receipt_id: receiptId }),
+      })
+        .then(() => poll())
+        .catch(() => {});
+    }
+  });
+
   function poll() {
     fetch('/api/injection-health', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((health) => {
         if (!health) return;
+        _lastHealth = health;
         if (health.any_active) {
           renderText(health);
           $banner.hidden = false;
+          if (!$details.hidden) renderDetails(health);
         } else {
           $banner.hidden = true;
+          closeDetails();
         }
       })
       .catch(() => {});
   }
 
   $dismiss.addEventListener('click', function () {
+    closeDetails();
     fetch('/api/injection-health/ack', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

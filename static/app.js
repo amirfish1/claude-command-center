@@ -9,6 +9,12 @@
   // early), so it's instant and reversible with zero teardown.
   window.__pollersOff = window.__pollersOff || {};
   function _pollerOff(name) { return !!(window.__pollersOff && window.__pollersOff[name]); }
+  // Bridge for markup that lives outside this closure (e.g. the page-global
+  // injection-health banner in index.html) to open a session by id without
+  // duplicating selectConversation's pane/tray/scroll-restore logic.
+  window.cccOpenSession = function (sid) {
+    try { if (sid) selectConversation(sid); } catch (_) {}
+  };
   // Always-on background pollers that have nothing to do while the window is
   // hidden — paused on document.hidden, kicked once on re-focus. View-
   // conditional pollers (gcReader, pkoodTail, codexLog, hiStatus, peer) and the
@@ -27515,6 +27521,31 @@
         + ship
         + '</div>';
     };
+    // A collapsed project folder hides every row inside it, including
+    // subagent-cluster chips (see `.conv-folder-group.collapsed >
+    // .conv-subagent-cluster` in app.css) — so a running or attention-needing
+    // spawn underneath a collapsed folder used to vanish with no trace. This
+    // surfaces a small badge on the still-visible folder header instead, so
+    // collapsing a project never drops hidden live work to zero visibility.
+    const _folderGroupLiveBadgeHtml = (clusters) => {
+      let running = 0;
+      let attention = 0;
+      for (const cluster of (clusters || [])) {
+        const rows = (cluster && cluster.rows) || [];
+        for (let i = 1; i < rows.length; i++) {
+          const card = rows[i] && rows[i].card;
+          if (!card) continue;
+          if (_subagentRowNeedsAttention(card)) attention++;
+          else if (_subagentRowIsActive(card)) running++;
+        }
+      }
+      if (!attention && !running) return '';
+      const label = attention > 0
+        ? (attention + (attention === 1 ? ' needs attention' : ' need attention'))
+        : (running + (running === 1 ? ' agent running' : ' agents running'));
+      return '<span class="conv-folder-group-live-badge' + (attention > 0 ? ' has-attention' : '') + '"'
+        + ' title="' + escapeAttr(label + ' inside this collapsed group') + '">' + escapeHtml(label) + '</span>';
+    };
     const _GH_ISSUE_PREVIEW_LIMIT = 5;
     const _ghIssueExpandedStorageKey = (key) =>
       'ccc-ghissues-expanded:' + String(key || '').slice(0, 180);
@@ -29287,8 +29318,11 @@
         _arcFolderCollapseKeys.push(_folderGroupStorageKey('archived', collapseKey));
         const collapsed = _isFolderGroupCollapsed('archived', collapseKey);
         const archivedRepoPath = root.folder_path || '';
+        // Badge rides inside the existing count cell (not a new grid column)
+        // so it can't collide with the ship control's grid-column: 5.
+        const countWithLiveBadge = collapsed ? (count + _folderGroupLiveBadgeHtml(clusters)) : count;
         return '<div class="conv-folder-group' + (collapsed ? ' collapsed' : '') + '">'
-          + _folderGroupHeaderHtml('archived', folder, count, hue, orphan, collapseKey, '', archivedRepoPath)
+          + _folderGroupHeaderHtml('archived', folder, countWithLiveBadge, hue, orphan, collapseKey, '', archivedRepoPath)
           + _renderAllTabClusters(clusters, true)
           + '</div>';
       }).join('');

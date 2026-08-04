@@ -11701,9 +11701,25 @@
   .conv-folder-group-count {
     grid-column: 4;
     justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     color: var(--text-muted);
     font-size: 10px;
     font-variant-numeric: tabular-nums;
+  }
+  .conv-folder-group-live-badge {
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 700;
+    white-space: nowrap;
+    background: rgba(63,185,80,0.16);
+    color: var(--green);
+  }
+  .conv-folder-group-live-badge.has-attention {
+    background: rgba(248,81,73,0.18);
+    color: var(--red);
   }
   .conv-folder-object-actions {
     grid-column: 5;
@@ -16551,6 +16567,80 @@ body.status-pos-right #convToolbar {
   font-family: inherit;
 }
 .injection-health-banner__dismiss:hover { background: rgba(255,255,255,0.25); }
+.injection-health-banner__details {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit;
+}
+.injection-health-banner__details:hover { background: rgba(255,255,255,0.15); }
+.injection-health-banner__details[aria-expanded="true"] { background: rgba(255,255,255,0.25); }
+.injection-health-banner-details {
+  position: fixed;
+  top: 39px; left: 0; right: 0;
+  z-index: 9999;
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--surface, #161b22);
+  color: var(--text, #e6edf3);
+  border-bottom: 1px solid rgba(139,148,158,0.3);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+  font-size: 12px;
+  padding: 8px 16px 12px;
+}
+.injection-health-details__group-label {
+  margin: 8px 0 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8b949e);
+}
+.injection-health-details__group-label:first-child { margin-top: 2px; }
+.injection-health-details__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(139,148,158,0.12);
+}
+.injection-health-details__row:first-of-type,
+.injection-health-details__group-label + .injection-health-details__row {
+  border-top: none;
+}
+.injection-health-details__sid {
+  flex: 0 0 auto;
+  background: rgba(139,148,158,0.14);
+  border: 1px solid rgba(139,148,158,0.3);
+  color: var(--text, #e6edf3);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-family: var(--mono-font, monospace);
+  cursor: pointer;
+}
+.injection-health-details__sid:hover { background: rgba(139,148,158,0.24); }
+.injection-health-details__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted, #8b949e);
+}
+.injection-health-details__ack {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid rgba(139,148,158,0.3);
+  color: var(--text-muted, #8b949e);
+  border-radius: 4px;
+  width: 20px; height: 20px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 13px;
+}
+.injection-health-details__ack:hover { color: var(--red, #f85149); border-color: var(--red, #f85149); }
 
 /* Quote blocks — italic with a hairline left rule, à la Omnara: the italic
    reads as "this is the quoted source", and the rule signals structure
