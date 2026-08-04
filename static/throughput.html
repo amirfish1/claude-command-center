@@ -2241,7 +2241,7 @@
       }
       if (selectDefault) setStatus('Loading sessions...', true);
       try {
-        const convRes = await fetch(`/api/conversations?all=1&${throughputEngineParam()}`);
+        const convRes = await fetch(`/api/conversations?all=1&compact=1&${throughputEngineParam()}`);
         if (!convRes.ok) throw new Error('API failed');
         const data = await convRes.json();
         allSessions = data.conversations || data.sessions || [];

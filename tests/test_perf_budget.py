@@ -17,6 +17,7 @@ import concurrent.futures
 import gzip
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -194,11 +195,53 @@ def test_archive_list_rows_reuse_warm_archive_cache(monkeypatch):
     assert calls == [{"include_prs": False}]
 
 
+def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
+    """A short sidebar window must not copy/refresh every historical row."""
+    expected = [{"session_id": "recent"}, {"session_id": "old"}]
+    calls = []
+
+    def serve(
+        key,
+        options,
+        *,
+        copy_rows=True,
+        force_refresh=False,
+    ):
+        calls.append((key, options, copy_rows, force_refresh))
+        return expected, True, 7
+
+    monkeypatch.setattr(server, "_archive_serve_rows_versioned", serve)
+    options = {"include_prs": False}
+
+    rows, from_cache = server._archive_list_source_rows_cached(options)
+
+    assert rows is expected
+    assert from_cache is True
+    fresh_rows, fresh_from_cache = server._archive_list_source_rows_cached(
+        options,
+        force_refresh=True,
+    )
+
+    assert fresh_rows is expected
+    assert fresh_from_cache is True
+    assert calls == [(
+        server._archive_response_cache_key(**options),
+        options,
+        False,
+        False,
+    ), (
+        server._archive_response_cache_key(**options),
+        options,
+        False,
+        True,
+    )]
+
+
 def test_archive_list_http_route_projects_cached_rows(monkeypatch):
     monkeypatch.setattr(
         server,
-        "_archive_all_rows_cached",
-        lambda _options: ([{
+        "_archive_list_source_rows_cached",
+        lambda _options, **_kwargs: ([{
             "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
             "archived": True, "trashed": True, "all_lane_override": "messages",
             "last_assistant_text": "not returned",
@@ -345,6 +388,141 @@ def _count_calls(monkeypatch, attr, passthrough_return=None):
 # ── Liveness-gate invariants ────────────────────────────────────────────────
 # Old, untouched sessions must NOT get the per-row liveness probe (which scans
 # every Gemini/Codex file). These guard the cold-build and warm-serve gates.
+
+
+def test_process_comm_native_path_does_not_touch_filesystem(monkeypatch):
+    """Classifying every ps row must be string work, not thousands of lstats."""
+    native = Path.home() / ".local" / "share" / "claude" / "versions" / "2.1.144"
+    resolve_calls = []
+    real_resolve = Path.resolve
+
+    def counting_resolve(path, *args, **kwargs):
+        resolve_calls.append(path)
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    assert server._process_comm_is_claude(str(native))
+    assert resolve_calls == [], "process-name classification performed filesystem resolution"
+
+
+def test_session_registry_reuses_shared_process_snapshot(monkeypatch, tmp_path):
+    """Registry validation and engine discovery share one cached ps snapshot."""
+    sid = "00000000-0000-4000-8000-000000000001"
+    (tmp_path / "123.json").write_text(
+        json.dumps({"pid": 123, "sessionId": sid}),
+        encoding="utf-8",
+    )
+    native = Path.home() / ".local" / "share" / "claude" / "versions" / "2.1.144"
+    subprocess_calls = []
+
+    monkeypatch.setattr(server, "SESSIONS_REGISTRY", tmp_path)
+    monkeypatch.setattr(
+        server,
+        "_scan_engine_processes",
+        lambda: [("123", "??", str(native), str(native))],
+    )
+
+    def fake_run(args, **kwargs):
+        subprocess_calls.append(args)
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=f"123 {native}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+    server._load_session_registry.cache_clear()
+
+    assert sid in server._load_session_registry()
+    assert subprocess_calls == [], "registry forked a second ps instead of sharing the snapshot"
+
+
+def test_live_engine_ids_use_raw_process_snapshot_without_metadata_probes(monkeypatch):
+    """The idle liveness poll must not fork cwd/terminal probes per engine PID."""
+    sid = "00000000-0000-4000-8000-000000000002"
+    monkeypatch.setattr(server, "_spawned_sessions", [])
+    monkeypatch.setattr(
+        server,
+        "_scan_engine_processes",
+        lambda: [("123", "??", "/usr/local/bin/codex", f"codex resume {sid}")],
+    )
+    for name in (
+        "find_live_codex_processes",
+        "find_live_gemini_processes",
+        "find_live_cursor_processes",
+    ):
+        monkeypatch.setattr(
+            server,
+            name,
+            lambda name=name: pytest.fail(f"idle liveness called metadata scanner {name}"),
+        )
+    server._engine_live_sids_cache.update(ts=0.0, sids=frozenset())
+
+    assert server._live_engine_session_ids() == frozenset({sid})
+
+
+def test_codex_pool_probe_uses_raw_process_snapshot_without_metadata(monkeypatch):
+    """Checking for app-server must not resolve cwd or terminal ancestry."""
+    monkeypatch.setattr(
+        server,
+        "_scan_engine_processes",
+        lambda: [("123", "??", "/usr/local/bin/codex", "codex app-server")],
+    )
+    monkeypatch.setattr(
+        server,
+        "find_live_codex_processes",
+        lambda: pytest.fail("pool probe called the full Codex process scanner"),
+    )
+    server._codex_pool_alive_cache.update(ts=0.0, alive=False)
+
+    assert server._codex_pool_alive()
+
+
+def test_codex_desktop_probe_uses_raw_process_snapshot_without_metadata(monkeypatch):
+    """Desktop attachment discovery needs PID/command only, never terminal data."""
+    desktop_cmd = "/Applications/Codex.app/Contents/MacOS/codex app-server"
+    monkeypatch.setattr(
+        server,
+        "_raw_engine_process_commands",
+        lambda engine: iter([("123", desktop_cmd), ("124", "codex app-server")]),
+    )
+    monkeypatch.setattr(
+        server,
+        "find_live_codex_processes",
+        lambda: pytest.fail("desktop probe called the full Codex process scanner"),
+    )
+    monkeypatch.setattr(server, "_CODEX_APP_SERVER_PROC", None)
+
+    assert server._codex_desktop_app_server_procs() == [
+        {"pid": 123, "command": desktop_cmd},
+    ]
+
+
+def test_liveness_uses_memoized_engine_classifier(monkeypatch):
+    """One candidate gets one cached engine classification, not every probe."""
+    sid = "gemini-session"
+    probe_calls = []
+    monkeypatch.setattr(server, "_detect_session_engine", lambda value: "gemini")
+    for name in (
+        "_is_kimi_session",
+        "_is_codex_session",
+        "_is_cursor_session",
+        "_is_gemini_session",
+        "_is_antigravity_session",
+        "_is_kilo_session",
+        "_is_opencode_session",
+    ):
+        monkeypatch.setattr(
+            server,
+            name,
+            lambda value, name=name: probe_calls.append(name) or False,
+        )
+    monkeypatch.setattr(server, "_live_engine_session_ids", lambda: frozenset({sid}))
+
+    assert server._archive_session_is_live_uncached(sid)
+    assert probe_calls == [], "liveness bypassed the memoized engine classifier"
 
 def test_reattached_zombie_checks_share_one_process_state_scan(monkeypatch):
     """N reattached children require one bulk `ps`, never one fork per PID."""
@@ -1217,6 +1395,16 @@ _ALL_OPTS = dict(include_prs=False, resolve_pr_states=False,
 _ALL_KEY = server._archive_response_cache_key(**_ALL_OPTS)
 
 
+def test_archive_build_variants_share_one_global_singleflight_lock():
+    """Different option keys must not parse the same corpus concurrently."""
+    assert server._archive_build_lock("default") is server._archive_build_lock("with-prs")
+
+
+def test_archive_serve_default_throttles_large_corpus_refreshes():
+    """Live activity has its own overlay; full history needs at most 1/5min."""
+    assert server._ARCHIVE_SERVE_TTL >= 300.0
+
+
 def test_archive_spawned_cold_cache_does_not_block_request(monkeypatch):
     """A slow first spawned-session refresh must not hang ?all=1."""
     release = threading.Event()
@@ -1339,6 +1527,50 @@ def test_archive_build_cache_skips_rebuild_when_unchanged(big_projects, isolated
     assert len(rows2) == len(rows1), "rehydrate must return the same rows as the build"
 
 
+def test_archive_response_cache_restores_signature_stat_map(
+    isolated_archive_cache,
+):
+    """A detached worker/restart must retain enough state for delta refreshes."""
+    old_sig = "persisted-old-stat-map"
+    new_sig = "current-new-stat-map"
+    old_files = {"/repo/a.jsonl": (1, 10)}
+    old_extras = {"/engine/store": 4}
+    new_files = {
+        "/repo/a.jsonl": (2, 12),
+        "/repo/b.jsonl": (1, 8),
+    }
+
+    with server._archive_sig_lock:
+        server._ARCHIVE_STATMAP_BY_SIG[old_sig] = (old_files, old_extras)
+    try:
+        server._archive_response_cache_put(
+            _ALL_KEY,
+            [{"session_id": "cached"}],
+            signature=old_sig,
+        )
+        server._save_archive_response_cache(force=True)
+
+        server._ARCHIVE_RESPONSE_CACHE.clear()
+        server._ARCHIVE_RESPONSE_CACHE_LOADED = False
+        with server._archive_sig_lock:
+            server._ARCHIVE_STATMAP_BY_SIG.pop(old_sig, None)
+
+        server._load_archive_response_cache()
+
+        with server._archive_sig_lock:
+            restored = server._ARCHIVE_STATMAP_BY_SIG.get(old_sig)
+            server._ARCHIVE_STATMAP_BY_SIG[new_sig] = (new_files, old_extras)
+        assert restored == (old_files, old_extras)
+        changed, removed, engines = server._archive_signature_delta(old_sig, new_sig)
+        assert changed == ["/repo/a.jsonl", "/repo/b.jsonl"]
+        assert removed == []
+        assert engines == set()
+    finally:
+        with server._archive_sig_lock:
+            server._ARCHIVE_STATMAP_BY_SIG.pop(old_sig, None)
+            server._ARCHIVE_STATMAP_BY_SIG.pop(new_sig, None)
+
+
 def test_archive_build_cache_invalidates_on_change(big_projects, isolated_archive_cache, monkeypatch, tmp_path):
     """Touching a transcript must bust the signature and force exactly one rebuild
     (the build cache must never serve a stale payload after a real change)."""
@@ -1409,6 +1641,198 @@ def test_archive_all_serve_cache_coalesces_concurrent_polls(big_projects, isolat
         "serve-cache window must not even rehydrate — concurrent polls within "
         "the TTL must share one snapshot (the per-request liveness-probe drain)"
     )
+
+
+def test_archive_warm_force_refresh_never_computes_on_request_thread(
+    isolated_archive_cache, monkeypatch,
+):
+    """A warm freshness request must stale-serve and refresh off-thread.
+
+    Real archive rehydrates repeatedly exceeded the one-second prediction
+    budget (up to 32s), monopolizing the GIL and delaying unrelated session
+    opens. Structural "cheapness" must never put archive work back onto an
+    HTTP request thread once a serve snapshot exists.
+    """
+    cached_rows = [{"session_id": "cached", "mtime": 1}]
+    assert server._archive_serve_cache_store(
+        _ALL_KEY, cached_rows, server._archive_serve_generation,
+    )
+    with server._archive_serve_lock:
+        server._archive_serve_cache[_ALL_KEY]["ts"] = 0.0
+
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            spawned.append(self)
+
+        def start(self):
+            pass
+
+    compute_calls = []
+
+    def compute(*args, **kwargs):
+        compute_calls.append((args, kwargs))
+        return [{"session_id": "fresh"}], True
+
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    monkeypatch.setattr(server, "_archive_compute_rows", compute)
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=True,
+    )
+
+    assert rows == cached_rows
+    assert from_cache is True
+    assert compute_calls == [], "archive refresh ran synchronously on the request thread"
+    assert len(spawned) == 1, "warm freshness request did not schedule one refresh"
+    assert spawned[0].target is server._archive_serve_refresh
+
+
+def test_archive_background_refresh_uses_detached_process(
+    isolated_archive_cache, monkeypatch,
+):
+    """Archive parsing must not share the dashboard server's Python GIL."""
+    detached_calls = []
+
+    def detached(key, options, generation):
+        detached_calls.append((key, options, generation))
+        return [], True
+
+    monkeypatch.setattr(
+        server, "_archive_compute_rows_detached", detached, raising=False,
+    )
+    monkeypatch.setattr(
+        server,
+        "_archive_compute_rows",
+        lambda *_args, **_kwargs: pytest.fail(
+            "background archive refresh ran inside the dashboard process"
+        ),
+    )
+
+    generation = server._archive_serve_generation
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, generation)
+
+    assert detached_calls == [(_ALL_KEY, _ALL_OPTS, generation)]
+
+
+def test_cold_persisted_snapshot_does_not_eagerly_rebuild(isolated_archive_cache, monkeypatch):
+    """Opening CCC trusts its persisted rows; explicit freshness can rebuild."""
+    entry = {
+        "cached_at": time.time(),
+        "conversations": [{"session_id": "persisted", "mtime": 1}],
+        "signature": "old-sig",
+    }
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            spawned.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(server, "_archive_response_cache_get", lambda _key: entry)
+    monkeypatch.setattr(server, "_rehydrate_archive_cached_rows", lambda rows: [dict(r) for r in rows])
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=False,
+    )
+    assert rows[0]["session_id"] == "persisted"
+    assert from_cache is True
+    assert spawned == [], "cold startup rebuilt despite having a persisted snapshot"
+
+    server._archive_serve_cache.clear()
+    server._archive_serve_refreshing.clear()
+    server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=True,
+    )
+    assert len(spawned) == 1, "explicit freshness did not schedule a refresh"
+
+
+def test_cold_persisted_snapshot_does_not_rehydrate_on_request(
+    isolated_archive_cache, monkeypatch,
+):
+    """First paint after a restart must not process every archived row."""
+    entry = {
+        "cached_at": time.time(),
+        "conversations": [{"session_id": "persisted", "state": "ended"}],
+        "signature": "persisted-sig",
+    }
+    monkeypatch.setattr(server, "_archive_response_cache_get", lambda _key: entry)
+    monkeypatch.setattr(
+        server,
+        "_rehydrate_archive_cached_rows",
+        lambda _rows: pytest.fail("cold request synchronously rehydrated the archive"),
+    )
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        _ALL_KEY,
+        _ALL_OPTS,
+        force_refresh=False,
+    )
+
+    assert rows == entry["conversations"]
+    assert from_cache is True
+
+
+def test_cold_archive_variant_borrows_base_snapshot_and_refreshes_detached(
+    isolated_archive_cache, monkeypatch,
+):
+    """A missing enriched cache key must not full-build on an HTTP thread."""
+    variant_options = dict(_ALL_OPTS, include_prs=True)
+    variant_key = server._archive_response_cache_key(**variant_options)
+    base_entry = {
+        "cached_at": time.time(),
+        "conversations": [{"session_id": "base-snapshot"}],
+        "signature": "base-sig",
+    }
+    spawned = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), daemon=None, **_kwargs):
+            self.target = target
+            self.args = args
+            spawned.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(
+        server,
+        "_archive_response_cache_get",
+        lambda key: base_entry if key == _ALL_KEY else None,
+    )
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        server,
+        "_archive_compute_rows",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing archive variant full-built on the request thread"
+        ),
+    )
+
+    rows, from_cache, _ver = server._archive_serve_rows_versioned(
+        variant_key,
+        variant_options,
+    )
+
+    assert rows == base_entry["conversations"]
+    assert from_cache is True
+    assert len(spawned) == 1
+    assert spawned[0].target is server._archive_serve_refresh
+    assert spawned[0].args[:2] == (variant_key, variant_options)
 
 
 def test_archive_signature_delta_engine_churn_is_engine_scoped_refresh():
@@ -2263,6 +2687,17 @@ def test_wt_past_workers_uses_warning_free_utc_timestamp(monkeypatch, tmp_path):
         rows = server._wt_past_workers(hours=1)
 
     assert rows and rows[0]["ended_at_iso"].endswith("Z")
+
+
+def test_shorten_display_name_warning_free_on_python_314():
+    """A hot group-chat label path must not flood stderr with deprecations."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        value = server._shorten_display_name(
+            "alpha beta gamma delta: trailing detail that is definitely long"
+        )
+
+    assert value == "alpha beta gamma delta"
 
 
 def test_pending_resume_retry_backoff_prevents_hot_loop():

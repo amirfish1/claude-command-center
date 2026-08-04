@@ -1932,8 +1932,12 @@ _IDLE_REAPER_INTERVAL_S = 1800  # 30 min
 # This TTL retires them: idle (no spawn-log/FIFO/transcript activity) longer
 # than the TTL AND not mid-turn -> graceful SIGTERM, registry entry marked
 # retired (the transcript survives, so the session stays resumable).
+# One idle Claude process commonly retains 150-500 MB. Keeping several warm
+# for three hours made the control-plane tree consume multiple GB after an
+# active work session. One hour preserves quick follow-ups while bounding the
+# quiet-period footprint; transcripts remain resumable after retirement.
 # Tunable via CCC_SPAWN_IDLE_TTL_HOURS; <= 0 disables the sweep.
-_SPAWN_IDLE_TTL_HOURS_DEFAULT = 3.0
+_SPAWN_IDLE_TTL_HOURS_DEFAULT = 1.0
 # Stable scratch cwd for short-lived background `claude -p` calls (title
 # summarizers, morning braindump, etc.). Without this, those calls
 # could run in whichever directory launched the server and pollute an unrelated
@@ -6127,14 +6131,8 @@ def _live_engine_session_ids():
         return cached["sids"]
     sids = set()
     try:
-        scanners = (
-            ("codex", find_live_codex_processes),
-            ("gemini", find_live_gemini_processes),
-            ("cursor", find_live_cursor_processes),
-        )
-        for engine, scan in scanners:
-            for p in scan():
-                cmd = p.get("command") or ""
+        for engine in ("codex", "gemini", "cursor"):
+            for _pid_s, cmd in _raw_engine_process_commands(engine):
                 # Pull any resume-arg session id out of the command line. The
                 # matcher needs a candidate id, so test each whitespace token
                 # that looks like a session id against the exact matcher.
@@ -6298,19 +6296,15 @@ def _archive_session_is_live_uncached(session_id):
     """
     if not session_id:
         return False
+    engine = _detect_session_engine(session_id)
     # Kimi sessions share one ACP harness rather than owning a per-session
     # process. As long as that harness is available, a Kimi session can receive
     # queued input once its current turn becomes idle.
-    if _is_kimi_session(session_id):
+    if engine == "kimi":
         return bool(_acp_resolve_bin("kimi").get("available"))
-    is_non_claude_engine = (
-        _is_codex_session(session_id)
-        or _is_cursor_session(session_id)
-        or _is_gemini_session(session_id)
-        or _is_antigravity_session(session_id)
-        or _is_kilo_session(session_id)
-        or _is_opencode_session(session_id)
-    )
+    is_non_claude_engine = engine in {
+        "codex", "cursor", "gemini", "antigravity", "kilo", "opencode",
+    }
     if not is_non_claude_engine and SIDECAR_STATE_DIR.is_dir():
         # Only a FRESH sidecar proves liveness — a stale one is a dead session's
         # leftover marker (see _SIDECAR_LIVE_WINDOW). stat() instead of exists()
@@ -6332,7 +6326,7 @@ def _archive_session_is_live_uncached(session_id):
     # any command line, so the resume-arg scan above misses it. A codex
     # session whose rollout was written recently (non-None codex_state) and
     # whose engine pool is up is live.
-    if _is_codex_session(session_id):
+    if engine == "codex":
         return _codex_state_fields(session_id).get("codex_state") is not None
     return False
 
@@ -8630,9 +8624,10 @@ def find_all_conversations(
     return out
 
 
-# v6 adds Codex ``thread_source`` to cached sidebar rows so provenance chips
-# cannot be starved by a pre-feature persisted archive snapshot.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 6
+# v7 persists the transcript stat map alongside cached rows. Detached refresh
+# workers and restarted servers can then calculate a file-level delta instead
+# of forgetting the previous signature's inputs and rebuilding every session.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 7
 _ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
 # The all-repos archive payload can be several MB on machines with years of
 # agent history. Refreshing it every 30 seconds keeps the Python server in a
@@ -8684,6 +8679,31 @@ def _load_archive_response_cache():
     entries = data.get("entries")
     if not isinstance(entries, dict):
         return
+    signature_maps = data.get("signature_maps")
+    restored_signature_maps = {}
+    if isinstance(signature_maps, dict):
+        for signature, raw_map in signature_maps.items():
+            if not isinstance(signature, str) or not isinstance(raw_map, dict):
+                continue
+            raw_files = raw_map.get("files")
+            raw_extras = raw_map.get("extras")
+            if not isinstance(raw_files, dict) or not isinstance(raw_extras, dict):
+                continue
+            files = {}
+            for transcript_path, values in raw_files.items():
+                if (
+                    isinstance(transcript_path, str)
+                    and isinstance(values, (list, tuple))
+                    and len(values) == 2
+                    and all(isinstance(value, (int, float)) for value in values)
+                ):
+                    files[transcript_path] = (int(values[0]), int(values[1]))
+            extras = {
+                extra_path: int(mtime)
+                for extra_path, mtime in raw_extras.items()
+                if isinstance(extra_path, str) and isinstance(mtime, (int, float))
+            }
+            restored_signature_maps[signature] = (files, extras)
     keep = {}
     for key, entry in entries.items():
         if not isinstance(key, str) or not isinstance(entry, dict):
@@ -8698,6 +8718,11 @@ def _load_archive_response_cache():
     if keep:
         with _ARCHIVE_RESPONSE_CACHE_LOCK:
             _ARCHIVE_RESPONSE_CACHE.update(keep)
+    if restored_signature_maps:
+        with _archive_sig_lock:
+            _ARCHIVE_STATMAP_BY_SIG.update(restored_signature_maps)
+            while len(_ARCHIVE_STATMAP_BY_SIG) > _ARCHIVE_STATMAP_MAX:
+                _ARCHIVE_STATMAP_BY_SIG.pop(next(iter(_ARCHIVE_STATMAP_BY_SIG)))
 
 
 _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S = 30.0
@@ -8715,10 +8740,29 @@ def _save_archive_response_cache(force=False):
         return
     _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = now
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
-        snapshot = {
-            "schema_version": _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
-            "entries": dict(_ARCHIVE_RESPONSE_CACHE),
+        entries = dict(_ARCHIVE_RESPONSE_CACHE)
+    referenced_signatures = {
+        entry.get("signature")
+        for entry in entries.values()
+        if isinstance(entry, dict) and entry.get("signature")
+    }
+    with _archive_sig_lock:
+        signature_maps = {
+            signature: {
+                "files": {
+                    transcript_path: list(values)
+                    for transcript_path, values in files.items()
+                },
+                "extras": dict(extras),
+            }
+            for signature, (files, extras) in _ARCHIVE_STATMAP_BY_SIG.items()
+            if signature in referenced_signatures
         }
+    snapshot = {
+        "schema_version": _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        "entries": entries,
+        "signature_maps": signature_maps,
+    }
     try:
         _ARCHIVE_RESPONSE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = _ARCHIVE_RESPONSE_CACHE_FILE.with_suffix(".json.tmp")
@@ -8785,24 +8829,19 @@ def _archive_response_refresh_end(key):
         _ARCHIVE_RESPONSE_REFRESHING.discard(key)
 
 
-# Per-cache-key build locks. The ?all=1 endpoints (dashboard + COO board poll
-# them) had no single-flight: on a cold/changed cache, every concurrent poll
-# kicked off its own O(all-sessions) _build_archive_conversations. N parallel
-# full rebuilds pinned every core, GIL-starved click-to-open, and a 14s request
-# wedged the server (ignored SIGTERM, had to be kill -9'd). The lock makes the
-# rebuild single-flight: the first caller builds, the rest wait briefly and
-# share the freshly-cached payload instead of stampeding the CPU.
+# Cross-key build lock. The ?all=1 endpoints use different cache keys for the
+# plain sidebar and PR/worktree-enriched rows, but both parse the same transcript
+# corpus. Per-key locks still allowed those variants to rebuild concurrently;
+# native sampling caught two _archive_serve_refresh threads saturating one core
+# while each retained its own thousands-row working set. Serialize the GIL-bound
+# build/rehydrate phase across variants. Requests still serve stale snapshots
+# immediately while the one background owner refreshes.
 _ARCHIVE_BUILD_LOCKS = {}
-_ARCHIVE_BUILD_LOCKS_GUARD = threading.Lock()
+_ARCHIVE_BUILD_GLOBAL_LOCK = threading.Lock()
 
 
 def _archive_build_lock(key):
-    with _ARCHIVE_BUILD_LOCKS_GUARD:
-        lk = _ARCHIVE_BUILD_LOCKS.get(key)
-        if lk is None:
-            lk = threading.Lock()
-            _ARCHIVE_BUILD_LOCKS[key] = lk
-        return lk
+    return _ARCHIVE_BUILD_GLOBAL_LOCK
 
 
 # TTL-memoized wrapper around the corpus fingerprint. The fingerprint is a
@@ -9145,86 +9184,19 @@ def _archive_corpus_signature_parts():
 # rationale as _live_activity_snapshot's 1.5s window: serve one ≤TTL-old
 # rehydrated snapshot to all concurrent callers. Transcript-derived fields
 # (state / ended_blocked / question from JSONL) are signature-gated and stay
-# fresh on any real change; only process-liveness/sidecar lag, by ≤TTL.
+# fresh on any real change; only process-liveness/sidecar lag, by ≤TTL. Live
+# activity has its own lightweight overlay, so aligning full-row refreshes with
+# the existing five-minute persisted-cache TTL avoids continuous work on large,
+# actively-written corpora without delaying working/waiting indicators.
 try:
-    _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "10")))
+    _ARCHIVE_SERVE_TTL = max(0.0, float(os.environ.get("CCC_ARCHIVE_SERVE_TTL_SEC", "300")))
 except ValueError:
-    _ARCHIVE_SERVE_TTL = 10.0
+    _ARCHIVE_SERVE_TTL = 300.0
 _archive_serve_cache = {}      # key -> {"ts", "rows", "ver"} (+ optional prebuilt body)
 _archive_serve_lock = threading.Lock()
 _archive_serve_refreshing = set()  # keys with a background refresh in flight
 _archive_serve_generation = 0
 _archive_serve_version = 0       # monotonic per store; tags prebuilt response bodies
-
-# W84 follow-up: _archive_refresh_is_cheap predicts the fast TIER (unchanged
-# signature -> rehydrate, or a small transcript delta) but says nothing about
-# how long that tier actually costs. The rehydrate is O(all rows), so on a
-# large corpus "cheap" is several seconds — and because it ran synchronously
-# on any poll past the serve TTL, roughly every other sidebar poll stalled.
-# Measured on a 3,643-row corpus: alternating 0.08s / 4-7s, forever.
-#
-# So don't trust the structural prediction alone: time the sync refresh, and
-# when it blows the budget demote that key to the background refresh (stale
-# serve, same as the full-rebuild tier) for a while. The block expires so a
-# corpus that becomes cheap again — fewer rows, archived sessions — returns to
-# synchronous, fresher serves on its own. One slow poll per re-probe window
-# instead of one per serve TTL.
-try:
-    _ARCHIVE_SYNC_REFRESH_BUDGET = max(
-        0.0, float(os.environ.get("CCC_ARCHIVE_SYNC_REFRESH_BUDGET_SEC", "1.0"))
-    )
-except ValueError:
-    _ARCHIVE_SYNC_REFRESH_BUDGET = 1.0
-try:
-    _ARCHIVE_SYNC_REFRESH_REPROBE = max(
-        5.0, float(os.environ.get("CCC_ARCHIVE_SYNC_REFRESH_REPROBE_SEC", "60"))
-    )
-except ValueError:
-    _ARCHIVE_SYNC_REFRESH_REPROBE = 60.0
-# Each consecutive over-budget re-probe doubles the window, so a corpus that is
-# simply large (and will stay expensive) stops paying a multi-second poll every
-# minute forever. Reset to the base window the moment a run comes in on budget.
-try:
-    _ARCHIVE_SYNC_REFRESH_REPROBE_MAX = max(
-        _ARCHIVE_SYNC_REFRESH_REPROBE,
-        float(os.environ.get("CCC_ARCHIVE_SYNC_REFRESH_REPROBE_MAX_SEC", "900")),
-    )
-except ValueError:
-    _ARCHIVE_SYNC_REFRESH_REPROBE_MAX = max(_ARCHIVE_SYNC_REFRESH_REPROBE, 900.0)
-_archive_sync_refresh_block = {}   # key -> {"until": ts, "window": sec}
-
-
-def _archive_sync_refresh_allowed(key, now=None):
-    """False while this key is serving its post-budget-blowout cooldown."""
-    if _ARCHIVE_SYNC_REFRESH_BUDGET <= 0:
-        return False
-    with _archive_serve_lock:
-        entry = _archive_sync_refresh_block.get(key)
-    if not entry:
-        return True
-    return (time.time() if now is None else now) >= entry.get("until", 0)
-
-
-def _archive_note_sync_refresh_cost(key, seconds):
-    """Record what a synchronous refresh actually cost and gate the next one."""
-    if _ARCHIVE_SYNC_REFRESH_BUDGET <= 0:
-        return
-    if seconds <= _ARCHIVE_SYNC_REFRESH_BUDGET:
-        with _archive_serve_lock:
-            _archive_sync_refresh_block.pop(key, None)
-        return
-    with _archive_serve_lock:
-        previous = (_archive_sync_refresh_block.get(key) or {}).get("window", 0)
-        window = min(
-            _ARCHIVE_SYNC_REFRESH_REPROBE_MAX,
-            previous * 2 if previous else _ARCHIVE_SYNC_REFRESH_REPROBE,
-        )
-        _archive_sync_refresh_block[key] = {"until": time.time() + window, "window": window}
-    print(
-        f"  [archive-serve] sync refresh took {seconds:.2f}s "
-        f"(budget {_ARCHIVE_SYNC_REFRESH_BUDGET:.2f}s) — backgrounding refreshes "
-        f"for {window:.0f}s"
-    )
 
 
 def _archive_serve_cache_store(key, rows, generation):
@@ -9432,6 +9404,27 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
     return _archive_list_project_rows(rows, window=window, now=now), from_cache
 
 
+def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
+    """Read-only full snapshot feeding the projected sidebar list.
+
+    The list response immediately projects a small 1d/7d window into fresh
+    dictionaries, so copying all historical rows first is pure allocator churn.
+    Normal polls do not need a synchronous stale refresh: live chips come from
+    the separate live-activity overlay, while a single background refresh
+    updates transcript-derived fields for the next list poll. Explicit
+    stale_ok=0 requests schedule freshness after a mutation or new-session
+    landing without making the HTTP request wait for the archive scan.
+    """
+    key = _archive_response_cache_key(**cache_options)
+    rows, from_cache, _snap_ver = _archive_serve_rows_versioned(
+        key,
+        cache_options,
+        copy_rows=False,
+        force_refresh=force_refresh,
+    )
+    return rows, from_cache
+
+
 def _archive_list_payload(rows, *, window="all", now=None, cached=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now)
@@ -9583,10 +9576,124 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
     return rows, from_cache
 
 
+try:
+    _ARCHIVE_REFRESH_WORKER_TIMEOUT = max(
+        30.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_WORKER_TIMEOUT_SEC", "180"))
+    )
+except ValueError:
+    _ARCHIVE_REFRESH_WORKER_TIMEOUT = 180.0
+
+
+def _archive_refresh_worker_main(encoded_options, output_path):
+    """Build one archive snapshot in a short-lived, low-priority process."""
+    try:
+        if hasattr(os, "nice"):
+            try:
+                os.nice(10)
+            except OSError:
+                pass
+        raw_options = base64.urlsafe_b64decode(encoded_options.encode("ascii"))
+        cache_options = json.loads(raw_options.decode("utf-8"))
+        if not isinstance(cache_options, dict):
+            raise ValueError("archive worker options must be an object")
+        cache_options = {
+            name: bool(cache_options.get(name, False))
+            for name in (
+                "include_prs",
+                "resolve_pr_states",
+                "resolve_effective",
+                "resolve_worktree_dirty",
+            )
+        }
+        key = _archive_response_cache_key(**cache_options)
+        rows, from_cache = _archive_compute_rows(key, cache_options)
+        result = {
+            "ok": True,
+            "key": key,
+            "rows": rows,
+            "from_cache": bool(from_cache),
+        }
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)}
+    try:
+        with open(output_path, "w", encoding="utf-8") as output_file:
+            json.dump(result, output_file, separators=(",", ":"))
+    except OSError as exc:
+        print(f"archive refresh worker could not write its result: {exc}", file=sys.stderr)
+        return 1
+    return 0 if result.get("ok") else 1
+
+
+def _archive_compute_rows_detached(key, cache_options, serve_generation):
+    """Run GIL-heavy archive parsing outside the dashboard server process.
+
+    The worker is deliberately one-shot: its parser allocations disappear on
+    exit instead of permanently raising the daemon's RSS. The parent only
+    decodes the completed row snapshot and publishes it atomically.
+    """
+    output_fd, output_name = tempfile.mkstemp(
+        prefix="ccc-archive-refresh-", suffix=".json",
+    )
+    os.close(output_fd)
+    encoded_options = base64.urlsafe_b64encode(
+        json.dumps(cache_options, sort_keys=True).encode("utf-8")
+    ).decode("ascii")
+    env = dict(os.environ)
+    # The worker has no HTTP callers and exits after one build, so an in-memory
+    # serve snapshot there is wasted work. It still updates the durable response
+    # cache consumed by future workers and server restarts.
+    env["CCC_ARCHIVE_SERVE_TTL_SEC"] = "0"
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--archive-refresh-worker",
+        encoded_options,
+        output_name,
+    ]
+    try:
+        # Serialize variants in the parent. The lock cannot coordinate separate
+        # processes, but holding it around the one-shot worker prevents two
+        # option variants from parsing the same corpus concurrently.
+        with _ARCHIVE_BUILD_GLOBAL_LOCK:
+            completed = subprocess.run(
+                command,
+                cwd=str(CCC_ROOT),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=_ARCHIVE_REFRESH_WORKER_TIMEOUT,
+            )
+        try:
+            result = json.loads(Path(output_name).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            detail = (completed.stderr or completed.stdout or "").strip()[-500:]
+            raise RuntimeError(
+                f"archive refresh worker produced no result: {exc}; {detail}"
+            ) from exc
+        if completed.returncode != 0 or not result.get("ok"):
+            detail = result.get("error") or (completed.stderr or "").strip()[-500:]
+            raise RuntimeError(f"archive refresh worker failed: {detail}")
+        if result.get("key") != key:
+            raise RuntimeError("archive refresh worker returned the wrong cache variant")
+        rows = result.get("rows")
+        if not isinstance(rows, list):
+            raise RuntimeError("archive refresh worker returned invalid rows")
+        if _ARCHIVE_SERVE_TTL > 0:
+            _archive_serve_cache_store(key, rows, serve_generation)
+        return rows, bool(result.get("from_cache"))
+    finally:
+        try:
+            os.unlink(output_name)
+        except OSError:
+            pass
+
+
 def _archive_serve_refresh(key, cache_options, serve_generation):
     global _archive_serve_refreshing
     try:
-        _archive_compute_rows(key, cache_options, serve_generation)
+        _archive_compute_rows_detached(key, cache_options, serve_generation)
     except Exception as e:
         print(f"  [archive-serve] background refresh failed: {e}")
     finally:
@@ -9594,41 +9701,18 @@ def _archive_serve_refresh(key, cache_options, serve_generation):
             _archive_serve_refreshing.discard(key)
 
 
-def _archive_refresh_is_cheap(key, cache_options):
-    """True when refreshing this key now would take the fast path in
-    _archive_compute_rows: corpus signature unchanged (rehydrate-only) or a
-    known-small transcript delta (incremental merge);
-    everything else means a full O(all-rows) rebuild that must stay off the
-    request path. Signature is memoized (TTL) and the cache probe is an
-    in-memory dict read, so this predicate is cheap enough per poll.
-
-    The fast tier is not automatically FAST: the rehydrate is O(all rows), so
-    on a large corpus it costs seconds. _archive_sync_refresh_allowed carries
-    the measured verdict from the last synchronous run and vetoes this
-    prediction when that run blew the budget.
-    """
-    if not _archive_sync_refresh_allowed(key):
-        return False
-    try:
-        entry_sig = _archive_response_cache_signature(key)
-        if not entry_sig:
-            return False
-        sig = _archive_corpus_signature()
-        if entry_sig == sig:
-            return True
-        if cache_options.get("include_prs"):
-            return False
-        return _archive_signature_delta(entry_sig, sig) is not None
-    except Exception:
-        return False
-
-
 def _archive_serve_rows(key, cache_options):
     rows, from_cache, _snap_ver = _archive_serve_rows_versioned(key, cache_options)
     return rows, from_cache
 
 
-def _archive_serve_rows_versioned(key, cache_options):
+def _archive_serve_rows_versioned(
+    key,
+    cache_options,
+    *,
+    copy_rows=True,
+    force_refresh=False,
+):
     """Archive rows for an ?all=1 request, stale-while-revalidate.
 
     The endpoint is polled continuously by the dashboard AND the COO board, and
@@ -9637,7 +9721,8 @@ def _archive_serve_rows_versioned(key, cache_options):
     signature-gated rebuild (~1-2s, GIL-bound) is exactly the sustained CPU
     drain we are killing. Instead:
 
-      - fresh snapshot (< serve TTL) → return a copy immediately;
+      - fresh snapshot (< serve TTL) → return a copy immediately (or a
+        read-only reference for callers that project before responding);
       - stale snapshot → return it immediately AND kick a single background
         refresh (the request never pays the rebuild);
       - no snapshot yet (cold) → build once synchronously.
@@ -9662,9 +9747,10 @@ def _archive_serve_rows_versioned(key, cache_options):
         serve_generation = _archive_serve_generation
         sc = _archive_serve_cache.get(key)
         if sc is not None:
-            rows = [dict(r) for r in sc.get("rows") or []]
+            stored_rows = sc.get("rows") or []
+            rows = [dict(r) for r in stored_rows] if copy_rows else stored_rows
             snap_ver = sc.get("ver", 0)
-            stale = (now - sc.get("ts", 0)) >= _ARCHIVE_SERVE_TTL
+            stale = force_refresh or (now - sc.get("ts", 0)) >= _ARCHIVE_SERVE_TTL
             if stale and key not in _archive_serve_refreshing:
                 _archive_serve_refreshing.add(key)
                 spawn = True
@@ -9676,29 +9762,11 @@ def _archive_serve_rows_versioned(key, cache_options):
             spawn = False
     if rows is not None:
         if spawn:
-            # W84: when the refresh is predictably cheap — corpus unchanged
-            # (rehydrate-only) or a known-small file delta (incremental tier)
-            # — run it synchronously so a transcript that landed since the
-            # last snapshot is IN this poll's response, not the next one's.
-            # A 60s-cadence dashboard poll otherwise always trails reality by
-            # a full poll cycle even after the rebuild itself got cheap. The
-            # slow cases (unknown signature, engine-source change, bulk delta
-            # → full rebuild) keep the stale-serve + background refresh.
-            # "Cheap" is a prediction about the TIER, not the clock. Time the
-            # run and let _archive_note_sync_refresh_cost demote this key to
-            # the background path when the prediction turns out expensive.
-            if _archive_refresh_is_cheap(key, cache_options):
-                started = time.time()
-                try:
-                    new_rows, from_cache = _archive_compute_rows(key, cache_options, serve_generation)
-                    return new_rows, from_cache, _archive_serve_ver_for_rows(key, new_rows)
-                except Exception as e:
-                    print(f"  [archive-serve] sync refresh failed, serving stale: {e}")
-                finally:
-                    _archive_note_sync_refresh_cost(key, time.time() - started)
-                    with _archive_serve_lock:
-                        _archive_serve_refreshing.discard(key)
-                return rows, True, snap_ver
+            # A structural "cheap" prediction is not a latency bound. On a
+            # large real archive, even the rehydrate-only tier repeatedly took
+            # 3-32s and monopolized the GIL, delaying unrelated conversation
+            # opens. Once a snapshot exists, freshness work is therefore
+            # always asynchronous; this request returns the snapshot now.
             threading.Thread(
                 target=_archive_serve_refresh,
                 args=(key, cache_options, serve_generation),
@@ -9707,18 +9775,33 @@ def _archive_serve_rows_versioned(key, cache_options):
         return rows, True, snap_ver
     # Cold (e.g. just after a restart): the in-memory serve snapshot is empty.
     # Rather than block this first caller on a full rebuild (~20-30s cold), serve
-    # the persisted response payload from the last run (rehydrated for fresh
-    # live state) and rebuild in the background. Only a truly first-ever run with
-    # no persisted cache builds synchronously.
+    # the persisted response payload from the last run as-is. Rehydrating every
+    # historical row here is itself an O(all rows), GIL-heavy operation; live
+    # chips arrive through the dedicated live-activity overlay. Normal startup
+    # trusts this snapshot for the serve TTL. If an enriched option variant has
+    # no persisted entry yet, it borrows the base rows for first paint and fills
+    # that variant in the detached worker. An explicit freshness request also
+    # starts the detached build.
+    # Only a truly first-ever run with no persisted cache builds synchronously.
     entry = _archive_response_cache_get(key)
+    borrowed_base_snapshot = False
+    if not entry:
+        base_key = _archive_response_cache_key()
+        if key != base_key:
+            entry = _archive_response_cache_get(base_key)
+            borrowed_base_snapshot = bool(entry and entry.get("conversations"))
     if entry and entry.get("conversations"):
-        rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
-        _stamp_archive_state(rows)  # cache-safe: stamp lives in the served snapshot
-        _stamp_archive_goals(rows)  # cache-safe: codex goal layered on at serve time
-        _apply_watchtower_worker_display_names(rows)  # cache-safe: refresh WT ticket badge
+        rows = [
+            dict(row) for row in (entry.get("conversations") or [])
+            if isinstance(row, dict)
+        ]
         stored = _archive_serve_cache_store(key, rows, serve_generation)
         with _archive_serve_lock:
-            if stored and key not in _archive_serve_refreshing:
+            if (
+                stored
+                and (force_refresh or borrowed_base_snapshot)
+                and key not in _archive_serve_refreshing
+            ):
                 _archive_serve_refreshing.add(key)
                 spawn = True
             else:
@@ -9729,7 +9812,8 @@ def _archive_serve_rows_versioned(key, cache_options):
                 args=(key, cache_options, serve_generation),
                 daemon=True,
             ).start()
-        return [dict(r) for r in rows], True, _archive_serve_ver_for_rows(key, rows)
+        returned_rows = [dict(r) for r in rows] if copy_rows else rows
+        return returned_rows, True, _archive_serve_ver_for_rows(key, rows)
     # Nothing persisted yet — build once synchronously.
     rows, from_cache = _archive_compute_rows(key, cache_options, serve_generation)
     return rows, from_cache, _archive_serve_ver_for_rows(key, rows)
@@ -15594,6 +15678,33 @@ def _scan_engine_processes():
     return rows
 
 
+def _raw_engine_process_commands(engine):
+    """Yield ``(pid, command)`` without resolving cwd or terminal metadata.
+
+    Idle liveness and pool-presence checks only inspect command arguments. The
+    richer ``find_live_*`` helpers additionally fork ``lsof`` and walk process
+    ancestors, which is useful for Jump-to-terminal UI but far too expensive
+    for a recurring status poll.
+    """
+    wanted = {
+        "codex": "codex",
+        "gemini": "gemini",
+        "cursor": "cursor-agent",
+    }.get(engine)
+    if not wanted:
+        return
+    for pid_s, _tty, comm, args in _scan_engine_processes():
+        arg_parts = args.split()
+        basenames = {comm.rsplit("/", 1)[-1]}
+        if engine == "codex":
+            if arg_parts:
+                basenames.add(arg_parts[0].rsplit("/", 1)[-1])
+        else:
+            basenames.update(p.rsplit("/", 1)[-1] for p in arg_parts[:4])
+        if wanted in basenames:
+            yield pid_s, args
+
+
 @_ttl_memo(3.0)
 def find_live_codex_processes():
     """Return running Codex CLI processes with pid, tty, cwd, terminal app, command."""
@@ -15750,14 +15861,14 @@ def _process_comm_is_claude(comm):
     """
     if not comm:
         return False
-    name = str(comm).rsplit("/", 1)[-1]
+    raw = os.path.normpath(os.path.expanduser(str(comm)))
+    name = raw.rsplit("/", 1)[-1]
     if name == "claude":
         return True
-    try:
-        path = Path(comm).expanduser()
-        versions_dir = Path.home() / ".local" / "share" / "claude" / "versions"
-        path.resolve(strict=False).relative_to(versions_dir.resolve(strict=False))
-    except (OSError, ValueError):
+    versions_dir = os.path.join(
+        os.path.expanduser("~"), ".local", "share", "claude", "versions",
+    )
+    if not raw.startswith(versions_dir + os.sep):
         return False
     return bool(re.match(r"^\d+\.\d+\.\d+(?:[-+].*)?$", name))
 
@@ -15788,18 +15899,15 @@ def _load_session_registry():
     registry = {}
     if not SESSIONS_REGISTRY.is_dir():
         return registry
-    # Build a set of currently-live claude pids in one ps call
+    # Reuse the same cached process snapshot as the other engine scanners.
+    # A live-activity build needs both, so a dedicated ps fork here doubled
+    # process enumeration and classified every system process twice.
     live_claude_pids = set()
     try:
-        ps_out = subprocess.run(
-            ["ps", "-A", "-o", "pid=,comm="],
-            capture_output=True, text=True, timeout=2,
-        )
-        for line in ps_out.stdout.splitlines():
-            parts = line.strip().split(None, 1)
-            if len(parts) == 2 and _process_comm_is_claude(parts[1]):
+        for pid_s, _tty, comm, _args in _scan_engine_processes():
+            if _process_comm_is_claude(comm):
                 try:
-                    live_claude_pids.add(int(parts[0]))
+                    live_claude_pids.add(int(pid_s))
                 except ValueError:
                     pass
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -27289,16 +27397,19 @@ def _codex_desktop_app_server_procs():
         proc = _CODEX_APP_SERVER_PROC
         if proc is not None:
             own_pid = proc.pid
-        for p in find_live_codex_processes():
-            cmd = p.get("command") or ""
+        for pid_s, cmd in _raw_engine_process_commands("codex"):
             if "app-server" not in cmd:
                 continue
             head = cmd.split()[0] if cmd.split() else ""
             if ".app/Contents/" not in head:
                 continue
-            if own_pid and p.get("pid") == own_pid:
+            try:
+                pid = int(pid_s)
+            except (TypeError, ValueError):
                 continue
-            procs.append(p)
+            if own_pid and pid == own_pid:
+                continue
+            procs.append({"pid": pid, "command": cmd})
     except Exception:
         return []
     return procs
@@ -32065,11 +32176,10 @@ def _codex_pool_alive(now=None):
     if now - cached["ts"] < _ENGINE_LIVE_TTL:
         return cached["alive"]
     try:
-        alive = False
-        for p in find_live_codex_processes():
-            if "app-server" in (p.get("command") or ""):
-                alive = True
-                break
+        alive = any(
+            "app-server" in command
+            for _pid_s, command in _raw_engine_process_commands("codex")
+        )
     except Exception:
         return cached["alive"]
     _codex_pool_alive_cache["ts"] = now
@@ -43910,7 +44020,7 @@ def _shorten_display_name(raw, session_id=""):
     if len(s) <= 28:
         return s[:80]
     # Too long: first clause, then cap to the first few words / 28 chars.
-    s = re.split(r"[.:;|]\s", s, 1)[0].strip()
+    s = re.split(r"[.:;|]\s", s, maxsplit=1)[0].strip()
     out = ""
     for w in s.split(" "):
         if out and len(out) + 1 + len(w) > 28:
@@ -53716,6 +53826,39 @@ def _car_mode_stop() -> dict:
     return {"ok": True, "running": False, "stopped": True}
 
 
+_BACKGROUND_API_READ_LIMIT = 2
+_background_api_read_slots = threading.BoundedSemaphore(_BACKGROUND_API_READ_LIMIT)
+_BACKGROUND_API_READ_PATHS = frozenset({
+    "/api/attention",
+    "/api/group-chats/active",
+    "/api/history/status",
+    "/api/issues/all",
+    "/api/nextjs/status",
+    "/api/queue/list",
+    "/api/queue/status",
+    "/api/repo/list",
+    "/api/repo/ship/status",
+    "/api/repo/worktrees",
+    "/api/sessions/live-activity",
+    "/api/system/services",
+    "/api/throughput/daily",
+    "/api/vercel-deploy",
+    "/api/watchtower/service/status",
+})
+
+
+def _is_background_api_read(path, client_marked):
+    return bool(client_marked or path in _BACKGROUND_API_READ_PATHS)
+
+
+def _run_api_request(is_background, callback):
+    """Keep slow dashboard probes from crowding out foreground requests."""
+    if not is_background:
+        return callback()
+    with _background_api_read_slots:
+        return callback()
+
+
 class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
     def _is_morning_path(self, path):
         """True if the request targets the (opt-in) Morning sub-feature."""
@@ -53727,6 +53870,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path.rstrip("/")
+        is_background = _is_background_api_read(
+            path, self.headers.get("X-CCC-Background") == "1"
+        )
+        return _run_api_request(is_background, self._do_GET)
+
+    def _do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
@@ -54353,6 +54503,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             if qs.get("all", ["0"])[0] in ("1", "true"):
                 engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
+                compact = qs.get("compact", ["0"])[0] in ("1", "true")
                 rows, _from_cache = _archive_all_rows_cached({
                     "include_prs": qs.get("include_prs", ["0"])[0] in ("1", "true"),
                     "resolve_pr_states": qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
@@ -54364,13 +54515,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
                 rows = _apply_session_query_params(rows, qs)
-                self.send_json({
+                payload = {
                     "ok": True,
                     "sessions": rows,
-                    "conversations": rows,
                     "spawned": spawned,
                     "count": len(rows),
-                })
+                }
+                # Keep the legacy alias by default for API compatibility.
+                # CCC-owned callers opt into compact=1 so the JSON encoder and
+                # browser do not materialize the same thousands-row list twice.
+                if not compact:
+                    payload["conversations"] = rows
+                self.send_json(payload)
                 return
             include_old = qs.get("include_old", ["0"])[0] in ("1", "true")
             try:
@@ -54389,6 +54545,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             if qs.get("all", ["0"])[0] in ("1", "true"):
                 engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
+                compact = qs.get("compact", ["0"])[0] in ("1", "true")
                 rows, _from_cache = _archive_all_rows_cached({
                     "include_prs": qs.get("include_prs", ["0"])[0] in ("1", "true"),
                     "resolve_pr_states": qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
@@ -54399,13 +54556,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 if engine_filter:
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
                     spawned = [r for r in spawned if (r.get("engine") or "").lower() == engine_filter]
-                self.send_json({
+                payload = {
                     "ok": True,
                     "conversations": rows,
-                    "sessions": rows,
                     "spawned": spawned,
                     "count": len(rows),
-                })
+                }
+                if not compact:
+                    payload["sessions"] = rows
+                self.send_json(payload)
                 return
             try:
                 ctx = require_repo_context(query=qs, allow_session=False)
@@ -55962,7 +56121,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "resolve_effective": qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
                 "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
             }
-            rows, from_cache = _archive_all_rows_cached(cache_options)
+            stale_ok = qs.get("stale_ok", ["0"])[0] in ("1", "true")
+            rows, from_cache = _archive_list_source_rows_cached(
+                cache_options,
+                force_refresh=not stale_ok,
+            )
             self.send_json(
                 _archive_list_payload(rows, window=window, cached=from_cache), etag=True,
             )
@@ -67369,4 +67532,12 @@ def _chuck_imessage_poller() -> None:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--archive-refresh-worker":
+        if len(sys.argv) != 4:
+            print(
+                "usage: server.py --archive-refresh-worker OPTIONS OUTPUT",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        raise SystemExit(_archive_refresh_worker_main(sys.argv[2], sys.argv[3]))
     main()

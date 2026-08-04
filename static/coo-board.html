@@ -175,7 +175,7 @@ let SEED=[];
 let AUTO_IDS=[]; const AUTO_N=14;
 async function refreshAutoList(){
   try{
-    const d=await fetch('/api/sessions?all=1').then(r=>r.json());
+    const d=await fetch('/api/conversations/list?window=all&stale_ok=1').then(r=>r.json());
     const rows=d.sessions||d.conversations||[];
     AUTO_IDS=rows
       .filter(r=>!r.archived)
@@ -348,9 +348,9 @@ let listLoaded=false;
 async function loadSessionList(){
   if(listLoaded)return; listLoaded=true;
   try{
-    const rs=await fetch('/api/sessions?all=1').then(r=>r.json());
+    const rs=await fetch('/api/conversations/list?window=all&stale_ok=1').then(r=>r.json());
     const dl=document.getElementById('sessList'); dl.innerHTML='';
-    (rs.sessions||[]).forEach(s=>{
+    (rs.conversations||[]).forEach(s=>{
       const nm=(s.display_name||s.ai_title||s.first_message||s.session_id).replace(/\s+/g,' ').slice(0,60);
       const o=document.createElement('option'); o.value=nm+"  ·  "+s.session_id; dl.appendChild(o);
     });

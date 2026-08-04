@@ -182,13 +182,20 @@ def test_recent_transcript_blocks_reap(tmp_path, harness):
 
 
 def test_ttl_env_knob(tmp_path, harness, monkeypatch):
-    _write_registry(tmp_path, [_entry(114, tmp_path, idle_s=2 * 3600)])
+    _write_registry(tmp_path, [_entry(114, tmp_path, idle_s=0.75 * 3600)])
     harness["table"] = {114: _claude_row(pgid=114)}
-    # 2h idle < default 3h TTL -> survives.
+    # 45m idle < default 1h TTL -> survives.
     assert server._reap_idle_spawned_headless(now=NOW) == []
-    # Tighten to 1h -> retired.
-    monkeypatch.setenv("CCC_SPAWN_IDLE_TTL_HOURS", "1")
+    # Tighten to 30m -> retired.
+    monkeypatch.setenv("CCC_SPAWN_IDLE_TTL_HOURS", "0.5")
     assert [r["pid"] for r in server._reap_idle_spawned_headless(now=NOW)] == [114]
+
+
+def test_default_idle_ttl_bounds_warm_worker_memory(monkeypatch):
+    """Finished headless workers should not retain hundreds of MB for hours."""
+    monkeypatch.delenv("CCC_SPAWN_IDLE_TTL_HOURS", raising=False)
+
+    assert server._spawn_idle_ttl_hours() == 1.0
 
 
 def test_ttl_zero_disables_sweep(tmp_path, harness, monkeypatch):

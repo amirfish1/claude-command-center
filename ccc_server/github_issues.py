@@ -1552,7 +1552,7 @@ def start_repo_ship(repo_path):
     return snapshot
 
 
-_REPO_SHIP_STATUS_TTL = 5.0
+_REPO_SHIP_STATUS_TTL = 15.0
 _repo_ship_status_cache = {}        # repo_path -> {"ts", "data"}
 _repo_ship_status_cache_lock = threading.Lock()
 _repo_ship_status_build_locks = {}  # repo_path -> threading.Lock

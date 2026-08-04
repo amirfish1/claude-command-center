@@ -7193,7 +7193,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             "kind": "bg",
         }))
         native_bin = pathlib.Path(
-            self.tmp_home,
+            os.environ["HOME"],
             ".local",
             "share",
             "claude",
@@ -7201,17 +7201,16 @@ class TestRepoContextHelpers(unittest.TestCase):
             "2.1.144",
         )
 
-        def fake_run(args, **kwargs):
-            if args == ["ps", "-A", "-o", "pid=,comm="]:
-                return subprocess.CompletedProcess(
-                    args,
-                    0,
-                    stdout=f"123 {native_bin}\n456 /usr/bin/python3\n",
-                    stderr="",
-                )
-            raise AssertionError(f"unexpected command: {args}")
-
-        with mock.patch.object(self.server.subprocess, "run", side_effect=fake_run):
+        process_rows = [
+            ("123", "??", str(native_bin), str(native_bin)),
+            ("456", "??", "/usr/bin/python3", "/usr/bin/python3"),
+        ]
+        self.server._load_session_registry.cache_clear()
+        with mock.patch.object(
+            self.server,
+            "_scan_engine_processes",
+            return_value=process_rows,
+        ):
             registry = self.server._load_session_registry()
 
         self.assertIn(sid, registry)
@@ -9754,7 +9753,24 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.assertTrue(body["ok"])
             self.assertEqual(body["count"], 1)
             self.assertEqual(body["sessions"][0]["engine"], "codex")
+            self.assertEqual(body["conversations"], body["sessions"])
             self.assertEqual(body["spawned"][0]["spawn_id"], "123")
+
+            with urllib.request.urlopen(
+                base + "/api/sessions?all=1&engine=codex&compact=1",
+                timeout=5,
+            ) as res:
+                compact_sessions = json.loads(res.read().decode("utf-8"))
+            self.assertEqual(compact_sessions["sessions"], body["sessions"])
+            self.assertNotIn("conversations", compact_sessions)
+
+            with urllib.request.urlopen(
+                base + "/api/conversations?all=1&engine=codex&compact=1",
+                timeout=5,
+            ) as res:
+                compact_conversations = json.loads(res.read().decode("utf-8"))
+            self.assertEqual(compact_conversations["conversations"], body["sessions"])
+            self.assertNotIn("sessions", compact_conversations)
         finally:
             httpd.shutdown()
             httpd.server_close()

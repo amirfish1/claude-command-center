@@ -120,11 +120,15 @@ def test_all_tab_archived_group_chats_respect_window(app_js):
 
 
 def test_sidebar_uses_additive_list_endpoint_and_search_widens_history(app_js):
-    source = inspect.getsource(server.CommandCenterHandler.do_GET)
+    source = inspect.getsource(server.CommandCenterHandler._do_GET)
 
     assert 'path == "/api/conversations/list"' in source
     assert 'path == "/api/conversations/all"' in source
-    assert "_archive_all_rows_cached(cache_options)" in source
+    assert "_archive_list_source_rows_cached(" in source
+    assert "force_refresh=not stale_ok" in source
+    list_source = inspect.getsource(server._archive_list_source_rows_cached)
+    assert "copy_rows=False" in list_source
+    assert "force_refresh=force_refresh" in list_source
     assert "'/api/conversations/list'" in app_js
     assert "let archiveDataWindow = null;" in app_js
     assert "function _refreshArchiveWindow(value)" in app_js
