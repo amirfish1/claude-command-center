@@ -12097,7 +12097,9 @@ def enqueue_annotation_ux_fixes_queue(
         existing = _find_annotation_ux_queue_session(queue_name)
         if existing:
             sid = existing.get("session_id") or existing.get("id")
-            injected = _inject_text_into_session(sid, text, source="annotate-queue")
+            injected = _inject_text_into_session(
+                sid, text, mode="steer", source="annotate-queue"
+            )
             if injected.get("ok"):
                 _record_interaction(sid)
                 return {

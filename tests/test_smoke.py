@@ -7850,7 +7850,9 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "injected")
         self.assertEqual(result["session_id"], sid)
-        inject.assert_called_once_with(sid, "Annotation: bad pill", source="annotate-queue")
+        inject.assert_called_once_with(
+            sid, "Annotation: bad pill", mode="steer", source="annotate-queue"
+        )
         spawn.assert_not_called()
 
     def test_inject_input_wraps_announced_from(self):
