@@ -2844,6 +2844,11 @@
   const F2_STALE_MINUTES = 60;         // claude: the cliff
   const F2_STALE_MINUTES_CODEX = 25;   // codex: where graded loss is material
   const F2_STALE_MINUTES_KIMI = 35;    // kimi: measured rise in cache-miss risk
+  // Below the cache/size gate, offer the same "continue in a new session"
+  // route on plain idle time alone — no token-size claim, no cache-decay
+  // claim, just "you haven't touched this in a while". Requested directly:
+  // the cache warning isn't the only reason to want a fresh session.
+  const F2_IDLE_ONLY_MINUTES = 60;
   const F2_ENGINE_CACHE = {
     claude: {
       staleMinutes: F2_STALE_MINUTES,
@@ -2957,15 +2962,23 @@
       const demoEngine = engine || 'claude';
       return { tokens: demoTokens, ageMin, model, engine: demoEngine, cache: F2_ENGINE_CACHE[demoEngine], forced: true };
     }
-    // No measured decay profile for this engine → no warning. See the
-    // F2_ENGINE_CACHE comment: warning without evidence is worse than silence.
-    if (!engine) return null;
-    const cache = F2_ENGINE_CACHE[engine];
-    if (tokens < F2_TOKEN_THRESHOLD) return null;
     if (!mtime) return null;
     const ageMin = (Date.now() / 1000 - mtime) / 60;
-    if (ageMin < cache.staleMinutes) return null;
-    return { tokens, ageMin, model, engine, cache, forced: false };
+    // Cache-based warning: a measured engine, past ITS OWN stale line, on a
+    // context big enough that a reload is worth interrupting for. See the
+    // F2_ENGINE_CACHE comment: warning without evidence is worse than silence.
+    if (engine && tokens >= F2_TOKEN_THRESHOLD) {
+      const cache = F2_ENGINE_CACHE[engine];
+      if (ageMin >= cache.staleMinutes) {
+        return { tokens, ageMin, model, engine, cache, idleOnly: false, forced: false };
+      }
+    }
+    // Plain idle offer: same route, no cache/size claim attached, since
+    // neither may apply here.
+    if (ageMin >= F2_IDLE_ONLY_MINUTES) {
+      return { tokens, ageMin, model, engine: engine || 'claude', cache: null, idleOnly: true, forced: false };
+    }
+    return null;
   }
 
   function f2ResolveSpawnCwd(ctx) {
@@ -2973,11 +2986,18 @@
     const s = ctx.session || {};
     return row.session_cwd || row.cwd || row.repo_path || row.folder_path || s.cwd || '';
   }
+  // Below F2_TOKEN_THRESHOLD, telling the new session to avoid ever reading
+  // its (small) origin transcript would be actively bad advice — reading it
+  // directly is the cheap, normal thing to do. Only the size claim and the
+  // "large" framing need to flex with idleOnly; the retrieval-vs-read choice
+  // already flexes with the actual measured token count either way.
   function f2RetrievalPrompt(ctx, gate) {
     const sid = ctx.sid;
     const task = String(ctx.text || '').trim();
-    return [
-      'You are continuing a task from an earlier, large Claude session.',
+    const worthSelectiveRetrieval = gate.tokens >= F2_TOKEN_THRESHOLD;
+    const lines = [
+      'You are continuing a task from an earlier Claude session'
+        + (worthSelectiveRetrieval ? ', which ran long' : '') + '.',
       '',
       'Origin session id: ' + sid,
       'Its transcript is a JSONL under ~/.claude/projects/. Locate it with:',
@@ -2985,14 +3005,23 @@
       '',
       'Task: ' + task,
       '',
-      'Retrieve context SELECTIVELY. Never open or Read the whole transcript',
-      '(it is ~' + f2FmtTokens(gate.tokens) + ' tokens). Pull only the slice you need:',
-      '  - Total Recall:  total-recall recall --query "<terms>" --limit 10',
-      '  - grep/rg the transcript for specific strings',
-      '  - tail the transcript for the most recent turns',
-      '',
-      'Load the minimum slice that answers the task, then proceed.',
-    ].join('\n');
+    ];
+    if (worthSelectiveRetrieval) {
+      lines.push(
+        'Retrieve context SELECTIVELY. Never open or Read the whole transcript',
+        '(it is ~' + f2FmtTokens(gate.tokens) + ' tokens). Pull only the slice you need:',
+        '  - Total Recall:  total-recall recall --query "<terms>" --limit 10',
+        '  - grep/rg the transcript for specific strings',
+        '  - tail the transcript for the most recent turns',
+        '',
+        'Load the minimum slice that answers the task, then proceed.',
+      );
+    } else {
+      lines.push(
+        'The transcript is small (~' + f2FmtTokens(gate.tokens) + ' tokens) — read it directly for context, then proceed.',
+      );
+    }
+    return lines.join('\n');
   }
 
   // Phase 2 — continuation lineage. Link the new lean session to the origin
@@ -3215,7 +3244,7 @@
     const clear = () => {
       rail.hidden = true; rail.innerHTML = '';
       panel.hidden = true; panel.innerHTML = '';
-      if (bar) bar.classList.remove('is-f2-cold');
+      if (bar) bar.classList.remove('is-f2-cold', 'is-f2-idle-only');
       f2PaneState.delete(f2PaneKey(paneId));
     };
     let gate = null;
@@ -3240,27 +3269,43 @@
     // ── rail: session-row data only, so it can paint before a keystroke ──
     rail.hidden = false;
     rail.setAttribute('role', 'status');
+    const railHeadline = gate.idleOnly ? 'Idle a while' : 'Large and stale';
+    const railCacheNote = gate.idleOnly ? '' : (' · ' + escapeHtml(gate.cache.railNote));
     rail.innerHTML = '<span class="rail-dot" aria-hidden="true"></span>'
-      + '<strong>Large and stale</strong>'
+      + '<strong>' + escapeHtml(railHeadline) + '</strong>'
       + '<span class="sep" aria-hidden="true">·</span>'
       + '<span class="meta">' + escapeHtml(tokensLabel) + ' tokens · idle ' + escapeHtml(ageLabel)
-        + ' · ' + escapeHtml(gate.cache.railNote) + '</span>';
+        + railCacheNote + '</span>';
 
     // ── panel: one line — the price on the left, the one alternative on the
     // right. Send stays the ordinary submit; the pill offers the cheap
     // continuation. The measured cache story and the compacting caveat live
     // in the verdict tooltip; the launch dialog renders below on demand. ──
     const force = !!(opts && opts.force);
-    if (bar) bar.classList.add('is-f2-cold');
+    if (bar) {
+      // Two distinct signals get two distinct treatments: a genuine
+      // measured cache warning still reads as "notice" (amber); a plain
+      // idle offer with no cache/size claim behind it stays neutral so it
+      // never overstates what CCC actually knows here.
+      bar.classList.toggle('is-f2-cold', !gate.idleOnly);
+      bar.classList.toggle('is-f2-idle-only', !!gate.idleOnly);
+    }
     if (!force && panel.innerHTML) return;              // static once painted
     panel.hidden = false;
-    panel.innerHTML =
-      '<div class="verdict" title="' + escapeAttr('Estimate: ' + gate.cache.verdictNote
-        + '. CCC infers coldness from the transcript’s mtime — it cannot observe the provider’s cache. '
-        + 'Compacting first costs more, not less: writing the summary reloads all ' + tokensLabel
-        + ', then you still pay for the turn.') + '">'
-        + 'Resuming here reloads <span class="cost">~' + escapeHtml(tokensLabel)
-        + ' tokens on ' + escapeHtml(modelLabel) + '</span></div>'
+    const verdictHtml = gate.idleOnly
+      ? '<div class="verdict" title="' + escapeAttr('This session has sat idle for ' + ageLabel
+          + '. CCC has no cache-cost evidence for this one (small context, or an engine without a'
+          + ' measured decay profile) — this is purely "you haven’t touched this in a while."')
+          + '">'
+          + 'Idle <span class="cost">' + escapeHtml(ageLabel)
+          + '</span> — start fresh with just the context you need</div>'
+      : '<div class="verdict" title="' + escapeAttr('Estimate: ' + gate.cache.verdictNote
+          + '. CCC infers coldness from the transcript’s mtime — it cannot observe the provider’s cache. '
+          + 'Compacting first costs more, not less: writing the summary reloads all ' + tokensLabel
+          + ', then you still pay for the turn.') + '">'
+          + 'Resuming here reloads <span class="cost">~' + escapeHtml(tokensLabel)
+          + ' tokens on ' + escapeHtml(modelLabel) + '</span></div>';
+    panel.innerHTML = verdictHtml
       + '<div class="routes">' + f2RoutesHtml(st) + '</div>'
       + (st.configOpen ? f2ConfigHtml(st.launch) : '');
   }
