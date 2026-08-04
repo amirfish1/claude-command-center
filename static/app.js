@@ -27576,6 +27576,15 @@
             + ' title="Commit dormant work, pull --rebase, push (no force)">Push all</button>'
           + '</span>'
         : '';
+      const newSession = repoPath
+        ? '<button type="button" class="conv-folder-new-session-btn" data-role="folder-new-session"'
+          + ' data-folder-path="' + escapeHtml(repoPath) + '"'
+          + ' title="Start a new session in this repository"'
+          + ' aria-label="Start a new session in this repository">+</button>'
+        : '';
+      const repoActions = (newSession || ship)
+        ? '<span class="conv-folder-repo-actions">' + newSession + ship + '</span>'
+        : '';
       const objectRenameIcon = '<svg class="conv-folder-object-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>';
       const objectRename = (section === 'inprogress' && archiveObjectId)
         ? '<button type="button" class="conv-folder-object-rename-btn" data-role="object-rename"'
@@ -27624,7 +27633,7 @@
         + '<span class="conv-folder-group-count">' + count + '</span>'
         + inlineMetaHtml
         + objectActions
-        + ship
+        + repoActions
         + '</div>';
     };
     // A collapsed project folder hides every row inside it, including
@@ -31204,6 +31213,20 @@
         if (ev.key !== 'Enter' && ev.key !== ' ') return;
         ev.preventDefault();
         toggleFolderGroup(ev);
+      });
+    });
+    // A repository header's compact + reuses the normal new-session flow,
+    // retaining the exact repository path shown by that group.
+    $convList.querySelectorAll('[data-role="folder-new-session"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const repoPath = btn.getAttribute('data-folder-path') || '';
+        if (!repoPath || typeof enterNewSessionMode !== 'function') return;
+        enterNewSessionMode();
+        setSpawnCwdInputValue(repoPath, { focus: false });
+        const input = composerInputForPane(activePaneId()) || $convInput;
+        if (input) input.focus();
       });
     });
     // "Push all" ship controls in folder headers (conv list only).

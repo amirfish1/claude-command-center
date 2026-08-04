@@ -11780,10 +11780,38 @@
     border-color: rgba(88,166,255,0.45);
     outline: none;
   }
-  /* "Push all" ship control — lives in the flexible last header column */
-  .conv-folder-ship {
+  /* Repository actions share the flexible last header column. */
+  .conv-folder-repo-actions {
     grid-column: 5;
     justify-self: end;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .conv-folder-new-session-btn {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid rgba(139,148,158,0.30);
+    border-radius: 3px;
+    color: var(--text-muted);
+    background: rgba(139,148,158,0.10);
+    font: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .conv-folder-new-session-btn:hover,
+  .conv-folder-new-session-btn:focus-visible {
+    background: rgba(88,166,255,0.18);
+    border-color: rgba(88,166,255,0.45);
+    color: var(--text);
+    outline: none;
+  }
+  /* "Push all" ship control — lives alongside the new-session action. */
+  .conv-folder-ship {
     display: flex;
     align-items: center;
     gap: 6px;
