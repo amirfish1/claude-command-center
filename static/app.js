@@ -2991,17 +2991,39 @@
   // directly is the cheap, normal thing to do. Only the size claim and the
   // "large" framing need to flex with idleOnly; the retrieval-vs-read choice
   // already flexes with the actual measured token count either way.
+  // Each engine stores its transcripts in a different tree with a different
+  // naming scheme, so the "go find it" instruction has to branch on the
+  // ORIGIN session's engine, not the engine the new session launches on.
+  const F2_ENGINE_LOCATE = {
+    claude: {
+      label: 'Claude',
+      note: 'Its transcript is a JSONL under ~/.claude/projects/. Locate it with:',
+      cmd: sid => '  ls ~/.claude/projects/*/' + sid + '.jsonl',
+    },
+    codex: {
+      label: 'Codex',
+      note: 'Its transcript is a rollout JSONL under ~/.codex/sessions/. Locate it with:',
+      cmd: sid => '  find ~/.codex/sessions -name "*' + sid + '.jsonl"',
+    },
+    kimi: {
+      label: 'Kimi',
+      note: 'Its transcript path is recorded in ~/.kimi-code/session_index.jsonl. Locate it with:',
+      cmd: sid => '  grep ' + sid + ' ~/.kimi-code/session_index.jsonl',
+    },
+  };
+
   function f2RetrievalPrompt(ctx, gate) {
     const sid = ctx.sid;
     const task = String(ctx.text || '').trim();
     const worthSelectiveRetrieval = gate.tokens >= F2_TOKEN_THRESHOLD;
+    const locate = F2_ENGINE_LOCATE[gate.engine] || F2_ENGINE_LOCATE.claude;
     const lines = [
-      'You are continuing a task from an earlier Claude session'
+      'You are continuing a task from an earlier ' + locate.label + ' session'
         + (worthSelectiveRetrieval ? ', which ran long' : '') + '.',
       '',
       'Origin session id: ' + sid,
-      'Its transcript is a JSONL under ~/.claude/projects/. Locate it with:',
-      '  ls ~/.claude/projects/*/' + sid + '.jsonl',
+      locate.note,
+      locate.cmd(sid),
       '',
       'Task: ' + task,
       '',
