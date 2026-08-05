@@ -33466,6 +33466,49 @@
     }
     if (!kind) return;
 
+    if (kind === 'incomplete') {
+      // A long extended-thinking pause after a big context reload writes
+      // nothing to the transcript for a while, which the quiet-time
+      // heuristic above can't tell apart from "actually stopped" — a
+      // session has surfaced this banner and then kept working with no
+      // user action needed. Two of this function's three call sites run
+      // off the transcript-tail poll, which can fire faster than the 5s
+      // liveStatus poll, so the liveStatus snapshot the guard above
+      // checked can already be stale by the time we get here. 'error' skips
+      // this: an actual error message already IN the transcript is a much
+      // stronger signal and isn't subject to this race.
+      const sid = (currentSession && currentSession.id) ? String(currentSession.id) : '';
+      if (sid) {
+        _confirmSessionNotLiveThenRenderOutcomeBanner(view, sid, kind, title, detail);
+        return;
+      }
+    }
+    _renderOutcomeBanner(view, kind, title, detail);
+  }
+
+  async function _confirmSessionNotLiveThenRenderOutcomeBanner(view, sid, kind, title, detail) {
+    const convIdAtStart = window.currentConversation;
+    let fresh = null;
+    try {
+      const params = new URLSearchParams({
+        session_id: sid, cwd: (currentSession && currentSession.cwd) || '',
+      });
+      const res = await fetch('/api/session-status?' + params.toString(), { cache: 'no-store' });
+      const data = await res.json();
+      if (data) {
+        fresh = !!(data.live || data.sidecar_in_flight || data.question_waiting
+          || data.codex_state === 'working');
+      }
+    } catch (_) { /* couldn't confirm either way — fall through, still show it */ }
+    if (fresh === true) return; // confirmed live after all — say nothing
+    // The pane may have switched sessions, or a newer render already handled
+    // this, while the confirm fetch was in flight.
+    if (!view.isConnected || window.currentConversation !== convIdAtStart) return;
+    if (view.querySelector(':scope > .conv-outcome-banner')) return;
+    _renderOutcomeBanner(view, kind, title, detail);
+  }
+
+  function _renderOutcomeBanner(view, kind, title, detail) {
     const wakeSessionId = (currentSession && currentSession.id) ? String(currentSession.id) : '';
     const canWakeCodex = !!(wakeSessionId && currentSession && currentSession.source === 'codex');
     const banner = document.createElement('div');
