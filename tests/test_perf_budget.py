@@ -1718,7 +1718,7 @@ def test_archive_background_refresh_uses_detached_process(
     )
 
     generation = server._archive_serve_generation
-    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, generation)
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, generation, time.time())
 
     assert detached_calls == [(_ALL_KEY, _ALL_OPTS, generation)]
 

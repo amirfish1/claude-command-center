@@ -9211,9 +9211,19 @@ except ValueError:
     _ARCHIVE_SERVE_TTL = 300.0
 _archive_serve_cache = {}      # key -> {"ts", "rows", "ver"} (+ optional prebuilt body)
 _archive_serve_lock = threading.Lock()
-_archive_serve_refreshing = set()  # keys with a background refresh in flight
+_archive_serve_refreshing = {}  # key -> start-time epoch, for in-flight background refreshes
 _archive_serve_generation = 0
 _archive_serve_version = 0       # monotonic per store; tags prebuilt response bodies
+
+
+def _archive_refresh_slot_available(key, now):
+    """True if `key` has no background refresh in flight, or the one it has
+    has been running past _ARCHIVE_REFRESH_WATCHDOG_S -- treated as abandoned
+    so a new attempt gets spawned instead of trusting the flag forever. Must
+    be called with _archive_serve_lock already held (same lock guards
+    _archive_serve_refreshing everywhere else)."""
+    started = _archive_serve_refreshing.get(key)
+    return started is None or (now - started) > _ARCHIVE_REFRESH_WATCHDOG_S
 
 
 def _archive_serve_cache_store(key, rows, generation):
@@ -9599,6 +9609,13 @@ try:
     )
 except ValueError:
     _ARCHIVE_REFRESH_WORKER_TIMEOUT = 180.0
+# 2026-08-04 incident: something held _ARCHIVE_BUILD_GLOBAL_LOCK forever (the
+# subprocess it wraps has its own timeout, but acquiring the lock itself did
+# not), which silently froze the served archive snapshot for hours -- every
+# stale poll saw the key already marked "refreshing" and skipped spawning a
+# replacement, with nothing to log and nothing to restart into. Margin beyond
+# the worker's own timeout for legitimate lock-wait under real contention.
+_ARCHIVE_REFRESH_WATCHDOG_S = _ARCHIVE_REFRESH_WORKER_TIMEOUT + 60.0
 
 
 def _archive_refresh_worker_main(encoded_options, output_path):
@@ -9667,11 +9684,21 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         encoded_options,
         output_name,
     ]
+    # Serialize variants in the parent. The lock cannot coordinate separate
+    # processes, but holding it around the one-shot worker prevents two
+    # option variants from parsing the same corpus concurrently. A bounded
+    # acquire, not `with lock:` -- the subprocess below has its own timeout,
+    # but plain lock acquisition did not, so whatever wedged the lock on
+    # 2026-08-04 blocked every subsequent refresh attempt forever with no
+    # exception, no log line, nothing to restart into. Failing loud beats
+    # hanging silent even when it can't fix the underlying stuck holder.
     try:
-        # Serialize variants in the parent. The lock cannot coordinate separate
-        # processes, but holding it around the one-shot worker prevents two
-        # option variants from parsing the same corpus concurrently.
-        with _ARCHIVE_BUILD_GLOBAL_LOCK:
+        if not _ARCHIVE_BUILD_GLOBAL_LOCK.acquire(timeout=_ARCHIVE_REFRESH_WATCHDOG_S):
+            raise RuntimeError(
+                "archive refresh worker could not acquire the build lock within "
+                f"{_ARCHIVE_REFRESH_WATCHDOG_S:.0f}s -- another refresh is stuck holding it"
+            )
+        try:
             completed = subprocess.run(
                 command,
                 cwd=str(CCC_ROOT),
@@ -9682,6 +9709,8 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
                 text=True,
                 timeout=_ARCHIVE_REFRESH_WORKER_TIMEOUT,
             )
+        finally:
+            _ARCHIVE_BUILD_GLOBAL_LOCK.release()
         try:
             result = json.loads(Path(output_name).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -9707,7 +9736,7 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
             pass
 
 
-def _archive_serve_refresh(key, cache_options, serve_generation):
+def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
     global _archive_serve_refreshing
     try:
         _archive_compute_rows_detached(key, cache_options, serve_generation)
@@ -9715,7 +9744,13 @@ def _archive_serve_refresh(key, cache_options, serve_generation):
         print(f"  [archive-serve] background refresh failed: {e}")
     finally:
         with _archive_serve_lock:
-            _archive_serve_refreshing.discard(key)
+            # Only clear the slot if it still belongs to THIS attempt. The
+            # watchdog in _archive_refresh_slot_available can start a second
+            # attempt for the same key once the first has been in flight
+            # implausibly long; if that first one eventually does return, it
+            # must not clobber the second attempt's own bookkeeping.
+            if _archive_serve_refreshing.get(key) == started_at:
+                _archive_serve_refreshing.pop(key, None)
 
 
 def _archive_serve_rows(key, cache_options):
@@ -9768,8 +9803,8 @@ def _archive_serve_rows_versioned(
             rows = [dict(r) for r in stored_rows] if copy_rows else stored_rows
             snap_ver = sc.get("ver", 0)
             stale = force_refresh or (now - sc.get("ts", 0)) >= _ARCHIVE_SERVE_TTL
-            if stale and key not in _archive_serve_refreshing:
-                _archive_serve_refreshing.add(key)
+            if stale and _archive_refresh_slot_available(key, now):
+                _archive_serve_refreshing[key] = now
                 spawn = True
             else:
                 spawn = False
@@ -9786,7 +9821,7 @@ def _archive_serve_rows_versioned(
             # always asynchronous; this request returns the snapshot now.
             threading.Thread(
                 target=_archive_serve_refresh,
-                args=(key, cache_options, serve_generation),
+                args=(key, cache_options, serve_generation, now),
                 daemon=True,
             ).start()
         return rows, True, snap_ver
@@ -9817,16 +9852,16 @@ def _archive_serve_rows_versioned(
             if (
                 stored
                 and (force_refresh or borrowed_base_snapshot)
-                and key not in _archive_serve_refreshing
+                and _archive_refresh_slot_available(key, now)
             ):
-                _archive_serve_refreshing.add(key)
+                _archive_serve_refreshing[key] = now
                 spawn = True
             else:
                 spawn = False
         if spawn:
             threading.Thread(
                 target=_archive_serve_refresh,
-                args=(key, cache_options, serve_generation),
+                args=(key, cache_options, serve_generation, now),
                 daemon=True,
             ).start()
         returned_rows = [dict(r) for r in rows] if copy_rows else rows
