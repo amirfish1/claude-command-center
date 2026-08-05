@@ -14,6 +14,7 @@ import sqlite3
 import time
 
 from ccc_server import core as _core
+from ccc_server import dbutil
 
 # ---------------------------------------------------------------------------
 # Kilo Code session ingestion (read-only).
@@ -32,23 +33,11 @@ KILO_LIVE_WINDOW_S = 180
 
 def _kilo_db_path():
     p = Path.home() / ".local" / "share" / "kilo" / "kilo.db"
-    try:
-        return p if p.exists() else None
-    except OSError:
-        return None
+    return dbutil.path_if_exists(p)
 
 
 def _kilo_connect():
-    db = _kilo_db_path()
-    if not db:
-        return None
-    try:
-        con = sqlite3.connect(str(db), timeout=0.5)
-        con.execute("PRAGMA query_only=1")
-        con.row_factory = sqlite3.Row
-        return con
-    except sqlite3.Error:
-        return None
+    return dbutil.connect_readonly(_kilo_db_path())
 
 
 def _kilo_model_str(raw):
