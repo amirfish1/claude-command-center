@@ -311,7 +311,9 @@ def find_devin_conversations(
         raw_id = str(s.get("session_id") or s.get("id") or "").strip()
         if not raw_id:
             continue
-        sid = DEVIN_SESSION_PREFIX + raw_id
+        # The v1 API already returns ids with the "devin-" prefix; only add
+        # it when absent so we never produce "devin-devin-...".
+        sid = raw_id if raw_id.startswith(DEVIN_SESSION_PREFIX) else DEVIN_SESSION_PREFIX + raw_id
         created = _devin_epoch(s.get("created_at"))
         modified = _devin_epoch(s.get("updated_at")) or created
         freshness = max(modified, last_interactions.get(sid) or 0)
@@ -331,11 +333,13 @@ def find_devin_conversations(
                     first_message = text.strip()
                     break
         first_message = _core._strip_ccc_session_state_instruction(first_message).strip()
+        # Web URLs use the id without the "devin-" prefix.
+        url_slug = raw_id[len(DEVIN_SESSION_PREFIX):] if raw_id.startswith(DEVIN_SESSION_PREFIX) else raw_id
         display_name = (
             name_overrides.get(sid)
             or _core._truncate_session_name(title)
             or (first_message[:80] if first_message else None)
-            or f"Devin session {raw_id[:8]}"
+            or f"Devin session {url_slug[:8]}"
         )
         status = _devin_status(s)
         is_live = status in _DEVIN_ACTIVE_STATUSES
@@ -379,7 +383,7 @@ def find_devin_conversations(
             "last_assistant_text": "",
             "tail_issue_number": None,
             "tail_pr_number": None,
-            "tail_pr_url": None,
+            "tail_pr_url": str((s.get("pull_request") or {}).get("url") or "") or None,
             "pr_state": None,
             "session_state": None,
             "archived": sid in archived_set,
@@ -393,9 +397,10 @@ def find_devin_conversations(
             "needs_approval_message": "",
             "model": str(s.get("model") or ""),
             "reasoning_effort": "",
-            # Cloud session link (https://app.devin.ai/sessions/...) — additive
-            # field; no other engine exposes one yet.
-            "session_url": str(s.get("url") or ""),
+            # Cloud session link — the list payload has no url field, so
+            # construct the app.devin.ai URL (id without the devin- prefix).
+            # Additive field; no other engine exposes one yet.
+            "session_url": str(s.get("url") or f"https://app.devin.ai/sessions/{url_slug}"),
         })
     out.sort(key=lambda x: x.get("last_interacted") or x.get("modified") or 0, reverse=True)
     return out
@@ -409,10 +414,9 @@ def _parse_devin_conversation(session_id, after_line=0):
     if not _devin_api_key():
         return {"events": [], "last_line": 0}
     raw_id = str(session_id or "")
-    if raw_id.startswith(DEVIN_SESSION_PREFIX):
-        raw_id = raw_id[len(DEVIN_SESSION_PREFIX):]
     if not raw_id:
         return {"events": [], "last_line": 0}
+    # The detail endpoint accepts the full "devin-..." id (verified live).
     detail = _devin_session_detail(raw_id)
     if not isinstance(detail, dict):
         return {"events": [], "last_line": 0}
