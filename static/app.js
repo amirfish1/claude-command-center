@@ -7355,6 +7355,7 @@
     const isHermes = currentSession.source === 'hermes';
     const isKimi = currentSession.source === 'kimi';
     const isOpencode = currentSession.source === 'opencode';
+    const isDevin = currentSession.source === 'devin';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll; until it matches
     // the open conversation, treat the session as not-live so we never show the
@@ -7434,6 +7435,12 @@
       } else if (isKimi) {
         activeInputControls.ttyLabel.textContent = 'kimi';
         if (activeInput) activeInput.placeholder = liveStatus.live ? 'Send to Kimi session…' : 'Resume Kimi and send…';
+      } else if (isDevin) {
+        // Devin is a read-only engine: transcripts render here, but replies
+        // belong in the Devin app. Block the composer instead of failing the
+        // send with repo_required (Devin rows carry no local repo context).
+        activeInputControls.ttyLabel.textContent = 'devin';
+        if (activeInput) activeInput.placeholder = 'Devin sessions are read-only in CCC - reply at app.devin.ai…';
       } else if (live) {
         activeInputControls.ttyLabel.textContent = liveStatus.tty;
         if (activeInput) activeInput.placeholder = 'Send to terminal...';
@@ -7456,7 +7463,7 @@
       // order. Previously we readOnly'd the input when both
       // can_headless_resume and can_app_resume were false, leaving the
       // user with a dead input bar and no way to type a follow-up.
-      const canSend = !isAntigravity || antigravityCanSendNow;
+      const canSend = !isDevin && (!isAntigravity || antigravityCanSendNow);
       if (activeInput) {
         const blockTyping = !canSend && !isAntigravity;
         activeInput.readOnly = blockTyping;
@@ -7466,7 +7473,9 @@
         const blockSend = !canSend && !isAntigravity;
         activeSendBtn.disabled = blockSend;
         activeSendBtn.title = blockSend
-          ? 'Open Antigravity to continue this app session'
+          ? (isDevin
+              ? 'Devin sessions are read-only in CCC'
+              : 'Open Antigravity to continue this app session')
           : (isAntigravity && !antigravityCanSendNow
               ? 'Send - runs AGY headless on this session'
               : 'Send');
