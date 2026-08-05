@@ -26798,8 +26798,10 @@
       // spawn_recent means the session was spawned moments ago and its engine
       // has not written a transcript YET — the row now reaches the list before
       // the engine writes anything. That is "starting", not "created and never
-      // used", so the chip stays off until the grace window expires.
-      const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.first_message && !c.spawn_recent)
+      // used", so the chip stays off until the grace window expires. Devin rows
+      // are excluded too: their transcripts live in the cloud (fetched on open),
+      // so a missing local first_message says nothing about usage.
+      const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.first_message && !c.spawn_recent && c.source !== 'devin')
         ? '<span class="conv-empty-session-chip" title="This session has no transcript messages">[EMPTY]</span>'
         : '';
       const historySnippetHtml = c._historySnippet
@@ -29171,8 +29173,12 @@
       _readyToMergeConvs,
       _mainArchivedConvs,
     );
+    // Synthesized open-PR rows (source 'github_pr') are kept out of the All
+    // list — mixed into the session list they read as sessions and confuse.
+    // Real sessions still carry their PR state via pr_* decoration fields.
     const _allTabConvs = _allTabUnfilteredConvs.filter(
-      c => _archiveEngineAllowsRow(c, _arcEngineFilter)
+      c => c.source !== 'github_pr'
+        && _archiveEngineAllowsRow(c, _arcEngineFilter)
     );
     const _allTabTrashConvs = _trashConvs.filter(
       c => _archiveEngineAllowsRow(c, _arcEngineFilter)
@@ -43501,12 +43507,37 @@
     // A durable transcript event can be present before its matching synthetic
     // queue overlay arrives. Show just the actionable tray version until the
     // queued copy drains; otherwise the same prompt appears twice.
-    const queuedTexts = new Set(Array.from(tray.querySelectorAll('.event.user_text'))
+    let queuedTexts = new Set(Array.from(tray.querySelectorAll('.event.user_text'))
       .map(el => {
         const msg = el.querySelector('.user-msg');
         return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
       })
       .filter(Boolean));
+    // Self-heal: if the latest durable user message matches a queued tray entry,
+    // the queued copy has already drained. Drop the stale tray card so the real
+    // message stays visible instead of hiding it behind the duplicate CSS class.
+    const durableUserRows = Array.from($view.querySelectorAll(
+      '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'));
+    const lastDurableUserRow = durableUserRows[durableUserRows.length - 1] || null;
+    const lastDurableUserMsg = lastDurableUserRow && lastDurableUserRow.querySelector('.user-msg');
+    const lastDurableText = lastDurableUserMsg
+      && _normSend(lastDurableUserMsg.getAttribute('data-raw-text') || lastDurableUserMsg.textContent);
+    if (lastDurableText && queuedTexts.has(lastDurableText)) {
+      tray.querySelectorAll('.event.user_text').forEach(el => {
+        const msg = el.querySelector('.user-msg');
+        const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+        if (text !== lastDurableText) return;
+        if (el._pendingRef) removePendingSendEcho(el._pendingRef);
+        else if (el.parentNode) el.parentNode.removeChild(el);
+      });
+      if (!tray.children.length) { tray.remove(); return; }
+      queuedTexts = new Set(Array.from(tray.querySelectorAll('.event.user_text'))
+        .map(el => {
+          const msg = el.querySelector('.user-msg');
+          return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
+        })
+        .filter(Boolean));
+    }
     transcriptRows.forEach(el => {
       if (isPendingSendEchoElement(el)) return;
       const msg = el.querySelector('.user-msg');
