@@ -36598,6 +36598,22 @@
             + '<button type="button" class="uxq-td-session-btn" data-sid="' + escapeAttr(item.claimed_session_id) + '">open in CCC ↗</button>'
             + '</div>'
           : '')
+      + (function () {
+          // Live engine/model/effort of the worker's session, so the
+          // detail page shows who is actually doing the work right now
+          // (not just the worker id string) — CCC-735.
+          if (item.closed_at || !item.claimed_session_id) return '';
+          const sid = item.claimed_session_id;
+          const conv = (conversationsData || []).find(c => c && (c.session_id === sid || c.id === sid));
+          if (!conv) return '';
+          const ovr = conv.override || null;
+          const engine = conv.engine || (ovr && ovr.engine) || '';
+          const model = conv.model || (ovr && ovr.model) || '';
+          const effort = conv.reasoning_effort || (ovr && ovr.reasoning_effort) || '';
+          const bits = [engine, model, effort].filter(Boolean);
+          if (!bits.length) return '';
+          return _propRow('Engine', '<span class="uxq-td-mono">' + escapeHtml(bits.join(' · ')) + '</span>');
+        })()
       + (item.claimed_at ? _propRow('Claimed', '<span class="uxq-td-pr-time" title="' + escapeAttr(item.claimed_at) + '">' + escapeHtml(_uxqRelTime(item.claimed_at)) + '</span>') : '')
       + (item.closed_at  ? _propRow('Closed',  '<span class="uxq-td-pr-time" title="' + escapeAttr(item.closed_at)  + '">' + escapeHtml(_uxqRelTime(item.closed_at))  + '</span>') : '')
       + '</div>'
