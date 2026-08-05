@@ -4398,8 +4398,28 @@ def _compute_repo_usage_signals(repo_paths):
             "score": 0.0,
         }
 
+    def _finalize(result):
+        """Session sets are an implementation detail — collapse them to counts
+        before anything can hand this dict to json.dumps()."""
+        for path in repo_paths:
+            repo = result[path]
+            for win in ("d7", "d30", "all"):
+                sessions = repo["signals"][win]["sessions"]
+                if isinstance(sessions, set):
+                    repo["signals"][win]["sessions"] = len(sessions)
+            s = repo["signals"]
+            repo["score"] = (
+                s["d7"]["sessions"] * 8.0
+                + s["d7"]["turns"] * 2.0
+                + s["d7"]["tokens"] * 0.002
+                + s["d30"]["sessions"] * 4.0
+                + s["d30"]["turns"] * 1.0
+                + s["d30"]["tokens"] * 0.001
+            )
+        return result
+
     if not repo_paths or not PROJECTS_ROOT.is_dir():
-        return signals
+        return _finalize(signals)
 
     # Map project dirs back to repo paths.
     dir_to_repo = {}
@@ -4462,19 +4482,7 @@ def _compute_repo_usage_signals(repo_paths):
                                 repo["signals"]["d7"]["sessions"].add(session_id)
 
     # Convert session sets to counts and compute composite score.
-    for p in repo_paths:
-        repo = signals[p]
-        for window in ("d7", "d30", "all"):
-            repo["signals"][window]["sessions"] = len(repo["signals"][window]["sessions"])
-        s = repo["signals"]
-        repo["score"] = (
-            s["d7"]["sessions"] * 8.0
-            + s["d7"]["turns"] * 2.0
-            + s["d7"]["tokens"] * 0.002
-            + s["d30"]["sessions"] * 4.0
-            + s["d30"]["turns"] * 1.0
-            + s["d30"]["tokens"] * 0.001
-        )
+    _finalize(signals)
 
     _REPO_SIGNALS_CACHE["paths"] = key
     _REPO_SIGNALS_CACHE["data"] = signals
@@ -62474,7 +62482,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # counter the dashboard's bottom-left bar reads. Cheap, no disk scan.
         if status >= 500:
             _record_server_error()
-        body_str = json.dumps(data)
+        try:
+            body_str = json.dumps(data)
+        except (TypeError, ValueError) as e:
+            # A non-serializable value leaked into a response payload. Letting
+            # it escape into BaseHTTPRequestHandler drops the connection with
+            # no status line at all, so the caller sees a transport error and
+            # the traceback only exists in the server log. Answer with a real
+            # 500 instead — same failure, but attributable from the client.
+            log_swallowed("response payload was not JSON-serializable", e)
+            _record_server_error()
+            status = 500
+            etag = False
+            body_str = json.dumps({"error": f"response serialization failed: {e}"})
         etag_val = None
         if etag:
             etag_val = '"' + hashlib.sha1(body_str.encode()).hexdigest() + '"'

@@ -1,0 +1,1 @@
+`/api/repo/list` returned a 500 (raw session sets leaking into the JSON encoder) on machines with no `~/.claude/projects` yet, such as a fresh install. `send_json` now answers a real 500 with an `error` field instead of dropping the connection when a payload can't be serialized.
