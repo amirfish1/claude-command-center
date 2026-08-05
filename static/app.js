@@ -6941,7 +6941,6 @@
   const $convSubmitPlusBtn = document.getElementById('convSubmitPlusBtn');
   const $convSteerBtn = document.getElementById('convSteerBtn');
   const $convCompactBtn = document.getElementById('convCompactBtn');
-  const $convAutoHandoverBtn = document.getElementById('convAutoHandoverBtn');
   const $convAnnouncedFrom = document.getElementById('convAnnouncedFrom');
   const $convAnnouncedFromControl = $convAnnouncedFrom && $convAnnouncedFrom.closest('.conv-announced-from');
   const $convTtsBtn = document.getElementById('convTtsBtn');
@@ -6962,7 +6961,6 @@
       sendBtn: q('.send-btn') || (root === $convInputBar ? $convSendBtn : null),
       steerBtn: q('.steer-btn') || (root === $convInputBar ? $convSteerBtn : null),
       compactBtn: q('.compact-btn') || (root === $convInputBar ? $convCompactBtn : null),
-      autoHandoverBtn: q('.auto-handover-btn') || (root === $convInputBar ? $convAutoHandoverBtn : null),
       escBtn: q('.esc-btn') || (root === $convInputBar ? $convEscBtn : null),
       issueAction: q('#convInputIssueAction, select[title="Action to take on this issue"]'),
       announcedFromControl: q('.conv-announced-from') || (root === $convInputBar ? $convAnnouncedFromControl : null),
@@ -6977,9 +6975,9 @@
   // double-click can't fire two /api/session/compact calls; updateInputBar
   // respects it so a poll mid-flight doesn't re-enable the button.
   let _compactInFlight = false;
-  // Guards only the in-flight auto-handover toggle POST -- unlike
-  // _compactInFlight, the on/off truth itself lives server-side
-  // (liveStatus.auto_handover_enabled), not in this flag.
+  // Guards only the in-flight auto-handover toggle POST -- the on/off truth
+  // itself lives server-side (auto-handover.json, read back via each pane's
+  // usage fetch), not in this flag.
   let _autoHandoverToggleInFlight = false;
   const INPUT_DRAFTS_KEY = 'ccc-input-drafts-v1';
   const INPUT_DRAFTS_MAX = 200;
@@ -7368,7 +7366,6 @@
     const activeSendBtn = activeInputControls.sendBtn;
     const activeSteerBtn = activeInputControls.steerBtn;
     const activeCompactBtn = activeInputControls.compactBtn;
-    const activeAutoHandoverBtn = activeInputControls.autoHandoverBtn;
     const activeEscBtn = activeInputControls.escBtn;
     const activeIssueAction = activeInputControls.issueAction;
     const activeAnnouncedFromControl = activeInputControls.announcedFromControl;
@@ -7568,21 +7565,6 @@
           ? 'Wait for the pending message to land in the transcript before compacting.'
           : 'Compact conversation context';
       }
-      // Auto handover toggle — Claude sessions only (matches the server-side
-      // watchdog's own claude-only scope). Unlike Compact, this reflects
-      // persistent on/off state (liveStatus.auto_handover_enabled) rather
-      // than firing a one-shot action, so it's an aria-pressed toggle.
-      if (activeAutoHandoverBtn) {
-        const canOfferHandover = hasSession && !isNewSession && !isBacklogIssue && !isPkood
-          && isClaudeSource(currentSession.source);
-        activeAutoHandoverBtn.classList.toggle('visible', canOfferHandover);
-        const handoverOn = !!(liveStatus && liveStatus.auto_handover_enabled);
-        if (!_autoHandoverToggleInFlight) {
-          activeAutoHandoverBtn.disabled = !canOfferHandover;
-          activeAutoHandoverBtn.classList.toggle('active', handoverOn);
-          activeAutoHandoverBtn.setAttribute('aria-pressed', handoverOn ? 'true' : 'false');
-        }
-      }
       // Codex app-server indicator — show only for live Codex sessions; reflect
       // whether CCC is currently driving Codex via its own app-server (RPC,
       // can append to a loaded thread + run thread/compact) vs no live
@@ -7659,11 +7641,6 @@
       if (activeCompactBtn) {
         activeCompactBtn.classList.remove('visible');
         activeCompactBtn.disabled = true;
-      }
-      if (activeAutoHandoverBtn) {
-        activeAutoHandoverBtn.classList.remove('visible', 'active');
-        activeAutoHandoverBtn.disabled = true;
-        activeAutoHandoverBtn.setAttribute('aria-pressed', 'false');
       }
       if (activeAnnouncedFromControl) activeAnnouncedFromControl.classList.remove('visible');
       if (activeCodexAppSrv) activeCodexAppSrv.classList.remove('visible', 'live');
@@ -10250,7 +10227,6 @@
   if ($convSubmitPlusBtn) $convSubmitPlusBtn.addEventListener('click', () => submitPlus('p1'));
   if ($convSteerBtn) $convSteerBtn.addEventListener('click', () => sendToTerminal('p1', 'steer'));
   if ($convCompactBtn) $convCompactBtn.addEventListener('click', () => compactCurrentSession());
-  if ($convAutoHandoverBtn) $convAutoHandoverBtn.addEventListener('click', () => toggleAutoHandoverForCurrentSession());
   // Mobile: lift the Compact button out of the composer into the header so the
   // input row stays uncluttered (user request). Same node + click handler; its
   // .visible show/hide toggle keeps working by id from its new parent.
@@ -25543,13 +25519,11 @@
     }
   }
 
-  async function toggleAutoHandoverForCurrentSession() {
-    if (_autoHandoverToggleInFlight) return;
-    const sid = currentSession.id;
-    if (!sid) return;
-    const next = !(liveStatus && liveStatus.auto_handover_enabled);
+  async function toggleAutoHandoverForPane(paneId, sid) {
+    if (_autoHandoverToggleInFlight || !sid) return;
+    const u = _usageDataByPane[paneId] || {};
+    const next = !u.auto_handover_enabled;
     _autoHandoverToggleInFlight = true;
-    if ($convAutoHandoverBtn) $convAutoHandoverBtn.disabled = true;
     try {
       const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/auto-handover', {
         method: 'POST',
@@ -25558,7 +25532,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        if (liveStatus) liveStatus.auto_handover_enabled = !!data.enabled;
+        if (_usageDataByPane[paneId]) _usageDataByPane[paneId].auto_handover_enabled = !!data.enabled;
         showOpToast(data.enabled ? 'Auto handover on for this session' : 'Auto handover off', 'success');
       } else {
         showOpToast('Could not update auto handover: ' + (data.error || ('HTTP ' + res.status)), 'error');
@@ -25567,7 +25541,7 @@
       showOpToast('Auto handover update failed: ' + ((err && err.message) || 'network error'), 'error');
     } finally {
       _autoHandoverToggleInFlight = false;
-      if (typeof updateInputBar === 'function') updateInputBar();
+      renderSessionUsageIntoStrip(paneId);
     }
   }
 
@@ -41830,6 +41804,23 @@
           + escapeHtml(totalsTip) + '">' + escapeHtml(totalsText) + '</span>';
       }
     }
+    // Auto handover toggle — status-bar pill, not an input-bar icon (user
+    // request): needs to clearly read on/off at a glance, so it's a labeled
+    // pill with explicit ON/OFF text rather than an icon whose state only
+    // shows via a subtle color change. Claude sessions only, matching the
+    // server-side watchdog's own claude-only scope.
+    let handoverPill = '';
+    if (engine === 'claude') {
+      const handoverOn = !!u.auto_handover_enabled;
+      const handoverTip = handoverOn
+        ? 'Auto handover is ON — when this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
+        : 'Auto handover is OFF. Click to turn on — when this session goes idle 55 min, CCC will ask it to file a WatchTower checkpoint.';
+      handoverPill = ' <button type="button" class="wp-handover-toggle' + (handoverOn ? ' is-on' : ' is-off') + '"'
+        + ' data-auto-handover-toggle aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
+        + ' title="' + escapeHtml(handoverTip) + '">'
+        + '<span class="wp-handover-dot"></span>Auto handover: ' + (handoverOn ? 'ON' : 'OFF')
+        + '</button>';
+    }
     // Model pill renders LAST in the wp-usage cluster — rightmost slot,
     // matching the Claude Desktop convention users expect. The chevron
     // cover bug (#convInputContext right edge covered by .status-rail-
@@ -41841,9 +41832,17 @@
       + sourceLabel + ' ' + _formatTokens(displayTokens) + ' / ' + _formatTokens(limit)
       + ' <span class="wp-usage-pct">(' + calcPct + '%)</span>'
       + slashContextText
-      + '</span>' + peakNote + costPill + antigravityTotalsPill + modelPill;
+      + '</span>' + peakNote + costPill + antigravityTotalsPill + modelPill + handoverPill;
     syncInputContextVisibility(slot);
     scheduleInputContextFit();
+    const handoverBtn = uSlot.querySelector('[data-auto-handover-toggle]');
+    if (handoverBtn) {
+      handoverBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleAutoHandoverForPane(paneId, _usageSessionIdByPane[paneId]);
+      });
+    }
     const pill = uSlot.querySelector('.wp-usage-clickable');
     if (pill) {
       pill.addEventListener('click', (e) => {
@@ -41877,6 +41876,8 @@
         if (pu) pu.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openPlanUsagePopover(pu); });
         const pm = paneUSlot.querySelector('[data-model-picker]');
         if (pm) pm.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openModelPicker(pm); });
+        const ph = paneUSlot.querySelector('[data-auto-handover-toggle]');
+        if (ph) ph.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleAutoHandoverForPane(pane.id, _usageSessionIdByPane[pane.id]); });
       });
     }
     // Keep the per-session advisor nudge in sync with whatever session is open.

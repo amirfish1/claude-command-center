@@ -55367,7 +55367,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/usage$", path):
             # Token-usage stats for the conv pane's "Context: 142k / 200k" pill.
             sid = path.rsplit("/", 2)[-2]
-            self.send_json(extract_session_usage(sid))
+            usage = extract_session_usage(sid)
+            if isinstance(usage, dict):
+                # Per-pane (not just active-pane) so the status-bar toggle stays
+                # correct in split view -- session-status only tracks whichever
+                # pane is currently "active".
+                usage["auto_handover_enabled"] = sid in _load_auto_handover_flags()
+            self.send_json(usage)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/slash-commands$", path):
             # Slash commands reported by Claude's system/init event. The
             # composer uses this for `/` suggestions, including project and
