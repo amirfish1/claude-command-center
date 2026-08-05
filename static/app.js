@@ -4989,13 +4989,14 @@
     };
     const engineLabel = engineLabels[engine] || 'Claude';
     const model = String((row && row.model) || '').trim();
+    const effort = String((row && row.reasoning_effort) || '').trim();
     const tier = sessionCostTier(engine, model);
     const tierLabel = tierLabels[tier] || '';
     const working = sessionIsActivelyWorking(row, optimistic);
     const activityLabel = working ? 'Working now' : 'Not working';
     const title = [
       engineLabel,
-      model || 'Model unknown',
+      (model || 'Model unknown') + (effort ? ' (' + effort + ')' : ''),
       tierLabel ? tierLabel + ' cost' : 'Cost tier unknown',
       activityLabel,
     ].join(' · ');
