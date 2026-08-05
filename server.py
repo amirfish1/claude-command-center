@@ -9640,6 +9640,14 @@ _ARCHIVE_REFRESH_WATCHDOG_S = _ARCHIVE_REFRESH_WORKER_TIMEOUT + 60.0
 def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
     try:
+        # This is the __main__ dispatch for --archive-refresh-worker, which
+        # exits via SystemExit before ever reaching main()'s normal startup
+        # sequence -- so the per-file (mtime, size) parse cache that makes a
+        # rebuild only touch changed sessions was never loaded here. Every
+        # detached refresh has been doing a full cold re-parse of the whole
+        # corpus, every time, which is the actual reason these were slow
+        # enough to hit the subprocess timeout in the first place.
+        _load_conv_meta_cache()
         if hasattr(os, "nice"):
             try:
                 os.nice(10)
