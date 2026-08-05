@@ -1,0 +1,1 @@
+Fixed `/api/repo/list` returning HTTP 500 on installs whose `~/.claude/projects` directory doesn't exist yet: `_compute_repo_usage_signals()` took an early return that left per-window `sessions` as unserializable `set()` objects. They're now finalized to integer counts on that path too, so the repo picker loads on a fresh install.

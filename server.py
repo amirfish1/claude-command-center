@@ -4395,6 +4395,14 @@ def _compute_repo_usage_signals(repo_paths):
         }
 
     if not repo_paths or not PROJECTS_ROOT.is_dir():
+        # No transcripts to aggregate — still finalize the session sets to
+        # counts so the result is JSON-serializable (empty projects dir is
+        # the common case on a fresh install; /api/repo/list must not 500).
+        for p in repo_paths:
+            for window in ("d7", "d30", "all"):
+                signals[p]["signals"][window]["sessions"] = len(
+                    signals[p]["signals"][window]["sessions"]
+                )
         return signals
 
     # Map project dirs back to repo paths.
