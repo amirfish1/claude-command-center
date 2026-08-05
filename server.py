@@ -89,6 +89,10 @@ def _adopt_ccc_module(name):
     return mod
 
 
+# Best-effort failures still get one rate-limited stderr line instead of
+# vanishing. Imports no server names, so it is safe this early.
+from ccc_server.errlog import log_swallowed
+
 # Model-drift advisor (stdlib-only, no back-reference to this module). Lives
 # next to server.py; recommends cheaper/stronger models per live session. See
 # /api/model-advisor and model_advisor.py.
@@ -2963,7 +2967,7 @@ def _record_recent_repo(path_str):
         _RECENT_REPOS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _RECENT_REPOS_FILE.write_text("\n".join(new_list) + "\n")
     except OSError:
-        pass
+        log_swallowed("persist recent-repos list")
 
 
 def _append_custom_repo(path_str):
@@ -6650,7 +6654,7 @@ def _resume_ledger_append(event, sid=None, pid=None, **fields):
             except OSError:
                 pass
     except Exception:
-        pass
+        log_swallowed("append resume ledger")
 
 
 def _resume_ledger_stats():
@@ -12244,17 +12248,22 @@ def enqueue_annotation_ux_fixes_queue(
             return out
 
         sid = None
+        name_warning = ""
         log_path = spawned.get("log")
         if log_path:
             sid = _morning_resolve_session_id_from_log(log_path, max_wait_s=8.0)
         if sid:
             try:
                 _save_session_name_override(sid, queue_name)
-            except OSError:
-                pass
+            except OSError as e:
+                # The spawn itself succeeded, so this stays a success — but
+                # the card will show the raw session id instead of the queue
+                # name, and the caller should be able to say why.
+                log_swallowed("persist session name for spawned queue session", e)
+                name_warning = f"could not persist session name: {e}"
             _record_interaction(sid)
 
-        return {
+        out = {
             "ok": True,
             "action": "spawned",
             "queue_name": queue_name,
@@ -12263,6 +12272,9 @@ def enqueue_annotation_ux_fixes_queue(
             "pid": spawned.get("pid"),
             "spawn": spawned,
         }
+        if name_warning:
+            out["warning"] = name_warning
+        return out
 
 
 def _schedule_restart(delay=0.5):
@@ -13328,7 +13340,7 @@ def _log_archive_event(action, sid, reason=""):
         with ARCHIVE_EVENTS_LOG.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except OSError:
-        pass
+        log_swallowed("append archive-events log")
 PINNED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "pinned-conversations.json"  # [session_id,...]
 VERIFIED_CONVERSATIONS_FILE = COMMAND_CENTER_STATE_DIR / "verified-conversations.json"  # [session_id,...]
 SESSION_LANE_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-lane-overrides.json"  # {session_id: coding|workers|messages}
@@ -14334,7 +14346,7 @@ def _save_archive_grace() -> None:
         LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
         ARCHIVE_GRACE_FILE.write_text(json.dumps(_archive_grace, indent=2))
     except OSError:
-        pass
+        log_swallowed("persist archive grace map")
 
 
 _archive_grace: dict = _load_archive_grace()  # sid → epoch; manual archives, sticky vs auto-unarchive
@@ -14763,7 +14775,7 @@ def _record_interaction(session_id):
         LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
         LAST_INTERACTIONS_FILE.write_text(json.dumps(data, indent=2))
     except OSError:
-        pass
+        log_swallowed("persist last-interaction timestamps")
 
 
 def _load_session_issues():
@@ -15248,7 +15260,7 @@ def rename_session(session_id, name, source="user"):
                 _save_session_name_override(session_id, name)
                 _sync_codex_thread_title(session_id, name)
             except OSError:
-                pass  # non-fatal
+                log_swallowed("persist session name side-car")
         result["ok"] = True
         result["method"] = "jsonl"
         return result
@@ -17649,7 +17661,7 @@ def _save_session_cwd_overrides():
             json.dump(_session_cwd_override, f, indent=2)
         os.replace(tmp, _SESSION_CWD_OVERRIDE_FILE)
     except OSError:
-        pass
+        log_swallowed("persist session cwd overrides")
 
 
 def _set_session_cwd_override(session_id, cwd):
@@ -20033,7 +20045,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
         try:
             _save_cwd_relocation_cache()
         except Exception:
-            pass
+            log_swallowed("persist cwd-relocation cache")
 
     # Aggregate timers — gated on env var so prod stays silent.
     _PROFILE = os.environ.get("CCC_PROFILE_CONVS") == "1"
@@ -23899,7 +23911,7 @@ def _spawn_timeline_save():
         st = _SPAWN_TIMELINE_FILE.stat()
         _SPAWN_TIMELINE_FILE_SIG = (st.st_mtime_ns, st.st_size)
     except (OSError, ValueError):
-        pass
+        log_swallowed("persist spawn timeline")
 
 
 def _spawn_timeline_load():
@@ -24206,7 +24218,7 @@ def _save_codex_app_server_state_unlocked():
             json.dump(_codex_app_server_state_payload_unlocked(), f, indent=2, sort_keys=True)
         tmp.replace(CODEX_APP_SERVER_STATE_FILE)
     except OSError:
-        pass
+        log_swallowed("persist codex app-server state")
 
 
 def _codex_managed_app_server_socket_path():
@@ -32759,7 +32771,7 @@ def _acp_save_state_unlocked(harness):
             json.dump(payload, f, indent=1, sort_keys=True)
         tmp.replace(path)
     except OSError:
-        pass
+        log_swallowed("persist ACP session state")
 
 
 def _acp_load_state(harness):
@@ -32799,7 +32811,7 @@ def _acp_append_transcript_unlocked(harness, sid, event):
         with path.open("a") as f:
             f.write(json.dumps(event) + "\n")
     except OSError:
-        pass
+        log_swallowed("append ACP transcript")
 
 
 def _acp_emit_event_unlocked(harness, sid, event, save=False):
@@ -43478,7 +43490,7 @@ def _persist_codex_parent_link(thread_id, parent_session_id):
             os.replace(tmp, CODEX_PARENT_LINKS_FILE)
             _codex_parent_links_cache["data"] = existing
         except OSError:
-            pass
+            log_swallowed("persist codex parent links")
 
 
 @_ttl_memo(3.0)
@@ -65655,7 +65667,7 @@ def _provenance_append(records):
                     tmp.write_text("\n".join(lines[-_PROVENANCE_CAP // 2:]) + "\n")
                     tmp.replace(PROVENANCE_INDEX_FILE)
         except OSError:
-            pass
+            log_swallowed("append provenance index")
 
 
 def _provenance_harvest_sidecars(session_ids):
@@ -67119,7 +67131,7 @@ def _telemetry_record_heartbeat():
             except OSError:
                 pass
         except OSError:
-            pass
+            log_swallowed("persist telemetry state")
     return state
 
 

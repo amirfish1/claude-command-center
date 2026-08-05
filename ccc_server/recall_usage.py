@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.errlog import log_swallowed
 
 # ---------------------------------------------------------------------------
 # Total Recall search — optional session-level augmentation for the sidebar
@@ -335,7 +336,7 @@ def _save_last_claude_org_id(org_id):
             json.dump({"org_id": org_id}, f)
         os.replace(tmp_file, _CLAUDE_ORG_ID_STATE_FILE)
     except OSError:
-        pass
+        log_swallowed("persist claude org id")
 
 
 def _claude_org_id_diagnostic():

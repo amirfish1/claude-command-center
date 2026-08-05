@@ -14,6 +14,14 @@ Disabled gracefully when:
 import os
 import shutil
 import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from _errlog import log_swallowed
+except ImportError:
+    def log_swallowed(*_a, **_k):
+        pass
 
 
 def _enabled():
@@ -47,4 +55,4 @@ def notify(title, message, subtitle=""):
             start_new_session=True,
         )
     except OSError:
-        pass
+        log_swallowed("desktop notification")

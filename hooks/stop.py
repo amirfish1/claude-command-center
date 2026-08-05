@@ -17,6 +17,11 @@ try:
 except ImportError:
     def notify(*_a, **_k):
         pass
+try:
+    from _errlog import log_swallowed
+except ImportError:
+    def log_swallowed(*_a, **_k):
+        pass
 
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 
@@ -69,7 +74,7 @@ def main():
         )
 
     except Exception:
-        pass
+        log_swallowed("stop hook")
 
 
 if __name__ == "__main__":

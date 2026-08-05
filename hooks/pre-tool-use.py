@@ -13,6 +13,13 @@ import re
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from _errlog import log_swallowed
+except ImportError:
+    def log_swallowed(*_a, **_k):
+        pass
+
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 # Question-relay coordination dir. When a CCC-spawned headless session calls
 # AskUserQuestion, this hook blocks here waiting for the dashboard to drop an
@@ -372,7 +379,7 @@ def main():
             question_relay(session_id, tool_input)
 
     except Exception:
-        pass
+        log_swallowed("pre-tool-use hook")
 
 
 if __name__ == "__main__":

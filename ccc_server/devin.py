@@ -23,6 +23,7 @@ import time
 import urllib.request
 
 from ccc_server import core as _core
+from ccc_server.errlog import log_swallowed
 
 DEVIN_API_BASE = "https://api.devin.ai/v1"
 DEVIN_HTTP_TIMEOUT_S = 10
@@ -94,7 +95,7 @@ def _devin_write_cache(path, payload):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
     except OSError:
-        pass
+        log_swallowed("persist devin session cache")
 
 
 def _devin_api_get(path):
