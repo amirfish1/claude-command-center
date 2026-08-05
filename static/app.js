@@ -26564,7 +26564,9 @@
         }
         if (c.model) {
           const hermesModel = String(c.model).replace(/^hermes[-_]?/i, '').slice(0, 36);
-          signals += '<span class="conv-signal hermes-model" title="' + escapeAttr(c.model) + '">' + escapeHtml(hermesModel) + '</span>';
+          const hermesModelTitle = c.reasoning_effort ? (c.model + ' · effort ' + c.reasoning_effort) : c.model;
+          const hermesModelLabel = c.reasoning_effort ? (hermesModel + ' (' + c.reasoning_effort + ')') : hermesModel;
+          signals += '<span class="conv-signal hermes-model" title="' + escapeAttr(hermesModelTitle) + '">' + escapeHtml(hermesModelLabel) + '</span>';
         }
         const lineageCount = Number(c.hermes_lineage_count || 0);
         if (lineageCount > 1) {

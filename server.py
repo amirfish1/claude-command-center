@@ -9381,7 +9381,7 @@ _ARCHIVE_LIST_FIELDS = (
     "goal_status", "parent_session_id", "hermes_parent_session_id",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
-    "model", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
+    "model", "reasoning_effort", "latest_input_tokens", "lifetime_tokens", "cost_usd", "cost_breakdown_usd",
     "total_input_tokens", "total_cache_creation_tokens", "total_cache_read_tokens",
     "total_output_tokens", "live_context_tokens", "live_context_limit",
     "live_context_percent", "context_limit", "quality_score", "quality_grade",
