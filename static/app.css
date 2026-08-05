@@ -7394,6 +7394,10 @@
        View from quietly hiding the caret over a transparent bg. */
     -webkit-text-fill-color: currentColor;
     caret-color: currentColor;
+    /* Let the Unicode bidi algorithm choose each prompt paragraph's base
+       direction. This keeps English left-to-right while Hebrew, Arabic, and
+       other RTL prompts begin at the right edge. */
+    unicode-bidi: plaintext;
     font-size: 15px; font-weight: 500; font-family: inherit;
   }
   /* Keep composer sizing in JS. WebKit/WKWebView can paint native textarea
