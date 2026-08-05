@@ -52,8 +52,8 @@ def test_landing_hero_has_one_direct_download_cta():
 def test_landing_page_names_current_release():
     page = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
 
-    assert "v5.8.1" in page
-    assert "v5.8.0" not in page
+    assert "v5.19.1" in page
+    assert "v5.8" not in page
 
 
 def test_download_is_the_only_emphasized_action_above_fold():
