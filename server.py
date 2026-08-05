@@ -9604,11 +9604,21 @@ def _archive_compute_rows(key, cache_options, serve_generation=None):
 
 
 try:
+    # 2026-08-05: measured this timing out at exactly 180s against the real
+    # corpus (~3930 conversations, resolve_effective + resolve_pr_states +
+    # resolve_worktree_dirty all on) while the dashboard was busy -- an
+    # isolated run of the identical worker command took ~80s with no
+    # contention. Every attempt was failing this way, back to back, so the
+    # served snapshot never advanced even with the watchdog above correctly
+    # un-wedging the slot each time: self-healing into "spawn a replacement
+    # that also times out" is not actually healed. 420s gives real headroom
+    # over the observed 2-3x contention slowdown; CCC_ARCHIVE_REFRESH_
+    # WORKER_TIMEOUT_SEC still overrides for a corpus far outside this range.
     _ARCHIVE_REFRESH_WORKER_TIMEOUT = max(
-        30.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_WORKER_TIMEOUT_SEC", "180"))
+        30.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_WORKER_TIMEOUT_SEC", "420"))
     )
 except ValueError:
-    _ARCHIVE_REFRESH_WORKER_TIMEOUT = 180.0
+    _ARCHIVE_REFRESH_WORKER_TIMEOUT = 420.0
 # 2026-08-04 incident: something held _ARCHIVE_BUILD_GLOBAL_LOCK forever (the
 # subprocess it wraps has its own timeout, but acquiring the lock itself did
 # not), which silently froze the served archive snapshot for hours -- every
