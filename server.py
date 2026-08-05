@@ -3124,6 +3124,167 @@ def _save_session_overrides(overrides):
     tmp.replace(SESSION_OVERRIDES_FILE)
 
 
+def _load_auto_handover_flags():
+    """Return {session_id: {enabled, set_at, last_fired_mtime, last_fired_at}} or {}."""
+    try:
+        with open(AUTO_HANDOVER_FILE) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_auto_handover_flags(flags):
+    AUTO_HANDOVER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = AUTO_HANDOVER_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(flags, f, indent=2, sort_keys=True)
+    tmp.replace(AUTO_HANDOVER_FILE)
+
+
+def _set_auto_handover(session_id, enabled):
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+    flags = _load_auto_handover_flags()
+    if enabled:
+        flags[sid] = {
+            "enabled": True,
+            "set_at": datetime.now().isoformat(),
+            "last_fired_mtime": None,
+            "last_fired_at": None,
+        }
+    else:
+        flags.pop(sid, None)
+    _save_auto_handover_flags(flags)
+    return {"ok": True, "session_id": sid, "enabled": bool(enabled)}
+
+
+def _mark_auto_handover_fired(session_id, transcript_mtime):
+    flags = _load_auto_handover_flags()
+    entry = flags.get(session_id)
+    if not entry:
+        return  # toggled off since the watchdog last checked — nothing to mark
+    entry["last_fired_mtime"] = float(transcript_mtime)
+    entry["last_fired_at"] = datetime.now().isoformat()
+    _save_auto_handover_flags(flags)
+
+
+_AUTO_HANDOVER_IDLE_MINUTES = 55  # 5 min before F2_STALE_MINUTES's claude cliff (60, static/app.js)
+_AUTO_HANDOVER_CHECK_INTERVAL_S = 60  # stat()-ing transcripts every 5s is wasteful at minute-scale thresholds
+_auto_handover_last_checked_at = {"ts": 0.0}
+
+
+def _auto_handover_prompt():
+    return (
+        "[CCC auto-handover] This session has been idle long enough that its "
+        "prompt cache is close to going cold, so reloading full context later "
+        "would be expensive. Before continuing, write a short durable "
+        "checkpoint: run `wt add` yourself (use `wt ls` to find an existing "
+        "queue for this repo/workstream, or pick a sensible new one if none "
+        "fits) with a 2-3 sentence --note covering (1) what's done, (2) "
+        "what's left, (3) the next concrete step. File exactly one ticket -- "
+        "this is a lightweight just-in-case checkpoint, not a task "
+        "breakdown or dedup pass. No other action needed; nothing to ask me."
+    )
+
+
+def _auto_handover_gates_pass(session_id):
+    """True only for a live, CCC-owned, idle, headless (no-TTY) Claude spawn.
+
+    Deliberately narrower than compact/clear's gating: auto-handover never
+    resurrects a dormant session via `claude --resume` just to have it write a
+    note (that would contradict the "survives even if unreachable" goal, since
+    a resurrected headless goes stale again seconds later), and never
+    keystrokes into a live interactive terminal (that's visibly disruptive if
+    a human is mid-thought in that window, unlike an unattended headless spawn).
+    """
+    cwd = find_session_cwd(session_id)
+    status = session_live_status(session_id, cwd)
+    if _session_status_is_busy(status):
+        return False
+    if _pending_ask_user_question_for_session(session_id):
+        return False
+    has_tty = _is_real_tty(status.get("tty"))
+    if has_tty:
+        return False
+    spawn = _find_live_spawn_entry_for_session(session_id)
+    if spawn is None:
+        return False
+    return True
+
+
+def _fire_auto_handover_local(session_id):
+    """Gate + inject in THIS process's own local state.
+
+    Only correct to call where the live spawn actually lives -- CCC-owned
+    Claude headless spawns are tracked in `_spawned_sessions`, which is
+    per-process. A normal spawn created via /api/sessions/spawn is dispatched
+    to and lives in the WORKER's copy of this module, not the dashboard's.
+    Callers must route through the control plane first (see
+    _maybe_fire_auto_handover) so this only runs directly when already inside
+    the worker (or in a single-process deployment with no separate worker).
+    """
+    if not _auto_handover_gates_pass(session_id):
+        return {"ok": False, "code": "auto_handover_gate_failed"}
+    return _inject_text_into_session(
+        session_id, _auto_handover_prompt(), mode="send", source="auto-handover",
+    )
+
+
+def _maybe_fire_auto_handover(session_id, entry, now):
+    if _detect_session_engine(session_id) != "claude":
+        return  # scope: claude sessions only, matching F2's own claude-specific cliff
+    try:
+        path = _resolve_conversation_path(session_id)
+        mtime = os.path.getmtime(path)
+    except (OSError, TypeError):
+        return
+    idle_min = (now - mtime) / 60.0
+    if idle_min < _AUTO_HANDOVER_IDLE_MINUTES:
+        return
+    last_fired = entry.get("last_fired_mtime")
+    if last_fired and float(last_fired) >= mtime:
+        return  # already fired for this exact idle streak
+
+    # The gate check (_find_live_spawn_entry_for_session) and the injection
+    # itself both need to see the WORKER's live spawn state, not the
+    # dashboard's own (usually empty, for a worker-dispatched spawn) copy --
+    # route the whole gate-and-fire operation there, same as
+    # compact_session_context/clear_session_context do at their own top.
+    routed = _control_plane_engine_call(
+        "claude", "auto_handover_fire", {"session_id": session_id},
+        idempotency_key=str(uuid.uuid4()),
+    )
+    if routed is not None:
+        result = routed
+    else:
+        # No worker available -- fall back to local (correct in a
+        # single-process deployment, where there's nowhere else for the
+        # spawn state to live).
+        result = _fire_auto_handover_local(session_id)
+
+    if result.get("ok"):
+        _mark_auto_handover_fired(session_id, mtime)
+        _log_activity("auto-handover", "FIRED", f"session={session_id[:8]} idle_min={idle_min:.0f}")
+    elif result.get("code") != "auto_handover_gate_failed":
+        print(f"[auto-handover] inject failed for {session_id[:8]}: {result.get('error')}", flush=True)
+
+
+def _run_auto_handover_watchdog_once(now=None):
+    now = time.time() if now is None else float(now)
+    if now - _auto_handover_last_checked_at["ts"] < _AUTO_HANDOVER_CHECK_INTERVAL_S:
+        return
+    _auto_handover_last_checked_at["ts"] = now
+    for sid, entry in list(_load_auto_handover_flags().items()):
+        if not isinstance(entry, dict) or not entry.get("enabled"):
+            continue
+        try:
+            _maybe_fire_auto_handover(sid, entry, now)
+        except Exception as e:
+            print(f"[auto-handover] {sid[:8]} check failed: {e}", flush=True)
+
+
 def _get_session_override(session_id):
     if not session_id:
         return None
@@ -13538,6 +13699,13 @@ CODEX_THREAD_REGISTRY_FILE = (
 SESSION_OVERRIDES_FILE = COMMAND_CENTER_STATE_DIR / "session-overrides.json"
 PENDING_INPUTS_FILE = COMMAND_CENTER_STATE_DIR / "pending-inputs.json"
 PENDING_INPUT_HANDOFF_DIR = COMMAND_CENTER_STATE_DIR / "pending-input-handoffs"
+
+# Per-session opt-in for the auto-handover watchdog (see _run_auto_handover_watchdog_once).
+# Schema: { "<session_id>": {"enabled": bool, "set_at": "ISO-8601",
+#           "last_fired_mtime": float|null, "last_fired_at": "ISO-8601"|null} }
+# enabled=False deletes the key entirely rather than writing enabled:false, so
+# the watchdog's iteration never has to filter dead entries.
+AUTO_HANDOVER_FILE = COMMAND_CENTER_STATE_DIR / "auto-handover.json"
 
 
 # {path: {mtime, custom_title, last_prompt, agent_name, ...}}
@@ -37011,6 +37179,7 @@ def _start_resume_queue_watcher() -> None:
             # this before FIFO draining so a queued message suppresses its
             # conversation's automatic continuation instead of racing it.
             _run_codex_recovery_watchdog_once()
+            _run_auto_handover_watchdog_once()
             with _pending_resume_lock:
                 queued_sids = list(_pending_resume_queue.keys())
             for sid in queued_sids:
@@ -55267,6 +55436,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             status = session_live_status(sid, cwd)
             status["cwd"] = cwd
             status["cwd_exists"] = bool(cwd and Path(cwd).is_dir())
+            status["auto_handover_enabled"] = bool(sid) and sid in _load_auto_handover_flags()
             # Live "what's running right now" — prefer the PreToolUse
             # in-flight marker (currently running) over the PostToolUse
             # sidecar (most-recently completed). The detail pane uses these
@@ -61737,6 +61907,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     sid, model, context_1m, reasoning_effort,
                     effort_only=bool(payload.get("effort_only")),
                 ))
+        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/auto-handover$", path):
+            sid = path.split("/")[3]
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            _record_interaction(sid)
+            self.send_json(_set_auto_handover(sid, bool(payload.get("enabled"))))
         elif path == "/api/inject-esc":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

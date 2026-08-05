@@ -6941,6 +6941,7 @@
   const $convSubmitPlusBtn = document.getElementById('convSubmitPlusBtn');
   const $convSteerBtn = document.getElementById('convSteerBtn');
   const $convCompactBtn = document.getElementById('convCompactBtn');
+  const $convAutoHandoverBtn = document.getElementById('convAutoHandoverBtn');
   const $convAnnouncedFrom = document.getElementById('convAnnouncedFrom');
   const $convAnnouncedFromControl = $convAnnouncedFrom && $convAnnouncedFrom.closest('.conv-announced-from');
   const $convTtsBtn = document.getElementById('convTtsBtn');
@@ -6961,6 +6962,7 @@
       sendBtn: q('.send-btn') || (root === $convInputBar ? $convSendBtn : null),
       steerBtn: q('.steer-btn') || (root === $convInputBar ? $convSteerBtn : null),
       compactBtn: q('.compact-btn') || (root === $convInputBar ? $convCompactBtn : null),
+      autoHandoverBtn: q('.auto-handover-btn') || (root === $convInputBar ? $convAutoHandoverBtn : null),
       escBtn: q('.esc-btn') || (root === $convInputBar ? $convEscBtn : null),
       issueAction: q('#convInputIssueAction, select[title="Action to take on this issue"]'),
       announcedFromControl: q('.conv-announced-from') || (root === $convInputBar ? $convAnnouncedFromControl : null),
@@ -6975,6 +6977,10 @@
   // double-click can't fire two /api/session/compact calls; updateInputBar
   // respects it so a poll mid-flight doesn't re-enable the button.
   let _compactInFlight = false;
+  // Guards only the in-flight auto-handover toggle POST -- unlike
+  // _compactInFlight, the on/off truth itself lives server-side
+  // (liveStatus.auto_handover_enabled), not in this flag.
+  let _autoHandoverToggleInFlight = false;
   const INPUT_DRAFTS_KEY = 'ccc-input-drafts-v1';
   const INPUT_DRAFTS_MAX = 200;
   const INPUT_DRAFT_MAX_CHARS = 50000;
@@ -7362,6 +7368,7 @@
     const activeSendBtn = activeInputControls.sendBtn;
     const activeSteerBtn = activeInputControls.steerBtn;
     const activeCompactBtn = activeInputControls.compactBtn;
+    const activeAutoHandoverBtn = activeInputControls.autoHandoverBtn;
     const activeEscBtn = activeInputControls.escBtn;
     const activeIssueAction = activeInputControls.issueAction;
     const activeAnnouncedFromControl = activeInputControls.announcedFromControl;
@@ -7561,6 +7568,21 @@
           ? 'Wait for the pending message to land in the transcript before compacting.'
           : 'Compact conversation context';
       }
+      // Auto handover toggle — Claude sessions only (matches the server-side
+      // watchdog's own claude-only scope). Unlike Compact, this reflects
+      // persistent on/off state (liveStatus.auto_handover_enabled) rather
+      // than firing a one-shot action, so it's an aria-pressed toggle.
+      if (activeAutoHandoverBtn) {
+        const canOfferHandover = hasSession && !isNewSession && !isBacklogIssue && !isPkood
+          && isClaudeSource(currentSession.source);
+        activeAutoHandoverBtn.classList.toggle('visible', canOfferHandover);
+        const handoverOn = !!(liveStatus && liveStatus.auto_handover_enabled);
+        if (!_autoHandoverToggleInFlight) {
+          activeAutoHandoverBtn.disabled = !canOfferHandover;
+          activeAutoHandoverBtn.classList.toggle('active', handoverOn);
+          activeAutoHandoverBtn.setAttribute('aria-pressed', handoverOn ? 'true' : 'false');
+        }
+      }
       // Codex app-server indicator — show only for live Codex sessions; reflect
       // whether CCC is currently driving Codex via its own app-server (RPC,
       // can append to a loaded thread + run thread/compact) vs no live
@@ -7637,6 +7659,11 @@
       if (activeCompactBtn) {
         activeCompactBtn.classList.remove('visible');
         activeCompactBtn.disabled = true;
+      }
+      if (activeAutoHandoverBtn) {
+        activeAutoHandoverBtn.classList.remove('visible', 'active');
+        activeAutoHandoverBtn.disabled = true;
+        activeAutoHandoverBtn.setAttribute('aria-pressed', 'false');
       }
       if (activeAnnouncedFromControl) activeAnnouncedFromControl.classList.remove('visible');
       if (activeCodexAppSrv) activeCodexAppSrv.classList.remove('visible', 'live');
@@ -10223,6 +10250,7 @@
   if ($convSubmitPlusBtn) $convSubmitPlusBtn.addEventListener('click', () => submitPlus('p1'));
   if ($convSteerBtn) $convSteerBtn.addEventListener('click', () => sendToTerminal('p1', 'steer'));
   if ($convCompactBtn) $convCompactBtn.addEventListener('click', () => compactCurrentSession());
+  if ($convAutoHandoverBtn) $convAutoHandoverBtn.addEventListener('click', () => toggleAutoHandoverForCurrentSession());
   // Mobile: lift the Compact button out of the composer into the header so the
   // input row stays uncluttered (user request). Same node + click handler; its
   // .visible show/hide toggle keeps working by id from its new parent.
@@ -25511,6 +25539,34 @@
       showOpToast('/compact failed: ' + ((err && err.message) || 'network error'), 'error');
     } finally {
       _compactInFlight = false;
+      if (typeof updateInputBar === 'function') updateInputBar();
+    }
+  }
+
+  async function toggleAutoHandoverForCurrentSession() {
+    if (_autoHandoverToggleInFlight) return;
+    const sid = currentSession.id;
+    if (!sid) return;
+    const next = !(liveStatus && liveStatus.auto_handover_enabled);
+    _autoHandoverToggleInFlight = true;
+    if ($convAutoHandoverBtn) $convAutoHandoverBtn.disabled = true;
+    try {
+      const res = await fetch('/api/session/' + encodeURIComponent(sid) + '/auto-handover', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ enabled: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        if (liveStatus) liveStatus.auto_handover_enabled = !!data.enabled;
+        showOpToast(data.enabled ? 'Auto handover on for this session' : 'Auto handover off', 'success');
+      } else {
+        showOpToast('Could not update auto handover: ' + (data.error || ('HTTP ' + res.status)), 'error');
+      }
+    } catch (err) {
+      showOpToast('Auto handover update failed: ' + ((err && err.message) || 'network error'), 'error');
+    } finally {
+      _autoHandoverToggleInFlight = false;
       if (typeof updateInputBar === 'function') updateInputBar();
     }
   }

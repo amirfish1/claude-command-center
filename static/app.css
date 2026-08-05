@@ -7929,6 +7929,36 @@
     border-color: var(--border); cursor: not-allowed; opacity: 0.5;
   }
   .conv-input-bar .compact-btn svg { display: block; }
+  /* Auto handover toggle — same pill shape as Compact, but it carries
+     persistent on/off state (aria-pressed) rather than firing a one-shot
+     action, so .active gets a warmer accent to read as "armed". */
+  .conv-input-bar .auto-handover-btn {
+    width: 32px; height: 32px; flex-shrink: 0;
+    border-radius: 999px; border: 1px solid rgba(88,166,255,0.42); cursor: pointer;
+    background: rgba(88,166,255,0.12); color: var(--accent);
+    line-height: 1; padding: 0;
+    display: none; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.05s;
+  }
+  .conv-input-bar .auto-handover-btn.visible { display: inline-flex; }
+  .conv-input-bar .auto-handover-btn:hover {
+    background: rgba(88,166,255,0.20);
+    border-color: rgba(88,166,255,0.70);
+  }
+  .conv-input-bar .auto-handover-btn:active { transform: translateY(1px); }
+  .conv-input-bar .auto-handover-btn.active {
+    background: rgba(255,166,64,0.18); color: #ffa640;
+    border-color: rgba(255,166,64,0.55);
+  }
+  .conv-input-bar .auto-handover-btn.active:hover {
+    background: rgba(255,166,64,0.26);
+    border-color: rgba(255,166,64,0.75);
+  }
+  .conv-input-bar .auto-handover-btn:disabled {
+    background: transparent; color: var(--text-muted);
+    border-color: var(--border); cursor: not-allowed; opacity: 0.5;
+  }
+  .conv-input-bar .auto-handover-btn svg { display: block; }
   /* Codex app-server indicator — a subtle pill in the input hint row. */
   .conv-input-hint .codex-appsrv {
     display: none; align-items: center; gap: 4px;
