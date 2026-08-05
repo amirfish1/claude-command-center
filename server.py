@@ -9226,15 +9226,24 @@ def _archive_refresh_slot_available(key, now):
     return started is None or (now - started) > _ARCHIVE_REFRESH_WATCHDOG_S
 
 
-def _archive_serve_cache_store(key, rows, generation):
-    """Store rows only if no lifecycle mutation invalidated their build."""
+def _archive_serve_cache_store(key, rows, generation, ts=None):
+    """Store rows only if no lifecycle mutation invalidated their build.
+
+    `ts` defaults to now (a genuine fresh build). The cold-restart path
+    passes the persisted entry's own build time instead -- stamping a
+    known-stale snapshot with "now" bought it a free 300s TTL grace window
+    on every restart, on top of however stale it already was, which is
+    exactly backwards: a restart should make a stale snapshot MORE eligible
+    for an immediate refresh, not less.
+    """
     global _archive_serve_version
     with _archive_serve_lock:
         if generation != _archive_serve_generation:
             return False
         _archive_serve_version += 1
         _archive_serve_cache[key] = {
-            "ts": time.time(), "rows": rows, "ver": _archive_serve_version,
+            "ts": ts if ts is not None else time.time(),
+            "rows": rows, "ver": _archive_serve_version,
         }
         return True
 
@@ -9857,11 +9866,14 @@ def _archive_serve_rows_versioned(
             dict(row) for row in (entry.get("conversations") or [])
             if isinstance(row, dict)
         ]
-        stored = _archive_serve_cache_store(key, rows, serve_generation)
+        stored = _archive_serve_cache_store(
+            key, rows, serve_generation, ts=entry.get("cached_at"),
+        )
+        entry_stale = (now - float(entry.get("cached_at") or 0)) >= _ARCHIVE_SERVE_TTL
         with _archive_serve_lock:
             if (
                 stored
-                and (force_refresh or borrowed_base_snapshot)
+                and (force_refresh or borrowed_base_snapshot or entry_stale)
                 and _archive_refresh_slot_available(key, now)
             ):
                 _archive_serve_refreshing[key] = now
