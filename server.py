@@ -15,7 +15,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.19.1"
+__version__ = "5.19.2"
 
 import ast
 import base64
@@ -55531,6 +55531,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", mt)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/pasted-image":
@@ -55601,6 +55602,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/local-image":
@@ -55639,6 +55641,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            # SECURITY: this route serves an arbitrary on-disk path, so a
+            # crafted .svg could carry inline JS that runs in CCC's origin if
+            # the URL is opened as a top-level document. The image renders the
+            # same via <img> (scripts never run there), so lock direct/framed
+            # navigation down and stop MIME sniffing.
+            self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/image-cache/"):
@@ -55679,6 +55688,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct_map[ext])
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(body)
         elif path.startswith("/static/morning/"):
