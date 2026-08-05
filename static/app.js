@@ -5133,7 +5133,23 @@
   function settleStaleOptimisticAgentIndicator($view) {
     const el = ($view || document).querySelector('.conv-live-tool-inline.optimistic.is-thinking');
     if (!el || !_optimisticAgentStart) return false;
-    if ((Date.now() - _optimisticAgentStart) < 10000) return false;
+    // 10s -> 15s: the liveStatus poll runs every 5s (startLiveStatusPolling),
+    // so even after delivery there can be up to one full cycle of lag before
+    // a just-registered headless spawn shows up here. 10s left too small a
+    // margin past that lag on top of the delivery wait below.
+    if ((Date.now() - _optimisticAgentStart) < 15000) return false;
+    const sid = currentSession && currentSession.id;
+    // The send that's supposed to wake this session headlessly can itself
+    // take many seconds end to end (subprocess launch + Claude CLI startup
+    // for a large/cold session — the same class of slow resume the F2
+    // cold-composer gate warns about). While THAT send hasn't even been
+    // acknowledged yet, liveStatus reading "nothing running" just means
+    // "hasn't happened yet", not "failed to start" — trusting the poll here
+    // was firing a scary false "No active agent process" that the next
+    // poll then silently corrected once the resume actually landed.
+    const sendStillInFlight = Array.isArray(_pendingSends)
+      && _pendingSends.some(p => p && p.sid === sid && !p.delivered);
+    if (sendStillInFlight) return false;
     const noKnownProcess = liveStatusMatchesOpenConv()
       && !liveStatus.live && !liveStatus.headlessPresent && !liveStatus.terminalPresent && !liveStatus.bgPresent
       && !liveStatus.sidecarInFlight && liveStatus.codexState !== 'working';
@@ -5143,7 +5159,6 @@
       _optimisticAgentTimer = null;
     }
     _stopOptimisticAgeTicker();
-    const sid = currentSession && currentSession.id;
     if (sid) clearSessionSending(sid);
     el.className = 'conv-live-tool-inline optimistic is-stale-no-process';
     el.innerHTML = '<span class="cl-pulse"></span>'
