@@ -356,6 +356,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, K
 | Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | yes — UI/default model picker; default from `CCC_KILO_MODEL` |
 | Kimi Code     | yes — ACP client over `kimi acp`, token-level live streaming | yes — steer live ACP sessions with inline permission-prompt answers; attach for TUI sessions | yes — reads `~/.kimi-code/sessions/`; live list and archive | yes — UI/default model picker; default from `CCC_KIMI_MODEL` |
 | OpenCode      | yes — headless via `opencode run --auto` | yes — follow-ups route through `opencode run --session <id> --auto` | yes — externally-launched OpenCode (opencode.ai) sessions appear on the board | yes — UI/default model picker; default from `CCC_OPENCODE_MODEL` |
+| Devin         | no — cloud-only, sessions start at app.devin.ai | no — read-only | yes — sessions listed from the Devin API when `DEVIN_API_KEY` is set; board and archive show them with transcripts | no |
 
 **Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
 
@@ -555,6 +556,7 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_KILO_MODEL` | `kilo/stepfun/step-3.7-flash:free` | Default model for Kilo spawns when no dashboard or API model override is set. |
 | `CCC_OPENCODE_BIN` | *(auto)* | Absolute path to the OpenCode CLI (`opencode`) if it is not on the service PATH. |
 | `CCC_OPENCODE_MODEL` | `anthropic/claude-sonnet-4-5` | Default model for OpenCode spawns when no dashboard or API model override is set. |
+| `DEVIN_API_KEY` | *(unset)* | Personal Devin API key (from app.devin.ai settings). When set, your Devin cloud sessions appear on the board and in the archive (read-only). `CCC_DEVIN_API_KEY` is accepted as a fallback. |
 | `CCC_WORKER_SOCKET` | `~/.claude/command-center/worker.sock` | Local Unix socket used between the restartable dashboard and persistent execution worker. |
 | `CCC_WORK_LEDGER` | `~/.claude/command-center/control-plane.sqlite3` | Durable SQLite work graph, idempotency, lease, and recovery ledger. |
 | `CCC_BIND_HOST` | `127.0.0.1` | Interface to bind. Set to `0.0.0.0` to expose on the LAN. **No auth, see [`SECURITY.md`](SECURITY.md)** |

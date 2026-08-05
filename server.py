@@ -2806,6 +2806,7 @@ def _archive_load_begin():
         "copilot":     {"key": "copilot",     "label": "Copilot conversations",            "state": "pending", "detail": "Scanning ~/.copilot/."},
         "grok":        {"key": "grok",        "label": "Grok conversations",               "state": "pending", "detail": "Scanning ~/.grok/."},
         "copilotchat": {"key": "copilotchat", "label": "Copilot Chat conversations",       "state": "pending", "detail": "Scanning VS Code chatSessions stores."},
+        "devin":       {"key": "devin",       "label": "Devin conversations",              "state": "pending", "detail": "Querying the Devin API."},
         "pr_states":   {"key": "pr_states",   "label": "Refreshing pull-request status",   "state": "pending", "detail": "gh pr view per known PR."},
         "issues":      {"key": "issues",      "label": "Refreshing GitHub issues",         "state": "pending", "detail": "gh issue list per repo."},
         "group_chats": {"key": "group_chats", "label": "Cross-repo group chats",           "state": "pending", "detail": "Reading sidecars."},
@@ -2819,7 +2820,7 @@ def _archive_load_begin():
             "started_at": now,
             "updated_at": now,
             "steps": steps,
-            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "pr_states", "issues", "group_chats"],
+            "order": ["folders", "transcripts", "infer", "worktrees", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "devin", "pr_states", "issues", "group_chats"],
         })
 
 
@@ -3875,10 +3876,10 @@ def _detect_session_engine_uncached(session_id):
     for s in _spawned_sessions:
         if s.get("session_id") == session_id or s.get("resumed_sid") == session_id:
             engine = s.get("engine")
-            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi"):
+            if engine in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin"):
                 return engine
     spawned = _spawn_registry_entry_for_session(session_id)
-    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi"):
+    if spawned and spawned.get("engine") in ("claude", "codex", "gemini", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin"):
         return spawned.get("engine")
     if _is_codex_session(session_id):
         return "codex"
@@ -3900,6 +3901,8 @@ def _detect_session_engine_uncached(session_id):
         return "copilot"
     if _is_grok_session(session_id):
         return "grok"
+    if _is_devin_session(session_id):
+        return "devin"
     if _is_copilotchat_session(session_id):
         return "copilotchat"
     return "claude"
@@ -8585,6 +8588,16 @@ def find_all_conversations(
         ))
     except Exception:
         pass
+    # Add Devin cloud sessions to the archive. They come from the Devin API
+    # (DEVIN_API_KEY); no key or any API failure yields an empty list.
+    try:
+        out.extend(find_devin_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+        ))
+    except Exception:
+        pass
     # Add VS Code Copilot Chat sessions to the archive. They live in VS
     # Code's user-data workspaceStorage/*/chatSessions stores (plus the
     # empty-window store under globalStorage).
@@ -9149,6 +9162,10 @@ def _archive_corpus_signature_parts():
         _copilot_home() / "session-state",
         _grok_home() / "sessions",
         _grok_home() / "grok.db",
+        # Devin has no local store; its on-disk API cache file only rewrites
+        # when the session list actually changes, so its mtime is exactly the
+        # add/remove signal the archive needs.
+        _devin_sessions_cache_path(),
     ]:
         try:
             mt = os.stat(extra).st_mtime_ns
@@ -21105,6 +21122,21 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             progress("grok", state="error", detail=f"Grok session scan failed: {exc}")
 
     if progress:
+        progress("devin", state="running", detail="Reading Devin cloud sessions.")
+    try:
+        conversations.extend(find_devin_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("devin", state="done")
+    except Exception as exc:
+        if progress:
+            progress("devin", state="error", detail=f"Devin session scan failed: {exc}")
+
+    if progress:
         progress("copilotchat", state="running", detail="Reading VS Code Copilot Chat sessions.")
     try:
         conversations.extend(find_copilotchat_conversations(
@@ -21707,6 +21739,12 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "grok":
         result = _parse_grok_conversation(conversation_id, after_line=after_line)
+        _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
+        events_copy = list(result.get("events") or [])
+        events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
+        return {"events": events_copy, "last_line": result.get("last_line", 0)}
+    if engine == "devin":
+        result = _parse_devin_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
@@ -37264,6 +37302,8 @@ _adopt_ccc_module("copilot_cli")
 
 _adopt_ccc_module("grok")
 
+_adopt_ccc_module("devin")
+
 _adopt_ccc_module("vscode_copilot")
 
 # ---------------------------------------------------------------------------
@@ -37352,6 +37392,12 @@ def _detect_engines_installed():
         readonly.append(("copilotchat", "Copilot Chat", result))
     except Exception:
         readonly.append(("copilotchat", "Copilot Chat", (False, "")))
+    try:
+        # Cloud engine: "installed" means a personal API key is configured.
+        # Key-presence only — never a network call from this probe.
+        readonly.append(("devin", "Devin", _devin_available()))
+    except Exception:
+        readonly.append(("devin", "Devin", (False, "")))
 
     for engine, label, (installed, detail) in readonly:
         engines.append({

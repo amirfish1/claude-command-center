@@ -363,6 +363,46 @@ class TestServerImports(unittest.TestCase):
         opencode_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "opencode.py").read_text(encoding="utf-8")
         self.assertIn("opencode-resume", opencode_py)
 
+    def test_devin_engine_surfaces_exist(self):
+        """Devin (cloud, read-only) engine must be wired for is_, discovery,
+        parse and availability — no spawn/resume surface by design. Works
+        without an API key or network."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        self.assertTrue(hasattr(server, "_is_devin_session"))
+        self.assertTrue(hasattr(server, "find_devin_conversations"))
+        self.assertTrue(hasattr(server, "_parse_devin_conversation"))
+        self.assertTrue(hasattr(server, "_devin_available"))
+
+        # is_devin is a pure prefix probe (never touches the network)
+        self.assertTrue(server._is_devin_session("devin-abc123"))
+        self.assertFalse(server._is_devin_session("abc123"))
+
+        # no API key → empty results, no exception, no network
+        with mock.patch.dict(os.environ, {"DEVIN_API_KEY": "", "CCC_DEVIN_API_KEY": ""}):
+            self.assertEqual(server.find_devin_conversations(), [])
+            self.assertEqual(
+                server._parse_devin_conversation("devin-abc123"),
+                {"events": [], "last_line": 0},
+            )
+            self.assertEqual(server._devin_available(), (False, ""))
+
+        # route/dispatch wiring (mirrors the other read-only engines)
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
+        self.assertIn('_adopt_ccc_module("devin")', server_py)
+        self.assertIn("if _is_devin_session(session_id):", server_py)
+        self.assertIn("find_devin_conversations(", server_py)
+        self.assertIn("result = _parse_devin_conversation(conversation_id", server_py)
+
+        # adapter markers: v1 API base, bearer env key, cache file
+        devin_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "devin.py").read_text(encoding="utf-8")
+        self.assertIn("https://api.devin.ai/v1", devin_py)
+        self.assertIn("DEVIN_API_KEY", devin_py)
+        self.assertIn("devin_sessions_cache.json", devin_py)
+        self.assertIn("def find_devin_conversations(", devin_py)
+        self.assertIn("def _parse_devin_conversation(", devin_py)
+
     def test_repo_kind_classifier(self):
         """Production vs dev/test classification respects explicit overrides
         and common path-name heuristics."""

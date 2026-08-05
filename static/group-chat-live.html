@@ -155,6 +155,8 @@
   .pill.engine-codex .dot { background: var(--green); }
   .pill.engine-kilo { background: rgba(188, 140, 255, 0.12); color: var(--purple); border-color: rgba(188, 140, 255, 0.25); }
   .pill.engine-kilo .dot { background: var(--purple); }
+  .pill.engine-devin { background: rgba(139, 92, 246, 0.12); color: #a78bfa; border-color: rgba(139, 92, 246, 0.25); }
+  .pill.engine-devin .dot { background: #a78bfa; }
   .pill.engine-cursor { background: rgba(210, 153, 34, 0.12); color: var(--orange); border-color: rgba(210, 153, 34, 0.25); }
   .pill.engine-cursor .dot { background: var(--orange); }
   .pill.engine-antigravity { background: rgba(227, 179, 65, 0.12); color: var(--gold); border-color: rgba(227, 179, 65, 0.25); }
@@ -553,6 +555,7 @@
     claude:      { cls: 'engine-claude',      label: 'Claude', color: '#39d2c0' },
     codex:       { cls: 'engine-codex',       label: 'Codex',  color: '#3fb950' },
     kilo:        { cls: 'engine-kilo',        label: 'Kilo',   color: '#bc8cff' },
+    devin:       { cls: 'engine-devin',       label: 'Devin',  color: '#8b5cf6' },
     cursor:      { cls: 'engine-cursor',      label: 'Cursor', color: '#d29922' },
     antigravity: { cls: 'engine-antigravity', label: 'AG',     color: '#e3b341' },
     gemini:      { cls: 'engine-antigravity', label: 'Gemini', color: '#e3b341' },
@@ -566,6 +569,7 @@
     if (low === 'human') return 'human';
     if (low.indexOf('codex') >= 0 || low.indexOf('openai') >= 0) return 'codex';
     if (low.indexOf('kilo') >= 0) return 'kilo';
+    if (low.indexOf('devin') >= 0) return 'devin';
     if (low.indexOf('cursor') >= 0) return 'cursor';
     if (low.indexOf('antigravity') >= 0 || low.indexOf('gemini') >= 0 || low.indexOf('agy') >= 0) return 'antigravity';
     return 'claude';
