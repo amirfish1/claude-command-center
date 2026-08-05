@@ -46851,6 +46851,201 @@ def _compact_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=180.0):
     }
 
 
+def _clear_via_live_spawn_stdin(spawn_entry, session_id, *, timeout=60.0):
+    """Clear a LIVE CCC-owned stream-json claude spawn by sending `/clear` as a
+    normal user message over its stdin FIFO — the native in-stream path.
+
+    Verified empirically (2026-08-05, claude 2.1.222): current Claude Code
+    executes a `/clear` user message inline even when it arrives over headless
+    stream-json stdin (the old assumption that it "is just literal text and
+    never runs" was stale/false — the same false assumption `/compact` had
+    until it was corrected 2026-06-28, see `_compact_via_live_spawn_stdin`
+    above). It emits
+        {"type":"conversation_reset","session_id":"<old>","new_conversation_id":"<new>"}
+    then mints a brand-new session_id and a brand-new on-disk JSONL — the
+    pre-clear transcript freezes in the old file untouched. The live process
+    itself is NOT killed and NOT restarted; only its self-reported session_id
+    changes, so the caller must re-key the spawn entry afterward.
+
+    Returns {ok, via:"live-spawn-clear", old_session_id, new_session_id, ...}.
+    """
+    sid = (session_id or "").strip()
+    log = (spawn_entry or {}).get("log") if isinstance(spawn_entry, dict) else None
+
+    # Watermark the log size so we only read NEW lines emitted after our send,
+    # never an older reset from a prior turn in the same long-lived spawn.
+    log_pos = 0
+    if log:
+        try:
+            log_pos = os.path.getsize(log)
+        except OSError:
+            log_pos = 0
+
+    if not _write_stream_json_user_message(spawn_entry, "/clear"):
+        return {
+            "ok": False,
+            "via": "live-spawn-clear",
+            "code": "clear_stdin_write_failed",
+            "error": "Couldn't write /clear to the live session's stdin.",
+        }
+
+    seen_reset = False
+
+    def _scan_for_reset():
+        """Read log lines appended since `log_pos`; return the new session_id
+        once one lands, advancing log_pos.
+
+        The `conversation_reset` event's own `new_conversation_id` field is
+        NOT reliable — verified empirically (2026-08-05, claude 2.1.222) that
+        it does not match the session_id subsequent events (and the actual
+        on-disk JSONL filename) actually use. So this only uses that event as
+        a marker that a reset happened, then takes the session_id off the
+        first event AFTER it that differs from the pre-clear sid — cross
+        -checked against disk by the caller regardless.
+        """
+        nonlocal log_pos, seen_reset
+        if not log:
+            return None
+        try:
+            with open(log, "rb") as fh:
+                fh.seek(log_pos)
+                chunk = fh.read()
+                log_pos = fh.tell()
+        except OSError:
+            return None
+        for raw in chunk.splitlines():
+            try:
+                ev = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if ev.get("type") == "conversation_reset":
+                seen_reset = True
+                continue
+            if seen_reset:
+                candidate = ev.get("session_id")
+                if candidate and candidate != sid:
+                    return candidate
+        return None
+
+    new_sid = None
+    deadline = time.time() + float(timeout)
+    while time.time() < deadline:
+        new_sid = _scan_for_reset()
+        if new_sid:
+            break
+        if _poll_spawn_entry(spawn_entry) is not None:
+            # Process exited — one last look in case the reset landed right
+            # before it did, then give up.
+            new_sid = _scan_for_reset()
+            break
+        time.sleep(0.2)
+
+    if not new_sid:
+        return {
+            "ok": False,
+            "via": "live-spawn-clear",
+            "code": "clear_timeout",
+            "error": "/clear did not complete in time (the live session is still up).",
+        }
+
+    # Belt-and-suspenders: confirm the fresh transcript actually landed on
+    # disk before re-keying anything to point at it.
+    confirm_deadline = time.time() + 10.0
+    while time.time() < confirm_deadline and not _find_session_jsonl(new_sid):
+        time.sleep(0.2)
+    if not _find_session_jsonl(new_sid):
+        return {
+            "ok": False,
+            "via": "live-spawn-clear",
+            "code": "clear_no_transcript",
+            "error": "/clear reset the session but its new transcript never appeared on disk.",
+        }
+
+    if isinstance(spawn_entry, dict):
+        # Re-key whichever identity field(s) this entry actually carries so
+        # every existing lookup that trusts them (_find_live_spawn_entry_for_session,
+        # _spawn_entry_session_id, the GH #71 staleness watermark machinery)
+        # picks up the new id for free.
+        if "resumed_sid" in spawn_entry:
+            spawn_entry["resumed_sid"] = new_sid
+        if "session_id" in spawn_entry:
+            spawn_entry["session_id"] = new_sid
+        _update_spawn_session_id_in_registry(spawn_entry.get("pid"), new_sid)
+
+    return {
+        "ok": True,
+        "via": "live-spawn-clear",
+        "old_session_id": sid,
+        "new_session_id": new_sid,
+        "note": "Cleared in place — the live session ran /clear itself.",
+    }
+
+
+def clear_session_context(session_id, *, terminal_app=None, initial_message=None,
+                           _from_terminal_queue=False):
+    """Run Claude Code's `/clear` for a session, picking the right surface.
+
+    Routing (deliberately narrower than `compact_session_context` — CCC-44):
+      - LIVE CCC-owned stream-json spawn, IDLE → send /clear in-stream over
+        its stdin FIFO (`_clear_via_live_spawn_stdin`); the live process is
+        NOT killed, no terminal window opens. If `initial_message` was
+        given, it's sent as the fresh session's first turn once the reset
+        is confirmed.
+      - LIVE spawn BUSY mid-turn → queue (`_queue_terminal_input`).
+      - Everything else (live interactive terminal present, or fully
+        dormant with no live process) is left to the CALLER's existing
+        paths — this function is only reached for the live-headless,
+        no-terminal case the frontend routes here.
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+
+    engine = _detect_session_engine(sid)
+    if engine == "claude":
+        routed = _control_plane_engine_call(
+            "claude", "clear", {
+                "session_id": sid,
+                "terminal_app": terminal_app,
+                "initial_message": initial_message,
+                "from_terminal_queue": bool(_from_terminal_queue),
+            },
+            idempotency_key=_take_control_plane_action_id(),
+        )
+        if routed is not None:
+            return routed
+    if engine != "claude":
+        return {
+            "ok": False,
+            "code": "clear_unsupported_engine",
+            "engine": engine,
+            "error": "/clear is only available for Claude Code sessions.",
+        }
+
+    cwd = find_session_cwd(sid)
+    status = session_live_status(sid, cwd) or {}
+    has_tty = _is_real_tty(status.get("tty"))
+
+    live_spawn = _find_live_spawn_entry_for_session(sid) if not has_tty else None
+    if live_spawn is not None:
+        if not _spawn_entry_active_tool_child(live_spawn):
+            result = _clear_via_live_spawn_stdin(live_spawn, sid)
+            if result.get("ok") and initial_message:
+                _write_stream_json_user_message(live_spawn, initial_message)
+            return result
+        queued_status = {"pid": live_spawn.get("pid"), "status": "headless"}
+        result = _queue_terminal_input(sid, "/clear", queued_status)
+        result["via"] = "terminal-queued-headless"
+        result["note"] = "Queued — /clear will run when the headless turn finishes."
+        return result
+
+    return {
+        "ok": False,
+        "code": "clear_no_headless_spawn",
+        "error": "No CCC-owned live headless session to clear.",
+    }
+
+
 def compact_session_context(session_id, *, terminal_app=None, _from_terminal_queue=False):
     """Run Claude Code's `/compact` for a session, picking the right surface.
 
@@ -61448,6 +61643,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _record_interaction(sid)
                 _set_control_plane_action_id(payload.get("idempotency_key"))
                 self.send_json(compact_session_context(sid, terminal_app=term_app))
+        elif path == "/api/session/clear":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            sid = (payload.get("session_id") or "").strip()
+            term_app = payload.get("terminal_app") or None
+            initial_message = payload.get("initial_message") or None
+            if not sid:
+                self.send_json({"ok": False, "error": "missing session_id"})
+            else:
+                _record_interaction(sid)
+                _set_control_plane_action_id(payload.get("idempotency_key"))
+                self.send_json(clear_session_context(
+                    sid, terminal_app=term_app, initial_message=initial_message,
+                ))
         elif path == "/api/answer-question":
             # Answer a relayed AskUserQuestion (headless sessions only — the
             # PreToolUse hook is blocking on this file). `answers` is aligned

@@ -528,6 +528,13 @@ class EngineHost:
                     terminal_app=args.get("terminal_app"),
                     _from_terminal_queue=bool(args.get("from_terminal_queue")),
                 )
+            if operation == "clear":
+                return legacy.clear_session_context(
+                    args.get("session_id"),
+                    terminal_app=args.get("terminal_app"),
+                    initial_message=args.get("initial_message"),
+                    _from_terminal_queue=bool(args.get("from_terminal_queue")),
+                )
         raise ValueError(f"unsupported worker engine operation: {engine}.{operation}")
 
     def _track_async(self, work_id, engine, operation, args, result):

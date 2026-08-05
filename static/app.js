@@ -8687,35 +8687,58 @@
           }),
         });
       } else if (clearCommand && isClaudeSource(currentSession.source) && !(liveStatus && liveStatus.terminalPresent)) {
-        // /clear is a REPL-only command. Written to a headless stream-json stdin
-        // it's just literal text and never runs — hence "/clear still not
-        // working" (CCC-44). A session WITH a live terminal keystrokes /clear to
-        // its REPL fine (falls through to the normal inject below); a headless
-        // one has no REPL, so route it through a terminal that runs /clear.
-        try {
-          const r = await fetch('/api/launch-terminal', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              session_id: sid,
-              cwd: currentSession.cwd || '',
-              terminal_app: (liveStatus && liveStatus.terminalApp) || null,
-              post_slash_commands: ['/clear'],
-            }),
-          });
-          const d = await r.json().catch(() => ({}));
-          if (r.ok && d.ok) {
-            markPendingSendQueued(pendingSend, 'Opened a terminal to run /clear (a headless session has no REPL to clear).');
-            showOpToast('Opened a terminal - /clear runs there. Headless sessions have no REPL to clear in place.', 'info');
-          } else {
-            markPendingSendQueued(pendingSend, '/clear could not be routed to a terminal.');
-            showOpToast('Could not open a terminal for /clear: ' + (d.error || ('HTTP ' + r.status)), 'error');
+        // /clear DOES run over headless stream-json stdin (verified 2026-08-05,
+        // claude 2.1.222) — the old assumption it "is just literal text and
+        // never runs" was stale, the same false assumption /compact had until
+        // it was corrected 2026-06-28. Always try the in-place path first —
+        // clear_session_context on the backend is the authoritative check for
+        // whether a live CCC-owned headless spawn exists (checked live, empirically:
+        // liveStatus.headlessPresent tracks mid-turn steerability, not plain
+        // existence, so it under-reports an idle-but-live headless and can't
+        // be trusted to gate this client-side). Falls back to opening a
+        // terminal only when the backend confirms there's truly no live spawn
+        // to talk to. Any trailing text after /clear becomes the fresh
+        // session's first turn.
+        const clearRest = /^\/clear\s+([\s\S]+)$/i.exec(text);
+        res = await fetch('/api/session/clear', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            session_id: sid,
+            terminal_app: liveStatus && liveStatus.terminalApp,
+            initial_message: clearRest ? clearRest[1].trim() : '',
+            idempotency_key: durableActionId('clear'),
+          }),
+        });
+        const preClearData = await res.clone().json().catch(() => ({}));
+        if (!preClearData.ok && (preClearData.code === 'clear_no_headless_spawn' || preClearData.code === 'clear_unsupported_engine')) {
+          // No live spawn to clear in-place — fall back to a terminal running
+          // /clear the way it always has (CCC-44 fallback for this case only).
+          try {
+            const r = await fetch('/api/launch-terminal', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                session_id: sid,
+                cwd: currentSession.cwd || '',
+                terminal_app: (liveStatus && liveStatus.terminalApp) || null,
+                post_slash_commands: ['/clear'],
+              }),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (r.ok && d.ok) {
+              markPendingSendQueued(pendingSend, 'Opened a terminal to run /clear (no live headless to clear in place).');
+              showOpToast('Opened a terminal - /clear runs there.', 'info');
+            } else {
+              markPendingSendQueued(pendingSend, '/clear could not be routed to a terminal.');
+              showOpToast('Could not open a terminal for /clear: ' + (d.error || ('HTTP ' + r.status)), 'error');
+            }
+          } catch (e) {
+            showOpToast('Could not open a terminal for /clear: ' + (e && e.message ? e.message : e), 'error');
           }
-        } catch (e) {
-          showOpToast('Could not open a terminal for /clear: ' + (e && e.message ? e.message : e), 'error');
+          if ($actionBtn) $actionBtn.disabled = false;
+          return;
         }
-        if ($actionBtn) $actionBtn.disabled = false;
-        return;
       } else {
         const payload = {
           session_id: sid,
@@ -8787,7 +8810,9 @@
             ? 'Queued - ' + data.queued_reason
             : (compactCommand
                 ? 'Queued /compact - will run when the session finishes its current step.'
-                : 'Queued - will send when the session finishes its current step.');
+                : (clearCommand
+                    ? 'Queued /clear - will run when the session finishes its current step.'
+                    : 'Queued - will send when the session finishes its current step.'));
           markPendingSendQueued(pendingSend, queuedMsg);
           showOpToast(queuedMsg);
         } else if (data.via === 'codex-steer') {
@@ -8844,6 +8869,10 @@
             showCompactInProgressBanner(sid);
             scheduleCompactUsageRefresh(sid);
           }
+        } else if (data.via === 'live-spawn-clear') {
+          removePendingSendEcho(pendingSend);
+          applyClearSuccession(sid, data.new_session_id, paneId || activePaneId());
+          showOpToast('Cleared - the live session ran /clear itself.', 'success');
         } else {
           // Plain inject success — Claude TTY ('terminal-control') or headless
           // ('spawn-fifo'). The server confirmed delivery (ok:true) but the
@@ -13289,6 +13318,63 @@
     }
     updateSplitInputBar();
     updateSplitToolbar();
+  }
+
+  // /clear supersedes oldSid with a brand-new newSid on the SAME live process
+  // (no spawn to adopt, unlike rebindCurrentSelectionToRealCard above) — the
+  // CLI itself minted the new id in-stream. Same "session B supersedes
+  // session A" shape session-handoff already uses for its own new-process
+  // continuations: chain the lineage so the Flow sidebar nests the old
+  // session under the new one (f2RecordContinuationLineage is already
+  // generic enough to reuse as-is), then, only if the pane the user is
+  // looking at is the one that got cleared, rebind it onto newSid so it
+  // keeps working without the user noticing the id changed underneath them.
+  function applyClearSuccession(oldSid, newSid, paneId) {
+    if (!oldSid || !newSid) return;
+    try { f2RecordContinuationLineage(oldSid, newSid); } catch (_) {}
+    if (currentConversation !== oldSid) {
+      // The pane that ran /clear isn't the one currently open (e.g. fired
+      // from a background pane) — nothing to rebind, just surface the new row.
+      refreshConversationList();
+      return;
+    }
+    currentConversation = newSid;
+    try {
+      if (!CONV_POPOUT_MODE) {
+        localStorage.setItem(getLastConvKey(), newSid);
+        localStorage.setItem('ccc-last-conv', newSid);
+      }
+    } catch (_) {}
+    saveSplitState();
+    sessionIdByConv[newSid] = newSid;
+    if (typeof stopConvStream === 'function') stopConvStream();
+    if (typeof stopSpawnStream === 'function') stopSpawnStream();
+    // Drop pre-clear optimistic artifacts before the fresh (empty) transcript
+    // paints — same cleanup rebindCurrentSelectionToRealCard does above.
+    try {
+      const $v = (typeof getConvViewForPane === 'function' ? getConvViewForPane(paneId || activePaneId()) : null)
+        || (typeof getConvView === 'function' ? getConvView() : null);
+      if ($v) $v.querySelectorAll('.event.user_text.pending, .stream-bubble').forEach(n => n.remove());
+      if (typeof _streamingBubble !== 'undefined') _streamingBubble = null;
+    } catch (_) {}
+    setCurrentSession(
+      currentSession.source || 'interactive',
+      newSid,
+      currentSession.cwd,
+      currentSession.cwdExists,
+      currentSession.spawnPid,
+      currentSession.repoPath
+    );
+    convLastLine = 0;
+    _firstUserMsgRendered = false;
+    _currentToolGroup = null;
+    _currentToolCount = 0;
+    setCopyableSessionId($cpSessionId, newSid || '');
+    fetchConversationEvents();
+    startConvStream();
+    updateSplitInputBar();
+    updateSplitToolbar();
+    refreshConversationList();
   }
 
   function markPendingSpawnNotAcknowledged(pid, fallbackId) {
