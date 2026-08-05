@@ -47454,9 +47454,13 @@ def _inject_text_into_session(
     # before engine detection so a Kimi nudge cannot fall through to a Claude
     # resume and fail with an unrelated ``repo_required`` error.
     session_id = _canonical_kimi_session_id(session_id)
+    # idempotency_key differentiates two genuinely separate calls (real
+    # double-send from the caller) from a single call whose log line simply
+    # looks duplicated at second-resolution timestamps — CCC-736.
     _log_activity(
         "inject", "INJECT",
         f"session={session_id} mode={mode} source={source} "
+        f"idem={idempotency_key or '-'} wt_origin={wt_origin} "
         f"text=\"{_activity_log_preview(text)}\"",
     )
     is_codex = _is_codex_session(session_id)
