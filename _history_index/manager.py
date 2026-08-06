@@ -34,8 +34,20 @@ class IndexerManager:
         self._last_stats: dict = {}
         self._last_error: Optional[str] = None
         self._embed_progress: dict = {"done": 0, "total": 0}
+        self._status_db_cache: dict = {}
+        self._status_db_cache_at = 0.0
 
     # ---- public API -----------------------------------------------------
+
+    # DB-derived fields (message_count/latest_message_unix/semantic) require
+    # COUNT(*) + MAX() scans over the messages table, which is not cheap once
+    # the index grows past ~1M rows (~0.5s cold on an 892k-row/4GB db observed
+    # in production, and multiple seconds under concurrent polling from
+    # several browser tabs). This endpoint is polled every 4s while indexing
+    # and was showing up as the single most frequent [SLOW] offender in
+    # service.out.log. The in-memory flags (indexing/embedding progress) stay
+    # live every call; only the expensive scan is throttled.
+    _STATUS_DB_CACHE_TTL_S = 10.0
 
     def status(self) -> dict:
         """Snapshot of indexer state + index health. Cheap; safe to poll."""
@@ -59,6 +71,10 @@ class IndexerManager:
             },
         }
         if not out["exists"]:
+            return out
+        now = time.time()
+        if self._status_db_cache and (now - self._status_db_cache_at) < self._STATUS_DB_CACHE_TTL_S:
+            out.update(self._status_db_cache)
             return out
         try:
             uri = f"file:{self.db_path}?mode=ro"
@@ -95,6 +111,12 @@ class IndexerManager:
                     pass
             finally:
                 conn.close()
+            self._status_db_cache = {
+                "message_count": out["message_count"],
+                "latest_message_unix": out["latest_message_unix"],
+                "semantic": dict(out["semantic"]),
+            }
+            self._status_db_cache_at = now
         except Exception as e:
             out["status_error"] = str(e)
         return out
