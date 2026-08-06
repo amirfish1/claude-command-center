@@ -54127,23 +54127,30 @@ def _reap_idle_sessions(now=None):
             continue
         try:
             os.kill(int(pid), _signal.SIGTERM)
+            idle_hours = round((now - last_active) / 3600, 1)
+            cwd = data.get("cwd") or ""
+            last_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_active))
             # Attribution (premature-death hunt): stamp WHO killed this headless
             # so a later `exit` row (SIGTERM) can be matched to a CCC-side kill.
             # An exit=SIGTERM with no matching kill/retire row = provably external
-            # (a closed terminal, an outside cleanup tool), not CCC.
+            # (a closed terminal, an outside cleanup tool), not CCC. Concrete
+            # evidence (last-active timestamp, threshold, cwd) so the kill is
+            # auditable, not just a bare idle_hours number (CCC-743).
             _resume_ledger_append(
                 "kill", sid=sid, pid=int(pid), source="idle_reaper",
-                idle_hours=round((now - last_active) / 3600, 1),
+                idle_hours=idle_hours, ttl_hours=_IDLE_REAPER_AGE_HOURS,
+                last_active_at=last_seen, cwd=cwd,
             )
             _log_activity(
                 "kill", "KILL",
                 f"pid={int(pid)} sid={sid} source=idle_reaper "
-                f"idle_hours={round((now - last_active) / 3600, 1)}",
+                f"idle_hours={idle_hours} ttl_hours={_IDLE_REAPER_AGE_HOURS} "
+                f"last_active={last_seen} cwd={cwd or '-'}",
             )
             reaped.append({
                 "sid": sid,
                 "pid": int(pid),
-                "age_hours": round((now - last_active) / 3600, 1),
+                "age_hours": idle_hours,
             })
         except (OSError, ProcessLookupError):
             continue
@@ -54291,18 +54298,21 @@ def _reap_idle_spawned_headless(now=None):
         # Cheap activity signals first: spawn log + FIFO mtimes (every turn
         # streams to the log; every inject writes the FIFO), fall back to
         # the spawn stamp so a log-less entry can't dodge the TTL forever.
+        # Kept as (source, epoch) pairs, not bare floats, so the eventual
+        # kill log line can name which signal was stalest instead of just
+        # a bare number (CCC-743).
         stamps = []
         for key in ("log", "fifo"):
             path = entry.get(key)
             if path:
                 try:
-                    stamps.append(os.stat(path).st_mtime)
+                    stamps.append((key, os.stat(path).st_mtime))
                 except OSError:
                     pass
         spawned_epoch = _spawn_entry_spawned_at_epoch(entry.get("spawned_at"))
         if spawned_epoch:
-            stamps.append(spawned_epoch)
-        if not stamps or max(stamps) >= cutoff:
+            stamps.append(("spawned_at", spawned_epoch))
+        if not stamps or max(s[1] for s in stamps) >= cutoff:
             continue
         if _spawn_table_has_active_tool_child(table, pid):
             continue
@@ -54313,11 +54323,14 @@ def _reap_idle_spawned_headless(now=None):
             jsonl = _find_session_jsonl(sid)
             if jsonl:
                 try:
-                    if jsonl.stat().st_mtime >= cutoff:
+                    jsonl_mtime = jsonl.stat().st_mtime
+                    if jsonl_mtime >= cutoff:
                         continue
+                    stamps.append(("transcript", jsonl_mtime))
                 except OSError:
                     pass
-        idle_hours = round((now - max(stamps)) / 3600, 1)
+        last_source, last_epoch = max(stamps, key=lambda s: s[1])
+        idle_hours = round((now - last_epoch) / 3600, 1)
         try:
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
@@ -54340,15 +54353,25 @@ def _reap_idle_spawned_headless(now=None):
                 cleaned = True
         if not cleaned:
             _unlink_quiet(entry.get("fifo"))
+        name = entry.get("name") or ""
+        cwd = entry.get("cwd") or ""
+        last_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_epoch))
         # Attribution for the premature-death ledger: this exit was CCC's
-        # idle-TTL policy, not an external kill.
+        # idle-TTL policy, not an external kill. Concrete evidence (which
+        # signal was stalest, its actual timestamp, the TTL threshold that
+        # fired) so a killed session isn't just "source=spawn_idle_ttl" with
+        # no way to audit the call (CCC-743).
         _resume_ledger_append(
             "kill", sid=sid, pid=pid, source="spawn_idle_ttl",
-            idle_hours=idle_hours,
+            idle_hours=idle_hours, ttl_hours=ttl_hours,
+            last_activity_source=last_source, last_activity_at=last_seen,
+            name=name, cwd=cwd,
         )
         _log_activity(
             "kill", "KILL",
-            f"pid={pid} sid={sid} source=spawn_idle_ttl idle_hours={idle_hours}",
+            f"pid={pid} sid={sid} name={name or '-'} source=spawn_idle_ttl "
+            f"idle_hours={idle_hours} ttl_hours={ttl_hours} "
+            f"last_activity={last_source}@{last_seen} cwd={cwd or '-'}",
         )
         reaped.append({
             "pid": pid,
