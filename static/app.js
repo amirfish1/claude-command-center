@@ -4867,6 +4867,17 @@
   // without sticking the chip for hours when something truly hangs.
   const _SENDING_TIMEOUT_MS = 5 * 60 * 1000;
   const _PENDING_SEND_ECHO_MAX_MS = _SENDING_TIMEOUT_MS + 15000;
+  // Same idea for _optimisticSessionTouches, which had NO expiry at all: an
+  // entry set once by touchSessionOptimistically got Math.max()'d into every
+  // render forever (until tab reload), permanently overriding the server's
+  // real modified/last_interacted with a stale local timestamp. If the real
+  // update never lands (failed inject, hung agent), the row keeps reading as
+  // freshly touched no matter how stale the server truth actually is --
+  // masking exactly the kind of staleness a user needs to see. 10min is
+  // generous versus the archive's own refresh cadence (60s poll + 30s stale
+  // retry), so it only ever masks real short-term latency, not a genuine
+  // stall.
+  const _OPTIMISTIC_TOUCH_TTL_MS = 10 * 60 * 1000;
   function _sessionRowMatches(c, sid) {
     if (!c || !sid) return false;
     return (c.session_id === sid) || (c.id === sid);
@@ -4881,10 +4892,16 @@
   }
   function _applyOptimisticTouches(rows) {
     if (!Array.isArray(rows) || !_optimisticSessionTouches.size) return rows;
+    const now = Date.now();
     for (const c of rows) {
       const sid = (c && (c.session_id || c.id)) || '';
       const ts = _optimisticSessionTouches.get(sid);
-      if (ts) _applyOptimisticTouchToRow(c, sid, ts);
+      if (!ts) continue;
+      if ((now - ts * 1000) > _OPTIMISTIC_TOUCH_TTL_MS) {
+        _optimisticSessionTouches.delete(sid);
+        continue;
+      }
+      _applyOptimisticTouchToRow(c, sid, ts);
     }
     return rows;
   }
