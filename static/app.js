@@ -3253,13 +3253,14 @@
       + '</div>';
   }
 
-  function f2RoutesHtml(st) {
+  function f2RoutesHtml(st, verdictText) {
     const r = F2_ROUTES.continue;
+    const title = (verdictText ? verdictText + ' ' : '') + r.name + ' — ' + r.desc;
     return '<div class="route is-recommended" data-f2-route="continue">'
       // .route is a div, .route-main the button: the ▾ caret is a real
       // control and a button may not nest inside a button.
       + '<button type="button" class="route-main" data-f2-act="continue"'
-        + ' title="' + escapeAttr(r.name + ' — ' + r.desc) + '">'
+        + ' title="' + escapeAttr(title) + '">'
         + '<span class="route-glyph" aria-hidden="true">' + r.glyph + '</span>'
         + '<span class="route-name">' + escapeHtml(r.short) + '</span>'
         + '<span class="cost-badge ' + r.costClass + '">' + escapeHtml(r.cost) + '</span>'
@@ -3318,10 +3319,11 @@
       + '<span class="meta">' + escapeHtml(tokensLabel) + ' tokens · idle ' + escapeHtml(ageLabel)
         + railCacheNote + '</span>';
 
-    // ── panel: one line — the price on the left, the one alternative on the
-    // right. Send stays the ordinary submit; the pill offers the cheap
-    // continuation. The measured cache story and the compacting caveat live
-    // in the verdict tooltip; the launch dialog renders below on demand. ──
+    // ── panel: lives inline in the toolbar row now (CCC-740), not its own
+    // line above it — the textarea stays clean and the route pill sits next
+    // to Esc/TTS/mic/expand/send instead of floating above them. The price
+    // verdict that used to render as visible text now rides in the route
+    // pill's tooltip; the launch dialog still renders below on demand. ──
     const force = !!(opts && opts.force);
     if (bar) {
       // Two distinct signals get two distinct treatments: a genuine

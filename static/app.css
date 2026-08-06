@@ -22326,6 +22326,13 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    warning). */
 .f2c-rail[hidden], .f2c-panel[hidden] { display: none !important; }
 
+/* CCC-740: the panel now lives inside .conv-input-buttons, in line with
+   Esc/TTS/mic/expand/send, rather than its own row above the toolbar — pass
+   the layout straight through so `.route` becomes an ordinary flex item of
+   that row and picks up its gap/alignment for free. */
+.conv-input-buttons > .f2c-panel { display: contents; }
+.conv-input-buttons .f2c-panel .routes { display: contents; }
+
 /* Status rail — the part that fires at focus, before a keystroke. */
 .f2c-rail {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -22345,21 +22352,17 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .conv-input-bar.is-f2-idle-only { border-color: rgba(139,148,158,0.38); }
 
 /* The whole gate is ONE line: the price on the left, the one alternative
-   pill on the right. The launch dialog (when open) wraps to its own row. */
+   pill on the right. The launch dialog (when open) wraps to its own row. The
+   price verdict that used to render here as visible text now rides in the
+   route pill's tooltip (CCC-740) — the panel now holds only the pill. */
 .f2c-panel {
   display: flex; flex-wrap: wrap; align-items: center;
-  justify-content: space-between; gap: 8px; min-width: 0;
+  gap: 8px; min-width: 0;
 }
-.f2c-panel .verdict {
-  flex: 1 1 auto; min-width: 0;
-  font-size: 12px; color: var(--text-muted); line-height: 1.5;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.f2c-panel .verdict .cost { color: #d29922; font-weight: 600; }
 
 .f2c-panel .routes { flex: 0 0 auto; display: flex; }
 .f2c-panel .route {
-  display: flex; align-items: stretch;
+  display: flex; align-items: stretch; height: 32px;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 8px;
   transition: border-color .14s ease, background .14s ease;
@@ -22373,7 +22376,7 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .f2c-panel .route-main {
   display: flex; flex: 1; align-items: center; justify-content: center;
   gap: 7px; min-width: 0;
-  background: none; border: none; padding: 6px 8px;
+  background: none; border: none; padding: 0 8px;
   font: inherit; color: var(--text); cursor: pointer;
   border-radius: 8px;
 }

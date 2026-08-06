@@ -1000,7 +1000,6 @@
           <div class="conv-input-row-top">
             <textarea id="convInput" rows="1" placeholder="Send to terminal..." autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true" enterkeyhint="send" inputmode="text" dir="auto"></textarea>
           </div>
-          <div class="f2c-panel" data-role="conv-f2-panel" hidden></div>
           <div class="conv-input-row-bottom">
             <div class="conv-input-selectors">
               <!-- Engine picker for new-session mode. Occupies the same slot as
@@ -1042,6 +1041,10 @@
                    input is absent. (CCC-287) -->
             </div>
             <div class="conv-input-buttons">
+              <!-- F2 route pill — sits inline with the rest of the toolbar
+                   (Esc/TTS/mic/expand/send) instead of its own row, so the
+                   idle/cold nudge never crowds the textarea above it. -->
+              <div class="f2c-panel" data-role="conv-f2-panel" hidden></div>
               <button class="esc-btn" id="convEscBtn" title="Send Esc to terminal - cancels in-flight response (or kills a headless spawn)">Esc</button>
               <button class="tts-btn" id="convTtsBtn" title="Read last message" aria-label="Read last message" aria-pressed="false">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
