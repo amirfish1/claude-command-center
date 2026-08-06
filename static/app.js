@@ -1519,6 +1519,11 @@
     try { if (typeof refreshLiveStatus === 'function') refreshLiveStatus(); } catch (_) {}
     try { if (typeof updateLiveToolStrip === 'function') updateLiveToolStrip(); } catch (_) {}
     try { if (typeof updateCodexStateBadge === 'function') updateCodexStateBadge(); } catch (_) {}
+    // CCC-46 (same class): a backgrounded/occluded window can delay the
+    // optimistic "Sending…/Thinking…" age ticker's first setInterval fire by
+    // 10+ seconds, freezing it at "0s" for the whole spawn if it resolves
+    // before that first tick lands. Force-correct it from wall-clock now.
+    try { if (typeof _tickOptimisticAgeNow === 'function') _tickOptimisticAgeNow(); } catch (_) {}
     // pollGcActive is a DASHBOARD poll (the group-chat sidebar list, not the open
     // reader). Reader-only popouts must not fire it — see READER_ONLY_POPOUT.
     if (!READER_ONLY_POPOUT) {
@@ -5055,53 +5060,61 @@
     if (s < 60) return s + 's';
     return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
   }
+  // Shared by the 1s setInterval tick AND by _resumeForegroundPollers: the
+  // interval alone isn't reliable — a backgrounded/occluded CCC window (Mac
+  // app WKWebView, or just a background browser tab) can delay a freshly
+  // created setInterval's FIRST fire by 10+ seconds even while document.hidden
+  // stays false, so a spawn that resolves quickly can show a "0s" age the
+  // entire time and never get a single tick in. Recomputing from wall-clock
+  // on focus/visibility regain fixes the display immediately instead of
+  // waiting on a timer the platform may keep deferring.
+  function _tickOptimisticAgeNow() {
+    // Query the whole document, not a captured view: pane remounts during
+    // spawn handoffs replace the .conversations-view node, and a ticker
+    // bound to the detached node missed forever and stopped — freezing the
+    // age at 0s. There is only ever one optimistic indicator app-wide.
+    const el = document.querySelector('.conv-live-tool-inline.optimistic');
+    if (!el) {
+      _optimisticAgentMisses++;
+      if (_optimisticAgentMisses === 1 || _optimisticAgentMisses === 10) {
+        _clientLog('[OPT-DIAG] tick miss n=' + _optimisticAgentMisses
+          + ' key=' + _optimisticAgentStartKey);
+      }
+      if (_optimisticAgentMisses >= 10) _stopOptimisticAgeTicker();
+      return;
+    }
+    if (_optimisticAgentMisses > 0) {
+      _clientLog('[OPT-DIAG] tick found el again after ' + _optimisticAgentMisses + ' misses');
+      _optimisticAgentMisses = 0;
+    }
+    const ms = Date.now() - _optimisticAgentStart;
+    const age = el.querySelector('.cl-age');
+    if (age) age.textContent = _optimisticAgeLabel(ms);
+    // Long-think reassurance: during a pre-tool thinking phase nothing
+    // streams (no hook fires), so a lone "🧠 Thinking…" with only a ticking
+    // counter reads as a hang past a minute. Escalate the copy so it's
+    // visibly alive, not stuck.
+    if (el.classList.contains('is-thinking')) {
+      const secs = Math.round(ms / 1000);
+      const hint = secs >= 120 ? 'still working - long reasoning step'
+        : (secs >= 30 ? 'still working…' : '');
+      let hintEl = el.querySelector('.cl-hint');
+      if (hint) {
+        if (!hintEl) {
+          hintEl = document.createElement('span');
+          hintEl.className = 'cl-hint';
+          el.insertBefore(hintEl, age || null);
+        }
+        if (hintEl.textContent !== hint) hintEl.textContent = hint;
+      } else if (hintEl) {
+        hintEl.remove();
+      }
+    }
+  }
   function _startOptimisticAgeTicker($view) {
     if (_optimisticAgentTick) clearInterval(_optimisticAgentTick);
     _optimisticAgentMisses = 0;
-    _optimisticAgentTick = setInterval(() => {
-      // Query the whole document, not the captured view: pane remounts during
-      // spawn handoffs replace the .conversations-view node, and a ticker
-      // bound to the detached node missed forever and stopped — freezing the
-      // age at 0s. There is only ever one optimistic indicator app-wide.
-      const el = document.querySelector('.conv-live-tool-inline.optimistic');
-      if (!el) {
-        _optimisticAgentMisses++;
-        if (_optimisticAgentMisses === 1 || _optimisticAgentMisses === 10) {
-          _clientLog('[OPT-DIAG] tick miss n=' + _optimisticAgentMisses
-            + ' viewConnected=' + !!($view && $view.isConnected)
-            + ' key=' + _optimisticAgentStartKey);
-        }
-        if (_optimisticAgentMisses >= 10) _stopOptimisticAgeTicker();
-        return;
-      }
-      if (_optimisticAgentMisses > 0) {
-        _clientLog('[OPT-DIAG] tick found el again after ' + _optimisticAgentMisses + ' misses');
-        _optimisticAgentMisses = 0;
-      }
-      const ms = Date.now() - _optimisticAgentStart;
-      const age = el.querySelector('.cl-age');
-      if (age) age.textContent = _optimisticAgeLabel(ms);
-      // Long-think reassurance: during a pre-tool thinking phase nothing
-      // streams (no hook fires), so a lone "🧠 Thinking…" with only a ticking
-      // counter reads as a hang past a minute. Escalate the copy so it's
-      // visibly alive, not stuck.
-      if (el.classList.contains('is-thinking')) {
-        const secs = Math.round(ms / 1000);
-        const hint = secs >= 120 ? 'still working - long reasoning step'
-          : (secs >= 30 ? 'still working…' : '');
-        let hintEl = el.querySelector('.cl-hint');
-        if (hint) {
-          if (!hintEl) {
-            hintEl = document.createElement('span');
-            hintEl.className = 'cl-hint';
-            el.insertBefore(hintEl, age || null);
-          }
-          if (hintEl.textContent !== hint) hintEl.textContent = hint;
-        } else if (hintEl) {
-          hintEl.remove();
-        }
-      }
-    }, 1000);
+    _optimisticAgentTick = setInterval(_tickOptimisticAgeNow, 1000);
   }
   function showOptimisticAgentIndicator($view) {
     if (!$view) return;
