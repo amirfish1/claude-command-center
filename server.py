@@ -9771,7 +9771,192 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
         copy_rows=False,
         force_refresh=force_refresh,
     )
+    # ACP sessions (Kimi/GLM) live in memory before their first transcript
+    # lands and before the archive background refresh picks them up. Without
+    # this overlay, a brand-new ACP session appears in the UI via the pending
+    # spawn card, then vanishes on the next /api/conversations/list poll
+    # because the cached snapshot has not refreshed yet, then reappears ~30s
+    # later when the refresh completes. Merge in-memory attached sessions
+    # cheaply so the sidebar never drops them in that window.
+    overlay = _archive_overlay_acp_sessions(rows)
+    if overlay:
+        rows = list(rows or []) + overlay
     return rows, from_cache
+
+
+def _archive_overlay_acp_sessions(rows):
+    """Return archive-shaped rows for ACP sessions live in memory but missing
+    from the cached archive snapshot. Called by the lightweight /list path so
+    new Kimi/GLM sessions stay visible between creation and the next archive
+    refresh."""
+    if not _ACP_HARNESSES:
+        return []
+    existing = set()
+    for r in (rows or []):
+        sid = r.get("session_id") or r.get("id")
+        if sid:
+            existing.add(str(sid))
+    try:
+        name_overrides = _load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
+    except Exception:
+        archived_set, trashed_set = set(), set()
+    try:
+        pinned_list = _load_pinned_conversations()
+    except Exception:
+        pinned_list = []
+    pinned_rank = _pinned_rank_map(pinned_list)
+    out = []
+    now = time.time()
+    for harness in _ACP_HARNESSES:
+        if not _acp_harness_enabled(harness):
+            continue
+        with _ACP_LOCK:
+            sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+        if not sessions:
+            continue
+        label = (_ACP_HARNESSES.get(harness) or {}).get("label", harness)
+        for sid, state in sessions.items():
+            sid = str(sid)
+            if not sid or sid in existing:
+                continue
+            if not (state and state.get("attached")):
+                continue
+            status = str((state.get("status") or "")).strip()
+            if status == "closed":
+                continue
+            cwd = str((state.get("cwd") or "")).strip()
+            if not cwd:
+                continue
+            try:
+                cwd_exists = Path(cwd).is_dir()
+            except OSError:
+                cwd_exists = False
+            folder_label = Path(cwd).name or cwd or label
+            updated_at = float(state.get("updated_at") or 0)
+            transcript_path = _acp_transcript_path(harness, sid)
+            try:
+                transcript_mtime = transcript_path.stat().st_mtime
+            except OSError:
+                transcript_mtime = 0
+            mtime = max(updated_at, transcript_mtime) or now
+            first_message = _acp_transcript_first_prompt(harness, sid) or ""
+            title = str(state.get("title") or "").strip()
+            display_name = (
+                name_overrides.get(sid)
+                or _truncate_session_name(title)
+                or (first_message[:80] if first_message else None)
+                or f"{label} session"
+            )
+            model = str(state.get("model") or "").strip()
+            is_live = status == "active"
+            row = {
+                "id": sid,
+                "session_id": sid,
+                "source": harness,
+                "engine": harness,
+                "jsonl_path": str(transcript_path),
+                "slug": _encode_project_slug(cwd) if cwd else "",
+                "folder_label": folder_label,
+                "folder_path": cwd,
+                "pinned_repo": False,
+                "session_cwd": cwd,
+                "session_cwd_exists": cwd_exists,
+                "session_cwd_is_worktree": False,
+                "mtime": mtime,
+                "modified": mtime,
+                "last_interacted": mtime,
+                "size": 0,
+                "first_message": first_message[:200] if first_message else None,
+                "ai_title": title or None,
+                "branch": "",
+                "git_branch": "",
+                "effective_branch": None,
+                "effective_kind": None,
+                "display_name": display_name,
+                "spawn_named": "",
+                "name_overridden": bool(name_overrides.get(sid)),
+                "archived": sid in archived_set,
+                "trashed": sid in trashed_set,
+                "recently_unarchived": False,
+                "verified": sid in set(_load_verified_conversations() or []),
+                "pinned": sid in pinned_rank,
+                "pin_rank": pinned_rank.get(sid),
+                "worktree_dirty": False,
+                "has_commit": False,
+                "has_push": False,
+                "has_edit": False,
+                "tail_pr_number": None,
+                "tail_pr_url": None,
+                "pr_state": None,
+                "is_live": is_live,
+                "worktree_label": None,
+                "last_assistant_text": "",
+                "last_event_type": None,
+                "pending_tool": None,
+                "pending_file": None,
+                "pending_tool_ts": 0,
+                "stale_tool_call": False,
+                "stale_tool_age_s": 0,
+                "stale_tool_threshold_s": 0,
+                "stale_tool_queued_input": "",
+                "subagent_count": 0,
+                "subagent_in_flight_count": 0,
+                "subagent_recent": [],
+                "workflows": [],
+                "session_state": None,
+                "goal": "",
+                "goal_status": "",
+                "parent_session_id": "",
+                "model": model,
+                "reasoning_effort": None,
+                "latest_input_tokens": 0,
+                "lifetime_tokens": 0,
+                "cost_usd": 0.0,
+                "cost_breakdown_usd": {},
+                "total_input_tokens": 0,
+                "total_cache_creation_tokens": 0,
+                "total_cache_read_tokens": 0,
+                "total_output_tokens": 0,
+                "live_context_tokens": 0,
+                "live_context_limit": 0,
+                "live_context_percent": 0,
+                "context_limit": 200000,
+                "sidecar_status": None,
+                "sidecar_has_writes": False,
+                "sidecar_tool": None,
+                "sidecar_file": None,
+                "sidecar_ts": 0,
+                "sidecar_in_flight": False,
+                "needs_approval": False,
+                "needs_approval_message": "",
+                "question_waiting": False,
+                "question_text": "",
+                "question_header": "",
+                "question_preamble": "",
+                "question_options": [],
+                "question_option_details": [],
+                "can_headless_resume": False,
+                "can_app_resume": False,
+                "hermes_source": "",
+                "hermes_origin": "",
+                "hermes_profile": "",
+                "hermes_chat_type": "",
+                "hermes_tool_calls": 0,
+                "all_lane_override": "",
+                "source_platform": "",
+                "thread_source": "",
+                "tail_issue_number": None,
+                "spawn_pid": sid if is_live else None,
+                "state": "working" if is_live else "idle",
+                "ended_blocked": False,
+                **_token_optimizer_quality_for_session(sid),
+            }
+            out.append(row)
+    return out
 
 
 _row_flicker_seen = {}      # sid -> epoch last served on a window="all" poll
@@ -30625,6 +30810,13 @@ def _session_landed(session_id):
                 return {"ok": True, "landed": True, "known": True, "engine": "claude"}
     except OSError:
         pass
+    # Kimi/GLM ACP sessions write their transcript under ~/.claude/command-center/acp/.
+    try:
+        for harness in _ACP_HARNESSES:
+            if _acp_harness_enabled(harness) and _acp_transcript_path(harness, sid).is_file():
+                return {"ok": True, "landed": True, "known": True, "engine": harness}
+    except OSError:
+        pass
     # known=False means "this probe cannot answer for this id" (an engine that
     # stores sessions somewhere neither branch reads). The client keeps its
     # periodic full refresh in that case rather than trusting a false negative.
@@ -33163,6 +33355,27 @@ def _acp_state_file(harness):
 def _acp_transcript_path(harness, sid):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid or ""))
     return _ACP_TRANSCRIPT_DIR / harness / f"{safe}.jsonl"
+
+
+def _acp_transcript_first_prompt(harness, sid):
+    """Return the first user_text event from an ACP transcript, or None."""
+    try:
+        with _acp_transcript_path(harness, sid).open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") == "user_text":
+                    text = str(ev.get("text") or "").strip()
+                    if text:
+                        return text
+    except OSError:
+        pass
+    return None
 
 
 def _acp_transcript_events_after(harness, sid, after_line):

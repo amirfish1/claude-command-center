@@ -1,0 +1,1 @@
+Fixed new Kimi/GLM sessions flickering out of the sidebar for ~30 seconds after spawn by overlaying in-memory ACP sessions onto the cached `/api/conversations/list` snapshot until the next archive refresh completes.
