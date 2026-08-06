@@ -3191,14 +3191,21 @@
     let st = f2PaneState.get(key);
     if (!st || st.sid !== sid) {
       // Defaults, all deliberate: same engine as the origin session (tool
-      // continuity), Sonnet because a scoped continuation is real work but not
-      // Opus work, Light effort because the hard thinking already happened
-      // upstream and this session only has to retrieve it.
-      const engine = F2_LAUNCH_ENGINES.some(e => e.id === gate.engine) ? gate.engine : 'claude';
+      // continuity) when that engine is a valid launch option, else CCC's
+      // own configured spawn-default engine — never a hardcoded 'claude'.
+      // Model and effort likewise fall back to CCC's spawn defaults rather
+      // than a fixed sonnet-5/Light, so this panel tracks whatever the user
+      // has set as their normal spawn engine defaults.
+      const fallbackEngine = (typeof getSpawnEngine === 'function' && F2_LAUNCH_ENGINES.some(e => e.id === getSpawnEngine()))
+        ? getSpawnEngine() : 'claude';
+      const engine = F2_LAUNCH_ENGINES.some(e => e.id === gate.engine) ? gate.engine : fallbackEngine;
       const models = f2ModelsForEngine(engine);
-      const preferred = engine === 'claude' ? 'sonnet-5' : '';
+      const defaultModels = (typeof spawnDefaultsState === 'object' && spawnDefaultsState && spawnDefaultsState.models) || {};
+      const preferred = defaultModels[engine] || (engine === 'claude' ? 'sonnet-5' : '');
       const model = (preferred && models.some(m => m.id === preferred)) ? preferred : (models[0] ? models[0].id : '');
-      st = { sid, launch: { engine, model, effort: 'low' }, configOpen: false };
+      const defaultEffort = (typeof spawnDefaultsState === 'object' && spawnDefaultsState && spawnDefaultsState.reasoning_effort) || '';
+      const effort = F2_LAUNCH_EFFORTS.some(e => e.id === defaultEffort) ? defaultEffort : 'low';
+      st = { sid, launch: { engine, model, effort }, configOpen: false };
       f2PaneState.set(key, st);
     }
     st.gate = gate;
