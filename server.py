@@ -8705,9 +8705,10 @@ def find_all_conversations(
                 # archive rows can render sidebar usage without opening the
                 # session pane.
                 "model": model,
-                # Re-layered per serve by _rehydrate_archive_cached_rows, since
-                # the user can repick effort long after this row was cached.
-                "reasoning_effort": _conv_row_reasoning_effort(
+                # Transcript-first (see find_conversations). Re-layered per
+                # serve by _rehydrate_archive_cached_rows, since the user can
+                # repick effort long after this row was cached.
+                "reasoning_effort": tail_meta.get("reasoning_effort") or _conv_row_reasoning_effort(
                     session_id, session_overrides, spawn_entry,
                 ),
                 "latest_input_tokens": latest_tok,
@@ -10412,14 +10413,16 @@ def _rehydrate_archive_cached_rows(rows):
             row["trashed"] = sid in trashed_set
             row["recently_unarchived"] = _is_recently_unarchived(sid, _now_rehydrate)
             row["verified"] = sid in verified_set
-            effort = _conv_row_reasoning_effort(
-                sid, session_overrides, spawn_registry_by_sid.get(sid),
-            )
-            # Only overwrite when we know better: an engine that parses effort
-            # out of its own transcript (codex) already put the observed value
-            # on the row and CCC's side files have nothing to add.
-            if effort or not row.get("reasoning_effort"):
-                row["reasoning_effort"] = effort
+            # Live-first, matching the model beside it (CCC-466): a row states
+            # what the session last RAN at. An observed transcript value always
+            # wins, whichever engine parsed it, because a picked-but-not-yet-
+            # applied override would otherwise show indefinitely on a session
+            # provably running something else. CCC's side files are the
+            # fallback for a session with no assistant turn yet.
+            if not row.get("reasoning_effort"):
+                row["reasoning_effort"] = _conv_row_reasoning_effort(
+                    sid, session_overrides, spawn_registry_by_sid.get(sid),
+                )
             row["pinned"] = sid in pinned_rank
             row["pin_rank"] = pinned_rank.get(sid)
             spawn_parent_id = str(
@@ -14496,6 +14499,12 @@ def _extract_tail_meta(path):
                     msg = _safe_parse_message(ev.get("message", {}))
                     if msg.get("model"):
                         meta["model"] = msg.get("model")
+                    # Effort rides on the assistant record itself, not inside
+                    # `message`. Free here because this tail is already being
+                    # parsed for the model, which is the only reason a list row
+                    # can state it without the per-row read the perf gate bans.
+                    if ev.get("effort"):
+                        meta["reasoning_effort"] = str(ev.get("effort")).strip()
                     u = msg.get("usage") or {}
                     if isinstance(u, dict):
                         ti = u.get("input_tokens") or 0
@@ -20929,10 +20938,11 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "goal_status": tail_meta.get("goal_status") or "",
             "parent_session_id": parent_session_id,
             "model": tail_meta.get("model"),
-            # Claude's `--effort` level. Not recorded in the transcript, so it
-            # comes from the hoisted override/spawn maps rather than tail_meta:
-            # this is the effort CCC chose, not one typed into the TUI.
-            "reasoning_effort": _conv_row_reasoning_effort(
+            # Transcript-first, like the model beside it: the tail states the
+            # effort the last turn actually ran at, including a `/effort` typed
+            # into the TUI that CCC never saw. The override/spawn maps are the
+            # fallback for a session with no assistant turn yet.
+            "reasoning_effort": tail_meta.get("reasoning_effort") or _conv_row_reasoning_effort(
                 sid, session_overrides, spawn_registry_by_sid.get(sid),
             ),
             "archived": sid in archived_set,

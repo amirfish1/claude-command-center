@@ -2223,6 +2223,7 @@ def extract_session_usage(session_id):
     total_cr = 0
     total_out = 0
     model = desktop_meta.get("model") or ""
+    live_effort = ""
     diagnostic_latest = 0
     diagnostic_peak = 0
     live_context = None
@@ -2284,6 +2285,13 @@ def extract_session_usage(session_id):
                 msg = _core._safe_parse_message(ev.get("message", {}))
                 if msg.get("model"):
                     model = msg.get("model")
+                # Claude Code stamps the turn's effort on the assistant record,
+                # a sibling of `message` rather than a field inside it. That is
+                # the ground truth: it reflects a `/effort` typed into the TUI
+                # just as much as CCC's own `--effort`, where the override file
+                # only knows what CCC set.
+                if ev.get("effort"):
+                    live_effort = str(ev.get("effort")).strip()
                 diag_window = _diagnostic_context_tokens(
                     msg.get("diagnostics") or ev.get("diagnostics")
                 )
@@ -2349,10 +2357,11 @@ def extract_session_usage(session_id):
 
     return _with_token_optimizer_quality({
         # Top-level effort, matching _extract_codex_usage's shape so a client
-        # reads one key for every engine. For Claude this is the effort CCC
-        # chose (`--effort` at spawn, or the model picker) — a `/effort` typed
-        # into the TUI never reaches the transcript, so it is invisible here.
-        "reasoning_effort": (override or {}).get("reasoning_effort") or "",
+        # reads one key for every engine. Transcript-first for the same reason
+        # the model pill is live-first: the assistant record states what the
+        # turn actually ran at, while the override only knows what CCC asked
+        # for and goes stale the moment the user types `/effort` in the TUI.
+        "reasoning_effort": live_effort or (override or {}).get("reasoning_effort") or "",
         "latest_input_tokens": latest,
         "peak_input_tokens": peak,
         "total_output_tokens": total_out,

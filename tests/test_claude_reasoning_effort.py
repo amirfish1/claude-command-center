@@ -193,3 +193,75 @@ def test_spawned_session_rows_carry_effort(monkeypatch):
     assert (row["engine"], row["model"], row["reasoning_effort"]) == (
         "claude", "opus-5", "max",
     )
+
+
+def _write_transcript(directory, name, *events):
+    import json as _json
+    p = directory / f"{name}.jsonl"
+    p.write_text("\n".join(_json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    return p
+
+
+def test_tail_meta_reads_effort_off_the_assistant_record(tmp_path):
+    """Claude Code stamps `effort` as a SIBLING of `message`, not inside it.
+
+    Reading it here is what lets a list row state the effort a session is
+    actually running without the per-row disk read the perf gate bans, and it
+    catches a `/effort` typed into the TUI, which CCC's own side files cannot.
+    """
+    jsonl = _write_transcript(
+        tmp_path,
+        "sess",
+        {
+            "type": "assistant",
+            "effort": "xhigh",
+            "message": {
+                "model": "claude-opus-5",
+                "id": "msg_1",
+                "usage": {"input_tokens": 10},
+            },
+        },
+    )
+
+    meta = server._extract_tail_meta(jsonl)
+
+    assert meta["model"] == "claude-opus-5"
+    assert meta["reasoning_effort"] == "xhigh"
+
+
+def test_usage_prefers_the_observed_effort_over_a_stale_override(tmp_path, monkeypatch):
+    """Live-first, the same rule the model pill follows (CCC-466).
+
+    An override the session has not picked up yet must not masquerade as the
+    level the session is running at.
+    """
+    from ccc_server import core as _core, morning_launch
+
+    proj = tmp_path / "-Users-someone-repo"
+    proj.mkdir()
+    _write_transcript(proj, "sid-1", {
+        "type": "assistant",
+        "effort": "high",
+        "message": {
+            "model": "claude-opus-5",
+            "id": "msg_1",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    })
+    monkeypatch.setattr(_core, "PROJECTS_ROOT", tmp_path)
+    monkeypatch.setattr(_core, "_load_desktop_app_metadata", lambda: {})
+    monkeypatch.setattr(
+        _core, "_get_session_override",
+        lambda _sid: {"model": "opus-5", "reasoning_effort": "low"},
+    )
+    for probe in ("_is_codex_session", "_is_gemini_session", "_is_cursor_session",
+                  "_is_antigravity_session", "_is_hermes_session", "_is_kimi_session"):
+        monkeypatch.setattr(_core, probe, lambda _sid: False)
+    monkeypatch.setattr(
+        morning_launch, "_with_token_optimizer_quality", lambda payload, _sid: payload,
+    )
+
+    usage = morning_launch.extract_session_usage("sid-1")
+
+    assert usage["model"] == "claude-opus-5"
+    assert usage["reasoning_effort"] == "high"
