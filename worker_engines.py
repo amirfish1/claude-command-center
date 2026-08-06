@@ -512,6 +512,10 @@ class EngineHost:
                     skip_wt=bool(args.get("skip_wt")),
                     preserve_queued_steer=bool(args.get("preserve_queued_steer")),
                 )
+            if operation == "interrupt":
+                return legacy._interrupt_claude_headless_local(
+                    args.get("session_id")
+                )
             if operation == "inject_pid":
                 return legacy.inject_into_spawned(
                     int(args.get("pid")), args.get("text") or ""

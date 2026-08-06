@@ -16309,8 +16309,18 @@ def _load_session_registry():
     # process enumeration and classified every system process twice.
     live_claude_pids = set()
     try:
-        for pid_s, _tty, comm, _args in _scan_engine_processes():
-            if _process_comm_is_claude(comm):
+        for pid_s, _tty, comm, args in _scan_engine_processes():
+            # `ps -o comm=` TRUNCATES to the column width (16 chars on macOS),
+            # so a process started by absolute path — every CCC-spawned
+            # headless, `/Users/<me>/.local/bin/claude` — reports comm as
+            # `/Users/<me>/` and fails the basename check. Only sessions
+            # launched as bare `claude` from PATH survived it, which is why
+            # every spawned session read "not live": no live pid, so
+            # session_live_status returned live=False for a process that was
+            # answering fine. argv[0] is not truncated — check it too (same
+            # comm-or-argv0 idiom as _live_claude_terminal_pids_by_session).
+            cmd_first = (args.split(None, 1)[0] if args else "")
+            if _process_comm_is_claude(comm) or _process_comm_is_claude(cmd_first):
                 try:
                     live_claude_pids.add(int(pid_s))
                 except ValueError:
@@ -48493,6 +48503,32 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
     return payload
 
 
+def _interrupt_claude_headless_local(session_id):
+    """In-band interrupt for a CCC-owned headless Claude spawn.
+
+    Runs wherever the spawn entry actually lives — the worker owns engine
+    execution, so the dashboard reaches this through the control plane.
+    Writes the stream-json `interrupt` control request to the spawn's FIFO:
+    it aborts the in-flight tool, ends the turn, and LEAVES THE PROCESS
+    ALIVE, which is what "Esc" should mean. SIGINT (the old and now
+    fallback-only route) kills `claude -p` outright — the session is over
+    and every later message pays a cold `--resume`.
+    """
+    if not session_id:
+        return {"ok": False, "code": "missing_session_id"}
+    spawn = _find_live_spawn_entry_for_session(session_id)
+    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+        return {"ok": False, "code": "no_spawn"}
+    if not _write_stream_json_interrupt(spawn):
+        return {"ok": False, "code": "write_failed", "pid": spawn.get("pid")}
+    return {
+        "ok": True,
+        "via": "claude-stream-interrupt",
+        "pid": spawn.get("pid"),
+        "note": "turn aborted — session still live",
+    }
+
+
 def _interrupt_session(session_id):
     """Send an interrupt to a session using the same fall-through as
     `_inject_text_into_session`:
@@ -48501,9 +48537,12 @@ def _interrupt_session(session_id):
       * Live Codex process → SIGINT directly to the process.
       * Live TTY (non-Codex) → AppleScript Esc keystroke (cancels the in-flight stream
         when Claude is mid-response, clears the input buffer otherwise).
-      * Live headless session (no TTY, non-Codex) → SIGINT to its
-        identity-verified pid. NOTE: this terminates the headless `claude -p` subprocess —
-        you cannot resume mid-conversation, the spawn is over.
+      * Live headless Claude spawn CCC owns → stream-json `interrupt` control
+        request: aborts the turn, process survives.
+      * Live headless session with no reachable FIFO (foreign writer, or the
+        spawn entry is gone) → SIGINT to its identity-verified pid. NOTE: this
+        terminates the headless `claude -p` subprocess — you cannot resume
+        mid-conversation, the spawn is over.
       * Dormant session with no live spawn → no-op error; nothing is running
         to interrupt.
     """
@@ -48541,6 +48580,23 @@ def _interrupt_session(session_id):
         result = interrupt_input_via_keystroke(tty, term_app or "Terminal")
         result["via"] = "tty-esc"
         return result
+    # Headless Claude: prefer the in-band control request over SIGINT so Esc
+    # cancels the TURN instead of ending the SESSION. The spawn entry lives in
+    # whichever process owns engine execution (the worker), hence the routed
+    # call before the local attempt.
+    if not _is_cursor_session(session_id) and not _is_hermes_session(session_id) \
+            and not _is_opencode_session(session_id) \
+            and not _is_gemini_session(session_id) \
+            and not _is_antigravity_session(session_id):
+        routed = _control_plane_engine_call(
+            "claude", "interrupt", {"session_id": session_id},
+        )
+        if routed is not None and routed.get("ok"):
+            return routed
+        if routed is None:
+            local = _interrupt_claude_headless_local(session_id)
+            if local.get("ok"):
+                return local
     if status.get("live") and status.get("pid"):
         pid = status["pid"]
         try:

@@ -19204,5 +19204,48 @@ class TestAutoHandoverOneShot(unittest.TestCase):
                 server._auto_handover_last_checked_at["ts"] = old_checked_ts
 
 
+class TestSessionRegistryTruncatedComm(unittest.TestCase):
+    """Regression for 2026-08-06: every CCC-spawned session read "not live".
+
+    `ps -o comm=` truncates to the column width (16 chars on macOS), so a
+    headless spawned by absolute path reports comm as `/Users/<me>/` and
+    failed the basename check in `_load_session_registry`. Only sessions
+    started as bare `claude` from PATH survived, so `session_live_status`
+    returned live=False for processes that were answering fine -- no working
+    indicator, and Esc answered "session is not live". argv[0] is never
+    truncated; the registry must fall back to it.
+    """
+
+    def _registry_for(self, ps_rows, sessions_dir):
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        with mock.patch.object(server, "SESSIONS_REGISTRY", sessions_dir), \
+             mock.patch.object(server, "_scan_engine_processes", return_value=ps_rows):
+            return server._load_session_registry()
+
+    def test_truncated_comm_still_resolves_via_argv0(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_dir = pathlib.Path(tmp)
+            (sessions_dir / "4242.json").write_text(json.dumps({
+                "pid": 4242, "sessionId": sid, "cwd": tmp,
+            }), encoding="utf-8")
+
+            truncated = [(
+                "4242", "??", "/Users/someone/",
+                "/Users/someone/.local/bin/claude -p --verbose --resume " + sid,
+            )]
+            self.assertIn(
+                sid, self._registry_for(truncated, sessions_dir),
+                "truncated comm must fall back to argv[0]",
+            )
+
+            # A non-claude pid that merely reuses the number stays rejected --
+            # that guard (CCC-45 pid recycling) is the reason for the scan.
+            foreign = [("4242", "??", "/usr/bin/", "/usr/bin/some-other-daemon")]
+            self.assertNotIn(sid, self._registry_for(foreign, sessions_dir))
+
+
 if __name__ == "__main__":
     unittest.main()
