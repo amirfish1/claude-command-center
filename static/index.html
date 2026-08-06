@@ -1019,12 +1019,19 @@
               <select id="convInputModelSelect" class="model-select" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <!-- Populated dynamically via app.js -->
               </select>
-              <select id="convInputEffortSelect" class="effort-select" title="Codex reasoning effort" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
+              <!-- Reasoning effort is not a Codex-only knob: Claude takes
+                   --effort and Kimi has its own ladder, and they reach 'max'
+                   while Codex stops at 'xhigh'. These options are the union
+                   fallback; app.js re-renders them per engine through
+                   effortLevelsForEngine() and hides the select for engines
+                   with no effort concept. -->
+              <select id="convInputEffortSelect" class="effort-select" title="Reasoning effort for this new session" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <option value="">Default effort</option>
                 <option value="low">Light</option>
                 <option value="medium">Medium</option>
                 <option value="high">High</option>
                 <option value="xhigh">Extra High</option>
+                <option value="max">Max</option>
               </select>
               <select id="convInputIssueAction" title="Action to take on this issue" style="display:none;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px;">
                 <option value="spawn">Fix (session)</option>
@@ -1697,6 +1704,7 @@
             <option value="cursor">Cursor</option>
             <option value="antigravity">Antigravity</option>
             <option value="kilo">Kilo</option>
+            <option value="hermes">Hermes</option>
             <option value="kimi">Kimi</option>
             <option value="opencode">OpenCode</option>
           </select>
@@ -1731,15 +1739,19 @@
         </div>
         <div>
           <label class="bug-label" for="spawnDefaultsWorkerEffort">Worker reasoning effort</label>
+          <!-- No worker engine chosen means WatchTower picks one at claim
+               time, so the option list here has to be the union of every
+               ladder; app.js narrows it once a worker engine is selected. -->
           <select id="spawnDefaultsWorkerEffort" class="bug-input">
             <option value="">Engine default</option>
             <option value="low">Light</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>
             <option value="xhigh">Extra High</option>
+            <option value="max">Max</option>
           </select>
           <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
-            Used for Codex WatchTower workers unless their queue chooses an explicit effort.
+            WatchTower queue workers spawn at this effort when the queue has no explicit override. Engines with no reasoning-effort setting ignore it.
           </div>
         </div>
         <div id="spawnDefaultsEffortField" style="display:none;">
@@ -1750,9 +1762,10 @@
             <option value="medium">Medium</option>
             <option value="high">High</option>
             <option value="xhigh">Extra High</option>
+            <option value="max">Max</option>
           </select>
           <div style="color:var(--text-muted);font-size:12px;margin-top:4px;">
-            Used for Codex spawns unless a request chooses an explicit effort.
+            Used for new sessions on the default engine unless a request chooses an explicit effort. The field is hidden for engines that have no reasoning-effort setting.
           </div>
         </div>
       </div>
@@ -1942,7 +1955,7 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="spawn defaults engine model effort new session codex claude">
+            <div class="settings-row" data-keywords="spawn defaults engine model effort reasoning new session codex claude kimi">
               <div class="settings-row-main">
                 <div class="settings-row-label">Spawn defaults</div>
                 <div class="settings-row-desc">Default engine, model, and effort used when you spawn a new session.</div>

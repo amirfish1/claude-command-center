@@ -125,7 +125,7 @@ def test_prewarmed_model_metadata_is_scheduled_after_first_response(monkeypatch)
     timer = created[0]
     assert timer.delay >= 10
     assert timer.target is server._set_session_model
-    assert timer.args == ("session-fast", "claude-sonnet-5", False)
+    assert timer.args == ("session-fast", "claude-sonnet-5", False, None)
     assert timer.daemon is True
     assert timer.started is True
 

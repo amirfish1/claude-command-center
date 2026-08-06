@@ -347,16 +347,21 @@ the UI uses for the kanban.
 
 CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, and OpenCode support followed. Spawn-from-dashboard works for all seven. The rest varies:
 
-| Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model picker |
+| Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model + reasoning-effort picker |
 |---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
-| Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle |
-| Codex         | yes                      | yes (both)                                 | partial — Codex JSONL parsed, broader parity tracked in [#57](https://github.com/amirfish1/claude-command-center/issues/57) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL` |
-| Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | yes — UI/default model picker; default from `CCC_CURSOR_MODEL` |
-| Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | auto-detected from transcript metadata |
-| Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | yes — UI/default model picker; default from `CCC_KILO_MODEL` |
-| Kimi Code     | yes — ACP client over `kimi acp`, token-level live streaming | yes — steer live ACP sessions with inline permission-prompt answers; attach for TUI sessions | yes — reads `~/.kimi-code/sessions/`; live list and archive | yes — UI/default model picker; default from `CCC_KIMI_MODEL` |
-| OpenCode      | yes — headless via `opencode run --auto` | yes — follow-ups route through `opencode run --session <id> --auto` | yes — externally-launched OpenCode (opencode.ai) sessions appear on the board | yes — UI/default model picker; default from `CCC_OPENCODE_MODEL` |
+| Claude Code   | yes                      | yes (both)                                 | yes — first-class JSONL (`~/.claude/projects/*.jsonl`) | yes — UI picker, incl. 1M-context toggle; effort `low` `medium` `high` `xhigh` `max` |
+| Codex         | yes                      | yes (both)                                 | partial — Codex JSONL parsed, broader parity tracked in [#57](https://github.com/amirfish1/claude-command-center/issues/57) | yes — UI picker via per-session override; default from `CCC_CODEX_MODEL`; effort `low` `medium` `high` `xhigh` (no `max`) |
+| Cursor        | yes — headless via `cursor-agent` | yes — follow-ups route through `cursor-agent --resume` | partial — Cursor agent transcripts parsed from `~/.cursor/projects/` | model only — UI/default picker, default from `CCC_CURSOR_MODEL`; no effort ladder |
+| Antigravity   | yes — headless via `agy` print mode | yes — follow-ups route through AGY CLI or the running app's language-server RPC | yes — JSONL transcripts from `~/.gemini/antigravity/brain/` | model auto-detected from transcript metadata; no effort ladder |
+| Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | model only — UI/default picker, default from `CCC_KILO_MODEL`; no effort ladder |
+| Kimi Code     | yes — ACP client over `kimi acp`, token-level live streaming | yes — steer live ACP sessions with inline permission-prompt answers; attach for TUI sessions | yes — reads `~/.kimi-code/sessions/`; live list and archive | yes — UI/default model picker; default from `CCC_KIMI_MODEL`; effort ladder read from Kimi's own `config.toml` (`support_efforts`) |
+| OpenCode      | yes — headless via `opencode run --auto` | yes — follow-ups route through `opencode run --session <id> --auto` | yes — externally-launched OpenCode (opencode.ai) sessions appear on the board | model only — UI/default picker, default from `CCC_OPENCODE_MODEL`; no effort ladder |
 | Devin         | no — cloud-only, sessions start at app.devin.ai | no — read-only | yes — sessions listed from the Devin API when `DEVIN_API_KEY` is set; board and archive show them with transcripts | no |
+
+Where an engine has no effort ladder, CCC hides the effort control rather than
+guessing one, and drops a `reasoning_effort` sent to it over the API. The live
+per-engine ladders are published at `GET /api/engines/models` under
+`efforts_by_engine`.
 
 **Note on Cursor IDE integration:** While CCC spawns Cursor agents headlessly via the CLI, the Desktop IDE manages UI state internally using a highly-nested, proprietary Protobuf Merkle tree in `store.db`. Full "two-way chat sync" into the IDE is unsupported due to the extreme risk of workspace corruption. Instead, CCC performs a **metadata integration**: CLI sessions are injected into the IDE sidebar as bookmarks (with correct titles and timestamps) so you don't lose track of them, but they cannot be interacted with natively inside the IDE window. Use the CCC dashboard for full history.
 
@@ -425,15 +430,24 @@ dry-run mode, and an honest fallback when CCC is down. On startup the server cop
 instance without hardcoding a port.
 
 Spawn calls pass `repo_path` (or `cwd`) plus optional
-`engine: "claude" | "codex" | "cursor" | "antigravity" | "kilo" | "kimi" | "opencode"` to `/api/sessions/spawn`;
-omitted engine/model values use the server-side defaults from the dashboard.
+`engine: "claude" | "codex" | "cursor" | "antigravity" | "kilo" | "kimi" | "opencode"`,
+`model`, and `reasoning_effort` to `/api/sessions/spawn`;
+omitted engine/model/effort values use the server-side defaults from the dashboard.
+The effort ladder is per engine (Claude `low`…`max`, Codex `low`…`xhigh`, Kimi
+whatever its own config declares, others none), so read the legal values from
+`efforts_by_engine` in `GET /api/engines/models` instead of assuming one list.
+An unrecognized `model` is a 400 on Codex; an effort the engine does not accept
+is dropped rather than rejected, so the spawn still succeeds at that engine's
+default effort.
 Clients that may retry a spawn or `/api/inject-input` request should also pass
 a stable `idempotency_key` for that user action. CCC returns the original work
 record instead of dispatching the same engine turn twice.
 Legacy `engine: "gemini"` maps to Antigravity. Successful spawns return
 `spawn_id`, `engine`, `repo_path`, `cwd`, optional `parent_session_id`, and
 `session_id` when the native engine has emitted one; callers can poll
-`/api/sessions/spawned` if `session_id_pending` is true. Passing `report_to`
+`/api/sessions/spawned` if `session_id_pending` is true. Those rows also carry
+the resolved `model` and `reasoning_effort`, which is how a caller confirms what
+the spawn actually ran with. Passing `report_to`
 (or explicit `parent_session_id`) links spawned sibling sessions under the
 dispatcher in Current Sessions.
 
@@ -567,6 +581,12 @@ For more depth: [`docs/architecture.md`](docs/architecture.md),
 | `CCC_ORG_PATTERNS` | *(empty)* | Multi-tenant org-tagger. Format: `Label1:pat1a\|pat1b;Label2:pat2`. Each issue body is scanned and tagged with the first matching label so the UI can group backlog by org. |
 | `VERCEL_PROJECT` | *(unset)* | Vercel project name. Leave empty to disable deploy polling. |
 | `CCC_TELEMETRY_DISABLED` | *(unset)* | Set to `1` to hard-disable the anonymous opt-in daily ping at the process level. Telemetry is **off by default** — the env var is the corporate / CI kill switch that also hides the consent banner. Full contract: [`docs/telemetry.md`](docs/telemetry.md). |
+
+Default models have a `CCC_*_MODEL` env var per engine; default **reasoning
+effort** deliberately does not. It lives in one place, **Settings → Spawn
+defaults…**, readable and writable headlessly at `GET`/`POST /api/spawn-defaults`
+(keys `reasoning_effort` for sessions you spawn and `worker_reasoning_effort` for
+queue workers). Per-call `reasoning_effort` on `/api/sessions/spawn` overrides it.
 
 The `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` knobs can also be set in `~/.claude/command-center/network.json` so they survive shell restarts, or flipped from the **Network access…** entry in the sidebar settings popover. Env vars always win, useful for CI / one-shot overrides. The same security caveats apply: every trusted origin can run commands as you.
 

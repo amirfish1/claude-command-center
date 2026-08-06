@@ -1482,6 +1482,25 @@
       return `engine=${encodeURIComponent(activeThroughputEngine)}`;
     }
 
+    // Engine · model · effort in one line. Engines without an effort concept,
+    // and rows served before reasoning_effort existed, just render shorter
+    // rather than printing an empty segment.
+    function routingSummary(engine, model, effort) {
+      return [engine, model, effort]
+        .map(part => String(part || '').trim())
+        .filter(Boolean)
+        .join(' · ');
+    }
+
+    // Both the engine-tab switch and selectSession() write this badge. Keep
+    // one writer so a tab switch cannot leave the previous session's model up.
+    function updateActiveEngineBadge(s) {
+      const badge = document.getElementById('active-engine-badge');
+      if (!badge) return;
+      const engine = (s && s.engine) || throughputEngineLabel();
+      badge.textContent = `Engine: ${routingSummary(engine, s && s.model, s && s.reasoning_effort)}`;
+    }
+
     function throughputFetchUrl(path, sessionId) {
       return `${path}?session_id=${encodeURIComponent(sessionId)}&engine=${encodeURIComponent(activeThroughputEngine)}`;
     }
@@ -1894,8 +1913,7 @@
         kimi.classList.toggle('active', activeThroughputEngine === 'kimi');
         kimi.setAttribute('aria-selected', activeThroughputEngine === 'kimi' ? 'true' : 'false');
       }
-      const badge = document.getElementById('active-engine-badge');
-      if (badge) badge.textContent = `Engine: ${throughputEngineLabel()}`;
+      updateActiveEngineBadge(findSessionById(activeSessionId));
     }
 
     async function setThroughputEngine(engine) {
@@ -2325,19 +2343,24 @@
         const name = s.display_name || s.name || s.title || 'Untitled Session';
         const ageText = formatTimeAge(s.modified);
         const engine = s.engine || 'unknown';
+        const routing = routingSummary(engine, s.model, s.reasoning_effort);
+        const effort = String(s.reasoning_effort || '').trim();
         const wt = s._week_tokens;
         const pctStr = (ppt && wt) ? `${(wt * ppt).toFixed(2)}%` : '';
 
         const item = document.createElement('div');
         item.className = `session-item ${sid === activeSessionId ? 'active' : ''}`;
         item.onclick = () => selectSession(s);
+        // Effort drives token volume, so it earns the one spare slot on the
+        // meta line here; the model is too long for a 9px badge and rides in
+        // the title instead.
         item.innerHTML = `
           <div class="session-item-header">
             <span class="session-title" title="${name}">${name}</span>
-            <span class="badge-engine" style="font-size: 9px; padding: 1px 5px;">${engine}</span>
+            <span class="badge-engine" style="font-size: 9px; padding: 1px 5px;" title="${routing}">${engine}</span>
           </div>
           <div class="session-meta">
-            <span>${sid.substring(0, 8)}...</span>
+            <span>${sid.substring(0, 8)}...${effort ? ` · ${effort}` : ''}</span>
             <span>${pctStr || ageText}</span>
           </div>
         `;
@@ -2418,7 +2441,7 @@
       renderSessionList();
 
       // Update engine badge
-      document.getElementById('active-engine-badge').textContent = `Engine: ${s.engine || throughputEngineLabel()}`;
+      updateActiveEngineBadge(s);
 
       // Show loader
       setStatus(`Loading throughput data for ${s.session_id.substring(0, 8)}...`, true);

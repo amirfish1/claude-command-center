@@ -2067,6 +2067,7 @@ def _extract_kimi_usage(session_id):
         limit = int(os.environ.get("CCC_KIMI_CONTEXT_LIMIT", "256000") or "256000")
     except ValueError:
         limit = 256000
+    override = _core._get_session_override(session_id)
     result = {
         "latest_input_tokens": 0,
         "peak_input_tokens": 0,
@@ -2083,7 +2084,11 @@ def _extract_kimi_usage(session_id):
         "live_context_timestamp": "",
         "live_context_source": "",
         "engine": "kimi",
-        "override": _core._get_session_override(session_id),
+        "override": override,
+        # Kimi's thinking effort never streams back over ACP, so the value CCC
+        # spawned or last picked is the only source. Top-level to match the
+        # codex usage shape.
+        "reasoning_effort": (override or {}).get("reasoning_effort") or "",
         "cost_usd": 0.0,
         "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
                                "cache_read": 0.0, "output": 0.0},
@@ -2152,8 +2157,9 @@ def extract_session_usage(session_id):
     Returns: {latest_input_tokens, peak_input_tokens, total_output_tokens,
               total_input_tokens, total_cache_creation_tokens,
               total_cache_read_tokens, model, context_limit, cost_usd,
-              cost_breakdown_usd}.
+              reasoning_effort, cost_breakdown_usd}.
     """
+    override = _core._get_session_override(session_id)
     empty = {
         "latest_input_tokens": 0,
         "peak_input_tokens": 0,
@@ -2170,7 +2176,8 @@ def extract_session_usage(session_id):
         "live_context_timestamp": "",
         "live_context_source": "",
         "engine": "claude",
-        "override": _core._get_session_override(session_id),
+        "override": override,
+        "reasoning_effort": (override or {}).get("reasoning_effort") or "",
         "cost_usd": 0.0,
         "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
                                "cache_read": 0.0, "output": 0.0},
@@ -2340,8 +2347,12 @@ def extract_session_usage(session_id):
     cost_out = total_out * rate_out / 1_000_000
     cost_total = cost_in + cost_cw + cost_cr + cost_out
 
-    override = _core._get_session_override(session_id)
     return _with_token_optimizer_quality({
+        # Top-level effort, matching _extract_codex_usage's shape so a client
+        # reads one key for every engine. For Claude this is the effort CCC
+        # chose (`--effort` at spawn, or the model picker) — a `/effort` typed
+        # into the TUI never reaches the transcript, so it is invisible here.
+        "reasoning_effort": (override or {}).get("reasoning_effort") or "",
         "latest_input_tokens": latest,
         "peak_input_tokens": peak,
         "total_output_tokens": total_out,

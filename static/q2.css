@@ -510,6 +510,19 @@ body.q2-resizing .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
 }
 .q2-dg-worker-idle { font-size: 10.5px; color: var(--text-muted); opacity: 0.7; }
+/* What the running worker was spawned with. Same readout as the tickets-column
+   header spec, but these are facts about a live process rather than links into
+   the config form, so nothing here invites a click. */
+/* Wraps rather than clips: the card is narrower than one model name, and half
+   a truncated model reads as a rendering bug. */
+.q2-dg-worker-spec {
+  flex-wrap: wrap;
+  overflow: visible;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.q2-dg-worker-spec .q2-spec-v { color: var(--text-muted); cursor: default; }
+.q2-dg-worker-spec .q2-spec-v:hover { color: var(--text-muted); border-bottom-color: transparent; }
 .q2-dg-worker-release {
   margin-left: auto;
   padding: 1px 5px;
@@ -952,6 +965,8 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-live-workers-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .q2-live-worker { display: inline-flex; align-items: center; gap: 4px; font: 10.5px var(--font-mono); color: var(--text); }
 .q2-live-worker b { font: inherit; color: var(--cyan); }
+/* Engine and effort, dimmed behind the worker and queue that identify the row. */
+.q2-live-worker i { font: inherit; font-style: normal; color: var(--text-muted); }
 /* Triage chips: type/priority, readiness, value/confidence. Fixed width, never
    shrink — the title yields the space instead, since it is truncated anyway. */
 .q2-tchips { flex: 0 0 auto; display: inline-flex; gap: 2px; }

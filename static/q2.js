@@ -19,6 +19,20 @@
   // leaving the all-time closure history behind the explicit control.
   var RECENT_CLOSED_WINDOW_MS = 12 * 60 * 60 * 1000;
 
+  // Reasoning-effort ladders differ per engine: Claude goes up to max, Codex
+  // stops at xhigh, Kimi skips rungs entirely. The server publishes the real
+  // ladders as efforts_by_engine; this map is only the fallback for a server
+  // that predates that field, so an older build still offers a usable list
+  // instead of one engine's ladder applied to all of them.
+  var EFFORTS_FALLBACK = {
+    claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+    codex: ['low', 'medium', 'high', 'xhigh'],
+    kimi: ['low', 'high', 'max'],
+  };
+  var EFFORT_LABEL = {
+    low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max',
+  };
+
   var state = {
     queues: [],
     projects: {},       // queue name → per-project health row (why it's stuck)
@@ -858,6 +872,51 @@
     return html;
   }
 
+  // Is this live worker the one running this ticket? Asked in both directions:
+  // the diagram asks it per worker, the ticket detail asks it per ticket.
+  function workerMatchesItem(w, it) {
+    var s = String((it && it.claimed_session_id) || '').trim();
+    var by = String((it && it.claimed_by) || '').trim();
+    return !!(w && ((s && s === w.session_id) || (by && (by === w.session_id || by === w.worker_id))));
+  }
+
+  // What a LIVE worker is actually running: the same engine / model / effort
+  // triple the tickets-column header shows for the queue, so the two can be
+  // compared at a glance when a worker predates a config change. Rendered as
+  // plain text rather than links: these are facts about a process that already
+  // started, not fields you can still edit. A worker with no effort was spawned
+  // without one, which is NOT the header's "unset here, inherited from the
+  // defaults", so a missing field is left out rather than shown as a default.
+  function workerSpecFields(w) {
+    return [
+      String((w && w.engine) || ''),
+      String((w && w.model) || ''),
+      String((w && w.effort) || ''),
+    ];
+  }
+
+  // The worker cards are barely wider than one model name, so the vendor prefix
+  // is dropped on screen only. The title always carries the exact values.
+  function shortModel(model) {
+    return String(model || '').split('/').pop().replace(/^claude-/, '');
+  }
+
+  function workerSpecTitle(w) {
+    var f = workerSpecFields(w);
+    return 'engine ' + (f[0] || 'default') + ' · model ' + (f[1] || 'default')
+      + ' · effort ' + (f[2] || 'none set at spawn');
+  }
+
+  function workerSpecHtml(w, cls) {
+    var f = workerSpecFields(w);
+    var shown = [f[0], shortModel(f[1]), f[2]].filter(Boolean);
+    if (!shown.length) return '';
+    return '<div class="q2-spec ' + esc(cls) + '" title="' + esc(workerSpecTitle(w)) + '">'
+      + shown.map(function (v) { return '<span class="q2-spec-v">' + esc(v) + '</span>'; })
+          .join('<span class="q2-spec-sep">&middot;</span>')
+      + '</div>';
+  }
+
   // Re-rendering the diagram on every 5s poll would restart every CSS
   // animation mid-cycle, which reads as a stutter. Only rebuild when something
   // it actually draws has changed.
@@ -867,7 +926,10 @@
       m.waiting.length, m.parked.length, m.blocked.length,
       m.working.map(function (it) { return it.ref; }).join(','),
       m.workers.map(function (w) {
-        return w.worker_id + ':' + Q2WorkerIdle.signatureBucket(w.idle_seconds);
+        // The spec is part of what the card draws, so a worker that respawned
+        // on a different engine/model/effort has to repaint.
+        return w.worker_id + ':' + Q2WorkerIdle.signatureBucket(w.idle_seconds)
+          + ':' + workerSpecFields(w).join('/');
       }).join(','),
       m.doneRecent.map(function (it) { return it.ref; }).join(','),
     ].join('|');
@@ -900,10 +962,7 @@
     var workerBody;
     if (m.workers.length) {
       workerBody = m.workers.map(function (w) {
-        var on = m.working.filter(function (it) {
-          var s = String(it.claimed_session_id || '').trim(), by = String(it.claimed_by || '').trim();
-          return (s && s === w.session_id) || (by && (by === w.session_id || by === w.worker_id));
-        })[0];
+        var on = m.working.filter(function (it) { return workerMatchesItem(w, it); })[0];
         var idle = Q2WorkerIdle.presentation(w.idle_seconds);
         var idleClass = idle.severity === 'pending' ? ' is-idle-pending'
           : idle.severity === 'warning' ? ' is-idle-warning'
@@ -919,6 +978,7 @@
           + ' title="Release this worker and requeue its ticket"'
           + ' aria-label="Release ' + esc(w.worker_id || 'worker') + ' and requeue its ticket">Release</button>'
           + '</div>'
+          + workerSpecHtml(w, 'q2-dg-worker-spec')
           + (on
               ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
                 + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
@@ -1002,7 +1062,10 @@
   function renderLiveWorkersStrip(host) {
     var workers = state.workers || [];
     var sig = 'all|' + workers.map(function (w) {
-      return String(w.worker_id || '') + '|' + String(w.queue || '');
+      // engine/model/effort are drawn here too, so keying on worker+queue alone
+      // would freeze a stale spec on screen after a respawn.
+      return String(w.worker_id || '') + '|' + String(w.queue || '')
+        + '|' + workerSpecFields(w).join('/');
     }).join(',');
     if (host.getAttribute('data-sig') === sig) return;
     host.setAttribute('data-sig', sig);
@@ -1010,8 +1073,14 @@
       + '<div class="q2-live-workers-head">Live workers <span>' + workers.length + '</span></div>'
       + (workers.length
           ? '<div class="q2-live-workers-list">' + workers.map(function (w) {
-              return '<span class="q2-live-worker"><span class="q2-dg-spin" aria-hidden="true"></span>'
-                + esc(w.worker_id || 'worker') + '<b>' + esc(w.queue || 'unknown queue') + '</b></span>';
+              // Same triple as the per-queue worker cards, on the short model
+              // name: this strip is the only place the ALL view says anything
+              // about how each queue's worker is configured.
+              var spec = [w.engine, shortModel(w.model), w.effort].filter(Boolean).join(' · ');
+              return '<span class="q2-live-worker" title="' + esc(workerSpecTitle(w)) + '">'
+                + '<span class="q2-dg-spin" aria-hidden="true"></span>'
+                + esc(w.worker_id || 'worker') + '<b>' + esc(w.queue || 'unknown queue') + '</b>'
+                + (spec ? '<i>' + esc(spec) + '</i>' : '') + '</span>';
             }).join('') + '</div>'
           : '<div class="q2-dg-empty">No workers are live.</div>')
       + '</div>';
@@ -1537,10 +1606,22 @@
         + esc(armed[1]) + '</button></div></section>'
       : '';
 
+    // What the ticket is running ON, resolved from the live worker roster we
+    // already poll. Only a claimed ticket with a still-live worker can answer
+    // this: a closed one is not "no engine", it is a record we never kept, so
+    // the bit is labelled "running on" and simply absent otherwise.
+    var runner = (state.workers || []).filter(function (w) {
+      return workerMatchesItem(w, item);
+    })[0];
+    var runnerSpec = runner ? workerSpecFields(runner).filter(Boolean).join(' · ') : '';
+
     // Assignment and origin: one compact strip at the very bottom, replacing
     // the fixed sidebar. It is reference data, not something you act on.
     var metaBits = [
       item.claimed_by ? 'worker <span class="q2-mono">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : '',
+      runnerSpec ? (closed ? 'ran on ' : 'running on ')
+        + '<span class="q2-mono" title="' + esc(workerSpecTitle(runner)) + '">'
+        + esc(runnerSpec) + '</span>' : '',
       sid ? 'session ' + sessionBtn(sid, 'open in CCC') : '',
       item.claimed_at ? 'claimed ' + esc(relTime(item.claimed_at)) : '',
       item.closed_at ? 'closed ' + esc(relTime(item.closed_at)) : '',
@@ -1989,6 +2070,7 @@
     })[0];
     var c = Object.assign({}, options.defaults || {}, (existing && existing.config) || {});
     var models = options.models_by_engine || {};
+    var efforts = options.efforts_by_engine || {};
     var engine = c.engine || 'claude';
     var types = Array.isArray(c.claim_types) ? c.claim_types : [];
 
@@ -1996,6 +2078,24 @@
       var list = models[eng] || [];
       return opt('', 'default', cur)
         + list.map(function (m) { return opt(m, m, cur); }).join('');
+    }
+
+    function effortsFor(eng) {
+      var list = efforts[eng];
+      return Array.isArray(list) ? list : (EFFORTS_FALLBACK[eng] || []);
+    }
+
+    function effortOptions(eng, cur) {
+      var list = effortsFor(eng);
+      // A saved value this engine no longer offers stays selectable rather than
+      // silently collapsing to the first option: the main dashboard's dialog
+      // can save a queue at an effort this list does not contain, and editing
+      // an unrelated field here must not quietly downgrade it.
+      var extra = cur && list.indexOf(cur) === -1
+        ? opt(cur, (EFFORT_LABEL[cur] || cur) + ' (not offered by ' + eng + ')', cur) : '';
+      return opt('', 'default', cur)
+        + list.map(function (x) { return opt(x, EFFORT_LABEL[x] || x, cur); }).join('')
+        + extra;
     }
 
     openModal(
@@ -2025,9 +2125,8 @@
           + '</select>')
       + field('Model', '<select class="q2-input" data-q2-cfg="model">' + modelOptions(engine, c.model) + '</select>')
       + field('Effort', '<select class="q2-input" data-q2-cfg="effort">'
-          + opt('', 'default', c.effort) + ['low', 'medium', 'high', 'xhigh'].map(function (x) {
-              return opt(x, x, c.effort); }).join('')
-          + '</select>')
+          + effortOptions(engine, c.effort || '')
+          + '</select>', 'Reasoning budget for workers this queue spawns')
       + field('Desired workers', '<input class="q2-input" type="number" min="0" max="16"'
           + ' data-q2-cfg="desired_workers" value="' + esc(String(c.desired_workers != null ? c.desired_workers : 1)) + '">')
       + field('Auto-drain', '<select class="q2-input" data-q2-cfg="auto_drain">'
@@ -2052,7 +2151,16 @@
         // Model list follows the engine, or it offers models the engine cannot run.
         var eng = modal.querySelector('[data-q2-cfg="engine"]');
         var mod = modal.querySelector('[data-q2-cfg="model"]');
-        eng.addEventListener('change', function () { mod.innerHTML = modelOptions(eng.value, ''); });
+        var eff = modal.querySelector('[data-q2-cfg="effort"]');
+        eng.addEventListener('change', function () {
+          mod.innerHTML = modelOptions(eng.value, '');
+          // Effort ladders are per engine too (Claude has max, Codex does not),
+          // so a value the new engine cannot run is dropped back to default.
+          // Unlike the model it is kept when it survives the switch: the rung
+          // is the same intent on either engine, the model name is not.
+          var keep = effortsFor(eng.value).indexOf(eff.value) !== -1 ? eff.value : '';
+          eff.innerHTML = effortOptions(eng.value, keep);
+        });
         // Land on the field the user clicked, not the top of the form.
         var target = focusField && modal.querySelector('[data-q2-cfg="' + focusField + '"]');
         var first = target || modal.querySelector('[data-q2-cfg="' + (isNew ? 'queue' : 'repo_path') + '"]');

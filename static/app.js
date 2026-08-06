@@ -2895,15 +2895,15 @@
     { id: 'codex',  label: 'Codex',  fallback: [{ id: 'gpt-5.5', label: '5.5' }] },
     { id: 'kimi',   label: 'Kimi',   fallback: [{ id: 'kimi-code/k3', label: 'K3' }] },
   ];
-  // Same vocabulary as CODEX_REASONING_LEVELS plus 'max' — the spec asked for
-  // the full Light…Max ladder here even though the Codex composer select tops
-  // out at Extra High.
+  // Fallback ladder only. The real one is per engine (Codex stops at Extra
+  // High, Claude and Kimi go to Max), read at call time from
+  // effortLevelsForEngine for the same temporal-dead-zone reason as the model
+  // lists above. Offering Max for Codex here used to be offerable-then-dropped.
   const F2_LAUNCH_EFFORTS = [
     { id: 'low',    label: 'Light' },
     { id: 'medium', label: 'Medium' },
     { id: 'high',   label: 'High' },
     { id: 'xhigh',  label: 'Extra High' },
-    { id: 'max',    label: 'Max' },
   ];
   // Per-pane composer state: the gate that fired, plus the launch overrides
   // and dialog open/closed, so a repaint can't reset a choice already made.
@@ -3170,6 +3170,16 @@
     } catch (_) {}
     return spec.fallback;
   }
+  // Same shape and the same lazy read as f2ModelsForEngine: an engine with no
+  // reasoning ladder returns [], which is the signal to drop the effort clause
+  // from the sentence rather than offer a level the CLI will reject.
+  function f2EffortsForEngine(engineId) {
+    try {
+      const levels = effortLevelsForEngine(engineId);
+      if (Array.isArray(levels)) return levels;
+    } catch (_) {}
+    return F2_LAUNCH_EFFORTS;
+  }
   function f2LaunchNote(launch) {
     // Only claims a saving it can actually justify: the Claude ladder is the
     // one place we know the relative rate. Silent everywhere else.
@@ -3211,7 +3221,13 @@
       const preferred = defaultModels[engine] || (engine === 'claude' ? 'sonnet-5' : '');
       const model = (preferred && models.some(m => m.id === preferred)) ? preferred : (models[0] ? models[0].id : '');
       const defaultEffort = (typeof spawnDefaultsState === 'object' && spawnDefaultsState && spawnDefaultsState.reasoning_effort) || '';
-      const effort = F2_LAUNCH_EFFORTS.some(e => e.id === defaultEffort) ? defaultEffort : 'low';
+      const efforts = f2EffortsForEngine(engine);
+      // The saved default only carries over when the chosen engine actually
+      // has that rung; otherwise take the engine's cheapest, and '' for an
+      // engine with no ladder at all.
+      const effort = efforts.some(e => e.id === defaultEffort)
+        ? defaultEffort
+        : (efforts[0] ? efforts[0].id : '');
       st = { sid, launch: { engine, model, effort }, configOpen: false };
       f2PaneState.set(key, st);
     }
@@ -3225,13 +3241,17 @@
           + (o.id === current ? ' selected' : '') + '>' + escapeHtml(o.label) + '</option>').join('')
       + '</select>';
   }
-  function f2EffortLabel(effortId) {
-    const e = F2_LAUNCH_EFFORTS.find(x => x.id === effortId);
-    return e ? e.label : String(effortId || '');
+  function f2EffortLabel(launch) {
+    const e = f2EffortsForEngine(launch.engine).find(x => x.id === launch.effort);
+    return e ? e.label : String(launch.effort || '');
   }
   function f2ModelLabel(launch) {
     const m = f2ModelsForEngine(launch.engine).find(x => x.id === launch.model);
     return m ? m.label : String(launch.model || '');
+  }
+  function f2EngineLabel(launch) {
+    const e = F2_LAUNCH_ENGINES.find(x => x.id === launch.engine);
+    return e ? e.label : String(launch.engine || '');
   }
   // The launch spec collapses to a two-word chip on the row; the actual
   // engine/model/effort choice happens in this follow-up dialog, so the route
@@ -3241,13 +3261,14 @@
   function f2ConfigHtml(launch) {
     const engines = F2_LAUNCH_ENGINES.map(e => ({ id: e.id, label: e.label }));
     const note = f2LaunchNote(launch);
+    const efforts = f2EffortsForEngine(launch.engine);
     return '<div class="f2c-config">'
       + '<span>Launches on</span>'
       + f2SelectHtml('engine', engines, launch.engine)
       + f2SelectHtml('model', f2ModelsForEngine(launch.engine), launch.model)
-      + '<span>at</span>'
-      + f2SelectHtml('effort', F2_LAUNCH_EFFORTS, launch.effort)
-      + '<span>effort</span>'
+      + (efforts.length
+          ? '<span>at</span>' + f2SelectHtml('effort', efforts, launch.effort) + '<span>effort</span>'
+          : '')
       + (note ? '<span class="rate">' + escapeHtml(note) + '</span>' : '')
       + '<button type="button" class="f2c-config-done" data-f2-chip>Done</button>'
       + '</div>';
@@ -3256,6 +3277,13 @@
   function f2RoutesHtml(st, verdictText) {
     const r = F2_ROUTES.continue;
     const title = (verdictText ? verdictText + ' ' : '') + r.name + ' — ' + r.desc;
+    // Name all three parts of the spec the click will actually use. The engine
+    // was missing (two engines can offer look-alike model labels), and the
+    // effort clause is dropped rather than invented for engines without one.
+    const effortLabel = f2EffortLabel(st.launch);
+    const chipTitle = 'Launches on ' + f2EngineLabel(st.launch) + ' ' + f2ModelLabel(st.launch)
+      + (effortLabel ? ' at ' + effortLabel + ' effort' : '')
+      + ' — click to change';
     return '<div class="route is-recommended" data-f2-route="continue">'
       // .route is a div, .route-main the button: the ▾ caret is a real
       // control and a button may not nest inside a button.
@@ -3268,8 +3296,7 @@
       + '<button type="button" class="f2c-chip" data-f2-chip'
         + ' aria-expanded="' + (st.configOpen ? 'true' : 'false') + '"'
         + ' aria-label="Change engine, model, or effort"'
-        + ' title="' + escapeAttr('Launches on ' + f2ModelLabel(st.launch) + ' at '
-            + f2EffortLabel(st.launch.effort) + ' effort — click to change') + '">▾</button>'
+        + ' title="' + escapeAttr(chipTitle) + '">▾</button>'
       + '</div>';
   }
 
@@ -3335,21 +3362,10 @@
     }
     if (!force && panel.innerHTML) return;              // static once painted
     panel.hidden = false;
-    const verdictHtml = gate.idleOnly
-      ? '<div class="verdict" title="' + escapeAttr('This session has sat idle for ' + ageLabel
-          + '. CCC has no cache-cost evidence for this one (small context, or an engine without a'
-          + ' measured decay profile) — this is purely "you haven’t touched this in a while."')
-          + '">'
-          + 'Idle <span class="cost">' + escapeHtml(ageLabel)
-          + '</span> — start fresh with just the context you need</div>'
-      : '<div class="verdict" title="' + escapeAttr('Estimate: ' + gate.cache.verdictNote
-          + '. CCC infers coldness from the transcript’s mtime — it cannot observe the provider’s cache. '
-          + 'Compacting first costs more, not less: writing the summary reloads all ' + tokensLabel
-          + ', then you still pay for the turn.') + '">'
-          + 'Resuming here reloads <span class="cost">~' + escapeHtml(tokensLabel)
-          + ' tokens on ' + escapeHtml(modelLabel) + '</span></div>';
-    panel.innerHTML = verdictHtml
-      + '<div class="routes">' + f2RoutesHtml(st) + '</div>'
+    const verdictText = gate.idleOnly
+      ? 'Idle ' + ageLabel + ' — start fresh with just the context you need.'
+      : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.';
+    panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText) + '</div>'
       + (st.configOpen ? f2ConfigHtml(st.launch) : '');
   }
 
@@ -3371,18 +3387,20 @@
     const subject = 'Continue ' + parentTitle;
     const tempPid = 'tmp-f2-' + Date.now();
     try {
-      const body = {
+      const cwd = f2ResolveSpawnCwd(ctx);
+      // The chip already told the user "Launches on <engine> <model> at
+      // <effort> effort". Send the whole spec, or that sentence is a lie for
+      // every engine whose effort we used to drop on the floor.
+      const body = buildSpawnBody({
+        engine: launch.engine,
+        model: launch.model,
+        effort: launch.effort,
         prompt: f2RetrievalPrompt(ctx, st.gate),
         name: subject,
-        engine: launch.engine,
-        parent_session_id: sid,
-      };
-      if (launch.model) body.model = launch.model;
-      // Effort is only meaningful for the engines that expose a reasoning
-      // ladder; sending it elsewhere would be noise the server has to ignore.
-      if (launch.engine === 'codex' && launch.effort) body.reasoning_effort = launch.effort;
-      const cwd = f2ResolveSpawnCwd(ctx);
-      if (cwd) { body.cwd = cwd; body.repo_path = cwd; }
+        cwd,
+        repoPath: cwd,
+      });
+      body.parent_session_id = sid;
       let endpoint = '/api/sessions/spawn';
       try { if (typeof spawnEndpointForEngine === 'function') endpoint = spawnEndpointForEngine(launch.engine); } catch (_) {}
       // Continue New is a navigation action as well as a spawn. Use the
@@ -3486,6 +3504,13 @@
       // rather than leaving a stale label in the box.
       const models = f2ModelsForEngine(sel.value);
       st.launch.model = models[0] ? models[0].id : '';
+      // Same for the effort: the ladders differ in extent (Max exists for
+      // Claude and Kimi, not Codex), so a held rung the new engine has never
+      // heard of has to come down to one it has.
+      const efforts = f2EffortsForEngine(sel.value);
+      if (!efforts.some(e => e.id === st.launch.effort)) {
+        st.launch.effort = efforts[0] ? efforts[0].id : '';
+      }
     }
     // Repaint on every change so the chip label tracks the choice; the open
     // dialog survives because configOpen lives in state, not the DOM.
@@ -5013,28 +5038,68 @@
     return !!optimistic;
   }
 
+  const SESSION_ENGINE_LABELS = {
+    claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
+    antigravity: 'Antigravity', hermes: 'Hermes', kimi: 'Kimi',
+    copilot: 'Copilot', grok: 'Grok', copilotchat: 'Copilot Chat',
+    devin: 'Devin',
+    opencode: 'OpenCode',
+    // sessionIconEngine never returns these two, but the pending-spawn card
+    // looks labels up by raw source and they are real spawn targets.
+    kilo: 'Kilo', pkood: 'pkood',
+  };
+
+  // Rows disagree about how they spell the effort key: conversation rows carry
+  // `reasoning_effort`, the codex-wake payload and the F2 launch spec carry a
+  // bare `effort`. Read both so a caller never has to know which one it holds.
+  function rowReasoningEffort(row) {
+    if (!row) return '';
+    return String(row.reasoning_effort || row.effort || '').trim();
+  }
+
+  // One spelling of "this model, at this effort". The same pair was being
+  // concatenated four different ways (' (high)', ' · effort high', a bare
+  // ' · ' segment, 'effort high'), twice on adjacent lines for the same value.
+  // Callers pick a presentation, not a separator.
+  //   opts.style     'compact' (default) → "opus-5 (high)"   — chips, labels
+  //                  'verbose'           → "opus-5 · effort high" — tooltips
+  //   opts.fallback  stand-in when the model is unknown (default: none)
+  function formatModelEffort(model, effort, opts) {
+    const o = opts || {};
+    const modelText = String(model == null ? '' : model).trim() || String(o.fallback || '');
+    const effortText = String(effort == null ? '' : effort).trim();
+    if (!effortText) return modelText;
+    if (o.style === 'verbose') {
+      return modelText ? modelText + ' · effort ' + effortText : 'effort ' + effortText;
+    }
+    return modelText ? modelText + ' (' + effortText + ')' : effortText;
+  }
+
+  // The engine and the model+effort as two ready-to-join bits, for the many
+  // readouts that render "Engine · model" and drop the effort on the floor.
+  function engineModelEffortBits(row, opts) {
+    const o = opts || {};
+    const engine = o.engine || sessionIconEngine(row);
+    return [
+      SESSION_ENGINE_LABELS[engine] || 'Claude',
+      formatModelEffort(row && row.model, rowReasoningEffort(row), o),
+    ];
+  }
+
   function sessionIconPresentation(row, optimistic) {
     const engine = sessionIconEngine(row);
-    const engineLabels = {
-      claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor',
-      antigravity: 'Antigravity', hermes: 'Hermes', kimi: 'Kimi',
-      copilot: 'Copilot', grok: 'Grok', copilotchat: 'Copilot Chat',
-      devin: 'Devin',
-      opencode: 'OpenCode',
-    };
     const tierLabels = {
       premium: 'Premium', high: 'High', medium: 'Medium', low: 'Low',
     };
-    const engineLabel = engineLabels[engine] || 'Claude';
+    const engineLabel = SESSION_ENGINE_LABELS[engine] || 'Claude';
     const model = String((row && row.model) || '').trim();
-    const effort = String((row && row.reasoning_effort) || '').trim();
     const tier = sessionCostTier(engine, model);
     const tierLabel = tierLabels[tier] || '';
     const working = sessionIsActivelyWorking(row, optimistic);
     const activityLabel = working ? 'Working now' : 'Not working';
     const title = [
       engineLabel,
-      (model || 'Model unknown') + (effort ? ' (' + effort + ')' : ''),
+      formatModelEffort(model, rowReasoningEffort(row), { fallback: 'Model unknown' }),
       tierLabel ? tierLabel + ' cost' : 'Cost tier unknown',
       activityLabel,
     ].join(' · ');
@@ -5365,20 +5430,19 @@
     }
   }
   function _wakeStageLabel(name, data) {
-    const model = data.model || 'model';
-    const effort = data.effort ? (' (' + data.effort + ')') : '';
+    const modelEffort = formatModelEffort(data.model, rowReasoningEffort(data), { fallback: 'model' });
     switch (name) {
       case 'connect': return 'Connected';
       case 'thread-resume': return 'Reattached (thread/resume)';
       case 'turn-start': return 'Sent (turn/start)';
-      case 'running': return 'Running ' + model + effort;
+      case 'running': return 'Running ' + modelEffort;
       default: return name;
     }
   }
   function _wakeStageQuietLabel(name, data) {
-    const model = data.model || 'model';
-    const effort = data.effort ? (' (' + data.effort + ')') : '';
-    if (name === 'running') return 'Thinking… ' + model + effort;
+    if (name === 'running') {
+      return 'Thinking… ' + formatModelEffort(data.model, rowReasoningEffort(data), { fallback: 'model' });
+    }
     return _wakeStageLabel(name, data);
   }
   function _codexWakeTransportLabel(data) {
@@ -5443,8 +5507,10 @@
     const parts = [];
     const transportLabel = _codexWakeTransportLabel(data);
     if (transportLabel) parts.push(transportLabel);
-    if (data.model) parts.push(data.model);
-    if (data.effort) parts.push(data.effort);
+    // Verbose style so the effort reads as "effort high" and not as a bare
+    // "high" segment the reader has to guess the meaning of.
+    const modelEffort = formatModelEffort(data.model, rowReasoningEffort(data), { style: 'verbose' });
+    if (modelEffort) parts.push(modelEffort);
     if (data.input_tokens != null || data.output_tokens != null) {
       parts.push((data.input_tokens || 0) + '↓ / ' + (data.output_tokens || 0) + '↑ tokens');
     }
@@ -7667,7 +7733,20 @@
         }
       }
       if (activeEffortSelect) {
-        activeEffortSelect.style.display = isNewSession && getSpawnEngine() === 'codex' ? '' : 'none';
+        // Every engine with a reasoning ladder, not just Codex.
+        const spawnEngine = getSpawnEngine();
+        const canPickEffort = engineSupportsEffort(spawnEngine);
+        // syncSpawnEngineDependentUi rebuilds the primary bar's ladder; a
+        // cloned pane bar has its own .effort-select that it never sees. Only
+        // touch it when the rungs actually differ, so a repaint mid-typing
+        // cannot reset a pick the user already made in that pane.
+        if (canPickEffort && activeEffortSelect.id !== 'convInputEffortSelect') {
+          const levels = effortLevelsForEngine(spawnEngine);
+          const want = levels.map(lvl => lvl.id).join(',');
+          const have = Array.from(activeEffortSelect.options).map(o => o.value).filter(Boolean).join(',');
+          if (want !== have) renderEffortOptions(activeEffortSelect, levels, activeEffortSelect.value, 'Default effort');
+        }
+        activeEffortSelect.style.display = isNewSession && canPickEffort ? '' : 'none';
       }
     } else {
       _activeInputBar.classList.remove('visible');
@@ -13188,17 +13267,17 @@
     if (!$view || !card) return;
     const prompt = (card.first_message || card.prompt || card.display_name || '').trim();
     const failed = !!card.spawn_failed;
-    const engineLabel = card.source === 'codex' ? 'Codex'
-      : card.source === 'gemini' ? 'Gemini'
-      : card.source === 'cursor' ? 'Cursor'
-      : card.source === 'antigravity' ? 'Antigravity'
-      : card.source === 'kilo' ? 'Kilo'
-      : card.source === 'opencode' ? 'OpenCode'
-      : card.source === 'pkood' ? 'pkood'
-      : 'Claude';
+    // This card is the receipt for a choice the user made seconds ago, so it
+    // has to name the whole choice: engine, model and effort, not just the
+    // engine. Label lookup goes through the shared map rather than a fourth
+    // copy of the engine ternary.
+    const cardSource = String(card.source || '').trim().toLowerCase();
+    const [engineLabel, modelEffort] = engineModelEffortBits(card, {
+      engine: SESSION_ENGINE_LABELS[cardSource] ? cardSource : undefined,
+    });
     const cwd = card.spawn_cwd || card.repo_path || card.folder_path || card.cwd || '';
     const cwdLabel = cwd ? (_pathLeaf(cwd) || cwd) : '';
-    const meta = [engineLabel + ' session', cwdLabel].filter(Boolean).join(' · ');
+    const meta = [engineLabel + ' session', modelEffort, cwdLabel].filter(Boolean).join(' · ');
     const promptHtml = prompt
       ? linkifyPastedImages(escapeHtml(prompt))
       : escapeHtml(card.display_name || 'New session');
@@ -17529,11 +17608,20 @@
 
     try {
       const endpoint = spawnEndpointForEngine(engine);
-      // CCC-509: always send engine explicitly — see comment at the inline-
-      // input spawn call site for why omitting it lets the server's own
-      // persisted default silently override what the UI shows.
-      const body = { prompt, name: subject, cwd: repoPath, repo_path: repoPath, engine };
-      if (spawnSupportsWorktree(engine)) body.worktree = false;
+      // Play launches on the spec the composer is advertising — engine, model
+      // AND effort. Sending the engine alone let the server pick a model and
+      // effort the user never chose.
+      const choice = currentSpawnChoice(engine);
+      const body = buildSpawnBody({
+        engine,
+        model: choice.model,
+        effort: choice.effort,
+        prompt,
+        name: subject,
+        cwd: repoPath,
+        repoPath,
+        worktree: false,
+      });
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -18577,7 +18665,13 @@
           x: defaultPos.x,
           y: defaultPos.y,
           title: flowRowTitle(row),
-          kicker: row.source || row.engine || 'session',
+          // The kicker named the engine and stopped there, so a board full of
+          // "claude" nodes said nothing about what each one is costing. It is
+          // a nowrap/ellipsis line, so appending the model keeps node height
+          // stable (Organize's bin-pack math depends on that).
+          kicker: [row.source || row.engine || 'session', formatModelEffort(row.model, rowReasoningEffort(row))]
+            .filter(Boolean).join(' · '),
+          tooltip: sessionIconPresentation(row).title,
           meta,
           chipsHtml: flowSessionChipsHtml(row),
           className: 'flow-node-session is-' + status.key + worktree + (currentConversation === row.id ? ' active' : '') + (row.archived ? ' is-archived' : ''),
@@ -18663,9 +18757,13 @@
       // Archived nodes wear a green ✓ badge (CSS ::before — can't carry its
       // own tooltip). Explain it on the node so hovering answers "what are
       // these checkmarks?" (CCC-75).
-      const nodeTitle = (rec.className || '').indexOf('is-archived') !== -1
-        ? ' title="Archived (done) session - the ✓ marks it complete. Shown because ‘Include archived’ is on or it’s pinned to the board."'
+      const archivedTip = (rec.className || '').indexOf('is-archived') !== -1
+        ? 'Archived (done) session - the ✓ marks it complete. Shown because ‘Include archived’ is on or it’s pinned to the board.'
         : '';
+      // rec.tooltip carries the session's engine · model (effort) · cost tier
+      // readout, which the truncated kicker can only hint at.
+      const nodeTipText = [rec.tooltip || '', archivedTip].filter(Boolean).join('\n');
+      const nodeTitle = nodeTipText ? ' title="' + escapeAttr(nodeTipText) + '"' : '';
       return '<div class="flow-node ' + escapeAttr(rec.className) + selectedClass + '" data-flow-kind="' + escapeAttr(rec.kind) + '"'
         + ' data-flow-node-id="' + escapeAttr(rec.id) + '"' + dataParent + dataRow + dataSession + dataObject + dataDraft + dataRepoPath + dataGcPath + dataGcId + dataGcMode + nodeTitle
         + ' style="left:' + Math.round(pos.x) + 'px;top:' + Math.round(pos.y) + 'px;' + accentStyle + '">'
@@ -26682,9 +26780,14 @@
           signals += '<span class="conv-signal hermes-chat" title="Plain conversation - no tool calls">chat</span>';
         }
         if (c.model) {
-          const hermesModel = String(c.model).replace(/^hermes[-_]?/i, '').slice(0, 36);
-          const hermesModelTitle = c.reasoning_effort ? (c.model + ' · effort ' + c.reasoning_effort) : c.model;
-          const hermesModelLabel = c.reasoning_effort ? (hermesModel + ' (' + c.reasoning_effort + ')') : hermesModel;
+          const hermesEffort = rowReasoningEffort(c);
+          // 36 chars is the sidebar's width budget for this chip, so the
+          // effort suffix has to come out of the model's share of it rather
+          // than be appended past it.
+          const effortRoom = hermesEffort ? (hermesEffort.length + 3) : 0;
+          const hermesModel = String(c.model).replace(/^hermes[-_]?/i, '').slice(0, Math.max(8, 36 - effortRoom));
+          const hermesModelTitle = formatModelEffort(c.model, hermesEffort, { style: 'verbose' });
+          const hermesModelLabel = formatModelEffort(hermesModel, hermesEffort);
           signals += '<span class="conv-signal hermes-model" title="' + escapeAttr(hermesModelTitle) + '">' + escapeHtml(hermesModelLabel) + '</span>';
         }
         const lineageCount = Number(c.hermes_lineage_count || 0);
@@ -41747,7 +41850,21 @@
     const ovrNorm = ovr ? _normalizeModelId(ovr.model) : '';
     const liveNorm = _normalizeModelId(liveModel);
     const queued = !!ovr && ovrNorm && ovrNorm !== liveNorm;
-    const currentReasoningEffort = (ovr && ovr.reasoning_effort) || u.reasoning_effort || '';
+    // Effort follows the same live-first rule as the model above: the pill
+    // states what the session is RUNNING, and a queued effort change goes in
+    // the "→" chip instead of masquerading as current. Without this an
+    // effort-only switch (applyModel effort_only) was invisible — the pill
+    // already read "xhigh" while the session was still thinking at medium.
+    const liveReasoningEffort = String(u.reasoning_effort || '').trim();
+    const ovrReasoningEffort = ovr ? String(ovr.reasoning_effort || '').trim() : '';
+    const currentReasoningEffort = liveReasoningEffort || ovrReasoningEffort;
+    const queuedEffort = (liveReasoningEffort && ovrReasoningEffort && ovrReasoningEffort !== liveReasoningEffort)
+      ? ovrReasoningEffort
+      : '';
+    // The picker still opens on the user's INTENDED level, so a queued switch
+    // reads back as the active row instead of inviting them to pick it twice.
+    const pickerReasoningEffort = ovrReasoningEffort || liveReasoningEffort;
+    const showsEffort = engineSupportsEffort(engine);
     // Chip names the queued target unless the pill itself already does
     // (no live model yet → the override IS the pill text, chip says "next").
     const shortOvrModel = ovr
@@ -41771,15 +41888,27 @@
           ? engine + ' (model unknown - latest event was synthesized by the client; the next real turn will populate this)'
           : displayModel)
         + (isOneM ? '\n(1M context window - anthropic-beta: context-1m)' : '')
-        + (currentReasoningEffort ? '\nReasoning effort: ' + currentReasoningEffort : '')
+        + (currentReasoningEffort
+          ? '\nReasoning effort: ' + currentReasoningEffort
+          : (showsEffort ? '\nReasoning effort: engine default (CCC has not set one)' : ''))
         + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
+        + (queuedEffort ? '\n(Switch to effort ' + queuedEffort + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
         + (engine === 'antigravity' ? '' : '\n\nClick to change model');
-      const effortInner = currentReasoningEffort
-        ? ' <span class="wp-model-effort">' + escapeHtml(currentReasoningEffort) + '</span>'
+      // The effort segment is the third knob of engine/model/effort, so on an
+      // effort-capable engine it renders even when CCC never set one: a blank
+      // gap read as "this session has no effort", when it is really running at
+      // the CLI default. Engines with no effort concept still render nothing.
+      const effortInner = showsEffort
+        ? ' <span class="wp-model-effort' + (currentReasoningEffort ? '' : ' is-default') + '">'
+          + escapeHtml(currentReasoningEffort || 'default') + '</span>'
         : '';
+      const pendingModelText = queued ? ((liveModel && shortOvrModel) ? shortOvrModel : 'next') : '';
+      const pendingText = pendingModelText
+        ? formatModelEffort(pendingModelText, queuedEffort)
+        : (queuedEffort ? formatModelEffort('', queuedEffort, { style: 'verbose' }) : '');
       const modelInner = escapeHtml(shortModel)
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
-        + (queued ? ' <span class="wp-model-pending">→ ' + (liveModel && shortOvrModel ? escapeHtml(shortOvrModel) : 'next') + '</span>' : '')
+        + (pendingText ? ' <span class="wp-model-pending">→ ' + escapeHtml(pendingText) + '</span>' : '')
         + effortInner
         + ' <span class="wp-model-chevron">&#x25be;</span>';
       if (engine === 'antigravity' || engine === 'hermes') {
@@ -41791,7 +41920,7 @@
           + ' data-engine="' + escapeHtml(engine) + '"'
           + ' data-current="' + escapeHtml(displayModel) + '"'
           + ' data-1m="' + (isOneM ? '1' : '0') + '"'
-          + ' data-reasoning="' + escapeHtml(currentReasoningEffort) + '"'
+          + ' data-reasoning="' + escapeHtml(pickerReasoningEffort) + '"'
           + ' title="' + escapeHtml(modelTip) + '">'
           + modelInner
           + '</button>';
@@ -42058,9 +42187,11 @@
     opencode: true,
   };
 
-  // Codex's own switcher pairs a Model choice with a separate Reasoning
-  // effort choice (`model_reasoning_effort` config value: low/medium/high/
-  // xhigh) — mirror that as a second section in our Codex model picker.
+  // Each engine pairs a Model choice with a separate reasoning-effort choice
+  // (Codex's `model_reasoning_effort` config value, Claude's `--effort` flag),
+  // so every model-choosing surface offers both. These two are the static
+  // fallback ladders behind REASONING_LEVELS_BY_ENGINE below; read them
+  // through effortLevelsForEngine() rather than by name.
   const CODEX_REASONING_LEVELS = [
     { id: 'low',    label: 'Light' },
     { id: 'medium', label: 'Medium' },
@@ -42070,6 +42201,84 @@
   const CLAUDE_REASONING_LEVELS = CODEX_REASONING_LEVELS.concat([
     { id: 'max', label: 'Max' },
   ]);
+
+  // The ladders are shared in vocabulary but not in extent: Claude and Kimi go
+  // up to 'max', Codex stops at 'xhigh'. That asymmetry is why every surface
+  // that gated on `engine === 'codex'` got it wrong in one direction or the
+  // other — ask engineSupportsEffort() instead of naming an engine.
+  const REASONING_LEVELS_BY_ENGINE = {
+    claude: CLAUDE_REASONING_LEVELS,
+    codex: CODEX_REASONING_LEVELS,
+    kimi: CLAUDE_REASONING_LEVELS,
+  };
+
+  // Labels live here, not on the wire: the server publishes membership only,
+  // so a ladder learned from it renders the same words as the static fallback.
+  const REASONING_LEVEL_LABELS = {
+    low: 'Light', medium: 'Medium', high: 'High', xhigh: 'Extra High', max: 'Max',
+  };
+
+  // Adopt /api/engines/models efforts_by_engine. An engine with no effort
+  // concept publishes [], which is the signal to hide the control rather than
+  // guess a ladder for it. A server too old to send the field (or a failed
+  // catalog fetch) leaves the static ladders above in place.
+  function applyEffortsByEngine(effortsByEngine) {
+    if (!effortsByEngine || typeof effortsByEngine !== 'object') return;
+    Object.keys(effortsByEngine).forEach((engine) => {
+      const ids = effortsByEngine[engine];
+      if (!Array.isArray(ids)) return;
+      REASONING_LEVELS_BY_ENGINE[String(engine).trim().toLowerCase()] = ids
+        .map(id => String(id == null ? '' : id).trim().toLowerCase())
+        .filter(Boolean)
+        .map(id => ({ id, label: REASONING_LEVEL_LABELS[id] || id }));
+    });
+  }
+
+  function effortLevelsForEngine(engine) {
+    return REASONING_LEVELS_BY_ENGINE[String(engine || '').trim().toLowerCase()] || [];
+  }
+
+  function engineSupportsEffort(engine) {
+    return effortLevelsForEngine(engine).length > 0;
+  }
+
+  // The union of every engine's ladder, cheapest first. For the one control
+  // whose engine is not known at render time (the WatchTower worker default,
+  // where WatchTower picks the engine at claim time) — scoping that one to a
+  // guessed engine would silently drop a saved level the real engine accepts.
+  function allEffortLevels() {
+    const seen = new Set();
+    const out = [];
+    Object.keys(REASONING_LEVELS_BY_ENGINE).forEach((engine) => {
+      (REASONING_LEVELS_BY_ENGINE[engine] || []).forEach((lvl) => {
+        if (seen.has(lvl.id)) return;
+        seen.add(lvl.id);
+        out.push(lvl);
+      });
+    });
+    return out;
+  }
+
+  // Repopulate an effort <select> for one engine. Every effort control in the
+  // app is rebuilt through here so none of them can drift back into offering a
+  // hardcoded ladder that the chosen engine does not have.
+  function renderEffortOptions(select, levels, current, blankLabel) {
+    if (!select) return;
+    const list = Array.isArray(levels) ? levels : [];
+    const want = String(current == null ? '' : current);
+    select.innerHTML = '';
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = blankLabel || 'Engine default';
+    select.appendChild(blank);
+    list.forEach((lvl) => {
+      const el = document.createElement('option');
+      el.value = lvl.id;
+      el.textContent = lvl.label || lvl.id;
+      select.appendChild(el);
+    });
+    select.value = list.some(lvl => lvl.id === want) ? want : '';
+  }
 
   function _normalizeModelId(s) {
     return (s || '').replace(/^claude-/, '').replace(/\[1m\]/i, '').trim().toLowerCase();
@@ -42154,6 +42363,7 @@
           ENGINE_SUPPORTS_CUSTOM_MODEL[engine] = info.supports_custom;
         }
       });
+      applyEffortsByEngine(data && data.efforts_by_engine);
       return data;
     } catch (_) {
       return null;
@@ -42392,6 +42602,23 @@
     }));
   }
 
+  // One Reasoning-effort section for every engine that has a ladder. It used to
+  // be written twice — a Claude copy with the Max rung and a Codex copy without
+  // it — which is why engines added later got no section at all.
+  function _reasoningSectionHtml(engine, currentReasoning) {
+    const levels = effortLevelsForEngine(engine);
+    if (!levels.length) return '';
+    let html = '<div class="mp-section">Reasoning effort</div>';
+    levels.forEach((lvl) => {
+      const isActive = lvl.id === currentReasoning;
+      html += '<button type="button" class="mp-row mp-reasoning-row' + (isActive ? ' active' : '') + '" data-reasoning="' + escapeHtml(lvl.id) + '">'
+        + escapeHtml(lvl.label)
+        + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span>'
+        + '</button>';
+    });
+    return html;
+  }
+
   function _buildClaudeModelMenuHtml(currentNorm, currentIs1M, currentReasoning) {
     const defNorm = _normalizeModelId(CLAUDE_DEFAULT_MODEL);
     const defaultActive = currentNorm === defNorm && !currentIs1M;
@@ -42420,12 +42647,8 @@
         + '<span class="mp-num">' + escapeHtml(opt.num) + '</span>'
         + '</button>';
     });
-    html += '<div class="mp-divider"></div><div class="mp-section">Reasoning effort</div>';
-    CLAUDE_REASONING_LEVELS.forEach((lvl) => {
-      const isActive = lvl.id === currentReasoning;
-      html += '<button type="button" class="mp-row mp-reasoning-row' + (isActive ? ' active' : '') + '" data-reasoning="' + escapeHtml(lvl.id) + '">'
-        + escapeHtml(lvl.label) + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span></button>';
-    });
+    const reasoning = _reasoningSectionHtml('claude', currentReasoning);
+    if (reasoning) html += '<div class="mp-divider"></div>' + reasoning;
     html += '<div class="mp-divider"></div>'
       + '<div class="mp-other">'
       + '<input type="text" placeholder="Other model…" data-mp-other-input>'
@@ -42498,18 +42721,8 @@
         html += '</button>';
       });
       html += '<div class="mp-divider"></div>';
-      if (engine === 'codex') {
-        const currentReasoning = btn.dataset.reasoning || '';
-        html += '<div class="mp-section">Reasoning effort</div>';
-        CODEX_REASONING_LEVELS.forEach((lvl) => {
-          const isActive = lvl.id === currentReasoning;
-          html += '<button type="button" class="mp-row mp-reasoning-row' + (isActive ? ' active' : '') + '" data-reasoning="' + escapeHtml(lvl.id) + '">'
-            + escapeHtml(lvl.label)
-            + '<span class="mp-check">' + (isActive ? '✓' : '') + '</span>'
-            + '</button>';
-        });
-        html += '<div class="mp-divider"></div>';
-      }
+      const reasoning = _reasoningSectionHtml(engine, btn.dataset.reasoning || '');
+      if (reasoning) html += reasoning + '<div class="mp-divider"></div>';
       if (_engineSupportsCustomModel(engine)) {
         html += '<div class="mp-other">'
           + '<input type="text" placeholder="Other model…" data-mp-other-input>'
@@ -46042,8 +46255,7 @@
       if (!ev || !ev.model) return '';
       const bits = [];
       const prefix = role === 'assistant' ? 'Used' : 'Sent to';
-      bits.push(prefix + ' ' + String(ev.model));
-      if (ev.reasoning_effort) bits.push('effort ' + String(ev.reasoning_effort));
+      bits.push(prefix + ' ' + formatModelEffort(ev.model, rowReasoningEffort(ev), { style: 'verbose' }));
       return '<div class="event-model-meta" title="' + escapeAttr(bits.join(' · ')) + '">' + escapeHtml(bits.join(' · ')) + '</div>';
     }
     function ambientContextHtml(context) {
@@ -46307,7 +46519,7 @@
             bits.push('<span class="hts-ok">' + escapeHtml(String(_tsOk)) + ' ✓</span>');
             bits.push('<span class="hts-failed">' + escapeHtml(_tsFailed + ' failed') + '</span>');
           }
-          if (ev.model) bits.push('<span class="hts-model">' + escapeHtml(String(ev.model)) + '</span>');
+          if (ev.model) bits.push('<span class="hts-model">' + escapeHtml(formatModelEffort(ev.model, rowReasoningEffort(ev))) + '</span>');
           div.classList.add('system-compact', 'system-hermes', 'hermes-turn-summary');
           if (_tsFailed > 0) div.classList.add('has-failures');
           div.innerHTML = '<span class="label">Hermes</span>'
@@ -46341,7 +46553,7 @@
           const shortSession = ev.session ? String(ev.session).slice(0, 19) : '';
           const bits = [];
           if (ev.source_platform) bits.push(String(ev.source_platform));
-          if (ev.model) bits.push(String(ev.model));
+          if (ev.model) bits.push(formatModelEffort(ev.model, rowReasoningEffort(ev)));
           const meta = bits.length ? ' · ' + escapeHtml(bits.join(' · ')) : '';
           const tip = 'Hermes compression created a continuation session.'
             + (parent ? '\nContinued from: ' + parent : '')
@@ -46362,7 +46574,7 @@
           const parent = ev.parent_session_id || '';
           const bits = [];
           if (ev.source_platform) bits.push(String(ev.source_platform));
-          if (ev.model) bits.push(String(ev.model));
+          if (ev.model) bits.push(formatModelEffort(ev.model, rowReasoningEffort(ev)));
           const meta = bits.length ? ' · ' + escapeHtml(bits.join(' · ')) : '';
           const tip = 'Messages below were recorded in a Hermes continuation segment.'
             + (parent ? '\nContinued from: ' + parent : '');
@@ -46403,7 +46615,9 @@
           // error block right after the prompt it belongs to.
           const _ftMsg = String(ev.text || '').trim();
           const _ftBits = [];
-          if (ev.model) _ftBits.push(String(ev.model));
+          // Effort belongs here more than anywhere: an effort the model does
+          // not accept is exactly the failure this block exists to explain.
+          if (ev.model) _ftBits.push(formatModelEffort(ev.model, rowReasoningEffort(ev)));
           if (ev.status_code) _ftBits.push('HTTP ' + escapeHtml(String(ev.status_code)));
           if (ev.error_type) _ftBits.push(String(ev.error_type));
           else if (ev.reason) _ftBits.push(String(ev.reason).replace(/_/g, ' '));
@@ -46460,7 +46674,7 @@
           div.innerHTML = '<span class="label">System</span>'
             + '<span class="line-num">L' + ev.line + '</span>'
             + tsSpan(ev.ts)
-            + '<span>' + escapeHtml(ev.subtype || '') + (ev.model ? ' &middot; ' + escapeHtml(ev.model) : '') + (ev.session ? ' &middot; ' + escapeHtml(ev.session) : '') + '</span>';
+            + '<span>' + escapeHtml(ev.subtype || '') + (ev.model ? ' &middot; ' + escapeHtml(formatModelEffort(ev.model, rowReasoningEffort(ev))) : '') + (ev.session ? ' &middot; ' + escapeHtml(ev.session) : '') + '</span>';
         }
       } else if (ev.type === 'user_text') {
         // If this matches an outstanding optimistic send, drop the pending stub
@@ -47419,6 +47633,18 @@
     return name.concat(recall).concat(rest);
   }
 
+  // Search by reasoning effort ("xhigh", "effort:high"). Deliberately NOT a
+  // substring match on the level: "low", "high" and "max" are ordinary words
+  // that appear in titles and prompts, so a bare query has to equal the level
+  // exactly. Prefixing it with "effort:" (or "effort ") opens up partials.
+  function rowMatchesEffortQuery(row, q) {
+    const effort = rowReasoningEffort(row).toLowerCase();
+    if (!effort || !q) return false;
+    if (q === effort) return true;
+    const scoped = q.replace(/^effort[:\s]+/, '');
+    return scoped !== q && !!scoped && effort.includes(scoped);
+  }
+
   function filterConversations(q) {
     q = (q || '').toLowerCase();
     const recentCutoff = recencyCutoffSec();
@@ -47467,7 +47693,8 @@
         || (c.hermes_source || '').toLowerCase().includes(q)
         || (c.hermes_origin || '').toLowerCase().includes(q)
         || (c.hermes_profile || '').toLowerCase().includes(q)
-        || (c.hermes_chat_type || '').toLowerCase().includes(q);
+        || (c.hermes_chat_type || '').toLowerCase().includes(q)
+        || rowMatchesEffortQuery(c, q);
     });
     const sorted = _prioritizeNameMatches(_prioritizeSessionIdMatches(applyConvSort(filtered), q), q);
     return _decorateWithHistoryMatches(sorted, q);
@@ -51615,7 +51842,10 @@
       // single-repo path alone had this, leaving the default view unable to
       // surface Hermes rows by platform.
       ((c.display_name || '') + ' ' + (c.first_message || '') + ' ' + (c.folder_label || '') + ' ' + (c.git_branch || '') + ' ' + (c.branch || '') + ' ' + (c.session_id || '') + ' ' + (c.id || '') + ' ' + (c.engine || '') + ' ' + (c.model || '') + ' ' + (c.source_platform || '') + ' ' + (c.hermes_source || '') + ' ' + (c.hermes_origin || '') + ' ' + (c.hermes_profile || '') + ' ' + (c.hermes_chat_type || ''))
-        .toLowerCase().includes(q)
+        .toLowerCase().includes(q) ||
+      // Effort is matched separately, not folded into the haystack above, so
+      // "low"/"high" stay exact-match only (see rowMatchesEffortQuery).
+      rowMatchesEffortQuery(c, q)
     ) : byFolder;
 
     // OR-union with history-search results. The local substring filter
@@ -52369,6 +52599,60 @@
     return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes' || engine === 'opencode';
   }
 
+  // The one spawn payload builder. Four call sites grew their own and drifted:
+  // two sent engine+model+effort, two sent engine alone, so the same choice
+  // made in two different surfaces produced two different spawns. This owns
+  // the engine/model/effort triple; call-site-specific keys
+  // (idempotency_key, parent_session_id, prewarm_id, timeline_t0_epoch_ms)
+  // stay with their caller.
+  //
+  //   effortExplicit — send reasoning_effort even when blank, so a user who
+  //   deliberately cleared the control overrides the saved default instead of
+  //   falling back to it.
+  function buildSpawnBody(opts) {
+    const o = opts || {};
+    const engine = String(o.engine || '').trim();
+    // CCC-509: always send the engine the UI actually shows. Omitting it lets
+    // the server's own persisted spawn-defaults engine win, which silently
+    // spawned a Claude-picked model under Codex.
+    const body = { prompt: o.prompt, engine };
+    if (o.name) body.name = o.name;
+    if (o.cwd) body.cwd = o.cwd;
+    if (o.repoPath) body.repo_path = o.repoPath;
+    const model = String(o.model || '').trim();
+    if (model) {
+      // CCC-503: a select can still hold another engine's model id right after
+      // an engine switch. Known-elsewhere ids are dropped; unknown custom ids
+      // pass through for the engines that accept free-form model strings.
+      if (_modelAllowedForEngine(engine, model)) {
+        body.model = model;
+      } else {
+        console.warn('[spawn] dropping model "' + model + '" not valid for engine "' + engine + '"; using server default instead');
+      }
+    }
+    const effort = String(o.effort || '').trim();
+    if (engineSupportsEffort(engine) && (effort || o.effortExplicit)) {
+      body.reasoning_effort = effort;
+    }
+    if (o.worktree !== undefined && spawnSupportsWorktree(engine)) {
+      body.worktree = !!o.worktree;
+    }
+    return body;
+  }
+
+  // The engine/model/effort triple the composer is showing right now. Spawn
+  // surfaces with no selectors of their own (Flow's draft Play, the Kanban Run
+  // button) used to send the engine alone and let the server pick the rest, so
+  // the session they started disagreed with the toolbar the user was reading.
+  function currentSpawnChoice(engine) {
+    const eng = normalizeSpawnDefaultEngine(engine || getSpawnEngine());
+    const held = (spawnEffortChoiceDirty && $convInputEffortSelect)
+      ? $convInputEffortSelect.value
+      : (spawnDefaultsState.reasoning_effort || '');
+    const effort = effortLevelsForEngine(eng).some(lvl => lvl.id === held) ? held : '';
+    return { engine: eng, model: String(_defaultModelsByEngine[eng] || '').trim(), effort };
+  }
+
   function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
     engine = normalizeSpawnDefaultEngine(engine);
     const base = MODEL_OPTIONS_BY_ENGINE[engine] || [];
@@ -52408,7 +52692,11 @@
         _defaultModelsByEngine[engine] = model;
       }
     });
-    spawnDefaultsState.reasoning_effort = CODEX_REASONING_LEVELS.some(level => level.id === data.reasoning_effort)
+    // Validate against the union, not one engine's ladder: `reasoning_effort`
+    // is a single engine-agnostic key on the wire, so checking it against
+    // Codex's rungs used to blank a perfectly valid saved 'max' on load. Each
+    // control re-scopes it to its own engine when it renders.
+    spawnDefaultsState.reasoning_effort = allEffortLevels().some(level => level.id === data.reasoning_effort)
       ? data.reasoning_effort
       : '';
     // The WatchTower queue-worker default; '' means WT picks (codex first).
@@ -52416,7 +52704,7 @@
       ? data.worker_engine
       : '';
     spawnDefaultsState.worker_model = String(data.worker_model == null ? '' : data.worker_model).trim();
-    spawnDefaultsState.worker_reasoning_effort = CODEX_REASONING_LEVELS.some(level => level.id === data.worker_reasoning_effort)
+    spawnDefaultsState.worker_reasoning_effort = allEffortLevels().some(level => level.id === data.worker_reasoning_effort)
       ? data.worker_reasoning_effort
       : '';
     if (typeof data.codex_context_1m === 'boolean') spawnDefaultsState.codex_context_1m = data.codex_context_1m;
@@ -52429,6 +52717,10 @@
     // producing an engine/model pairing that was never actually chosen.
     [$convInputEngineSelect, $kptToolbarEngineSelect]
       .forEach(s => { if (s && s.value !== spawnDefaultsState.engine) s.value = spawnDefaultsState.engine; });
+    // Settings shows engine · model · effort from this same state, so refresh
+    // it here rather than only on the settings-modal open path — a Save (which
+    // routes back through here) has to change the summary it just contradicted.
+    if (typeof refreshSpawnEngineValue === 'function') refreshSpawnEngineValue();
   }
 
   // setSpawnDefaultModel/setSpawnEngine only ever mutate in-memory +
@@ -52503,8 +52795,16 @@
   function syncSpawnEngineDependentUi() {
     const engine = getSpawnEngine();
     const worktreeSupported = spawnSupportsWorktree(engine);
-    if (!spawnEffortChoiceDirty && $convInputEffortSelect) {
-      $convInputEffortSelect.value = engine === 'codex' ? (spawnDefaultsState.reasoning_effort || '') : '';
+    if ($convInputEffortSelect) {
+      // Ladders differ in extent per engine, so the options are rebuilt rather
+      // than filtered — otherwise Codex would keep offering Max. A pick the
+      // user made by hand survives the rebuild as long as the new engine has
+      // that rung; anything else falls back to the saved default.
+      const seed = spawnEffortChoiceDirty
+        ? $convInputEffortSelect.value       // including a deliberate blank
+        : (spawnDefaultsState.reasoning_effort || '');
+      renderEffortOptions($convInputEffortSelect, effortLevelsForEngine(engine), seed, 'Default effort');
+      $convInputEffortSelect.title = spawnEngineLabel(engine) + ' reasoning effort';
     }
     ['inlineWorktreeToggle', 'nsmWorktree', 'kptWorktreeToggle'].forEach(id => {
       const el = document.getElementById(id);
@@ -52572,6 +52872,11 @@
     v = normalizeSpawnDefaultEngine(v);
     if (!SPAWN_DEFAULT_ENGINES.includes(v)) return;
     spawnDefaultsState.engine = v;
+    // Deliberate: the ladders differ per engine, so a rung picked for the old
+    // engine is not a statement about the new one. syncSpawnEngineDependentUi
+    // then reseeds the control from the new engine's default. This does mean
+    // flipping engine and back forgets the pick — that is the lesser evil
+    // against silently sending an effort the new engine has never heard of.
     spawnEffortChoiceDirty = false;
     try { localStorage.setItem('ccc.spawnEngine', v); } catch (_) {}
     // setSpawnEngine() propagates to both selectors + dependent UI, but never
@@ -52611,6 +52916,10 @@
   if ($convInputEffortSelect) {
     $convInputEffortSelect.addEventListener('change', () => {
       spawnEffortChoiceDirty = true;
+      // Effort is part of the prewarm reservation's identity, so a change here
+      // has to re-reserve exactly like a model change does — otherwise the
+      // pending warm process no longer matches what submit will ask for.
+      if (currentConversation === '__new__') scheduleClaudePrewarm();
     });
   }
   const refreshEngineModelCatalog = _gated('modelCatalog', loadEngineModelCatalog);
@@ -52883,13 +53192,19 @@
       $kptRunBtn.textContent = engine === 'antigravity' ? 'Starting...' : 'Spawning...';
       try {
         const endpoint = spawnEndpointForEngine(engine);
-        // Engines with native long-running app sessions can opt out of CCC-managed worktrees.
-        // CCC-509: always send engine explicitly — see comment at the inline-
-        // input spawn call site for why omitting it lets the server's own
-        // persisted default silently override what the UI shows.
-        const body = spawnSupportsWorktree(engine)
-          ? { prompt, repo_path: repoPath, worktree: useWorktree, engine }
-          : { prompt, repo_path: repoPath, engine };
+        // Same spec the composer is advertising, not just the engine — Run
+        // used to fall back to the server's model and effort defaults.
+        // buildSpawnBody drops the worktree key for engines with native
+        // long-running app sessions, which opt out of CCC-managed worktrees.
+        const choice = currentSpawnChoice(engine);
+        const body = buildSpawnBody({
+          engine,
+          model: choice.model,
+          effort: choice.effort,
+          prompt,
+          repoPath,
+          worktree: useWorktree,
+        });
         body.idempotency_key = durableActionId('spawn');
         const res = await fetch(endpoint, {
           method: 'POST',
@@ -57547,12 +57862,25 @@
     if (!spawnDefaultsDraft) return;
     if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
     if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.value = spawnDefaultsDraft.worker_engine || '';
-    if ($spawnDefaultsWorkerEffort) $spawnDefaultsWorkerEffort.value = spawnDefaultsDraft.worker_reasoning_effort || '';
+    // No worker engine chosen means WatchTower picks one at claim time, so the
+    // widest ladder is the honest option list here.
+    const workerEngine = spawnDefaultsDraft.worker_engine || '';
+    const workerLevels = workerEngine ? effortLevelsForEngine(workerEngine) : allEffortLevels();
+    renderEffortOptions(
+      $spawnDefaultsWorkerEffort,
+      workerLevels,
+      spawnDefaultsDraft.worker_reasoning_effort,
+      'Engine default',
+    );
+    if ($spawnDefaultsWorkerEffort && $spawnDefaultsWorkerEffort.parentElement) {
+      $spawnDefaultsWorkerEffort.parentElement.style.display = workerLevels.length ? '' : 'none';
+    }
     renderSpawnDefaultsModelDraft();
     renderSpawnDefaultsWorkerModelDraft();
-    const isCodex = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine) === 'codex';
-    if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = isCodex ? '' : 'none';
-    if ($spawnDefaultsEffort) $spawnDefaultsEffort.value = spawnDefaultsDraft.reasoning_effort || '';
+    const draftEngine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+    const draftLevels = effortLevelsForEngine(draftEngine);
+    if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = draftLevels.length ? '' : 'none';
+    renderEffortOptions($spawnDefaultsEffort, draftLevels, spawnDefaultsDraft.reasoning_effort, 'Engine default');
   }
   async function openSpawnDefaultsModal() {
     if (!$spawnDefaultsModal) return;
@@ -57598,16 +57926,24 @@
     updateSpawnDefaultsDraftModelFromControls();
     if ($spawnDefaultsWorkerEngine) spawnDefaultsDraft.worker_engine = $spawnDefaultsWorkerEngine.value || '';
     updateSpawnDefaultsDraftWorkerModelFromControls();
-    if ($spawnDefaultsEffort) spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
-    if ($spawnDefaultsWorkerEffort) spawnDefaultsDraft.worker_reasoning_effort = $spawnDefaultsWorkerEffort.value || '';
     spawnDefaultsModalError('');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsDraft.engine);
+    // Read each effort control only while its engine actually has a ladder.
+    // Reading a hidden select persisted the previous engine's rung under the
+    // new one; leaving the draft value alone keeps a stored choice intact for
+    // when the user switches back.
+    if ($spawnDefaultsEffort && engineSupportsEffort(engine)) {
+      spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value;
+    }
+    const workerEngine = spawnDefaultsDraft.worker_engine || '';
+    if ($spawnDefaultsWorkerEffort && (!workerEngine || engineSupportsEffort(workerEngine))) {
+      spawnDefaultsDraft.worker_reasoning_effort = $spawnDefaultsWorkerEffort.value || '';
+    }
     const model = String((spawnDefaultsDraft.models || {})[engine] || '').trim();
     if ((engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
       spawnDefaultsModalError('Claude, Codex, and Cursor need an explicit default model.');
       return;
     }
-    const workerEngine = spawnDefaultsDraft.worker_engine || '';
     const workerModel = String(spawnDefaultsDraft.worker_model || '').trim();
     const workerUnavailableReason = workerEngine && _modelUnavailableReason(workerEngine, workerModel);
     if (workerUnavailableReason) {
@@ -59499,10 +59835,19 @@
         model = picked;
       }
     }
+    // The reservation bakes `--effort` into its argv, and the server's match
+    // key includes it. Sending it here is what makes a warm hit honour the
+    // composer's choice instead of silently launching at the CLI default.
+    let effort = '';
+    if ($convInputEffortSelect) {
+      const picked = $convInputEffortSelect.value;
+      if (picked && effortLevelsForEngine('claude').some(lvl => lvl.id === picked)) effort = picked;
+    }
     return {
       cwd,
       model,
       name,
+      reasoning_effort: effort,
       client_id: _claudePrewarmClientId,
     };
   }
@@ -60138,43 +60483,28 @@
       const endpoint = spawnEndpointForEngine(engine);
       const $inlineWorktree = document.getElementById('inlineWorktreeToggle');
       const useWorktree = !!($inlineWorktree && $inlineWorktree.checked);
-      // CCC-509: /api/sessions/spawn (the claude/default route) falls back to
-      // the *server's* persisted spawn-defaults engine when this is omitted.
-      // If that persisted default has drifted from what this tab's UI shows
-      // (e.g. another tab saved a different default after this one loaded),
-      // the server silently spawns under the wrong engine while still
-      // accepting this tab's model value verbatim — producing exactly the
-      // "unknown codex model" error for a model picked from the Claude list.
-      // Always send the engine the UI actually shows so the two can't diverge.
-      const spawnBody = {
+      // A visible select is the only one whose value is a statement of intent;
+      // a hidden one can still hold the previous engine's leftovers.
+      const pickedModel = (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect
+        && $convInputModelSelect.style.display !== 'none')
+        ? $convInputModelSelect.value : '';
+      // buildSpawnBody owns the engine/model/effort triple (CCC-509 engine
+      // pinning and CCC-503 cross-engine model filtering live there); the keys
+      // below are specific to this call site.
+      const spawnBody = Object.assign(buildSpawnBody({
+        engine,
+        model: pickedModel,
+        effort: $convInputEffortSelect ? $convInputEffortSelect.value : '',
+        effortExplicit: spawnEffortChoiceDirty,
         prompt,
         name: subject,
         cwd: launchCwd,
-        engine,
+        repoPath,
+        worktree: useWorktree,
+      }), {
         timeline_t0_epoch_ms: spawnAskedAt,
         idempotency_key: durableActionId('spawn'),
-      };
-      if (repoPath) spawnBody.repo_path = repoPath;
-      if (typeof $convInputModelSelect !== 'undefined' && $convInputModelSelect && $convInputModelSelect.style.display !== 'none' && $convInputModelSelect.value) {
-        const pickedModel = $convInputModelSelect.value;
-        // Guard against a stale/orphaned select value from a different
-        // engine's model family (e.g. the select still holding a Claude
-        // model id right after switching to Codex) ever reaching the
-        // wrong CLI, which produced a hard "model not supported" spawn
-        // failure (CCC-503). Known values from a different engine are still
-        // dropped, but unknown custom IDs are allowed for engines that accept
-        // free-form model strings.
-        const isValidForEngine = _modelAllowedForEngine(engine, pickedModel);
-        if (isValidForEngine) {
-          spawnBody.model = pickedModel;
-        } else {
-          console.warn('[spawn] dropping model "' + pickedModel + '" not valid for engine "' + engine + '"; using server default instead');
-        }
-      }
-      if (spawnSupportsWorktree(engine)) spawnBody.worktree = useWorktree;
-      if (engine === 'codex' && $convInputEffortSelect && ($convInputEffortSelect.value || spawnEffortChoiceDirty)) {
-        spawnBody.reasoning_effort = $convInputEffortSelect.value;
-      }
+      });
       if (engine === 'claude') abortBackgroundApiReadsForSpawn();
       if (engine === 'claude' && !useWorktree) {
         const prewarm = await claudePrewarmPromise;
@@ -60602,9 +60932,18 @@
   function refreshSpawnEngineValue() {
     const el = document.getElementById('settingsSpawnEngineValue');
     if (!el) return;
-    let v = '';
-    try { v = localStorage.getItem('ccc.spawnEngine') || ''; } catch (_) {}
-    el.textContent = v ? v : 'Not set';
+    let engine = '';
+    try { engine = localStorage.getItem('ccc.spawnEngine') || ''; } catch (_) {}
+    if (!engine) { el.textContent = 'Not set'; el.title = ''; return; }
+    // The row summarises the whole spawn spec, not just the engine: a user who
+    // set Claude at Max effort should not have to open the modal to see it.
+    const model = String((spawnDefaultsState.models || {})[engine] || '').trim();
+    const effortId = engineSupportsEffort(engine) ? String(spawnDefaultsState.reasoning_effort || '') : '';
+    const effort = effortLevelsForEngine(engine).find(lvl => lvl.id === effortId);
+    const summary = [engine, model, effort ? effort.label + ' effort' : ''].filter(Boolean).join(' · ');
+    el.textContent = summary;
+    // The value column is narrow; the title carries the untruncated spec.
+    el.title = summary;
   }
 
   function refreshMonthlyClaudePlanInput() {

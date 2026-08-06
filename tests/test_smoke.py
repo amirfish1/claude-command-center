@@ -3135,7 +3135,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("worker_model: spawnDefaultsState.worker_model || ''", js)
 
     def test_spawn_defaults_worker_effort_is_independent_and_validated(self):
-        """WatchTower workers retain their own global Codex effort default."""
+        """WatchTower workers retain their own global effort default.
+
+        The ladder is the worker engine's own: Codex tops out at xhigh, Claude
+        goes to max, and a blank worker engine (WatchTower decides at dispatch)
+        is validated against the widest ladder rather than erased."""
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
@@ -3159,7 +3163,17 @@ class TestServerImports(unittest.TestCase):
                 self.assertTrue(saved["ok"])
                 self.assertEqual(saved["worker_reasoning_effort"], "low")
 
+                saved = server._save_spawn_defaults({"worker_reasoning_effort": "max"})
+                self.assertTrue(saved["ok"])
+                self.assertEqual(saved["worker_reasoning_effort"], "max")
+
+                saved = server._save_spawn_defaults({"worker_engine": "codex"})
+                self.assertTrue(saved["ok"])
                 rejected = server._save_spawn_defaults({"worker_reasoning_effort": "max"})
+                self.assertFalse(rejected["ok"])
+                self.assertIn("codex", rejected["error"])
+
+                rejected = server._save_spawn_defaults({"worker_reasoning_effort": "turbo"})
                 self.assertFalse(rejected["ok"])
             finally:
                 server.SPAWN_DEFAULTS_FILE = old_file
@@ -5698,7 +5712,10 @@ class TestServerImports(unittest.TestCase):
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function _wakeStageQuietLabel", app_js)
-        self.assertIn("return 'Thinking… ' + model + effort;", app_js)
+        self.assertIn(
+            "return 'Thinking… ' + formatModelEffort(data.model, rowReasoningEffort(data), { fallback: 'model' });",
+            app_js,
+        )
         self.assertIn("const WAKE_STAGE_DETAIL_DELAY_MS = 1000;", app_js)
         self.assertIn("el.classList.toggle('is-detailed', showDetails);", app_js)
         self.assertIn(".wake-breakdown .wb-stage.is-done .wb-label { display: none; }", app_css)
@@ -10073,6 +10090,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(list(sig.parameters), [
             "prompt", "name", "cwd", "repo_path", "worktree", "model",
             "parent_session_id", "timeline_t0_epoch_ms", "prewarm_id",
+            "reasoning_effort",
         ])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)
@@ -14860,12 +14878,32 @@ class TestModelPicker(unittest.TestCase):
 
     def test_codex_model_picker_marks_current_reasoning_effort(self):
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
-        self.assertIn("const currentReasoningEffort = (ovr && ovr.reasoning_effort) || u.reasoning_effort || '';", js)
-        self.assertIn("const effortInner = currentReasoningEffort", js)
+        # Live-first: the pill states the effort the session is RUNNING, and a
+        # queued effort-only switch renders as its own "→" chip rather than
+        # masquerading as current.
+        self.assertIn("const liveReasoningEffort = String(u.reasoning_effort || '').trim();", js)
+        self.assertIn("const currentReasoningEffort = liveReasoningEffort || ovrReasoningEffort;", js)
+        self.assertIn("const effortInner = showsEffort", js)
         self.assertIn("wp-model-effort", js)
-        self.assertIn('data-reasoning="\' + escapeHtml(currentReasoningEffort) + \'"', js)
-        self.assertIn("const currentReasoning = btn.dataset.reasoning || '';", js)
+        # The picker opens on the INTENDED level, so a queued switch reads back
+        # as the active row instead of inviting the user to pick it twice.
+        self.assertIn("const pickerReasoningEffort = ovrReasoningEffort || liveReasoningEffort;", js)
+        self.assertIn('data-reasoning="\' + escapeHtml(pickerReasoningEffort) + \'"', js)
         self.assertIn("const isActive = lvl.id === currentReasoning;", js)
+
+    def test_model_pill_always_states_effort_on_effort_capable_engines(self):
+        """Engine + model + effort is one triple; a blank effort segment reads
+        as "no effort" when the session is really on the engine default."""
+        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
+        server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
+
+        self.assertIn("const showsEffort = engineSupportsEffort(engine);", js)
+        self.assertIn("escapeHtml(currentReasoningEffort || 'default')", js)
+        self.assertIn(".conv-input-context .wp-model-effort.is-default", css)
+        # extract_session_usage only sees the picker override, so a session
+        # spawned with --effort and never re-picked would report blank.
+        self.assertIn("usage[\"reasoning_effort\"] = _conv_row_reasoning_effort(", server_py)
 
     def test_new_codex_session_composer_sends_selected_reasoning_effort(self):
         """New Codex sessions need an effort picker alongside their model picker."""
@@ -14879,11 +14917,16 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("reasoning_effort: spawnDefaultsState.reasoning_effort", js)
         self.assertIn("spawnDefaultsDraft.reasoning_effort = $spawnDefaultsEffort.value", js)
         self.assertIn("let spawnEffortChoiceDirty = false;", js)
-        self.assertIn("if (!spawnEffortChoiceDirty && $convInputEffortSelect)", js)
         self.assertIn("spawnEffortChoiceDirty = true;", js)
         self.assertIn("spawnEffortChoiceDirty = false;\n    syncSpawnEngineDependentUi();", js)
-        self.assertIn("($convInputEffortSelect.value || spawnEffortChoiceDirty)", js)
-        self.assertIn("spawnBody.reasoning_effort = $convInputEffortSelect.value", js)
+        # The effort now flows through buildSpawnBody, which owns the whole
+        # engine/model/effort triple for every spawn surface. effortExplicit
+        # keeps a deliberate "engine default" choice distinguishable from an
+        # untouched select, so it can still be sent as a blank.
+        self.assertIn("const held = (spawnEffortChoiceDirty && $convInputEffortSelect)", js)
+        self.assertIn("if (engineSupportsEffort(engine) && (effort || o.effortExplicit)) {", js)
+        self.assertIn("body.reasoning_effort = effort;", js)
+        self.assertIn("effortExplicit: spawnEffortChoiceDirty", js)
         self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", server_py)
         self.assertIn('cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])', server_py)
 

@@ -3506,6 +3506,12 @@
     font-size: 9px;
     font-weight: 700;
   }
+  /* "default" is the engine's own level, not one CCC picked. Dimmer and
+     non-bold so it reads as inherited rather than as a deliberate choice. */
+  .conv-input-context .wp-model-effort.is-default {
+    opacity: 0.45;
+    font-weight: 600;
+  }
   .conv-input-context .wp-model-chevron { opacity: 0.45; font-size: 8px; vertical-align: middle; }
   /* Model picker popover — anchored under the wp-model-pill button. */
   .model-picker-pop {

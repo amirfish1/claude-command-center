@@ -1084,6 +1084,10 @@ def _queue_config_options():
             engine: [model for model in choices]
             for engine, choices in models_by_engine.items()
         },
+        # Effort sibling of models_by_engine, so the queue dialogs pick from
+        # the engine's real ladder instead of the flat union _QUEUE_CONFIG_EFFORTS
+        # accepts (which stays flat on purpose — see _queue_config_from_payload).
+        "efforts_by_engine": _reasoning_efforts_by_engine(models_by_engine),
     }
 
 
@@ -3305,6 +3309,23 @@ def _get_session_override(session_id):
     return entry
 
 
+def _conv_row_reasoning_effort(sid, overrides, spawn_entry=None):
+    """Effort for one list row, read from maps the caller hoisted out of its loop.
+
+    List builders touch every conversation, so this must never reach disk:
+    callers pass ONE _load_session_overrides() for the whole batch, the same
+    way archived_set / pinned_rank are already hoisted. The override is what
+    the user last picked; the spawn-registry entry covers a session that was
+    spawned with an effort and never re-picked.
+    """
+    entry = (overrides or {}).get(str(sid or ""))
+    if isinstance(entry, dict):
+        effort = str(entry.get("reasoning_effort") or "").strip()
+        if effort:
+            return effort
+    return str((spawn_entry or {}).get("reasoning_effort") or "").strip()
+
+
 # Codex's `-c model_reasoning_effort=<value>` config override (confirmed via
 # `codex --help` / the user's own ~/.codex/config.toml) accepts these values.
 CODEX_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh"}
@@ -5221,6 +5242,76 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "kimi": True,
 }
 
+# Which effort ladder each engine actually accepts. Claude takes a top-level
+# `--effort <level>` (low..max), Codex takes `-c model_reasoning_effort=` and
+# has no "max", and Kimi's ladder is whatever its own config.toml declares —
+# so it is resolved lazily below rather than frozen here. An engine missing
+# from this map has no effort concept at all; a requested value is dropped,
+# not rejected, because the caller has no way to know that up front.
+_ENGINE_REASONING_EFFORTS = {
+    "claude": CLAUDE_REASONING_EFFORTS,
+    "codex": CODEX_REASONING_EFFORTS,
+}
+
+# Display order, cheap→expensive. Set membership is the contract; this is only
+# for listing a ladder back to a human or to a picker.
+_REASONING_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+
+
+def _engine_reasoning_efforts(engine):
+    """The effort values `engine` accepts, including "" for "leave the default"."""
+    engine = str(engine or "").strip().lower()
+    if engine == "kimi":
+        # Per-install ladder (support_efforts in kimi's config.toml). The file
+        # read stays on this branch so the common engines answer from a
+        # module constant.
+        return {"", *(_kimi_thinking_config().get("efforts") or _KIMI_EFFORT_ORDER)}
+    return set(_ENGINE_REASONING_EFFORTS.get(engine) or ())
+
+
+def _ordered_reasoning_efforts(engine):
+    """`engine`'s ladder cheap→expensive, blank excluded."""
+    allowed = _engine_reasoning_efforts(engine)
+    return [level for level in _REASONING_EFFORT_ORDER if level in allowed]
+
+
+def _reasoning_efforts_by_engine(engines):
+    """{engine: ladder} for a picker, published so clients stop hardcoding it.
+
+    Every surface that hardcoded its own list ended up with a different one
+    (Claude's "max" missing here, Codex's absent "max" offered there). An
+    engine with no effort concept maps to [], which is the signal to hide the
+    control rather than to guess a ladder for it.
+    """
+    return {engine: _ordered_reasoning_efforts(engine) for engine in engines}
+
+
+def _validate_reasoning_effort(value, engine, *, strict=False):
+    """Normalize one effort value against the engine's own ladder.
+
+    Returns "" for blank input, for an engine with no effort concept, and (when
+    strict is False) for a value that engine does not accept — read paths keep
+    their existing "fall back to the CLI default" behaviour rather than growing
+    an error branch. strict=True returns None for a value the engine rejects so
+    a POST handler can answer 400 with the ladder that engine really has.
+    """
+    value = str(value or "").strip().lower()
+    allowed = _engine_reasoning_efforts(engine)
+    if not value or not allowed:
+        return ""
+    if value in allowed:
+        return value
+    return None if strict else ""
+
+
+def _reasoning_effort_error(field, engine):
+    """400 text that names the ladder for the engine actually selected."""
+    levels = _ordered_reasoning_efforts(engine)
+    if not levels:
+        return f"{field} must be blank for engine {engine}"
+    return f"{field} must be {', '.join(levels)}, or blank for engine {engine}"
+
+
 _CODEX_PICKER_MODEL_IDS = frozenset(
     str(opt["id"]).strip().lower() for opt in _ENGINE_CURATED_MODELS["codex"]
 )
@@ -5839,9 +5930,17 @@ def _build_engine_model_catalog(force_refresh=False):
             for engine, bucket in catalog.items()
         },
         "enforced": [],
+        # Per-engine effort ladder, cheap→expensive, alongside the models each
+        # engine offers. Codex already ships reasoning_efforts on its per-MODEL
+        # rows; this is the engine-level answer Claude and Kimi never had, which
+        # is why every picker grew its own hardcoded copy.
+        "efforts_by_engine": _reasoning_efforts_by_engine(
+            sorted(set(catalog) | set(_ENGINE_REASONING_EFFORTS) | {"kimi"})
+        ),
         # Kimi thinking-effort picker metadata (from kimi's config.toml
         # support_efforts / [thinking] effort). The new-session input bar
-        # builds its effort select from this when engine=kimi.
+        # builds its effort select from this when engine=kimi. Kept for
+        # back-compat; efforts_by_engine["kimi"] carries the same ladder.
         "kimi_thinking": _kimi_thinking_config(),
     }
     _MODEL_CATALOG_CACHE["ts"] = now
@@ -5912,12 +6011,9 @@ def _load_spawn_defaults():
     for required in ("claude", "codex", "cursor", "hermes"):
         if not models.get(required):
             models[required] = defaults["models"].get(required) or _spawn_fallback_model_for_engine(required)
-    reasoning_effort = str(raw.get("reasoning_effort") or raw.get("effort") or "").strip().lower()
-    if reasoning_effort not in CODEX_REASONING_EFFORTS:
-        reasoning_effort = ""
-    worker_reasoning_effort = str(raw.get("worker_reasoning_effort") or "").strip().lower()
-    if worker_reasoning_effort not in CODEX_REASONING_EFFORTS:
-        worker_reasoning_effort = ""
+    reasoning_effort = _validate_reasoning_effort(
+        raw.get("reasoning_effort") or raw.get("effort"), engine,
+    )
     # The WatchTower queue-worker default (WT's config.engine() fallback chain
     # reads this key). Separate from `engine`, which is the interactive
     # new-session default (WT-105). Blank = WT picks (codex when installed).
@@ -5928,6 +6024,12 @@ def _load_spawn_defaults():
     )
     if worker_engine not in _ORCHESTRATION_SPAWN_ENGINES:
         worker_engine = ""
+    # A blank worker_engine means WatchTower decides at dispatch time, so
+    # validate against Claude's ladder — the widest one. A level the engine WT
+    # picks cannot use is dropped there, not silently erased from the defaults.
+    worker_reasoning_effort = _validate_reasoning_effort(
+        raw.get("worker_reasoning_effort"), worker_engine or "claude",
+    )
     worker_model = _clean_spawn_default_model(raw.get("worker_model"))
     if len(worker_model) > 200:
         worker_model = ""
@@ -5973,24 +6075,33 @@ def _save_spawn_defaults(config):
         current["worker_model"] = worker_model
 
     if "reasoning_effort" in config or "effort" in config:
-        reasoning_effort = str((
+        # Validated against the engine this save leaves selected, so Claude can
+        # hold "max" and Codex still cannot.
+        reasoning_effort = _validate_reasoning_effort(
             config.get("reasoning_effort")
             if "reasoning_effort" in config
-            else config.get("effort")
-        ) or "").strip().lower()
-        if reasoning_effort not in CODEX_REASONING_EFFORTS:
+            else config.get("effort"),
+            current["engine"],
+            strict=True,
+        )
+        if reasoning_effort is None:
             return {
                 "ok": False,
-                "error": "reasoning_effort must be low, medium, high, xhigh, or blank",
+                "error": _reasoning_effort_error("reasoning_effort", current["engine"]),
             }
         current["reasoning_effort"] = reasoning_effort
 
     if "worker_reasoning_effort" in config:
-        worker_reasoning_effort = str(config.get("worker_reasoning_effort") or "").strip().lower()
-        if worker_reasoning_effort not in CODEX_REASONING_EFFORTS:
+        worker_engine_for_effort = current.get("worker_engine") or "claude"
+        worker_reasoning_effort = _validate_reasoning_effort(
+            config.get("worker_reasoning_effort"), worker_engine_for_effort, strict=True,
+        )
+        if worker_reasoning_effort is None:
             return {
                 "ok": False,
-                "error": "worker_reasoning_effort must be low, medium, high, xhigh, or blank",
+                "error": _reasoning_effort_error(
+                    "worker_reasoning_effort", worker_engine_for_effort,
+                ),
             }
         current["worker_reasoning_effort"] = worker_reasoning_effort
 
@@ -6061,8 +6172,12 @@ def _spawn_request_engine_and_model(payload):
 
 
 def _spawn_request_reasoning_effort(payload, engine):
-    """Resolve an explicit Codex effort or the persisted spawn default."""
-    if engine != "codex":
+    """Resolve an explicit effort or the persisted spawn default, per engine.
+
+    Engines with no effort ladder resolve to "" without touching the defaults
+    file, so every spawn branch can pass the value through unconditionally.
+    """
+    if not _engine_reasoning_efforts(engine):
         return ""
     payload = payload if isinstance(payload, dict) else {}
     if "reasoning_effort" in payload or "effort" in payload:
@@ -6070,8 +6185,7 @@ def _spawn_request_reasoning_effort(payload, engine):
     else:
         defaults = _load_spawn_defaults()
         value = defaults.get("reasoning_effort") or ""
-    value = str(value or "").strip().lower()
-    return value if value in CODEX_REASONING_EFFORTS else ""
+    return _validate_reasoning_effort(value, engine)
 
 
 # Canonical effort ladder, cheap→expensive. Kimi model configs declare their
@@ -8166,6 +8280,11 @@ def find_all_conversations(
     except Exception:
         repo_pins = {}
     spawn_registry_by_sid = _spawn_registry_entries_by_session(engine="claude")
+    # One read for the whole corpus scan — never per row.
+    try:
+        session_overrides = _load_session_overrides()
+    except Exception:
+        session_overrides = {}
 
     # Liveness gate, built once. The cheap "could be live right now" set —
     # Claude registry (one cached `ps`), engine resume-arg scan, sidecar marker
@@ -8586,6 +8705,11 @@ def find_all_conversations(
                 # archive rows can render sidebar usage without opening the
                 # session pane.
                 "model": model,
+                # Re-layered per serve by _rehydrate_archive_cached_rows, since
+                # the user can repick effort long after this row was cached.
+                "reasoning_effort": _conv_row_reasoning_effort(
+                    session_id, session_overrides, spawn_entry,
+                ),
                 "latest_input_tokens": latest_tok,
                 "lifetime_tokens": tail_meta.get("lifetime_tokens") or 0,
                 "cost_usd": tail_meta.get("cost_usd") or 0.0,
@@ -10192,6 +10316,13 @@ def _rehydrate_archive_cached_rows(rows):
         spawn_registry_by_sid = _spawn_registry_entries_by_session()
     except Exception:
         spawn_registry_by_sid = {}
+    # Effort lives in a side file the model picker rewrites, so a cached row
+    # can be arbitrarily stale. Re-layer it here like the other user-mutable
+    # state above; one read for the whole list, never one per row.
+    try:
+        session_overrides = _load_session_overrides()
+    except Exception:
+        session_overrides = {}
 
     # Same liveness gate as the build path. This rehydrate runs on EVERY
     # stale-cache serve — the path the dashboard hits on each load — so an
@@ -10280,6 +10411,14 @@ def _rehydrate_archive_cached_rows(rows):
             row["trashed"] = sid in trashed_set
             row["recently_unarchived"] = _is_recently_unarchived(sid, _now_rehydrate)
             row["verified"] = sid in verified_set
+            effort = _conv_row_reasoning_effort(
+                sid, session_overrides, spawn_registry_by_sid.get(sid),
+            )
+            # Only overwrite when we know better: an engine that parses effort
+            # out of its own transcript (codex) already put the observed value
+            # on the row and CCC's side files have nothing to add.
+            if effort or not row.get("reasoning_effort"):
+                row["reasoning_effort"] = effort
             row["pinned"] = sid in pinned_rank
             row["pin_rank"] = pinned_rank.get(sid)
             spawn_parent_id = str(
@@ -20394,6 +20533,9 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
     verified_set = set(_load_verified_conversations())
     last_interactions = _load_last_interactions()
     spawn_registry_by_sid = _spawn_registry_entries_by_session(engine="claude")
+    # One read for the whole scan — the row loop below must not call
+    # _get_session_override() per session (see CLAUDE.md § Performance gates).
+    session_overrides = _load_session_overrides()
     # If the same session_id (file name) appears in multiple candidate
     # dirs (unlikely — claude-code uses one slug per process — but
     # possible if a repo path was historically encoded both ways), the
@@ -20786,6 +20928,12 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "goal_status": tail_meta.get("goal_status") or "",
             "parent_session_id": parent_session_id,
             "model": tail_meta.get("model"),
+            # Claude's `--effort` level. Not recorded in the transcript, so it
+            # comes from the hoisted override/spawn maps rather than tail_meta:
+            # this is the effort CCC chose, not one typed into the TUI.
+            "reasoning_effort": _conv_row_reasoning_effort(
+                sid, session_overrides, spawn_registry_by_sid.get(sid),
+            ),
             "archived": sid in archived_set,
             "trashed": sid in trashed_set,
             "pinned": sid in pinned_rank,
@@ -34792,6 +34940,15 @@ def find_kimi_conversations(
         verified_set = set(_load_verified_conversations())
     except Exception:
         verified_set = set()
+    # Hoisted out of the row loop below — one read each, never per session.
+    try:
+        session_overrides = _load_session_overrides()
+    except Exception:
+        session_overrides = {}
+    try:
+        spawn_registry_by_sid = _spawn_registry_entries_by_session(engine="kimi")
+    except Exception:
+        spawn_registry_by_sid = {}
     now = time.time()
     max_age_days = int(os.environ.get("CCC_MAX_CONV_AGE_DAYS", "30") or "30")
     cutoff = 0 if include_old else now - (max_age_days * 86400)
@@ -34897,6 +35054,11 @@ def find_kimi_conversations(
             # Live ACP value wins; the wire's initial config.update alias
             # covers never-attached (TUI / WT-spawned) sessions.
             "model": acp.get("model") or wire_info["model"],
+            # Kimi's thinking effort. ACP does not report it back, so the
+            # value CCC spawned or last picked is the only source.
+            "reasoning_effort": _conv_row_reasoning_effort(
+                sid, session_overrides, spawn_registry_by_sid.get(sid),
+            ),
         }
         if status:
             row["status"] = "running" if status == "active" else "idle"
@@ -41446,7 +41608,7 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None):
     return prompt + footer
 
 
-def _claude_spawn_command(claude_bin, model, session_name, session_id, capabilities):
+def _claude_spawn_command(claude_bin, model, session_name, session_id, capabilities, effort=""):
     cmd = [
         claude_bin, "-p", "--verbose",
         "--input-format", "stream-json",
@@ -41455,6 +41617,13 @@ def _claude_spawn_command(claude_bin, model, session_name, session_id, capabilit
         "--dangerously-skip-permissions",
         "--name", session_name,
     ]
+    # `--effort` is a top-level session flag, not a resume-only one, so a cold
+    # spawn can honour the picker instead of falling back to the CLI default.
+    # An unknown level only warns, but validate anyway: the spawn is headless
+    # and nobody reads that warning.
+    effort = str(effort or "").strip().lower()
+    if effort and effort in CLAUDE_REASONING_EFFORTS:
+        cmd.extend(["--effort", effort])
     if session_id:
         cmd.extend(["--session-id", session_id])
     if capabilities.get("partial_messages"):
@@ -41517,20 +41686,28 @@ def _store_claude_prewarm(entry):
         _discard_claude_prewarm(old_entry)
 
 
-def _start_claude_prewarm(cwd=None, repo_path=None, model=None, name=None, client_id=None):
+def _start_claude_prewarm(
+    cwd=None, repo_path=None, model=None, name=None, client_id=None,
+    reasoning_effort="",
+):
     """Start a prompt-less Claude stream process for the new-session composer.
 
     Claude performs its SessionStart hooks and MCP setup before the first
     stream-json user message arrives. Reserving that exact process while the
     user types moves the expensive initialization off the submit-to-text path.
+
+    The reservation bakes in `--effort`, so the effort is part of its identity:
+    a spawn asking for a different level must not adopt this process.
     """
-    routed = _control_plane_engine_call(
-        "claude", "prewarm", {
+    reasoning_effort = _validate_reasoning_effort(reasoning_effort, "claude")
+    routed, _dropped = _route_claude_call_with_kwarg_fallback(
+        "prewarm", {
             "cwd": cwd,
             "repo_path": repo_path,
             "model": model,
             "name": name,
             "client_id": client_id,
+            "reasoning_effort": reasoning_effort,
         },
     )
     if routed is not None:
@@ -41564,6 +41741,7 @@ def _start_claude_prewarm(cwd=None, repo_path=None, model=None, name=None, clien
     fifo_path, child_stdin_fd = _make_stdin_fifo(log_path)
     cmd = _claude_spawn_command(
         claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
+        effort=reasoning_effort,
     )
     popen_kwargs = dict(
         stdout=log_fh,
@@ -41607,6 +41785,7 @@ def _start_claude_prewarm(cwd=None, repo_path=None, model=None, name=None, clien
         "command": list(cmd),
         "prewarmed": True,
         "client_id": str(client_id or "").strip(),
+        "reasoning_effort": reasoning_effort,
     }
     _store_claude_prewarm(entry)
     _record_spawn_to_registry(
@@ -41624,6 +41803,7 @@ def _start_claude_prewarm(cwd=None, repo_path=None, model=None, name=None, clien
         prewarm=True,
         prewarm_id=prewarm_id,
         client_id=entry["client_id"],
+        reasoning_effort=reasoning_effort,
     )
     expiry_timer = threading.Timer(
         _CLAUDE_PREWARM_TTL_S + 1, _prune_claude_prewarms,
@@ -41638,10 +41818,11 @@ def _start_claude_prewarm(cwd=None, repo_path=None, model=None, name=None, clien
         "cwd": spawn_cwd,
         "repo_path": ctx["repo_path"],
         "model": model_to_use,
+        "reasoning_effort": reasoning_effort,
     }
 
 
-def _take_claude_prewarm(prewarm_id, cwd, model, name=None):
+def _take_claude_prewarm(prewarm_id, cwd, model, name=None, effort=""):
     if not prewarm_id:
         return None
     _prune_claude_prewarms()
@@ -41653,6 +41834,10 @@ def _take_claude_prewarm(prewarm_id, cwd, model, name=None):
             entry.get("cwd") != cwd
             or entry.get("model") != model
             or (name is not None and entry.get("name") != name)
+            # Effort is baked into the reserved argv, so a mismatch has to miss
+            # and spawn cold. Adopting the process anyway would drop the user's
+            # choice with no error, and only on warm hits.
+            or str(entry.get("reasoning_effort") or "") != str(effort or "")
         ):
             return None
         entry = _CLAUDE_PREWARMS.pop(str(prewarm_id))
@@ -41667,7 +41852,7 @@ def _take_claude_prewarm(prewarm_id, cwd, model, name=None):
 
 
 def _take_claude_prewarm_for_request(
-    prewarm_id, cwd=None, repo_path=None, model=None, name=None,
+    prewarm_id, cwd=None, repo_path=None, model=None, name=None, effort="",
 ):
     """Claim a reservation using its already-validated launch context.
 
@@ -41698,6 +41883,10 @@ def _take_claude_prewarm_for_request(
             return None
         if name is not None and entry.get("name") != name:
             return None
+        # The reserved argv already carries --effort, so a different level is a
+        # miss: adopting it would silently launch at the wrong effort.
+        if str(entry.get("reasoning_effort") or "") != str(effort or ""):
+            return None
         if not same_path(cwd, entry.get("cwd")):
             return None
         if not same_path(repo_path, entry.get("repo_path")):
@@ -41713,35 +41902,76 @@ def _take_claude_prewarm_for_request(
     return entry
 
 
-def _schedule_session_model_update(session_id, model, context_1m):
+def _schedule_session_model_update(session_id, model, context_1m, reasoning_effort=None):
     """Persist non-critical model UI metadata after the first-response window."""
     timer = threading.Timer(
-        12, _set_session_model, args=(session_id, model, context_1m),
+        12, _set_session_model, args=(session_id, model, context_1m, reasoning_effort),
     )
     timer.daemon = True
     timer.start()
 
 
-def _is_claude_prewarm_keyword_compatibility_error(result):
-    """Whether an older worker rejected only the optional prewarm argument."""
+_UNEXPECTED_KWARG_RE = re.compile(r"unexpected keyword argument '([^']+)'")
+
+
+def _unexpected_keyword_argument(result):
+    """The routed argument an older worker rejected, or "" if that isn't why.
+
+    worker_engines splats these args straight into the legacy function, so any
+    optional field this server has learned and the running worker has not comes
+    back as a TypeError raised BEFORE the work happened. Naming the key lets the
+    caller retry without it instead of failing the call on a version skew.
+    """
     if not isinstance(result, dict) or result.get("ok"):
-        return False
-    return "spawn_session() got an unexpected keyword argument 'prewarm_id'" in str(
-        result.get("error") or ""
+        return ""
+    match = _UNEXPECTED_KWARG_RE.search(str(result.get("error") or ""))
+    return match.group(1) if match else ""
+
+
+def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_key=None):
+    """Route one Claude engine call, shedding args an older worker rejects.
+
+    Returns (result, dropped_keys). Each retry gets a fresh action id so the
+    previous worker's durable failed work item is not replayed.
+    """
+    result = _control_plane_engine_call(
+        "claude", operation, dict(route_args), idempotency_key=idempotency_key,
     )
+    dropped = []
+    if result is None:
+        return None, dropped
+    retry_args = dict(route_args)
+    while True:
+        stale_key = _unexpected_keyword_argument(result)
+        if not stale_key or stale_key not in retry_args:
+            return result, dropped
+        retry_args.pop(stale_key)
+        dropped.append(stale_key)
+        retried = _control_plane_engine_call(
+            "claude", operation, retry_args, idempotency_key=str(uuid.uuid4()),
+        )
+        if not isinstance(retried, dict):
+            return result, dropped
+        result = retried
 
 
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
-                  parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None):
+                  parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None,
+                  reasoning_effort=""):
     """Spawn a headless Claude Code session and return tracking info.
 
     The spawned subprocess requires an explicit cwd or repo_path.
+
+    `reasoning_effort` is Claude's `--effort` level for the whole session. It
+    is fixed at launch: headless Claude has no live effort switch, so the
+    picker's later changes take effect on the next resume.
 
     If `worktree=True`, create a fresh git worktree off the launch cwd on a
     `feat/<slug>` branch and run the spawned session there. The worktree path
     + branch are returned in the response under
       `worktree_path` / `worktree_branch` so the UI can show them.
     """
+    reasoning_effort = _validate_reasoning_effort(reasoning_effort, "claude")
     route_args = {
         "prompt": prompt,
         "name": name,
@@ -41752,27 +41982,16 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         "parent_session_id": parent_session_id,
         "timeline_t0_epoch_ms": timeline_t0_epoch_ms,
         "prewarm_id": prewarm_id,
+        "reasoning_effort": reasoning_effort,
     }
-    routed = _control_plane_engine_call(
-        "claude", "spawn", {
-            **route_args,
-        },
-        idempotency_key=_take_control_plane_action_id(),
+    routed, dropped = _route_claude_call_with_kwarg_fallback(
+        "spawn", route_args, idempotency_key=_take_control_plane_action_id(),
     )
     if routed is not None:
-        if _is_claude_prewarm_keyword_compatibility_error(routed):
-            # A legacy worker rejected the call before executing it. Retry once
-            # without the optional fast-start field; a fresh action id avoids
-            # replaying that worker's durable failed work item.
-            cold_route_args = dict(route_args)
-            cold_route_args.pop("prewarm_id", None)
-            cold = _control_plane_engine_call(
-                "claude", "spawn", cold_route_args,
-                idempotency_key=str(uuid.uuid4()),
-            )
-            if isinstance(cold, dict) and cold.get("ok"):
-                cold["prewarm_fallback"] = True
-                return cold
+        if isinstance(routed, dict) and routed.get("ok") and "prewarm_id" in dropped:
+            # The retry that succeeded ran cold, so the UI can explain why this
+            # spawn was slower than the reserved one it was promised.
+            routed["prewarm_fallback"] = True
         return routed
     if os.environ.get("CCC_SSH_HOST"):
         try:
@@ -41799,6 +42018,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         repo_path=repo_path,
         model=model_to_use,
         name=session_name,
+        effort=reasoning_effort,
     )
     if entry is not None:
         ctx = {"cwd": entry["cwd"], "repo_path": entry["repo_path"]}
@@ -41828,6 +42048,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         session_id = str(uuid.uuid4()) if capabilities.get("session_id") else None
         cmd = _claude_spawn_command(
             claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
+            effort=reasoning_effort,
         )
 
     worktree_path = None
@@ -41862,6 +42083,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             session_id = str(uuid.uuid4()) if capabilities.get("session_id") else None
             cmd = _claude_spawn_command(
                 claude_bin["bin"], model_to_use, session_name, session_id, capabilities,
+                effort=reasoning_effort,
             )
         else:
             session_id = entry.get("session_id")
@@ -41959,6 +42181,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
             "partial_messages": bool(capabilities.get("partial_messages")),
             "command": list(cmd),
             "prewarmed": False,
+            "reasoning_effort": reasoning_effort,
         }
     # Write the initial prompt as the first stream-json user message.
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
@@ -41980,12 +42203,18 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         }
     if session_id:
         _spawn_timeline_mark(session_id, "initial_prompt_written")
-    if model:
+    # The override sidecar is what the composer pill and the next resume read,
+    # so record the effort this process actually launched with. Blank stays the
+    # "preserve whatever is there" sentinel rather than clearing a picked value.
+    if model or reasoning_effort:
         model_session_id = session_id or log_filename[:-4]
+        effort_arg = reasoning_effort or None
         if entry.get("prewarmed"):
-            _schedule_session_model_update(model_session_id, model, False)
+            _schedule_session_model_update(
+                model_session_id, model or model_to_use, False, effort_arg,
+            )
         else:
-            _set_session_model(model_session_id, model, False)
+            _set_session_model(model_session_id, model or model_to_use, False, effort_arg)
 
     _spawned_sessions.append(entry)
     _record_spawn_to_registry(
@@ -42001,6 +42230,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
         repo_path=ctx["repo_path"],
         model=model_to_use,
         parent_session_id=parent_session_id,
+        reasoning_effort=reasoning_effort,
     )
     # Cwd determines the ~/.claude/projects/ bucket the new session
     # logs to, which is how the kanban groups it by repo. Print it so
@@ -42224,6 +42454,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         repo_path=repo_for_logs,
         model=model_to_use,
         parent_session_id=parent_session_id,
+        reasoning_effort=reasoning_effort,
     )
 
     resp = {
@@ -42444,6 +42675,7 @@ def spawn_session_kimi(
         "log_fh": None, "fifo": None, "stdin_fd": None,
         "engine": "kimi", "session_id": sid, "cwd": spawn_cwd,
         "repo_path": repo_for_logs, "model": model_to_use or "",
+        "reasoning_effort": effort or "",
         "parent_session_id": parent_session_id or "",
     }
     _spawned_sessions.append(entry)
@@ -42452,6 +42684,7 @@ def spawn_session_kimi(
         cwd=spawn_cwd, spawned_at=timestamp, command_summary=prompt[:200],
         fifo=None, engine="kimi", session_id=sid, model=model_to_use,
         repo_path=repo_for_logs, parent_session_id=parent_session_id,
+        reasoning_effort=effort or "",
     )
     resp = {
         "ok": True, "pid": None, "session_id": sid, "name": session_name,
@@ -43898,6 +44131,7 @@ def _record_spawn_to_registry(
     pid, name, log_path, cwd, spawned_at, command_summary,
     fifo=None, engine="claude", session_id=None, model=None, repo_path=None,
     parent_session_id=None, prewarm=False, prewarm_id=None, client_id=None,
+    reasoning_effort="",
 ):
     """Append a freshly-spawned session to the on-disk registry. The
     session_id is provided for known resume calls and otherwise filled in
@@ -43926,6 +44160,9 @@ def _record_spawn_to_registry(
         "command_summary": command_summary,
         "engine": engine,
         "model": model or "",
+        # The level this process launched with, so the spawned-sessions list
+        # still knows it after a restart. Older entries simply lack the key.
+        "reasoning_effort": str(reasoning_effort or ""),
         "parent_session_id": parent_session_id or "",
     }
     if prewarm:
@@ -44347,6 +44584,7 @@ def list_spawned_sessions():
                 "cwd": entry.get("cwd") or "",
                 "repo_path": entry.get("repo_path") or "",
                 "model": entry.get("model") or "",
+                "reasoning_effort": entry.get("reasoning_effort") or "",
                 "parent_session_id": entry.get("parent_session_id") or "",
                 "command_summary": entry.get("command_summary") or "",
                 "running": running,
@@ -44372,6 +44610,7 @@ def list_spawned_sessions():
             "cwd": s.get("cwd") or "",
             "repo_path": s.get("repo_path") or "",
             "model": s.get("model") or "",
+            "reasoning_effort": s.get("reasoning_effort") or "",
             "parent_session_id": s.get("parent_session_id") or "",
             "command_summary": s.get("prompt", ""),
             "running": poll is None,
@@ -48391,9 +48630,11 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
     new value even when the inject succeeded, and the next resume picks
     it up if the live session ends before the user asks again.
 
-    `reasoning_effort` (Codex only — `model_reasoning_effort` config value)
-    defaults to None, which preserves whatever was previously set rather
-    than clearing it when the caller is only changing the model.
+    `reasoning_effort` is validated against the ladder the session's own
+    engine accepts (Claude `--effort`, Codex `model_reasoning_effort`, Kimi
+    thinking effort). It defaults to None, which preserves whatever was
+    previously set rather than clearing it when the caller is only changing
+    the model.
 
     Returns:
         {"ok": True, "applied": "live"|"queued", "model": ..., "context_1m": ...,
@@ -48414,10 +48655,13 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
     if reasoning_effort is None:
         reasoning_effort = (_get_session_override(session_id) or {}).get("reasoning_effort") or ""
     else:
-        reasoning_effort = str(reasoning_effort).strip().lower()
-        allowed_efforts = CLAUDE_REASONING_EFFORTS if engine == "claude" else CODEX_REASONING_EFFORTS
-        if reasoning_effort not in allowed_efforts:
-            return {"ok": False, "error": "unsupported reasoning effort", "engine": engine}
+        reasoning_effort = _validate_reasoning_effort(reasoning_effort, engine, strict=True)
+        if reasoning_effort is None:
+            return {
+                "ok": False,
+                "error": _reasoning_effort_error("reasoning_effort", engine),
+                "engine": engine,
+            }
     if engine == "kimi":
         # Kimi's ACP harness supports a live ``model`` config option. Unlike
         # the other non-Claude engines, it has no resume path that consumes a
@@ -55502,6 +55746,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # correct in split view -- session-status only tracks whichever
                 # pane is currently "active".
                 usage["auto_handover_enabled"] = sid in _load_auto_handover_flags()
+                # extract_session_usage only sees the picker override, so a
+                # session spawned with `--effort` and never re-picked reports
+                # blank and the composer's model pill drops the effort segment
+                # entirely. Fall back to the spawn registry, which records what
+                # CCC actually launched. Single-session route, so the one-shot
+                # lookups here are not the per-row disk hit the list builders
+                # have to avoid.
+                if not str(usage.get("reasoning_effort") or "").strip():
+                    usage["reasoning_effort"] = _conv_row_reasoning_effort(
+                        sid,
+                        _load_session_overrides(),
+                        _spawn_registry_entry_for_session(sid),
+                    )
             self.send_json(usage)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/slash-commands$", path):
             # Slash commands reported by Claude's system/init event. The
@@ -56714,6 +56971,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 **defaults,
                 "stored": SPAWN_DEFAULTS_FILE.exists(),
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
+                # Ladder per engine so the dialog can build its effort select
+                # for whichever engine is selected. The flat reasoning_effort /
+                # worker_reasoning_effort keys spread in above stay the stored
+                # values — WatchTower's config fallback chain reads those.
+                "efforts_by_engine": _reasoning_efforts_by_engine(
+                    _ORCHESTRATION_SPAWN_ENGINES
+                ),
                 "codex_context_1m": os.environ.get("CCC_CODEX_CONTEXT_1M", "1").lower() not in ("0", "false", "no"),
             })
         elif path == "/api/objects":
@@ -58580,17 +58844,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             )
             name = (payload.get("name") or "").strip() or f"UX worker · {project}"
             model = (payload.get("model") or "").strip() or None
+            # Validated per engine below, once the engine is known: this
+            # endpoint spawns Claude on the fallback path but whatever the
+            # queue config says on the WatchTower path.
+            raw_effort = str(
+                payload.get("reasoning_effort") or payload.get("effort") or ""
+            ).strip().lower()
             extra_message = str(
                 payload.get("message") or payload.get("note") or payload.get("extra") or ""
             ).strip()
             # WT owns worker lifecycle — including the bespoke case (custom
-            # model / extra instructions): those now ride WT's extra-instruction
-            # goal channel and land in workers.json like any reconciler worker,
-            # instead of an untracked CCC shadow worker. The CCC spawn_session
-            # path below remains only as the fallback for installs without the
-            # watchtower package.
+            # model / effort / extra instructions): those now ride WT's
+            # extra-instruction goal channel and land in workers.json like any
+            # reconciler worker, instead of an untracked CCC shadow worker. The
+            # CCC spawn_session path below remains only as the fallback for
+            # installs without the watchtower package.
             wants_ccc_session = bool(
-                model or extra_message or (payload.get("name") or "").strip()
+                model or raw_effort or extra_message or (payload.get("name") or "").strip()
             )
             if _WT_WORKERS_AVAILABLE and _wt_workers is not None:
                 try:
@@ -58604,33 +58874,44 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         engine = _wt_config.engine(project) or "claude"
                     except Exception:
                         engine = "claude"
-                try:
-                    recs = _wt_workers.spawn_workers(
-                        project, 1, engine,
-                        repo_path=str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
-                        model=model or "",
-                        extra_instructions=extra_message,
-                        kind="bespoke" if wants_ccc_session else "",
-                        dry_run=bool(payload.get("dry_run")),
-                    )
-                except TypeError:
-                    # Older watchtower without extra_instructions/kind kwargs:
-                    # spawn tracked with what it understands (model only).
+                wt_kwargs = {
+                    "repo_path": str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
+                    "model": model or "",
+                    "extra_instructions": extra_message,
+                    "kind": "bespoke" if wants_ccc_session else "",
+                    "dry_run": bool(payload.get("dry_run")),
+                }
+                effort = _validate_reasoning_effort(raw_effort, engine)
+                if effort:
+                    wt_kwargs["effort"] = effort
+                # Watchtower installs differ in which kwargs they accept; retry
+                # with progressively fewer so a stale package still spawns a
+                # tracked worker. effort sheds first and alone — no released
+                # watchtower takes it yet, and folding it into the older
+                # extra_instructions/kind shed would drop the goal channel with it.
+                attempts = [wt_kwargs]
+                if "effort" in wt_kwargs:
+                    attempts.append({k: v for k, v in wt_kwargs.items() if k != "effort"})
+                attempts.append({
+                    k: v for k, v in wt_kwargs.items()
+                    if k in ("repo_path", "model", "dry_run")
+                })
+                attempts.append({
+                    k: v for k, v in wt_kwargs.items() if k in ("repo_path", "dry_run")
+                })
+                recs = None
+                kwarg_error = None
+                for attempt in attempts:
                     try:
-                        recs = _wt_workers.spawn_workers(
-                            project, 1, engine,
-                            repo_path=str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
-                            model=model or "",
-                            dry_run=bool(payload.get("dry_run")),
-                        )
-                    except TypeError:
-                        recs = _wt_workers.spawn_workers(
-                            project, 1, engine,
-                            repo_path=str(ctx.get("cwd") or ctx.get("repo_path") or repo_path),
-                            dry_run=bool(payload.get("dry_run")),
-                        )
-                except Exception as e:
-                    self.send_json({"ok": False, "error": str(e)}, 500)
+                        recs = _wt_workers.spawn_workers(project, 1, engine, **attempt)
+                        break
+                    except TypeError as e:
+                        kwarg_error = e
+                    except Exception as e:
+                        self.send_json({"ok": False, "error": str(e)}, 500)
+                        return
+                if recs is None:
+                    self.send_json({"ok": False, "error": str(kwarg_error)}, 500)
                     return
                 rec = recs[0] if recs else {}
                 self.send_json({
@@ -58651,6 +58932,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     name=name,
                     repo_path=repo_path,
                     model=model,
+                    reasoning_effort=_validate_reasoning_effort(raw_effort, "claude"),
                 )
                 if isinstance(result, dict):
                     result.setdefault("engine", "claude")
@@ -59567,6 +59849,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     model=payload.get("model"),
                     name=payload.get("name"),
                     client_id=payload.get("client_id"),
+                    reasoning_effort=(
+                        payload.get("reasoning_effort") or payload.get("effort") or ""
+                    ),
                 )
                 self.send_json(result, 200 if result.get("ok") else 503)
             except RepoContextError as exc:
@@ -59795,6 +60080,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             parent_session_id=parent_session_id,
                             timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                             prewarm_id=payload.get("prewarm_id"),
+                            reasoning_effort=reasoning_effort,
                         )
                     result.setdefault("engine", engine)
                     if report_to and isinstance(result, dict):

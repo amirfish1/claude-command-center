@@ -85,10 +85,10 @@ curl -s -X POST "$CCC_URL/api/sessions/spawn" -H "Content-Type: application/json
 JSON
 ```
 
-Omit `"model"` — the server spawn default (Settings → Spawn defaults) applies;
-the user can pass `"model"` explicitly to keep cost down — and pass `"engine"`
-alongside it, since model names are validated against the target engine (a bare
-`"model"` fails if the server default engine differs). CCC appends the
+Omit `"model"` and `"reasoning_effort"`: the server spawn defaults (Settings →
+Spawn defaults) apply. Pass either explicitly to keep cost down, with
+`"engine"` alongside it, since both are validated per engine (see
+`ccc-orchestration` § 2 for the per-engine effort ladders). CCC appends the
 return-address footer (`report_to`), so the auditor injects its GO/NO-GO back to
 you when it finishes.
 
