@@ -3161,12 +3161,23 @@ def _set_auto_handover(session_id, enabled):
 
 
 def _mark_auto_handover_fired(session_id, transcript_mtime):
+    """Record the fire and disable the flag -- one-shot per enable.
+
+    The injected prompt (and the model's own `wt add` response to it) rewrites
+    the transcript, which bumps its mtime. If we stayed enabled and kept
+    comparing against that mtime, the watchdog would see a "fresh" idle streak
+    starting from the fire's own footprint and re-fire again 55 minutes later,
+    forever, with no real user activity involved (observed 2026-08-06: fired
+    10x overnight for one session). Disabling after the first fire sidesteps
+    that self-sustaining loop entirely; re-enable manually for another round.
+    """
     flags = _load_auto_handover_flags()
     entry = flags.get(session_id)
     if not entry:
         return  # toggled off since the watchdog last checked — nothing to mark
     entry["last_fired_mtime"] = float(transcript_mtime)
     entry["last_fired_at"] = datetime.now().isoformat()
+    entry["enabled"] = False
     _save_auto_handover_flags(flags)
 
 

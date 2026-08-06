@@ -19156,5 +19156,53 @@ class TestClaudeSubagentResumeRouting(unittest.TestCase):
                 server._session_cwd_cache.pop(agent_sid, None)
                 server.PROJECTS_ROOT = original_root
 
+class TestAutoHandoverOneShot(unittest.TestCase):
+    def test_fire_disables_flag_and_prevents_overnight_refire_loop(self):
+        """Regression for 2026-08-06: the watchdog fired 10x overnight for one
+        session. Firing injects a prompt the model responds to (running `wt
+        add`), which rewrites the transcript and bumps its mtime -- if the
+        flag stayed enabled, that self-caused mtime bump looked like a fresh
+        idle streak and the watchdog re-armed every ~55 min forever, with no
+        real user activity involved. Firing must disable the flag instead."""
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_file = server.AUTO_HANDOVER_FILE
+            old_checked_ts = server._auto_handover_last_checked_at["ts"]
+            try:
+                server.AUTO_HANDOVER_FILE = pathlib.Path(tmp) / "auto-handover.json"
+                server._auto_handover_last_checked_at["ts"] = 0.0
+                sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                server._set_auto_handover(sid, True)
+
+                transcript = pathlib.Path(tmp) / "transcript.jsonl"
+                transcript.write_text("{}\n", encoding="utf-8")
+
+                with mock.patch.object(server, "_detect_session_engine", return_value="claude"), \
+                     mock.patch.object(server, "_resolve_conversation_path", return_value=str(transcript)), \
+                     mock.patch.object(server, "_control_plane_engine_call", return_value={"ok": True}) as fire_call:
+                    t0 = os.path.getmtime(transcript)
+                    server._run_auto_handover_watchdog_once(now=t0 + 56 * 60)
+                    self.assertEqual(fire_call.call_count, 1)
+                    self.assertFalse(server._load_auto_handover_flags()[sid]["enabled"])
+
+                    # Simulate the fire's own footprint: the injected prompt
+                    # plus the model's `wt add` response rewrite the
+                    # transcript, same as it would against a real session.
+                    transcript.write_text("{}\n{}\n", encoding="utf-8")
+                    t1 = os.path.getmtime(transcript)
+
+                    server._run_auto_handover_watchdog_once(now=t1 + 56 * 60)
+                    self.assertEqual(
+                        fire_call.call_count, 1,
+                        "must not re-fire off its own transcript footprint",
+                    )
+            finally:
+                server.AUTO_HANDOVER_FILE = old_file
+                server._auto_handover_last_checked_at["ts"] = old_checked_ts
+
+
 if __name__ == "__main__":
     unittest.main()
