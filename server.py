@@ -60698,7 +60698,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(
                     routed if routed is not None else inject_into_spawned(pid, text)
                 )
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/cwd$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/cwd$", path):
             # CCC-128: point a session at a user-chosen folder when CCC can't
             # resolve its recorded cwd ("CWD MISSING"). Display/resolution only
             # — the JSONL is untouched. Same-origin is enforced globally for
@@ -62384,12 +62384,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 entry = model_advisor.mark(MODEL_ADVISOR_LOG_FILE, rec_id, "dismissed")
                 self.send_json({"ok": bool(entry), "entry": entry})
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/model/clear$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/model/clear$", path):
             sid = path.split("/")[3]
             _clear_session_override(sid)
             _record_interaction(sid)
             self.send_json({"ok": True, "session_id": sid, "cleared": True})
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/model$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/model$", path):
             sid = path.split("/")[3]
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -62408,7 +62408,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     sid, model, context_1m, reasoning_effort,
                     effort_only=bool(payload.get("effort_only")),
                 ))
-        elif re.match(r"^/api/session/[a-zA-Z0-9-]+/auto-handover$", path):
+        elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/auto-handover$", path):
             sid = path.split("/")[3]
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
