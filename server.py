@@ -15078,12 +15078,17 @@ def _set_conversation_trashed(sid, trashed):
 
     with _conversation_lifecycle_lock:
         archived_ids, trashed_ids = _load_conversation_lifecycle_state()
-        if want_trashed and sid not in archived_ids:
-            # Write the sticky marker first so a concurrent archive sweep can
-            # never observe a newly archived live session without its manual
-            # grace state.
+        if want_trashed:
+            # Write/refresh the sticky marker first so a concurrent archive
+            # sweep can never observe this session without its manual grace
+            # state. Must run even when the session was already archived
+            # (trashed from the Archived bucket) — otherwise a session
+            # archived without a grace entry (e.g. an older auto-archive)
+            # trashes with none, and the 30s sweep can auto-unarchive it out
+            # of Trash the moment it looks live again.
             _archive_grace[sid] = time.time()
             _save_archive_grace()
+        if want_trashed and sid not in archived_ids:
             archived_ids.append(sid)
             _save_archived_conversations(archived_ids)
             _log_archive_event("archive", sid, "trash")
