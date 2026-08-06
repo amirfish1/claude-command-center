@@ -1910,6 +1910,22 @@ def _uxq_item_payload(item):
     return out
 
 
+def _uxq_not_found_error(ref):
+    """Explain a falsy write result instead of shipping ok:false with nothing.
+
+    `_q.answer`/`.comment`/`.update`/`.close` return None, not an exception,
+    when `ref` matches no item in the local queue store — which happens for
+    any ``backend: github`` queue (its tickets are synced live from GitHub,
+    not persisted here). Without this, the client only sees HTTP 200 + no
+    error text and reports the meaningless "Failed: HTTP 200" (CCC-746).
+    """
+    return (
+        f"ticket {ref} not found in the local queue store — GitHub-backed "
+        "queues aren't answerable/editable from this dashboard yet; use the "
+        "GitHub issue directly"
+    )
+
+
 import objects_store  # durable server-side Flow object/parent/order state (GOAL-3/4)
 PROJECTS_ROOT = Path.home() / ".claude" / "projects"
 # User-picked repos that live outside the $HOME scan (e.g. ~/dev/foo, /workspaces/bar).
@@ -55078,7 +55094,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 item = _q.get(ref)
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/queue/status" or path == "/api/ux-fixes/health":
@@ -58501,13 +58520,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 payload = {}
             try:
+                number = int(payload.get("number"))
                 item = _q.update_status(
-                    int(payload.get("number")),
+                    number,
                     str(payload.get("status") or ""),
                     session_id=str(payload.get("session_id") or ""),
                     session_uuid=str(payload.get("session_uuid") or ""),
                 )
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(number)}, 404)
+                    return
+                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -58535,8 +58558,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # its reconciler sees no reason to wake it and the human's
                 # decision never reaches the session.
                 item, delivery = _answer_queue_item_and_notify_worker(ref, text)
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
                 self.send_json({
-                    "ok": bool(item),
+                    "ok": True,
                     "item": _uxq_item_payload(item),
                     "delivery": delivery,
                 })
@@ -58558,7 +58584,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 item = _q.update(ref, priority=priority)
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -58675,7 +58704,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             fields = {k: payload[k] for k in editable if k in payload}
             try:
                 item = _q.update(ref, **fields)
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -58694,7 +58726,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 item = _q.update_status(ref, "open", reason=reopen_note)
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
@@ -58721,8 +58756,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 item, delivery = _comment_queue_item_and_notify_worker(ref, text)
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
                 self.send_json({
-                    "ok": bool(item),
+                    "ok": True,
                     "item": _uxq_item_payload(item),
                     "delivery": delivery,
                 })
@@ -58750,7 +58788,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     item = _q.close(ref, resolution=(note or None))
                 else:
                     item = _q.update_status(ref, "closed")
-                self.send_json({"ok": bool(item), "item": _uxq_item_payload(item)})
+                if not item:
+                    self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
+                    return
+                self.send_json({"ok": True, "item": _uxq_item_payload(item)})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
