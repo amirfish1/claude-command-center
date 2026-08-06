@@ -3076,7 +3076,14 @@
         // Origin heavy session nests UNDER the new lean session (the flip).
         flowNodeParents[originKey] = newKey;
         try { localStorage.setItem('ccc-flow-node-parents', JSON.stringify(flowNodeParents)); } catch (_) {}
-        if (typeof renderFlowSidebar === 'function' && typeof conversationsData !== 'undefined') {
+        // renderFlowSidebar() unconditionally shows the flow board and hides
+        // the session list/kanban board — it does not check the current view
+        // mode itself. Calling it here regardless of isFlowView() switched the
+        // sidebar into Flow out from under the user on every "Continue in a
+        // new session" (CCC-739). The lineage edge is persisted above either
+        // way; only repaint Flow's DOM if Flow is actually the active view.
+        if (typeof isFlowView === 'function' && isFlowView()
+            && typeof renderFlowSidebar === 'function' && typeof conversationsData !== 'undefined') {
           try { renderFlowSidebar(conversationsData); } catch (_) {}
         }
       }
