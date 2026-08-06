@@ -2908,6 +2908,11 @@
   // Per-pane composer state: the gate that fired, plus the launch overrides
   // and dialog open/closed, so a repaint can't reset a choice already made.
   const f2PaneState = new Map();
+  // paneKey -> sid pinned open by the manual "Continue in a new session"
+  // button (CCC-744), for panes where the token/idle gate itself says no.
+  // Keyed by sid too so switching sessions in the same pane doesn't leave a
+  // stale panel pinned open on the wrong conversation.
+  const f2ManualPanes = new Map();
 
   function f2ClearComposer() {
     try {
@@ -2984,6 +2989,40 @@
       return { tokens, ageMin, model, engine: engine || 'claude', cache: null, idleOnly: true, forced: false };
     }
     return null;
+  }
+
+  // Manual trigger (CCC-744): the gate above only offers this route once a
+  // session is big+stale or plain idle past F2_IDLE_ONLY_MINUTES. Users asked
+  // for it on demand regardless — a not-live session they simply want to
+  // hand off fresh, with no size or idle claim behind it. Reuses the same
+  // panel/launch/spawn plumbing; only the copy differs (see gate.manual in
+  // f2RenderComposer).
+  function f2ManualOpen(paneId) {
+    try {
+      const sid = (currentSession && currentSession.id) || '';
+      if (!sid || currentConversation === '__new__') return;
+      f2ManualPanes.set(f2PaneKey(paneId), sid);
+      f2RenderComposer(paneId, { force: true });
+      const st = f2PaneState.get(f2PaneKey(paneId));
+      if (st) {
+        st.configOpen = true;
+        f2RenderComposer(paneId, { force: true });
+      }
+    } catch (_) {}
+  }
+  // Synthesizes the same shape f2ResumeGate returns, for a session the gate
+  // itself declined (too small / not idle enough) but the user asked for
+  // anyway via the manual button. No cache/size claim attached — see
+  // gate.manual in f2RenderComposer.
+  function f2ManualGate(ctx) {
+    const row = ctx.row || {};
+    const cf = _contextFieldsFromRow(row);
+    const tokens = Math.max(Number(cf.live_context_tokens) || 0, Number(cf.latest_input_tokens) || 0);
+    const mtime = Number(row.modified || row.mtime || 0);
+    const ageMin = mtime ? (Date.now() / 1000 - mtime) / 60 : 0;
+    const engine = f2EngineKey(String((ctx.session && ctx.session.source) || cf.engine || 'claude')) || 'claude';
+    const model = row.model || (ctx.session && ctx.session.model) || cf.model || 'the current model';
+    return { tokens, ageMin, model, engine, cache: null, idleOnly: true, manual: true, forced: false };
   }
 
   function f2ResolveSpawnCwd(ctx) {
@@ -3326,6 +3365,7 @@
       // modes spawn rather than resume, so there is no context to reload.
       if (!sid || currentConversation === '__new__') { clear(); return; }
       gate = f2ResumeGate(ctx);
+      if (!gate && f2ManualPanes.get(f2PaneKey(paneId)) === sid) gate = f2ManualGate(ctx);
     } catch (_) { clear(); return; }
     if (!gate) { clear(); return; }
 
@@ -3338,7 +3378,7 @@
     // ── rail: session-row data only, so it can paint before a keystroke ──
     rail.hidden = false;
     rail.setAttribute('role', 'status');
-    const railHeadline = gate.idleOnly ? 'Idle a while' : 'Large and stale';
+    const railHeadline = gate.manual ? 'New session' : (gate.idleOnly ? 'Idle a while' : 'Large and stale');
     const railCacheNote = gate.idleOnly ? '' : (' · ' + escapeHtml(gate.cache.railNote));
     rail.innerHTML = '<span class="rail-dot" aria-hidden="true"></span>'
       + '<strong>' + escapeHtml(railHeadline) + '</strong>'
@@ -3362,9 +3402,11 @@
     }
     if (!force && panel.innerHTML) return;              // static once painted
     panel.hidden = false;
-    const verdictText = gate.idleOnly
-      ? 'Idle ' + ageLabel + ' — start fresh with just the context you need.'
-      : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.';
+    const verdictText = gate.manual
+      ? 'Start fresh with just the context you need.'
+      : (gate.idleOnly
+        ? 'Idle ' + ageLabel + ' — start fresh with just the context you need.'
+        : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.');
     panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText) + '</div>'
       + (st.configOpen ? f2ConfigHtml(st.launch) : '');
   }
@@ -3377,6 +3419,7 @@
   async function f2RunContinue(paneId, st, btn) {
     if (btn) btn.disabled = true;
     const sid = st.sid;
+    f2ManualPanes.delete(f2PaneKey(paneId));
     const ctx = Object.assign({}, st.ctx || {}, { text: f2ComposerText(paneId) });
     const launch = st.launch;
     // The parent row already has the human-facing title. Keep it on the
@@ -3459,6 +3502,17 @@
   // One delegated listener for every pane's composer — the panel DOM is
   // rebuilt on repaint, so per-node handlers would leak.
   document.addEventListener('click', (ev) => {
+    // Manual "Continue in a new session" button — always in the toolbar,
+    // independent of the token/idle gate (CCC-744).
+    const continueBtn = ev.target && ev.target.closest && ev.target.closest('.continue-new-btn');
+    if (continueBtn) {
+      ev.preventDefault();
+      const cbPane = continueBtn.closest('.conv-pane');
+      const cbPaneId = (cbPane && cbPane.getAttribute('data-pane-id')) || null;
+      if (cbPaneId && typeof setActivePaneById === 'function') { try { setActivePaneById(cbPaneId); } catch (_) {} }
+      try { f2ManualOpen(cbPaneId); } catch (_) {}
+      return;
+    }
     // Launch chip (and the dialog's Done button): toggle the follow-up
     // config dialog. Open/closed lives in pane state so a re-rank can't
     // slam it shut mid-choice.

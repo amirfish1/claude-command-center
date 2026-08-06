@@ -7960,6 +7960,20 @@
     border-color: var(--border); cursor: not-allowed; opacity: 0.5;
   }
   .conv-input-bar .compact-btn svg { display: block; }
+  .conv-input-bar .continue-new-btn {
+    width: 32px; height: 32px; flex-shrink: 0;
+    border-radius: 999px; border: 1px solid var(--border); cursor: pointer;
+    background: transparent; color: var(--text-muted);
+    line-height: 1; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.05s;
+  }
+  .conv-input-bar.is-new-session-launch .continue-new-btn { display: none; }
+  .conv-input-bar .continue-new-btn:hover {
+    background: var(--surface-2); color: var(--text); border-color: var(--text-muted);
+  }
+  .conv-input-bar .continue-new-btn:active { transform: translateY(1px); }
+  .conv-input-bar .continue-new-btn svg { display: block; }
   /* Codex app-server indicator — a subtle pill in the input hint row. */
   .conv-input-hint .codex-appsrv {
     display: none; align-items: center; gap: 4px;
