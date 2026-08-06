@@ -9622,9 +9622,71 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False):
     return rows, from_cache
 
 
+_row_flicker_seen = {}      # sid -> epoch last served on a window="all" poll
+_row_flicker_missing = {}   # sid -> epoch first NOT served after being seen
+_ROW_FLICKER_FRESH_WINDOW_S = 15 * 60   # only track recently-active sids — a
+                                         # row scrolling out on age isn't the
+                                         # "new session vanishes" bug being chased
+_ROW_FLICKER_FORGET_S = 30 * 60
+
+
+def _trace_row_flicker(rows, now=None):
+    """Log ADD/REMOVE transitions of recently-active sids in the payload
+    actually served by /api/conversations/list (window=all polls only, so
+    a tab switching window scope doesn't read as a mass disappearance).
+
+    Diagnostic-only, added because "new session appears, vanishes ~30s,
+    reappears" (screenshot-reported, not yet root-caused) needs proof of
+    WHERE the row drops — server corpus vs client-side filtering — before
+    a fix can be attempted. See _traceRowFlicker in app.js for the client
+    side of the same trace; both write to the same service.out.log so a
+    server-only drop (this function fires, app.js's [ARCHIVE-DIAG] does not
+    see the sid missing from its own last-good set) is distinguishable from
+    a client-side drop (this function stays quiet, app.js logs it alone).
+    """
+    try:
+        now = time.time() if now is None else now
+        fresh_by_sid = {}
+        for r in rows or []:
+            if not isinstance(r, dict):
+                continue
+            sid = r.get("session_id") or r.get("id")
+            if not sid:
+                continue
+            if (now - _archive_list_row_ts(r)) < _ROW_FLICKER_FRESH_WINDOW_S:
+                fresh_by_sid[sid] = r
+        now_ids = set(fresh_by_sid)
+        for sid in now_ids:
+            missing_at = _row_flicker_missing.pop(sid, None)
+            if missing_at is not None:
+                print(f"[ROW-FLICKER] reappeared sid={sid} gap={now - missing_at:.0f}s", flush=True)
+            _row_flicker_seen[sid] = now
+        for sid, last_seen in list(_row_flicker_seen.items()):
+            if sid in now_ids or sid in _row_flicker_missing:
+                continue
+            if now - last_seen > _ROW_FLICKER_FORGET_S:
+                _row_flicker_seen.pop(sid, None)
+                continue
+            _row_flicker_missing[sid] = now
+            print(
+                f"[ROW-FLICKER] disappeared sid={sid} last_seen_ago={now - last_seen:.0f}s "
+                f"fresh_rows_served={len(now_ids)}",
+                flush=True,
+            )
+        if len(_row_flicker_seen) > 5000:
+            cutoff = now - _ROW_FLICKER_FORGET_S
+            for sid, ts in list(_row_flicker_seen.items()):
+                if ts < cutoff:
+                    _row_flicker_seen.pop(sid, None)
+    except Exception:
+        pass
+
+
 def _archive_list_payload(rows, *, window="all", now=None, cached=None):
     window = _archive_list_window(window)
     projected = _archive_list_project_rows(rows, window=window, now=now)
+    if window == "all":
+        _trace_row_flicker(projected, now=now)
     payload = {
         "ok": True,
         "conversations": projected,

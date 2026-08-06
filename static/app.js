@@ -51421,6 +51421,66 @@
     });
   }
 
+  // ── Row-flicker instrumentation ──────────────────────────────────────────
+  // CCC bug (screenshot-reported, not yet root-caused): a freshly spawned
+  // session appears in the sidebar, vanishes for ~30s, then reappears. This
+  // traces sid membership of `conversationsData` — the set every view mode
+  // (list/kanban/flow) renders from — across renders, and on a disappearance
+  // records which pipeline stage still had the row so the next occurrence
+  // pinpoints server-corpus vs client-filter without needing a repro session.
+  // Server-side counterpart: _trace_row_flicker in server.py, same
+  // [ROW-FLICKER] tag, same service.out.log via _clientLog → /api/client-log.
+  const _rowFlickerSeen = new Map();     // sid -> epoch ms last seen fresh
+  const _rowFlickerMissing = new Map();  // sid -> epoch ms first missing
+  const ROW_FLICKER_FRESH_MS = 15 * 60 * 1000;
+  const ROW_FLICKER_FORGET_MS = 30 * 60 * 1000;
+  function _hasSid(arr, sid) {
+    return Array.isArray(arr) && arr.some(r => r && (r.session_id || r.id) === sid);
+  }
+  function _rowFreshnessAgeMs(r) {
+    let ts = Number((r && (r.modified || r.mtime || r.last_interacted)) || 0);
+    if (!ts) return Infinity;
+    if (ts > 1e11) ts = ts / 1000; // tolerate ms timestamps; server rows are epoch seconds
+    return Date.now() - ts * 1000;
+  }
+  function _traceRowFlicker(finalRows, ctx) {
+    if (ctx && ctx.q) return; // active search intentionally narrows the set
+    try {
+      const now = Date.now();
+      const nowIds = new Set();
+      for (const r of finalRows || []) {
+        const sid = r && (r.session_id || r.id);
+        if (sid && _rowFreshnessAgeMs(r) < ROW_FLICKER_FRESH_MS) nowIds.add(sid);
+      }
+      for (const sid of nowIds) {
+        const missingAt = _rowFlickerMissing.get(sid);
+        if (missingAt) {
+          _rowFlickerMissing.delete(sid);
+          _clientLog('[ROW-FLICKER] reappeared sid=' + sid + ' gap=' + Math.round((now - missingAt) / 1000) + 's');
+        }
+        _rowFlickerSeen.set(sid, now);
+      }
+      for (const [sid, lastSeen] of _rowFlickerSeen) {
+        if (nowIds.has(sid) || _rowFlickerMissing.has(sid)) continue;
+        if (now - lastSeen > ROW_FLICKER_FORGET_MS) { _rowFlickerSeen.delete(sid); continue; }
+        _rowFlickerMissing.set(sid, now);
+        const stage = {
+          inArchiveData: _hasSid(archiveData, sid),
+          inArchiveRows: _hasSid(ctx && ctx.archiveRows, sid),
+          inWindowed: _hasSid(ctx && ctx.windowed, sid),
+          inRowsForRender: _hasSid(ctx && ctx.rowsForRender, sid),
+        };
+        _clientLog('[ROW-FLICKER] disappeared sid=' + sid
+          + ' lastSeenAgo=' + Math.round((now - lastSeen) / 1000) + 's'
+          + ' stage=' + JSON.stringify(stage));
+      }
+      if (_rowFlickerSeen.size > 2000) {
+        const cutoff = now - ROW_FLICKER_FORGET_MS;
+        for (const [sid, ts] of _rowFlickerSeen) if (ts < cutoff) _rowFlickerSeen.delete(sid);
+      }
+    } catch (_) {}
+  }
+
   function renderArchiveList(filter, opts) {
     const $list = document.getElementById('convList');
     if (!$list) return;
@@ -51846,6 +51906,7 @@
         q),
       q);
     clearInputDraftKeyCache();
+    _traceRowFlicker(conversationsData, { q, archiveRows, windowed: _windowed, rowsForRender });
 
     // Make sure the active sidebar mode stays active. Archive refreshes run on
     // search and on the 10s poll; if the board is open, refresh its cards
