@@ -1072,6 +1072,18 @@ def find_gemini_conversations(
     git_top_cache = {}
     out = []
     scanned = 0
+    # At least one Gemini CLI build has written more than one physical chat
+    # file (a stale .json alongside a newer .jsonl, or a rotated checkpoint)
+    # carrying the SAME internal sessionId — confirmed via
+    # scripts/debug_conv_list.py against a live corpus (5 duplicate sids, all
+    # engine=gemini, distinct jsonl_path/mtime, identical sessionId). Every
+    # id-keyed conv-list code path (sidebar signature diff, FLIP reorder,
+    # active-row marking — see ccc_duplicate_dataid_flicker in memory)
+    # assumes session_id is unique per row, so two rows sharing one breaks
+    # that invariant. `paths` is already sorted newest-first (see
+    # _gemini_chat_paths), so keeping only the first file seen per sessionId
+    # keeps the freshest one.
+    seen_sids = set()
     for path in paths:
         if limit and scanned >= int(limit):
             break
@@ -1081,6 +1093,9 @@ def find_gemini_conversations(
         sid = data.get("sessionId") or ""
         if not sid:
             continue
+        if sid in seen_sids:
+            continue
+        seen_sids.add(sid)
         scanned += 1
         tail = _extract_gemini_tail_meta(path) or {}
         cwd = tail.get("cwd") or _gemini_project_root_for_chat(path)
