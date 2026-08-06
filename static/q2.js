@@ -1854,6 +1854,9 @@
     if (act === 'run') {
       var queued = !!(state.detail && state.detail.run_requested);
       btn.disabled = true;
+      btn.classList.add('is-pending');
+      var prevLabel = btn.textContent;
+      btn.textContent = queued ? 'Cancelling…' : 'Queuing…';
       try {
         await postJson('/api/ux-fixes/run', { ref: ref, cancel: queued });
         note(queued ? 'Run request cancelled' : 'Queued to run');
@@ -1861,7 +1864,8 @@
         await refresh();
       } catch (e) {
         note('Failed: ' + e.message);
-      } finally { btn.disabled = false; }
+        btn.textContent = prevLabel;
+      } finally { btn.disabled = false; btn.classList.remove('is-pending'); }
       return;
     }
 

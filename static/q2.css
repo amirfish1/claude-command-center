@@ -113,6 +113,7 @@ body {
 .q2-btn:hover { border-color: var(--accent); }
 .q2-btn-ghost { background: transparent; }
 .q2-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.q2-btn.is-pending { border-color: var(--accent); color: var(--accent); cursor: progress; opacity: 0.85; }
 
 /* ── three-column shell ───────────────────────────────────────────────── */
 .q2-shell {
