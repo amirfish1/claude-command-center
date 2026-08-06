@@ -62204,6 +62204,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         last_keepalive = time.time()
         normalizer = _SpawnEventNormalizer()
         first_visible_sent = False
+        # Pre-first-output polling starts fast (0.05s) so a normal single
+        # spawn sees its first token with minimal added latency, but backs
+        # off when nothing lands for a while. Without this, N concurrent
+        # fresh spawns (e.g. several sessions started around the same time)
+        # each busy-poll at 20Hz, which is the same GIL-thrash "poll
+        # pile-up" pattern that stalled /api/sessions/live-activity before
+        # it got coalescing (see scratch/ccc-performance-investigation-2026-06.md).
+        consecutive_empty = 0
         try:
             while True:
                 events_to_send = []
@@ -62264,6 +62272,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         first_visible_sent = True
                     except (BrokenPipeError, ConnectionResetError, OSError):
                         break
+                    consecutive_empty = 0
+                else:
+                    consecutive_empty += 1
 
                 now = time.time()
                 if now - last_keepalive >= 5:
@@ -62274,7 +62285,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         break
                     last_keepalive = now
 
-                time.sleep(0.25 if first_visible_sent else 0.05)
+                if first_visible_sent:
+                    sleep_s = 0.25
+                else:
+                    sleep_s = min(0.05 * (1.3 ** consecutive_empty), 0.25)
+                time.sleep(sleep_s)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
