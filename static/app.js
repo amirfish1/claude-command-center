@@ -13097,6 +13097,48 @@
       && card.fast_path && !card.fast_path_visible);
   }
 
+  // Watchdog for shouldPausePeriodicUiWork(): when it's true, the
+  // muteTickersWhileTyping wrapper silences EVERY setInterval poller in the
+  // whole tab -- sidebar refresh, live status, everything -- not just the
+  // one row a fast-spawn's paint gate is protecting. The spawn handler has a
+  // 30s setTimeout backstop that's supposed to guarantee this releases; if
+  // it's still open well past that, something leaked (the gate never
+  // released, or currentConversation got stuck at a 'spawning-<pid>'
+  // placeholder id and never rebound to the real session). That would freeze
+  // the ENTIRE sidebar indefinitely, not just the spawned row -- a plausible
+  // root cause for "new session appears then vanishes" reports, and for
+  // rows generally looking stuck on stale data. Logged once per leak episode
+  // via _clientLog so it lands in service.out.log without needing devtools
+  // access to a WKWebView tab. Uses setTimeout (not setInterval) so this
+  // watchdog isn't itself silenced by the same mute wrapper it's watching.
+  let _uiPauseSince = 0;
+  let _uiPauseLeakLogged = false;
+  const UI_PAUSE_LEAK_THRESHOLD_MS = 40 * 1000;  // 30s backstop + 10s slack
+  (function watchPeriodicUiPause() {
+    const now = Date.now();
+    if (shouldPausePeriodicUiWork()) {
+      if (!_uiPauseSince) _uiPauseSince = now;
+      if (!_uiPauseLeakLogged && (now - _uiPauseSince) > UI_PAUSE_LEAK_THRESHOLD_MS) {
+        _uiPauseLeakLogged = true;
+        const cur = window.currentConversation;
+        const reason = cur === '__new__' ? 'currentConversation=__new__'
+          : String(cur || '').startsWith('spawning-') ? ('currentConversation stuck at ' + cur)
+          : claudeFastSpawnAwaitingPaint() ? 'claudeFastSpawnAwaitingPaint stuck open'
+          : 'unknown (typing guard should self-clear in 1.5s)';
+        _clientLog('[UI-POLL-PAUSE-LEAK] shouldPausePeriodicUiWork() stuck true for '
+          + Math.round((now - _uiPauseSince) / 1000) + 's -- every setInterval poller in '
+          + 'this tab is silenced. reason=' + reason
+          + ' spawnGateSids=' + JSON.stringify(Array.from(claudeSpawnAwaitingFirstPaint))
+          + ' fastPathPendingPids=' + JSON.stringify(Array.from(pendingSpawns.entries())
+              .filter(([, c]) => c && c.fast_path && !c.fast_path_visible).map(([pid]) => pid)));
+      }
+    } else {
+      _uiPauseSince = 0;
+      _uiPauseLeakLogged = false;
+    }
+    setTimeout(watchPeriodicUiPause, 5000);
+  })();
+
   function releaseClaudeSpawnPaintGate(sessionId, pendingPid) {
     if (sessionId) claudeSpawnAwaitingFirstPaint.delete(sessionId);
     for (const [pid, card] of pendingSpawns.entries()) {
