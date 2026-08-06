@@ -13906,8 +13906,7 @@
   .hsd-result-snippet {
     font-size: 12px; line-height: 1.45; margin-top: 4px;
     color: var(--text, #e6e6e6);
-    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
-    overflow: hidden;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .hsd-result-snippet mark {
     background: rgba(255, 209, 102, 0.32); color: inherit;
