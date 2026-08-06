@@ -9791,10 +9791,11 @@ def _trace_row_flicker(rows, now=None):
             if (now - _archive_list_row_ts(r)) < _ROW_FLICKER_FRESH_WINDOW_S:
                 fresh_by_sid[sid] = r
         now_ids = set(fresh_by_sid)
+        _ts = time.strftime("%H:%M:%S")
         for sid in now_ids:
             missing_at = _row_flicker_missing.pop(sid, None)
             if missing_at is not None:
-                print(f"[ROW-FLICKER] reappeared sid={sid} gap={now - missing_at:.0f}s", flush=True)
+                print(f"[ROW-FLICKER] {_ts} reappeared sid={sid} gap={now - missing_at:.0f}s", flush=True)
             _row_flicker_seen[sid] = now
         for sid, last_seen in list(_row_flicker_seen.items()):
             if sid in now_ids or sid in _row_flicker_missing:
@@ -9804,7 +9805,7 @@ def _trace_row_flicker(rows, now=None):
                 continue
             _row_flicker_missing[sid] = now
             print(
-                f"[ROW-FLICKER] disappeared sid={sid} last_seen_ago={now - last_seen:.0f}s "
+                f"[ROW-FLICKER] {_ts} disappeared sid={sid} last_seen_ago={now - last_seen:.0f}s "
                 f"fresh_rows_served={len(now_ids)}",
                 flush=True,
             )
@@ -57563,7 +57564,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 data = json.loads(body) if body else {}
                 msg = str(data.get("msg", ""))[:500]
                 if msg:
-                    print(f"[CLIENT] {msg}", flush=True)
+                    print(f"[CLIENT] {time.strftime('%H:%M:%S')} {msg}", flush=True)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 400)
@@ -63417,7 +63418,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _ms = (time.time() - _t0) * 1000.0
                 if _ms >= SLOW_REQ_MS:
                     _p = getattr(self, "path", "?").split("?", 1)[0]
-                    print(f"[SLOW] {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
+                    _ts = time.strftime("%H:%M:%S")
+                    print(f"[SLOW] {_ts} {getattr(self, 'command', '?')} {_p} {_ms:.0f}ms",
                           flush=True)
             except Exception:
                 pass
