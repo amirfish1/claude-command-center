@@ -942,6 +942,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
   box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.20);
 }
 .q2-trow.is-blocked .q2-tstatus { color: var(--wip-blue); }
+/* Queued to run: an idle open ticket WatchTower will pick up on its own,
+   distinct from a plain "open" row waiting for a human decision. Wins over
+   is-open's orange since it's the more specific rule. */
+.q2-trow.is-run-requested .q2-tstatus { color: var(--purple); }
 
 .q2-tref {
   flex: 0 0 auto;
@@ -1240,6 +1244,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-status.is-in_progress { color: var(--green); }
 .q2-status.is-blocked { color: var(--wip-blue); }
 .q2-status.is-closed { color: var(--text-muted); }
+/* Queued to run: idle but not "just open" — WatchTower's reconciler will
+   pick it up on its own. Purple keeps it out of the orange/green/blue set
+   already meaning open/in-progress/blocked. */
+.q2-status.is-run-requested { color: var(--purple); }
 
 .q2-sec { margin-bottom: 18px; }
 .q2-sec-label {

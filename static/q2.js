@@ -1210,17 +1210,22 @@
     var age = relTime(ageSrc);
     // Only an idle, open ticket can be "run now": a closed one has nothing to
     // do and a live-claimed one is already being worked.
-    var queued = !!it.run_requested;
     var canRun = st !== 'closed' && !isLiveWip(it);
+    // run_requested is its own state, distinct from plain "open": the ticket
+    // is sitting idle until WatchTower's reconciler picks it up. Only surface
+    // it where it can actually mean something (an idle, runnable row).
+    var queued = canRun && !!it.run_requested;
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'
+      : queued ? 'run requested'
       : statusLabel(st);
     return '<button type="button" class="q2-trow is-' + esc(st)
       + (ref === state.ref ? ' is-selected' : '')
       + (isNewTicket(ref) ? ' q2-new-ticket' : '')
       + (stale ? ' is-stale-claim' : '')
       + (unverified ? ' is-unverified-claim' : '')
+      + (queued ? ' is-run-requested' : '')
       + (unresolved ? ' has-unresolved' : '') + '"'
       + ' data-q2-ref="' + esc(ref) + '">'
       + '<span class="q2-tref">' + esc(ref) + '</span>'
@@ -1551,10 +1556,12 @@
     var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
     var closed = st === 'closed';
+    var runQueued = !closed && !isLiveWip(item) && !!item.run_requested;
 
     // Everything editable lives on one chip row, next to the read-only state.
     var chips = ''
-      + '<span class="q2-status is-' + esc(st) + '">' + esc(statusLabel(st)) + '</span>'
+      + '<span class="q2-status is-' + esc(st) + (runQueued ? ' is-run-requested' : '') + '">'
+      + esc(runQueued ? 'run requested' : statusLabel(st)) + '</span>'
       + (item.lane ? '<span class="q2-chip is-lane">' + esc(item.lane) + '</span>' : '')
       + editChip('type', item.type ? (TYPE_SHORT[item.type] || item.type) : 'type?',
                  item.type, item.type ? 'is-type-' + item.type : '')
@@ -1572,7 +1579,6 @@
         + (state.arm === k ? ' is-armed' : '') + '" data-q2-arm="' + esc(k) + '">'
         + esc(label) + '</button>';
     }
-    var runQueued = !!item.run_requested;
     var toolbar = '<div class="q2-actions">'
       + (closed ? '' :
           '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
