@@ -199,6 +199,19 @@
     <button type="button" class="injection-health-banner__dismiss" id="injectionHealthBannerDismissAll" title="Dismiss the lost-receipt incidents shown above (active holds clear on their own)">Dismiss</button>
   </div>
   <div id="injectionHealthBannerDetails" class="injection-health-banner-details" hidden></div>
+  <!-- Global dispatch-paused banner. Shown while the control-plane drain is
+       enabled (restart handoff, or a leaked drain) -- new sends queue
+       server-side instead of dispatching, which otherwise reads as every
+       session being silently "busy" (observed 2026-08-06: a leaked
+       worker-restart drain parked 31 messages for 4 hours with no signal).
+       Rides the 20s control-plane poll; Resume lifts the drain and replays
+       the queue, Details opens Settings > Maintenance. -->
+  <div id="drainPausedBanner" class="drain-paused-banner" hidden role="alert" aria-live="assertive">
+    <span class="drain-paused-banner__icon" aria-hidden="true">&#9208;</span>
+    <span class="drain-paused-banner__text" id="drainPausedBannerText"></span>
+    <button type="button" class="drain-paused-banner__resume" id="drainPausedResumeBtn" title="Lift the drain; queued messages dispatch immediately">Resume dispatch</button>
+    <button type="button" class="drain-paused-banner__details" id="drainPausedDetailsBtn" title="Open Settings > Maintenance">Details</button>
+  </div>
   <!-- PWA install banner (tab-mode only). Hidden by default; surfaced after
        a short delay if the page is NOT running standalone, with copy
        tailored to the current platform. Dismissal is persisted for 14

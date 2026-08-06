@@ -254,6 +254,23 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
         super().__init__(str(path), WorkerRequestHandler)
 
 
+def _release_stale_restart_drain(runtime):
+    """Lift a "worker-restart:" drain left over from the restart window.
+
+    That drain protects the restart that produced THIS worker process; once
+    the worker is serving, the window is over. The dashboard's restart
+    handler normally lifts it, but if that dashboard died mid-restart nobody
+    else would -- every later submit would defer forever.
+    """
+    drain = runtime.ledger.drain_state()
+    if drain.get("enabled") and str(drain.get("reason") or "").startswith(
+        "worker-restart:"
+    ):
+        runtime.ledger.set_drain(False, "worker online")
+        return True
+    return False
+
+
 def serve(path=None):
     path = Path(path or socket_path())
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -286,6 +303,7 @@ def serve(path=None):
         f"socket={path} nofile={open_files}",
         flush=True,
     )
+    _release_stale_restart_drain(runtime)
     if (
         not runtime.ledger.drain_state().get("enabled")
         and (

@@ -160,7 +160,9 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
         self.assertEqual(protected["queued"], 1)
 
     def test_worker_restart_endpoint_waits_for_health_then_reconciles(self):
-        """The endpoint itself: precheck -> kickstart -> wait -> reconcile."""
+        """The endpoint itself: precheck -> kickstart -> wait -> reconcile
+        -> lift the precheck drain (a leaked "worker-restart:" drain defers
+        every later submit forever; nothing else used to release it)."""
         import pathlib
         src = pathlib.Path(self.server.__file__).read_text()
         block = src[src.index('if path == "/api/restart/worker":'):
@@ -169,9 +171,11 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
         kick = block.index("_restart_worker_process()")
         wait = block.index("_wait_worker_healthy(")
         reconcile = block.index('"work.reconcile"')
+        release = block.index('"drain.set"')
         self.assertLess(precheck, kick)
         self.assertLess(kick, wait)
         self.assertLess(wait, reconcile)
+        self.assertLess(reconcile, release)
 
 
 if __name__ == "__main__":

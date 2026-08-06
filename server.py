@@ -58126,12 +58126,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             outcome = _restart_worker_process()
             healthy = False
             reconciled = None
+            drain_replayed = None
             if outcome.get("restarted"):
                 healthy = _wait_worker_healthy()
                 if healthy:
                     recon = _control_plane_request("work.reconcile", {})
                     if isinstance(recon, dict) and recon.get("ok"):
                         reconciled = int(recon.get("reconciled") or 0)
+                    # Lift the precheck drain now that the worker answers:
+                    # nobody else released "worker-restart:" drains (startup
+                    # only cleared "dashboard-restart:" ones), so a successful
+                    # restart left every later submit deferring forever.
+                    rel = _control_plane_request("drain.set", {
+                        "enabled": False,
+                        "reason": "worker restart complete",
+                    })
+                    if isinstance(rel, dict) and rel.get("ok"):
+                        drain_replayed = int(rel.get("replayed") or 0)
             self.send_json({
                 "ok": bool(outcome.get("restarted")),
                 "worker": outcome,
@@ -58139,6 +58150,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "drain_queued": int((protected or {}).get("queued") or 0),
                 "worker_reachable": healthy,
                 "reconciled": reconciled,
+                "drain_replayed": drain_replayed,
                 "note": (
                     ("Worker restarted and reconciled ("
                         + str(reconciled) + " item(s) reclaimed).") if healthy
@@ -68354,14 +68366,20 @@ def main():
         drain = worker_health.get("drain") or {}
         if (
             drain.get("enabled")
-            and str(drain.get("reason") or "").startswith("dashboard-restart:")
+            and str(drain.get("reason") or "").startswith(
+                ("dashboard-restart:", "worker-restart:")
+            )
         ):
+            # "worker-restart:" drains are normally lifted by the restart
+            # handler itself once the worker is healthy; this catches the
+            # ones it leaked (dashboard died mid-restart), which otherwise
+            # defer every queued submit forever.
             resumed = _control_plane_request("drain.set", {
                 "enabled": False,
                 "reason": "dashboard online",
             })
             print(
-                "  [control-plane] dashboard restart handoff resumed "
+                "  [control-plane] restart handoff resumed "
                 f"({int(resumed.get('replayed') or 0)} queued action(s))"
             )
     threading.Thread(

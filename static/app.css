@@ -16664,6 +16664,53 @@ body.status-pos-right #convToolbar {
 }
 .injection-health-banner__details:hover { background: rgba(255,255,255,0.15); }
 .injection-health-banner__details[aria-expanded="true"] { background: rgba(255,255,255,0.25); }
+/* Dispatch-paused banner: same fixed-top pattern as injection-health, amber
+   instead of red -- a paused queue is a warning, not a failure. Stacks below
+   the injection banner when both are up at once. */
+.drain-paused-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 10000;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px;
+  background: #7a5a1f;
+  color: #fff;
+  font-size: 12.5px;
+  font-family: inherit;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  animation: injection-health-slide-down 0.25s ease-out;
+}
+@media (prefers-color-scheme: light) {
+  .drain-paused-banner { background: #b7791f; }
+}
+:root[data-theme="light"] .drain-paused-banner { background: #b7791f; }
+:root[data-theme="dark"] .drain-paused-banner { background: #7a5a1f; }
+#injectionHealthBanner:not([hidden]) ~ .drain-paused-banner { top: 39px; }
+.drain-paused-banner__icon { font-size: 15px; flex: 0 0 auto; }
+.drain-paused-banner__text { flex: 1 1 auto; line-height: 1.4; }
+.drain-paused-banner__resume {
+  flex: 0 0 auto;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit;
+}
+.drain-paused-banner__resume:hover { background: rgba(255,255,255,0.25); }
+.drain-paused-banner__resume:disabled { opacity: 0.6; cursor: default; }
+.drain-paused-banner__details {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit;
+}
+.drain-paused-banner__details:hover { background: rgba(255,255,255,0.15); }
 .injection-health-banner-details {
   position: fixed;
   top: 39px; left: 0; right: 0;

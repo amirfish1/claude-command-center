@@ -13,7 +13,7 @@ import urllib.request
 import unittest
 from unittest import mock
 
-from ccc_worker import WorkerRuntime, WorkerServer
+from ccc_worker import WorkerRuntime, WorkerServer, _release_stale_restart_drain
 from control_plane import ControlPlaneClient, WorkLedger
 from worker_engines import EngineHost
 
@@ -546,6 +546,31 @@ class TestWatchTowerServiceControl(unittest.TestCase):
                 "--port", "8788",
             ],
         )
+
+
+class TestReleaseStaleRestartDrain(unittest.TestCase):
+    """Worker boot lifts "worker-restart:" drains the dashboard leaked."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        ledger = WorkLedger(pathlib.Path(self.tmp.name, "ledger.sqlite3"))
+        self.runtime = WorkerRuntime(ledger=ledger, token="b" * 64)
+
+    def test_lifts_worker_restart_drain(self):
+        self.runtime.ledger.set_drain(True, "worker-restart:some-uuid")
+        self.assertTrue(_release_stale_restart_drain(self.runtime))
+        self.assertFalse(self.runtime.ledger.drain_state().get("enabled"))
+
+    def test_leaves_other_drains_alone(self):
+        for reason in ("dashboard-restart:some-uuid", "dashboard upgrade", ""):
+            self.runtime.ledger.set_drain(True, reason)
+            self.assertFalse(_release_stale_restart_drain(self.runtime))
+            self.assertTrue(self.runtime.ledger.drain_state().get("enabled"))
+            self.runtime.ledger.set_drain(False, "test reset")
+
+    def test_noop_when_not_draining(self):
+        self.assertFalse(_release_stale_restart_drain(self.runtime))
 
 
 class TestEngineHost(unittest.TestCase):

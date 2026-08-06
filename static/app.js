@@ -41772,6 +41772,43 @@
     return 'CACHE MISS — ' + _formatTokensAntigravity(missed) + ' input tokens uncached';
   }
 
+  // A running, cross-turn log of cache misses (CCC-750): a chip on screen
+  // only shows the one turn, not whether it followed close on the heels of
+  // the previous turn (a burst) or after a long gap (an expected cold
+  // start). Track the last assistant ts per session so each miss record
+  // can carry the gap. Capped ring buffer, inspectable from devtools via
+  // `dumpCacheMissLog()`.
+  const _cacheMissPrevTs = new Map();
+  window._ccCacheMissLog = window._ccCacheMissLog || [];
+
+  function _recordCacheMissLog(sessionId, ev, tIn, tCached) {
+    const total = Number(tIn) || 0;
+    const cached = Number(tCached) || 0;
+    const missed = Math.max(0, total - cached);
+    const prevTs = _cacheMissPrevTs.get(sessionId) || null;
+    if (missed && total && (missed / total) > CACHE_MISS_CALLOUT_MIN_SHARE) {
+      const entry = {
+        session_id: sessionId,
+        ts: ev.ts || null,
+        prev_turn_ts: prevTs,
+        gap_seconds: (ev.ts && prevTs) ? Math.round((Date.parse(ev.ts) - Date.parse(prevTs)) / 1000) : null,
+        tokens_in: total,
+        tokens_cached: cached,
+        tokens_uncached: missed,
+        tokens_out: Number(ev.tokens_out) || 0,
+      };
+      window._ccCacheMissLog.push(entry);
+      if (window._ccCacheMissLog.length > 500) window._ccCacheMissLog.shift();
+      console.warn('[cache-miss]', entry);
+    }
+    if (ev.ts) _cacheMissPrevTs.set(sessionId, ev.ts);
+  }
+
+  window.dumpCacheMissLog = function () {
+    console.table(window._ccCacheMissLog);
+    return window._ccCacheMissLog;
+  };
+
   function _getCtxLimitOverride() {
     const v = parseInt(localStorage.getItem('ccc-context-limit') || '0', 10);
     return v === 1_000_000 || v === 200_000 ? v : 0;
@@ -47157,6 +47194,7 @@
               'Cache read covered ' + chipCached.toLocaleString() + ' of ' + (Number(ev.tokens_in) || 0).toLocaleString() + ' input tokens.'
             ) + '">' + escapeHtml(cacheMiss) + '</div>');
           }
+          _recordCacheMissLog(renderedConversationId, ev, ev.tokens_in, chipCached);
         }
         html += blockParts.join('');
         if (renderedSomething) html += eventModelMetaHtml(ev, 'assistant');
@@ -55402,11 +55440,17 @@
   const $workerBadge = document.getElementById('cccWorkerBadge');
   const $workerWord = document.getElementById('cccWorkerWord');
   const $workerCount = document.getElementById('cccWorkerCount');
+  const $drainPausedBanner = document.getElementById('drainPausedBanner');
+  const $drainPausedBannerText = document.getElementById('drainPausedBannerText');
+  const $drainPausedResumeBtn = document.getElementById('drainPausedResumeBtn');
+  const $drainPausedDetailsBtn = document.getElementById('drainPausedDetailsBtn');
   const $watchtowerServiceStatus = document.getElementById('watchtowerServiceStatus');
   const $watchtowerServiceOpenBtn = document.getElementById('watchtowerServiceOpenBtn');
   const $watchtowerServiceActionBtn = document.getElementById('watchtowerServiceActionBtn');
   let restartServerPort = '';
   let controlPlaneDraining = false;
+  let controlPlaneDrainReason = '';
+  let controlPlaneDrainQueued = 0;
   let controlPlaneOnline = false;
   let watchtowerServiceRunning = false;
   let watchtowerServiceUrl = '';
@@ -55495,10 +55539,33 @@
     // started line and busy line already carry all of this. No aria-label.
   }
 
+  function renderDrainPausedBanner() {
+    if (!$drainPausedBanner) return;
+    if (!controlPlaneDraining) {
+      $drainPausedBanner.hidden = true;
+      if ($drainPausedResumeBtn) $drainPausedResumeBtn.disabled = false;
+      return;
+    }
+    const reason = controlPlaneDrainReason
+      ? ' (' + controlPlaneDrainReason.slice(0, 60) + ')'
+      : '';
+    const queued = controlPlaneDrainQueued > 0
+      ? ' ' + controlPlaneDrainQueued + ' message(s) held.'
+      : '';
+    if ($drainPausedBannerText) {
+      $drainPausedBannerText.textContent =
+        'Dispatch paused' + reason + ' — new sends are queuing, not sending.'
+        + queued;
+    }
+    $drainPausedBanner.hidden = false;
+  }
+
   function renderControlPlaneStatus(data) {
     renderWorkerBadge(data);
     controlPlaneOnline = false;
     if (!data || !data.ok) {
+      controlPlaneDraining = false;
+      renderDrainPausedBanner();
       if ($controlPlaneStatus) {
         $controlPlaneStatus.textContent =
           'Worker unavailable; active compatibility work may block dashboard restart.';
@@ -55515,6 +55582,8 @@
     }
     const capabilities = (data.worker && data.worker.capabilities) || [];
     if (!capabilities.includes('engine-execution-v1')) {
+      controlPlaneDraining = false;
+      renderDrainPausedBanner();
       if ($controlPlaneStatus) {
         $controlPlaneStatus.textContent =
           'Worker update pending; compatibility execution remains active.';
@@ -55529,8 +55598,11 @@
     controlPlaneOnline = true;
     const drain = data.drain || {};
     controlPlaneDraining = !!drain.enabled;
+    controlPlaneDrainReason = controlPlaneDraining
+      ? String(drain.reason || '') : '';
     const active = Number(data.active || 0);
     const queued = Number(data.queued || 0);
+    controlPlaneDrainQueued = controlPlaneDraining ? queued : 0;
     const uncertain = Number(data.uncertain || 0);
     const parts = [
       'Persistent worker online',
@@ -55549,6 +55621,7 @@
       $controlPlaneReconcileBtn.hidden = uncertain === 0;
       $controlPlaneReconcileBtn.disabled = false;
     }
+    renderDrainPausedBanner();
   }
 
   async function refreshControlPlaneStatus() {
@@ -55763,6 +55836,46 @@
         );
         refreshControlPlaneStatus();
       }
+    });
+  }
+  if ($drainPausedResumeBtn) {
+    $drainPausedResumeBtn.addEventListener('click', async () => {
+      $drainPausedResumeBtn.disabled = true;
+      try {
+        const response = await fetch('/api/control-plane/drain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: false,
+            reason: 'operator resumed dispatch (banner)',
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        // Repaint from the full status payload, not the drain.set response:
+        // the latter carries no worker.capabilities, which the renderer
+        // would misread as "worker update pending" for up to one poll tick.
+        refreshControlPlaneStatus();
+        showOpToast(
+          data.replayed
+            ? 'Dispatch resumed — ' + data.replayed + ' queued message(s) sent.'
+            : 'Dispatch resumed.',
+          'success'
+        );
+      } catch (error) {
+        showOpToast(
+          'Resume failed: ' + ((error && error.message) || error),
+          'error'
+        );
+        refreshControlPlaneStatus();
+      }
+    });
+  }
+  if ($drainPausedDetailsBtn) {
+    $drainPausedDetailsBtn.addEventListener('click', () => {
+      openMaintenanceSettings();
     });
   }
   if ($controlPlaneReconcileBtn) {
