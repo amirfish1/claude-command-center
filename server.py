@@ -42466,13 +42466,13 @@ def _take_claude_prewarm(prewarm_id, cwd, model, name=None, effort=""):
         entry = _CLAUDE_PREWARMS.get(str(prewarm_id))
         if not entry:
             return None
+        # Name is NOT checked: the prewarm uses a stable placeholder name
+        # ("prewarm-<cwd-basename>"), not the user's text. The real session
+        # name is set after claim. Matching on cwd+model+effort is sufficient
+        # — those are baked into the reserved argv and can't be changed.
         if (
             entry.get("cwd") != cwd
             or entry.get("model") != model
-            or (name is not None and entry.get("name") != name)
-            # Effort is baked into the reserved argv, so a mismatch has to miss
-            # and spawn cold. Adopting the process anyway would drop the user's
-            # choice with no error, and only on warm hits.
             or str(entry.get("reasoning_effort") or "") != str(effort or "")
         ):
             return None
@@ -42523,8 +42523,8 @@ def _take_claude_prewarm_for_request(
             return None
         if entry.get("model") != model:
             return None
-        if name is not None and entry.get("name") != name:
-            return None
+        # Name is NOT checked: the prewarm uses a stable placeholder name,
+        # not the user's text. See _take_claude_prewarm for rationale.
         # The reserved argv already carries --effort, so a different level is a
         # miss: adopting it would silently launch at the wrong effort.
         if str(entry.get("reasoning_effort") or "") != str(effort or ""):

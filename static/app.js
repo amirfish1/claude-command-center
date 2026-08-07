@@ -60202,8 +60202,13 @@
     if (worktree && worktree.checked) return null;
     const cwd = getSpawnCwd();
     if (!cwd) return null;
-    const name = spawnFirstSentence($convInput ? $convInput.value : '');
-    if (!name) return null;
+    // Use a stable name for the prewarm, NOT the user's text. The name changes
+    // on every keystroke (derived from the first sentence), so including it
+    // would spawn a new claude process per character. The real session name
+    // is set when the user actually submits — the prewarm just needs to boot
+    // Claude with the right cwd/model/effort.
+    const cwdBase = (cwd || '').split('/').pop() || 'session';
+    const name = 'prewarm-' + cwdBase;
     let model = '';
     if ($convInputModelSelect) {
       const picked = $convInputModelSelect.value;
@@ -60231,7 +60236,13 @@
   function requestClaudePrewarm() {
     const spec = claudePrewarmSpec();
     if (!spec) return Promise.resolve(null);
-    const key = JSON.stringify(spec);
+    // Dedup on cwd+model+effort only, NOT the session name. The name changes
+    // on every keystroke (it's derived from the first sentence the user
+    // types), so including it in the key would spawn a new claude process
+    // for every character. The old prewarm is evicted server-side by
+    // client_id, but that still means N processes for N keystrokes. By
+    // excluding the name, one prewarm serves the whole typing session.
+    const key = JSON.stringify({ cwd: spec.cwd, model: spec.model, reasoning_effort: spec.reasoning_effort });
     if (_claudePrewarmPromise && _claudePrewarmKey === key) return _claudePrewarmPromise;
     _claudePrewarmKey = key;
     const request = fetch('/api/sessions/prewarm-claude', {
