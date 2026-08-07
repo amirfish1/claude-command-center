@@ -239,6 +239,25 @@ wt_ensure_daemon() {
   return 0
 }
 
+# WatchTower's own skill sync (the SKILL.md files that teach an agent the `wt`
+# commands) only fires the first time its LaunchAgent plist gets written —
+# i.e. once, ever, per machine. Anyone who installed WatchTower before a skill
+# existed (or before skills_sync shipped at all) has a plist already on disk
+# and never gets a resync: the daemon runs fine, `import watchtower` works,
+# but the agent has no idea `wt` exists. Call it unconditionally here instead
+# of relying on WatchTower's own first-run gate. `wt skills sync` just
+# symlinks bundled skill dirs into each present harness's skills dir
+# (~/.claude/skills, ~/.codex/skills, ...) — idempotent and cheap, safe to run
+# on every launch.
+wt_ensure_skills() {
+  if command -v wt >/dev/null 2>&1; then
+    wt skills sync >/dev/null 2>&1 || true
+  else
+    "$WT_PYTHON" -m watchtower.cli skills sync >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 # Post-install verification. pip can exit 0 and still leave nothing importable
 # (wrong interpreter, --user dir not on sys.path), and that failure mode is the
 # one that looks like success in the logs.
@@ -251,6 +270,7 @@ wt_finish() {
   wt_touch_marker "$WT_CHECK_MARKER"
   wt_warn_if_wt_not_on_path
   wt_ensure_daemon
+  wt_ensure_skills
   return 0
 }
 
@@ -278,6 +298,7 @@ ccc_install_watchtower() {
       wt_refresh_managed_clone
     fi
     wt_ensure_daemon
+    wt_ensure_skills
     return 0
   fi
 
