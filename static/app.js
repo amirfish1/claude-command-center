@@ -3630,14 +3630,18 @@
       const reasonStr = ev.reason || 'unspecified';
       const aliveStr = ev.alive ? ' (was live)' : ' (was already dead)';
       let msg;
+      let logKind = 'kill';
       if (reasonStr === 'stale_transcript') {
         msg = '<strong>Session replaced</strong>: ' + name + '<br>The transcript advanced (another terminal or resume drove it). Restarting from current state.';
+        logKind = 'stale';
+        _appendActivityLog(logKind, 'Session "' + name + '" replaced (stale transcript)');
       } else if (reasonStr === 'prewarm_expired') {
         // Prewarm expiry is already handled by the prewarm event handler —
         // skip the generic kill toast to avoid double-notification.
         continue;
       } else {
         msg = '<strong>CCC killed a session</strong>: ' + name + aliveStr + ageStr + callerStr + '<br>Reason: ' + reasonStr;
+        _appendActivityLog(logKind, 'Killed "' + name + '" — ' + reasonStr + callerStr);
       }
       if (typeof showOpToast === 'function') showOpToast(msg, 'warn');
     }
@@ -3650,14 +3654,69 @@
       _lastPrewarmEventId = ev.id;
       const name = ev.name || 'session';
       if (ev.kind === 'prewarm_spawned') {
+        _appendActivityLog('prewarm', 'Pre-warming "' + name + '" in the background');
         if (typeof showOpToast === 'function') showOpToast('Pre-warming Claude session "' + name + '" in the background', 'info');
       } else if (ev.kind === 'prewarm_claimed') {
+        _appendActivityLog('prewarm', 'Pre-warm "' + name + '" claimed (instant startup)');
         if (typeof showOpToast === 'function') showOpToast('Pre-warmed session "' + name + '" claimed (instant startup)', 'success');
       } else if (ev.kind === 'prewarm_expired') {
         // Expired prewarms are too noisy (340/week) — skip the toast, just
         // update the cursor so we don't re-process them.
       }
     }
+  }
+
+  // ── CCC activity log panel ──
+  // Reuses the same attentionPanel as the "Push all" ship log (bottom left).
+  // Shows a live feed of prewarm spawns/claims and session kills/stale
+  // retirements. Auto-shows on first event, stays until dismissed.
+  let _activityLogLines = [];
+  let _activityLogActive = false;
+  const _ACTIVITY_LOG_MAX = 50;
+
+  function _appendActivityLog(kind, text) {
+    const ts = new Date();
+    const tsStr = [ts.getHours(), ts.getMinutes(), ts.getSeconds()]
+      .map(n => String(n).padStart(2, '0')).join(':');
+    _activityLogLines.unshift({ ts: tsStr, kind, text, id: Date.now() + Math.random() });
+    if (_activityLogLines.length > _ACTIVITY_LOG_MAX) {
+      _activityLogLines = _activityLogLines.slice(0, _ACTIVITY_LOG_MAX);
+    }
+    _activityLogActive = true;
+    _renderActivityLogPanel();
+  }
+
+  function _dismissActivityLog() {
+    _activityLogActive = false;
+    const $panel = document.getElementById('attentionPanel');
+    if ($panel) $panel.classList.add('collapsed');
+    if (typeof loadAttentionList === 'function') loadAttentionList();
+  }
+
+  function _renderActivityLogPanel() {
+    if (!_activityLogActive) return;
+    // Don't fight the ship log — if it's active, let it own the panel.
+    if (typeof _shipLogActive !== 'undefined' && _shipLogActive) return;
+    const $panel = document.getElementById('attentionPanel');
+    const $list = document.getElementById('attentionList');
+    if (!$panel || !$list) return;
+    $panel.classList.remove('collapsed');
+    const lines = _activityLogLines.map(line => {
+      const cls = line.kind === 'kill' ? 'warn' : (line.kind === 'stale' ? 'warn' : 'info');
+      return '<div class="ship-log-line ' + cls + '">'
+        + '<span class="ship-log-ts">' + escapeHtml(line.ts) + '</span>'
+        + '<span class="ship-log-txt">' + escapeHtml(line.text) + '</span></div>';
+    }).join('');
+    $list.innerHTML =
+      '<div class="ship-log">'
+      + '<div class="ship-log-head">'
+        + '<span class="ship-log-title">CCC activity</span>'
+        + '<button type="button" class="ship-log-dismiss" data-role="activity-log-dismiss">✕ close</button>'
+      + '</div>'
+      + '<div class="ship-log-body">' + (lines || '<div class="ship-log-line info"><span class="ship-log-txt">…</span></div>') + '</div>'
+      + '</div>';
+    const dz = $list.querySelector('[data-role="activity-log-dismiss"]');
+    if (dz) dz.addEventListener('click', (e) => { e.stopPropagation(); _dismissActivityLog(); });
   }
   async function refreshLiveSessionsActivity() {
     // Dashboard-wide overlay: patches WIP/live chips onto conversation-list
