@@ -42301,6 +42301,69 @@ def _store_claude_prewarm(entry):
         _discard_claude_prewarm(old_entry)
 
 
+def _watch_prewarm_readiness(entry, log_path):
+    """Watch a prewarm's stdout log for the system/init event.
+
+    Claude emits {"type":"system","subtype":"init",...} once it has finished
+    SessionStart hooks and MCP setup and is ready to process input. We tail
+    the log file (Claude's stdout is redirected there) and set entry["ready"]
+    + signal the ready_event when we see it.
+
+    Exits when: init event seen, process dies, or 90s timeout (the prewarm
+    TTL is 120s, so this is well within the expiry window).
+    """
+    deadline = time.time() + 90
+    path = str(log_path)
+    try:
+        # Wait for the log file to have content
+        while time.time() < deadline:
+            try:
+                if Path(path).stat().st_size > 0:
+                    break
+            except OSError:
+                pass
+            # Check if the process died
+            proc = entry.get("proc")
+            if proc and proc.poll() is not None:
+                return
+            time.sleep(0.1)
+        # Tail the log file looking for the init event
+        with open(path, "r") as f:
+            while time.time() < deadline:
+                line = f.readline()
+                if not line:
+                    # No new data — check if process is still alive
+                    proc = entry.get("proc")
+                    if proc and proc.poll() is not None:
+                        return
+                    time.sleep(0.05)
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if (
+                    isinstance(ev, dict)
+                    and ev.get("type") == "system"
+                    and ev.get("subtype") == "init"
+                ):
+                    with entry.get("ready_lock", threading.Lock()):
+                        entry["ready"] = True
+                    ev_obj = entry.get("ready_event")
+                    if ev_obj:
+                        ev_obj.set()
+                    _log_activity(
+                        "prewarm", "PREWARM_READY",
+                        f"pid={entry.get('pid')} prewarm_id={str(entry.get('prewarm_id') or '')[:8]}",
+                    )
+                    return
+    except Exception:
+        pass
+
+
 def _start_claude_prewarm(
     cwd=None, repo_path=None, model=None, name=None, client_id=None,
     reasoning_effort="",
@@ -42415,8 +42478,22 @@ def _start_claude_prewarm(
         "prewarmed": True,
         "client_id": str(client_id or "").strip(),
         "reasoning_effort": reasoning_effort,
+        "ready": False,
+        "ready_lock": threading.Lock(),
+        "ready_event": threading.Event(),
     }
     _store_claude_prewarm(entry)
+    # Start a background thread that watches the prewarm's stdout log for the
+    # system/init event, which signals Claude has finished booting (SessionStart
+    # hooks, MCP setup) and is ready to process input. The claim path waits for
+    # this before writing the prompt, so the user doesn't pay the boot latency
+    # after claim.
+    threading.Thread(
+        target=_watch_prewarm_readiness,
+        args=(entry, log_path),
+        daemon=True,
+        name=f"ccc-prewarm-watch-{prewarm_id[:8]}",
+    ).start()
     _record_spawn_to_registry(
         pid=proc.pid,
         name=session_name,
@@ -42835,6 +42912,16 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     # Note: headless `claude -p` doesn't support TUI slash commands like /rename
     # or /color — they're treated as unknown skills. Tab naming/coloring only
     # happens when the user "jumps" into the TUI (see launch_terminal_for_session).
+    # If this is a prewarm, wait for Claude to finish booting (system/init event)
+    # before writing the prompt — otherwise the prompt sits in the FIFO while
+    # Claude is still running SessionStart hooks, and the user pays the full
+    # boot latency after claim instead of during prewarm.
+    if entry and entry.get("prewarmed"):
+        ready_ev = entry.get("ready_event")
+        if ready_ev and not ready_ev.is_set():
+            _spawn_timeline_mark(session_id, "prewarm_waiting_for_ready")
+            ready_ev.wait(timeout=30)
+            _spawn_timeline_mark(session_id, "prewarm_ready")
     prompt_written = _write_stream_json_user_message(entry, prompt, timeout=30)
     if not prompt_written:
         message = "Claude Code started, but CCC could not write the initial prompt to stdin."
