@@ -52602,7 +52602,7 @@
   const $kptSearch = document.getElementById('kptSearch');
   const $kptRefreshBtn = document.getElementById('kptRefreshBtn');
   const $kptRecentBtn = document.getElementById('kptRecentBtn');
-  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi', 'opencode'];
+  const SPAWN_DEFAULT_ENGINES = ['claude', 'codex', 'cursor', 'antigravity', 'kilo', 'hermes', 'kimi', 'opencode', 'devin'];
   const SPAWN_DEFAULT_OTHER = '__other__';
   function normalizeSpawnDefaultEngine(v) {
     if (v === 'gemini') return 'antigravity';
@@ -53064,6 +53064,7 @@
       probe('kilo', '/api/sessions/spawn-kilo/availability', 'Kilo'),
       probe('hermes', '/api/sessions/spawn-hermes/availability', 'Hermes'),
       probe('opencode', '/api/sessions/spawn-opencode/availability', 'OpenCode'),
+      probe('devin', '/api/sessions/spawn-devin/availability', 'Devin'),
     ]);
     syncSpawnEngineDependentUi();
   }
