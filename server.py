@@ -13956,6 +13956,44 @@ def _drain_new_kill_events(last_seen_id=""):
         return list(out)
 
 
+# Ring buffer of prewarm lifecycle events (spawned, claimed, expired), surfaced
+# to the UI so the user can see when CCC is pre-warming a session ahead of time
+# and when the reservation is claimed or expires unused.
+_PREWARM_EVENTS_MAX = 20
+_PREWARM_EVENTS = collections.deque(maxlen=_PREWARM_EVENTS_MAX)
+_PREWARM_EVENTS_LOCK = threading.Lock()
+
+
+def _record_prewarm_event(kind, prewarm_id, entry):
+    """Append a prewarm lifecycle event to the ring buffer for UI surfacing."""
+    try:
+        ev = {
+            "id": str(uuid.uuid4()),
+            "ts": round(time.time(), 3),
+            "kind": str(kind or ""),
+            "prewarm_id": str(prewarm_id or "")[:8],
+            "pid": (entry or {}).get("pid"),
+            "name": str((entry or {}).get("name") or ""),
+            "cwd": str((entry or {}).get("cwd") or ""),
+        }
+        with _PREWARM_EVENTS_LOCK:
+            _PREWARM_EVENTS.append(ev)
+    except Exception:
+        pass
+
+
+def _drain_new_prewarm_events(last_seen_id=""):
+    """Return prewarm events newer than last_seen_id (for frontend polling)."""
+    with _PREWARM_EVENTS_LOCK:
+        out = []
+        for ev in _PREWARM_EVENTS:
+            if ev["id"] == last_seen_id:
+                out = []
+                continue
+            out.append(ev)
+        return list(out)
+
+
 # ---------------------------------------------------------------------------
 # Log parsing (mirrors the bash viewer filter logic)
 # ---------------------------------------------------------------------------
@@ -42207,6 +42245,12 @@ def _discard_claude_prewarm(entry):
     """Retire one unclaimed reservation and remove only its private artifacts."""
     if not isinstance(entry, dict):
         return
+    _log_activity(
+        "prewarm", "PREWARM_EXPIRED",
+        f"pid={entry.get('pid')} prewarm_id={str(entry.get('prewarm_id') or '')[:8]} "
+        f"name={entry.get('name') or '-'}",
+    )
+    _record_prewarm_event("prewarm_expired", str(entry.get("prewarm_id") or ""), entry)
     _retire_unresponsive_spawn_entry(entry, terminate=True, reason="prewarm_expired")
     _unlink_quiet(entry.get("log"))
     sid = str(entry.get("session_id") or "").strip()
@@ -42381,6 +42425,13 @@ def _start_claude_prewarm(
     )
     expiry_timer.daemon = True
     expiry_timer.start()
+    _log_activity(
+        "prewarm", "PREWARM",
+        f"pid={proc.pid} prewarm_id={prewarm_id[:8]} name={session_name} "
+        f"cwd={spawn_cwd or '-'} model={model_to_use or '-'} "
+        f"effort={reasoning_effort or '-'} ttl={_CLAUDE_PREWARM_TTL_S}s",
+    )
+    _record_prewarm_event("prewarm_spawned", prewarm_id, entry)
     return {
         "ok": True,
         "prewarm_id": prewarm_id,
@@ -42419,6 +42470,12 @@ def _take_claude_prewarm(prewarm_id, cwd, model, name=None, effort=""):
     except Exception:
         _discard_claude_prewarm(entry)
         return None
+    _log_activity(
+        "prewarm", "PREWARM_CLAIMED",
+        f"pid={entry.get('pid')} prewarm_id={str(prewarm_id)[:8]} "
+        f"name={entry.get('name') or '-'}",
+    )
+    _record_prewarm_event("prewarm_claimed", str(prewarm_id), entry)
     return entry
 
 
@@ -42470,6 +42527,12 @@ def _take_claude_prewarm_for_request(
     except Exception:
         _discard_claude_prewarm(entry)
         return None
+    _log_activity(
+        "prewarm", "PREWARM_CLAIMED",
+        f"pid={entry.get('pid')} prewarm_id={str(prewarm_id)[:8]} "
+        f"name={entry.get('name') or '-'}",
+    )
+    _record_prewarm_event("prewarm_claimed", str(prewarm_id), entry)
     return entry
 
 
@@ -56463,15 +56526,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/sessions/live-activity":
             # Cheap poll target for the sidebar: refresh WIP / tool chips for
             # every live session without re-running the multi-MB archive scan.
-            # Also drains recent kill events for UI toasts ("CCC killed a
-            # session"). The frontend sends ?last_kill=ID to cursor.
+            # Also drains recent kill events and prewarm lifecycle events for
+            # UI toasts. The frontend sends ?last_kill=ID&last_prewarm=ID to
+            # cursor.
             qs = urllib.parse.parse_qs(parsed.query)
             last_kill = (qs.get("last_kill", [""])[0] or "").strip()
+            last_prewarm = (qs.get("last_prewarm", [""])[0] or "").strip()
             payload = {"sessions": build_live_sessions_activity()}
             try:
                 payload["kill_events"] = _drain_new_kill_events(last_kill)
             except Exception:
                 payload["kill_events"] = []
+            try:
+                payload["prewarm_events"] = _drain_new_prewarm_events(last_prewarm)
+            except Exception:
+                payload["prewarm_events"] = []
             self.send_json(payload)
         elif path == "/api/codex/stuck-summary":
             # Cached fleet-level count for the footer monitor. This intentionally

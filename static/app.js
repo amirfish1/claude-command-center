@@ -3617,6 +3617,7 @@
   let _liveSessionsActivityPromise = null;
   let _liveSessionsActivityLast = { sessions: {} };
   let _lastKillEventId = '';
+  let _lastPrewarmEventId = '';
 
   function _handleKillEvents(events) {
     if (!Array.isArray(events) || events.length === 0) return;
@@ -3632,6 +3633,23 @@
       if (typeof showOpToast === 'function') showOpToast(msg, 'warn');
     }
   }
+
+  function _handlePrewarmEvents(events) {
+    if (!Array.isArray(events) || events.length === 0) return;
+    for (const ev of events) {
+      if (!ev || !ev.id) continue;
+      _lastPrewarmEventId = ev.id;
+      const name = ev.name || 'session';
+      if (ev.kind === 'prewarm_spawned') {
+        if (typeof showOpToast === 'function') showOpToast('Pre-warming Claude session "' + name + '" in the background', 'info');
+      } else if (ev.kind === 'prewarm_claimed') {
+        if (typeof showOpToast === 'function') showOpToast('Pre-warmed session "' + name + '" claimed (instant startup)', 'success');
+      } else if (ev.kind === 'prewarm_expired') {
+        // Expired prewarms are too noisy (340/week) — skip the toast, just
+        // update the cursor so we don't re-process them.
+      }
+    }
+  }
   async function refreshLiveSessionsActivity() {
     // Dashboard-wide overlay: patches WIP/live chips onto conversation-list
     // rows. Reader-only popouts have no such list, so this is pure waste —
@@ -3645,13 +3663,16 @@
       const blockerRequest = fetch('/api/bridge-recovery/blockers?_=' + Date.now())
         .then(response => response.ok ? response.json() : { sessions: [] })
         .catch(() => ({ sessions: [] }));
-      const res = await backgroundApiFetch('/api/sessions/live-activity?_=' + Date.now() + '&last_kill=' + encodeURIComponent(_lastKillEventId || ''));
+      const res = await backgroundApiFetch('/api/sessions/live-activity?_=' + Date.now() + '&last_kill=' + encodeURIComponent(_lastKillEventId || '') + '&last_prewarm=' + encodeURIComponent(_lastPrewarmEventId || ''));
       if (!res.ok) return _liveSessionsActivityLast;
       const data = await res.json();
       const blockerData = await blockerRequest;
       _liveSessionsActivityLast = data || { sessions: {} };
       // Surface kill events as toasts so the user knows CCC terminated a spawn.
       try { _handleKillEvents(data.kill_events || []); } catch (_) {}
+      // Surface prewarm lifecycle events so the user can see when CCC is
+      // pre-warming a session ahead of time, and when it's claimed or expires.
+      try { _handlePrewarmEvents(data.prewarm_events || []); } catch (_) {}
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {
