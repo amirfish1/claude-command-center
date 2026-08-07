@@ -3616,6 +3616,22 @@
 
   let _liveSessionsActivityPromise = null;
   let _liveSessionsActivityLast = { sessions: {} };
+  let _lastKillEventId = '';
+
+  function _handleKillEvents(events) {
+    if (!Array.isArray(events) || events.length === 0) return;
+    for (const ev of events) {
+      if (!ev || !ev.id) continue;
+      _lastKillEventId = ev.id;
+      const name = ev.name || 'unnamed';
+      const ageStr = ev.age_s != null ? (' at ' + ev.age_s + 's old') : '';
+      const callerStr = ev.caller ? (' by ' + ev.caller) : '';
+      const reasonStr = ev.reason || 'unspecified';
+      const aliveStr = ev.alive ? ' (was live)' : ' (was already dead)';
+      const msg = '<strong>CCC killed a session</strong>: ' + name + aliveStr + ageStr + callerStr + '<br>Reason: ' + reasonStr;
+      if (typeof showOpToast === 'function') showOpToast(msg, 'warn');
+    }
+  }
   async function refreshLiveSessionsActivity() {
     // Dashboard-wide overlay: patches WIP/live chips onto conversation-list
     // rows. Reader-only popouts have no such list, so this is pure waste —
@@ -3629,11 +3645,13 @@
       const blockerRequest = fetch('/api/bridge-recovery/blockers?_=' + Date.now())
         .then(response => response.ok ? response.json() : { sessions: [] })
         .catch(() => ({ sessions: [] }));
-      const res = await backgroundApiFetch('/api/sessions/live-activity?_=' + Date.now());
+      const res = await backgroundApiFetch('/api/sessions/live-activity?_=' + Date.now() + '&last_kill=' + encodeURIComponent(_lastKillEventId || ''));
       if (!res.ok) return _liveSessionsActivityLast;
       const data = await res.json();
       const blockerData = await blockerRequest;
       _liveSessionsActivityLast = data || { sessions: {} };
+      // Surface kill events as toasts so the user knows CCC terminated a spawn.
+      try { _handleKillEvents(data.kill_events || []); } catch (_) {}
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {
@@ -8948,6 +8966,46 @@
       }
       let data = {};
       try { data = await res.json(); } catch (_) {}
+      // Soft-block: CCC suspects a terminal is running on this session but
+      // couldn't route to it. Ask the user before delivering to the headless.
+      if (res.ok && data.soft_block && data.code === 'terminal_suspected') {
+        const choice = await _showTerminalSuspectedDialog(data.message || 'A terminal may be running on this session. Send there instead?');
+        if (choice === 'terminal') {
+          // Retry with force_terminal — route to the terminal via osascript.
+          payload.force_terminal = true;
+          try {
+            res = await fetch('/api/inject-input', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(payload),
+            });
+            data = await res.json();
+          } catch (e) {
+            removePendingSendEcho(pendingSend);
+            showOpToast('Failed to send to terminal: ' + (e && e.message ? e.message : e), 'error');
+            return;
+          }
+        } else if (choice === 'headless') {
+          // Retry with force_headless — skip the soft-block and deliver.
+          payload.force_headless = true;
+          try {
+            res = await fetch('/api/inject-input', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(payload),
+            });
+            data = await res.json();
+          } catch (e) {
+            removePendingSendEcho(pendingSend);
+            showOpToast('Failed to send: ' + (e && e.message ? e.message : e), 'error');
+            return;
+          }
+        } else {
+          // User dismissed the dialog — remove the pending echo and abort.
+          removePendingSendEcho(pendingSend);
+          return;
+        }
+      }
       if (res.ok && data.ok && data.submitted === false) {
         removePendingSendEcho(pendingSend);
         showOpToast(data.warning || 'Text typed into Terminal but was not submitted. Press Enter in that terminal tab.', 'error');
@@ -23663,6 +23721,51 @@
     // Errors linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
     arm(kind === 'error' ? 15000 : (kind === 'info' ? 10000 : 3000));
+  }
+
+  // Soft-block dialog: "CCC detected a terminal running on this session.
+  // Do you want to send your text to the terminal instead of the background
+  // session?" Returns 'terminal', 'headless', or null (dismissed).
+  function _showTerminalSuspectedDialog(message) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:10000;';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px 24px;max-width:440px;width:90%;box-shadow:0 8px 24px rgba(0,0,0,0.4);';
+      const title = document.createElement('div');
+      title.style.cssText = 'font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px;';
+      title.textContent = 'Terminal detected';
+      const body = document.createElement('div');
+      body.style.cssText = 'font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.5;';
+      body.textContent = message;
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+      const mkBtn = (label, kind) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        const isPrimary = kind === 'primary';
+        btn.style.cssText = 'cursor:pointer;border-radius:4px;padding:6px 14px;font-size:12px;border:1px solid ' + (isPrimary ? 'var(--accent, #5b8def)' : 'var(--border)') + ';background:' + (isPrimary ? 'var(--accent, #5b8def)' : 'transparent') + ';color:' + (isPrimary ? 'var(--button-text, #fff)' : 'var(--text)') + ';';
+        return btn;
+      };
+      const termBtn = mkBtn('Send to terminal', 'primary');
+      const headlessBtn = mkBtn('Send to background', 'secondary');
+      const cancelBtn = mkBtn('Cancel', 'secondary');
+      const cleanup = (val) => { overlay.remove(); resolve(val); };
+      termBtn.addEventListener('click', () => cleanup('terminal'));
+      headlessBtn.addEventListener('click', () => cleanup('headless'));
+      cancelBtn.addEventListener('click', () => cleanup(null));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(null); });
+      btnRow.appendChild(cancelBtn);
+      btnRow.appendChild(headlessBtn);
+      btnRow.appendChild(termBtn);
+      box.appendChild(title);
+      box.appendChild(body);
+      box.appendChild(btnRow);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      termBtn.focus();
+    });
   }
 
   function showClaudePrewarmFallbackRecovery() {

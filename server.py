@@ -13912,6 +13912,49 @@ _CLAUDE_PREWARMS = {}
 _CLAUDE_PREWARM_TTL_S = 120
 _CLAUDE_PREWARM_MAX = 4
 
+# Ring buffer of recent session kill/retire events, surfaced to the UI so the
+# user knows CCC killed a spawn (and why). Capped at _KILL_EVENTS_MAX; old
+# entries fall off the left. Polled via /api/sessions/live-activity.
+_KILL_EVENTS_MAX = 20
+_KILL_EVENTS = collections.deque(maxlen=_KILL_EVENTS_MAX)
+_KILL_EVENTS_LOCK = threading.Lock()
+
+
+def _record_kill_event(entry, *, reason, caller, alive, age_s=None):
+    """Append a kill event to the ring buffer for UI surfacing."""
+    try:
+        sid = (entry or {}).get("session_id") or (entry or {}).get("resumed_sid") or ""
+        name = (entry or {}).get("name") or ""
+        pid = (entry or {}).get("pid")
+        ev = {
+            "id": str(uuid.uuid4()),
+            "ts": round(time.time(), 3),
+            "pid": pid,
+            "session_id": str(sid),
+            "name": str(name),
+            "reason": str(reason or "unspecified"),
+            "caller": str(caller or ""),
+            "alive": bool(alive),
+            "age_s": round(age_s, 1) if age_s is not None else None,
+            "cwd": str((entry or {}).get("cwd") or ""),
+        }
+        with _KILL_EVENTS_LOCK:
+            _KILL_EVENTS.append(ev)
+    except Exception:
+        pass
+
+
+def _drain_new_kill_events(last_seen_id=""):
+    """Return kill events newer than last_seen_id (for frontend polling)."""
+    with _KILL_EVENTS_LOCK:
+        out = []
+        for ev in _KILL_EVENTS:
+            if ev["id"] == last_seen_id:
+                out = []  # found the cursor; start fresh after this point
+                continue
+            out.append(ev)
+        return list(out)
+
 
 # ---------------------------------------------------------------------------
 # Log parsing (mirrors the bash viewer filter logic)
@@ -43539,7 +43582,7 @@ def _cleanup_finished_entry(entry):
         entry["log_fh"] = None
 
 
-def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None):
+def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, caller=None):
     """Stop tracking a CCC-owned spawn whose stdin can no longer accept input."""
     if not isinstance(entry, dict):
         return
@@ -43553,9 +43596,18 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None):
             alive = _proc.poll() is None
     except Exception:
         alive = None
+    # Compute spawn age at kill time for diagnostics.
+    started_epoch = _spawn_entry_started_epoch(entry)
+    age_s = round(time.time() - started_epoch, 1) if started_epoch else None
     _resume_ledger_append(
         "retire", sid=entry.get("resumed_sid"), pid=pid,
         terminate=bool(terminate), reason=reason or "unspecified", alive=alive,
+        caller=caller or "", age_s=age_s,
+    )
+    # Surface the kill to the UI via the ring buffer (polled by live-activity).
+    _record_kill_event(
+        entry, reason=reason or "unspecified", caller=caller or "",
+        alive=alive, age_s=age_s,
     )
     if terminate and pid is not None:
         try:
@@ -44051,9 +44103,25 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
             spawn["retire_when_idle"] = True
             return {"retired": False, "reason": "busy", "deferred": True}
         return {"retired": False, "reason": "busy"}
+    # Startup grace period: a freshly spawned headless runs SessionStart hooks
+    # (Total Recall, Token Optimizer, Superpowers, etc.) before it produces any
+    # stream output.  Hook processes are NOT tool children (they're skipped by
+    # _spawn_entry_active_tool_child), so during this window the spawn looks
+    # "idle" even though it's actively initializing.  Without this guard the
+    # staleness watcher or a status poll can SIGTERM a spawn mid-hook, killing
+    # it before it ever processes its first prompt (the spawn-stream then hangs
+    # until the browser gives up — "session doesn't load, times out").
+    _STARTUP_GRACE_S = 60
+    started_epoch = _spawn_entry_started_epoch(spawn)
+    if started_epoch and (time.time() - started_epoch) < _STARTUP_GRACE_S:
+        sid_for_timeline = _spawn_entry_session_id(spawn)
+        timeline = _spawn_timeline_get(sid_for_timeline) if sid_for_timeline else None
+        marks = (timeline or {}).get("marks") or {}
+        if "claude_system_init" not in marks and "claude_first_stream_event" not in marks:
+            return {"retired": False, "reason": "startup_grace"}
     pid = spawn.get("pid")
     spawn.pop("retire_when_idle", None)
-    _retire_unresponsive_spawn_entry(spawn, terminate=True)
+    _retire_unresponsive_spawn_entry(spawn, terminate=True, caller=reason or "terminal-takeover")
     return {"retired": True, "pid": pid, "reason": reason or "terminal-takeover"}
 
 
@@ -44170,51 +44238,43 @@ def _bg_pty_entry_for_session(session_id):
 
 
 def _start_headless_staleness_watcher() -> None:
-    """GH #71 (mechanism 5) — always-on server-side reaper.
+    """Honor deferred retire requests from terminal launches.
 
-    Every ~8s, for each CCC-spawned live Claude headless that now shares its
-    session with a live terminal (TTY) and is idle, retire the headless. This
-    runs regardless of any open dashboard, so a stale ~500MB headless doesn't
-    linger after a human opens a terminal on the same session. Busy headless
-    (mid-turn) are never retired — that's the hard safety rule.
+    When the user clicks "Launch Terminal" and the headless is mid-turn,
+    _retire_idle_headless_for_session(defer_if_busy=True) sets
+    retire_when_idle=True on the spawn entry. This watcher is the only
+    thing that honors that flag — it polls every ~8s and retires the
+    headless the moment it goes idle.
+
+    The background terminal-scan kill (the original mechanism 5) was
+    removed: it killed spawns during SessionStart hooks before they
+    could produce output (75 kills in 7 days, 59% under 10s old).
+    The launch-time kill (mechanism 2) is the only place that should
+    initiate a retire — it fires on an explicit user action.
     """
     def _watcher():
         while True:
             time.sleep(8)
             try:
-                # Snapshot: only live Claude headless spawns.
                 entries = [
                     s for s in list(_spawned_sessions)
                     if isinstance(s, dict) and s.get("engine") == "claude"
                 ]
-                terminal_pids_by_sid = _live_claude_terminal_pids_by_session()
             except Exception:
                 continue
             for entry in entries:
                 try:
                     if _poll_spawn_entry(entry) is not None:
                         continue  # already exited
+                    if not entry.get("retire_when_idle"):
+                        continue
+                    if _spawn_entry_active_tool_child(entry):
+                        continue  # still mid-turn; wait for it to finish
                     sid = _spawn_entry_session_id(entry)
                     if not sid:
                         continue
-                    # CCC-53: a terminal launch already recorded intent to retire
-                    # this headless once it stops being busy. Honor that the
-                    # moment it's idle — the user explicitly took the session
-                    # over with a terminal, so we don't re-require TTY detection.
-                    if entry.get("retire_when_idle"):
-                        if _spawn_entry_active_tool_child(entry):
-                            continue  # still mid-turn; wait for it to finish
-                        _retire_idle_headless_for_session(
-                            sid, reason="deferred-terminal-takeover")
-                        continue
-                    if not any(
-                        pid != entry.get("pid")
-                        for pid in terminal_pids_by_sid.get(sid, set())
-                    ):
-                        continue
-                    # A terminal is driving this session. Retire the idle
-                    # headless (the helper enforces Claude-only + not-busy).
-                    _retire_idle_headless_for_session(sid, reason="watcher-terminal-takeover")
+                    _retire_idle_headless_for_session(
+                        sid, reason="deferred-terminal-takeover")
                 except Exception:
                     continue
     threading.Thread(
@@ -47561,7 +47621,7 @@ def _compact_via_hidden_pty(session_id, cwd):
         if _spawn_entry_active_tool_child(spawn):
             return {"ok": False, "via": "hidden-pty", "error": "headless is mid-turn"}
         hpid = spawn.get("pid")
-        _retire_unresponsive_spawn_entry(spawn, terminate=True)
+        _retire_unresponsive_spawn_entry(spawn, terminate=True, caller="hidden-pty-compact")
         if hpid is not None:
             deadline = time.time() + 5.0
             while time.time() < deadline:
@@ -48632,6 +48692,8 @@ def _inject_text_into_session(
     preserve_queued_steer=False,
     idempotency_key=None,
     source="api",
+    force_terminal=False,
+    force_headless=False,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -48992,9 +49054,60 @@ def _inject_text_into_session(
         return resume_session_opencode(session_id, text)
     if _is_devin_cli_session(session_id):
         return resume_session_devin(session_id, text)
+    # force_terminal: the user confirmed a terminal is running and wants the
+    # text sent there. Find the terminal's TTY and inject via osascript even
+    # though the initial status check didn't see it.
+    if force_terminal and not has_tty:
+        terminal_pids = _live_claude_terminal_pids_by_session().get(session_id, set())
+        if terminal_pids:
+            for tpid in terminal_pids:
+                try:
+                    ps_out = subprocess.run(
+                        ["ps", "-o", "tty=,command=", "-p", str(tpid)],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    if ps_out.returncode == 0:
+                        parts = ps_out.stdout.strip().split(None, 1)
+                        if len(parts) >= 1 and _is_real_tty(parts[0]):
+                            # inject_input_via_keystroke handles both Terminal
+                            # and iTerm2 via osascript; "Terminal" is the
+                            # default and it falls back gracefully.
+                            return inject_input_via_keystroke(
+                                parts[0], "Terminal", text
+                            )
+                except Exception:
+                    pass
+        # No terminal found — fall through to headless delivery.
     if not status.get("live") or not has_tty:
         spawn = _find_live_spawn_entry_for_session(session_id)
         if spawn is not None:
+            # Soft-block: if we're about to send to the headless but we detect
+            # a live terminal on this session that we couldn't route to (TTY
+            # detection missed it), ask the user before delivering. The user
+            # might be typing in a terminal we can't see — sending to the
+            # headless would fork the transcript. force_headless skips this
+            # (the user already answered "No, send to headless").
+            if (
+                not force_headless
+                and not _from_terminal_queue
+                and spawn.get("engine") == "claude"
+                and not force_terminal
+            ):
+                suspected_terminal = _session_has_live_terminal(
+                    session_id, exclude_pid=spawn.get("pid")
+                )
+                if suspected_terminal:
+                    return {
+                        "ok": False,
+                        "soft_block": True,
+                        "code": "terminal_suspected",
+                        "message": (
+                            "CCC detected a terminal running on this session. "
+                            "Do you want to send your text to the terminal "
+                            "instead of the background session?"
+                        ),
+                        "session_id": session_id,
+                    }
             active_child = _spawn_entry_active_tool_child(spawn)
             if not _from_terminal_queue:
                 # Deliver mid-turn. A headless `claude -p` reading stream-json
@@ -56350,7 +56463,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/sessions/live-activity":
             # Cheap poll target for the sidebar: refresh WIP / tool chips for
             # every live session without re-running the multi-MB archive scan.
-            self.send_json({"sessions": build_live_sessions_activity()})
+            # Also drains recent kill events for UI toasts ("CCC killed a
+            # session"). The frontend sends ?last_kill=ID to cursor.
+            qs = urllib.parse.parse_qs(parsed.query)
+            last_kill = (qs.get("last_kill", [""])[0] or "").strip()
+            payload = {"sessions": build_live_sessions_activity()}
+            try:
+                payload["kill_events"] = _drain_new_kill_events(last_kill)
+            except Exception:
+                payload["kill_events"] = []
+            self.send_json(payload)
         elif path == "/api/codex/stuck-summary":
             # Cached fleet-level count for the footer monitor. This intentionally
             # reports the same stale-transcript heuristic as the row badge; it is
@@ -56652,26 +56774,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["terminal_present"] = bool(
                         _session_has_live_terminal(sid, exclude_pid=status.get("headless_pid"))
                     )
-                    # GH #71 / CCC-173 — terminal-takeover retire, on observe.
-                    # The background watcher (mechanism 5) only sweeps every ~8s,
-                    # so a session that has BOTH a CCC-spawned headless AND a live
-                    # terminal (TTY) keeps showing "headless · terminal" in the
-                    # proc pill until the next sweep. When THIS poll observes that
-                    # exact pair, retire the headless right here so the pill clears
-                    # immediately instead of lingering. The helper is self-guarding:
-                    # Claude-only and NEVER a busy (mid-turn) headless, so it cannot
-                    # kill a session that isn't terminal-owned or is doing real work.
-                    if status["headless_present"] and status["terminal_present"]:
-                        try:
-                            _retired = _retire_idle_headless_for_session(
-                                sid, reason="status-terminal-takeover")
-                            if _retired.get("retired"):
-                                status["headless_present"] = False
-                                status["headless_pid"] = None
-                                status["headless_stale"] = False
-                                status["retired_headless_pid"] = _retired.get("pid")
-                        except Exception:
-                            pass
+                    # NOTE: the status-poll terminal-takeover retire (mechanism 3)
+                    # was removed — it killed spawns during SessionStart hooks
+                    # before they could produce output. The launch-time kill
+                    # (mechanism 2) handles the explicit "open terminal" action,
+                    # which is the only case where killing the headless is safe.
                     # Claude Code's bg-pty daemon (registry kind "bg") hosts the
                     # REPL with NO controlling tty, yet the session is attached
                     # to an open terminal pane — without this it read as
@@ -62806,6 +62913,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     inject_options = {
                         "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
                         "skip_wt": bool(payload.get("skip_wt")),
+                        "force_terminal": bool(payload.get("force_terminal")),
+                        "force_headless": bool(payload.get("force_headless")),
                     }
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True

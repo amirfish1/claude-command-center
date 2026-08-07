@@ -7977,6 +7977,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 source="api",
                 wt_origin=False,
                 skip_wt=False,
+                force_terminal=False,
+                force_headless=False,
             )
         finally:
             httpd.shutdown()
@@ -8026,6 +8028,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 source="api",
                 wt_origin=False,
                 skip_wt=False,
+                force_terminal=False,
+                force_headless=False,
             )
         finally:
             httpd.shutdown()
@@ -8070,6 +8074,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 source="api",
                 wt_origin=True,
                 skip_wt=False,
+                force_terminal=False,
+                force_headless=False,
             )
         finally:
             httpd.shutdown()
