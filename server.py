@@ -42326,6 +42326,20 @@ def _start_claude_prewarm(
         },
     )
     if routed is not None:
+        # The worker ran the prewarm — record the event in the dashboard's
+        # ring buffer so the UI can surface it. The worker has its own
+        # _PREWARM_EVENTS but the frontend polls the dashboard, not the worker.
+        if isinstance(routed, dict) and routed.get("ok"):
+            _log_activity(
+                "prewarm", "PREWARM",
+                f"pid={routed.get('pid')} prewarm_id={str(routed.get('prewarm_id') or '')[:8]} "
+                f"name={name or '-'} cwd={cwd or '-'} (via worker)",
+            )
+            _record_prewarm_event("prewarm_spawned", str(routed.get("prewarm_id") or ""), {
+                "pid": routed.get("pid"),
+                "name": name,
+                "cwd": cwd,
+            })
         return routed
     _prune_claude_prewarms()
     ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
