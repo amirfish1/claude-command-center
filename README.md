@@ -108,6 +108,7 @@ The whole point is the first row: the moment you touch a terminal, a tool that o
 
 ## Recent
 
+- **2026-08-07**: **v5.20.0**. **Devin joins as the eighth engine**, now fully spawnable via its local CLI (`devin -p`) with headless spawn, resume, and transcript ingestion from its SQLite store — cloud API sessions stay read-only. Plus a per-repository new-session button in the sidebar, a private queue/worker diagnostic Q2 can send in one click, and a broad reasoning-effort picker rollout across every composer surface.
 - **2026-07-20**: **v5.9.0**. **Kimi Code joins as the sixth engine** (spawn, steer, live token streaming, guided setup in Settings). Plus a FIRST FLIGHT onboarding tour, a searchable full settings modal (Cmd/Ctrl+,), a cost-aware cold-session composer that offers ranked cheaper routes instead of a blind expensive resume, a 12-skill orchestration pack, plan-to-fleet queue import, and a perf pass that gets new sessions into the list in seconds.
 - **2026-06-25**: **v5.4.0**. **Project tree**: the "By objects" sidebar now splits a live "Current sessions" triage band over a hierarchical map of your day, sessions grouped under nestable, draggable Flow objects. Plus a new `/api/sessions/events` SSE stream (subscribe to session-state changes instead of polling) and a broad Codex, sidebar, and Total Recall search polish wave.
 - **2026-06-03**: **v4.6.0**. Major performance pass: the dashboard idles instead of pinning a CPU core, group-chat opens ~40x faster, long conversations open near-instantly (windowed load + scroll-up to load earlier), and Codex sessions with screenshots no longer stall on multi-MB images. New CCC self-health readout in the footer.
@@ -345,7 +346,7 @@ the UI uses for the kanban.
 
 ## Engine support
 
-CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, and OpenCode support followed. Spawn-from-dashboard works for all seven. The rest varies:
+CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin support followed. Spawn-from-dashboard works for all eight. The rest varies:
 
 | Engine        | Spawn (headless from UI) | Resume (terminal inject / headless resume) | Transcript ingestion | Per-session model + reasoning-effort picker |
 |---------------|--------------------------|--------------------------------------------|----------------------|--------------------------|
@@ -356,7 +357,7 @@ CCC was built around Claude Code first; Codex, Cursor, Antigravity, Kilo Code, K
 | Kilo Code     | yes — headless via `kilo run --auto` | no — fire-and-forget headless run, no resume wiring yet | yes — reads Kilo's SQLite store (`~/.local/share/kilo/kilo.db`); externally-launched sessions appear on the board | model only — UI/default picker, default from `CCC_KILO_MODEL`; no effort ladder |
 | Kimi Code     | yes — ACP client over `kimi acp`, token-level live streaming | yes — steer live ACP sessions with inline permission-prompt answers; attach for TUI sessions | yes — reads `~/.kimi-code/sessions/`; live list and archive | yes — UI/default model picker; default from `CCC_KIMI_MODEL`; effort ladder read from Kimi's own `config.toml` (`support_efforts`) |
 | OpenCode      | yes — headless via `opencode run --auto` | yes — follow-ups route through `opencode run --session <id> --auto` | yes — externally-launched OpenCode (opencode.ai) sessions appear on the board | model only — UI/default picker, default from `CCC_OPENCODE_MODEL`; no effort ladder |
-| Devin         | no — cloud-only, sessions start at app.devin.ai | no — read-only | yes — sessions listed from the Devin API when `DEVIN_API_KEY` is set; board and archive show them with transcripts | no |
+| Devin         | yes — local CLI, headless via `devin -p` | yes — local CLI resumes via `devin --resume <id> -p`; cloud API sessions (`devin-` prefix) stay read-only | yes — local CLI sessions (`devincli-` prefix) parsed from its SQLite DB (`message_nodes`); cloud API sessions listed read-only when `DEVIN_API_KEY` is set | no |
 
 Where an engine has no effort ladder, CCC hides the effort control rather than
 guessing one, and drops a `reasoning_effort` sent to it over the API. The live
@@ -369,7 +370,7 @@ If you'd like to see an engine bumped from "partial" to first-class, open an iss
 
 ## Features
 
-- **One board, seven engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, and **OpenCode** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity. Kimi Code has a guided setup flow in Settings → Engines that detects the CLI, walks through install and `kimi login`, and verifies with a smoke-test spawn.
+- **One board, eight engines**: spawn, resume, and review **Claude Code**, **Codex**, **Cursor**, **Antigravity**, **Kilo Code**, **Kimi Code**, **OpenCode**, and **Devin** sessions from one dashboard. See the [engine support matrix](#engine-support) for per-engine parity. Kimi Code has a guided setup flow in Settings → Engines that detects the CLI, walks through install and `kimi login`, and verifies with a smoke-test spawn.
 - **Cost-aware cold-session composer**: when a session is large and stale, the send button is replaced by ranked routes — continue in a new session on a cheaper tier, search history, copy session id — with the full (expensive) resume demoted to a priced link. Routes are ranked by intent: question-shaped text promotes search, task-shaped text promotes continuing fresh.
 - **FIRST FLIGHT tour**: a spotlight walkthrough of the dashboard on first run, with newcomer and multi-engine paths and sample cards on empty installs. Replay any time from Settings.
 - **Settings modal**: the gear menu is a full settings modal with instant search (Cmd/Ctrl+, to open), keyboard navigation, and per-section reset — appearance, layout, sessions, fleet & network, tools, maintenance, help.
