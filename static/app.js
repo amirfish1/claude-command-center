@@ -53188,6 +53188,10 @@
     if (typeof updateInputBar === 'function') updateInputBar();
     if (currentConversation === '__new__' && typeof enterNewSessionMode === 'function') {
       enterNewSessionMode();
+      // Switching to Claude in the new-session composer should prewarm
+      // immediately, even if the user hasn't typed yet — they explicitly
+      // chose Claude, so boot the process while they start typing.
+      if (v === 'claude') requestClaudePrewarm({ force: true });
     }
   }
   [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(sel => {
@@ -60196,12 +60200,20 @@
     return first.length > 120 ? first.slice(0, 120).trim() + '...' : first;
   }
 
-  function claudePrewarmSpec() {
+  function claudePrewarmSpec(opts) {
+    opts = opts || {};
     if (getSpawnEngine() !== 'claude') return null;
     const worktree = document.getElementById('inlineWorktreeToggle');
     if (worktree && worktree.checked) return null;
     const cwd = getSpawnCwd();
     if (!cwd) return null;
+    // Only prewarm if the user has typed something, unless force=true (e.g.
+    // switching to Claude in the engine dropdown — the user explicitly chose
+    // Claude, so boot the process while they're about to type).
+    if (!opts.force) {
+      const inputText = ($convInput ? $convInput.value : '').trim();
+      if (!inputText) return null;
+    }
     // Use a stable name for the prewarm, NOT the user's text. The name changes
     // on every keystroke (derived from the first sentence), so including it
     // would spawn a new claude process per character. The real session name
@@ -60233,8 +60245,8 @@
     };
   }
 
-  function requestClaudePrewarm() {
-    const spec = claudePrewarmSpec();
+  function requestClaudePrewarm(opts) {
+    const spec = claudePrewarmSpec(opts);
     if (!spec) return Promise.resolve(null);
     // Dedup on cwd+model+effort only, NOT the session name. The name changes
     // on every keystroke (it's derived from the first sentence the user
