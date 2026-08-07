@@ -14772,13 +14772,19 @@ def _extract_tail_meta(path):
                             dedup_key = f"{path.stem}:{ev_uuid}"
                             if ev_uuid and dedup_key not in _SEEN_INTERRUPTS:
                                 _SEEN_INTERRUPTS.add(dedup_key)
-                                # Cap the set so it doesn't grow forever
                                 if len(_SEEN_INTERRUPTS) > 500:
                                     _SEEN_INTERRUPTS.clear()
                                     _SEEN_INTERRUPTS.add(dedup_key)
                                 _log_activity(
                                     "interrupt", "INTERRUPT",
                                     f"sid={path.stem} — Request interrupted (likely CCC kill, not user)",
+                                )
+                                _resume_ledger_append(
+                                    "interrupt", sid=path.stem,
+                                    reason="request_interrupted",
+                                    source="transcript-scan",
+                                    uuid=ev_uuid,
+                                    agent_name=meta.get("agent_name") or meta.get("custom_title") or "",
                                 )
                                 _record_kill_event({
                                     "name": meta.get("agent_name") or meta.get("custom_title") or "",
@@ -63646,17 +63652,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                     if isinstance(block, dict) and block.get("type") == "text":
                                         txt = block.get("text", "")
                                         if txt and txt.strip().startswith("[Request interrupted by user"):
-                                            _log_activity(
-                                                "interrupt", "INTERRUPT",
-                                                f"sid={session_id} — Request interrupted (likely CCC kill, not user)",
-                                            )
-                                            _record_kill_event({
-                                                "name": "",
-                                                "reason": "request_interrupted",
-                                                "caller": "transcript-detection",
-                                                "alive": False,
-                                                "age_s": None,
-                                            })
+                                            ev_uuid = ev.get("uuid", "")
+                                            dedup_key = f"{session_id}:{ev_uuid}"
+                                            if ev_uuid and dedup_key not in _SEEN_INTERRUPTS:
+                                                _SEEN_INTERRUPTS.add(dedup_key)
+                                                if len(_SEEN_INTERRUPTS) > 500:
+                                                    _SEEN_INTERRUPTS.clear()
+                                                    _SEEN_INTERRUPTS.add(dedup_key)
+                                                _log_activity(
+                                                    "interrupt", "INTERRUPT",
+                                                    f"sid={session_id} — Request interrupted (likely CCC kill, not user)",
+                                                )
+                                                _resume_ledger_append(
+                                                    "interrupt", sid=session_id,
+                                                    reason="request_interrupted",
+                                                    source="sse-stream",
+                                                    uuid=ev_uuid,
+                                                )
+                                                _record_kill_event({
+                                                    "name": "",
+                                                    "reason": "request_interrupted",
+                                                    "caller": "sse-stream",
+                                                    "alive": False,
+                                                    "age_s": None,
+                                                })
                                             timeline_dirty = _spawn_timeline_mark(
                                                 session_id, "request_interrupted"
                                             ) or timeline_dirty
