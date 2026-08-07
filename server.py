@@ -36585,6 +36585,22 @@ def _is_ccc_hook_command(command):
     return any(name in (command or "") for name in _CCC_HOOK_SCRIPTS)
 
 
+def _spawn_has_produced_output(entry):
+    """True if the spawn has written any stream output to its log file.
+
+    Used to distinguish "prompt written, Claude is thinking" (no output yet)
+    from "Claude has started responding" (output exists). Killing a spawn
+    that has a prompt but no output produces [Request interrupted by user].
+    """
+    log_path = (entry or {}).get("log")
+    if not log_path:
+        return True  # can't tell — don't block the retire
+    try:
+        return Path(log_path).stat().st_size > 0
+    except OSError:
+        return True
+
+
 def _spawn_entry_active_tool_child(entry):
     """Return metadata for a transient child tool process under a spawned agent.
 
@@ -44278,6 +44294,16 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
             spawn["retire_when_idle"] = True
             return {"retired": False, "reason": "busy", "deferred": True}
         return {"retired": False, "reason": "busy"}
+    # Also check if the spawn has a pending prompt (was claimed but hasn't
+    # produced any output yet). Between "prompt written" and "first tool call",
+    # Claude is thinking — there are no tool children, but the session is NOT
+    # idle. Killing it here produces "[Request interrupted by user]" and leaves
+    # the session stuck with no response.
+    if spawn.get("prompt") and not _spawn_has_produced_output(spawn):
+        if defer_if_busy:
+            spawn["retire_when_idle"] = True
+            return {"retired": False, "reason": "pending_prompt", "deferred": True}
+        return {"retired": False, "reason": "pending_prompt"}
     # Startup grace period: a freshly spawned headless runs SessionStart hooks
     # (Total Recall, Token Optimizer, Superpowers, etc.) before it produces any
     # stream output.  Hook processes are NOT tool children (they're skipped by
@@ -44296,7 +44322,7 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
             return {"retired": False, "reason": "startup_grace"}
     pid = spawn.get("pid")
     spawn.pop("retire_when_idle", None)
-    _retire_unresponsive_spawn_entry(spawn, terminate=True, caller=reason or "terminal-takeover")
+    _retire_unresponsive_spawn_entry(spawn, terminate=True, reason=reason or "terminal-takeover", caller=reason or "terminal-takeover")
     return {"retired": True, "pid": pid, "reason": reason or "terminal-takeover"}
 
 
