@@ -1,0 +1,1 @@
+Fixed a race where a headless spawn could be retired while Claude was still thinking (prompt written, no output yet), producing a spurious "[Request interrupted by user]" and leaving the session stuck with no response.
