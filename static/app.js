@@ -52652,6 +52652,7 @@
     if (engine === 'hermes') return 'Hermes';
     if (engine === 'kimi') return 'Kimi';
     if (engine === 'opencode') return 'OpenCode';
+    if (engine === 'devin') return 'Devin';
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
@@ -52664,6 +52665,7 @@
     if (engine === 'hermes') return 'hermes';
     if (engine === 'kimi') return 'kimi';
     if (engine === 'opencode') return 'opencode';
+    if (engine === 'devin') return 'devin';
     if (engine === 'pkood') return 'pkood';
     return 'interactive';
   }
@@ -52690,10 +52692,10 @@
   function spawnSupportsWorktree(engine) {
     // pkood orchestrates remote agents and has its own workspace contract,
     // so it doesn't participate in the CCC-managed git-worktree flow.
-    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'kimi' || engine === 'opencode';
+    return engine === 'claude' || engine === 'gemini' || engine === 'codex' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'kimi' || engine === 'opencode' || engine === 'devin';
   }
   function spawnUsesLogPlaceholder(engine) {
-    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes' || engine === 'opencode';
+    return engine === 'codex' || engine === 'gemini' || engine === 'cursor' || engine === 'antigravity' || engine === 'kilo' || engine === 'hermes' || engine === 'opencode' || engine === 'devin';
   }
 
   // The one spawn payload builder. Four call sites grew their own and drifted:
