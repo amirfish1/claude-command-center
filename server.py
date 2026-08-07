@@ -41,6 +41,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -823,7 +824,7 @@ def _watchtower_service_status(*, probe_api=True, include_queues=False):
             started_at = None
     status = {
         "ok": True,
-        "installed": bool(shutil.which("wt")),
+        "installed": bool(_wt_cli_path()),
         "running": running,
         "pid": pid if running else None,
         "command_verified": command_verified,
@@ -892,7 +893,7 @@ def _watchtower_service_action(action):
     action = str(action or "").strip().lower()
     if action not in ("start", "restart"):
         return {"ok": False, "error": "action must be start or restart"}
-    wt_cli = shutil.which("wt")
+    wt_cli = _wt_cli_path()
     if not wt_cli:
         return {"ok": False, "error": "WatchTower CLI is not installed"}
     with _WT_SERVICE_ACTION_LOCK:
@@ -11419,10 +11420,11 @@ def _wt_live_workers():
     process lifetime, and the update we are in the middle of is precisely the
     event that can make `wt` appear."""
     rows = None
-    if shutil.which("wt"):
+    wt_cli = _find_wt_cli()
+    if wt_cli:
         try:
             proc = subprocess.run(
-                ["wt", "workers", "--json"],
+                [wt_cli, "workers", "--json"],
                 capture_output=True, text=True, timeout=_WT_WORKERS_PROBE_TIMEOUT,
             )
             if proc.returncode == 0:
@@ -11495,7 +11497,7 @@ def _restart_wt_daemon():
     lands in the user scripts dir and that is routinely off PATH — the
     library is importable either way, and it is by construction the same
     interpreter CCC runs on."""
-    wt = shutil.which("wt")
+    wt = _wt_cli_path()
     base = [wt] if wt else [sys.executable or "python3", "-m", "watchtower.cli"]
     steps = {}
     for step in ("stop", "start"):
@@ -28064,7 +28066,7 @@ def _wt_register_codex_agent(thread_id, cwd=""):
     a delivery-reliability nicety, not something a spawn should ever block
     or fail on.
     """
-    wt_cli = shutil.which("wt")
+    wt_cli = _wt_cli_path()
     if not wt_cli:
         return
     # `_` (not `-`) before the id: WT rejects any name ending in
@@ -48594,13 +48596,43 @@ def _wt_messaging_enabled():
     return os.environ.get(CCC_MESSAGING_BACKEND_ENV, "").strip().lower() == "wt"
 
 
-def _wt_cli_available():
-    """Cached `shutil.which("wt")` check — a single stat-ish lookup per
+def _find_wt_cli():
+    """Uncached resolution of the `wt` binary's absolute path, or "" if not
+    found. Most callers want `_wt_cli_path()` (cached); use this directly
+    only when a fresh lookup matters (e.g. probing right after an install).
+
+    `shutil.which("wt")` alone misses the common case: `pip install --user`
+    (what CCC's own installer uses, see scripts/install-watchtower.sh) puts
+    the console-script in the interpreter's user scripts dir, which is
+    routinely off PATH — and launchd's PATH (what the CCC dashboard process
+    itself runs under) essentially never includes it. Without this fallback,
+    a machine where WatchTower installed cleanly still shows "WatchTower is
+    not installed" in the dashboard, `wt` start/restart fails, and every
+    queue affordance silently disables itself."""
+    found = shutil.which("wt") or ""
+    if not found:
+        try:
+            scheme = "posix_user" if os.name == "posix" else "nt_user"
+            candidate = os.path.join(sysconfig.get_path("scripts", scheme=scheme), "wt")
+            if os.access(candidate, os.X_OK):
+                found = candidate
+        except Exception:
+            pass
+    return found
+
+
+def _wt_cli_path():
+    """Cached wrapper around `_find_wt_cli` — a single stat-ish lookup per
     process rather than a PATH search on every inject/ask call."""
     global _WT_CLI_PATH_CACHE
     if _WT_CLI_PATH_CACHE is None:
-        _WT_CLI_PATH_CACHE = shutil.which("wt") or ""
-    return bool(_WT_CLI_PATH_CACHE)
+        _WT_CLI_PATH_CACHE = _find_wt_cli()
+    return _WT_CLI_PATH_CACHE
+
+
+def _wt_cli_available():
+    """Cached check for whether the `wt` CLI is usable — see `_wt_cli_path`."""
+    return bool(_wt_cli_path())
 
 
 # --- Plan-to-fleet: document -> Watchtower queue (W51) ------------------------
