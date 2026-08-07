@@ -1,1 +1,0 @@
-Fixed the dashboard wrongly reporting "WatchTower is not installed" (and disabling queue features) on machines where WatchTower installed fine via `pip install --user` but its `wt` binary landed off PATH — CCC now also checks the interpreter's own user-scripts directory before giving up.
