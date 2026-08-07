@@ -25389,6 +25389,15 @@
           : 'Antigravity is idle - CCC resumes it headlessly when you send (there is no live terminal)');
       return;
     }
+    // Devin CLI sessions are one-shot `devin -p` processes — headless, no TTY.
+    if (currentSession && currentSession.source === 'devin-cli') {
+      const dvLive = !!ls.live;
+      el.innerHTML = pill0(dvLive, false, dvLive ? 'headless · running' : 'headless',
+        dvLive
+          ? 'Devin CLI is running headlessly (one-shot `devin -p` - there is no live terminal)'
+          : 'Devin CLI is idle - CCC resumes it headlessly when you send (there is no live terminal)');
+      return;
+    }
     const headOn = !!ls.headlessPresent;
     const stale = headOn && !!ls.headlessStale;
     // bg-pty daemon (Claude Code background terminal): no controlling tty,

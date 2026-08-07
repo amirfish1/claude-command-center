@@ -16930,6 +16930,35 @@ def session_live_status(session_id, session_cwd):
         result["live"] = True
         return result
 
+    if _is_devin_cli_session(session_id):
+        # Devin CLI sessions are one-shot `devin -p` processes. Liveness
+        # comes from the spawn registry (a live entry means the process
+        # is still running) and the lock file in the CLI's session_locks
+        # dir. No TTY — the CLI runs headless.
+        raw_id = _devin_cli_raw_id(session_id)
+        entry = _live_spawn_registry_entry_for_session(session_id, "devin")
+        if not entry:
+            entry = _find_live_spawn_entry_for_session(session_id)
+        if entry:
+            pid = entry["pid"]
+            result["pid"] = pid
+            result["tty"] = _process_tty(pid)
+            result["cwd"] = _proc_cwd(pid) or entry.get("cwd") or session_cwd
+            result["terminal_app"], _term_pid = _proc_ancestor_terminal(pid)
+            result["live"] = True
+            result["kind"] = "headless"
+            result["match_count"] = 1
+            return result
+        # No live spawn entry — check the lock file (CLI may have been
+        # started outside CCC).
+        if _devin_cli_session_live(raw_id):
+            result["live"] = True
+            result["kind"] = "headless"
+            result["match_count"] = 1
+            result["cwd"] = _devin_cli_session_cwd(raw_id) or session_cwd
+            return result
+        return result
+
     if _is_cursor_session(session_id):
         path = _cursor_transcript_path(session_id)
         if path:
