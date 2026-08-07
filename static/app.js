@@ -7549,6 +7549,7 @@
     const isKimi = currentSession.source === 'kimi';
     const isOpencode = currentSession.source === 'opencode';
     const isDevin = currentSession.source === 'devin';
+    const isDevinCli = currentSession.source === 'devin-cli';
     const antigravityCanSendNow = antigravityCanSend(currentSession);
     // liveStatus lags a conversation switch by up to one poll; until it matches
     // the open conversation, treat the session as not-live so we never show the
@@ -7629,11 +7630,14 @@
         activeInputControls.ttyLabel.textContent = 'kimi';
         if (activeInput) activeInput.placeholder = liveStatus.live ? 'Send to Kimi session…' : 'Resume Kimi and send…';
       } else if (isDevin) {
-        // Devin is a read-only engine: transcripts render here, but replies
-        // belong in the Devin app. Block the composer instead of failing the
-        // send with repo_required (Devin rows carry no local repo context).
+        // Devin cloud sessions are read-only: transcripts render here, but
+        // replies belong in the Devin app. Block the composer instead of
+        // failing the send with repo_required.
         activeInputControls.ttyLabel.textContent = 'devin';
-        if (activeInput) activeInput.placeholder = 'Devin sessions are read-only in CCC - reply at app.devin.ai…';
+        if (activeInput) activeInput.placeholder = 'Devin cloud sessions are read-only in CCC - reply at app.devin.ai…';
+      } else if (isDevinCli) {
+        activeInputControls.ttyLabel.textContent = 'devin';
+        if (activeInput) activeInput.placeholder = liveStatus.live ? 'Send to Devin session…' : 'Resume Devin and send…';
       } else if (live) {
         activeInputControls.ttyLabel.textContent = liveStatus.tty;
         if (activeInput) activeInput.placeholder = 'Send to terminal...';
@@ -7667,7 +7671,7 @@
         activeSendBtn.disabled = blockSend;
         activeSendBtn.title = blockSend
           ? (isDevin
-              ? 'Devin sessions are read-only in CCC'
+              ? 'Devin cloud sessions are read-only in CCC'
               : 'Open Antigravity to continue this app session')
           : (isAntigravity && !antigravityCanSendNow
               ? 'Send - runs AGY headless on this session'
@@ -27193,9 +27197,10 @@
       // spawn_recent means the session was spawned moments ago and its engine
       // has not written a transcript YET — the row now reaches the list before
       // the engine writes anything. That is "starting", not "created and never
-      // used", so the chip stays off until the grace window expires. Devin rows
-      // are excluded too: their transcripts live in the cloud (fetched on open),
-      // so a missing local first_message says nothing about usage.
+      // used", so the chip stays off until the grace window expires. Devin
+      // cloud rows are excluded too: their transcripts live in the cloud
+      // (fetched on open), so a missing local first_message says nothing
+      // about usage. Devin CLI rows carry first_message from the SQLite DB.
       const emptySessionChipHtml = (!isBacklogRow && !isGithubPrRow && !c.first_message && !c.spawn_recent && c.source !== 'devin')
         ? '<span class="conv-empty-session-chip" title="This session has no transcript messages">[EMPTY]</span>'
         : '';

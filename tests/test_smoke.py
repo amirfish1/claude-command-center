@@ -364,22 +364,34 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("opencode-resume", opencode_py)
 
     def test_devin_engine_surfaces_exist(self):
-        """Devin (cloud, read-only) engine must be wired for is_, discovery,
-        parse and availability — no spawn/resume surface by design. Works
-        without an API key or network."""
+        """Devin engine must be wired for cloud (read-only) and local CLI
+        (spawnable) surfaces. Works without an API key, network, or the
+        devin binary."""
         for mod in ("server", "morning", "morning_store"):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
+        # Cloud adapter (existing)
         self.assertTrue(hasattr(server, "_is_devin_session"))
         self.assertTrue(hasattr(server, "find_devin_conversations"))
         self.assertTrue(hasattr(server, "_parse_devin_conversation"))
         self.assertTrue(hasattr(server, "_devin_available"))
+        # Local CLI adapter (new)
+        self.assertTrue(hasattr(server, "_is_devin_cli_session"))
+        self.assertTrue(hasattr(server, "find_devin_cli_conversations"))
+        self.assertTrue(hasattr(server, "_parse_devin_cli_conversation"))
+        self.assertTrue(hasattr(server, "_resolve_devin_bin"))
+        self.assertTrue(hasattr(server, "spawn_session_devin"))
+        self.assertTrue(hasattr(server, "resume_session_devin"))
 
-        # is_devin is a pure prefix probe (never touches the network)
+        # is_devin (cloud) is a pure prefix probe (never touches the network)
         self.assertTrue(server._is_devin_session("devin-abc123"))
         self.assertFalse(server._is_devin_session("abc123"))
+        # is_devin_cli is a pure prefix probe (never touches the DB)
+        self.assertTrue(server._is_devin_cli_session("devincli-real-ninja"))
+        self.assertFalse(server._is_devin_cli_session("devin-abc123"))
+        self.assertFalse(server._is_devin_cli_session("abc123"))
 
-        # no API key → empty results, no exception, no network
+        # no API key → empty cloud results, no exception, no network
         with mock.patch.dict(os.environ, {"DEVIN_API_KEY": "", "CCC_DEVIN_API_KEY": ""}):
             self.assertEqual(server.find_devin_conversations(), [])
             self.assertEqual(
@@ -388,20 +400,37 @@ class TestServerImports(unittest.TestCase):
             )
             self.assertEqual(server._devin_available(), (False, ""))
 
-        # route/dispatch wiring (mirrors the other read-only engines)
+        # devin is now a spawnable engine
+        self.assertIn("devin", server._ORCHESTRATION_SPAWN_ENGINES)
+        self.assertEqual(server._normalize_orchestration_spawn_engine("devin"), "devin")
+        self.assertEqual(server._normalize_orchestration_spawn_engine("devin-cli"), "devin")
+
+        # route/dispatch wiring
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn('_adopt_ccc_module("devin")', server_py)
         self.assertIn("if _is_devin_session(session_id):", server_py)
+        self.assertIn("if _is_devin_cli_session(session_id):", server_py)
         self.assertIn("find_devin_conversations(", server_py)
+        self.assertIn("find_devin_cli_conversations(", server_py)
         self.assertIn("result = _parse_devin_conversation(conversation_id", server_py)
+        self.assertIn("_parse_devin_cli_conversation(conversation_id", server_py)
+        self.assertIn("def spawn_session_devin(", server_py)
+        self.assertIn("def resume_session_devin(", server_py)
+        self.assertIn('"/api/sessions/spawn-devin/availability"', server_py)
 
-        # adapter markers: v1 API base, bearer env key, cache file
+        # adapter markers: v1 API base, bearer env key, cache file, CLI DB
         devin_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "devin.py").read_text(encoding="utf-8")
         self.assertIn("https://api.devin.ai/v1", devin_py)
         self.assertIn("DEVIN_API_KEY", devin_py)
         self.assertIn("devin_sessions_cache.json", devin_py)
         self.assertIn("def find_devin_conversations(", devin_py)
         self.assertIn("def _parse_devin_conversation(", devin_py)
+        # Local CLI adapter markers
+        self.assertIn("def _resolve_devin_bin(", devin_py)
+        self.assertIn("def find_devin_cli_conversations(", devin_py)
+        self.assertIn("def _parse_devin_cli_conversation(", devin_py)
+        self.assertIn("DEVIN_CLI_SESSION_PREFIX", devin_py)
+        self.assertIn("sessions.db", devin_py)
 
     def test_repo_kind_classifier(self):
         """Production vs dev/test classification respects explicit overrides

@@ -1,26 +1,36 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
-"""Devin (Cognition) cloud session ingestion (read-only).
+"""Devin (Cognition) engine integration — cloud API + local CLI.
 
-Devin is CCC's first cloud/API-based engine: there is no local session store,
-so sessions are listed via Devin's REST API. This uses the v1 API
-(https://api.devin.ai/v1) authenticated with a personal API key from the
-DEVIN_API_KEY env var (CCC_DEVIN_API_KEY accepted as a fallback). v1 is
-deprecated upstream but remains the only API personal keys can call; v3
-(enterprise org-id + service-user RBAC) support can be added later.
+Two backends share this module:
 
-Listing + transcript view only; no spawn / resume / steering. Everything here
-degrades to empty results on a missing key, network failure, or an
-unrecognized payload shape — the API key is never logged. Names still living
-in server.py are reached via `_core` at call time."""
+1. **Cloud API** (read-only): sessions listed via Devin's REST API (v1),
+   authenticated with a personal API key from DEVIN_API_KEY. Listing +
+   transcript view only; no spawn/resume/steering. Session IDs use the
+   ``devin-`` prefix.
+
+2. **Local CLI** (full parity): the ``devin`` terminal CLI stores sessions in
+   a SQLite DB at ``~/.local/share/devin/cli/sessions.db``. CCC spawns it
+   headless via ``devin -p "prompt"`` (one-shot, like gemini/cursor), resumes
+   via ``devin --resume <id> -p "text"``, and reads transcripts from the DB.
+   Session IDs use the ``devincli-`` prefix to avoid collision with cloud
+   sessions.
+
+Everything degrades to empty results on a missing key, missing binary, network
+failure, or an unrecognized payload shape. Names still living in server.py are
+reached via ``_core`` at call time."""
 
 from __future__ import annotations
 
 from datetime import datetime
 import json
 import os
+import shlex
+import shutil
+import sqlite3
 import time
 import urllib.request
+from pathlib import Path
 
 from ccc_server import core as _core
 
@@ -37,6 +47,20 @@ _DEVIN_ACTIVE_STATUSES = frozenset({
     "working", "running", "blocked", "pending", "queued", "in_progress",
     "resumed", "claimed",
 })
+
+# ---------------------------------------------------------------------------
+# Local CLI backend
+# ---------------------------------------------------------------------------
+# The Devin CLI (~/.local/bin/devin) stores sessions in a SQLite DB. CCC
+# spawns it headless via `devin -p "prompt"` (one-shot, like gemini/cursor)
+# and reads transcripts from the DB. Session IDs use the "devincli-" prefix
+# to avoid collision with cloud "devin-" sessions.
+
+DEVIN_CLI_SESSION_PREFIX = "devincli-"
+DEVIN_CLI_HOME = Path.home() / ".local" / "share" / "devin" / "cli"
+DEVIN_CLI_SESSIONS_DB = DEVIN_CLI_HOME / "sessions.db"
+DEVIN_CLI_LOCKS_DIR = DEVIN_CLI_HOME / "session_locks"
+_DEVIN_CLI_ID_CACHE = {"key": None, "ids": set(), "mtime": 0}
 
 
 def _devin_api_key():
@@ -444,6 +468,380 @@ def _parse_devin_conversation(session_id, after_line=0):
                 "message_id": f"devin-{line}",
                 "blocks": [{"kind": "text", "text": text}],
             })
+    if after_line and after_line > 0:
+        visible = [e for e in events if e["line"] > after_line]
+    else:
+        visible = events
+    return {"events": visible, "last_line": line}
+
+
+# ---------------------------------------------------------------------------
+# Local CLI backend — binary resolution, session discovery, transcript parse
+# ---------------------------------------------------------------------------
+
+def _resolve_devin_bin():
+    """Locate a usable Devin CLI binary.
+
+    Priority order mirrors the other engines:
+      1. $CCC_DEVIN_BIN when set and executable.
+      2. ``shutil.which("devin")``.
+      3. ~/.local/bin/devin (common user-install location).
+    """
+    env_bin = os.environ.get("CCC_DEVIN_BIN")
+    if env_bin:
+        expanded = os.path.expanduser(env_bin)
+        if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+            return {"available": True, "bin": expanded, "source": "env"}
+        return {
+            "available": False,
+            "bin": None,
+            "code": "devin_unavailable",
+            "reason": f"CCC_DEVIN_BIN is set to {env_bin!r} but it isn't an executable file",
+        }
+    which_bin = shutil.which("devin")
+    if which_bin:
+        return {"available": True, "bin": which_bin, "source": "path"}
+    local_bin = Path.home() / ".local" / "bin" / "devin"
+    if local_bin.is_file() and os.access(local_bin, os.X_OK):
+        return {"available": True, "bin": str(local_bin), "source": "candidate"}
+    return {
+        "available": False,
+        "bin": None,
+        "code": "devin_unavailable",
+        "reason": "Devin CLI not found. Install Devin CLI or set CCC_DEVIN_BIN.",
+    }
+
+
+def _devin_cli_db_path():
+    """Path to the sessions DB, overridable for tests via CCC_DEVIN_DB."""
+    override = os.environ.get("CCC_DEVIN_DB")
+    if override:
+        return Path(override).expanduser()
+    return DEVIN_CLI_SESSIONS_DB
+
+
+def _devin_cli_connect():
+    """Open a read-only connection to the Devin CLI sessions DB, or None."""
+    path = _devin_cli_db_path()
+    try:
+        if not path.is_file():
+            return None
+    except OSError:
+        return None
+    try:
+        # uri=True + mode=ro prevents creating the DB if it vanished between
+        # the is_file check and the connect.
+        con = sqlite3.connect(
+            f"file:{path}?mode=ro", uri=True, timeout=3,
+            detect_types=sqlite3.PARSE_DECLTYPES,
+        )
+        con.row_factory = sqlite3.Row
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def _devin_cli_session_ids():
+    """Cached set of raw session IDs from the Devin CLI SQLite DB.
+
+    Cached by DB file mtime so repeated detection probes stay cheap. Returns
+    an empty set when the DB is missing or unreadable — never raises.
+    """
+    path = _devin_cli_db_path()
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0
+    cache = _DEVIN_CLI_ID_CACHE
+    if cache.get("key") == str(path) and cache.get("mtime") == mtime:
+        return set(cache.get("ids") or set())
+    ids = set()
+    con = _devin_cli_connect()
+    if con is not None:
+        try:
+            for row in con.execute("SELECT id FROM sessions"):
+                sid = row["id"]
+                if sid:
+                    ids.add(str(sid))
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+    cache["key"] = str(path)
+    cache["mtime"] = mtime
+    cache["ids"] = set(ids)
+    return ids
+
+
+def _is_devin_cli_session(session_id):
+    """Prefix probe for local CLI sessions — never touches the DB."""
+    return (
+        isinstance(session_id, str)
+        and session_id.startswith(DEVIN_CLI_SESSION_PREFIX)
+    )
+
+
+def _devin_cli_raw_id(session_id):
+    """Strip the devincli- prefix to get the raw Devin CLI session ID."""
+    if session_id and session_id.startswith(DEVIN_CLI_SESSION_PREFIX):
+        return session_id[len(DEVIN_CLI_SESSION_PREFIX):]
+    return str(session_id or "")
+
+
+def _devin_cli_session_live(raw_id):
+    """True when a lock file exists for the session (process is running)."""
+    if not raw_id:
+        return False
+    lock = DEVIN_CLI_LOCKS_DIR / f"{raw_id}.lock"
+    try:
+        return lock.is_file()
+    except OSError:
+        return False
+
+
+def find_devin_cli_conversations(
+    repo_path=None,
+    include_old=False,
+    repo_only=False,
+    progress=None,
+    limit=None,
+):
+    """Discover local Devin CLI sessions from the SQLite DB.
+
+    Sessions are repo-scoped (each has a working_directory). When repo_path is
+    given, only sessions in that repo are returned. No DB (or any error) → [].
+    """
+    con = _devin_cli_connect()
+    if con is None:
+        return []
+    try:
+        name_overrides = _core._load_session_name_overrides()
+    except Exception:
+        name_overrides = {}
+    try:
+        archived_set, trashed_set = _core._load_conversation_lifecycle_sets()
+    except Exception:
+        archived_set, trashed_set = set(), set()
+    try:
+        verified_set = set(_core._load_verified_conversations())
+    except Exception:
+        verified_set = set()
+    try:
+        last_interactions = _core._load_last_interactions()
+    except Exception:
+        last_interactions = {}
+
+    cutoff = _core._session_scan_cutoff_ts(include_old)
+    max_rows = _core._session_scan_file_limit(include_old)
+
+    # Resolve repo_path to a canonical string for comparison.
+    repo_filter = None
+    if repo_only and repo_path:
+        try:
+            repo_filter = str(Path(repo_path).resolve())
+        except OSError:
+            repo_filter = str(repo_path)
+
+    rows = []
+    try:
+        query = (
+            "SELECT id, working_directory, backend_type, model, agent_mode, "
+            "created_at, last_activity_at, title, main_chain_id "
+            "FROM sessions ORDER BY last_activity_at DESC"
+        )
+        for row in con.execute(query):
+            raw_id = str(row["id"] or "").strip()
+            if not raw_id:
+                continue
+            working_dir = str(row["working_directory"] or "").strip()
+            if repo_filter:
+                try:
+                    wd_resolved = str(Path(working_dir).resolve())
+                except OSError:
+                    wd_resolved = working_dir
+                if wd_resolved != repo_filter:
+                    continue
+            created = float(row["created_at"] or 0)
+            modified = float(row["last_activity_at"] or 0) or created
+            sid = DEVIN_CLI_SESSION_PREFIX + raw_id
+            freshness = max(modified, last_interactions.get(sid) or 0)
+            if not include_old and cutoff > 0 and freshness < cutoff:
+                continue
+            if not include_old and max_rows > 0 and len(rows) >= max_rows:
+                continue
+            title = _core._strip_ccc_session_state_instruction(
+                str(row["title"] or "")
+            ).strip()
+            model = str(row["model"] or "")
+            # Read first user message from prompt_history for first_message.
+            first_message = ""
+            try:
+                ph_row = con.execute(
+                    "SELECT content FROM prompt_history "
+                    "WHERE session_id = ? AND is_shell = 0 "
+                    "ORDER BY timestamp ASC LIMIT 1",
+                    (raw_id,),
+                ).fetchone()
+                if ph_row:
+                    first_message = str(ph_row["content"] or "").strip()
+            except sqlite3.Error:
+                pass
+            first_message = _core._strip_ccc_session_state_instruction(
+                first_message
+            ).strip()
+            display_name = (
+                name_overrides.get(sid)
+                or _core._truncate_session_name(title)
+                or (first_message[:80] if first_message else None)
+                or f"Devin session {raw_id[:12]}"
+            )
+            is_live = _devin_cli_session_live(raw_id)
+            # Check if the working directory exists.
+            wd_exists = False
+            wd_is_worktree = False
+            if working_dir:
+                try:
+                    wd_exists = Path(working_dir).is_dir()
+                except OSError:
+                    pass
+            rows.append({
+                "id": sid,
+                "session_id": sid,
+                "source": "devin-cli",
+                "engine": "devin",
+                "timestamp": "",
+                "branch": "",
+                "git_branch": "",
+                "first_message": first_message[:200],
+                "display_name": display_name,
+                "ai_title": title or None,
+                "name_overridden": bool(name_overrides.get(sid)),
+                "last_prompt": first_message[:200],
+                "size": 0,
+                "modified": modified,
+                "modified_human": time.strftime(
+                    "%Y-%m-%d %H:%M", time.localtime(modified)
+                ) if modified else "",
+                "mtime": modified,
+                "jsonl_path": "",
+                "folder_label": "Devin",
+                "folder_path": working_dir or "",
+                "worktree_label": None,
+                "session_cwd": working_dir or None,
+                "session_cwd_exists": wd_exists,
+                "session_cwd_is_worktree": wd_is_worktree,
+                "worktree_dirty": False,
+                "effective_branch": None,
+                "effective_kind": None,
+                "has_edit": False,
+                "has_commit": False,
+                "has_push": False,
+                "last_edit_pos": 0,
+                "last_commit_pos": 0,
+                "last_push_pos": 0,
+                "last_event_type": None,
+                "pending_tool": None,
+                "pending_file": None,
+                "pending_tool_ts": 0,
+                "last_assistant_text": "",
+                "tail_issue_number": None,
+                "tail_pr_number": None,
+                "tail_pr_url": None,
+                "pr_state": None,
+                "session_state": None,
+                "archived": sid in archived_set,
+                "trashed": sid in trashed_set,
+                "verified": sid in verified_set,
+                "pinned_repo": False,
+                "last_interacted": last_interactions.get(sid),
+                "is_live": is_live,
+                "spawn_pid": None,
+                "needs_approval": False,
+                "needs_approval_message": "",
+                "model": model,
+                "reasoning_effort": "",
+                "session_url": None,
+            })
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    rows.sort(
+        key=lambda x: x.get("last_interacted") or x.get("modified") or 0,
+        reverse=True,
+    )
+    if limit and limit > 0:
+        rows = rows[:int(limit)]
+    return rows
+
+
+def _parse_devin_cli_conversation(session_id, after_line=0):
+    """Build a CCC transcript event list from a Devin CLI session's messages.
+
+    Reads user and assistant messages from the message_nodes table, deduped
+    by content (the CLI rebuilds context each turn, producing duplicates).
+    line = number of messages consumed, matching the other adapters'
+    after_line semantics. Unknown shapes are skipped, never fatal."""
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return {"events": [], "last_line": 0}
+    con = _devin_cli_connect()
+    if con is None:
+        return {"events": [], "last_line": 0}
+    events = []
+    line = 0
+    seen = set()  # (role, content) dedup — the CLI duplicates context rebuilds
+    try:
+        for row in con.execute(
+            "SELECT node_id, chat_message, created_at "
+            "FROM message_nodes WHERE session_id = ? "
+            "ORDER BY node_id",
+            (raw_id,),
+        ):
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role") or "").strip().lower()
+            if role not in ("user", "assistant"):
+                continue
+            text = str(msg.get("content") or "").strip()
+            if not text:
+                continue
+            # Skip system-injected user messages (context rebuilds) — only
+            # keep actual user input. Assistant messages have no
+            # is_user_input flag, so they pass through.
+            if role == "user":
+                meta = msg.get("metadata") or {}
+                if not meta.get("is_user_input"):
+                    continue
+            dedup_key = (role, text)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            ts_raw = msg.get("metadata", {}).get("created_at") or row["created_at"]
+            ts = _devin_epoch(ts_raw)
+            ts_str = (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
+            )
+            line += 1
+            if role == "user":
+                events.append({
+                    "line": line, "ts": ts_str, "type": "user_text",
+                    "text": text, "images": [],
+                })
+            else:
+                events.append({
+                    "line": line, "ts": ts_str, "type": "assistant",
+                    "message_id": f"devincli-{line}",
+                    "blocks": [{"kind": "text", "text": text}],
+                })
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
     if after_line and after_line > 0:
         visible = [e for e in events if e["line"] > after_line]
     else:

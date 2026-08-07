@@ -4112,6 +4112,8 @@ def _detect_session_engine_uncached(session_id):
         return "grok"
     if _is_devin_session(session_id):
         return "devin"
+    if _is_devin_cli_session(session_id):
+        return "devin"
     if _is_copilotchat_session(session_id):
         return "copilotchat"
     return "claude"
@@ -5098,7 +5100,7 @@ def _spawn_repo_context(cwd=None, repo_path=None):
     return {"repo_path": resolved, "cwd": str(p)}
 
 
-_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi")
+_ORCHESTRATION_SPAWN_ENGINES = ("claude", "codex", "cursor", "antigravity", "kilo", "opencode", "hermes", "kimi", "devin")
 _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "claude": "claude",
     "claude-code": "claude",
@@ -5122,6 +5124,10 @@ _ORCHESTRATION_SPAWN_ENGINE_ALIASES = {
     "kimi": "kimi",
     "kimi-code": "kimi",
     "kimi_code": "kimi",
+    "devin": "devin",
+    "devin-cli": "devin",
+    "devin_cli": "devin",
+    "cognition": "devin",
 }
 
 
@@ -5171,6 +5177,8 @@ def _spawn_fallback_model_for_engine(engine):
         return os.environ.get("CCC_HERMES_MODEL", "auto")
     if engine == "kimi":
         return os.environ.get("CCC_KIMI_MODEL", "kimi-code/k3")
+    if engine == "devin":
+        return os.environ.get("CCC_DEVIN_MODEL", "adaptive")
     return ""
 
 
@@ -5239,6 +5247,17 @@ _ENGINE_CURATED_MODELS = {
         {"id": "kimi-code/kimi-for-coding", "label": "K2.7 Coding"},
         {"id": "kimi-code/kimi-for-coding-highspeed", "label": "K2.7 Coding Highspeed"},
     ),
+    "devin": (
+        {"id": "adaptive", "label": "Adaptive (default)"},
+        {"id": "claude-opus-5", "label": "Claude Opus 5"},
+        {"id": "claude-fable-5", "label": "Claude Fable 5"},
+        {"id": "claude-sonnet-5", "label": "Claude Sonnet 5"},
+        {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol"},
+        {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna"},
+        {"id": "glm-5.2", "label": "GLM-5.2"},
+        {"id": "kimi-k3", "label": "Kimi K3"},
+        {"id": "swe-1.7", "label": "SWE-1.7"},
+    ),
 }
 
 # Backward-compatible ID-only view used by older scripts and error payloads.
@@ -5256,6 +5275,7 @@ _ENGINE_SUPPORTS_CUSTOM_MODELS = {
     "opencode": True,
     "hermes": True,
     "kimi": True,
+    "devin": True,
 }
 
 # Which effort ladder each engine actually accepts. Claude takes a top-level
@@ -8905,6 +8925,16 @@ def find_all_conversations(
     # (DEVIN_API_KEY); no key or any API failure yields an empty list.
     try:
         out.extend(find_devin_conversations(
+            include_old=True,
+            repo_only=False,
+            limit=limit_per_folder,
+        ))
+    except Exception:
+        pass
+    # Add Devin CLI (local) sessions to the archive. They come from the
+    # Devin CLI's SQLite DB (~/.local/share/devin/cli/sessions.db).
+    try:
+        out.extend(find_devin_cli_conversations(
             include_old=True,
             repo_only=False,
             limit=limit_per_folder,
@@ -21818,6 +21848,21 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             progress("devin", state="error", detail=f"Devin session scan failed: {exc}")
 
     if progress:
+        progress("devin-cli", state="running", detail="Reading Devin CLI sessions.")
+    try:
+        conversations.extend(find_devin_cli_conversations(
+            repo_path=repo_path,
+            include_old=include_old,
+            repo_only=True,
+            progress=progress,
+        ))
+        if progress:
+            progress("devin-cli", state="done")
+    except Exception as exc:
+        if progress:
+            progress("devin-cli", state="error", detail=f"Devin CLI session scan failed: {exc}")
+
+    if progress:
         progress("copilotchat", state="running", detail="Reading VS Code Copilot Chat sessions.")
     try:
         conversations.extend(find_copilotchat_conversations(
@@ -22425,7 +22470,10 @@ def parse_conversation(conversation_id, after_line=0, repo_path=None, use_cache=
         events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
         return {"events": events_copy, "last_line": result.get("last_line", 0)}
     if engine == "devin":
-        result = _parse_devin_conversation(conversation_id, after_line=after_line)
+        if _is_devin_cli_session(conversation_id):
+            result = _parse_devin_cli_conversation(conversation_id, after_line=after_line)
+        else:
+            result = _parse_devin_conversation(conversation_id, after_line=after_line)
         _conv_parse_cache_put(conversation_id, after_line, repo_path, result)
         events_copy = list(result.get("events") or [])
         events_copy = _merge_synthetic_conversation_events(events_copy, _get_queued_events_for_session(conversation_id))
@@ -37707,6 +37755,8 @@ def _start_resume_queue_watcher() -> None:
                         result = resume_session_hermes(sid, text)
                     elif _is_opencode_session(sid):
                         result = resume_session_opencode(sid, text)
+                    elif _is_devin_cli_session(sid):
+                        result = resume_session_devin(sid, text)
                 except Exception:
                     result = {"ok": False}
                 if not result or not result.get("ok"):
@@ -38081,6 +38131,7 @@ def _detect_engines_installed():
         ("opencode", "OpenCode", _resolve_opencode_bin),
         ("kimi", "Kimi Code", _resolve_kimi_bin),
         ("hermes", "Hermes", _resolve_hermes_bin),
+        ("devin", "Devin", _resolve_devin_bin),
     ):
         installed, detail = _spawn_engine_installed(resolver)
         engines.append({
@@ -38116,12 +38167,6 @@ def _detect_engines_installed():
         readonly.append(("copilotchat", "Copilot Chat", result))
     except Exception:
         readonly.append(("copilotchat", "Copilot Chat", (False, "")))
-    try:
-        # Cloud engine: "installed" means a personal API key is configured.
-        # Key-presence only — never a network call from this probe.
-        readonly.append(("devin", "Devin", _devin_available()))
-    except Exception:
-        readonly.append(("devin", "Devin", (False, "")))
 
     for engine, label, (installed, detail) in readonly:
         engines.append({
@@ -40709,6 +40754,215 @@ def spawn_session_gemini(prompt, name=None, cwd=None, repo_path=None, worktree=F
         entry,
         ctx,
     )
+
+
+def spawn_session_devin(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+    """Spawn a headless Devin CLI run and return tracking info.
+
+    Uses `devin -p "prompt" --permission-mode dangerous` (one-shot, like
+    gemini). The session ID is assigned by the Devin CLI and discovered
+    later from its SQLite DB via find_devin_cli_conversations().
+    """
+    prompt = _strip_ccc_session_state_instruction(prompt)
+    resolved = _resolve_devin_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    ctx = _spawn_repo_context(cwd=cwd, repo_path=repo_path)
+    spawn_cwd = ctx["cwd"]
+    repo_for_logs = ctx["repo_path"]
+    session_name = _slugify(name or prompt) or "unnamed"
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"spawn-devin-{session_name}-{timestamp}.log"
+    if model:
+        _set_session_model(log_filename[:-4], model, False)
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+    cmd = [
+        resolved["bin"],
+        "--permission-mode", os.environ.get("CCC_DEVIN_PERMISSION_MODE", "dangerous"),
+        "--respect-workspace-trust", "false",
+    ]
+    model_to_use = model or os.environ.get("CCC_DEVIN_MODEL")
+    if model_to_use:
+        cmd.extend(["--model", model_to_use])
+    cmd.extend(["-p", prompt])
+    log_fh = open(log_path, "w")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=spawn_cwd,
+            start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "code": "devin_launch_failed", "via": "devin-spawn"}
+    failure = _spawn_early_failure_payload(
+        proc, log_path, log_fh, engine="devin", via="devin-spawn",
+    )
+    if failure:
+        return failure
+    entry = {
+        "pid": proc.pid,
+        "name": session_name,
+        "log": str(log_path),
+        "prompt": prompt[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "fifo": None,
+        "stdin_fd": None,
+        "engine": "devin",
+        "cwd": spawn_cwd,
+        "repo_path": repo_for_logs,
+        "model": model_to_use or "",
+        "parent_session_id": parent_session_id or "",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=session_name,
+        log_path=log_path,
+        cwd=spawn_cwd,
+        spawned_at=timestamp,
+        command_summary=prompt[:200],
+        fifo=None,
+        engine="devin",
+        repo_path=repo_for_logs,
+        model=model_to_use,
+        parent_session_id=parent_session_id,
+    )
+    return _finalize_spawn_response(
+        {"ok": True, "pid": proc.pid, "name": session_name, "log": str(log_path)},
+        entry,
+        ctx,
+    )
+
+
+def resume_session_devin(session_id, text):
+    """Resume a Devin CLI session with a one-shot headless prompt.
+
+    Uses `devin --resume <id> -p "text" --permission-mode dangerous`.
+    The session_id is expected to be devincli-prefixed; the raw ID is
+    extracted for the CLI.
+    """
+    text = _strip_ccc_session_state_instruction(text)
+    if not session_id or not text:
+        return {"ok": False, "error": "missing session_id or text"}
+    resolved = _resolve_devin_bin()
+    if not resolved["available"]:
+        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    # Strip the devincli- prefix to get the raw Devin CLI session ID.
+    raw_id = session_id
+    if session_id.startswith("devincli-"):
+        raw_id = session_id[len("devincli-"):]
+    # Queue if already running.
+    for s in _spawned_sessions:
+        if s.get("engine") == "devin" and s.get("resumed_sid") == session_id:
+            try:
+                if _poll_spawn_entry(s) is None:
+                    with _pending_resume_lock:
+                        _pending_resume_queue.setdefault(session_id, []).append(text)
+                    _save_pending_inputs()
+                    return {
+                        "ok": True,
+                        "queued": True,
+                        "pid": s.get("pid"),
+                        "via": "devin-resume-queued",
+                    }
+            except Exception:
+                pass
+    spawned_ctx = _spawn_registry_entry_for_session(session_id, "devin") or {}
+    cwd = spawned_ctx.get("cwd") or _devin_cli_session_cwd(raw_id) or str(Path.cwd())
+    if not Path(cwd).is_dir():
+        cwd = str(Path.cwd())
+    timestamp = time.strftime("%Y%m%dT%H%M%S")
+    log_filename = f"resume-devin-{raw_id[:12]}-{timestamp}.log"
+    repo_for_logs = _git_toplevel_for_existing_dir(cwd) or cwd
+    log_dir = repo_log_dir(repo_for_logs)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / log_filename
+    cmd = [
+        resolved["bin"],
+        "--permission-mode", os.environ.get("CCC_DEVIN_PERMISSION_MODE", "dangerous"),
+        "--respect-workspace-trust", "false",
+        "--resume", raw_id,
+    ]
+    override = _get_session_override(session_id)
+    model = (override or {}).get("model") if override else None
+    if not model:
+        model = os.environ.get("CCC_DEVIN_MODEL")
+    if model:
+        cmd.extend(["--model", model])
+    cmd.extend(["-p", text])
+    log_fh = open(log_path, "w")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            start_new_session=True,
+        )
+    except (FileNotFoundError, OSError) as e:
+        log_fh.close()
+        return {"ok": False, "error": str(e), "via": "devin-resume"}
+    entry = {
+        "pid": proc.pid,
+        "name": f"resume-devin-{raw_id[:12]}",
+        "log": str(log_path),
+        "prompt": text[:200],
+        "started": timestamp,
+        "proc": proc,
+        "log_fh": log_fh,
+        "resumed_sid": session_id,
+        "fifo": None,
+        "stdin_fd": None,
+        "engine": "devin",
+        "cwd": cwd,
+        "repo_path": repo_for_logs,
+        "model": model or "",
+    }
+    _spawned_sessions.append(entry)
+    _record_spawn_to_registry(
+        pid=proc.pid,
+        name=entry["name"],
+        log_path=log_path,
+        cwd=cwd,
+        spawned_at=timestamp,
+        command_summary=text[:200],
+        fifo=None,
+        engine="devin",
+        session_id=session_id,
+        repo_path=repo_for_logs,
+        model=model,
+    )
+    return {"ok": True, "pid": proc.pid, "log": str(log_path), "resumed": True, "via": "devin-resume"}
+
+
+def _devin_cli_session_cwd(raw_id):
+    """Look up the working_directory for a Devin CLI session from the DB."""
+    try:
+        con = _devin_cli_connect()
+        if con is None:
+            return None
+        try:
+            row = con.execute(
+                "SELECT working_directory FROM sessions WHERE id = ?", (raw_id,)
+            ).fetchone()
+            if row:
+                return str(row["working_directory"] or "").strip() or None
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
+    except Exception:
+        pass
+    return None
 
 
 def resume_session_cursor(session_id, text):
@@ -48707,6 +48961,8 @@ def _inject_text_into_session(
         return resume_session_hermes(session_id, text)
     if is_opencode:
         return resume_session_opencode(session_id, text)
+    if _is_devin_cli_session(session_id):
+        return resume_session_devin(session_id, text)
     if not status.get("live") or not has_tty:
         spawn = _find_live_spawn_entry_for_session(session_id)
         if spawn is not None:
@@ -49843,6 +50099,8 @@ def ask_engine_session_and_wait(session_id, text, timeout_ms, engine):
         spawn_result = resume_session_hermes(session_id, text)
     elif engine == "opencode":
         spawn_result = resume_session_opencode(session_id, text)
+    elif engine == "devin":
+        spawn_result = resume_session_devin(session_id, text)
     else:
         return {"ok": False, "error": f"unsupported ask engine: {engine}", "source": "engine-resume"}
     source = f"{engine}-resume"
@@ -55673,6 +55931,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             info = _resolve_hermes_bin()
             info["model"] = "auto"
             self.send_json(info)
+        elif path == "/api/sessions/spawn-devin/availability":
+            info = _resolve_devin_bin()
+            info["model"] = os.environ.get("CCC_DEVIN_MODEL", "adaptive")
+            info["permission_mode"] = os.environ.get("CCC_DEVIN_PERMISSION_MODE", "dangerous")
+            self.send_json(info)
         elif path == "/api/loading-status":
             self.send_json(_session_load_snapshot())
         elif path == "/api/archive/loading-status":
@@ -60362,6 +60625,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             model=model,
                             parent_session_id=parent_session_id,
                         )
+                    elif engine == "devin":
+                        result = spawn_session_devin(
+                            prompt,
+                            name=name,
+                            cwd=spawn_cwd,
+                            repo_path=payload.get("repo_path"),
+                            worktree=worktree_flag,
+                            model=model,
+                            parent_session_id=parent_session_id,
+                        )
                     elif engine == "remote" or payload.get("remote") or (os.environ.get("CCC_SSH_HOST") and payload.get("remote") is not False and engine in ("claude", "hermes", "remote", None)):
                         remote_engine = "hermes" if engine == "hermes" else "claude"
                         result = spawn_session_remote(
@@ -60416,6 +60689,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "antigravity_launch_failed",
                         "hermes_unavailable",
                         "hermes_launch_failed",
+                        "devin_unavailable",
+                        "devin_launch_failed",
                     ):
                         self.send_json(result, 503)
                     else:
