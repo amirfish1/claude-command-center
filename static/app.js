@@ -3635,6 +3635,10 @@
         msg = '<strong>Session replaced</strong>: ' + name + '<br>The transcript advanced (another terminal or resume drove it). Restarting from current state.';
         logKind = 'stale';
         _appendActivityLog(logKind, 'Session "' + name + '" replaced (stale transcript)');
+      } else if (reasonStr === 'request_interrupted') {
+        msg = '<strong>Session interrupted</strong>: ' + name + '<br>Claude was killed mid-turn (Request interrupted by user). The session is now stuck — send a message to resume it.';
+        logKind = 'interrupt';
+        _appendActivityLog(logKind, 'Session interrupted (likely CCC kill mid-turn)');
       } else if (reasonStr === 'prewarm_expired') {
         // Prewarm expiry is already handled by the prewarm event handler —
         // skip the generic kill toast to avoid double-notification.
@@ -3702,7 +3706,9 @@
     if (!$panel || !$list) return;
     $panel.classList.remove('collapsed');
     const lines = _activityLogLines.map(line => {
-      const cls = line.kind === 'kill' ? 'warn' : (line.kind === 'stale' ? 'warn' : 'info');
+      const cls = line.kind === 'interrupt' ? 'warn'
+        : (line.kind === 'kill' ? 'warn'
+        : (line.kind === 'stale' ? 'warn' : 'info'));
       return '<div class="ship-log-line ' + cls + '">'
         + '<span class="ship-log-ts">' + escapeHtml(line.ts) + '</span>'
         + '<span class="ship-log-txt">' + escapeHtml(line.text) + '</span></div>';

@@ -43763,10 +43763,21 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
     # Compute spawn age at kill time for diagnostics.
     started_epoch = _spawn_entry_started_epoch(entry)
     age_s = round(time.time() - started_epoch, 1) if started_epoch else None
+    # If we're killing a live process mid-turn, Claude will write
+    # "[Request interrupted by user]" to the transcript. Flag it so the
+    # activity log can distinguish "CCC killed a working session" from
+    # "cleaned up an idle/dead one".
+    mid_turn = alive and bool(_spawn_entry_active_tool_child(entry))
     _resume_ledger_append(
         "retire", sid=entry.get("resumed_sid"), pid=pid,
         terminate=bool(terminate), reason=reason or "unspecified", alive=alive,
-        caller=caller or "", age_s=age_s,
+        caller=caller or "", age_s=age_s, mid_turn=mid_turn,
+    )
+    _log_activity(
+        "retire", "RETIRE",
+        f"pid={pid} sid={str(entry.get('resumed_sid') or '')[:8]} "
+        f"reason={reason or 'unspecified'} caller={caller or '-'} "
+        f"alive={alive} age={age_s}s mid_turn={mid_turn}",
     )
     # Surface the kill to the UI via the ring buffer (polled by live-activity).
     _record_kill_event(
@@ -63571,6 +63582,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             timeline_dirty = _spawn_timeline_mark(
                                 session_id, "claude_first_text_delta"
                             ) or timeline_dirty
+                        # Detect "[Request interrupted by user]" — Claude writes
+                        # this to the transcript when it receives SIGTERM mid-turn.
+                        # This is usually CCC killing the process, not the user.
+                        if event_type == "user":
+                            content = ev.get("message", {}).get("content", [])
+                            if isinstance(content, list):
+                                for block in content:
+                                    if isinstance(block, dict) and block.get("type") == "text":
+                                        txt = block.get("text", "")
+                                        if txt and txt.strip().startswith("[Request interrupted by user"):
+                                            _log_activity(
+                                                "interrupt", "INTERRUPT",
+                                                f"sid={session_id} — Request interrupted (likely CCC kill, not user)",
+                                            )
+                                            _record_kill_event({
+                                                "name": "",
+                                                "reason": "request_interrupted",
+                                                "caller": "transcript-detection",
+                                                "alive": False,
+                                                "age_s": None,
+                                            })
+                                            timeline_dirty = _spawn_timeline_mark(
+                                                session_id, "request_interrupted"
+                                            ) or timeline_dirty
+                                        break
                         if timeline_dirty:
                             _spawn_timeline_save()
                         if norm:
