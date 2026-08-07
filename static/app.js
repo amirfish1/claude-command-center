@@ -3629,7 +3629,16 @@
       const callerStr = ev.caller ? (' by ' + ev.caller) : '';
       const reasonStr = ev.reason || 'unspecified';
       const aliveStr = ev.alive ? ' (was live)' : ' (was already dead)';
-      const msg = '<strong>CCC killed a session</strong>: ' + name + aliveStr + ageStr + callerStr + '<br>Reason: ' + reasonStr;
+      let msg;
+      if (reasonStr === 'stale_transcript') {
+        msg = '<strong>Session replaced</strong>: ' + name + '<br>The transcript advanced (another terminal or resume drove it). Restarting from current state.';
+      } else if (reasonStr === 'prewarm_expired') {
+        // Prewarm expiry is already handled by the prewarm event handler —
+        // skip the generic kill toast to avoid double-notification.
+        continue;
+      } else {
+        msg = '<strong>CCC killed a session</strong>: ' + name + aliveStr + ageStr + callerStr + '<br>Reason: ' + reasonStr;
+      }
       if (typeof showOpToast === 'function') showOpToast(msg, 'warn');
     }
   }

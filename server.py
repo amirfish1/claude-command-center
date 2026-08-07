@@ -49207,6 +49207,12 @@ def _inject_text_into_session(
                 and _headless_spawn_is_stale(spawn, session_id)
             ):
                 _diag = spawn.get("_last_stale_diag") or {}
+                _log_activity(
+                    "stale", "STALE_RETIRE",
+                    f"sid={session_id} pid={spawn.get('pid')} "
+                    f"uuid_changed={_diag.get('uuid_changed')} "
+                    f"size_delta={_diag.get('size_delta')}",
+                )
                 _resume_ledger_append(
                     "stale_retire", sid=session_id, pid=spawn.get("pid"),
                     uuid_changed=_diag.get("uuid_changed"),
@@ -49214,7 +49220,10 @@ def _inject_text_into_session(
                     cur_results=_diag.get("cur_results"),
                     prev_results=_diag.get("prev_results"),
                 )
-                _retire_unresponsive_spawn_entry(spawn, terminate=True, reason="stale_transcript")
+                _retire_unresponsive_spawn_entry(
+                    spawn, terminate=True, reason="stale_transcript",
+                    caller="inject-stale-detection",
+                )
                 return resume_session_headless(session_id, text)
             ok = _write_stream_json_user_message(spawn, text)
             if ok:
