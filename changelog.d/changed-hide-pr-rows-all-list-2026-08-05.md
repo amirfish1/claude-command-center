@@ -1,1 +1,0 @@
-- Hid synthesized open-PR rows from the All session list — mixed into sessions they read as sessions. Real sessions still show their PR state badges.

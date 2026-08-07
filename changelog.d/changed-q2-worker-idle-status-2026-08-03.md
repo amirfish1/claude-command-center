@@ -1,1 +1,0 @@
-- Q2 now explains how long an unassigned WatchTower worker has been idle, keeps normal warm-idle workers neutral, and highlights workers that remain live past the normal release window.

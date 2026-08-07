@@ -11,6 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed CCC silently holding a message forever when a live WatchTower-tracked worker session had no channel CCC recognized as its own (a "foreign live writer" — CCC didn't spawn it, so the existing fork guard would neither deliver nor fail loudly). CCC now recognizes a live WT worker's FIFO in-process (reading `workers.json` directly, zero subprocess) and delivers through it before falling back to the hold, wired into both the watcher's hold gate and the inject fork guard; a write failure (ENXIO, no reader) still falls back to the existing hold, never to a parallel `claude --resume`. A hold that persists past two consecutive watcher ticks (~5-10s) now logs an actionable incident instead of staying invisible, and the queue's user-facing note stops claiming the message "sends when it finishes" for a headless worker that never will.
 - Added a global delivery-health banner fed by a new `/api/injection-health` endpoint: surfaces active foreign-writer holds and newly-lost WatchTower receipts, read in-process from `receipts.json` (no `wt` subprocess). Historical losses are baselined once, ever — not per restart — so a loss that happens while CCC is down still surfaces on the next start; dismissible per-incident or all-at-once, durably acked across reloads.
 
+## [5.20.0] - 2026-08-07
+
+### Added
+- Devin is now a fully spawnable engine alongside Claude, Codex, Cursor, and the rest. The local `devin` CLI is spawned headless via `devin -p` (one-shot, like gemini/cursor), sessions are discovered from its SQLite DB, transcripts are parsed from `message_nodes`, and resume works via `devin --resume <id> -p`. Cloud API sessions (`devin-` prefix) remain read-only; local CLI sessions use the `devincli-` prefix.
+- Added Devin engine support: sessions from the Devin API (set DEVIN_API_KEY) now appear in the session board and archive with transcripts (read-only).
+- Q2 can now open a sanitized queue/worker diagnostic in the existing bug-report window for review and send that exact text privately in one final click.
+- Add a per-repository new-session button to conversation sidebar headers.
+
+### Changed
+- Reasoning effort is now a first-class knob everywhere engine and model already were: pick it in the composer, the cold-start launcher, Flow, the kanban run button, spawn defaults, and queue workers, and read it back on any row that shows a session's engine and model. Claude sessions honour it on a fresh spawn for the first time (previously it only applied on resume), and each engine offers exactly the levels it accepts instead of one hardcoded list.
+- Group chat messages now show L-number labels, and participant cards link to each member's last pinged message.
+- Hid synthesized open-PR rows from the All session list — mixed into sessions they read as sessions. Real sessions still show their PR state badges.
+- Q2 now explains how long an unassigned WatchTower worker has been idle, keeps normal warm-idle workers neutral, and highlights workers that remain live past the normal release window.
+
+### Fixed
+- Fixed new Kimi/GLM sessions flickering out of the sidebar for ~30 seconds after spawn by overlaying in-memory ACP sessions onto the cached `/api/conversations/list` snapshot until the next archive refresh completes.
+- Claude conversations now always show a dollar cost beside their total tokens, including zero weekly allocation and API-equivalent fallback states.
+- Fixed queued Codex messages remaining visible in the composer tray after they had already been delivered to the conversation and the agent was responding.
+- Fixed conversation composer alignment for right-to-left prompts.
+- Added token-based dollar cost estimates for Codex and Kimi sessions, while keeping session usage refreshes stable and limited to visible conversations.
+- Devin conversation panes no longer offer a reply composer that fails with `repo_required` — the input is blocked with a pointer to reply at app.devin.ai (Devin is read-only in CCC).
+- Reduced idle CPU and memory use by making WebKit status cues settle, suspending hidden diagnostics, coalescing process/repository observations, isolating archive refreshes in short-lived low-priority processes, avoiding duplicated and thousands-row sidebar payloads, bounding slow background status probes so conversation rows open first, and retiring resumable idle headless workers after one hour instead of three.
+- Fixed "[Request interrupted by user]" events going undetected when nobody was actively watching the session — interrupt detection now runs on transcript scan, not just the SSE stream poller.
+- Fixed the All-sessions engine filter so its model buttons remain clickable after archive refreshes.
+- Fixed the new-session object picker so it lists all objects and prioritizes ones associated with the chosen repository.
+- Fixed collapsed project groups in All sessions so contained agent clusters collapse with the project.
+- Fixed reopened queue tickets appearing as in progress when their old worker was still live.
+- Primary conversation composer now automatically aligns right-to-left prompts correctly.
+- Fixed a race where a headless spawn could be retired while Claude was still thinking (prompt written, no output yet), producing a spurious "[Request interrupted by user]" and leaving the session stuck with no response.
+- Fixed the "Sending…/🧠 Thinking…" age counter freezing at "0s" for the whole spawn when the CCC window was backgrounded or occluded while a new session started.
+- The in-app updater and maintenance restarts now show their progress overlay
+above the originating modal instead of appearing stuck on a disabled button.
+- Kept session token and cost values stable while refreshing, and stopped usage scans for hidden conversations and browser tabs.
+- Fixed WatchTower's agent skills (the `wt` queue commands) not being installed/resynced on machines that installed WatchTower before those skills existed — CCC now resyncs them on every launch, not just on first-ever setup.
+- Worker-only restarts no longer wedge every later send: the queue drain that `/api/restart/worker` sets before kickstart is now lifted as soon as the restarted worker is healthy (previously a `worker-restart:` drain had no releaser anywhere, so messages parked in "Queued: the session is busy" forever). Dashboard startup and worker boot also clear leaked restart drains as a safety net.
+- A paused control-plane dispatch queue now shows a global amber banner ("Dispatch paused — new sends are queuing, not sending") with the drain reason, a **Resume dispatch** button, and a **Details** link into Settings → Maintenance — previously a stuck drain was invisible outside the Maintenance panel.
+
 ## [5.19.1] - 2026-08-03
 
 ### Fixed
@@ -2441,7 +2478,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.19.1...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.20.0...HEAD
+[5.20.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.20.0
 [5.19.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.19.1
 [5.19.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.19.0
 [5.18.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.18.0

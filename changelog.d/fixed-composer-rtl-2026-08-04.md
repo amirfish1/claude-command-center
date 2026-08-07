@@ -1,1 +1,0 @@
-- Fixed conversation composer alignment for right-to-left prompts.

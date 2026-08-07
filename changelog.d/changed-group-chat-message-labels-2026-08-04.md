@@ -1,1 +1,0 @@
-- Group chat messages now show L-number labels, and participant cards link to each member's last pinged message.

@@ -1,1 +1,0 @@
-- Q2 can now open a sanitized queue/worker diagnostic in the existing bug-report window for review and send that exact text privately in one final click.

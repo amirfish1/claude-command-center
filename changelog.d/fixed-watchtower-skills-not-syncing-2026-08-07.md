@@ -1,1 +1,0 @@
-Fixed WatchTower's agent skills (the `wt` queue commands) not being installed/resynced on machines that installed WatchTower before those skills existed — CCC now resyncs them on every launch, not just on first-ever setup.

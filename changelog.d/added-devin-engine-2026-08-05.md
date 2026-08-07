@@ -1,1 +1,0 @@
-- Added Devin engine support: sessions from the Devin API (set DEVIN_API_KEY) now appear in the session board and archive with transcripts (read-only).

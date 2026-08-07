@@ -1,1 +1,0 @@
-- Devin conversation panes no longer offer a reply composer that fails with `repo_required` — the input is blocked with a pointer to reply at app.devin.ai (Devin is read-only in CCC).

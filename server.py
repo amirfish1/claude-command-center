@@ -15,7 +15,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.19.1"
+__version__ = "5.20.0"
 
 import ast
 import base64
