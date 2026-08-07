@@ -14249,6 +14249,10 @@ _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
 _CONV_META_SCHEMA_VERSION = 16
 
+# Dedup set for transcript-scanned interrupts — prevents re-firing the same
+# [Request interrupted by user] event on every cache-invalidating re-parse.
+_SEEN_INTERRUPTS = set()
+
 # In-memory cache of the head-parse (first ~20 lines: session_id, timestamp,
 # git_branch, first_message, head_cwd) keyed by str(path) -> (cache_key, tuple),
 # where cache_key is (st_mtime_ns, st_size) — same invalidation as
@@ -14759,6 +14763,30 @@ def _extract_tail_meta(path):
                         prompt_text = _extract_user_prompt_text(ev)
                         if prompt_text:
                             meta["last_prompt"] = prompt_text
+                        # Detect [Request interrupted by user] — Claude writes
+                        # this when SIGTERM'd mid-turn. Usually CCC's kill, not
+                        # the user. Fire once per (session_id, uuid) so we don't
+                        # re-fire on every cache-invalidating re-parse.
+                        if raw_text and "[Request interrupted by user" in raw_text:
+                            ev_uuid = ev.get("uuid", "")
+                            dedup_key = f"{path.stem}:{ev_uuid}"
+                            if ev_uuid and dedup_key not in _SEEN_INTERRUPTS:
+                                _SEEN_INTERRUPTS.add(dedup_key)
+                                # Cap the set so it doesn't grow forever
+                                if len(_SEEN_INTERRUPTS) > 500:
+                                    _SEEN_INTERRUPTS.clear()
+                                    _SEEN_INTERRUPTS.add(dedup_key)
+                                _log_activity(
+                                    "interrupt", "INTERRUPT",
+                                    f"sid={path.stem} — Request interrupted (likely CCC kill, not user)",
+                                )
+                                _record_kill_event({
+                                    "name": meta.get("agent_name") or meta.get("custom_title") or "",
+                                    "reason": "request_interrupted",
+                                    "caller": "transcript-scan",
+                                    "alive": False,
+                                    "age_s": None,
+                                })
                 # Metadata
                 if t == "custom-title":
                     meta["custom_title"] = ev.get("customTitle") or meta["custom_title"]
