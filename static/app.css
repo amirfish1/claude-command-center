@@ -1639,6 +1639,34 @@
   /* Control-XML-only user messages render nothing (dedupe anchor only). */
   .conv-pane.is-webui-session .event.user_text.kimi-xml-only { display: none !important; }
 
+  /* Kimi answer metadata row (CCC-755): turn number, timestamp, speak/copy —
+     the parity Claude turns get from .assistant-message-actions, reused here
+     since kimi merges into .kimi-turn and has no visible per-event container. */
+  .conv-pane.is-webui-session .kimi-answer-meta {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; opacity: 0.6;
+  }
+  .conv-pane.is-webui-session .kimi-answer-meta:hover { opacity: 0.9; }
+  .conv-pane.is-webui-session .kimi-answer-meta .line-num,
+  .conv-pane.is-webui-session .kimi-answer-meta .msg-ts { float: none; margin-right: 0; }
+  .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-actions {
+    float: none; position: static; display: inline-flex; align-items: center; gap: 2px;
+  }
+  .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action {
+    width: 18px; height: 18px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 4px;
+    background: transparent; color: var(--text-muted);
+    font-size: 11px; line-height: 1;
+    cursor: pointer;
+  }
+  .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action:hover {
+    background: rgba(255,255,255,0.06); color: var(--text);
+  }
+  .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.copied { color: var(--green); }
+  .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.speaking { color: var(--accent); }
+  .conv-pane.is-webui-session .kimi-answer-meta .assistant-message-action.speaking.paused { color: var(--text-muted); opacity: 0.7; }
+
   /* User turn — right-aligned soft-blue bubble (kimi-web .u-bub). The event
      div is a full-width transparent flex container; the bubble carries the
      style. Must fully undo CCC's aurora .event.user_text bubble (fit-content

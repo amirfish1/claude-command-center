@@ -6832,7 +6832,7 @@
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
-    const eventEl = btn.closest('.event.assistant');
+    const eventEl = btn.closest('.event.assistant') || btn.closest('.kimi-answer-meta');
     const text = assistantNodeTextForCopy(eventEl);
     if (!text) {
       showOpToast('No assistant message to copy', 'error');
@@ -6925,7 +6925,7 @@
       }
       return;
     }
-    const eventEl = btn.closest('.event.assistant');
+    const eventEl = btn.closest('.event.assistant') || btn.closest('.kimi-answer-meta');
     const text = assistantNodeTextForCopy(eventEl);
     if (!text) {
       showOpToast('No assistant message to read', 'error');
@@ -47218,7 +47218,23 @@
               }
             }
           }
-          div._agentAnswerText = kimiAnswerParts.join('\n\n').trim();
+          const _kimiAnswerText = kimiAnswerParts.join('\n\n').trim();
+          div._agentAnswerText = _kimiAnswerText;
+          // Claude's assistant turns get a turn number, a timestamp, and
+          // speak/copy actions (assistantMessageActionsHtml); kimi turns
+          // merge into `.kimi-turn` and skipped all of that (the event div
+          // that would normally carry it is the hidden `.kimi-marker`,
+          // CCC-755). Surface the same metadata on a small visible row —
+          // `_agentAnswerText` lives on IT (not the hidden marker) so the
+          // copy/speak click handlers below can find it via `.closest`.
+          if (_kimiAnswerText) {
+            const metaEl = document.createElement('div');
+            metaEl.className = 'kimi-answer-meta';
+            metaEl._agentAnswerText = _kimiAnswerText;
+            metaEl.innerHTML = '<span class="line-num">L' + ev.line + '</span>'
+              + tsSpan(ev.ts) + assistantMessageActionsHtml(ev);
+            kimiBlockEls.push(metaEl);
+          }
           _kimiAppendAssistantEvent($view, div, kimiBlockEls);
           // Codex mode-3 presentation artifacts attach to the assistant
           // event — the shared tail below is skipped by this branch.
