@@ -96,6 +96,13 @@
   h1.hero-title .green { color: var(--green-bright); }
   .lede { font-size: 20px; color: var(--fg-dim); max-width: 62ch; margin: 0 auto 12px; }
   .lede .tag { color: var(--fg); }
+  .lede .tag .rotator {
+    display: inline-block;
+    color: var(--orange);
+    font-weight: 600;
+    min-width: 5.5em;
+    text-align: left;
+  }
   .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
   .hero .cta-row { margin-top: 24px; }
   .btn {
@@ -445,7 +452,7 @@
         Your coding agents <span class="orange">outgrew</span> your terminal.
       </h1>
       <p class="lede fade-target">
-        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. <span class="tag">Start the next while Claude builds the first.</span>
+        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. <span class="tag">Start the next while <span class="rotator" id="engineRotator">Claude</span> builds the first.</span>
       </p>
 
       <div class="cta-row fade-target">
@@ -1045,6 +1052,25 @@ brew install ccc</pre>
 
     frameVideos.forEach(v => videoObserver.observe(v));
   });
+
+  // Rotate the engine name in the hero tag — one word cycling through every
+  // engine CCC supports, so the list never goes stale as new engines are added.
+  (function() {
+    var engines = ['Claude', 'Codex', 'Cursor', 'Antigravity', 'Kilo', 'Kimi', 'OpenCode', 'Devin'];
+    var el = document.getElementById('engineRotator');
+    if (!el) return;
+    var i = 0;
+    setInterval(function() {
+      i = (i + 1) % engines.length;
+      el.style.opacity = '0';
+      setTimeout(function() {
+        el.textContent = engines[i];
+        el.style.opacity = '1';
+      }, 200);
+    }, 2200);
+    el.style.transition = 'opacity 200ms';
+    el.style.opacity = '1';
+  })();
 </script>
 </body>
 </html>
