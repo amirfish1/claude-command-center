@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import os
+import re
 import shlex
 import shutil
 import sqlite3
@@ -815,6 +816,7 @@ def _devin_cli_first_prompts_from_history(con, raw_ids):
         return {}
     placeholders = ",".join("?" * len(raw_ids))
     first_prompts = {}
+    start = time.perf_counter()
     try:
         query = (
             f"SELECT session_id, content, MIN(timestamp) AS ts "
@@ -827,6 +829,11 @@ def _devin_cli_first_prompts_from_history(con, raw_ids):
                 first_prompts[sid] = str(row["content"] or "").strip()
     except sqlite3.Error:
         pass
+    _devin_cli_profile_log(
+        "first_prompts_from_history",
+        time.perf_counter() - start,
+        f"raw_ids={len(raw_ids)} found={len(first_prompts)}",
+    )
     return first_prompts
 
 
@@ -841,12 +848,15 @@ def _devin_cli_first_messages_from_nodes(con, raw_ids):
         return {}
     placeholders = ",".join("?" * len(raw_ids))
     first_messages = {}
+    rows_scanned = 0
+    start = time.perf_counter()
     try:
         query = (
             f"SELECT session_id, chat_message FROM message_nodes "
             f"WHERE session_id IN ({placeholders}) ORDER BY session_id, node_id"
         )
         for row in con.execute(query, raw_ids):
+            rows_scanned += 1
             sid = str(row["session_id"] or "").strip()
             if not sid or sid in first_messages:
                 continue
@@ -866,6 +876,11 @@ def _devin_cli_first_messages_from_nodes(con, raw_ids):
                 first_messages[sid] = text
     except sqlite3.Error:
         pass
+    _devin_cli_profile_log(
+        "first_messages_from_nodes",
+        time.perf_counter() - start,
+        f"raw_ids={len(raw_ids)} rows_scanned={rows_scanned} found={len(first_messages)}",
+    )
     return first_messages
 
 
@@ -949,7 +964,10 @@ def find_devin_cli_conversations(
             "created_at, last_activity_at, title, main_chain_id "
             "FROM sessions ORDER BY last_activity_at DESC"
         )
+        qstart = time.perf_counter()
+        total_sessions_scanned = 0
         for row in con.execute(query):
+            total_sessions_scanned += 1
             raw_id = str(row["id"] or "").strip()
             if not raw_id:
                 continue
@@ -1077,10 +1095,17 @@ def find_devin_cli_conversations(
                 "reasoning_effort": "",
                 "session_url": None,
             })
+        qelapsed = time.perf_counter() - qstart
+        _devin_cli_profile_log(
+            "find_devin_cli_sessions_query",
+            qelapsed,
+            f"scanned={total_sessions_scanned} kept={len(rows)}",
+        )
 
         # Batch the first-message lookup instead of issuing one query per
         # session. The helper uses SQLite's bare-column-in-aggregate behavior
         # to return the content from the row that achieved MIN(timestamp).
+        fmstart = time.perf_counter()
         if rows:
             raw_ids = [r["_raw_id"] for r in rows]
             first_prompts = _devin_cli_first_prompts_from_history(con, raw_ids)
@@ -1105,6 +1130,12 @@ def find_devin_cli_conversations(
                 r["first_message"] = first_message[:200]
                 r["display_name"] = display_name
                 r["last_prompt"] = first_message[:200]
+        _devin_cli_profile_log(
+            "find_devin_cli_first_messages",
+            time.perf_counter() - fmstart,
+            f"prompts={len(first_prompts)} fallback={len(first_messages)} "
+            f"missing={len(missing_ids)}",
+        )
     except sqlite3.Error:
         pass
     finally:

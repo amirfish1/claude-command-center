@@ -64309,8 +64309,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     cur_key = _devin_cli_cache_key()
                     if cur_key != last_key:
                         last_key = cur_key
-                        result = _parse_devin_cli_conversation(
-                            conversation_id, after_line=after_line
+                        sse_start = time.perf_counter()
+                        result = parse_conversation(
+                            conversation_id, after_line=after_line, use_cache=True
+                        )
+                        _devin_cli_profile_log(
+                            "sse_devin_cli_parse_conversation",
+                            time.perf_counter() - sse_start,
+                            f"sid={conversation_id} after_line={after_line} "
+                            f"events={len(result.get('events') or [])}",
                         )
                         events = result.get("events") or []
                         if events:
