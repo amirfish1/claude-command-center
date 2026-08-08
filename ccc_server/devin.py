@@ -738,6 +738,10 @@ def find_devin_cli_conversations(
             ).strip()
             model = str(row["model"] or "")
             # Read first user message from prompt_history for first_message.
+            # Resumed/imported sessions can have real conversation turns in
+            # message_nodes but no prompt_history row (the CLI's prompt box
+            # was never used to start them) — fall back there so the row
+            # doesn't show [EMPTY] despite having a transcript.
             first_message = ""
             try:
                 ph_row = con.execute(
@@ -750,6 +754,30 @@ def find_devin_cli_conversations(
                     first_message = str(ph_row["content"] or "").strip()
             except sqlite3.Error:
                 pass
+            if not first_message:
+                try:
+                    for mn_row in con.execute(
+                        "SELECT chat_message FROM message_nodes "
+                        "WHERE session_id = ? ORDER BY node_id ASC",
+                        (raw_id,),
+                    ):
+                        try:
+                            msg = json.loads(mn_row["chat_message"])
+                        except (ValueError, TypeError):
+                            continue
+                        if not isinstance(msg, dict):
+                            continue
+                        if str(msg.get("role") or "").strip().lower() != "user":
+                            continue
+                        meta = msg.get("metadata") or {}
+                        if not meta.get("is_user_input"):
+                            continue
+                        text = str(msg.get("content") or "").strip()
+                        if text:
+                            first_message = text
+                            break
+                except sqlite3.Error:
+                    pass
             first_message = _core._strip_ccc_session_state_instruction(
                 first_message
             ).strip()
