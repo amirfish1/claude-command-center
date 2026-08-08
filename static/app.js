@@ -6255,7 +6255,8 @@
       stuckInline.className = 'conv-live-tool-inline is-stuck';
       stuckInline.innerHTML = '<span class="cl-stuck-icon">⚠</span>'
         + '<span class="cl-tool">Stuck — no output for ' + stuckMins + 'm</span>'
-        + (stuckToolName ? '<span class="cl-file">last: ' + escapeHtml(stuckToolName) + '</span>' : '');
+        + (stuckToolName ? '<span class="cl-file">last: ' + escapeHtml(stuckToolName) + '</span>' : '')
+        + '<button class="cl-stuck-wake" type="button" title="Send &quot;continue&quot; to restart this turn where it left off">Wake up</button>';
       stuckInline.title = 'This turn has produced no output for ' + stuckMins
         + 'm — the session may be stuck. Click to focus the composer; sending a message nudges it.';
       if (stuckInline.parentElement !== $view || stuckInline !== $view.lastElementChild) {
@@ -6263,7 +6264,30 @@
       }
       if (!stuckInline.dataset.stuckClickBound) {
         stuckInline.dataset.stuckClickBound = '1';
-        stuckInline.addEventListener('click', () => {
+        stuckInline.addEventListener('click', (ev) => {
+          const wakeBtn = ev.target && ev.target.closest && ev.target.closest('.cl-stuck-wake');
+          if (wakeBtn) {
+            // The banner is re-rendered every poll tick, so state feedback
+            // lives on the button only until the next tick — by which time a
+            // successful send has replaced the banner with the live turn.
+            ev.stopPropagation();
+            const sid = currentSession && currentSession.id;
+            if (!sid || wakeBtn.disabled) return;
+            wakeBtn.disabled = true;
+            wakeBtn.textContent = 'Waking…';
+            fetch('/api/inject-input', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sid, text: 'continue' }),
+            }).then((r) => r.json()).then((d) => {
+              wakeBtn.textContent = d && d.ok ? 'Sent' : 'Failed — use composer';
+              if (!(d && d.ok)) wakeBtn.disabled = false;
+            }).catch(() => {
+              wakeBtn.textContent = 'Failed — use composer';
+              wakeBtn.disabled = false;
+            });
+            return;
+          }
           try {
             const input = (typeof composerInputForPane === 'function' && composerInputForPane(activePaneId())) || document.getElementById('convInput');
             if (input) input.focus();

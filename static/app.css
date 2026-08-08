@@ -10885,6 +10885,22 @@
   }
   .conv-live-tool-inline.is-stuck .cl-stuck-icon { flex: 0 0 auto; }
   .conv-live-tool-inline.is-stuck .cl-file { color: inherit; opacity: 0.75; }
+  .conv-live-tool-inline.is-stuck .cl-stuck-wake {
+    margin-left: auto;
+    flex: 0 0 auto;
+    padding: 2px 10px;
+    font: inherit;
+    font-size: 12px;
+    color: inherit;
+    background: rgba(240, 136, 62, 0.16);
+    border: 1px solid rgba(240, 136, 62, 0.55);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .conv-live-tool-inline.is-stuck .cl-stuck-wake:hover:not(:disabled) {
+    background: rgba(240, 136, 62, 0.3);
+  }
+  .conv-live-tool-inline.is-stuck .cl-stuck-wake:disabled { opacity: 0.7; cursor: default; }
   .conv-live-tool-inline .cl-dismiss {
     margin-left: auto;
     flex: 0 0 auto;
