@@ -1130,10 +1130,14 @@
              keyboard-shortcut hint on the right. Kept out of the input row
              itself so the row stays uncluttered. -->
         <div class="conv-input-hint" id="convInputHint">
-          <!-- Engine/process status (headless, codex, dormant, …) lives in the
-               top breadcrumb pill (ccc-breadcrumb-proc) now — the old in-row
-               tty-label was redundant and was removed. renderConvInputBar still
-               writes to a detached #convTtyLabel stub so its code paths are safe. -->
+          <!-- Codex app-server state (managed / CCC / exec). Mirrors the top
+               breadcrumb proc pill so the indicator stays visible on the
+               right-hand side even in single-pane mode, where the per-pane
+               header is hidden. -->
+          <span class="codex-appsrv" id="convCodexAppSrv" title="Codex app-server state">
+            <span class="dot"></span>
+            <span class="codex-appsrv-label" id="convCodexAppSrvLabel">exec</span>
+          </span>
           <span class="conv-input-kbd"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
         </div>
       </div>
