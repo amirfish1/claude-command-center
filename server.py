@@ -8996,6 +8996,35 @@ def find_all_conversations(
 # of forgetting the previous signature's inputs and rebuilding every session.
 _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 7
 _ARCHIVE_RESPONSE_CACHE_FILE = COMMAND_CENTER_STATE_DIR / "archive-conversations-cache.json"
+
+
+def _archive_response_cache_build_id():
+    """Hash of server.py + ccc_server/*.py source files.
+
+    Busts the persisted archive cache whenever engine adapter logic changes,
+    so rows built by an older version of the code are not served after a
+    restart."""
+    try:
+        h = hashlib.sha1()
+        root = Path(__file__).resolve().parent
+        paths = [root / "server.py"]
+        ccc_server_dir = root / "ccc_server"
+        if ccc_server_dir.is_dir():
+            for p in sorted(ccc_server_dir.iterdir()):
+                if p.is_file() and p.suffix == ".py":
+                    paths.append(p)
+        for p in paths:
+            try:
+                st = p.stat()
+                h.update(f"{p}|{st.st_mtime_ns}|{st.st_size}\n".encode("utf-8"))
+            except OSError:
+                pass
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+_ARCHIVE_RESPONSE_CACHE_BUILD_ID = _archive_response_cache_build_id()
 # The all-repos archive payload can be several MB on machines with years of
 # agent history. Refreshing it every 30 seconds keeps the Python server in a
 # near-permanent scan/JSON cycle and starves click-to-open requests. Keep the
@@ -9042,6 +9071,8 @@ def _load_archive_response_cache():
     if not isinstance(data, dict):
         return
     if data.get("schema_version") != _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION:
+        return
+    if data.get("build_id") != _ARCHIVE_RESPONSE_CACHE_BUILD_ID:
         return
     entries = data.get("entries")
     if not isinstance(entries, dict):
@@ -9127,6 +9158,7 @@ def _save_archive_response_cache(force=False):
         }
     snapshot = {
         "schema_version": _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+        "build_id": _ARCHIVE_RESPONSE_CACHE_BUILD_ID,
         "entries": entries,
         "signature_maps": signature_maps,
     }
