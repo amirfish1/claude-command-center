@@ -1,0 +1,1 @@
+Restored the missing process-status chip in the conversation pane header (right-hand side) for Codex, Kimi, Antigravity, Devin, and Claude sessions. The pill now mirrors the top breadcrumb indicator, showing whether Codex is connected to the managed app-server, CCC app-server, or exec fallback, and whether Claude sessions have a live headless agent or terminal.

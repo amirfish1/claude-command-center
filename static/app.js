@@ -2760,7 +2760,7 @@
   let sessionSourceByConv = {}; // {convId: 'interactive'|'pkood'|'task'}
   let sessionSpawnPidByConv = {}; // {convId: pid of claude we spawned (stdin inject)}
   // Currently-focused session and its live-process state (per-pane, shimmed via window.currentSession)
-  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
+  let liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
   let liveStatusTimer = null;
   // Snapshot of liveStatus before the most recent refresh, used to detect
   // transitions (working -> idle, running -> idle) for audible feedback.
@@ -4411,7 +4411,7 @@
   async function refreshLiveStatus() {
     _liveStatusPrev = liveStatus;
     if (!currentSession.id) {
-      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
+      liveStatus = { forSessionId: null, live: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '' };
       updateJumpButton();
       updateInputBar();
       return;
@@ -4597,7 +4597,7 @@
         codex_desktop_attached: !!data.codex_desktop_attached,
       });
     } catch (err) {
-      liveStatus = { forSessionId: _fetchedFor, live: false, status: null, recentlyWritten: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
+      liveStatus = { forSessionId: _fetchedFor, live: false, status: null, recentlyWritten: false, pid: null, tty: null, terminalApp: null, ambiguous: false, matchCount: 0, sidecarTool: null, sidecarFile: null, sidecarStatus: null, sidecarTs: 0, sidecarInFlight: false, staleToolCall: false, staleToolAgeS: 0, needsApproval: false, needsApprovalMessage: '', questionWaiting: false, questionText: '', questionHeader: '', questionPreamble: '', questionOptions: [], questionOptionDetails: [], codexState: null, codexFresh: false, codexAppServer: false, codexAppServerTransport: null, codexManagedAppServer: false, codexAppServerEventSeq: 0, codexAppServerLastActivityAt: 0, codexAppServerLastItemId: '', codexWriter: null, codexDesktopAttached: false };
     }
     updateJumpButton();
     updateInputBar();
@@ -25543,14 +25543,18 @@
     return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
 
-  // Fill the breadcrumb process-presence slot: a "headless" pill and a
-  // "terminal" pill (on/off/stale) plus a "checked Xs ago" freshness label.
-  // Imperative (not part of the breadcrumb innerHTML) so the "ago" stays live
-  // on every 5s poll without a full breadcrumb rebuild. No-op when the slot
-  // isn't present (non-Claude session, or breadcrumb hidden).
+  // Fill the breadcrumb and conversation-pane process-presence slots: a
+  // "headless" pill and a "terminal" pill (on/off/stale) plus a "checked Xs ago"
+  // freshness label. Imperative (not part of the breadcrumb innerHTML) so the
+  // "ago" stays live on every 5s poll without a full breadcrumb rebuild. No-op
+  // when neither slot is present (non-Claude session, or breadcrumb hidden).
   function updateConvProcessIndicator() {
-    const el = document.querySelector('[data-role="ccc-breadcrumb-proc"]');
-    if (!el) return;
+    const targets = [
+      document.querySelector('[data-role="ccc-breadcrumb-proc"]'),
+      document.querySelector('[data-role="pane-proc"]'),
+    ].filter(Boolean);
+    if (!targets.length) return;
+    const setAll = (html) => { targets.forEach((t) => { t.innerHTML = html; }); };
     // liveStatus lags a conversation switch by up to one poll. Until it matches
     // the open conversation, render the engine pills as idle rather than painting
     // the new session with the PREVIOUS session's headless/terminal state.
@@ -25569,24 +25573,24 @@
       const appLive = !!ls.codexAppServer;
       const managed = ls.codexAppServerTransport === 'managed' || !!ls.codexManagedAppServer;
       const label = appLive ? (managed ? 'managed app-server' : 'app-server') : 'exec';
-      el.innerHTML = pill0(appLive, false, label,
+      setAll(pill0(appLive, false, label,
         appLive
           ? (managed
               ? "CCC is driving this Codex session via Codex's managed app-server Unix socket."
               : 'CCC is driving this Codex session via its private app-server fallback.')
           : 'No live CCC Codex app-server; Codex actions fall back to one-shot exec until one starts.',
-        true);
+        true));
       return;
     }
     if (currentSession && currentSession.source === 'kimi') {
       const acpLive = !!ls.live && ls.kind === 'acp';
       const acpBusy = acpLive && (ls.status === 'running' || ls.status === 'busy');
       const label = acpBusy ? 'Kimi ACP · working' : (acpLive ? 'Kimi ACP' : 'Kimi ACP · offline');
-      el.innerHTML = pill0(acpLive, false, label,
+      setAll(pill0(acpLive, false, label,
         acpLive
           ? 'Kimi sessions share this ACP adapter. Click to inspect or recover it safely.'
           : 'Kimi ACP is not connected. Click to inspect or recover it.',
-        true);
+        true));
       return;
     }
     // Antigravity is always headless — CCC resumes it per turn, no TTY. Surface
@@ -25594,19 +25598,19 @@
     // a resume is actively running.
     if (currentSession && currentSession.source === 'antigravity') {
       const agLive = !!ls.live;
-      el.innerHTML = pill0(agLive, false, agLive ? 'headless · running' : 'headless',
+      setAll(pill0(agLive, false, agLive ? 'headless · running' : 'headless',
         agLive
           ? 'Antigravity is running headlessly (CCC resumes it per turn - there is no live terminal)'
-          : 'Antigravity is idle - CCC resumes it headlessly when you send (there is no live terminal)');
+          : 'Antigravity is idle - CCC resumes it headlessly when you send (there is no live terminal)'));
       return;
     }
     // Devin CLI sessions are one-shot `devin -p` processes — headless, no TTY.
     if (currentSession && currentSession.source === 'devin-cli') {
       const dvLive = !!ls.live;
-      el.innerHTML = pill0(dvLive, false, dvLive ? 'headless · running' : 'headless',
+      setAll(pill0(dvLive, false, dvLive ? 'headless · running' : 'headless',
         dvLive
           ? 'Devin CLI is running headlessly (one-shot `devin -p` - there is no live terminal)'
-          : 'Devin CLI is idle - CCC resumes it headlessly when you send (there is no live terminal)');
+          : 'Devin CLI is idle - CCC resumes it headlessly when you send (there is no live terminal)'));
       return;
     }
     const headOn = !!ls.headlessPresent;
@@ -25667,11 +25671,11 @@
     const mergedPill = '<span class="ccc-proc-pill ' + procCls + (streaming ? ' is-streaming' : '') + '"'
       + ' title="' + escapeHtml(procTitle) + '">'
       + '<span class="ccc-proc-dot"></span>' + escapeHtml(procLabel) + '</span>';
-    el.innerHTML = mergedPill
+    setAll(mergedPill
       + (clock
           ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">' + escapeHtml(clock) + '</span>'
           : (ago ? '<span class="ccc-proc-checked" title="' + escapeHtml(checkedTitle) + '">checked ' + escapeHtml(ago) + '</span>' : ''))
-      + '<button type="button" class="ccc-proc-refresh" title="Refresh this session\'s headless / terminal state now" aria-label="Refresh state">↻</button>';
+      + '<button type="button" class="ccc-proc-refresh" title="Refresh this session\'s headless / terminal state now" aria-label="Refresh state">↻</button>');
   }
 
   // Quick-refresh for the headless/terminal state line (CCC-27). The "checked
