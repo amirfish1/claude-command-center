@@ -18776,6 +18776,15 @@ class TestAcpKimiEngine(unittest.TestCase):
                 write_boundary("step.end", "end_turn")
                 self.assertFalse(server._kimi_wire_turn_active(sid))
 
+                # A wire that ends in step.begin but has gone quiet for longer
+                # than the stale window means the kimi process died mid-turn
+                # (crash / worker restart); it must not wedge the queue forever.
+                write_boundary("step.begin")
+                self.assertTrue(server._kimi_wire_turn_active(sid))
+                stale = time.time() - 700
+                os.utime(wire, (stale, stale))
+                self.assertFalse(server._kimi_wire_turn_active(sid))
+
                 write_boundary("step.begin")
                 # Keep this unit test local: its synthetic session ID must not
                 # be sent to the persistent worker's real Kimi harness.

@@ -35,6 +35,11 @@ from ccc_server import core as _core
 _ACP_WIRE_TAIL = {"thread": None, "stop": False}
 _ACP_WIRE_TAIL_POLL_S = 1.0
 _ACP_WIRE_DEDUP_WINDOW = 50
+# A live turn appends step/tool boundaries continuously; the longest quiet
+# stretch is one slow tool call. A wire this old with no terminal event means
+# the kimi-code process died mid-turn (crash or worker restart) — treating it
+# as active would wedge the send queue forever.
+_KIMI_WIRE_ACTIVE_STALE_S = 600.0
 
 
 def _acp_wire_path(harness, sid):
@@ -70,6 +75,8 @@ def _kimi_wire_turn_active(sid):
     if path is None:
         return False
     try:
+        if time.time() - path.stat().st_mtime > _KIMI_WIRE_ACTIVE_STALE_S:
+            return False
         with path.open("rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
