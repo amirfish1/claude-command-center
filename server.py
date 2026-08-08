@@ -14259,6 +14259,12 @@ _CONV_META_SCHEMA_VERSION = 16
 _SEEN_INTERRUPTS = set()
 _SEEN_INTERRUPTS_LOCK = threading.Lock()
 
+# True when this process is a short-lived --archive-refresh-worker subprocess.
+# The worker has its own empty _SEEN_INTERRUPTS set, so it would re-fire every
+# interrupt in every transcript on each run. Guarding with this flag ensures
+# only the long-lived dashboard server process emits interrupt events.
+_IS_ARCHIVE_WORKER = len(sys.argv) >= 2 and sys.argv[1] == "--archive-refresh-worker"
+
 # In-memory cache of the head-parse (first ~20 lines: session_id, timestamp,
 # git_branch, first_message, head_cwd) keyed by str(path) -> (cache_key, tuple),
 # where cache_key is (st_mtime_ns, st_size) — same invalidation as
@@ -14773,7 +14779,10 @@ def _extract_tail_meta(path):
                         # this when SIGTERM'd mid-turn. Usually CCC's kill, not
                         # the user. Fire once per (session_id, uuid) so we don't
                         # re-fire on every cache-invalidating re-parse.
-                        if raw_text and "[Request interrupted by user" in raw_text:
+                        # Skip in archive refresh workers — they're short-lived
+                        # subprocesses with their own empty _SEEN_INTERRUPTS,
+                        # so they'd re-fire every interrupt on every run.
+                        if raw_text and "[Request interrupted by user" in raw_text and not _IS_ARCHIVE_WORKER:
                             ev_uuid = ev.get("uuid", "")
                             dedup_key = f"{path.stem}:{ev_uuid}"
                             if ev_uuid:
