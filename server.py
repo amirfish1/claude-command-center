@@ -14796,13 +14796,12 @@ def _extract_tail_meta(path):
                                         uuid=ev_uuid,
                                         agent_name=meta.get("agent_name") or meta.get("custom_title") or "",
                                     )
-                                    _record_kill_event({
-                                        "name": meta.get("agent_name") or meta.get("custom_title") or "",
-                                        "reason": "request_interrupted",
-                                        "caller": "transcript-scan",
-                                        "alive": False,
-                                        "age_s": None,
-                                    })
+                                    _record_kill_event(
+                                        {"name": meta.get("agent_name") or meta.get("custom_title") or ""},
+                                        reason="request_interrupted",
+                                        caller="transcript-scan",
+                                        alive=False,
+                                    )
                 # Metadata
                 if t == "custom-title":
                     meta["custom_title"] = ev.get("customTitle") or meta["custom_title"]
@@ -63713,13 +63712,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                                         source="sse-stream",
                                                         uuid=ev_uuid,
                                                     )
-                                                    _record_kill_event({
-                                                        "name": "",
-                                                        "reason": "request_interrupted",
-                                                        "caller": "sse-stream",
-                                                        "alive": False,
-                                                        "age_s": None,
-                                                    })
+                                                    _record_kill_event(
+                                                        {"name": ""},
+                                                        reason="request_interrupted",
+                                                        caller="sse-stream",
+                                                        alive=False,
+                                                    )
                                             timeline_dirty = _spawn_timeline_mark(
                                                 session_id, "request_interrupted"
                                             ) or timeline_dirty
