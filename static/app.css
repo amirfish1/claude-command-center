@@ -12192,6 +12192,7 @@
   .conv-archived-engine-btn.claude { color: #f09a78; }
   .conv-archived-engine-btn.codex { color: #3dd68c; }
   .conv-archived-engine-btn.kimi { color: #7dd3fc; }
+  .conv-archived-engine-btn.devin { color: #a78bfa; }
   .conv-archived-engine-btn.is-active {
     background: color-mix(in srgb, currentColor 18%, transparent);
     box-shadow: inset 0 0 0 1px currentColor;

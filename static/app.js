@@ -2463,7 +2463,7 @@
   function _archiveEngineFilter() {
     try {
       const value = String(localStorage.getItem(ARCHIVE_ENGINE_FILTER_KEY) || '').toLowerCase();
-      if (value === 'claude' || value === 'codex' || value === 'kimi') return value;
+      if (value === 'claude' || value === 'codex' || value === 'kimi' || value === 'devin') return value;
     } catch (_) {}
     return '';
   }
@@ -12094,7 +12094,7 @@
     if (!opt || !$convList.contains(opt)) return;
     ev.stopPropagation();
     const value = String(opt.getAttribute('data-archive-engine') || '').toLowerCase();
-    if (value !== 'claude' && value !== 'codex' && value !== 'kimi') return;
+    if (value !== 'claude' && value !== 'codex' && value !== 'kimi' && value !== 'devin') return;
     const current = _archiveEngineFilter();
     const next = current === value ? '' : value;
     try {
@@ -29772,7 +29772,7 @@
     const _arcEngineFilter = _archiveEngineFilter();
     const _arcEngineFilterLabel = _arcEngineFilter === 'codex'
       ? 'Codex'
-      : (_arcEngineFilter === 'kimi' ? 'Kimi' : 'Claude');
+      : (_arcEngineFilter === 'kimi' ? 'Kimi' : (_arcEngineFilter === 'devin' ? 'Devin' : 'Claude'));
     const _trashConvs = _archivedConvs.filter(c => !!c.trashed);
     const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);
     const _allTabUnfilteredConvs = _sessionConvs.concat(
@@ -30286,6 +30286,7 @@
           + _arcEngineButton('claude', 'Claude', getEngineSvg('claude'))
           + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
           + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
+          + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
         + '</span>';
       const _arcTools = (_arcWindowToggle || _arcEngineToggle || _arcGroupingToggle || _arcExpandAllToggle)
         ? '<div class="conv-archived-tools" data-role="archived-tools">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcExpandAllToggle + '</div>'
