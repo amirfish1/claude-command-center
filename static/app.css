@@ -22710,15 +22710,52 @@ a.q2-toggle-opt:hover { color: var(--text); background: var(--surface-2); }
   margin: 8px 12px 0;
 }
 
-/* ── Phone session-panel rows (≤600px) ───────────────────────────────
-   Companion to the phone header tidy-up above; placed at end of file
-   because the base .new-session-panel rules declare flex-wrap: nowrap
-   and equal-specificity ties resolve by source order. On a phone the
-   single nowrap row clipped the group-chat button mid-label
-   ("lew Group c"); give each row its own full-width line. */
+/* ── Phone chrome condense (≤600px) ──────────────────────────────────
+   The sidebar is a pure flex column and #convList is flex:1, so every
+   pixel of chrome above/below the list subtracts 1:1 from list height.
+   On phones, squeeze the chrome so many more conversations fit:
+   - tabs / header / status chip: tighter padding, hide the "Last
+     updated · check for updates · what's new" line (the same actions
+     live in Settings);
+   - the new-session panel becomes ONE line — [+ New session][search]
+     [+ Group][▶][≡] — instead of two full-width rows (the group-chat
+     label shortens to "+ Group"; the search input and buttons shrink
+     via their flex-basis on very narrow screens);
+   - filter tab bars and the in-progress tools row lose padding;
+   - footer collapses to a single scrollable line (the pill shrink lives
+     in the __pollerStripStyle media block in app.js, which must win
+     over the pills' inline styles).
+   Placed at end of file because the base .new-session-panel rules
+   declare flex-wrap: nowrap and equal-specificity ties resolve by
+   source order. */
 @media (max-width: 600px) {
-  .new-session-panel { flex-wrap: wrap; }
+  .q2-toggle { margin: 3px 10px 0; }
+  .q2-toggle-opt { padding: 2px 8px; font-size: 10.5px; line-height: 13px; }
+
+  .sidebar-header { padding: 4px 10px; gap: 4px; }
+  .sidebar-header-actions .sh-btn { width: 26px; height: 26px; }
+  .sidebar-header-brand .sh-meta-row { display: none; }
+  .sh-service-badges { margin: 1px 0 0; }
+  .sh-status-chip { margin: 1px 0 0; padding: 2px 7px 2px 5px; }
+
+  .new-session-panel { flex-wrap: nowrap; padding: 5px 10px; gap: 4px; }
   .new-session-primary-row,
-  .new-session-secondary-row { flex: 1 1 100%; }
-  .new-session-secondary-row #sidebarNewGroupChatBtn { flex: 1 1 auto; }
+  .new-session-secondary-row { flex: 0 1 auto; gap: 4px; }
+  .new-session-btn { padding: 5px 8px; font-size: 12px; gap: 4px; }
+  .new-session-secondary-row .new-session-icon-btn {
+    flex: 0 0 28px; width: 28px; height: 28px; font-size: 12px;
+  }
+  #sidebarNewGroupChatBtn { flex: 0 1 auto; font-size: 0; }
+  #sidebarNewGroupChatBtn .plus { font-size: 12px; }
+  #sidebarNewGroupChatBtn::after { content: " Group"; font-size: 12px; }
+  .conv-search-input { padding: 4px 24px 4px 8px; font-size: 12px; }
+
+  .conv-tab-bar { padding: 3px 4px 0; margin-bottom: 3px; }
+  .conv-tab { padding: 4px 3px 5px; }
+  .conv-all-hermes-tabs { margin: 1px 4px 4px; padding: 1px; }
+  .conv-all-hermes-tab { padding: 3px 6px; }
+  #convList .conv-inprogress-toolbar { padding: 3px 6px; gap: 4px; }
+
+  .sidebar-footer { padding: 3px 6px; }
+  .sidebar-footer-btn { width: 26px; height: 26px; }
 }

@@ -1178,7 +1178,17 @@
         '.pstrip-dot.blink{animation:pstripBlink .5s ease-out;}' +
         '@keyframes pstripBlink{0%{box-shadow:0 0 0 0 rgba(90,170,100,.7);background:#7e9;}' +
         '100%{box-shadow:0 0 0 6px rgba(90,170,100,0);background:#5a6;}}' +
-        '.pstrip-ago{opacity:.7;}';
+        '.pstrip-ago{opacity:.7;}' +
+        /* Phones: one horizontally-scrollable line of pills instead of 3-4
+           wrapped rows — the wrapped footer ate ~90px of conversation-list
+           height. !important beats the inline styles on the pills. */
+        '@media (max-width:600px){' +
+        '#pollerWrap{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;gap:2px 6px;padding:0 4px;}' +
+        '#pollerWrap::-webkit-scrollbar{display:none;}' +
+        '#cccHealth{gap:4px;font-size:9px;}' +
+        '#pollerToggle,#cccSoundToggle{font-size:9px !important;padding:1px 4px !important;}' +
+        '#cccAdvisorPill,#cccProductivityPill,#cccThroughputPill,#cccFleetPill{' +
+        'font-size:10px !important;padding:2px 6px !important;gap:3px !important;}}';
       document.head.appendChild(st);
     }
     // Wrapper: [ health metrics ] [ ⚡N toggle ] [ collapsible trigger strip ].
@@ -63691,7 +63701,7 @@
          strip already opens the dashboard on tap) and let the rest
          side-scroll instead of colliding. */
       '@media (max-width:600px){' +
-        '#cccThroughputStrip{overflow-x:auto;scrollbar-width:none;}' +
+        '#cccThroughputStrip{overflow-x:auto;scrollbar-width:none;padding:2px 8px;min-height:22px;gap:6px;margin:0;}' +
         '#cccThroughputStrip::-webkit-scrollbar{display:none;}' +
         '#cccThroughputStrip .ts-yd{display:none;}}' +
       '@media (max-width:480px){#cccThroughputStrip .ts-spark{display:none;}}';
