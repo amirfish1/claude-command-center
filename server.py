@@ -22603,6 +22603,8 @@ def _conv_parse_jsonl_mtime(conversation_id, repo_path=None):
             resolved = _antigravity_transcript_path(conversation_id)
         elif _is_hermes_session(conversation_id):
             return _hermes_cache_key()
+        elif _is_devin_cli_session(conversation_id):
+            return _devin_cli_cache_key()
         else:
             resolved, _ = _resolve_conversation_reader(conversation_id, repo_path=repo_path)
         if resolved and Path(resolved).is_file():
@@ -64235,6 +64237,64 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self.wfile.write(b"event: keepalive\ndata: {}\n\n")
                 self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            return
+        if _is_devin_session(conversation_id) and not _is_devin_cli_session(conversation_id):
+            # Cloud Devin: transcripts arrive via the REST API with TTL-based
+            # disk caching (see _devin_session_detail). No file to tail, so the
+            # SSE stream is keepalive-only — the frontend re-fetches via HTTP
+            # on its normal refresh paths.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            return
+        if _is_devin_cli_session(conversation_id):
+            # Local CLI: transcripts live in a SQLite DB. Poll the DB's
+            # (mtime_ns, size) cache key and re-parse when it changes — same
+            # pattern as the Gemini/Antigravity file-mtime path below, but
+            # keyed on the DB sidecars so writes from a parallel terminal
+            # (WAL flushes) are detected. Without this the SSE endpoint
+            # fell through to _resolve_conversation_reader, which can't
+            # resolve a SQLite-backed session to a file path, returned 404,
+            # and the frontend retried forever without ever getting events.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            last_keepalive = time.time()
+            last_key = None
+            try:
+                while True:
+                    cur_key = _devin_cli_cache_key()
+                    if cur_key != last_key:
+                        last_key = cur_key
+                        result = _parse_devin_cli_conversation(
+                            conversation_id, after_line=after_line
+                        )
+                        events = result.get("events") or []
+                        if events:
+                            after_line = result.get("last_line") or after_line
+                            payload = {"events": events, "last_line": after_line}
+                            self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+                            self.wfile.flush()
+                            last_keepalive = time.time()
+                            time.sleep(0.5)
+                            continue
+                    now = time.time()
+                    if now - last_keepalive >= 5:
+                        self.wfile.write(b"event: keepalive\ndata: {}\n\n")
+                        self.wfile.flush()
+                        last_keepalive = now
+                    time.sleep(0.5)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
             return

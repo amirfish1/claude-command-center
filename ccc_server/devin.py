@@ -599,6 +599,30 @@ def _devin_cli_session_live(raw_id):
         return False
 
 
+def _devin_cli_cache_key():
+    """(mtime_ns, size) across the sessions DB + its WAL/SHM sidecars.
+
+    Used as a cache key for the parse cache and the pre-serialized response
+    bytes cache — same role as ``_hermes_db_cache_key`` for Hermes. Without
+    this, Devin CLI sessions return ``(0, 0)`` from
+    ``_conv_parse_jsonl_mtime`` and every cache layer bails out, so the
+    SSE stream falls through to the file-based path (which 404s) and the
+    conversation text never refreshes while a terminal writes in parallel.
+    """
+    mtime_ns = 0
+    size = 0
+    for p in (DEVIN_CLI_SESSIONS_DB,
+              Path(str(DEVIN_CLI_SESSIONS_DB) + "-wal"),
+              Path(str(DEVIN_CLI_SESSIONS_DB) + "-shm")):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        mtime_ns = max(mtime_ns, st.st_mtime_ns)
+        size += st.st_size
+    return (mtime_ns, size)
+
+
 def find_devin_cli_conversations(
     repo_path=None,
     include_old=False,
