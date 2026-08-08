@@ -2202,6 +2202,10 @@ def extract_session_usage(session_id):
         return _with_token_optimizer_quality(_core._extract_hermes_usage(session_id), session_id)
     if _core._is_kimi_session(session_id):
         return _with_token_optimizer_quality(_extract_kimi_usage(session_id), session_id)
+    if _core._is_devin_cli_session(session_id):
+        result = _core._extract_devin_cli_usage(session_id)
+        result.setdefault("engine", "devin")
+        return _with_token_optimizer_quality(result, session_id)
     desktop_meta = _core._load_desktop_app_metadata().get(session_id) or {}
     if not _core.PROJECTS_ROOT.is_dir():
         return _with_token_optimizer_quality({**empty, "model": desktop_meta.get("model") or ""}, session_id)

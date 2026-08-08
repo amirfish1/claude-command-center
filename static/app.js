@@ -4251,6 +4251,7 @@
     const isGemini = sess.source === 'gemini';
     const isCursor = sess.source === 'cursor';
     const isAntigravity = sess.source === 'antigravity';
+    const isDevinCli = sess.source === 'devin-cli';
     const canJump = live && liveStatus.tty && liveStatus.terminalApp;
     const canShowLaunch = !!sid && !isPkood;
 
@@ -4291,7 +4292,9 @@
         btn.title = isCodex ? 'Open a Terminal window and run codex resume'
           : (isGemini ? 'Open a Terminal window and run gemini --resume'
             : (isCursor ? 'Open a Terminal window and run cursor-agent --resume'
-              : (isAntigravity ? 'Open AGY in Terminal; use /resume inside the TUI' : 'Open a Terminal window and run claude --resume')));
+              : (isAntigravity ? 'Open AGY in Terminal; use /resume inside the TUI'
+                : (isDevinCli ? 'Open a Terminal window and run devin --resume'
+                  : 'Open a Terminal window and run claude --resume'))));
         btn.querySelector('.jump-label').textContent = 'Launch';
         renderLaunchChoiceMenu($launchChoiceMenuConv);
       } else {

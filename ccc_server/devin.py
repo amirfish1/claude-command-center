@@ -871,3 +871,88 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
     else:
         visible = events
     return {"events": visible, "last_line": line}
+
+
+DEVIN_CLI_CONTEXT_LIMIT = 200_000
+
+
+def _extract_devin_cli_usage(session_id):
+    """Token usage for a Devin CLI session, read from the SQLite DB.
+
+    Assistant messages carry ``metadata.metrics`` with input/output/cache
+    token counts. We sum across all assistant turns and track the peak
+    input window — same shape as ``_extract_gemini_usage`` etc.
+    """
+    empty = {
+        "latest_input_tokens": 0,
+        "peak_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_input_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "model": "",
+        "context_limit": DEVIN_CLI_CONTEXT_LIMIT,
+        "cost_usd": 0.0,
+        "cost_breakdown_usd": {"input": 0.0, "cache_creation": 0.0,
+                               "cache_read": 0.0, "output": 0.0},
+    }
+    raw_id = _devin_cli_raw_id(session_id)
+    if not raw_id:
+        return empty
+    con = _devin_cli_connect()
+    if con is None:
+        return empty
+    latest = 0
+    peak = 0
+    total_in = 0
+    total_out = 0
+    total_cache_read = 0
+    total_cache_creation = 0
+    model = ""
+    try:
+        for row in con.execute(
+            "SELECT chat_message FROM message_nodes "
+            "WHERE session_id = ? ORDER BY node_id",
+            (raw_id,),
+        ):
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").lower() != "assistant":
+                continue
+            meta = msg.get("metadata") or {}
+            metrics = meta.get("metrics") or {}
+            if not isinstance(metrics, dict):
+                continue
+            in_tok = metrics.get("input_tokens") or 0
+            out_tok = metrics.get("output_tokens") or 0
+            cache_read = metrics.get("cache_read_tokens") or 0
+            cache_creation = metrics.get("cache_creation_tokens") or 0
+            if in_tok:
+                latest = in_tok
+                peak = max(peak, in_tok)
+            total_in += max(in_tok - cache_read, 0)
+            total_out += out_tok
+            total_cache_read += cache_read
+            total_cache_creation += cache_creation
+            gm = meta.get("generation_model")
+            if gm:
+                model = gm
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return {
+        **empty,
+        "latest_input_tokens": latest,
+        "peak_input_tokens": peak,
+        "total_output_tokens": total_out,
+        "total_input_tokens": total_in,
+        "total_cache_read_tokens": total_cache_read,
+        "total_cache_creation_tokens": total_cache_creation,
+        "model": model,
+        "override": _core._get_session_override(session_id),
+    }
