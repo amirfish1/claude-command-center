@@ -23,6 +23,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server.errlog import log_swallowed
 
 # ---------------------------------------------------------------------------
 # GitHub issues
@@ -410,7 +411,7 @@ def _save_ship_acks(acks):
         tmp.write_text(json.dumps(acks, indent=2))
         os.replace(tmp, SHIP_ACKS_FILE)
     except OSError:
-        pass
+        log_swallowed("persist ship acks")
 
 
 # session_id -> {ts, sig} of last reply (see above). Loaded from disk.

@@ -99,6 +99,11 @@ Read `SECURITY.md` before changing anything about network binding, origin checks
 - Flow workspace work (`#flowBoard`, `static/app.js`, `static/app.css`) has
   maintainer notes in `.claude/rules/flow-workspace.md`.
 - `hooks/` scripts run inside agent hook pipelines — they must exit fast and never prompt.
+- Best-effort handlers stay best-effort, but they don't stay silent: use
+  `log_swallowed("short stable context")` from `ccc_server/errlog.py` (hooks
+  import it via `hooks/_errlog.py`) instead of a bare `pass`. It rate-limits
+  per context so a per-request failure can't flood the log. `CCC_QUIET_ERRORS=1`
+  mutes it; `CCC_DEBUG=1` adds tracebacks.
 - Multiple CCC instances are allowed only across DIFFERENT repos (multi-repo
   peers, discovered via `registry.json`). At startup `main()` refuses to
   launch a second instance of the SAME repo (matched by git common-dir, which
