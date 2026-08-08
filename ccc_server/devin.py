@@ -28,6 +28,7 @@ import os
 import shlex
 import shutil
 import sqlite3
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -62,6 +63,23 @@ DEVIN_CLI_SESSIONS_DB = DEVIN_CLI_HOME / "sessions.db"
 DEVIN_CLI_LOCKS_DIR = DEVIN_CLI_HOME / "session_locks"
 _DEVIN_CLI_ID_CACHE = {"key": None, "ids": set(), "mtime": 0}
 
+# In-memory incremental parse cache for local CLI sessions. Devin CLI stores
+# every turn (including context rebuilds) in message_nodes, so a long session
+# can have thousands of rows. Re-parsing the whole table on every SSE poll is
+# O(n) and visibly slow. The cache stores the already-parsed events and a
+# (role, content) dedup set so subsequent calls read only newly appended rows.
+# Key: raw Devin CLI session id. Bounded and LRU-evicted by access time.
+_DEVIN_CLI_PARSE_CACHE = {}
+_DEVIN_CLI_PARSE_CACHE_LOCK = threading.Lock()
+_DEVIN_CLI_PARSE_CACHE_MAX = 64
+
+# In-memory session-list cache for the local CLI backend. Opening the Devin
+# CLI sessions DB can take multiple seconds when the DB is large and the WAL
+# is huge, so we avoid reconnecting on every sidebar refresh/poll. The cache
+# invalidates whenever the DB (or its WAL/SHM sidecars), the lock files, or
+# the lifecycle side-car files change.
+_DEVIN_CLI_LIST_CACHE = {"key": None, "rows": None}
+_DEVIN_CLI_LIST_CACHE_LOCK = threading.Lock()
 
 def _devin_api_key():
     """Personal Devin API key from the environment, or None when unset."""
@@ -288,6 +306,75 @@ def _is_devin_session(session_id):
     return isinstance(session_id, str) and session_id.startswith(DEVIN_SESSION_PREFIX)
 
 
+def _devin_cloud_repo_folder(s, title, first_message, repo_name_map, pinned=None):
+    """Best-effort repo folder for a Devin cloud session.
+
+    Cloud sessions carry no local cwd. We infer a project from:
+      1. an explicit repo pin (highest priority),
+      2. a linked GitHub PR URL (parsed to owner/repo),
+      3. the session title / first user message matching a known repo name.
+
+    Returns (folder_path, folder_label, folder_label_chip, pinned_repo)."""
+    if pinned:
+        folder_path = str(pinned)
+        return (
+            folder_path,
+            _core._resolve_dir_case(folder_path) or Path(folder_path).name,
+            "",
+            True,
+        )
+
+    matched_path = None
+    matched_name = ""
+
+    pr_url = str((s.get("pull_request") or {}).get("url") or "").strip()
+    if pr_url:
+        m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/\d+", pr_url)
+        if m:
+            repo_name = m.group(2)
+            matched_path = repo_name_map.get(repo_name)
+            if matched_path:
+                matched_name = repo_name
+
+    if not matched_path:
+        text = f"{title or ''} {first_message or ''}".strip().lower()
+        if text:
+            # Longest repo-name first so multi-word names win over substrings.
+            for name, path in sorted(
+                repo_name_map.items(), key=lambda kv: len(kv[0]), reverse=True
+            ):
+                if re.search(r"\b" + re.escape(name.lower()) + r"\b", text):
+                    matched_path = path
+                    matched_name = name
+                    break
+
+        if not matched_path:
+            # Prefix match: title words like "STRAMP" can map to "stramp-platform".
+            words = re.findall(r"[a-z0-9]+(?:[._+\-][a-z0-9]+)*", text)
+            for word in words:
+                if len(word) < 3:
+                    continue
+                for name, path in sorted(
+                    repo_name_map.items(), key=lambda kv: len(kv[0]), reverse=True
+                ):
+                    name_lower = name.lower()
+                    if name_lower.startswith(word):
+                        matched_path = path
+                        matched_name = name
+                        break
+                if matched_path:
+                    break
+
+    if matched_path:
+        return (
+            matched_path,
+            _core._resolve_dir_case(matched_path) or Path(matched_path).name,
+            "",
+            False,
+        )
+    return "", "Devin", "Devin", False
+
+
 def find_devin_conversations(
     repo_path=None,
     include_old=False,
@@ -297,10 +384,13 @@ def find_devin_conversations(
 ):
     """Discover Devin cloud sessions via the v1 API (DEVIN_API_KEY).
 
-    Cloud Devin sessions have no local cwd, so they are not naturally repo-bound.
-    The only way they can appear inside a per-repo view is when the user has
-    pinned them to that repo. In the global archive they continue to group under
-    a "Devin" engine folder. No API key (or any API failure) → []."""
+    Cloud sessions carry no local cwd, so they are not naturally repo-bound. We
+    try to put them in the right project folder by:
+      1. an explicit repo pin,
+      2. a linked GitHub PR URL,
+      3. the session title matching a known repo name.
+    Anything we can't place stays in a "Devin" engine bucket. No API key (or
+    any API failure) → []."""
     if not _devin_api_key():
         return []
     sessions = _devin_list_sessions()
@@ -333,6 +423,16 @@ def find_devin_conversations(
         except Exception:
             return []
 
+    try:
+        known_repos = list(_core._load_recent_repos()) + list(_core._load_custom_repos())
+    except Exception:
+        known_repos = []
+    repo_name_map = {}
+    for p in known_repos:
+        name = str(Path(p).name)
+        if name and name not in repo_name_map:
+            repo_name_map[name] = p
+
     cutoff = _core._session_scan_cutoff_ts(include_old)
     max_rows = _core._session_scan_file_limit(include_old)
     sessions.sort(
@@ -349,17 +449,6 @@ def find_devin_conversations(
         # The v1 API already returns ids with the "devin-" prefix; only add
         # it when absent so we never produce "devin-devin-...".
         sid = raw_id if raw_id.startswith(DEVIN_SESSION_PREFIX) else DEVIN_SESSION_PREFIX + raw_id
-        pinned = repo_pins.get(sid)
-        if repo_only:
-            if not pinned or pinned != repo_path:
-                continue
-        created = _devin_epoch(s.get("created_at"))
-        modified = _devin_epoch(s.get("updated_at")) or created
-        freshness = max(modified, last_interactions.get(sid) or 0)
-        if not include_old and cutoff > 0 and freshness < cutoff:
-            continue
-        if not include_old and max_rows > 0 and len(out) >= max_rows:
-            continue
         title = _core._strip_ccc_session_state_instruction(
             str(s.get("title") or "")
         ).strip()
@@ -382,19 +471,30 @@ def find_devin_conversations(
         )
         status = _devin_status(s)
         is_live = status in _DEVIN_ACTIVE_STATUSES
-        # Cloud sessions are not repo-bound unless explicitly pinned. Keep the
-        # pinned ones in their repo group; everything else stays under the
-        # engine-specific "Devin" bucket in the global archive.
-        if pinned:
-            folder_path = str(pinned)
-            folder_label = _core._resolve_dir_case(folder_path) or Path(folder_path).name
-            folder_label_chip = ""
-            pinned_repo = True
-        else:
-            folder_path = ""
-            folder_label = "Devin"
-            folder_label_chip = "Devin"
-            pinned_repo = False
+        pinned = repo_pins.get(sid)
+        folder_path, folder_label, folder_label_chip, pinned_repo = _devin_cloud_repo_folder(
+            s, title, first_message, repo_name_map, pinned=pinned
+        )
+        if repo_only:
+            if pinned:
+                if pinned != repo_path:
+                    continue
+            elif not folder_path:
+                continue
+            else:
+                try:
+                    if Path(folder_path).resolve() != Path(repo_path).resolve():
+                        continue
+                except OSError:
+                    if folder_path != repo_path:
+                        continue
+        created = _devin_epoch(s.get("created_at"))
+        modified = _devin_epoch(s.get("updated_at")) or created
+        freshness = max(modified, last_interactions.get(sid) or 0)
+        if not include_old and cutoff > 0 and freshness < cutoff:
+            continue
+        if not include_old and max_rows > 0 and len(out) >= max_rows:
+            continue
         out.append({
             "id": sid,
             "session_id": sid,
@@ -652,6 +752,123 @@ def _devin_cli_cache_key():
     return (mtime_ns, size)
 
 
+def _devin_cli_lock_set():
+    """Set of raw session IDs that currently hold a Devin CLI lock file.
+
+    Enumerating the lock directory once is cheaper than ``is_file()`` per row
+    and also gives us a stable cache-key component for the session list."""
+    try:
+        return frozenset(
+            p.name[:-5]
+            for p in DEVIN_CLI_LOCKS_DIR.iterdir()
+            if p.suffix == ".lock" and len(p.name) > 5
+        )
+    except OSError:
+        return frozenset()
+
+
+def _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit):
+    """Composite cache key for ``find_devin_cli_conversations``.
+
+    Covers every input that can change the returned rows without touching the
+    SQLite DB: the DB state itself, running-session lock files, and CCC-side
+    lifecycle/name/verification/pin side-car files."""
+    parts = [_devin_cli_cache_key(), _devin_cli_lock_set()]
+    for f in (
+        _core.SESSION_NAMES_FILE,
+        _core.ARCHIVED_CONVERSATIONS_FILE,
+        _core.TRASHED_CONVERSATIONS_FILE,
+        _core.VERIFIED_CONVERSATIONS_FILE,
+        _core.LAST_INTERACTIONS_FILE,
+        _core.PINNED_CONVERSATIONS_FILE,
+    ):
+        try:
+            parts.append(f.stat().st_mtime_ns)
+        except OSError:
+            parts.append(0)
+    parts.append((repo_path, bool(include_old), bool(repo_only), limit))
+    return tuple(parts)
+
+
+def _devin_cli_profile_log(label, duration_s, detail=""):
+    """Append a timing sample to the Devin CLI diagnostic profile log.
+
+    Log lives in ``<COMMAND_CENTER_STATE_DIR>/devin_cli_profile.log`` so the
+    user and agent can inspect it after a slow load. Writes are best-effort;
+    profiling never raises."""
+    try:
+        log_path = _core.COMMAND_CENTER_STATE_DIR / "devin_cli_profile.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            f.write(f"{ts} {label} {duration_s:.6f}s {detail}\n")
+    except Exception:
+        pass
+
+
+def _devin_cli_first_prompts_from_history(con, raw_ids):
+    """Batch lookup of the first non-shell user prompt per session.
+
+    Replaces the per-session prompt_history query that made session-list
+    refresh O(number_of_sessions). Returns {raw_id: content}."""
+    if not raw_ids:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    first_prompts = {}
+    try:
+        query = (
+            f"SELECT session_id, content, MIN(timestamp) AS ts "
+            f"FROM prompt_history WHERE session_id IN ({placeholders}) "
+            f"AND is_shell = 0 GROUP BY session_id"
+        )
+        for row in con.execute(query, raw_ids):
+            sid = str(row["session_id"] or "").strip()
+            if sid:
+                first_prompts[sid] = str(row["content"] or "").strip()
+    except sqlite3.Error:
+        pass
+    return first_prompts
+
+
+def _devin_cli_first_messages_from_nodes(con, raw_ids):
+    """Fallback batch parse of the earliest user input per session.
+
+    Imported/resumed sessions can have transcript turns in message_nodes but
+    no prompt_history row. Parses in node_id order and stops at the first user
+    message marked as actual user input for each session.
+    Returns {raw_id: content}."""
+    if not raw_ids:
+        return {}
+    placeholders = ",".join("?" * len(raw_ids))
+    first_messages = {}
+    try:
+        query = (
+            f"SELECT session_id, chat_message FROM message_nodes "
+            f"WHERE session_id IN ({placeholders}) ORDER BY session_id, node_id"
+        )
+        for row in con.execute(query, raw_ids):
+            sid = str(row["session_id"] or "").strip()
+            if not sid or sid in first_messages:
+                continue
+            try:
+                msg = json.loads(row["chat_message"])
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").strip().lower() != "user":
+                continue
+            meta = msg.get("metadata") or {}
+            if not meta.get("is_user_input"):
+                continue
+            text = str(msg.get("content") or "").strip()
+            if text:
+                first_messages[sid] = text
+    except sqlite3.Error:
+        pass
+    return first_messages
+
+
 def find_devin_cli_conversations(
     repo_path=None,
     include_old=False,
@@ -663,10 +880,27 @@ def find_devin_cli_conversations(
 
     Sessions are repo-scoped (each has a working_directory). When repo_path is
     given, only sessions in that repo (or a subdirectory of it) are returned.
-    No DB (or any API failure) → []."""
-    con = _devin_cli_connect()
-    if con is None:
-        return []
+    No DB (or any API failure) → [].
+
+    The result is cached in memory: opening the Devin CLI sessions DB can take
+    multiple seconds when the DB is large, so we avoid reconnecting on every
+    sidebar refresh. The cache invalidates when the DB/WAL/SHM, lock files, or
+    CCC lifecycle side-car files change."""
+    start = time.perf_counter()
+    cache_key = _devin_cli_list_cache_key(repo_path, include_old, repo_only, limit)
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        cached = _DEVIN_CLI_LIST_CACHE
+        if cached.get("key") == cache_key:
+            rows = cached.get("rows")
+            if rows is not None:
+                elapsed = time.perf_counter() - start
+                _devin_cli_profile_log(
+                    "find_devin_cli_conversations",
+                    elapsed,
+                    f"rows={len(rows)} repo_only={repo_only} cached",
+                )
+                return list(rows)
+
     try:
         name_overrides = _core._load_session_name_overrides()
     except Exception:
@@ -688,6 +922,11 @@ def find_devin_cli_conversations(
     except Exception:
         repo_pins = {}
 
+    con = _devin_cli_connect()
+    if con is None:
+        _devin_cli_profile_log("find_devin_cli_conversations", 0, "no_db")
+        return []
+
     cutoff = _core._session_scan_cutoff_ts(include_old)
     max_rows = _core._session_scan_file_limit(include_old)
 
@@ -699,10 +938,12 @@ def find_devin_cli_conversations(
             resolved_repo_path = _core.resolve_repo_path(repo_path)
             repo_path_obj = Path(resolved_repo_path)
         except Exception:
+            con.close()
             return []
 
     rows = []
     try:
+        lock_set = _devin_cli_lock_set()
         query = (
             "SELECT id, working_directory, backend_type, model, agent_mode, "
             "created_at, last_activity_at, title, main_chain_id "
@@ -737,57 +978,11 @@ def find_devin_cli_conversations(
                 str(row["title"] or "")
             ).strip()
             model = str(row["model"] or "")
-            # Read first user message from prompt_history for first_message.
-            # Resumed/imported sessions can have real conversation turns in
-            # message_nodes but no prompt_history row (the CLI's prompt box
-            # was never used to start them) — fall back there so the row
-            # doesn't show [EMPTY] despite having a transcript.
+            # first_message/display_name are filled in after the loop via one
+            # batched prompt_history query (plus a message_nodes fallback).
             first_message = ""
-            try:
-                ph_row = con.execute(
-                    "SELECT content FROM prompt_history "
-                    "WHERE session_id = ? AND is_shell = 0 "
-                    "ORDER BY timestamp ASC LIMIT 1",
-                    (raw_id,),
-                ).fetchone()
-                if ph_row:
-                    first_message = str(ph_row["content"] or "").strip()
-            except sqlite3.Error:
-                pass
-            if not first_message:
-                try:
-                    for mn_row in con.execute(
-                        "SELECT chat_message FROM message_nodes "
-                        "WHERE session_id = ? ORDER BY node_id ASC",
-                        (raw_id,),
-                    ):
-                        try:
-                            msg = json.loads(mn_row["chat_message"])
-                        except (ValueError, TypeError):
-                            continue
-                        if not isinstance(msg, dict):
-                            continue
-                        if str(msg.get("role") or "").strip().lower() != "user":
-                            continue
-                        meta = msg.get("metadata") or {}
-                        if not meta.get("is_user_input"):
-                            continue
-                        text = str(msg.get("content") or "").strip()
-                        if text:
-                            first_message = text
-                            break
-                except sqlite3.Error:
-                    pass
-            first_message = _core._strip_ccc_session_state_instruction(
-                first_message
-            ).strip()
-            display_name = (
-                name_overrides.get(sid)
-                or _core._truncate_session_name(title)
-                or (first_message[:80] if first_message else None)
-                or f"Devin session {raw_id[:12]}"
-            )
-            is_live = _devin_cli_session_live(raw_id)
+            display_name = ""
+            is_live = raw_id in lock_set
 
             # Resolve the session's folder the same way other CLI engines do:
             # honor a repo pin, walk up to the git root for the label, and split
@@ -822,6 +1017,8 @@ def find_devin_cli_conversations(
                 except OSError:
                     pass
             rows.append({
+                "_raw_id": raw_id,
+                "_title": title,
                 "id": sid,
                 "session_id": sid,
                 "source": "devin-cli",
@@ -880,6 +1077,34 @@ def find_devin_cli_conversations(
                 "reasoning_effort": "",
                 "session_url": None,
             })
+
+        # Batch the first-message lookup instead of issuing one query per
+        # session. The helper uses SQLite's bare-column-in-aggregate behavior
+        # to return the content from the row that achieved MIN(timestamp).
+        if rows:
+            raw_ids = [r["_raw_id"] for r in rows]
+            first_prompts = _devin_cli_first_prompts_from_history(con, raw_ids)
+            missing_ids = [rid for rid in raw_ids if rid not in first_prompts]
+            first_messages = _devin_cli_first_messages_from_nodes(con, missing_ids)
+            for r in rows:
+                raw_id = r.pop("_raw_id", "")
+                title = r.pop("_title", "")
+                sid = r["session_id"]
+                first_message = (
+                    first_prompts.get(raw_id, "") or first_messages.get(raw_id, "")
+                )
+                first_message = _core._strip_ccc_session_state_instruction(
+                    first_message
+                ).strip()
+                display_name = (
+                    name_overrides.get(sid)
+                    or _core._truncate_session_name(title)
+                    or (first_message[:80] if first_message else None)
+                    or f"Devin session {raw_id[:12]}"
+                )
+                r["first_message"] = first_message[:200]
+                r["display_name"] = display_name
+                r["last_prompt"] = first_message[:200]
     except sqlite3.Error:
         pass
     finally:
@@ -890,7 +1115,49 @@ def find_devin_cli_conversations(
     )
     if limit and limit > 0:
         rows = rows[:int(limit)]
+    with _DEVIN_CLI_LIST_CACHE_LOCK:
+        _DEVIN_CLI_LIST_CACHE["key"] = cache_key
+        _DEVIN_CLI_LIST_CACHE["rows"] = rows
+    elapsed = time.perf_counter() - start
+    _devin_cli_profile_log(
+        "find_devin_cli_conversations",
+        elapsed,
+        f"rows={len(rows)} repo_only={repo_only}",
+    )
     return rows
+
+
+def _devin_cli_parse_message_row(chat_message, created_at, seen):
+    """Parse one message_nodes row into (role, text, ts_str) or None.
+
+    Reuses the existing dedup ``seen`` set so incremental parses stay
+    consistent with a full parse. Unknown / skipped shapes return None."""
+    try:
+        msg = json.loads(chat_message)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(msg, dict):
+        return None
+    role = str(msg.get("role") or "").strip().lower()
+    if role not in ("user", "assistant"):
+        return None
+    text = str(msg.get("content") or "").strip()
+    if not text:
+        return None
+    # Skip system-injected user messages (context rebuilds) — only keep
+    # actual user input. Assistant messages have no is_user_input flag.
+    if role == "user":
+        meta = msg.get("metadata") or {}
+        if not meta.get("is_user_input"):
+            return None
+    dedup_key = (role, text)
+    if dedup_key in seen:
+        return None
+    seen.add(dedup_key)
+    ts_raw = msg.get("metadata", {}).get("created_at") or created_at
+    ts = _devin_epoch(ts_raw)
+    ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
+    return role, text, ts_str
 
 
 def _parse_devin_cli_conversation(session_id, after_line=0):
@@ -898,53 +1165,38 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
 
     Reads user and assistant messages from the message_nodes table, deduped
     by content (the CLI rebuilds context each turn, producing duplicates).
+    Uses an in-memory incremental cache so only newly appended SQLite rows
+    are parsed on subsequent calls — long sessions no longer re-parse the
+    entire message_nodes table on every SSE poll.
     line = number of messages consumed, matching the other adapters'
     after_line semantics. Unknown shapes are skipped, never fatal."""
+    start = time.perf_counter()
     raw_id = _devin_cli_raw_id(session_id)
     if not raw_id:
+        _devin_cli_profile_log("parse_devin_cli_conversation", 0, "no_raw_id")
         return {"events": [], "last_line": 0}
     con = _devin_cli_connect()
     if con is None:
+        _devin_cli_profile_log("parse_devin_cli_conversation", 0, "no_db")
         return {"events": [], "last_line": 0}
     events = []
     line = 0
-    seen = set()  # (role, content) dedup — the CLI duplicates context rebuilds
-    try:
-        for row in con.execute(
-            "SELECT node_id, chat_message, created_at "
-            "FROM message_nodes WHERE session_id = ? "
-            "ORDER BY node_id",
-            (raw_id,),
-        ):
-            try:
-                msg = json.loads(row["chat_message"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(msg, dict):
-                continue
-            role = str(msg.get("role") or "").strip().lower()
-            if role not in ("user", "assistant"):
-                continue
-            text = str(msg.get("content") or "").strip()
-            if not text:
-                continue
-            # Skip system-injected user messages (context rebuilds) — only
-            # keep actual user input. Assistant messages have no
-            # is_user_input flag, so they pass through.
-            if role == "user":
-                meta = msg.get("metadata") or {}
-                if not meta.get("is_user_input"):
-                    continue
-            dedup_key = (role, text)
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-            ts_raw = msg.get("metadata", {}).get("created_at") or row["created_at"]
-            ts = _devin_epoch(ts_raw)
-            ts_str = (
-                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)) if ts else ""
+    seen = set()
+    max_row_id = 0
+    db_key = _devin_cli_cache_key()
+    was_incremental = False
+
+    def _append_rows(rows):
+        nonlocal line, max_row_id
+        for row in rows:
+            parsed = _devin_cli_parse_message_row(
+                row["chat_message"], row["created_at"], seen
             )
+            if parsed is None:
+                continue
+            role, text, ts_str = parsed
             line += 1
+            max_row_id = max(max_row_id, row["row_id"])
             if role == "user":
                 events.append({
                     "line": line, "ts": ts_str, "type": "user_text",
@@ -956,14 +1208,111 @@ def _parse_devin_cli_conversation(session_id, after_line=0):
                     "message_id": f"devincli-{line}",
                     "blocks": [{"kind": "text", "text": text}],
                 })
+
+    try:
+        # Try to resume from the incremental cache. row_id is append-only on
+        # normal SQLite tables, so MAX(row_id) is a cheap per-session marker.
+        with _DEVIN_CLI_PARSE_CACHE_LOCK:
+            cached = _DEVIN_CLI_PARSE_CACHE.get(raw_id)
+
+        incremental = False
+        if cached and cached.get("max_row_id") and cached.get("db_key") == db_key:
+            row = con.execute(
+                "SELECT MAX(row_id) FROM message_nodes WHERE session_id = ?",
+                (raw_id,),
+            ).fetchone()
+            current_max_row_id = row[0] or 0
+            if current_max_row_id >= cached["max_row_id"]:
+                verify = con.execute(
+                    "SELECT 1 FROM message_nodes "
+                    "WHERE session_id = ? AND row_id = ?",
+                    (raw_id, cached["max_row_id"]),
+                ).fetchone()
+                if verify:
+                    events = list(cached["events"])
+                    seen = set(cached["seen"])
+                    line = cached["last_line"]
+                    max_row_id = cached["max_row_id"]
+                    incremental = True
+                    was_incremental = True
+
+        if incremental:
+            rows = con.execute(
+                "SELECT row_id, chat_message, created_at FROM message_nodes "
+                "WHERE session_id = ? AND row_id > ? ORDER BY row_id",
+                (raw_id, max_row_id),
+            )
+        else:
+            rows = con.execute(
+                "SELECT row_id, chat_message, created_at FROM message_nodes "
+                "WHERE session_id = ? ORDER BY row_id",
+                (raw_id,),
+            )
+        _append_rows(rows)
+
+        with _DEVIN_CLI_PARSE_CACHE_LOCK:
+            _DEVIN_CLI_PARSE_CACHE[raw_id] = {
+                "events": events,
+                "seen": seen,
+                "last_line": line,
+                "max_row_id": max_row_id,
+                "db_key": db_key,
+                "accessed": time.time(),
+            }
+            if len(_DEVIN_CLI_PARSE_CACHE) > _DEVIN_CLI_PARSE_CACHE_MAX:
+                oldest = min(
+                    _DEVIN_CLI_PARSE_CACHE.items(),
+                    key=lambda kv: kv[1].get("accessed", 0),
+                )[0]
+                _DEVIN_CLI_PARSE_CACHE.pop(oldest, None)
     except sqlite3.Error:
-        pass
+        # Fallback when row_id isn't available or the incremental probe fails:
+        # do a simple full parse ordered by node_id. Clears the stale cache.
+        events = []
+        line = 0
+        seen = set()
+        max_row_id = 0
+        try:
+            for row in con.execute(
+                "SELECT chat_message, created_at FROM message_nodes "
+                "WHERE session_id = ? ORDER BY node_id",
+                (raw_id,),
+            ):
+                parsed = _devin_cli_parse_message_row(
+                    row["chat_message"], row["created_at"], seen
+                )
+                if parsed is None:
+                    continue
+                role, text, ts_str = parsed
+                line += 1
+                if role == "user":
+                    events.append({
+                        "line": line, "ts": ts_str, "type": "user_text",
+                        "text": text, "images": [],
+                    })
+                else:
+                    events.append({
+                        "line": line, "ts": ts_str, "type": "assistant",
+                        "message_id": f"devincli-{line}",
+                        "blocks": [{"kind": "text", "text": text}],
+                    })
+            with _DEVIN_CLI_PARSE_CACHE_LOCK:
+                _DEVIN_CLI_PARSE_CACHE.pop(raw_id, None)
+        except sqlite3.Error:
+            pass
     finally:
         con.close()
     if after_line and after_line > 0:
         visible = [e for e in events if e["line"] > after_line]
     else:
         visible = events
+    elapsed = time.perf_counter() - start
+    _devin_cli_profile_log(
+        "parse_devin_cli_conversation",
+        elapsed,
+        f"sid={raw_id} incremental={was_incremental} events={len(events)} "
+        f"last_line={line} after_line={after_line}",
+    )
     return {"events": visible, "last_line": line}
 
 
