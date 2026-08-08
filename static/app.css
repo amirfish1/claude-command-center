@@ -4652,7 +4652,7 @@
        (10 → 12) for the Omnara-style breathing room — rows feel less
        cramped without losing scannable density. */
     padding: 6px 12px 6px var(--conv-content-left); border-radius: 6px; cursor: pointer;
-    margin-bottom: 0; transition: background 0.06s ease;
+    margin-bottom: 2px; transition: background 0.06s ease;
     border-left: 3px solid transparent;
     position: relative;
   }
@@ -6722,10 +6722,23 @@
   }
   #convList .conv-archived-section > .conv-archived-tools {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     flex-wrap: wrap;
     margin-left: 0;
     padding: 6px 8px;
+  }
+  /* Left slot only ever holds Expand/Collapse all; keeping it out of the
+     right-hand group means it can appear/disappear without shifting the
+     window/engine/grouping buttons. */
+  #convList .conv-archived-tools-left {
+    display: flex;
+    align-items: center;
+  }
+  #convList .conv-archived-tools-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   #convList .conv-inprogress-list > .conv-item {
     padding-left: 8px;

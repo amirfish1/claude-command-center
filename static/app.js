@@ -30305,8 +30305,18 @@
           + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
           + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
         + '</span>';
+      // Expand-all lives in its own left-hand slot, separate from the
+      // window/engine/grouping group on the right. It only renders when
+      // grouped by project with multiple folders, so its own slot can
+      // appear/disappear without shifting the right-hand group — keeping
+      // it inline with the others (all right-justified together) made the
+      // window/engine buttons visibly jump left/right when switching
+      // between "by time" and "by project".
       const _arcTools = (_arcWindowToggle || _arcEngineToggle || _arcGroupingToggle || _arcExpandAllToggle)
-        ? '<div class="conv-archived-tools" data-role="archived-tools">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + _arcExpandAllToggle + '</div>'
+        ? '<div class="conv-archived-tools" data-role="archived-tools">'
+          + '<span class="conv-archived-tools-left">' + _arcExpandAllToggle + '</span>'
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle + '</span>'
+          + '</div>'
         : '';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
