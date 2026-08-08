@@ -94,15 +94,43 @@
   }
   h1.hero-title .orange { color: var(--orange); }
   h1.hero-title .green { color: var(--green-bright); }
+  .hero-engine {
+    font-size: clamp(36px, 5.5vw, 64px);
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+    margin: 0 auto 28px;
+    max-width: 24ch;
+    color: var(--fg-dim);
+  }
+  .hero-engine .engine-line {
+    display: block;
+  }
+  .hero-engine .engine-word {
+    display: block;
+    font-weight: 800;
+    font-size: clamp(48px, 8vw, 96px);
+    line-height: 1;
+    letter-spacing: -0.03em;
+    margin: 8px 0;
+    overflow: hidden;
+    animation: engineSlideIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes engineSlideIn {
+    from { transform: translateY(100%); opacity: 0; }
+    to   { transform: translateY(0);   opacity: 1; }
+  }
+  /* Per-engine brand colors */
+  .hero-engine .engine-word.claude       { color: #d97757; }  /* Claude orange  */
+  .hero-engine .engine-word.codex        { color: #10a37f; }  /* Codex green    */
+  .hero-engine .engine-word.cursor       { color: #6b8cff; }  /* Cursor blue    */
+  .hero-engine .engine-word.antigravity  { color: #b388ff; }  /* Antigravity    */
+  .hero-engine .engine-word.kilo         { color: #f0b429; }  /* Kilo gold      */
+  .hero-engine .engine-word.kimi         { color: #e879f9; }  /* Kimi magenta   */
+  .hero-engine .engine-word.opencode     { color: #22d3ee; }  /* OpenCode cyan  */
+  .hero-engine .engine-word.devin        { color: #a78bfa; }  /* Devin purple   */
   .lede { font-size: 20px; color: var(--fg-dim); max-width: 62ch; margin: 0 auto 12px; }
   .lede .tag { color: var(--fg); }
-  .lede .tag .rotator {
-    display: inline-block;
-    color: var(--orange);
-    font-weight: 600;
-    min-width: 5.5em;
-    text-align: left;
-  }
   .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
   .hero .cta-row { margin-top: 24px; }
   .btn {
@@ -451,8 +479,13 @@
       <h1 class="hero-title fade-target">
         Your coding agents <span class="orange">outgrew</span> your terminal.
       </h1>
+      <div class="hero-engine fade-target">
+        <span class="engine-line">All your</span>
+        <span class="engine-word claude" id="engineRotator">Claude</span>
+        <span class="engine-line">sessions in one place.</span>
+      </div>
       <p class="lede fade-target">
-        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. <span class="tag">Start the next while <span class="rotator" id="engineRotator">Claude</span> builds the first.</span>
+        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. <span class="tag">Start the next while the first builds.</span>
       </p>
 
       <div class="cta-row fade-target">
@@ -1053,23 +1086,39 @@ brew install ccc</pre>
     frameVideos.forEach(v => videoObserver.observe(v));
   });
 
-  // Rotate the engine name in the hero tag — one word cycling through every
-  // engine CCC supports, so the list never goes stale as new engines are added.
+  // Rotate the engine name on its own line in the hero — one big word
+  // cycling through every engine CCC supports, each in its own brand color
+  // with a slide-up animation. The word sits on its own line between
+  // "All your" and "sessions in one place." so no width reservation is needed.
   (function() {
-    var engines = ['Claude', 'Codex', 'Cursor', 'Antigravity', 'Kilo', 'Kimi', 'OpenCode', 'Devin'];
+    var engines = [
+      { name: 'Claude',      cls: 'claude'      },
+      { name: 'Codex',       cls: 'codex'       },
+      { name: 'Cursor',      cls: 'cursor'      },
+      { name: 'Antigravity', cls: 'antigravity' },
+      { name: 'Kilo',        cls: 'kilo'        },
+      { name: 'Kimi',        cls: 'kimi'        },
+      { name: 'OpenCode',    cls: 'opencode'    },
+      { name: 'Devin',       cls: 'devin'       },
+    ];
     var el = document.getElementById('engineRotator');
     if (!el) return;
     var i = 0;
+    function showEngine(idx) {
+      var e = engines[idx];
+      // Replace the element — recreating it re-triggers the CSS animation
+      // (engineSlideIn) without needing to toggle classes.
+      var next = document.createElement('span');
+      next.className = 'engine-word ' + e.cls;
+      next.id = 'engineRotator';
+      next.textContent = e.name;
+      el.parentNode.replaceChild(next, el);
+      el = next;
+    }
     setInterval(function() {
       i = (i + 1) % engines.length;
-      el.style.opacity = '0';
-      setTimeout(function() {
-        el.textContent = engines[i];
-        el.style.opacity = '1';
-      }, 200);
+      showEngine(i);
     }, 2200);
-    el.style.transition = 'opacity 200ms';
-    el.style.opacity = '1';
   })();
 </script>
 </body>
