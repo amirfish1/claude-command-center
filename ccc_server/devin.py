@@ -297,9 +297,10 @@ def find_devin_conversations(
 ):
     """Discover Devin cloud sessions via the v1 API (DEVIN_API_KEY).
 
-    Devin sessions have no local cwd, so they are repo-unbound: repo_only is
-    accepted for signature parity with the other adapters but never filters
-    rows out. No API key (or any API failure) → []."""
+    Cloud Devin sessions have no local cwd, so they are not naturally repo-bound.
+    The only way they can appear inside a per-repo view is when the user has
+    pinned them to that repo. In the global archive they continue to group under
+    a "Devin" engine folder. No API key (or any API failure) → []."""
     if not _devin_api_key():
         return []
     sessions = _devin_list_sessions()
@@ -321,6 +322,16 @@ def find_devin_conversations(
         last_interactions = _core._load_last_interactions()
     except Exception:
         last_interactions = {}
+    try:
+        repo_pins = _core._load_repo_pins()
+    except Exception:
+        repo_pins = {}
+
+    if repo_only:
+        try:
+            repo_path = _core.resolve_repo_path(repo_path)
+        except Exception:
+            return []
 
     cutoff = _core._session_scan_cutoff_ts(include_old)
     max_rows = _core._session_scan_file_limit(include_old)
@@ -338,6 +349,10 @@ def find_devin_conversations(
         # The v1 API already returns ids with the "devin-" prefix; only add
         # it when absent so we never produce "devin-devin-...".
         sid = raw_id if raw_id.startswith(DEVIN_SESSION_PREFIX) else DEVIN_SESSION_PREFIX + raw_id
+        pinned = repo_pins.get(sid)
+        if repo_only:
+            if not pinned or pinned != repo_path:
+                continue
         created = _devin_epoch(s.get("created_at"))
         modified = _devin_epoch(s.get("updated_at")) or created
         freshness = max(modified, last_interactions.get(sid) or 0)
@@ -367,6 +382,19 @@ def find_devin_conversations(
         )
         status = _devin_status(s)
         is_live = status in _DEVIN_ACTIVE_STATUSES
+        # Cloud sessions are not repo-bound unless explicitly pinned. Keep the
+        # pinned ones in their repo group; everything else stays under the
+        # engine-specific "Devin" bucket in the global archive.
+        if pinned:
+            folder_path = str(pinned)
+            folder_label = _core._resolve_dir_case(folder_path) or Path(folder_path).name
+            folder_label_chip = ""
+            pinned_repo = True
+        else:
+            folder_path = ""
+            folder_label = "Devin"
+            folder_label_chip = "Devin"
+            pinned_repo = False
         out.append({
             "id": sid,
             "session_id": sid,
@@ -385,8 +413,9 @@ def find_devin_conversations(
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",
             "mtime": modified,
             "jsonl_path": "",
-            "folder_label": "Devin",
-            "folder_path": "",
+            "folder_label": folder_label,
+            "folder_path": folder_path,
+            "folder_label_chip": folder_label_chip,
             "worktree_label": None,
             "session_cwd": None,
             "session_cwd_exists": False,
@@ -413,7 +442,7 @@ def find_devin_conversations(
             "archived": sid in archived_set,
             "trashed": sid in trashed_set,
             "verified": sid in verified_set,
-            "pinned_repo": False,
+            "pinned_repo": pinned_repo,
             "last_interacted": last_interactions.get(sid),
             "is_live": is_live,
             "spawn_pid": None,
@@ -633,8 +662,8 @@ def find_devin_cli_conversations(
     """Discover local Devin CLI sessions from the SQLite DB.
 
     Sessions are repo-scoped (each has a working_directory). When repo_path is
-    given, only sessions in that repo are returned. No DB (or any error) → [].
-    """
+    given, only sessions in that repo (or a subdirectory of it) are returned.
+    No DB (or any API failure) → []."""
     con = _devin_cli_connect()
     if con is None:
         return []
@@ -654,17 +683,23 @@ def find_devin_cli_conversations(
         last_interactions = _core._load_last_interactions()
     except Exception:
         last_interactions = {}
+    try:
+        repo_pins = _core._load_repo_pins()
+    except Exception:
+        repo_pins = {}
 
     cutoff = _core._session_scan_cutoff_ts(include_old)
     max_rows = _core._session_scan_file_limit(include_old)
 
-    # Resolve repo_path to a canonical string for comparison.
-    repo_filter = None
-    if repo_only and repo_path:
+    resolved_repo_path = None
+    repo_path_obj = None
+    git_top_cache = {}
+    if repo_only:
         try:
-            repo_filter = str(Path(repo_path).resolve())
-        except OSError:
-            repo_filter = str(repo_path)
+            resolved_repo_path = _core.resolve_repo_path(repo_path)
+            repo_path_obj = Path(resolved_repo_path)
+        except Exception:
+            return []
 
     rows = []
     try:
@@ -678,16 +713,21 @@ def find_devin_cli_conversations(
             if not raw_id:
                 continue
             working_dir = str(row["working_directory"] or "").strip()
-            if repo_filter:
-                try:
-                    wd_resolved = str(Path(working_dir).resolve())
-                except OSError:
-                    wd_resolved = working_dir
-                if wd_resolved != repo_filter:
+            sid = DEVIN_CLI_SESSION_PREFIX + raw_id
+            pinned = repo_pins.get(sid)
+            pinned_repo = False
+            if repo_only:
+                if pinned and pinned != resolved_repo_path:
                     continue
+                if pinned == resolved_repo_path:
+                    pinned_repo = True
+                elif not _core._codex_cwd_matches_repo(
+                    working_dir, resolved_repo_path, git_top_cache
+                ):
+                    continue
+
             created = float(row["created_at"] or 0)
             modified = float(row["last_activity_at"] or 0) or created
-            sid = DEVIN_CLI_SESSION_PREFIX + raw_id
             freshness = max(modified, last_interactions.get(sid) or 0)
             if not include_old and cutoff > 0 and freshness < cutoff:
                 continue
@@ -720,12 +760,37 @@ def find_devin_cli_conversations(
                 or f"Devin session {raw_id[:12]}"
             )
             is_live = _devin_cli_session_live(raw_id)
+
+            # Resolve the session's folder the same way other CLI engines do:
+            # honor a repo pin, walk up to the git root for the label, and split
+            # out a sibling worktree suffix so the UI badge renders correctly.
+            session_cwd = pinned or working_dir or None
+            folder_path = pinned or working_dir or ""
+            git_root = ""
+            if folder_path:
+                try:
+                    git_root = _core._find_git_root(folder_path) or ""
+                except Exception:
+                    git_root = ""
+            if git_root:
+                folder_path = git_root
+                folder_label = _core._resolve_dir_case(git_root) or Path(git_root).name
+            elif folder_path:
+                folder_label = _core._resolve_dir_case(folder_path) or Path(folder_path).name
+            else:
+                folder_label = "Devin"
+            worktree_label = None
+            wt_idx = folder_label.find("-wt-")
+            if wt_idx > 0:
+                worktree_label = folder_label[wt_idx + 4:]
+                folder_label = folder_label[:wt_idx]
+            folder_label_chip = "Devin" if not folder_path else ""
+
             # Check if the working directory exists.
             wd_exists = False
-            wd_is_worktree = False
-            if working_dir:
+            if session_cwd:
                 try:
-                    wd_exists = Path(working_dir).is_dir()
+                    wd_exists = Path(session_cwd).is_dir()
                 except OSError:
                     pass
             rows.append({
@@ -748,12 +813,13 @@ def find_devin_cli_conversations(
                 ) if modified else "",
                 "mtime": modified,
                 "jsonl_path": "",
-                "folder_label": "Devin",
-                "folder_path": working_dir or "",
-                "worktree_label": None,
-                "session_cwd": working_dir or None,
+                "folder_label": folder_label,
+                "folder_path": folder_path,
+                "folder_label_chip": folder_label_chip,
+                "worktree_label": worktree_label,
+                "session_cwd": session_cwd,
                 "session_cwd_exists": wd_exists,
-                "session_cwd_is_worktree": wd_is_worktree,
+                "session_cwd_is_worktree": False,
                 "worktree_dirty": False,
                 "effective_branch": None,
                 "effective_kind": None,
@@ -776,7 +842,7 @@ def find_devin_cli_conversations(
                 "archived": sid in archived_set,
                 "trashed": sid in trashed_set,
                 "verified": sid in verified_set,
-                "pinned_repo": False,
+                "pinned_repo": pinned_repo,
                 "last_interacted": last_interactions.get(sid),
                 "is_live": is_live,
                 "spawn_pid": None,
