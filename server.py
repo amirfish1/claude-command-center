@@ -6807,8 +6807,18 @@ _SERVER_START_TS = time.time()
 # behavior. Off the hot path: the ledger is written only at lifecycle
 # transitions (reuse/spawn/exit/retire/server_start), never per row or per poll
 # iteration (the exit write is guarded to fire once via `_cleanup_done`).
-_RESUME_LEDGER_FILE = COMMAND_CENTER_STATE_DIR / "resume-ledger.jsonl"
-_RESUME_LEDGER_BACKUP = COMMAND_CENTER_STATE_DIR / "resume-ledger.1.jsonl"
+if "pytest" in sys.modules:
+    # Same rationale as ACTIVITY_LOG_FILE's pytest redirect at line 132:
+    # the test suite re-imports this module fresh per test, and without a
+    # redirect every test exercising an interrupt-detection code path would
+    # write real lines into the live dashboard's resume ledger. Both the
+    # current file and the rotation backup must be redirected, since
+    # _resume_ledger_append rotates to _RESUME_LEDGER_BACKUP at 5MB.
+    _RESUME_LEDGER_FILE = Path(tempfile.gettempdir()) / "ccc-test-resume-ledger.jsonl"
+    _RESUME_LEDGER_BACKUP = Path(tempfile.gettempdir()) / "ccc-test-resume-ledger.1.jsonl"
+else:
+    _RESUME_LEDGER_FILE = COMMAND_CENTER_STATE_DIR / "resume-ledger.jsonl"
+    _RESUME_LEDGER_BACKUP = COMMAND_CENTER_STATE_DIR / "resume-ledger.1.jsonl"
 _RESUME_LEDGER_MAX_BYTES = 5 * 1024 * 1024
 _RESUME_LEDGER_LOCK = threading.Lock()
 # Bounded in-memory window feeding /api/health rolling stats — so the health
@@ -13958,6 +13968,132 @@ def _drain_new_kill_events(last_seen_id=""):
         return list(out)
 
 
+# ── Interrupt event emission ──────────────────────────────────────────────
+# Unified helper for detecting and emitting [Request interrupted by user]
+# events. Both detection sites (transcript-scan in _extract_tail_meta and
+# SSE stream in _stream_spawn_deltas_log) call this helper instead of
+# inlining the dedup + sink logic. The helper owns:
+#   - _INTERRUPT_EVENTS_ENABLED gate (default-off, opt-in in main())
+#   - _SEEN_INTERRUPTS dedup (thread-safe, standardized key: sid:uuid)
+#   - 48h freshness cutoff on ALL sinks (toast + ledger + activity.log)
+#   - The three sinks: _log_activity, _resume_ledger_append, _record_kill_event
+# When disabled, the helper returns WITHOUT modifying _SEEN_INTERRUPTS —
+# marking-seen-while-disabled would silently swallow the later real emission
+# when the dashboard eventually enables.
+_INTERRUPT_FRESHNESS_CUTOFF_S = 48 * 3600
+
+
+def _emit_interrupt_event(sid, uuid_str, *, source, agent_name="", event_ts=None):
+    """Emit an interrupt event (activity log + ledger + kill-event toast).
+
+    Called from both the transcript-scan path (_extract_tail_meta) and the
+    SSE stream path (_stream_spawn_deltas_log). Deduped by sid:uuid across
+    processes via the durable ledger seed at startup. Events older than 48h
+    are marked seen but not emitted to any sink (prevents upgrade-day
+    backfill flood when the schema bump forces a full cold reparse).
+    """
+    if not _INTERRUPT_EVENTS_ENABLED:
+        return
+    if not sid or not uuid_str:
+        return
+    dedup_key = f"{sid}:{uuid_str}"
+    with _SEEN_INTERRUPTS_LOCK:
+        if dedup_key in _SEEN_INTERRUPTS:
+            return
+        _SEEN_INTERRUPTS.add(dedup_key)
+    # Freshness cutoff: skip all sinks for events older than 48h.
+    # The interrupt is already marked seen (above) so we don't re-check
+    # it on every cache hit. This prevents the upgrade-day backfill burst
+    # when the schema bump forces a cold reparse of years of transcripts.
+    if event_ts is not None and (time.time() - event_ts) > _INTERRUPT_FRESHNESS_CUTOFF_S:
+        return
+    try:
+        _log_activity(
+            "interrupt", "INTERRUPT",
+            f"sid={sid} — Request interrupted (likely CCC kill, not user)",
+        )
+        _resume_ledger_append(
+            "interrupt", sid=sid,
+            reason="request_interrupted",
+            source=source,
+            uuid=uuid_str,
+            agent_name=agent_name,
+        )
+        _record_kill_event(
+            {"name": agent_name, "session_id": sid},
+            reason="request_interrupted",
+            caller=source,
+            alive=False,
+        )
+    except Exception:
+        pass
+
+
+def _seed_seen_interrupts_from_ledger():
+    """Seed _SEEN_INTERRUPTS from the resume ledger at startup.
+
+    Reads both the current ledger file and the rotation backup in full,
+    extracting every sid:uuid pair from lines where event == "interrupt".
+    This makes dedup at-most-once across restarts: the in-memory set is
+    repopulated from the durable record on every boot.
+
+    Must be called in main() before any background thread (reaper, archive
+    refresher) starts parsing transcripts — those threads would fire unseeded.
+    """
+    for fpath in (_RESUME_LEDGER_BACKUP, _RESUME_LEDGER_FILE):
+        try:
+            if not fpath.is_file():
+                continue
+            with fpath.open("r") as f:
+                for line in f:
+                    # Prefilter: skip lines that can't contain an interrupt
+                    # event. Coupled to json.dumps default separators (which
+                    # produce '"event": "interrupt"' with a space after the
+                    # colon) — if the format ever switches to compact
+                    # separators ('"event":"interrupt"'), update this check
+                    # to match both styles.
+                    if '"event": "interrupt"' not in line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if rec.get("event") != "interrupt":
+                        continue
+                    sid = rec.get("sid") or ""
+                    uuid_str = rec.get("uuid") or ""
+                    if sid and uuid_str:
+                        _SEEN_INTERRUPTS.add(f"{sid}:{uuid_str}")
+        except OSError:
+            continue
+
+
+def _emit_interrupts_from_meta(meta, path_stem):
+    """Emit interrupt events from a cached meta's "interrupted" field.
+
+    Called on cache hits in _extract_tail_meta — the parser already ran on
+    this file and stored the interrupt data in meta. Without this, an
+    interrupt whose transcript was cached by a non-emitting process (archive
+    worker) would never be emitted by the dashboard, because the cache hit
+    skips the parse loop.
+    """
+    interrupted = meta.get("interrupted") if isinstance(meta, dict) else None
+    if not interrupted:
+        return
+    for entry in interrupted:
+        if not isinstance(entry, dict):
+            continue
+        uuid_str = entry.get("uuid") or ""
+        event_ts = entry.get("ts")
+        if uuid_str:
+            _emit_interrupt_event(
+                path_stem, uuid_str,
+                source="transcript-scan",
+                agent_name=meta.get("agent_name") or meta.get("custom_title") or "",
+                event_ts=event_ts,
+            )
+
+
 # Ring buffer of prewarm lifecycle events (spawned, claimed, expired), surfaced
 # to the UI so the user can see when CCC is pre-warming a session ahead of time
 # and when the reservation is claimed or expires unused.
@@ -14249,21 +14385,25 @@ AUTO_HANDOVER_FILE = COMMAND_CENTER_STATE_DIR / "auto-handover.json"
 _conv_meta_cache = {}
 _conv_meta_cache_dirty = False
 _conv_meta_cache_lock = threading.Lock()
-_CONV_META_SCHEMA_VERSION = 16
+_CONV_META_SCHEMA_VERSION = 17
 
 # Dedup set for transcript-scanned interrupts — prevents re-firing the same
 # [Request interrupted by user] event on every cache-invalidating re-parse.
-# Thread-safe via _SEEN_INTERRUPTS_LOCK — previously a bare set, which allowed
-# concurrent _extract_tail_meta calls (ThreadingHTTPServer) to race on the
-# check-then-add pattern and double-fire the same UUID.
+# Thread-safe via _SEEN_INTERRUPTS_LOCK. Seeded at startup from the resume
+# ledger (Change 2) so dedup survives restarts. Unbounded — interrupts are
+# rare (~37/day measured), and the durable seed means the set is populated
+# once, not grown incrementally.
 _SEEN_INTERRUPTS = set()
 _SEEN_INTERRUPTS_LOCK = threading.Lock()
 
-# True when this process is a short-lived --archive-refresh-worker subprocess.
-# The worker has its own empty _SEEN_INTERRUPTS set, so it would re-fire every
-# interrupt in every transcript on each run. Guarding with this flag ensures
-# only the long-lived dashboard server process emits interrupt events.
-_IS_ARCHIVE_WORKER = len(sys.argv) >= 2 and sys.argv[1] == "--archive-refresh-worker"
+# Interrupt event emission is disabled by default and enabled only in the
+# dashboard server's main() (and only when not CCC_EPHEMERAL). This makes the
+# worker process, archive-refresh subprocess, pytest, and any ad-hoc
+# `import server` fail-safe by construction — no emission unless explicitly
+# enabled. The guard check lives inside _emit_interrupt_event, not at call
+# sites; when disabled, the helper returns WITHOUT modifying _SEEN_INTERRUPTS
+# (marking-seen-while-disabled would silently swallow later real emission).
+_INTERRUPT_EVENTS_ENABLED = False
 
 # In-memory cache of the head-parse (first ~20 lines: session_id, timestamp,
 # git_branch, first_message, head_cwd) keyed by str(path) -> (cache_key, tuple),
@@ -14278,7 +14418,14 @@ _conv_head_cache = {}
 # sharing one dict made the two scans clobber each other's entries and unpack
 # the wrong arity (ValueError: too many values to unpack).
 _conv_head5_cache = {}
-_CONV_META_COMPAT_SCHEMA_VERSIONS = {16}
+# DROP 16: schema 16 payloads lack the "interrupted" field in meta entries.
+# Keeping 16 loadable would mean cached entries from before the interrupt
+# feature silently skip emit-on-cache-hit — the silent-drop window stays
+# open. Dropping 16 forces a one-time cold reparse; the cache is then warm
+# again with the new shape including "interrupted". First boot after upgrade
+# will visibly stall on the first conversation list render (~1.8GB corpus,
+# "API stalls for a minute or more" per the cache's own comment above).
+_CONV_META_COMPAT_SCHEMA_VERSIONS = {17}
 _CONV_META_CACHE_FILE = (
     Path.home() / ".claude" / "command-center" / "conv_meta_cache.json"
 )
@@ -14652,6 +14799,11 @@ def _extract_tail_meta(path):
         return {}
     cached = _conv_meta_cache.get(str(path))
     if cached and cached.get("cache_key") == cache_key:
+        # Emit interrupts from cached meta (Change 1: emit-on-cache-hit).
+        # Without this, an interrupt whose transcript was cached by a
+        # non-emitting process (archive worker) would never be emitted by
+        # the dashboard, because the cache hit skips the parse loop.
+        _emit_interrupts_from_meta(cached, path.stem)
         return cached
     meta = {
         "mtime": mtime,
@@ -14777,40 +14929,38 @@ def _extract_tail_meta(path):
                             meta["last_prompt"] = prompt_text
                         # Detect [Request interrupted by user] — Claude writes
                         # this when SIGTERM'd mid-turn. Usually CCC's kill, not
-                        # the user. Fire once per (session_id, uuid) so we don't
-                        # re-fire on every cache-invalidating re-parse.
-                        # Skip in archive refresh workers — they're short-lived
-                        # subprocesses with their own empty _SEEN_INTERRUPTS,
-                        # so they'd re-fire every interrupt on every run.
-                        if raw_text and "[Request interrupted by user" in raw_text and not _IS_ARCHIVE_WORKER:
+                        # the user. Standardized to startswith (not substring
+                        # `in`) to match the renderer's rule at line 7889 and
+                        # avoid false positives when a user pastes a log that
+                        # mentions the marker mid-message.
+                        # Collect interrupt data in meta for emit-on-cache-hit
+                        # (Change 1). The helper owns dedup + freshness cutoff
+                        # + the three sinks; this site just detects and calls.
+                        if raw_text and raw_text.strip().startswith("[Request interrupted by user"):
                             ev_uuid = ev.get("uuid", "")
-                            dedup_key = f"{path.stem}:{ev_uuid}"
                             if ev_uuid:
-                                with _SEEN_INTERRUPTS_LOCK:
-                                    already_seen = dedup_key in _SEEN_INTERRUPTS
-                                    if not already_seen:
-                                        _SEEN_INTERRUPTS.add(dedup_key)
-                                        if len(_SEEN_INTERRUPTS) > 500:
-                                            _SEEN_INTERRUPTS.clear()
-                                            _SEEN_INTERRUPTS.add(dedup_key)
-                                if not already_seen:
-                                    _log_activity(
-                                        "interrupt", "INTERRUPT",
-                                        f"sid={path.stem} — Request interrupted (likely CCC kill, not user)",
-                                    )
-                                    _resume_ledger_append(
-                                        "interrupt", sid=path.stem,
-                                        reason="request_interrupted",
-                                        source="transcript-scan",
-                                        uuid=ev_uuid,
-                                        agent_name=meta.get("agent_name") or meta.get("custom_title") or "",
-                                    )
-                                    _record_kill_event(
-                                        {"name": meta.get("agent_name") or meta.get("custom_title") or ""},
-                                        reason="request_interrupted",
-                                        caller="transcript-scan",
-                                        alive=False,
-                                    )
+                                # Capture event timestamp for freshness cutoff
+                                event_ts = None
+                                ts = ev.get("timestamp", "")
+                                if ts:
+                                    try:
+                                        from datetime import datetime as _dt
+                                        dt = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+                                        event_ts = dt.timestamp()
+                                    except (ValueError, ImportError):
+                                        pass
+                                # Store in meta for emit-on-cache-hit
+                                if "interrupted" not in meta:
+                                    meta["interrupted"] = []
+                                meta["interrupted"].append(
+                                    {"uuid": ev_uuid, "ts": event_ts}
+                                )
+                                _emit_interrupt_event(
+                                    path.stem, ev_uuid,
+                                    source="transcript-scan",
+                                    agent_name=meta.get("agent_name") or meta.get("custom_title") or "",
+                                    event_ts=event_ts,
+                                )
                 # Metadata
                 if t == "custom-title":
                     meta["custom_title"] = ev.get("customTitle") or meta["custom_title"]
@@ -63693,6 +63843,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         # Detect "[Request interrupted by user]" — Claude writes
                         # this to the transcript when it receives SIGTERM mid-turn.
                         # This is usually CCC killing the process, not the user.
+                        # The helper owns dedup + freshness cutoff + the three
+                        # sinks. The timeline mark stays HERE (outside the
+                        # helper's dedup gate) — _spawn_timeline_mark is
+                        # first-write-wins idempotent, so it fires on every
+                        # sighting without harm.
                         if event_type == "user":
                             content = ev.get("message", {}).get("content", [])
                             if isinstance(content, list):
@@ -63701,32 +63856,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                         txt = block.get("text", "")
                                         if txt and txt.strip().startswith("[Request interrupted by user"):
                                             ev_uuid = ev.get("uuid", "")
-                                            dedup_key = f"{session_id}:{ev_uuid}"
                                             if ev_uuid:
-                                                with _SEEN_INTERRUPTS_LOCK:
-                                                    already_seen = dedup_key in _SEEN_INTERRUPTS
-                                                    if not already_seen:
-                                                        _SEEN_INTERRUPTS.add(dedup_key)
-                                                        if len(_SEEN_INTERRUPTS) > 500:
-                                                            _SEEN_INTERRUPTS.clear()
-                                                            _SEEN_INTERRUPTS.add(dedup_key)
-                                                if not already_seen:
-                                                    _log_activity(
-                                                        "interrupt", "INTERRUPT",
-                                                        f"sid={session_id} — Request interrupted (likely CCC kill, not user)",
-                                                    )
-                                                    _resume_ledger_append(
-                                                        "interrupt", sid=session_id,
-                                                        reason="request_interrupted",
-                                                        source="sse-stream",
-                                                        uuid=ev_uuid,
-                                                    )
-                                                    _record_kill_event(
-                                                        {"name": ""},
-                                                        reason="request_interrupted",
-                                                        caller="sse-stream",
-                                                        alive=False,
-                                                    )
+                                                # Parse event timestamp for
+                                                # freshness cutoff (48h).
+                                                sse_event_ts = None
+                                                sse_ts = ev.get("timestamp", "")
+                                                if sse_ts:
+                                                    try:
+                                                        from datetime import datetime as _dt
+                                                        sse_dt = _dt.fromisoformat(sse_ts.replace("Z", "+00:00"))
+                                                        sse_event_ts = sse_dt.timestamp()
+                                                    except (ValueError, ImportError):
+                                                        pass
+                                                _emit_interrupt_event(
+                                                    session_id, ev_uuid,
+                                                    source="sse-stream",
+                                                    event_ts=sse_event_ts,
+                                                )
                                             timeline_dirty = _spawn_timeline_mark(
                                                 session_id, "request_interrupted"
                                             ) or timeline_dirty
@@ -69367,6 +69513,17 @@ def main():
     # background; every request only reads the published in-memory map.
     _start_token_optimizer_quality_index_refresher()
     _load_conv_meta_cache()
+    # Seed _SEEN_INTERRUPTS from the resume ledger BEFORE any background
+    # thread starts parsing transcripts. The seed makes dedup at-most-once
+    # across restarts. Must run before the reaper/archive refresher threads
+    # — those parse transcripts and would fire unseeded.
+    _seed_seen_interrupts_from_ledger()
+    # Enable interrupt event emission only in the real dashboard server,
+    # not in ephemeral verification instances (CCC_EPHEMERAL=1 bypasses
+    # the duplicate-repo check and would emit into the shared ledger).
+    if not os.environ.get("CCC_EPHEMERAL"):
+        global _INTERRUPT_EVENTS_ENABLED
+        _INTERRUPT_EVENTS_ENABLED = True
     _load_cwd_relocation_cache()
     _load_session_cwd_overrides()
     _load_stats_file_cache()

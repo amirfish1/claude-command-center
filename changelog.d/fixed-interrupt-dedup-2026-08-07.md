@@ -1,0 +1,1 @@
+- Fixed interrupt event deduplication: durable seed from the resume ledger at startup, emit-on-cache-hit for transcripts cached by the archive worker, 48h freshness cutoff on all sinks, and a unified `_emit_interrupt_event` helper with a standardized `startswith` predicate. Duplicate interrupt toasts and ledger entries after restart are eliminated.
