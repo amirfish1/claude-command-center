@@ -27820,8 +27820,8 @@
         + ' aria-expanded="' + (expanded ? 'true' : 'false') + '"'
         + ' title="Expand repeated rows">'
         + '<span class="conv-repeat-group-arrow">' + (expanded ? '&#9662;' : '&#9656;') + '</span>'
-        + '<span class="conv-repeat-group-title">' + escapeHtml(title) + '</span>'
         + groupIconHtml
+        + '<span class="conv-repeat-group-title">' + escapeHtml(title) + '</span>'
         + '<span class="conv-repeat-group-count">' + cards.length + '</span>'
         + (rel ? '<span class="conv-repeat-group-rel">' + escapeHtml(rel) + '</span>' : '')
         + '</button>'
