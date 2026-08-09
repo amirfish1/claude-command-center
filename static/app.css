@@ -13194,6 +13194,47 @@
     }
     .mobile-back-btn:active { opacity: 0.6; }
 
+    /* One scroll surface, not three portholes.
+       Desktop splits the sidebar into stacked accordion panels, each its own
+       scroller with `overscroll-behavior: contain`. That reads fine in a
+       900px-tall column; on a phone the panels collapse to slits. Measured on
+       a 390x844 viewport: Current sessions 286px tall over 9286px of content,
+       Project tree 134px over 12975px, Triggered workers 16px over 813px —
+       and `contain` stops the scroll from ever chaining out, while body,
+       .sidebar and #convList are all `overflow: hidden`. So a drag anywhere in
+       the list is captured by a 134px window with 97 screens of content in it
+       and the page itself cannot move: the "I get stuck very quickly" report.
+       On mobile, hand the scrolling to #convList and let the sections size to
+       their content. */
+    /* `.objects-scroll-split` is the class that pins #convList to
+       `overflow-y: hidden !important` on desktop, so match its specificity. */
+    #convList,
+    #convList.objects-scroll-split {
+      overflow-y: auto !important;
+      overscroll-behavior-y: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    .conv-inprogress-section,
+    .conv-inprogress-list {
+      flex: 0 0 auto !important;
+      min-height: auto !important;
+    }
+    /* With #convList scrolling, the tab bar and the list toolbar are both
+       `position: sticky; top: 0` and land on top of each other. Keep the tabs
+       pinned (they are the primary navigation) and let the toolbar scroll
+       away — two stacked sticky bars would eat ~80px of an 844px screen. */
+    #convList > .conv-tab-bar { z-index: 7; }
+    #convList .conv-inprogress-toolbar { position: static; }
+    .conv-current-sessions-scroll,
+    .conv-project-tree-scroll,
+    .conv-evergreen-agents-scroll,
+    #convList.objects-scroll-split .conv-section-fill {
+      flex: 0 0 auto !important;
+      max-height: none !important;
+      overflow-y: visible !important;
+      overscroll-behavior: auto;
+    }
+
     /* Hide non-essential controls in classic main toolbar */
     .toolbar .font-size-controls { display: none !important; }
     #convSessionId { display: none !important; }
