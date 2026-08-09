@@ -15711,6 +15711,21 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         self.server.CODEX_APP_SERVER_STATE_FILE = (
             pathlib.Path(self.tmp_dir) / "codex-app-server-state.json"
         )
+        # Keep interrupt-ask state out of the real dashboard file, and
+        # auto-approve asks so the pre-gate recovery flow (interrupt on the
+        # tick that sees a stalled active turn) still drives these tests.
+        # The approval gate itself is covered by
+        # test_recovery_waits_for_interrupt_approval / _dismissed_suppresses.
+        self.server._INTERRUPT_ASKS_FILE = (
+            pathlib.Path(self.tmp_dir) / "interrupt-asks.json"
+        )
+        self.interrupt_ask_patch = mock.patch.object(
+            self.server,
+            "_file_interrupt_ask",
+            return_value={"id": "test-ask", "status": "approved"},
+        )
+        self.interrupt_ask_patch.start()
+        self.addCleanup(self.interrupt_ask_patch.stop)
         with self.server._CODEX_APP_SERVER_LOCK:
             self.server._CODEX_APP_SERVER_THREAD_STATE.clear()
             self.server._CODEX_APP_SERVER_TURN_THREAD.clear()
@@ -15896,6 +15911,52 @@ class TestCodexCompactionRecovery(unittest.TestCase):
         recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
         self.assertEqual(recovery["status"], "interrupting")
         self.assertEqual(recovery["attempts"], 0)
+
+    def test_recovery_waits_for_interrupt_approval(self):
+        # CCC never interrupts a live turn on its own: with the ask still
+        # pending, the episode holds (no interrupt RPC) and re-checks later.
+        sid = self._armed_state(status="active")
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid]["active_turn_id"] = "turn-compact"
+        with mock.patch.object(
+            server,
+            "_file_interrupt_ask",
+            return_value={"id": "ask-1", "status": "pending"},
+        ), mock.patch.object(
+            server, "_codex_interrupt_via_app_server"
+        ) as interrupt, mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertEqual(result["waiting"], "interrupt-approval")
+        interrupt.assert_not_called()
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(
+            recovery["reason"],
+            "Waiting for approval to interrupt the stalled turn",
+        )
+        self.assertEqual(recovery["next_attempt_at"], 150.0)
+
+    def test_recovery_dismissed_interrupt_ask_suppresses_episode(self):
+        sid = self._armed_state(status="active")
+        server = self.server
+        with server._CODEX_APP_SERVER_LOCK:
+            server._CODEX_APP_SERVER_THREAD_STATE[sid]["active_turn_id"] = "turn-compact"
+        with mock.patch.object(
+            server,
+            "_file_interrupt_ask",
+            return_value={"id": "ask-1", "status": "dismissed"},
+        ), mock.patch.object(
+            server, "_codex_interrupt_via_app_server"
+        ) as interrupt, mock.patch.object(server, "resume_session_codex") as resume:
+            result = server._run_codex_compaction_recovery_once(sid, now=120.0)
+
+        self.assertEqual(result["suppressed"], "interrupt-declined")
+        interrupt.assert_not_called()
+        resume.assert_not_called()
+        recovery = server._codex_app_server_thread_state(sid)["compaction_recovery"]
+        self.assertEqual(recovery["status"], "suppressed")
 
     def test_codex_recovery_marks_interrupt_before_rpc_and_ignores_partial_output(self):
         sid = self._armed_state(status="active")
