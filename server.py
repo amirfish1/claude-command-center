@@ -57220,6 +57220,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 payload["interrupt_asks"] = []
             self.send_json(payload)
+        elif path == "/api/interrupt-asks":
+            # Cheap standalone poll for the interrupt-approval banner: one
+            # small JSON file read, no session scan. The banner must work
+            # even before any session is opened (live-activity polling only
+            # starts inside setCurrentSession).
+            try:
+                self.send_json({"asks": _pending_interrupt_asks()})
+            except Exception:
+                self.send_json({"asks": []})
         elif path == "/api/codex/stuck-summary":
             # Cached fleet-level count for the footer monitor. This intentionally
             # reports the same stale-transcript heuristic as the row badge; it is

@@ -3763,6 +3763,21 @@
     }
   }
 
+  // Standalone poll so the banner works even before any session is opened
+  // (live-activity polling only starts inside setCurrentSession). One tiny
+  // JSON file read server-side; 15s cadence is plenty for a human approval.
+  async function _pollInterruptAsks() {
+    if (READER_ONLY_POPOUT || document.hidden) return;
+    try {
+      const res = await fetch('/api/interrupt-asks', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      _renderInterruptAsks((data && data.asks) || []);
+    } catch (_) {}
+  }
+  setInterval(_pollInterruptAsks, 15000);
+  setTimeout(_pollInterruptAsks, 2500);
+
   // ── CCC activity log panel ──
   // Reuses the same attentionPanel as the "Push all" ship log (bottom left).
   // Shows a live feed of prewarm spawns/claims and session kills/stale
