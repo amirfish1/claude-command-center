@@ -240,7 +240,10 @@ body.q2-resizing .q2-col { pointer-events: none; }
   padding: 2px 0;
 }
 .q2-dg-stage.is-narrow { flex: 0 0 46px; align-items: center; }
-.q2-dg-stage.is-worker { flex: 1.4 1 0; justify-content: flex-start; }
+/* Live workers aren't capped like the backlog/done stacks (no "+N more"
+   chip makes sense for a running instance) -- scroll instead of silently
+   clipping workers past the band's fixed height. */
+.q2-dg-stage.is-worker { flex: 1.4 1 0; justify-content: flex-start; overflow-y: auto; max-height: 100%; }
 .q2-dg-label {
   display: flex;
   align-items: baseline;
