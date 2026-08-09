@@ -13219,6 +13219,16 @@
       flex: 0 0 auto !important;
       min-height: auto !important;
     }
+    /* One scroller over ~23000px of rows means the browser lays out and paints
+       every row, not just the 668px on screen. Let it skip the offscreen ones.
+       `auto` in contain-intrinsic-size makes each row remember its real
+       measured height once rendered, so the scrollbar and scroll anchoring
+       stay honest instead of snapping to a guessed placeholder size. */
+    #convList .conv-item {
+      content-visibility: auto;
+      contain-intrinsic-size: auto 44px;
+    }
+
     /* With #convList scrolling, the tab bar and the list toolbar are both
        `position: sticky; top: 0` and land on top of each other. Keep the tabs
        pinned (they are the primary navigation) and let the toolbar scroll
