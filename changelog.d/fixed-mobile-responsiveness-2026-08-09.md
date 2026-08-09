@@ -1,0 +1,1 @@
+Mobile: opening a conversation no longer freezes the UI for seconds. The first window is 120 transcript lines instead of 400 (Load earlier pages the rest), offscreen list rows skip layout, and repo ship status is fetched only for headers you actually scroll to. Worst main-thread block on open dropped from 2476ms to 395ms, and on Back from 978ms to 221ms.

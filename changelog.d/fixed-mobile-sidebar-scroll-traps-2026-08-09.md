@@ -1,0 +1,1 @@
+Mobile: the sidebar scrolls as one surface instead of trapping your finger in three separate panels (Current sessions, Project tree, Triggered workers) that each captured the scroll and could not chain out to the page.
