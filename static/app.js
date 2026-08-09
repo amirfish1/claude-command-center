@@ -32046,6 +32046,7 @@
       });
     });
     // "Push all" ship controls in folder headers (conv list only).
+    _resetShipVisibilityObserver();
     $convList.querySelectorAll('.conv-folder-ship').forEach(box => {
       const repo = box.getAttribute('data-ship-repo') || '';
       if (!_isShipRepoPath(repo)) return;
@@ -32065,7 +32066,7 @@
         ev.stopPropagation();
         _openShipLog(repo);
       });
-      _refreshShipStatus(repo);
+      _observeShipBoxForRefresh(box, repo);
     });
     // github_pr row: ↗ chip button opens GitHub directly (row click opens in-pane).
     $convList.querySelectorAll('[data-role="pr-external-link"]').forEach(btn => {
@@ -42064,11 +42065,12 @@
     if (paneId && active && paneId !== active) return;
     const pid = paneId || active;
     const u = pid ? _usageDataByPane[pid] : null;
-    const inTok = u
-      ? (Number(u.total_input_tokens) || 0)
+    const inFresh = u ? (Number(u.total_input_tokens) || 0) : 0;
+    const inCached = u
+      ? (Number(u.total_cache_read_tokens) || 0)
         + (Number(u.total_cache_creation_tokens) || 0)
-        + (Number(u.total_cache_read_tokens) || 0)
       : 0;
+    const inTok = inFresh + inCached;
     const outTok = u ? (Number(u.total_output_tokens) || 0) : 0;
     const total = inTok + outTok;
     if (!total) {
@@ -42086,9 +42088,14 @@
       '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
       + '<div class="rail-tokens-label">tokens this conversation'
       + (presentation ? ' &middot; ' + costText.label : '')
+      + '</div>'
+      + '<div class="rail-tokens-cache">in ' + _formatTokens(inFresh)
+      + ' &middot; in cached ' + _formatTokens(inCached)
+      + ' &middot; out ' + _formatTokens(outTok)
       + '</div>';
     el.title = total.toLocaleString() + ' tokens ('
-      + _formatTokens(inTok) + ' in incl. cache, '
+      + _formatTokens(inFresh) + ' in, '
+      + _formatTokens(inCached) + ' in cached, '
       + _formatTokens(outTok) + ' out)'
       + (presentation ? ' · ' + costText.tooltip : '');
     el.hidden = false;
@@ -49880,6 +49887,36 @@
     _shipLogRepo = repo;
     const data = await _refreshShipStatus(repo, null, true);
     if (data && data.job) _renderShipLogPanel(repo, data);
+  }
+
+  // One /api/repo/ship/status call costs a git subprocess server-side (~330ms
+  // measured) and the sidebar carries ~21 repo headers. Hydrating them all
+  // eagerly on every render fired 21 requests that saturated the browser's
+  // 6-connections-per-origin pool, so on mobile the transcript fetch for the
+  // conversation you just tapped queued behind a pile of git status calls.
+  // Fetch a repo's status the first time its header actually scrolls into
+  // view; repos below the fold cost nothing until you reach them, and the 15s
+  // TTL in _refreshShipStatus still de-dupes across re-renders.
+  let _shipVisibilityObserver = null;
+  function _resetShipVisibilityObserver() {
+    // Each sidebar render replaces the boxes, so previously observed elements
+    // are detached and would never intersect — drop them instead of leaking.
+    if (_shipVisibilityObserver) _shipVisibilityObserver.disconnect();
+  }
+  function _observeShipBoxForRefresh(box, repo) {
+    if (!box || !repo) return;
+    if (typeof IntersectionObserver !== 'function') { _refreshShipStatus(repo, box); return; }
+    if (!_shipVisibilityObserver) {
+      _shipVisibilityObserver = new IntersectionObserver((entries, obs) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          obs.unobserve(entry.target);
+          const seen = entry.target.getAttribute('data-ship-repo') || '';
+          if (seen) _refreshShipStatus(seen, entry.target);
+        }
+      }, { rootMargin: '200px' });
+    }
+    _shipVisibilityObserver.observe(box);
   }
 
   async function _refreshShipStatus(repo, box, force) {
