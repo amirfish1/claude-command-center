@@ -37669,9 +37669,9 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         # approval ask and hold the episode until the user answers it from
         # the dashboard (approve → interrupt below; dismiss → suppress).
         ask_reason = (
-            "Codex turn went silent — interrupt it so recovery can resume the task?"
+            "Codex turn went silent. Interrupt it so recovery can resume the task?"
             if silent_turn else
-            "Codex turn stalled after context compaction — interrupt it so recovery can resume the task?"
+            "Codex turn stalled after context compaction. Interrupt it so recovery can resume the task?"
         )
         ask = _file_interrupt_ask(
             sid, "codex-recovery", ask_reason, {"kind": "codex-interrupt"})
@@ -55485,7 +55485,7 @@ def _reap_idle_sessions(now=None):
                 _file_interrupt_ask(
                     sid, "idle-reaper",
                     f"Session idle {idle_h}h but a tool subprocess is still "
-                    "running — approve to SIGTERM it, dismiss to leave it alone.",
+                    "running. Approve to SIGTERM it, dismiss to leave it alone.",
                     {"kind": "sigterm", "pid": pid_int},
                 )
             except Exception:

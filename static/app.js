@@ -3722,7 +3722,7 @@
       card.style.cssText = 'display:flex;align-items:flex-start;gap:10px;background:var(--surface);border:1px solid var(--yellow, #d4a72c);padding:10px 14px;border-radius:8px;font-size:12px;color:var(--text);box-shadow:0 4px 12px rgba(0,0,0,0.4);';
       const body = document.createElement('div');
       body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
-      body.innerHTML = '<strong>CCC wants to interrupt this session — approve?</strong><br>'
+      body.innerHTML = '<strong>CCC wants to interrupt this session. Approve?</strong><br>'
         + '<span style="color:var(--text-muted)">' + escapeHtml(label) + ': ' + escapeHtml(ask.reason || '') + '</span>';
       card.appendChild(body);
       const resolve = async (decision) => {
