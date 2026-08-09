@@ -3646,9 +3646,9 @@
         logKind = 'stale';
         _appendActivityLog(logKind, 'Session "' + name + '" replaced (stale transcript)');
       } else if (reasonStr === 'request_interrupted') {
-        msg = '<strong>Session interrupted</strong>: ' + name + '<br>Claude was killed mid-turn (Request interrupted by user). The session is now stuck. Send a message to resume it.';
+        msg = '<strong>Request interrupt</strong>: ' + name + '<br>The turn was interrupted (Request interrupted by user). The session is now stuck. Send a message to resume it.';
         logKind = 'interrupt';
-        _appendActivityLog(logKind, 'Session interrupted (likely CCC kill mid-turn)');
+        _appendActivityLog(logKind, 'Request interrupt: ' + name);
       } else if (reasonStr === 'prewarm_expired') {
         // Prewarm expiry is already handled by the prewarm event handler —
         // skip the generic kill toast to avoid double-notification.

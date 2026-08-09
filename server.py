@@ -14042,7 +14042,7 @@ def _emit_interrupt_event(sid, uuid_str, *, source, agent_name="", event_ts=None
     try:
         _log_activity(
             "interrupt", "INTERRUPT",
-            f"sid={sid} — Request interrupted (likely CCC kill, not user)",
+            f"sid={sid} — Request interrupt",
         )
         _resume_ledger_append(
             "interrupt", sid=sid,
