@@ -9,6 +9,13 @@
 // First launch (no ~/.ccc/claude-command-center on disk) runs the bundled
 // install.sh as an owned child process. The app observes installation and
 // server startup directly, with no Terminal automation or extra permission.
+//
+// CCC_URL is configurable (FEAT-NEXT-10): set the CCC_REMOTE_URL env var, or
+// use the App menu's "Set Remote Server…" item, to point this shell at a CCC
+// already running elsewhere (e.g. a tailnet host). When the resolved target
+// is not localhost, the app never installs or spawns a local server — it's a
+// thin client against the remote instance. Default (nothing set) is unchanged:
+// http://localhost:8090, with the usual local install/spawn.
 
 import Cocoa
 import WebKit
@@ -27,7 +34,31 @@ let CCC_LOG_PATH = "\(CCC_LOG_DIR)/app-server.log"
 // if the user has wired one (see ccc-voice), they drop an executable .command here and
 // the menu item appears. Graceful absence, like the Morning view plugin.
 let CCC_CAR_MODE_CMD = NSString(string: "~/.ccc/car-mode.command").expandingTildeInPath
-let CCC_URL = URL(string: "http://localhost:\(CCC_PORT)")!
+// FEAT-NEXT-10: let the native shell target a CCC already running elsewhere
+// (e.g. on a tailnet host) instead of always spawning one locally. Priority:
+// CCC_REMOTE_URL env var (automation/tests) > the "Set Remote Server…" menu
+// item's UserDefaults value > the local default. Both overrides are unset
+// out of the box, so an existing user sees no behavior change.
+let CCC_REMOTE_URL_DEFAULTS_KEY = "CCCRemoteServerURL"
+
+func resolveCCCTargetURL() -> URL {
+    if let envValue = CCC_ENV["CCC_REMOTE_URL"], !envValue.isEmpty, let url = URL(string: envValue) {
+        return url
+    }
+    if let stored = UserDefaults.standard.string(forKey: CCC_REMOTE_URL_DEFAULTS_KEY),
+       !stored.isEmpty, let url = URL(string: stored) {
+        return url
+    }
+    return URL(string: "http://localhost:\(CCC_PORT)")!
+}
+
+let CCC_URL = resolveCCCTargetURL()
+// True when CCC_URL points somewhere other than this Mac — thin-client mode:
+// bootstrap() must never install/spawn a local server in that case.
+let CCC_TARGET_IS_REMOTE: Bool = {
+    let host = (CCC_URL.host ?? "").lowercased()
+    return !host.isEmpty && host != "localhost" && host != "127.0.0.1" && host != "0.0.0.0"
+}()
 let CCC_BUNDLE_VERSION = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "dev"
 let CCC_MAIN_MIN_WIDTH: CGFloat = 420
 let CCC_MAIN_MIN_HEIGHT: CGFloat = 600
@@ -134,15 +165,26 @@ func isLocalDashboardURL(_ url: URL) -> Bool {
     if scheme == "about" || scheme == "data" || scheme == "blob" { return true }
     if scheme != "http" && scheme != "https" { return false }
     let host = (url.host ?? "").lowercased()
-    let isLocalHost = host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
-    if !isLocalHost { return false }
+    // Historically this only ever matched localhost aliases, because the
+    // dashboard only ever ran on this Mac. Now CCC_URL may point at a remote
+    // host (FEAT-NEXT-10) — match against whatever CCC_URL's host actually
+    // is, falling back to the localhost-alias set when it is local.
+    let targetHost = (CCC_URL.host ?? "").lowercased()
+    let hostMatches: Bool
+    if CCC_TARGET_IS_REMOTE {
+        hostMatches = host == targetHost
+    } else {
+        hostMatches = host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0"
+    }
+    if !hostMatches { return false }
     // Only OUR dashboard port is the in-app dashboard. Other localhost ports
     // (e.g. the Next.js dev server the "localhost" pill links to) are external
     // sites — they must open in the browser, not spawn a duplicate in-app
     // window (CCC-39). Default ports (no explicit :port) are never the CCC
-    // dashboard, which always runs on CCC_PORT.
+    // dashboard, which always runs on CCC_PORT (or CCC_URL's port, remotely).
     let port = url.port ?? (scheme == "https" ? 443 : 80)
-    return port == CCC_PORT
+    let targetPort = CCC_URL.port ?? (CCC_URL.scheme == "https" ? 443 : 80)
+    return port == targetPort
 }
 
 func isConversationPopoutURL(_ url: URL) -> Bool {
@@ -590,6 +632,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         updatesItem.target = updaterController
         appMenu.addItem(updatesItem)
+        // FEAT-NEXT-10: point this app at a CCC already running elsewhere
+        // (e.g. a tailnet host) instead of always spawning one locally.
+        appMenu.addItem(withTitle: "Set Remote Server…",
+                        action: #selector(setRemoteServer),
+                        keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         // Car Mode (Voice) — only when a local launcher is wired (see ccc-voice).
         if carModeCommandExists() {
@@ -731,6 +778,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         """
         alert.alertStyle = .informational
         alert.runModal()
+    }
+
+    // FEAT-NEXT-10: let the user point this native shell at a CCC already
+    // running elsewhere (e.g. reachable via Tailscale) instead of always
+    // spawning a local server. Stored in UserDefaults; CCC_URL is a `let`
+    // resolved once at process start, so the new target only takes effect
+    // after a restart — same tradeoff as the existing CCC_PORT/CCC_INSTALL_DIR
+    // env-var overrides, which also require relaunch.
+    @objc func setRemoteServer() {
+        let alert = NSAlert()
+        alert.messageText = "Remote CCC Server"
+        alert.informativeText =
+            "Point this app at a CCC instance already running elsewhere "
+            + "(e.g. http://100.x.x.x:8090 over Tailscale). Leave blank to use "
+            + "the local server on this Mac (default)."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        input.stringValue = UserDefaults.standard.string(forKey: CCC_REMOTE_URL_DEFAULTS_KEY) ?? ""
+        input.placeholderString = "http://localhost:\(CCC_PORT)"
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: CCC_REMOTE_URL_DEFAULTS_KEY)
+        } else if let url = URL(string: trimmed), url.scheme != nil, url.host != nil {
+            UserDefaults.standard.set(trimmed, forKey: CCC_REMOTE_URL_DEFAULTS_KEY)
+        } else {
+            let bad = NSAlert()
+            bad.messageText = "Invalid URL"
+            bad.informativeText = "\"\(trimmed)\" doesn't look like a valid URL (e.g. http://100.x.x.x:8090)."
+            bad.alertStyle = .warning
+            bad.runModal()
+            return
+        }
+
+        let restart = NSAlert()
+        restart.messageText = "Restart required"
+        restart.informativeText = "Quit and reopen Command Center for the new server target to take effect."
+        restart.alertStyle = .informational
+        restart.addButton(withTitle: "Quit Now")
+        restart.addButton(withTitle: "Later")
+        if restart.runModal() == .alertFirstButtonReturn {
+            NSApp.terminate(nil)
+        }
     }
 
     // Launch the local Car Mode voice helper. `open` runs the .command in Terminal,
@@ -879,6 +974,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Bootstrap
 
     func bootstrap() {
+        if CCC_TARGET_IS_REMOTE {
+            // Thin-client mode (FEAT-NEXT-10): CCC_URL points at a CCC
+            // already running elsewhere (e.g. over Tailscale). Never install
+            // or spawn a local server — just load the remote dashboard.
+            loadDashboard()
+            return
+        }
+
         if !FileManager.default.fileExists(atPath: CCC_INSTALL_DIR) {
             // First-time install. Run the bundled installer as our child so
             // progress, failures, and the resulting server stay observable.
@@ -1065,6 +1168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard stuck >= self.watchdogGrace else { return }
 
             // Stage 2: reload didn't clear it → the server is wedged. Restart it.
+            // There is no local server to restart in thin-client mode — stop
+            // escalating past the reload and surface a network-facing message.
+            if self.watchdogReloaded && !self.watchdogRestarted && CCC_TARGET_IS_REMOTE {
+                self.stopWatchdog()
+                self.loadingLabel.isHidden = false
+                self.loadingLabel.stringValue =
+                    "Can't reach \(CCC_URL.absoluteString) — check your network/Tailscale connection."
+                return
+            }
             if self.watchdogReloaded && !self.watchdogRestarted {
                 guard self.watchdogRestartCount < 2 else {
                     self.stopWatchdog()
