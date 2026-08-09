@@ -3680,6 +3680,89 @@
     }
   }
 
+  // ── CCC interrupt-approval asks ──
+  // CCC never interrupts a possibly-mid-turn session on its own: the server
+  // files an ask instead (idle reaper mid-turn guard, Codex stalled-turn
+  // recovery) and this banner surfaces it. Approve executes the interrupt;
+  // Dismiss snoozes the asker. Polled via /api/sessions/live-activity.
+  const _interruptAskLogged = new Set();
+
+  function _interruptAskSessionLabel(sid) {
+    const row = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
+      ? conversationsData.find(c => c && (c.id === sid || c.session_id === sid))
+      : null;
+    const name = row && (row.display_name || row.ai_title || row.title || row.name);
+    return name ? String(name) : (String(sid || '').slice(0, 8) || 'unknown');
+  }
+
+  function _renderInterruptAsks(asks) {
+    let host = document.getElementById('interruptAsks');
+    if (!Array.isArray(asks)) asks = [];
+    if (!asks.length) { if (host) host.remove(); return; }
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'interruptAsks';
+      host.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:9998;max-width:560px;width:min(560px,92vw);';
+      document.body.appendChild(host);
+    }
+    const wanted = new Set(asks.map(a => a && a.id).filter(Boolean));
+    host.querySelectorAll('[data-ask-id]').forEach(el => {
+      if (!wanted.has(el.dataset.askId)) el.remove();
+    });
+    for (const ask of asks) {
+      if (!ask || !ask.id) continue;
+      if (host.querySelector('[data-ask-id="' + ask.id + '"]')) continue;
+      const label = _interruptAskSessionLabel(ask.sid);
+      if (!_interruptAskLogged.has(ask.id)) {
+        _interruptAskLogged.add(ask.id);
+        _appendActivityLog('interrupt', 'CCC asks to interrupt "' + label + '": ' + (ask.reason || ''));
+      }
+      const card = document.createElement('div');
+      card.dataset.askId = ask.id;
+      card.style.cssText = 'display:flex;align-items:flex-start;gap:10px;background:var(--surface);border:1px solid var(--yellow, #d4a72c);padding:10px 14px;border-radius:8px;font-size:12px;color:var(--text);box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+      const body = document.createElement('div');
+      body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
+      body.innerHTML = '<strong>CCC wants to interrupt this session — approve?</strong><br>'
+        + '<span style="color:var(--text-muted)">' + escapeHtml(label) + ': ' + escapeHtml(ask.reason || '') + '</span>';
+      card.appendChild(body);
+      const resolve = async (decision) => {
+        card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        try {
+          const res = await fetch('/api/interrupt-asks/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: ask.id, decision }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.ok) {
+            _appendActivityLog('interrupt', (decision === 'approve' ? 'Approved' : 'Dismissed')
+              + ' interrupt for "' + label + '"' + (data.note ? ' (' + data.note + ')' : ''));
+          } else if (typeof showOpToast === 'function') {
+            showOpToast('Interrupt ask failed: ' + ((data && data.error) || 'unknown error'), 'error');
+          }
+        } catch (_) {
+          if (typeof showOpToast === 'function') showOpToast('Interrupt ask failed: network error', 'error');
+        }
+        card.remove();
+        const remaining = document.getElementById('interruptAsks');
+        if (remaining && !remaining.querySelector('[data-ask-id]')) remaining.remove();
+      };
+      const approveBtn = document.createElement('button');
+      approveBtn.type = 'button';
+      approveBtn.textContent = 'Approve';
+      approveBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:var(--red, #d64545);border:1px solid var(--red, #d64545);color:#fff;border-radius:4px;padding:3px 10px;font-size:11px;line-height:1.4;';
+      approveBtn.addEventListener('click', (e) => { e.stopPropagation(); resolve('approve'); });
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button';
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:3px 10px;font-size:11px;line-height:1.4;';
+      dismissBtn.addEventListener('click', (e) => { e.stopPropagation(); resolve('dismiss'); });
+      card.appendChild(approveBtn);
+      card.appendChild(dismissBtn);
+      host.appendChild(card);
+    }
+  }
+
   // ── CCC activity log panel ──
   // Reuses the same attentionPanel as the "Push all" ship log (bottom left).
   // Shows a live feed of prewarm spawns/claims and session kills/stale
@@ -3757,6 +3840,8 @@
       // Surface prewarm lifecycle events so the user can see when CCC is
       // pre-warming a session ahead of time, and when it's claimed or expires.
       try { _handlePrewarmEvents(data.prewarm_events || []); } catch (_) {}
+      // Pending "CCC wants to interrupt this session" approval asks.
+      try { _renderInterruptAsks(data.interrupt_asks || []); } catch (_) {}
       const sessions = (data && data.sessions) || {};
       const liveIds = new Set(Object.keys(sessions));
       for (const [sid, fields] of Object.entries(sessions)) {

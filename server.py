@@ -14126,6 +14126,207 @@ def _emit_interrupts_from_meta(meta, path_stem):
             )
 
 
+# ── CCC-initiated interrupt approvals ─────────────────────────────────────
+# CCC must never interrupt/kill a session that could be mid-turn on its own.
+# Any automatic path that wants to (Codex compaction/silent-turn recovery,
+# the idle reaper hitting a session with an active tool child) files an ask
+# here instead. The UI surfaces pending asks with Approve/Dismiss; only an
+# approved ask executes the interrupt. Fully-idle reaping (no active tool
+# child) stays automatic — nothing in-flight is lost there.
+#
+# File-backed because the asker and the resolver live in different processes:
+# the worker runs the Codex recovery pump, the dashboard serves the resolve
+# endpoint. Mutations flock() the file so the two can't lose each other's
+# writes.
+_INTERRUPT_ASKS_FILE = COMMAND_CENTER_STATE_DIR / "interrupt-asks.json"
+_INTERRUPT_ASKS_LOCK = threading.Lock()
+_INTERRUPT_ASK_PENDING_TTL_S = 24 * 3600     # unanswered asks expire
+_INTERRUPT_ASK_DISMISS_SNOOZE_S = 6 * 3600   # dismissed → don't re-ask for 6h
+_INTERRUPT_ASK_RESOLVED_KEEP_S = 48 * 3600   # prune resolved entries after 48h
+
+
+def _interrupt_asks_mutate(fn):
+    """Load → fn(asks) → save, atomically across threads AND processes.
+
+    `fn` receives the pruned list and returns (asks, result); the list is
+    written back with an atomic replace while an flock on the file is held.
+    """
+    with _INTERRUPT_ASKS_LOCK:
+        COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        lock_path = _INTERRUPT_ASKS_FILE.with_suffix(".lock")
+        with open(lock_path, "w") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                asks = _interrupt_asks_read_unlocked()
+                asks, result = fn(asks)
+                tmp = _INTERRUPT_ASKS_FILE.with_suffix(".tmp")
+                tmp.write_text(json.dumps({"asks": asks}, indent=1))
+                os.replace(tmp, _INTERRUPT_ASKS_FILE)
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+    return result
+
+
+def _interrupt_asks_read_unlocked(now=None):
+    """Read + prune the ask list. Callers hold the flock (or accept a
+    read-only, possibly-momentarily-stale view for polling)."""
+    now = time.time() if now is None else now
+    try:
+        raw = json.loads(_INTERRUPT_ASKS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    asks = raw.get("asks") if isinstance(raw, dict) else None
+    if not isinstance(asks, list):
+        return []
+    kept = []
+    for a in asks:
+        if not isinstance(a, dict):
+            continue
+        status = a.get("status") or "pending"
+        created = float(a.get("created_at") or 0)
+        resolved = float(a.get("resolved_at") or 0)
+        if status == "pending" and now - created > _INTERRUPT_ASK_PENDING_TTL_S:
+            continue
+        if status != "pending" and resolved and now - resolved > _INTERRUPT_ASK_RESOLVED_KEEP_S:
+            continue
+        kept.append(a)
+    return kept
+
+
+def _file_interrupt_ask(sid, source, reason, action, name=""):
+    """File (or refresh) an approval ask for a CCC-initiated interrupt.
+
+    Dedup key is (sid, source). Returns the authoritative entry:
+      * an existing pending/approved entry wins (no duplicate asks);
+      * a dismissed entry inside the snooze window is returned as-is so the
+        caller can back off instead of nagging;
+      * anything else (no entry, expired, executed, stale dismissal) files a
+        fresh pending ask.
+    """
+    sid = str(sid or "").strip()
+    if not sid:
+        return None
+
+    def mutate(asks):
+        now = time.time()
+        for a in asks:
+            if a.get("sid") != sid or a.get("source") != source:
+                continue
+            status = a.get("status") or "pending"
+            if status in ("pending", "approved"):
+                return asks, a
+            if status == "dismissed" and now - float(a.get("resolved_at") or 0) \
+                    < _INTERRUPT_ASK_DISMISS_SNOOZE_S:
+                return asks, a
+        entry = {
+            "id": str(uuid.uuid4()),
+            "sid": sid,
+            "name": str(name or ""),
+            "source": str(source or ""),
+            "reason": str(reason or ""),
+            "action": action if isinstance(action, dict) else {},
+            "status": "pending",
+            "created_at": round(time.time(), 3),
+        }
+        # Replace any stale entry for the same (sid, source) so the list
+        # holds at most one row per asker per session.
+        asks = [a for a in asks
+                if not (a.get("sid") == sid and a.get("source") == source)]
+        asks.append(entry)
+        _log_activity(
+            "interrupt-ask", "ASK",
+            f"sid={sid} source={source} — {reason}",
+        )
+        return asks, entry
+
+    try:
+        return _interrupt_asks_mutate(mutate)
+    except OSError:
+        return None
+
+
+def _mark_interrupt_ask(ask_id, status, note=""):
+    def mutate(asks):
+        hit = None
+        for a in asks:
+            if a.get("id") == ask_id:
+                a["status"] = status
+                a["resolved_at"] = round(time.time(), 3)
+                if note:
+                    a["note"] = str(note)
+                hit = a
+                break
+        return asks, hit
+    try:
+        return _interrupt_asks_mutate(mutate)
+    except OSError:
+        return None
+
+
+def _pending_interrupt_asks():
+    """Pending asks for the live-activity poll (read-only, lock-free)."""
+    return [a for a in _interrupt_asks_read_unlocked()
+            if (a.get("status") or "pending") == "pending"]
+
+
+def _resolve_interrupt_ask(ask_id, decision):
+    """Approve or dismiss an ask from the UI.
+
+    Dismiss just marks the entry (askers snooze on it). Approve executes the
+    stored action when this process can (sigterm), or marks the entry
+    `approved` for the owning process to consume (codex-interrupt — the
+    recovery pump in the worker picks it up on its next tick).
+    """
+    ask_id = str(ask_id or "").strip()
+    if not ask_id:
+        return {"ok": False, "error": "missing ask id"}
+    if decision not in ("approve", "dismiss"):
+        return {"ok": False, "error": "decision must be approve or dismiss"}
+
+    if decision == "dismiss":
+        hit = _mark_interrupt_ask(ask_id, "dismissed")
+        if hit is None:
+            return {"ok": False, "error": "ask not found"}
+        _log_activity("interrupt-ask", "DISMISS",
+                      f"sid={hit.get('sid')} source={hit.get('source')}")
+        return {"ok": True, "status": "dismissed"}
+
+    hit = _mark_interrupt_ask(ask_id, "approved")
+    if hit is None:
+        return {"ok": False, "error": "ask not found"}
+    sid = hit.get("sid") or ""
+    action = hit.get("action") if isinstance(hit.get("action"), dict) else {}
+    kind = action.get("kind") or ""
+    _log_activity("interrupt-ask", "APPROVE",
+                  f"sid={sid} source={hit.get('source')} kind={kind}")
+    if kind == "sigterm":
+        pid = action.get("pid")
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            _mark_interrupt_ask(ask_id, "executed", note="invalid pid")
+            return {"ok": False, "error": "stored pid is invalid"}
+        if not _pid_is_engine_process(pid, "claude"):
+            _mark_interrupt_ask(ask_id, "executed", note="process already gone")
+            return {"ok": True, "status": "executed",
+                    "note": "process already gone"}
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (OSError, ProcessLookupError) as e:
+            _mark_interrupt_ask(ask_id, "executed", note=f"kill failed: {e}")
+            return {"ok": False, "error": f"kill failed: {e}"}
+        _resume_ledger_append(
+            "kill", sid=sid, pid=pid, source="interrupt_ask_approved",
+            reason=hit.get("reason") or "",
+        )
+        _mark_interrupt_ask(ask_id, "executed")
+        return {"ok": True, "status": "executed", "pid": pid}
+    # codex-interrupt (and any future owner-executed kind): leave `approved`;
+    # the asker consumes it on its next tick and marks it executed.
+    return {"ok": True, "status": "approved",
+            "note": "queued — the owning process executes it shortly"}
+
+
 # Ring buffer of prewarm lifecycle events (spawned, claimed, expired), surfaced
 # to the UI so the user can see when CCC is pre-warming a session ahead of time
 # and when the reservation is claimed or expires unused.
@@ -37464,6 +37665,37 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
         )
 
     if active_turn:
+        # CCC never interrupts a live turn on its own authority. File an
+        # approval ask and hold the episode until the user answers it from
+        # the dashboard (approve → interrupt below; dismiss → suppress).
+        ask_reason = (
+            "Codex turn went silent — interrupt it so recovery can resume the task?"
+            if silent_turn else
+            "Codex turn stalled after context compaction — interrupt it so recovery can resume the task?"
+        )
+        ask = _file_interrupt_ask(
+            sid, "codex-recovery", ask_reason, {"kind": "codex-interrupt"})
+        ask_status = (ask or {}).get("status") or "pending"
+        if ask is None or ask_status == "pending":
+            with _CODEX_APP_SERVER_LOCK:
+                state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+                recovery = state.get("compaction_recovery")
+                if isinstance(recovery, dict):
+                    recovery["reason"] = (
+                        "Waiting for approval to interrupt the stalled turn"
+                    )
+                    recovery["next_attempt_at"] = now + 30.0
+                    _save_codex_app_server_state_unlocked()
+            return {"ok": True, "waiting": "interrupt-approval"}
+        if ask_status == "dismissed":
+            with _CODEX_APP_SERVER_LOCK:
+                state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+                if isinstance(state.get("compaction_recovery"), dict):
+                    _codex_compaction_recovery_suppress_unlocked(
+                        state, "interrupt-declined", now)
+                    _save_codex_app_server_state_unlocked()
+            return {"ok": True, "suppressed": "interrupt-declined"}
+        # approved → the user said go; execute the interrupt.
         # Mark and persist before the RPC: Codex can emit turn/completed while
         # turn/interrupt is still waiting for its JSON-RPC response. Reset any
         # partial assistant delta so that interrupt completion cannot be
@@ -37490,6 +37722,8 @@ def _run_codex_compaction_recovery_once(session_id, now=None):
             )
             _save_codex_app_server_state_unlocked()
         interrupted = _codex_interrupt_via_app_server(sid)
+        if interrupted.get("ok") and isinstance(ask, dict) and ask.get("id"):
+            _mark_interrupt_ask(ask["id"], "executed")
         with _CODEX_APP_SERVER_LOCK:
             state = _CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
             recovery = state.get("compaction_recovery")
@@ -55193,6 +55427,10 @@ def _reap_idle_sessions(now=None):
     # lifecycle (watchtower.workers release/reap) — never SIGTERM one here.
     wt_pids, wt_sids = _wt_live_worker_guard()
     reaped = []
+    # Lazy batched process snapshot for the mid-turn guard below — built at
+    # most once per sweep, and only when a candidate actually crossed the
+    # idle cutoff (CLAUDE.md "Performance gates": no per-row subprocess).
+    ps_table = None
     for f in sessions_dir.glob("*.json"):
         try:
             data = json.loads(f.read_text())
@@ -55231,7 +55469,30 @@ def _reap_idle_sessions(now=None):
         if _session_repo_has_live_dev_server(data.get("cwd")):
             continue
         try:
-            os.kill(int(pid), _signal.SIGTERM)
+            pid_int = int(pid)
+        except (TypeError, ValueError):
+            continue
+        # Mid-turn guard: a direct tool child means the session only LOOKS
+        # idle — a long-running tool doesn't write transcript events. CCC
+        # never kills a possibly-mid-turn session on its own; file an
+        # approval ask for the dashboard instead. One batched ps snapshot
+        # per sweep, built lazily only when a candidate crossed the cutoff.
+        if ps_table is None:
+            ps_table = _spawn_reaper_process_table()
+        if _spawn_table_has_active_tool_child(ps_table, pid_int):
+            try:
+                idle_h = round((now - last_active) / 3600, 1)
+                _file_interrupt_ask(
+                    sid, "idle-reaper",
+                    f"Session idle {idle_h}h but a tool subprocess is still "
+                    "running — approve to SIGTERM it, dismiss to leave it alone.",
+                    {"kind": "sigterm", "pid": pid_int},
+                )
+            except Exception:
+                pass
+            continue
+        try:
+            os.kill(pid_int, _signal.SIGTERM)
             idle_hours = round((now - last_active) / 3600, 1)
             cwd = data.get("cwd") or ""
             last_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_active))
@@ -56954,6 +57215,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload["prewarm_events"] = _drain_new_prewarm_events(last_prewarm)
             except Exception:
                 payload["prewarm_events"] = []
+            try:
+                payload["interrupt_asks"] = _pending_interrupt_asks()
+            except Exception:
+                payload["interrupt_asks"] = []
             self.send_json(payload)
         elif path == "/api/codex/stuck-summary":
             # Cached fleet-level count for the footer monitor. This intentionally
@@ -63538,6 +63803,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             _record_interaction(sid)
             self.send_json(_set_auto_handover(sid, bool(payload.get("enabled"))))
+        elif path == "/api/interrupt-asks/resolve":
+            # Approve or dismiss a CCC-initiated interrupt ask (the "CCC
+            # wants to interrupt this session" banner).
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            self.send_json(_resolve_interrupt_ask(
+                payload.get("id"), payload.get("decision")))
         elif path == "/api/inject-esc":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
