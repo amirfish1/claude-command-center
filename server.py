@@ -6637,7 +6637,7 @@ def _archive_session_is_live_uncached(session_id):
         # keeps the syscall count identical while giving us the mtime to gate on.
         now = time.time()
         try:
-            for suffix in (".json", "_writes", "_in_flight.json", "_needs_approval.json"):
+            for suffix in (".json", "_writes", "_in_flight.json", "_needs_approval.json", "_compacting.json"):
                 try:
                     st = (SIDECAR_STATE_DIR / f"{session_id}{suffix}").stat()
                 except (OSError, ValueError):
@@ -6665,6 +6665,8 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
     "sidecar_file",
     "sidecar_ts",
     "sidecar_in_flight",
+    "is_compacting",
+    "compacting_trigger",
     "pending_tool",
     "pending_file",
     "last_event_type",
@@ -6729,6 +6731,8 @@ def _discover_live_session_ids():
                     sid = name[: -len("_in_flight")]
                 elif name.endswith("_needs_approval"):
                     sid = name[: -len("_needs_approval")]
+                elif name.endswith("_compacting"):
+                    sid = name[: -len("_compacting")]
                 else:
                     sid = name
                 if sid:
@@ -13911,7 +13915,10 @@ def _flow_index_payload():
 SIDECAR_STATE_DIR = Path.home() / ".claude" / "command-center" / "live-state"
 HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
 HOOK_MARKER = "command-center/hooks/"
-CCC_HOOK_SCRIPT_NAMES = ("pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py")
+CCC_HOOK_SCRIPT_NAMES = (
+    "pre-tool-use.py", "post-tool-use.py", "notification.py", "stop.py",
+    "pre-compact.py", "post-compact.py",
+)
 # Legacy marker (pre-rename) — kept so ensure_hooks_installed can detect old
 # entries in ~/.claude/settings.json and rewrite them to the new path.
 HOOK_MARKER_LEGACY = "log-viewer/hooks/"
@@ -21897,6 +21904,23 @@ def _read_in_flight_state(session_id):
     return None
 
 
+def _read_compacting_state(session_id):
+    """Return the PreCompact marker for a session, or None.
+
+    Written by pre-compact.py when Claude Code fires PreCompact, cleared by
+    post-compact.py on PostCompact. Presence means the session is mid-/compact
+    — a transient busy state, not a request for human input, so callers must
+    not fold it into needs_approval/question_waiting classification.
+    """
+    path = SIDECAR_STATE_DIR / f"{session_id}_compacting.json"
+    try:
+        if path.exists():
+            return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
 def _live_in_flight_or_none(session_id, inflight):
     """Drop a stale AskUserQuestion in-flight marker.
 
@@ -21978,13 +22002,15 @@ def _cleanup_stale_sidecars(live_session_ids):
             continue
         name = f.stem
         # Strip suffixes to get session_id (`_writes` flag, `_in_flight`
-        # marker, `_needs_approval` marker).
+        # marker, `_needs_approval` marker, `_compacting` marker).
         if name.endswith("_writes"):
             sid = name[:-len("_writes")]
         elif name.endswith("_in_flight"):
             sid = name[:-len("_in_flight")]
         elif name.endswith("_needs_approval"):
             sid = name[:-len("_needs_approval")]
+        elif name.endswith("_compacting"):
+            sid = name[:-len("_compacting")]
         else:
             sid = name
         if sid not in live_session_ids:
@@ -22129,6 +22155,12 @@ def _add_sidecar_fields(entry):
     sc = _read_sidecar_state(sid) if is_live else None
     inflight = _live_in_flight_or_none(sid, _read_in_flight_state(sid)) if is_live else None
     notif = _read_notification_state(sid) if is_live else None
+    compacting_state = _read_compacting_state(sid) if is_live else None
+    # Transient busy state, not a request for human input — deliberately kept
+    # separate from needs_approval/question_waiting so it never reclassifies
+    # the session into the "waiting" kanban column.
+    entry["is_compacting"] = bool(compacting_state)
+    entry["compacting_trigger"] = compacting_state.get("trigger", "") if compacting_state else ""
     entry["sidecar_status"] = sc.get("status") if sc else None
     entry["sidecar_has_writes"] = sc.get("has_writes", False) if sc else False
     entry["question_waiting"] = False
@@ -57396,6 +57428,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     status["sidecar_status"] = None
                     status["sidecar_ts"] = 0
                     status["sidecar_in_flight"] = False
+                compacting_state = _read_compacting_state(sid) if sid else None
+                status["is_compacting"] = bool(compacting_state)
+                status["compacting_trigger"] = compacting_state.get("trigger", "") if compacting_state else ""
                 # Default stale-tool fields so the response shape matches Codex
                 # (the UI reads stale_tool_call/age unconditionally). Filled in
                 # below when a long-running tool child is detected. Kimi sessions
@@ -66629,7 +66664,7 @@ def ensure_hooks_installed():
     # Code hook environments can run with a minimal PATH, where bare `python3`
     # exits 127 before our script even starts.
     rewrote_hooks = False
-    for kind in ("PreToolUse", "PostToolUse", "Notification", "Stop"):
+    for kind in ("PreToolUse", "PostToolUse", "Notification", "Stop", "PreCompact", "PostCompact"):
         for entry in hooks.get(kind, []) or []:
             for h in entry.get("hooks", []) or []:
                 cmd = h.get("command", "")
@@ -66724,8 +66759,45 @@ def ensure_hooks_installed():
         })
         print("  [hooks] Installed Stop hook")
 
+    # PreCompact / PostCompact hooks — mark a session as mid-/compact so the
+    # dashboard can show a "Compacting…" badge instead of a stale tool pill.
+    # No long timeout needed: unlike PreToolUse (which blocks on a relayed
+    # AskUserQuestion answer), these just write/clear a marker file and return.
+    pre_compact_hooks = hooks.setdefault("PreCompact", [])
+    has_pre_compact = any(
+        "pre-compact.py" in h.get("command", "") and HOOK_MARKER in h.get("command", "")
+        for entry in pre_compact_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not has_pre_compact:
+        pre_compact_hooks.append({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": _ccc_hook_command("pre-compact.py")
+            }]
+        })
+        print("  [hooks] Installed PreCompact hook")
+
+    post_compact_hooks = hooks.setdefault("PostCompact", [])
+    has_post_compact = any(
+        "post-compact.py" in h.get("command", "") and HOOK_MARKER in h.get("command", "")
+        for entry in post_compact_hooks
+        for h in entry.get("hooks", [])
+    )
+    if not has_post_compact:
+        post_compact_hooks.append({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": _ccc_hook_command("post-compact.py")
+            }]
+        })
+        print("  [hooks] Installed PostCompact hook")
+
     if (not has_pre_tool or not has_post_tool or not has_notification
-            or not has_stop or rewrote_hooks):
+            or not has_stop or not has_pre_compact or not has_post_compact
+            or rewrote_hooks):
         tmp_path = settings_path.with_suffix(".tmp")
         try:
             tmp_path.write_text(json.dumps(settings, indent=4) + "\n")

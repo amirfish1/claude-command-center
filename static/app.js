@@ -2779,7 +2779,7 @@
   const _sessionLiveOverlay = new Map();
   const _LIVE_OVERLAY_KEYS = [
     'is_live', 'state', 'ended_blocked', 'sidecar_status', 'sidecar_has_writes', 'sidecar_tool', 'sidecar_file',
-    'sidecar_ts', 'sidecar_in_flight', 'pending_tool', 'pending_file', 'last_event_type',
+    'sidecar_ts', 'sidecar_in_flight', 'is_compacting', 'compacting_trigger', 'pending_tool', 'pending_file', 'last_event_type',
     'needs_approval', 'needs_approval_message', 'question_waiting', 'question_text',
     'question_header', 'question_preamble', 'question_options', 'question_option_details',
     'codex_state', 'codex_fresh', 'codex_state_reason',
@@ -4548,6 +4548,8 @@
         sidecarStatus: data.sidecar_status || null,
         sidecarTs: data.sidecar_ts || 0,
         sidecarInFlight: !!data.sidecar_in_flight,
+        isCompacting: !!data.is_compacting,
+        compactingTrigger: data.compacting_trigger || '',
         codexState: data.codex_state || null,
         codexFresh: !!data.codex_fresh,
         codexStateReason: data.codex_state_reason || '',
@@ -4648,6 +4650,8 @@
           row.sidecar_status = data.sidecar_status || null;
           row.sidecar_ts = data.sidecar_ts || 0;
           row.sidecar_in_flight = !!data.sidecar_in_flight;
+          row.is_compacting = !!data.is_compacting;
+          row.compacting_trigger = data.compacting_trigger || '';
           row.pending_tool = Object.prototype.hasOwnProperty.call(data, 'pending_tool') ? (data.pending_tool || null) : (row.pending_tool || null);
           row.pending_file = Object.prototype.hasOwnProperty.call(data, 'pending_file') ? (data.pending_file || null) : (row.pending_file || null);
           row.pending_tool_ts = Object.prototype.hasOwnProperty.call(data, 'pending_tool_ts') ? (data.pending_tool_ts || 0) : (row.pending_tool_ts || 0);
@@ -4682,6 +4686,8 @@
         sidecar_status: data.sidecar_status || null,
         sidecar_ts: data.sidecar_ts || 0,
         sidecar_in_flight: !!data.sidecar_in_flight,
+        is_compacting: !!data.is_compacting,
+        compacting_trigger: data.compacting_trigger || '',
         needs_approval: !!data.needs_approval,
         needs_approval_message: data.needs_approval_message || '',
         question_waiting: !!data.question_waiting,
@@ -24733,6 +24739,13 @@
             + ' <span class="kanban-live-file">' + escapeHtml(liveActivityToolLabel(staleTool)) + '</span>'
             + (staleAge ? '<span class="kanban-live-age">' + escapeHtml(staleAge) + '</span>' : '')
             + '</div>';
+        } else if (c.is_live && c.is_compacting) {
+          // Transient busy state between turns — takes priority over the
+          // stale most-recently-completed-tool pill, which would otherwise
+          // misleadingly claim a tool is still "running" mid-/compact.
+          html += '<div class="kanban-live-tool in-flight" title="Compacting the conversation to free up context">'
+            + '<span class="kanban-live-name">▶ Compacting&hellip;</span>'
+            + '</div>';
         } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
           const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
           if (sidecarAge < 300) {
@@ -27026,6 +27039,13 @@
         const q = c.sidecar_file || c.question_text || 'Claude is asking a question';
         liveToolHtml = '<span class="conv-live-tool is-question" title="' + escapeHtml(q) + '">'
           + '<span class="conv-live-name">Question</span>'
+          + '</span>';
+      } else if (c.is_live && c.is_compacting) {
+        // Same priority rule as the kanban card: compacting is a transient
+        // busy state, not a stuck/completed tool — show it ahead of the
+        // stale sidecar_tool pill.
+        liveToolHtml = '<span class="conv-live-tool in-flight" title="Compacting the conversation to free up context">'
+          + '<span class="conv-live-name">▶ Compacting&hellip;</span>'
           + '</span>';
       } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool) {
         const sidecarAge = c.sidecar_ts ? Math.max(0, Math.floor(Date.now() / 1000 - c.sidecar_ts)) : 9999;
@@ -52437,6 +52457,8 @@
           sidecar_ts: c.sidecar_ts || 0,
           sidecar_in_flight: !!c.sidecar_in_flight,
           sidecar_has_writes: !!c.sidecar_has_writes,
+          is_compacting: !!c.is_compacting,
+          compacting_trigger: c.compacting_trigger || '',
           needs_approval: !!c.needs_approval,
           needs_approval_message: c.needs_approval_message || '',
           question_waiting: !!c.question_waiting,
@@ -52516,6 +52538,8 @@
         sidecar_ts: c.sidecar_ts || 0,
         sidecar_in_flight: !!c.sidecar_in_flight,
         sidecar_has_writes: !!c.sidecar_has_writes,
+        is_compacting: !!c.is_compacting,
+        compacting_trigger: c.compacting_trigger || '',
         pending_tool: c.pending_tool || null,
         pending_file: c.pending_file || null,
         pending_tool_ts: c.pending_tool_ts || 0,
