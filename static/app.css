@@ -7871,6 +7871,35 @@
       box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none;
     }
+    /* Spawn selectors (engine / model / effort) can be wider than a phone
+       viewport together, especially with a model like "K2.7 Coding". Keep them
+       on one horizontal row and scroll internally so the send/mic/tts button
+       cluster on the right never gets pushed off-screen. */
+    .conv-input-selectors {
+      flex: 1 1 auto;
+      min-width: 0;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .conv-input-selectors::-webkit-scrollbar { display: none; }
+    .conv-input-selectors > * {
+      flex-shrink: 0;
+    }
+    .conv-input-buttons {
+      flex-shrink: 0;
+    }
+    /* iOS Safari auto-zooms focused inputs below 16px. The inline style on the
+       spawn selects sets 12px for desktop density; force 16px on mobile so the
+       viewport doesn't zoom when the user taps a selector. */
+    .conv-input-bar select.engine-select,
+    .conv-input-bar select.model-select,
+    .conv-input-bar select.effort-select,
+    .conv-input-bar select#convInputIssueAction {
+      font-size: 16px !important;
+    }
     /* Submit+ is a desktop "phone-style" feature; on an actual phone the
        regular compose flow IS the phone experience — hide it to slim the row. */
     .conv-input-bar .submit-plus-btn { display: none !important; }
