@@ -3710,6 +3710,24 @@
     }
   });
 
+  // The banner is `position: fixed; top: 0` and overlays whatever is beneath
+  // it. On desktop that is one line over a topbar with slack. On a phone the
+  // same copy wraps to ~5 lines and lands squarely on #convToolbar, hiding the
+  // mobile Back button (it stays tappable, just invisible — "I click Back and
+  // I'm stuck"). Publish the real rendered height so the mobile layout can
+  // push itself down by exactly that much, and so the Details sheet can sit
+  // below the banner instead of behind it.
+  function syncBannerOffset() {
+    const shown = !$banner.hidden;
+    document.body.classList.toggle('has-injection-banner', shown);
+    document.documentElement.style.setProperty(
+      '--injection-banner-h', shown ? $banner.offsetHeight + 'px' : '0px');
+  }
+  try {
+    if (window.ResizeObserver) new ResizeObserver(syncBannerOffset).observe($banner);
+  } catch (_) {}
+  window.addEventListener('resize', syncBannerOffset);
+
   function poll() {
     fetch('/api/injection-health', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
@@ -3730,6 +3748,7 @@
           $banner.hidden = true;
           closeDetails();
         }
+        syncBannerOffset();
       })
       .catch(() => {});
   }

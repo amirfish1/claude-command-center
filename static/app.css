@@ -13194,6 +13194,37 @@
     }
     .mobile-back-btn:active { opacity: 0.6; }
 
+    /* The injection-health banner is `position: fixed; top: 0; z-index: 10000`.
+       Desktop gets one line over a topbar with slack; a phone wraps the same
+       copy to ~5 lines of red that lands squarely on #convToolbar, which is
+       where the mobile Back button lives. Back stayed hit-testable but was
+       invisible under the banner, so "I click Back and get stuck" was really
+       "I cannot see Back". Push the app down by the banner's measured height
+       instead of letting it overlay, and clamp the copy to two lines so a list
+       of session ids can never eat a fifth of the screen (Details still shows
+       the full list). */
+    body.has-injection-banner .sidebar {
+      padding-top: var(--injection-banner-h, 0px);
+      box-sizing: border-box;
+    }
+    body.has-injection-banner:not(.kanban-split) .main {
+      top: calc(var(--app-vv-top, 0px) + var(--injection-banner-h, 0px));
+      height: calc(var(--app-vh, 100vh) - var(--injection-banner-h, 0px));
+    }
+    .injection-health-banner {
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .injection-health-banner__text {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      min-width: 0;
+    }
+
     /* One scroll surface, not three portholes.
        Desktop splits the sidebar into stacked accordion panels, each its own
        scroller with `overscroll-behavior: contain`. That reads fine in a
@@ -15426,6 +15457,13 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   font-size: 11px;
   line-height: 1.3;
 }
+.status-rail-tokens .rail-tokens-cache {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
 .status-rail-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -16980,7 +17018,10 @@ body.status-pos-right #convToolbar {
 .drain-paused-banner__details:hover { background: rgba(255,255,255,0.15); }
 .injection-health-banner-details {
   position: fixed;
-  top: 39px; left: 0; right: 0;
+  /* 39px is the desktop one-line banner height. On a narrow viewport the copy
+     wraps and the banner grows, so follow its measured height (published by
+     syncBannerOffset in index.html) rather than sliding in behind it. */
+  top: var(--injection-banner-h, 39px); left: 0; right: 0;
   z-index: 9999;
   max-height: 40vh;
   overflow-y: auto;
