@@ -2483,7 +2483,7 @@
   function _archiveWindow() {
     try {
       const value = localStorage.getItem(ARCHIVE_WINDOW_KEY);
-      if (value === '1d' || value === '7d' || value === 'all') return value;
+      if (value === '8h' || value === '1d' || value === '7d' || value === 'all') return value;
     } catch (_) {}
     // Default to seven days on a fresh install. This is the shared upstream
     // window for both Active and All; a saved choice above always takes
@@ -2492,8 +2492,9 @@
   }
   function _archiveWindowCutoff() {
     const win = _archiveWindow();
-    const days = win === '7d' ? 7 : (win === '1d' ? 1 : null);
-    return days ? Math.floor(Date.now() / 1000) - (days * 24 * 3600) : null;
+    // '8h' is the "Now" window: the current working shift, not a calendar day.
+    const secs = win === '7d' ? 7 * 24 * 3600 : (win === '1d' ? 24 * 3600 : (win === '8h' ? 8 * 3600 : null));
+    return secs ? Math.floor(Date.now() / 1000) - secs : null;
   }
   function _archiveWindowRowTs(row) {
     if (!row) return 0;
@@ -29162,9 +29163,10 @@
       //     session attached to an object intentionally appears in both.
       //  3) "Unclassified" — loose sessions outside Current sessions, so nothing is
       //     dropped from view.
-      const _ipWindowDays = _ipWindow === '7d' ? 7 : (_ipWindow === '1d' ? 1 : null);
-      const _currentSessionsWindowS = _ipWindowDays ? (_ipWindowDays * 24 * 3600) : null;
-      const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all' : (_ipWindow === '7d' ? 'last 7d' : 'last 1d');
+      const _currentSessionsWindowS = _ipWindow === '7d' ? 7 * 24 * 3600
+        : (_ipWindow === '1d' ? 24 * 3600 : (_ipWindow === '8h' ? 8 * 3600 : null));
+      const _currentSessionsWindowLabel = _ipWindow === 'all' ? 'all'
+        : (_ipWindow === '7d' ? 'last 7d' : (_ipWindow === '1d' ? 'last 1d' : 'last 8h'));
       const _nowS = Date.now() / 1000;
       // Keep Current-session ordering and gap dividers aligned with the row's
       // displayed age: a CCC interaction can be newer than the transcript
@@ -29650,7 +29652,8 @@
       // chats are empty do we render the explicit empty state.
       const _hasGroupChatRows = (_gcItems || []).length > 0;
       if (!_hasGroupChatRows) {
-        const _emptyWindowLabel = _ipWindow === 'all' ? '' : (' in the last ' + (_ipWindow === '7d' ? '7 days' : 'day'));
+        const _emptyWindowLabel = _ipWindow === 'all' ? ''
+          : (' in the last ' + (_ipWindow === '7d' ? '7 days' : (_ipWindow === '1d' ? 'day' : '8 hours')));
         _activeRowsHtml = '<div class="archive-empty-state">No in-progress sessions' + _emptyWindowLabel + '.</div>';
       }
     }
@@ -29664,7 +29667,7 @@
     const _ipHiddenCount = ((_sessionConvs.length || 0) - (_visibleSessionConvs.length || 0))
       + _hiddenGroupChatCount;
     if (_ipHiddenCount > 0 && _ipWindow !== 'all') {
-      const _winLabel = _ipWindow === '7d' ? '7d' : '1d';
+      const _winLabel = _ipWindow === '7d' ? '7d' : (_ipWindow === '1d' ? '1d' : '8h');
       const _hiddenUnit = _hiddenGroupChatCount > 0 ? 'item' : 'session';
       _activeRowsHtml += '<div class="conv-inprogress-window-footer" data-role="inprogress-window-footer"'
         + ' role="button" tabindex="0"'
@@ -29688,6 +29691,7 @@
       // spans avoid nested-button HTML; click handlers stop propagation.
       const _ipWindowToggle = _hasFolderChips
         ? '<span class="conv-grouping-toggle conv-window-toggle" data-role="window-toggle" title="Limit In progress rows by recent activity">'
+            + '<span class="grouping-opt' + (_ipWindow === '8h' ? ' is-active' : '') + '" data-window="8h" title="Last 8 hours">Now</span>'
             + '<span class="grouping-opt' + (_ipWindow === '1d' ? ' is-active' : '') + '" data-window="1d">1d</span>'
             + '<span class="grouping-opt' + (_ipWindow === '7d' ? ' is-active' : '') + '" data-window="7d">7d</span>'
             + '<span class="grouping-opt' + (_ipWindow === 'all' ? ' is-active' : '') + '" data-window="all">All</span>'
@@ -30433,6 +30437,7 @@
       // window toggle's markup/classes (grouping-opt + data-window).
       const _arcWindowCur = _archiveWindow();
       const _arcWindowToggle = '<span class="conv-grouping-toggle conv-window-toggle" data-role="archived-window-toggle" title="Limit all rows by recent activity">'
+          + '<span class="grouping-opt' + (_arcWindowCur === '8h' ? ' is-active' : '') + '" data-window="8h" title="Last 8 hours">Now</span>'
           + '<span class="grouping-opt' + (_arcWindowCur === '1d' ? ' is-active' : '') + '" data-window="1d">1d</span>'
           + '<span class="grouping-opt' + (_arcWindowCur === '7d' ? ' is-active' : '') + '" data-window="7d">7d</span>'
           + '<span class="grouping-opt' + (_arcWindowCur === 'all' ? ' is-active' : '') + '" data-window="all">All</span>'
@@ -30788,7 +30793,7 @@
         const opt = ev.target.closest('[data-window]');
         if (!opt) return;
         const value = opt.getAttribute('data-window');
-        if (value !== '1d' && value !== '7d' && value !== 'all') return;
+        if (value !== '8h' && value !== '1d' && value !== '7d' && value !== 'all') return;
         _refreshArchiveWindow(value);
       });
     }
@@ -31943,7 +31948,7 @@
         const opt = ev.target.closest('[data-window]');
         if (!opt) return;
         const value = opt.getAttribute('data-window');
-        if (value !== '1d' && value !== '7d' && value !== 'all') return;
+        if (value !== '8h' && value !== '1d' && value !== '7d' && value !== 'all') return;
         // Unified window key (CCC-168 follow-up): write the SAME key the data
         // feed reads (ccc-archive-window), so this visible Active-tab toggle
         // controls the real upstream window — not a dead downstream key.
@@ -51945,7 +51950,7 @@
     return document.getElementById('convSearch')?.value || '';
   }
   function _refreshArchiveWindow(value) {
-    const next = (value === '1d' || value === '7d' || value === 'all') ? value : 'all';
+    const next = (value === '8h' || value === '1d' || value === '7d' || value === 'all') ? value : 'all';
     try { localStorage.setItem(ARCHIVE_WINDOW_KEY, next); } catch (_) {}
     const query = _archiveQuery();
     if (!archiveLoaded || archiveDataWindow !== next) {
@@ -52307,9 +52312,10 @@
     // active list). 'all' applies no cutoff. Recency uses the same `modified`
     // / `mtime` epoch-seconds field the shaping pass reads below.
     const _arcWindow = _archiveWindow();
-    const _arcWindowDays = _arcWindow === '7d' ? 7 : (_arcWindow === '1d' ? 1 : null);
-    const _arcWindowCutoff = _arcWindowDays
-      ? Math.floor(Date.now() / 1000) - (_arcWindowDays * 24 * 3600)
+    const _arcWindowSecs = _arcWindow === '7d' ? 7 * 24 * 3600
+      : (_arcWindow === '1d' ? 24 * 3600 : (_arcWindow === '8h' ? 8 * 3600 : null));
+    const _arcWindowCutoff = _arcWindowSecs
+      ? Math.floor(Date.now() / 1000) - _arcWindowSecs
       : null;
     // An active text search must span every session, not just the current
     // time window — otherwise a session older than the window (or one with no

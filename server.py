@@ -9786,12 +9786,13 @@ _ARCHIVE_LIST_FIELDS = (
 
 def _archive_list_window(value):
     value = (value or "all").strip().lower()
-    return value if value in ("1d", "7d", "all") else "all"
+    return value if value in ("8h", "1d", "7d", "all") else "all"
 
 
 def _archive_list_window_cutoff(window, now=None):
-    days = {"1d": 1, "7d": 7}.get(_archive_list_window(window))
-    return (time.time() if now is None else now) - days * 86400 if days else None
+    # "8h" is the "Now" window — the current working shift, not a calendar day.
+    seconds = {"8h": 8 * 3600, "1d": 86400, "7d": 7 * 86400}.get(_archive_list_window(window))
+    return (time.time() if now is None else now) - seconds if seconds else None
 
 
 def _archive_list_row_ts(row):
@@ -10845,7 +10846,7 @@ def _build_archive_conversations(
 
 def archive_window_since_epoch(window: str, now: float | None = None) -> float | None:
     """Translate the public archive window into a server-side time bound."""
-    seconds = {"1d": 24 * 60 * 60, "7d": 7 * 24 * 60 * 60}.get(window)
+    seconds = {"8h": 8 * 60 * 60, "1d": 24 * 60 * 60, "7d": 7 * 24 * 60 * 60}.get(window)
     if seconds is None:
         return None
     return (time.time() if now is None else now) - seconds
