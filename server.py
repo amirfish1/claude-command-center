@@ -10419,6 +10419,30 @@ def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
                 _archive_serve_refreshing.pop(key, None)
 
 
+def _overlay_conversation_lifecycle_flags(rows):
+    """Re-stamp archived/trashed from the lifecycle sidecars, in place.
+
+    Lifecycle mutations (archive/trash/merge) clear the in-memory serve cache
+    but not the durable response cache, whose rows still carry pre-mutation
+    flags. The cold-serve fallback below would otherwise serve those stale
+    flags — resurrecting a just-trashed row in the dashboard until the next
+    detached refresh landed. One batched sidecar read, no per-row I/O, so it
+    stays cheap on the cold-serve path that exists to avoid rehydration cost.
+    """
+    try:
+        archived_set, trashed_set = _load_conversation_lifecycle_sets()
+    except Exception:
+        return rows
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("session_id") or row.get("id")
+        if sid:
+            row["archived"] = sid in archived_set
+            row["trashed"] = sid in trashed_set
+    return rows
+
+
 def _archive_serve_rows(key, cache_options):
     rows, from_cache, _snap_ver = _archive_serve_rows_versioned(key, cache_options)
     return rows, from_cache
@@ -10509,10 +10533,10 @@ def _archive_serve_rows_versioned(
             entry = _archive_response_cache_get(base_key)
             borrowed_base_snapshot = bool(entry and entry.get("conversations"))
     if entry and entry.get("conversations"):
-        rows = [
+        rows = _overlay_conversation_lifecycle_flags([
             dict(row) for row in (entry.get("conversations") or [])
             if isinstance(row, dict)
-        ]
+        ])
         stored = _archive_serve_cache_store(
             key, rows, serve_generation, ts=entry.get("cached_at"),
         )
@@ -34609,7 +34633,9 @@ _KIMI_GOAL_READ_PREFIX = (
     "<ccc-kimi-goal>\n"
     "The slash-shaped user message below is a CCC compatibility "
     "command, not a Kimi ACP command. Use your GetGoal tool to inspect "
-    "the current durable goal, then report its objective and status.\n"
+    "the current durable goal, then report its objective and status. "
+    "If you need to clear or complete it, use UpdateGoal rather than a "
+    "CLI slash command.\n"
     "</ccc-kimi-goal>\n"
 )
 
@@ -34619,7 +34645,10 @@ _KIMI_GOAL_CREATE_PREFIX = (
     "not a Kimi ACP command. The user explicitly requested a durable goal. "
     "Use your CreateGoal tool with the text after `/goal` as the objective, "
     "then pursue it autonomously until its completion criterion is "
-    "satisfied.\n"
+    "satisfied. If the goal must be cleared or completed early, use "
+    "UpdateGoal rather than `/goal clear`. If context is filling up, use "
+    "the compact-to-queue skill to preserve open work instead of relying "
+    "on the CLI-only `/compact`.\n"
     "</ccc-kimi-goal>\n"
 )
 

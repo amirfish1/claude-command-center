@@ -14,6 +14,8 @@ def test_kimi_goal_command_uses_native_goal_tool_without_forwarding_slash():
 
     assert not translated.startswith("/")
     assert "CreateGoal" in translated
+    assert "UpdateGoal" in translated
+    assert "compact-to-queue" in translated
     assert "please fix the spawn failure so it never happens again" in translated
 
 
@@ -22,6 +24,7 @@ def test_kimi_bare_goal_command_reads_native_goal():
 
     assert not translated.startswith("/")
     assert "GetGoal" in translated
+    assert "UpdateGoal" in translated
 
 
 def test_kimi_goal_translation_leaves_other_prompts_unchanged():
