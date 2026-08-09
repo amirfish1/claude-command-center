@@ -57349,9 +57349,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # to a loaded thread and run thread/compact), or is there no
                 # live app-server (a Codex action would then lazily spawn one /
                 # fall back to one-shot `codex exec`). Read-only, cheap.
+                #
+                # _codex_app_server_is_live() reads THIS process's own
+                # transport global, which is empty in the dashboard because
+                # the worker owns the app-server (control-plane routing is on
+                # by default — see _app_server_status_preferring_worker's
+                # docstring, which fixed the identical bug for the System
+                # status panel). Reading it directly here made every Codex
+                # session's pill say "exec" even mid-turn on a live app-server.
                 _schedule_codex_managed_app_server_warmup()
-                status["codex_app_server"] = _codex_app_server_is_live()
-                transport = _codex_app_server_transport_kind()
+                _app_server_status = _app_server_status_preferring_worker()
+                status["codex_app_server"] = bool(_app_server_status.get("live"))
+                transport = _app_server_status.get("kind")
                 status["codex_app_server_transport"] = transport
                 status["codex_managed_app_server"] = transport == "managed"
                 app_public = _codex_app_server_thread_public_status(sid)
