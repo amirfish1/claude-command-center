@@ -368,6 +368,14 @@ def big_projects(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "HERMES_WHATSAPP_BRIDGE_LOG", hermes_home / "whatsapp" / "bridge.log")
     monkeypatch.setattr(server, "HERMES_CHUCK_PENDING_DIR", hermes_home / "whatsapp" / "chuck_realtor_pending")
     monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
+    # Devin CLI reads its sessions DB via CCC_DEVIN_DB (env override, checked
+    # fresh per call) rather than a server-module global, so it isn't covered
+    # by the monkeypatch.setattr overrides above. Without this, find_all_
+    # conversations hits the developer's REAL ~/.local/share/devin/cli/
+    # sessions.db (can be multi-GB with a large WAL) on every call, which is
+    # slow and makes this perf gate depend on the developer's box. Point it at
+    # a path with no file so _devin_cli_connect() short-circuits to None.
+    monkeypatch.setenv("CCC_DEVIN_DB", str(tmp_path / ".local" / "share" / "devin" / "cli" / "sessions.db"))
     return n, sids
 
 
