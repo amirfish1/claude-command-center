@@ -15207,6 +15207,9 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   font-size: 11px;
   line-height: 1.3;
 }
+.status-rail-conn-proc {
+  margin-top: 4px;
+}
 /* Transcript size (CCC-475) — session metadata, moved here from the pane
    titlebar. Filled by updatePaneHeader for the active pane. */
 .status-rail-size {

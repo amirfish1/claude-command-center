@@ -25689,9 +25689,14 @@
     const targets = [
       document.querySelector('[data-role="ccc-breadcrumb-proc"]'),
       document.querySelector('[data-role="pane-proc"]'),
+      document.querySelector('[data-role="rail-proc"]'),
     ].filter(Boolean);
     if (!targets.length) return;
     const setAll = (html) => { targets.forEach((t) => { t.innerHTML = html; }); };
+    // The rail chip is always in the DOM (unlike the pane-header pill, whose
+    // host is only rendered once a conversation pane exists), so it needs its
+    // own empty-state: no session selected means nothing to report.
+    if (!currentSession) { setAll(''); return; }
     // liveStatus lags a conversation switch by up to one poll. Until it matches
     // the open conversation, render the engine pills as idle rather than painting
     // the new session with the PREVIOUS session's headless/terminal state.

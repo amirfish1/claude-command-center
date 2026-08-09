@@ -884,6 +884,13 @@
                      cut off here, unbold, instead of losing it. -->
                 <div class="status-rail-title-rest" id="statusRailTitleRest" hidden></div>
                 <div class="status-rail-context">Context: Active</div>
+                <!-- Connection-type chip: headless / stream-json / terminal /
+                     app-server / managed app-server / ACP, mirrored from the
+                     same computation that drives the pane-header proc pill
+                     (updateConvProcessIndicator). Surfaces the transport in
+                     the Metadata rail, not just the pane titlebar above the
+                     transcript, so it's visible wherever a session is open. -->
+                <span class="conv-pane-proc ccc-breadcrumb-proc status-rail-conn-proc" data-role="rail-proc" title="How CCC is connected to this session"></span>
                 <!-- Transcript size (CCC-475) — moved out of the pane
                      titlebar; filled by updatePaneHeader for the active pane. -->
                 <div class="status-rail-size" id="statusRailSize" hidden></div>
