@@ -34618,6 +34618,8 @@
     const bgPalette = clone.querySelector('[data-role="conv-bg-palette"]');
     if (bgPalette) bgPalette.innerHTML = '';
     renderConversationBackgroundPalette(clone);
+    // Cloned nodes lose their listeners — rebuild the row-style picker too.
+    try { renderConvRowStylePalettes(); } catch (_) {}
     // In cloned panes, hide workspace/spawn elements that rely on p1-singleton
     // IDs. The [data-usage] slot (model + token pills) still works because
     // renderSessionUsageIntoStrip mirrors into it after rendering to p1.
@@ -61452,6 +61454,80 @@
   renderAllConversationBackgroundPalettes();
   window.addEventListener('storage', (ev) => {
     if (ev.key === CONV_BG_STORAGE_KEY) renderAllConversationBackgroundPalettes();
+  });
+
+  // ---- Conversation row style (sidebar list density / name brightness) ----
+  // Ten presets that only touch presentation of the conv row + its session
+  // name. Applied globally on <html data-conv-rowstyle>, so every list
+  // (All / Active / archived) picks it up from CSS alone.
+  const CONV_ROWSTYLE_STORAGE_KEY = 'ccc-conv-rowstyle';
+  const CONV_ROWSTYLE_VARIANTS = [
+    { id: 'default',   label: 'Default',   op: 70, h: 2,   gap: 3 },
+    { id: 'bright',    label: 'Bright',    op: 100, h: 2,  gap: 3 },
+    { id: 'dim',       label: 'Dim',       op: 42, h: 2,   gap: 3 },
+    { id: 'airy',      label: 'Airy',      op: 70, h: 2,   gap: 5 },
+    { id: 'compact',   label: 'Compact',   op: 70, h: 2,   gap: 1 },
+    { id: 'bold',      label: 'Bold',      op: 92, h: 3,   gap: 3 },
+    { id: 'large',     label: 'Large',     op: 78, h: 3,   gap: 4 },
+    { id: 'mono',      label: 'Mono',      op: 70, h: 2,   gap: 2 },
+    { id: 'contrast',  label: 'Contrast',  op: 100, h: 3,  gap: 4 },
+    { id: 'editorial', label: 'Editorial', op: 88, h: 1.5, gap: 5 },
+  ];
+
+  function storedConvRowStyle() {
+    let id = null;
+    try { id = localStorage.getItem(CONV_ROWSTYLE_STORAGE_KEY); } catch (_) {}
+    return CONV_ROWSTYLE_VARIANTS.some(v => v.id === id) ? id : 'default';
+  }
+
+  function updateConvRowStyleState(id) {
+    document.querySelectorAll('[data-conv-rowstyle-id]').forEach(btn => {
+      const active = btn.getAttribute('data-conv-rowstyle-id') === id;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-checked', String(active));
+    });
+  }
+
+  function applyConvRowStyle(id, opts = {}) {
+    const variant = CONV_ROWSTYLE_VARIANTS.find(v => v.id === id) || CONV_ROWSTYLE_VARIANTS[0];
+    document.documentElement.setAttribute('data-conv-rowstyle', variant.id);
+    if (opts.persist) {
+      try { localStorage.setItem(CONV_ROWSTYLE_STORAGE_KEY, variant.id); } catch (_) {}
+    }
+    updateConvRowStyleState(variant.id);
+  }
+
+  function renderConvRowStylePalettes() {
+    const current = document.documentElement.getAttribute('data-conv-rowstyle') || storedConvRowStyle();
+    document.querySelectorAll('[data-role="conv-rowstyle-palette"]').forEach(host => {
+      host.innerHTML = '';
+      CONV_ROWSTYLE_VARIANTS.forEach(variant => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'conv-rowstyle-swatch';
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', 'false');
+        btn.setAttribute('aria-label', variant.label);
+        btn.setAttribute('data-conv-rowstyle-id', variant.id);
+        btn.title = 'Row style: ' + variant.label;
+        btn.style.setProperty('--rs-op', String(variant.op));
+        btn.style.setProperty('--rs-h', variant.h + 'px');
+        btn.style.setProperty('--rs-gap', variant.gap + 'px');
+        btn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          applyConvRowStyle(variant.id, { persist: true });
+        });
+        host.appendChild(btn);
+      });
+    });
+    updateConvRowStyleState(current);
+  }
+
+  applyConvRowStyle(storedConvRowStyle());
+  renderConvRowStylePalettes();
+  window.addEventListener('storage', (ev) => {
+    if (ev.key === CONV_ROWSTYLE_STORAGE_KEY) applyConvRowStyle(storedConvRowStyle());
   });
 
   function getThemePref() { return localStorage.getItem('ccc-theme') || 'dark'; }

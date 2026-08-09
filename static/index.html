@@ -884,13 +884,6 @@
                      cut off here, unbold, instead of losing it. -->
                 <div class="status-rail-title-rest" id="statusRailTitleRest" hidden></div>
                 <div class="status-rail-context">Context: Active</div>
-                <!-- Connection-type chip: headless / stream-json / terminal /
-                     app-server / managed app-server / ACP, mirrored from the
-                     same computation that drives the pane-header proc pill
-                     (updateConvProcessIndicator). Surfaces the transport in
-                     the Metadata rail, not just the pane titlebar above the
-                     transcript, so it's visible wherever a session is open. -->
-                <span class="conv-pane-proc ccc-breadcrumb-proc status-rail-conn-proc" data-role="rail-proc" title="How CCC is connected to this session"></span>
                 <!-- Transcript size (CCC-475) — moved out of the pane
                      titlebar; filled by updatePaneHeader for the active pane. -->
                 <div class="status-rail-size" id="statusRailSize" hidden></div>
@@ -906,7 +899,13 @@
               <button class="status-rail-tab" type="button" role="tab" aria-selected="false" aria-controls="statusRailQueuePane" data-rail-tab="queue">Queue</button>
             </div>
             <div class="status-rail-pane is-active" id="statusRailMetadataPane" role="tabpanel" data-rail-pane="metadata">
-              <div class="rail-actions" id="railActions" data-role="rail-actions"></div>
+              <!-- Connection-type chip: headless / stream-json / terminal /
+                   app-server / managed app-server / ACP, mirrored from the
+                   same computation that drives the pane-header proc pill
+                   (updateConvProcessIndicator). Placed as the first chip in
+                   this row (not a separate label elsewhere) so it reads as
+                   one of "the chips" alongside Vercel/Screen/dev-server. -->
+              <div class="rail-actions" id="railActions" data-role="rail-actions"><span class="conv-pane-proc ccc-breadcrumb-proc status-rail-conn-proc" data-role="rail-proc" title="How CCC is connected to this session"></span></div>
               <!-- Subagents panel — surfaces Claude Code Task tool spawns for
                    the currently selected session. Populated by
                    updateSubagentsPanel() in app.js whenever the active
@@ -969,7 +968,10 @@
                 </div>
               </div>
             </div>
-            <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
+            <div class="rail-bottom-tools">
+              <div class="conv-rowstyle-palette" data-role="conv-rowstyle-palette" role="radiogroup" aria-label="Conversation row style"></div>
+              <div class="conv-bg-palette" data-role="conv-bg-palette" role="radiogroup" aria-label="Conversation background color"></div>
+            </div>
           </div>
           <div class="status-rail-file-viewer" id="statusRailFileViewer" style="display: none;">
             <div class="file-viewer-header">

@@ -13544,6 +13544,97 @@
     align-items: center;
   }
   .conv-bg-palette:empty { display: none; }
+  /* Row-style picker — sits to the LEFT of the background palette in the
+     rail's bottom bar. Each swatch is a 3-line mini glyph whose bar
+     brightness / thickness / gap previews the variant it applies. */
+  .conv-rowstyle-palette {
+    display: grid;
+    grid-template-columns: repeat(5, 16px);
+    grid-auto-rows: 16px;
+    gap: 3px;
+    align-items: center;
+  }
+  .conv-rowstyle-palette:empty { display: none; }
+  .conv-rowstyle-swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    padding: 0;
+    cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--text-muted) 40%, transparent);
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        currentColor 0 var(--rs-h, 2px),
+        transparent var(--rs-h, 2px) calc(var(--rs-h, 2px) + var(--rs-gap, 2px))
+      ) no-repeat 50% 50% / 9px calc((var(--rs-h, 2px) + var(--rs-gap, 2px)) * 3 - var(--rs-gap, 2px));
+    color: color-mix(in srgb, var(--text) calc(var(--rs-op, 70) * 1%), transparent);
+  }
+  .conv-rowstyle-swatch:hover { border-color: var(--text); }
+  .conv-rowstyle-swatch.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  /* ---- Row style variants (applied on <html data-conv-rowstyle>) ---- */
+  /* --rs-hi is the "toward maximum contrast" pole: white on dark themes,
+     black on light ones, so a "brighter name" variant reads the same way in
+     both. !important because the Active/current-session lists already pin
+     .conv-title colour+weight at a higher specificity. */
+  :root { --rs-hi: #ffffff; }
+  :root[data-theme="light"] { --rs-hi: #000000; }
+  html[data-conv-rowstyle="bright"] .conv-item .conv-title {
+    color: color-mix(in srgb, var(--text) 20%, var(--rs-hi)) !important;
+    font-weight: 500 !important;
+  }
+  html[data-conv-rowstyle="dim"] .conv-item .conv-title {
+    color: color-mix(in srgb, var(--text) 58%, transparent) !important;
+    font-weight: 450 !important;
+  }
+  html[data-conv-rowstyle="dim"] .conv-item:hover .conv-title,
+  html[data-conv-rowstyle="dim"] .conv-item.active .conv-title {
+    color: var(--text) !important;
+  }
+  html[data-conv-rowstyle="airy"] .conv-item {
+    padding-top: 10px !important; padding-bottom: 10px !important; margin-bottom: 4px !important;
+  }
+  html[data-conv-rowstyle="airy"] .conv-item .conv-title { line-height: 1.75 !important; }
+  html[data-conv-rowstyle="compact"] .conv-item {
+    padding-top: 2px !important; padding-bottom: 2px !important; margin-bottom: 0 !important;
+  }
+  html[data-conv-rowstyle="compact"] .conv-item .conv-title {
+    font-size: 12.5px !important; line-height: 1.15 !important;
+  }
+  html[data-conv-rowstyle="bold"] .conv-item .conv-title {
+    font-weight: 700 !important;
+    color: color-mix(in srgb, var(--text) 35%, var(--rs-hi)) !important;
+  }
+  html[data-conv-rowstyle="large"] .conv-item {
+    padding-top: 7px !important; padding-bottom: 7px !important;
+  }
+  html[data-conv-rowstyle="large"] .conv-item .conv-title {
+    font-size: 15px !important; line-height: 1.45 !important;
+  }
+  html[data-conv-rowstyle="mono"] .conv-item .conv-title {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;
+    font-size: 12.5px !important; letter-spacing: 0 !important;
+  }
+  html[data-conv-rowstyle="contrast"] .conv-item .conv-title {
+    color: color-mix(in srgb, var(--text) 15%, var(--rs-hi)) !important;
+    font-weight: 600 !important;
+  }
+  html[data-conv-rowstyle="contrast"] .conv-item .conv-row-meta,
+  html[data-conv-rowstyle="contrast"] .conv-item .conv-rel,
+  html[data-conv-rowstyle="contrast"] .conv-item .conv-branch-slot {
+    opacity: 0.45 !important;
+  }
+  html[data-conv-rowstyle="editorial"] .conv-item {
+    padding-top: 8px !important; padding-bottom: 8px !important; margin-bottom: 3px !important;
+  }
+  html[data-conv-rowstyle="editorial"] .conv-item .conv-title {
+    font-size: 14.5px !important; font-weight: 300 !important; line-height: 1.6 !important;
+    color: color-mix(in srgb, var(--text) 45%, var(--rs-hi)) !important;
+  }
   .conv-bg-swatch {
     width: 14px;
     height: 14px;
@@ -15207,9 +15298,6 @@ body.status-pos-right .conv-pane:has(> .status-rail) > .status-rail {
   font-size: 11px;
   line-height: 1.3;
 }
-.status-rail-conn-proc {
-  margin-top: 4px;
-}
 /* Transcript size (CCC-475) — session metadata, moved here from the pane
    titlebar. Filled by updatePaneHeader for the active pane. */
 .status-rail-size {
@@ -15433,13 +15521,20 @@ button.subagent-row.wf-agent:hover { border-color: rgba(139, 87, 215, 0.45); }
    the item past anything that doesn't have its own auto margin —
    reliable even when files-panel / file-viewer are hidden and there's no
    sticky-meta to anchor against. */
-.status-rail .conv-bg-palette {
+.status-rail .rail-bottom-tools {
   margin-top: auto !important;
   margin-bottom: 12px;
   padding: 10px 12px 0;
   border-top: 1px solid var(--border);
-  justify-self: end;
   align-self: stretch;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.status-rail .conv-bg-palette {
+  justify-self: end;
   justify-content: end;
 }
 /* Default (top mode): rail completely hidden. JS also moves its children
@@ -15606,6 +15701,16 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   overflow: hidden; text-overflow: ellipsis;
 }
 .rail-actions > *:hover { background: var(--surface-2); }
+/* Connection-type chip is its own pill (ccc-proc-pill already has a border/
+   background per state) — drop the generic button chrome so it doesn't
+   render as a bordered box around a bordered pill. */
+.rail-actions .status-rail-conn-proc {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: default;
+}
+.rail-actions .status-rail-conn-proc:hover { background: none; }
 /* Launch-split is two adjacent buttons; keep them visually joined. */
 .rail-actions .launch-split { display: flex; gap: 0; padding: 0; border: none; }
 .rail-actions .launch-split .launch-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1 1 auto; }
