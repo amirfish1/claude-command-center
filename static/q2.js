@@ -1915,6 +1915,38 @@
     if (tl) tl.classList.toggle('show-edits', box.checked);
   });
 
+  // Answer / comment / close / reopen boxes are plain textareas rebuilt on
+  // every poll (see renderDetail), so a listener bound to one instance would
+  // be gone by the next render. Delegate on document instead, and insert the
+  // uploaded path at the cursor the same way the new-ticket note does — that
+  // is what the worker on the other end can actually open.
+  function insertPastedPath(el, path) {
+    var start = el.selectionStart || 0, end = el.selectionEnd || 0;
+    var val = el.value || '';
+    var before = val.slice(0, start), after = val.slice(end);
+    var sep = (before && !/\s$/.test(before)) ? ' ' : '';
+    var insert = sep + path;
+    el.value = before + insert + after;
+    var pos = (before + insert).length;
+    el.focus();
+    try { el.setSelectionRange(pos, pos); } catch (_) {}
+  }
+  document.addEventListener('paste', function (e) {
+    var el = e.target;
+    if (!el || !el.matches || !el.matches('textarea.q2-input') || el.id === 'q2TicketNote') return;
+    var files = (e.clipboardData && e.clipboardData.files) || [];
+    var imgs = Array.prototype.filter.call(files, function (f) { return /^image\//.test(f.type || ''); });
+    if (!imgs.length) return;
+    e.preventDefault();
+    imgs.forEach(function (f) {
+      uploadImage(f).then(function (path) {
+        insertPastedPath(el, path);
+      }).catch(function (err) {
+        note('Image upload failed: ' + err.message);
+      });
+    });
+  });
+
   // ── modals: new ticket, queue configuration ──────────────────────────────
   function closeModal() {
     var host = $('q2Modal');
