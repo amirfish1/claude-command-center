@@ -3719,6 +3719,12 @@
         if (health.any_active) {
           renderText(health);
           $banner.hidden = false;
+          // The Dismiss button only acks lost-receipt incidents. When the
+          // banner is up solely because of active foreign-writer holds
+          // (which auto-resolve), there is nothing to dismiss — hide it so
+          // the button doesn't look broken (clicking it acked zero receipts
+          // and the immediate re-poll re-showed the banner).
+          $dismiss.hidden = !(health.new_lost_receipts || []).length;
           if (!$details.hidden) renderDetails(health);
         } else {
           $banner.hidden = true;

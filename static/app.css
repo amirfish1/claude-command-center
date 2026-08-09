@@ -16908,6 +16908,7 @@ body.status-pos-right #convToolbar {
   font-family: inherit;
 }
 .injection-health-banner__dismiss:hover { background: rgba(255,255,255,0.25); }
+.injection-health-banner__dismiss[hidden] { display: none; }
 .injection-health-banner__details {
   flex: 0 0 auto;
   background: transparent;
