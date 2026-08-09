@@ -1557,6 +1557,12 @@
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
     var closed = st === 'closed';
     var runQueued = !closed && !isLiveWip(item) && !!item.run_requested;
+    // GitHub-backed queues sync tickets read-only: run/answer/comment/close/
+    // reopen all 404 with "not found in the local queue store" (see
+    // _uxq_not_found_error server-side), which read as an unexplained
+    // failure. Gate the write UI up front instead of letting the user
+    // click into a dead end (CCC-759).
+    var githubBacked = String(item.source || '') === 'github' || !!item.github_repo;
 
     // Everything editable lives on one chip row, next to the read-only state.
     var chips = ''
@@ -1579,7 +1585,15 @@
         + (state.arm === k ? ' is-armed' : '') + '" data-q2-arm="' + esc(k) + '">'
         + esc(label) + '</button>';
     }
-    var toolbar = '<div class="q2-actions">'
+    var toolbar = githubBacked
+      ? '<div class="q2-actions">'
+        + '<span class="q2-dim">Synced from GitHub — read-only here.'
+        + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
+        + '</span>'
+        + '<span class="q2-spacer"></span>'
+        + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
+        + '</div>'
+      : '<div class="q2-actions">'
       + (closed ? '' :
           '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
           + ' data-q2-act="run" title="' + (runQueued
@@ -1599,7 +1613,7 @@
       close:   ['Resolution summary (optional)', 'Mark as closed', 'close'],
       reopen:  ['Reason for reopening (optional)', 'Reopen ticket', 'reopen'],
     };
-    var armed = FORMS[state.arm];
+    var armed = githubBacked ? null : FORMS[state.arm];
     var formHtml = armed
       ? '<section class="q2-sec q2-armed">'
         + (state.arm === 'answer' && item.block_question
@@ -1659,7 +1673,7 @@
       + '</div>' + timelineHtml(item)
       // The answer box belongs WITH the question, at the end of the thread —
       // the agent is waiting on it and it should need no hunting.
-      + (st === 'blocked'
+      + (!githubBacked && st === 'blocked'
           // The question is NOT repeated here. The timeline's last "Needs input"
           // event already shows it, immediately above, and printing it twice
           // read as two separate questions.
@@ -1670,12 +1684,15 @@
             + ' data-q2-act="answer">Send answer</button></div></div>'
           : '')
       // Comment sits after the last activity item, always available: it is a
-      // reply to the thread, so it reads as the next entry in it.
-      + '<div class="q2-inline">'
-      + '<textarea class="q2-input" data-q2-input="comment" rows="2"'
-      + ' placeholder="Add a comment - an update, not a resolution" aria-label="Add a comment"></textarea>'
-      + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="comment">Comment</button></div>'
-      + '</div>'
+      // reply to the thread, so it reads as the next entry in it. Not offered
+      // for GitHub-backed tickets, which are read-only here (CCC-759).
+      + (githubBacked ? '' : (
+        '<div class="q2-inline">'
+        + '<textarea class="q2-input" data-q2-input="comment" rows="2"'
+        + ' placeholder="Add a comment - an update, not a resolution" aria-label="Add a comment"></textarea>'
+        + '<div class="q2-actrow"><button type="button" class="q2-btn" data-q2-act="comment">Comment</button></div>'
+        + '</div>'
+      ))
       + '</section>'
       + (metaBits.length ? '<div class="q2-meta-strip">' + metaBits.join('<span class="q2-n-sep">·</span>') + '</div>' : '')
       + '<div class="q2-detail-foot"><span class="q2-dim">Filed '
