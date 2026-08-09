@@ -4534,6 +4534,11 @@
       liveStatus = {
         forSessionId: _fetchedFor,
         live: !!data.live,
+        // Backend liveness "kind" (e.g. "acp" for kimi, "headless" for
+        // devin-cli) — updateConvProcessIndicator's Kimi branch gates its
+        // "Kimi ACP" pill on this; without it the pill always read "offline"
+        // even mid-turn, since ls.kind was never populated from the response.
+        kind: data.kind || null,
         // Engine-reported turn state ("running"|"idle" for kimi ACP; null
         // elsewhere) — drives the webui-pane busy indicator for turns that
         // produce no live deltas (TUI-originated kimi turns).
@@ -40336,7 +40341,7 @@
     if (id.startsWith('pkood-') || id.startsWith('issue-')) return null;
     const existing = _convTailPrefetches.get(id);
     if (existing) return existing;
-    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + CONV_TAIL_LINES, {
+    const pending = fetch('/api/conversations/' + encodeURIComponent(id) + '?tail=' + convTailLines(), {
       cache: 'no-store',
     }).then(r => r.ok ? r.json() : null).catch(() => null);
     _convTailPrefetches.set(id, pending);
@@ -40386,6 +40391,18 @@
   // window at a time. Live `after=` polling is unaffected (tail returns the real
   // last_line, so streamed events keep appending from there).
   const CONV_TAIL_LINES = 400;
+  // Phones parse and paint the same transcript on a CPU roughly 4-6x slower
+  // than a laptop's. Measured at 4x CPU throttle on a 390px viewport, opening a
+  // conversation spent ~2.5s inside renderConversationEvents with the main
+  // thread frozen — taps during that window (notably Back) are swallowed, which
+  // is exactly the "mobile gets stuck" report. The "Load earlier" banner
+  // already pages older history in on demand, so a narrower first window is
+  // lossless: it costs one tap for anyone who wants to read further back.
+  const CONV_TAIL_LINES_MOBILE = 120;
+  function convTailLines() {
+    return (typeof isMobile === 'function' && isMobile())
+      ? CONV_TAIL_LINES_MOBILE : CONV_TAIL_LINES;
+  }
 
   function _ensureLoadEarlierStyle() {
     if (document.getElementById('__convLoadEarlierStyle')) return;
@@ -40766,9 +40783,9 @@
       if (_pane0) _pane0.loadBeforeLine = 0; // one-shot: consumed on this fetch
       const _freshOpen = convLastLine === 0;
       const _url = _loadingEarlier
-        ? '/api/conversations/' + id + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + CONV_TAIL_LINES
+        ? '/api/conversations/' + id + '?before=' + encodeURIComponent(_loadBefore) + '&tail=' + convTailLines()
         : (_freshOpen && !_wantFull)
-        ? '/api/conversations/' + id + '?tail=' + CONV_TAIL_LINES
+        ? '/api/conversations/' + id + '?tail=' + convTailLines()
         : '/api/conversations/' + id + '?after=' + convLastLine;
       let data = null;
       if (_freshOpen && !_wantFull && !_loadingEarlier) {
