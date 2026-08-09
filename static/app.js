@@ -26736,8 +26736,7 @@
           title = 'Spawned as a subagent; parent session not recorded';
           className = ' is-unknown';
         } else {
-          label = 'root';
-          title = 'No parent session recorded';
+          return '';
         }
       }
       return '<span class="conv-session-origin-chip' + className + '" title="' + escapeAttr(title) + '">'
