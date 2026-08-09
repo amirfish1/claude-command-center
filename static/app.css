@@ -11552,7 +11552,7 @@
     border-color: var(--border) !important;
   }
   body.chips-muted .conv-folder-group-header {
-    border-left-color: var(--border) !important;
+    border-left-color: rgba(139,148,158,0.45) !important;
   }
   /* CCC-467: in muted ("no colors") mode the meta-row chips lose their frame
      entirely — no border, no fill — and shrink a touch, so the folder / object
@@ -11624,14 +11624,27 @@
     border-radius: 4px;
     /* CCC-95: the colored left border read as visual noise down the rail —
        the folder chip itself already carries the hue. */
-    border-left: 3px solid transparent;
+    /* CCC-95 dropped the hue'd left border as noise. Restored at low
+       saturation together with a hue-tinted band: with 5+ project clusters
+       in one list, an untinted 1px rule was not enough to tell where one
+       cluster ends and the next begins. */
+    border-left: 3px solid hsla(var(--chip-hue), 55%, 55%, 0.5);
     user-select: none;
     margin-top: 3px;
-    border-top: 1px solid rgba(139,148,158,0.12);
-    background: rgba(139,148,158,0.035);
+    border-top: 1px solid hsla(var(--chip-hue), 45%, 55%, 0.28);
+    background: hsla(var(--chip-hue), 55%, 50%, 0.09);
   }
-  .conv-folder-group-header:first-child { margin-top: 0; border-top: none; }
-  .conv-folder-group-header:hover { background: rgba(139,148,158,0.08); color: var(--text); }
+  .conv-folder-group-header:first-child { margin-top: 0; }
+  .conv-folder-group-header:hover {
+    background: hsla(var(--chip-hue), 55%, 50%, 0.16);
+    color: var(--text);
+  }
+  /* Muted ("no colors") mode can't use the hue band, so the cluster boundary
+     leans on a neutral band + a visible left rail instead. */
+  body.chips-muted .conv-folder-group-header {
+    background: rgba(139,148,158,0.08) !important;
+    border-top-color: rgba(139,148,158,0.22) !important;
+  }
   /* GOAL-1 object status + immediate-objective line. Under the header; stays
      visible when the group is collapsed (it is not a .conv-item). */
   /* Object header carries an inline status + objective on the name row.
@@ -11808,10 +11821,10 @@
     outline: none;
   }
   .conv-folder-group-chip.is-orphan { opacity: 0.55; font-style: italic; }
+  /* Cluster gap: clusters read as separate blocks, not one long ribbon. */
   .conv-folder-group + .conv-folder-group {
-    border-top: 1px solid var(--border);
-    margin-top: 4px;
-    padding-top: 4px;
+    margin-top: 14px;
+    padding-top: 6px;
   }
   .conv-folder-group-count {
     grid-column: 4;
