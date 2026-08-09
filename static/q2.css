@@ -216,13 +216,16 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-diagram {
   flex: 0 0 auto;
   min-height: 96px;
-  max-height: 168px;
+  max-height: 320px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   overflow: hidden;
 }
 /* Sized for the tickets column at its 440px default, which is the tightest
-   this has to work at; the column is resizable, so it only gets roomier. */
+   this has to work at; the column is resizable, so it only gets roomier.
+   Raised from 168px (CCC-757 reopen): the worker-stage scroll fix wasn't
+   what was wanted -- the whole band should get taller before anything
+   inside it needs to scroll. */
 .q2-dg {
   height: 100%;
   display: flex;
