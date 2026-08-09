@@ -1,0 +1,1 @@
+- Fixed duplicate Codex resume entries: identical injected text (e.g. a verifier report) is now queued only once per session, preventing repeated re-injection when delivery confirmation is slow.

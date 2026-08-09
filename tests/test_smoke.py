@@ -16377,6 +16377,19 @@ class TestPendingInputs(unittest.TestCase):
 
         schedule.assert_called_once_with("sid-a")
 
+    def test_queue_codex_resume_dedupes_identical_text(self):
+        """A slow-to-confirm delivery must not accumulate duplicate copies of the
+        same verifier report (or any other injected text) for one session."""
+        sid = "sid-dedupe"
+        self.server._queue_codex_resume(sid, "verifier report")
+        self.server._queue_codex_resume(sid, "verifier report")
+        self.server._queue_codex_resume(sid, "different message")
+        with self.server._pending_resume_lock:
+            self.assertEqual(
+                self.server._pending_resume_queue.get(sid),
+                ["verifier report", "different message"],
+            )
+
     def test_codex_queue_pump_delivers_and_removes_only_fifo_head(self):
         sid = "sid-fifo"
         with self.server._pending_resume_lock:

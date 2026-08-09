@@ -741,7 +741,13 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
     with _core._pending_resume_lock:
         if only_if_pending and not _core._pending_resume_queue.get(session_id):
             return None
-        _core._pending_resume_queue.setdefault(session_id, []).append(text)
+        queue = _core._pending_resume_queue.setdefault(session_id, [])
+        # Deduplicate identical text so a slow-to-confirm delivery (e.g. a
+        # verifier report landing on a finished Codex thread) cannot pile up
+        # duplicate queued copies that get re-injected repeatedly.
+        if text not in queue:
+            queue.append(text)
+            _core._pending_resume_queue[session_id] = queue
     _core._save_pending_inputs()
     _core._schedule_codex_queue_pump(session_id)
     payload = {
