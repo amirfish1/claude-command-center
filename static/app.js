@@ -3094,7 +3094,7 @@
       );
     } else {
       lines.push(
-        'The transcript is small (~' + f2FmtTokens(gate.tokens) + ' tokens) — read it directly for context, then proceed.',
+        'The transcript is small (~' + f2FmtTokens(gate.tokens) + ' tokens). Read it directly for context, then proceed.',
       );
     }
     return lines.join('\n');
@@ -3325,14 +3325,14 @@
 
   function f2RoutesHtml(st, verdictText) {
     const r = F2_ROUTES.continue;
-    const title = (verdictText ? verdictText + ' ' : '') + r.name + ' — ' + r.desc;
+      const title = (verdictText ? verdictText + ' ' : '') + r.name + ': ' + r.desc;
     // Name all three parts of the spec the click will actually use. The engine
     // was missing (two engines can offer look-alike model labels), and the
     // effort clause is dropped rather than invented for engines without one.
     const effortLabel = f2EffortLabel(st.launch);
     const chipTitle = 'Launches on ' + f2EngineLabel(st.launch) + ' ' + f2ModelLabel(st.launch)
       + (effortLabel ? ' at ' + effortLabel + ' effort' : '')
-      + ' — click to change';
+          + '. Click to change';
     return '<div class="route is-recommended" data-f2-route="continue">'
       // .route is a div, .route-main the button: the ▾ caret is a real
       // control and a button may not nest inside a button.
@@ -3415,7 +3415,7 @@
     const verdictText = gate.manual
       ? 'Start fresh with just the context you need.'
       : (gate.idleOnly
-        ? 'Idle ' + ageLabel + ' — start fresh with just the context you need.'
+        ? 'Idle ' + ageLabel + '. Start fresh with just the context you need.'
         : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.');
     panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText) + '</div>'
       + (st.configOpen ? f2ConfigHtml(st.launch) : '');
@@ -3490,7 +3490,7 @@
             newSid,
           );
         }
-        if (typeof showOpToast === 'function') showOpToast('Continuing in a new session — it will pull only the slice it needs.', 'success');
+      if (typeof showOpToast === 'function') showOpToast('Continuing in a new session. It will pull only the slice it needs.', 'success');
         f2ClearComposer();
         setTimeout(refreshConversationList, 600);
         // ...then chase with a cheap probe rather than two more full-corpus
@@ -3646,7 +3646,7 @@
         logKind = 'stale';
         _appendActivityLog(logKind, 'Session "' + name + '" replaced (stale transcript)');
       } else if (reasonStr === 'request_interrupted') {
-        msg = '<strong>Session interrupted</strong>: ' + name + '<br>Claude was killed mid-turn (Request interrupted by user). The session is now stuck — send a message to resume it.';
+        msg = '<strong>Session interrupted</strong>: ' + name + '<br>Claude was killed mid-turn (Request interrupted by user). The session is now stuck. Send a message to resume it.';
         logKind = 'interrupt';
         _appendActivityLog(logKind, 'Session interrupted (likely CCC kill mid-turn)');
       } else if (reasonStr === 'prewarm_expired') {
@@ -3655,7 +3655,7 @@
         continue;
       } else {
         msg = '<strong>CCC killed a session</strong>: ' + name + aliveStr + ageStr + callerStr + '<br>Reason: ' + reasonStr;
-        _appendActivityLog(logKind, 'Killed "' + name + '" — ' + reasonStr + callerStr);
+        _appendActivityLog(logKind, 'Killed "' + name + '": ' + reasonStr + callerStr);
       }
       if (typeof showOpToast === 'function') showOpToast(msg, 'warn');
     }
@@ -6254,11 +6254,11 @@
       }
       stuckInline.className = 'conv-live-tool-inline is-stuck';
       stuckInline.innerHTML = '<span class="cl-stuck-icon">⚠</span>'
-        + '<span class="cl-tool">Stuck — no output for ' + stuckMins + 'm</span>'
+        + '<span class="cl-tool">Stuck: no output for ' + stuckMins + 'm</span>'
         + (stuckToolName ? '<span class="cl-file">last: ' + escapeHtml(stuckToolName) + '</span>' : '')
         + '<button class="cl-stuck-wake" type="button" title="Send &quot;continue&quot; to restart this turn where it left off">Wake up</button>';
       stuckInline.title = 'This turn has produced no output for ' + stuckMins
-        + 'm — the session may be stuck. Click to focus the composer; sending a message nudges it.';
+        + 'm. The session may be stuck. Click to focus the composer; sending a message nudges it.';
       if (stuckInline.parentElement !== $view || stuckInline !== $view.lastElementChild) {
         $view.appendChild(stuckInline);
       }
@@ -6280,10 +6280,10 @@
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ session_id: sid, text: 'continue' }),
             }).then((r) => r.json()).then((d) => {
-              wakeBtn.textContent = d && d.ok ? 'Sent' : 'Failed — use composer';
+            wakeBtn.textContent = d && d.ok ? 'Sent' : 'Failed. Use composer';
               if (!(d && d.ok)) wakeBtn.disabled = false;
             }).catch(() => {
-              wakeBtn.textContent = 'Failed — use composer';
+            wakeBtn.textContent = 'Failed. Use composer';
               wakeBtn.disabled = false;
             });
             return;
@@ -6399,12 +6399,12 @@
         // Drive the Claude picker: Approve sends Return (highlighted "Yes"),
         // Deny sends Esc, both into the session's live terminal.
         actionsHtml = '<span class="cl-approval-actions">'
-          + '<button type="button" class="cl-approval-btn" data-claude-decision="accept" title="Approve this once — sends Return to the session\'s terminal picker">Approve</button>'
-          + '<button type="button" class="cl-approval-btn is-negative" data-claude-decision="decline" title="Deny — sends Esc to the session\'s terminal picker">Deny</button>'
+              + '<button type="button" class="cl-approval-btn" data-claude-decision="accept" title="Approve this once. Sends Return to the session\'s terminal picker">Approve</button>'
+              + '<button type="button" class="cl-approval-btn is-negative" data-claude-decision="decline" title="Deny. Sends Esc to the session\'s terminal picker">Deny</button>'
           + '</span>';
       } else if (claudeNoRoute) {
         actionsHtml = '<span class="cl-approval-actions">'
-          + '<span class="cl-approval-note" title="Answering permission prompts from CCC is macOS-only today — approve or deny in the session\'s own terminal">Answer in terminal</span>'
+              + '<span class="cl-approval-note" title="Answering permission prompts from CCC is macOS-only today. Approve or deny in the session\'s own terminal">Answer in terminal</span>'
           + '</span>';
       } else {
         // Dead-zone escape hatch: a Codex approval owned by an external writer
@@ -9455,7 +9455,7 @@
   }
 
   function _annotationComposerText(jsonlLine, fullText, note) {
-    return '[L' + jsonlLine + '] "' + _annotationExcerpt(fullText) + '" — ' + note;
+    return '[L' + jsonlLine + '] "' + _annotationExcerpt(fullText) + '": ' + note;
   }
 
   function _wrapRangeInAnnotationMark(range, id) {
@@ -40512,7 +40512,7 @@
   ];
 
   function fmtStatMs(ms) {
-    if (ms == null) return '—';
+    if (ms == null) return 'N/A';
     return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
   }
 
@@ -42032,7 +42032,7 @@
     const missed = Math.max(0, total - (Number(tCached) || 0));
     if (!missed || !total) return '';
     if (missed / total <= CACHE_MISS_CALLOUT_MIN_SHARE) return '';
-    return 'CACHE MISS — ' + _formatTokensAntigravity(missed) + ' input tokens uncached';
+    return 'CACHE MISS: ' + _formatTokensAntigravity(missed) + ' input tokens uncached';
   }
 
   // A running, cross-turn log of cache misses (CCC-750): a chip on screen
@@ -42384,8 +42384,8 @@
     if (engine === 'claude') {
       const handoverOn = !!u.auto_handover_enabled;
       const handoverTip = handoverOn
-        ? 'Auto handover is ON — when this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
-        : 'Auto handover is OFF. Click to turn on — when this session goes idle 55 min, CCC will ask it to file a WatchTower checkpoint.';
+      ? 'Auto handover is ON. When this session goes idle 55 min, CCC asks it to file a WatchTower checkpoint. Click to turn off.'
+      : 'Auto handover is OFF. Click to turn on. When this session goes idle 55 min, CCC will ask it to file a WatchTower checkpoint.';
       handoverPill = ' <button type="button" class="wp-handover-toggle' + (handoverOn ? ' is-on' : ' is-off') + '"'
         + ' data-auto-handover-toggle aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
         + ' title="' + escapeHtml(handoverTip) + '">'
@@ -46522,7 +46522,7 @@
     overlay.innerHTML = '<div class="settings-modal-backdrop"></div>'
       + '<div class="activity-log-modal" role="dialog" aria-modal="true" aria-label="CCC activity log">'
       +   '<div class="activity-log-modal-header">'
-      +     '<div class="activity-log-modal-title">Activity log' + (titleHint ? ' — ' + escapeHtml(titleHint) : '') + '</div>'
+      +     '<div class="activity-log-modal-title">Activity log' + (titleHint ? ': ' + escapeHtml(titleHint) : '') + '</div>'
       +     toggleHtml
       +     '<button type="button" class="activity-log-modal-close" title="Close" aria-label="Close">&times;</button>'
       +   '</div>'
@@ -54423,7 +54423,7 @@
   const WORKER_RESTART_CONFIRM =
     'Restart the execution worker?\n\n'
     + 'CCC hands off ownership of any live sessions first and reconciles the '
-    + 'queue automatically once the worker answers again — no manual Reconcile '
+        + 'queue automatically once the worker answers again. No manual Reconcile '
     + 'needed. A turn already mid-response when the worker dies is still '
     + 'interrupted (draining stops new dispatch, it does not wait one out).';
   const WT_RESTART_CONFIRM =
@@ -55674,7 +55674,7 @@
     if ($whatsNewNoticeText && whatsNewVersion) {
       $whatsNewNoticeText.textContent = 'new';
       if ($whatsNewNoticeOpen) {
-        const label = 'New in v' + whatsNewVersion + ' — click to see changes';
+    const label = 'New in v' + whatsNewVersion + '. Click to see changes';
         $whatsNewNoticeOpen.title = label;
         $whatsNewNoticeOpen.setAttribute('aria-label', label);
       }
@@ -55840,7 +55840,7 @@
       : '';
     if ($drainPausedBannerText) {
       $drainPausedBannerText.textContent =
-        'Dispatch paused' + reason + ' — new sends are queuing, not sending.'
+        'Dispatch paused' + reason + '. New sends are queuing, not sending.'
         + queued;
     }
     $drainPausedBanner.hidden = false;
@@ -56146,7 +56146,7 @@
         refreshControlPlaneStatus();
         showOpToast(
           data.replayed
-            ? 'Dispatch resumed — ' + data.replayed + ' queued message(s) sent.'
+        ? 'Dispatch resumed. ' + data.replayed + ' queued message(s) sent.'
             : 'Dispatch resumed.',
           'success'
         );
@@ -57757,7 +57757,7 @@
     if (title) title.textContent = diagnostic ? 'Report diagnostics' : 'Report a bug';
     if (intro) intro.innerHTML = diagnostic
       ? 'Review the complete report below, edit it if needed, then send it directly to private support.'
-      : 'Tell us what broke — privately by email (recommended) or as a public GitHub issue against <strong>amirfish1/claude-command-center</strong>.';
+      : 'Tell us what broke privately by email (recommended) or as a public GitHub issue against <strong>amirfish1/claude-command-center</strong>.';
     if (privacy) privacy.textContent = diagnostic
       ? 'Only the text visible in Details will be sent. Prompts, ticket text, files, paths, and raw logs are never included.'
       : 'Only the data shown in the preview below is sent. No code, no file contents, no personal data is included.';
@@ -57809,7 +57809,7 @@
     const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
     const lines = ['## Description', '', desc, ''];
     if (bugDestination() === 'github' && bugShotB64) {
-      lines.push('## Screenshot', '', '![screenshot](attached — uploaded when the issue is filed)', '');
+      lines.push('## Screenshot', '', '![screenshot](attached; uploaded when the issue is filed)', '');
     }
     lines.push('## Context', '', '| Field | Value |', '|---|---|');
     lines.push('| **CCC version** | `' + (version || '-') + '` |');
@@ -58028,13 +58028,13 @@
     let subject = 'CCC bug report';
     for (const line of desc.split('\n')) {
       const t = line.trim();
-      if (t) { subject = 'CCC bug report — ' + (t.length > 80 ? t.slice(0, 80).trimEnd() + '…' : t); break; }
+        if (t) { subject = 'CCC bug report: ' + (t.length > 80 ? t.slice(0, 80).trimEnd() + '…' : t); break; }
     }
     // Some mail clients choke on very long mailto URLs — keep the encoded
     // body under ~1800 chars and say so in the body when we had to cut.
     let body = md;
     if (encodeURIComponent(body).length > 1800) {
-      const note = '\n\n[…truncated — the full report text was copied to your clipboard]';
+      const note = '\n\n[…truncated; the full report text was copied to your clipboard]';
       while (body.length > 0 && encodeURIComponent(body + note).length > 1800) {
         body = body.slice(0, Math.floor(body.length * 0.8));
       }
@@ -58044,7 +58044,7 @@
     window.location.href = 'mailto:amir.fish@gmail.com?subject=' +
       encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
     try {
-      showOpToast('Draft opened in your mail app — review and press send. (The report text was also copied to your clipboard.)', 'success');
+      showOpToast('Draft opened in your mail app. Review and press send. (The report text was also copied to your clipboard.)', 'success');
     } catch (_) {}
     bugCloseModal();
   }
@@ -60018,7 +60018,7 @@
     if (!list) return;
     list.innerHTML = '';
     if (!data.dirs || !data.dirs.length) {
-      list.innerHTML = '<div class="fp-empty">No subfolders — Select uses this one</div>';
+        list.innerHTML = '<div class="fp-empty">No subfolders. Select uses this one</div>';
       return;
     }
     for (const d of data.dirs) {
@@ -60036,7 +60036,7 @@
   // log it for debugging but show the user what the fallback actually is.
   function webPickerFallbackNote(picked) {
     if (picked && picked.error) console.debug('[ccc] native folder picker:', picked.error);
-    return 'No desktop folder dialog on the server — browse its folders below.';
+    return 'No desktop folder dialog on the server. Browse its folders below.';
   }
 
   // opts: { startPath?, note?, onPick(absPath) }
@@ -61437,11 +61437,11 @@
       if (row.status === 'current') return label + ' ' + (version || 'is current');
       if (row.status === 'managed') return label + ' is managed by its app';
       if (row.status === 'missing') {
-        return label + ' is not installed' + (row.install ? ' — ' + row.install : '');
+      return label + ' is not installed' + (row.install ? ': ' + row.install : '');
       }
       if (row.status === 'failed') {
         const detail = String(row.message || '').trim().split('\n').pop();
-        return label + ' update failed' + (detail ? ' — ' + detail : '');
+      return label + ' update failed' + (detail ? ': ' + detail : '');
       }
       return label + ' is pending';
     }).join(' · ');
@@ -61528,10 +61528,10 @@
       if (versionEl) versionEl.textContent = 'not installed';
       if (stepsRow) stepsRow.hidden = false;
       if (stepsEl) stepsEl.innerHTML =
-        '1. Get a Kimi membership — see <a href="https://www.kimi.com/code/docs/en/kimi-code/membership.html" target="_blank" rel="noopener noreferrer">Membership</a> (much cheaper than Claude, includes Kimi Code).<br>'
-        + '2. Install the Kimi Code CLI — see <a href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>.<br>'
+      '1. Get a Kimi membership. See <a href="https://www.kimi.com/code/docs/en/kimi-code/membership.html" target="_blank" rel="noopener noreferrer">Membership</a> (much cheaper than Claude, includes Kimi Code).<br>'
+      + '2. Install the Kimi Code CLI. See <a href="https://www.kimi.com/code/docs/en/third-party-tools/other-coding-agents.html" target="_blank" rel="noopener noreferrer">Install &amp; setup</a>.<br>'
         + '3. Sign in with your account: <code>kimi login</code>.<br>'
-        + '4. Click <strong>Recheck</strong> — then <strong>Verify setup</strong> to spawn a smoke-test session.';
+      + '4. Click <strong>Recheck</strong>, then <strong>Verify setup</strong> to spawn a smoke-test session.';
       if (verifyBtn) verifyBtn.style.display = 'none';
       return;
     }
@@ -61552,12 +61552,12 @@
         const res = await fetch('/api/engines/kimi/verify', { method: 'POST' });
         const data = await res.json().catch(() => ({}));
         if (data && data.ok && desc) {
-          desc.textContent = 'Working — spawned smoke-test session '
+    desc.textContent = 'Working. Spawned smoke-test session '
             + String(data.session_id || '').slice(0, 21) + '… via ACP. Kimi is ready to use.';
           if (typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(btn.closest('.settings-row'));
         } else if (desc) {
           desc.textContent = 'Setup not working yet: ' + ((data && data.error) || 'unknown error')
-            + ' — run `kimi login` in a terminal and retry.';
+        + '. Run `kimi login` in a terminal and retry.';
         }
       } catch (err) {
         if (desc) desc.textContent = 'Verify failed: ' + ((err && err.message) || 'network');
@@ -63768,7 +63768,7 @@
     ensureStyle();
     var strip = document.createElement('div');
     strip.id = 'cccThroughputStrip';
-    strip.title = 'Today’s token throughput — cache-adjusted burn, live and recently active sessions, pace vs yesterday at this time. Click to open the throughput dashboard.';
+    strip.title = 'Today’s token throughput: cache-adjusted burn, live and recently active sessions, pace vs yesterday at this time. Click to open the throughput dashboard.';
     strip.setAttribute('role', 'button');
     strip.innerHTML =
       '<span class="ts-spark"></span>' +

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
 <meta name="theme-color" content="#0d1117">
-<title>Daily Throughput — CCC</title>
+<title>Daily Throughput: CCC</title>
 <style>
   /* Palette lifted from throughput.html so the daily report reads as one
      product with the main analyzer (GitHub-dark-ish, teal accent). */
@@ -478,7 +478,7 @@
     return m + "m " + String(s).padStart(2, "0") + "s";
   }
   function fmtPct(ratio) {
-    if (ratio == null || isNaN(ratio)) return "—";
+    if (ratio == null || isNaN(ratio)) return "-";
     return (Number(ratio) * 100).toFixed(1) + "%";
   }
   function esc(s) {
@@ -495,9 +495,9 @@
   }
   // Extract HH:MM (local) from an ISO timestamp for span display.
   function hhmm(iso) {
-    if (!iso) return "—";
+    if (!iso) return "-";
     var d = new Date(iso);
-    if (isNaN(d.getTime())) return "—";
+    if (isNaN(d.getTime())) return "-";
     return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
   }
 
@@ -568,7 +568,7 @@
       badge.className = "status-badge progress";
       badge.textContent = "in progress";
     }
-    document.title = "Daily Throughput " + d.date + " — CCC";
+    document.title = "Daily Throughput " + d.date + ": CCC";
   }
 
   function kpiTile(label, value, sub, accent) {
@@ -659,7 +659,7 @@
     rows.forEach(function (r) {
       var m = r.m;
       html += "<tr>" +
-        '<td class="left name">' + esc(m.model || "—") + "</td>" +
+        '<td class="left name">' + esc(m.model || "-") + "</td>" +
         "<td>" + fmtInt(m.turns) + "</td>" +
         '<td class="strong">' + fmtCompact(r.cacheAdj) + "</td>" +
         "<td>" + fmtCompact(m.output_tokens) + "</td>" +
@@ -682,7 +682,7 @@
       html += '<tr><td class="left" colspan="10" style="color:var(--text-muted)">No sessions for this day.</td></tr>';
     }
     sessions.forEach(function (s, i) {
-      var name = s.session_name || (s.session_id ? String(s.session_id).slice(0, 8) : "—");
+      var name = s.session_name || (s.session_id ? String(s.session_id).slice(0, 8) : "-");
       var engCls = (s.engine === "codex") ? " codex" : "";
       var models = (s.models || []).join(", ");
       // The day payload does not aggregate reasoning effort yet, so this stays

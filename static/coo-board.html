@@ -131,11 +131,11 @@
 <body>
 <header>
   <h1>COO Board</h1>
-  <span class="sub">live · auto-refresh 30s (paused when hidden) · refreshed <span id="clock">—</span> · <b>last COO sweep <span id="swept">—</span></b></span>
+  <span class="sub">live · auto-refresh 30s (paused when hidden) · refreshed <span id="clock">N/A</span> · <b>last COO sweep <span id="swept">N/A</span></b></span>
   <div class="counts" id="counts"></div>
 </header>
 <div class="addbar">
-  <input id="addInput" list="sessList" placeholder="Add a session — pick by name or paste a session id…" autocomplete="off">
+  <input id="addInput" list="sessList" placeholder="Add a session: pick by name or paste a session id…" autocomplete="off">
   <datalist id="sessList"></datalist>
   <button id="addBtn">＋ Add</button>
   <span class="hint">badges are live from <code>/api/attention</code> + <code>/api/sessions</code>. ✕ removes a card. Your list is saved in this browser.</span>
@@ -144,13 +144,13 @@
 <aside id="drawer" aria-hidden="true">
   <div class="dresize" id="drawerResize" title="drag to resize"></div>
   <div class="dhead">
-    <span class="dtitle" id="drawerTitle">—</span>
+    <span class="dtitle" id="drawerTitle">N/A</span>
     <span class="dopen" id="drawerOpenTab" title="open in new tab">↗ tab</span>
     <span class="dclose" id="drawerClose" title="close">✕</span>
   </div>
   <iframe id="drawerFrame" title="conversation"></iframe>
 </aside>
-<footer>Status: <b style="color:var(--blocked)">blocked</b> (needs you) · <b style="color:var(--review)">review</b> (committed, awaiting push/review) · <b style="color:var(--working)">working</b> (in a call) · <b style="color:var(--idle)">idle</b> · <b style="color:var(--ended)">ended</b>. Live-derived every refresh — no hand-maintained labels.</footer>
+<footer>Status: <b style="color:var(--blocked)">blocked</b> (needs you) · <b style="color:var(--review)">review</b> (committed, awaiting push/review) · <b style="color:var(--working)">working</b> (in a call) · <b style="color:var(--idle)">idle</b> · <b style="color:var(--ended)">ended</b>. Live-derived every refresh, with no hand-maintained labels.</footer>
 
 <!-- Annotate (CCC-166): floating button + tiny note prompt. Self-contained,
      posts to /api/annotations; the server captures the screenshot natively. -->
@@ -198,12 +198,12 @@ function addId(id,t){
   l.push(t?{id,t}:{id}); setList(l); load();
 }
 const ORDER={blocked:0,review:1,working:2,idle:3,ended:4};
-function rel(ts){ if(!ts)return "—"; const s=Date.now()/1000-ts;
+function rel(ts){ if(!ts)return "-"; const s=Date.now()/1000-ts;
   if(s<60)return Math.round(s)+"s"; if(s<3600)return Math.round(s/60)+"m";
   if(s<86400)return Math.round(s/3600)+"h"; return Math.round(s/86400)+"d";}
 // Absolute wall-clock of a card's last update — concrete time beats a drifting
 // "1m ago" for spotting staleness at a glance.
-function clock(ts){ if(!ts)return "—"; const d=new Date(ts*1000);
+function clock(ts){ if(!ts)return "-"; const d=new Date(ts*1000);
   let h=d.getHours(); const ap=h>=12?"PM":"AM"; h=h%12||12;
   const p=n=>String(n).padStart(2,"0");
   return h+":"+p(d.getMinutes())+":"+p(d.getSeconds())+" "+ap;}
@@ -229,25 +229,25 @@ function blockReason(id){
     return "asked you: "+h+clip(L.question_text);
   }
   const sb=L.soft_block;
-  if(sb&&sb.question_text) return "waiting on your reply — “"+clip(sb.question_text)+"”";
+  if(sb&&sb.question_text) return "waiting on your reply: “"+clip(sb.question_text)+"”";
   if(A.next_step&&A.next_step!=='None') return clip(A.next_step);
   if(A.where&&A.where!=='None') return clip(A.where);
   const la=clip(L.last_assistant_text);
-  return la?("last said — “"+la+"”"):"needs you (reason not captured)";
+  return la?("last said: “"+la+"”"):"needs you (reason not captured)";
 }
 function statusOf(id){
   const L=SESS[id], A=ATT[id];
   if(!L) return {k:"ended", where:"session not found / ended"};
   // Trust the server's single-source-of-truth state (working/waiting/idle/ended).
   const s=L.state;
-  if(s==='working') return {k:"working", where:L.sidecar_in_flight?"in a call — running a tool":"in a call — active"};
+  if(s==='working') return {k:"working", where:L.sidecar_in_flight?"in a call, running a tool":"in a call, active"};
   if(s==='waiting') return {k:"blocked", where:blockReason(id)};
   if(s==='ended'){
     // A process that died WHILE blocked on you left an orphaned ask. Surface
     // recent ones (died in the last 48h) distinctly — those are worth resuming;
     // ancient corpses (median ~48d) stay quietly ended.
     const recent=L.mtime&&((Date.now()/1000-L.mtime)<48*3600);
-    if(L.ended_blocked&&recent) return {k:"ended", orphan:true, where:"died with an open ask — "+blockReason(id)};
+    if(L.ended_blocked&&recent) return {k:"ended", orphan:true, where:"died with an open ask: "+blockReason(id)};
     return {k:"ended", where:"process ended"};
   }
   // Server says idle (Stopped, nothing pending). Attention may still flag it as
@@ -310,7 +310,7 @@ function paint(){
     card.innerHTML=
       `<div class="xbtn" title="remove">✕</div>`+
       `<div class="top"><span class="title">${title}</span>`+
-      `<span class="repo">${L.folder_label||'—'}</span>`+
+      `<span class="repo">${L.folder_label||'-'}</span>`+
       `<span class="badge ${st.k}">${st.orphan?'ended · open ask':st.k}</span></div>`+
       `<div class="updated">last update ${clock(L.mtime)}</div>`+
       `<div class="where ${st.k}${st.orphan?' orphan-where':''}">▸ ${st.where}${st.orphan?' · click to resume':''}</div>`+
@@ -332,7 +332,7 @@ function paint(){
     const p=document.createElement('span'); p.className='pill';
     p.style.color=`var(--${k})`; p.textContent=`${counts[k]} ${k}`; c.appendChild(p);});
   document.getElementById('clock').textContent=new Date().toLocaleTimeString();
-  document.getElementById('swept').textContent=SWEPT?rel(SWEPT)+' ago':'—';
+  document.getElementById('swept').textContent=SWEPT?rel(SWEPT)+' ago':'-';
 }
 function doAdd(){
   const inp=document.getElementById('addInput'); let v=inp.value.trim(); if(!v)return;

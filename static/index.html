@@ -1273,8 +1273,8 @@
         <button type="button" class="upd-promo-more" id="updPromoMore">See all new features &rarr;</button>
       </div>
       <div class="upd-warning">
-        Click <strong>Update now</strong> and CCC does the rest — no commands
-        to run. It first checks the update is safe (this install is a clean
+        Click <strong>Update now</strong> and CCC does the rest. There are no
+        commands to run. It first checks the update is safe (this install is a clean
         git checkout on <code>main</code>), downloads the latest code, then
         <strong>restarts itself</strong>: the dashboard and the execution
         worker come back on the new code automatically. If the check fails,
@@ -1621,12 +1621,12 @@
     <div class="upd-dialog" style="width:min(560px,92vw); max-height:92vh; overflow-y:auto;">
       <div class="upd-title" id="bugReportTitle">Report a bug</div>
       <div class="upd-versions" id="bugReportIntro">
-        Tell us what broke — privately by email (recommended) or as a public
+        Tell us what broke privately by email (recommended) or as a public
         GitHub issue against <strong>amirfish1/claude-command-center</strong>.
       </div>
       <div class="bug-auto-banner" id="bugAutoBanner" style="display:none;">
         We noticed spawning a new session didn't finish within 30 seconds.
-        A bug report has been prepared for you — please review it below.
+        A bug report has been prepared for you. Please review it below.
         <label class="bug-auto-optout" for="bugAutoOptOut">
           <input type="checkbox" id="bugAutoOptOut">
           Don't show this automatically again
@@ -1647,7 +1647,7 @@
           <input id="bugName" class="bug-input" type="text" autocomplete="name">
         </div>
         <div>
-          <label class="bug-label" for="bugContact">Email or phone (optional — so the maintainer can reply)</label>
+          <label class="bug-label" for="bugContact">Email or phone (optional, so the maintainer can reply)</label>
           <input id="bugContact" class="bug-input" type="text" autocomplete="email">
         </div>
       </div>
@@ -1690,7 +1690,7 @@
         </div>
       </div>
       <div id="bugShotEmailNote" class="bug-shot-help" style="display:none;">
-        Screenshots can't be attached to an email draft — choose the GitHub
+        Screenshots can't be attached to an email draft. Choose the GitHub
         issue option above if you want to include one.
       </div>
       <div id="bugReportContextSection">
@@ -3594,7 +3594,7 @@
   function transportExplainHtml(transport) {
     const key = String(transport || '').trim();
     const known = TRANSPORT_EXPLAIN[key];
-    return known ? (escapeHtml(key) + ' — ' + escapeHtml(known)) : (escapeHtml(key) || 'an unknown transport');
+    return known ? (escapeHtml(key) + ': ' + escapeHtml(known)) : (escapeHtml(key) || 'an unknown transport');
   }
 
   // The two "lost" cases mean very different things: with a captured
@@ -3604,8 +3604,8 @@
   // well have landed.
   function proofExplain(proofAvailable) {
     return proofAvailable
-      ? "WatchTower recorded this session's transcript at send time and it never grew in the 10-minute wait window that followed — the message did not land."
-      : "WatchTower couldn't find this session's transcript file, either at send time or since — there was nothing to check the message against, so this is unverified rather than a confirmed loss.";
+      ? "WatchTower recorded this session's transcript at send time and it never grew in the 10-minute wait window that followed. The message did not land."
+      : "WatchTower couldn't find this session's transcript file, either at send time or since. There was nothing to check the message against, so this is unverified rather than a confirmed loss.";
   }
 
   function renderText(health) {
@@ -3615,7 +3615,7 @@
     if (holds.length) {
       parts.push(
         holds.length + ' session' + (holds.length === 1 ? '' : 's') +
-        ' stuck — CCC can\'t reach a live process it didn\'t start. Use `wt send <session-id> "text"` to deliver directly: ' +
+        ' stuck. CCC can\'t reach a live process it didn\'t start. Use `wt send <session-id> "text"` to deliver directly: ' +
         holds.map((h) => h.sid).join(', ')
       );
     }
@@ -3629,7 +3629,7 @@
       if (proven) bits.push(proven + ' confirmed lost');
       if (unproven) bits.push(unproven + ' unverified');
       parts.push(
-        lost.length + ' message' + (lost.length === 1 ? '' : 's') + ' in transit trouble — ' +
+        lost.length + ' message' + (lost.length === 1 ? '' : 's') + ' in transit trouble: ' +
         bits.join(', ') + ' · click Details'
       );
     }

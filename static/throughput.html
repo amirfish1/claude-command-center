@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%2339d2c0'>⌘</text></svg>">
 <meta name="theme-color" content="#0d1117">
-<title>CCC — Token Throughput Analyzer</title>
+<title>CCC: Token Throughput Analyzer</title>
 <style>
   :root {
     --bg: #0b0d11;
@@ -1295,9 +1295,9 @@
           <button type="button" id="record-reset-btn" onclick="recordLimitReset()" title="Record limit reset">Record reset</button>
         </div>
         <div class="weekly-reset-schedule" aria-label="Next weekly resets">
-          <span id="claude-next-reset"><strong>Claude next reset:</strong> —</span>
-          <span id="codex-next-reset"><strong>Codex next reset:</strong> —</span>
-          <span id="kimi-next-reset"><strong>Kimi next reset:</strong> —</span>
+          <span id="claude-next-reset"><strong>Claude next reset:</strong> N/A</span>
+          <span id="codex-next-reset"><strong>Codex next reset:</strong> N/A</span>
+          <span id="kimi-next-reset"><strong>Kimi next reset:</strong> N/A</span>
         </div>
       </div>
 
@@ -1338,22 +1338,22 @@
         <div class="metrics-grid">
           <div class="metric-card" id="metric-card-1">
             <div class="metric-label" id="lbl-card1">CALLS</div>
-            <div class="metric-value" id="val-active-duration">—</div>
+            <div class="metric-value" id="val-active-duration">N/A</div>
             <div class="metric-subtext" id="val-total-duration"></div>
           </div>
           <div class="metric-card" id="metric-card-2">
             <div class="metric-label" id="lbl-card2">CACHE-ADJUSTED TOKENS / DAY</div>
-            <div class="metric-value" id="val-total-tokens">—</div>
+            <div class="metric-value" id="val-total-tokens">N/A</div>
             <div class="metric-subtext" id="val-token-split"></div>
           </div>
           <div class="metric-card" id="metric-card-3">
             <div class="metric-label" id="lbl-card3">CACHE HIT RATE</div>
-            <div class="metric-value" id="val-in-throughput">—</div>
+            <div class="metric-value" id="val-in-throughput">N/A</div>
             <div class="metric-subtext" id="val-in-tps"></div>
           </div>
           <div class="metric-card" id="metric-card-4">
             <div class="metric-label" id="lbl-card4">IF OPUS ONLY</div>
-            <div class="metric-value" id="val-out-throughput">—</div>
+            <div class="metric-value" id="val-out-throughput">N/A</div>
             <div class="metric-subtext" id="val-out-tps"></div>
           </div>
         </div>
@@ -1771,7 +1771,7 @@
       document.getElementById('session-title-label').textContent = session.display_name;
       document.getElementById('session-id-label').textContent = session.session_id;
       ['val-active-duration', 'val-total-tokens', 'val-in-throughput', 'val-out-throughput']
-        .forEach(id => { document.getElementById(id).textContent = '—'; });
+        .forEach(id => { document.getElementById(id).textContent = '-'; });
       ['val-total-duration', 'val-token-split', 'val-in-tps', 'val-out-tps']
         .forEach(id => { document.getElementById(id).textContent = ''; });
       document.getElementById('chart-title-label').textContent = '3-Hour Cache-Adjusted Burn';
@@ -2060,7 +2060,7 @@
         secondary.textContent = `Expected about ${expected}`;
       } else {
         primary.textContent = formatRefreshAge(last);
-        secondary.textContent = `Last refresh ${elapsed || '—'} · ${read || discovered} sessions · ${cacheHits} cached · ${parsed} parsed`;
+        secondary.textContent = `Last refresh ${elapsed || '-'} · ${read || discovered} sessions · ${cacheHits} cached · ${parsed} parsed`;
       }
       panel.title = last
         ? `Last refreshed ${new Date(Number(last) * 1000).toLocaleString()}`
@@ -2516,7 +2516,7 @@
         kimiRate && `Kimi ${kimiRate.pct.toFixed(0)}%`].filter(Boolean);
       document.getElementById('val-total-tokens').textContent = rate
         ? `${rate.pctPerDay.toFixed(1)}% / day`
-        : (combinedRates.length ? `${combinedRates.join(' · ')} / day` : '—');
+        : (combinedRates.length ? `${combinedRates.join(' · ')} / day` : '-');
       document.getElementById('val-token-split').textContent = rate
         ? `${rate.pct.toFixed(0)}% so far · ${rate.elapsedDays.toFixed(1)} days elapsed`
         : (combinedSoFar.length ? `${combinedSoFar.join(' · ')} so far` : 'Weekly quota unavailable');
@@ -2584,12 +2584,12 @@
         document.getElementById('val-in-throughput').textContent =
           `${Math.round((summary.cache_hit_ratio || 0) * 100)}%`;
         document.getElementById('val-in-tps').textContent =
-          `saved ${ppt ? (((rawTok - effectiveTok) * ppt).toFixed(3)) : '—'}% by caching`;
+          `saved ${ppt ? (((rawTok - effectiveTok) * ppt).toFixed(3)) : '-'}% by caching`;
 
         document.getElementById('lbl-card4').textContent = 'COST';
         document.getElementById('val-out-throughput').textContent = fmtCost(summary.cost_usd || 0);
         document.getElementById('val-out-tps').textContent =
-          `${summary.avg_output_tps ? summary.avg_output_tps.toFixed(1) : '—'} out tok/s · raw ${fmtNum(summary.avg_input_tpm)} TPM`;
+          `${summary.avg_output_tps ? summary.avg_output_tps.toFixed(1) : '-'} out tok/s · raw ${fmtNum(summary.avg_input_tpm)} TPM`;
       }
       
       // Draw chart. Aggregate ranges use hourly buckets; per-session views
@@ -2831,7 +2831,7 @@
 
       top.forEach(s => {
         const tok = s._week_tokens || 0;
-        const pctStr = ppt ? `${(tok * ppt).toFixed(2)}%` : '—';
+        const pctStr = ppt ? `${(tok * ppt).toFixed(2)}%` : '-';
         const barW = Math.round((tok / maxTok) * 80);
         const row = document.createElement('div');
         row.className = 'top-sess-row';
@@ -2845,34 +2845,34 @@
           </div>
           <div style="font-weight:600;color:var(--accent)">${pctStr}</div>
           <div style="color:var(--text-muted)">${fmtNum(tok)}</div>
-          <div style="color:var(--text-muted)">${s._cost_usd ? fmtCost(s._cost_usd) : '—'}</div>`;
+          <div style="color:var(--text-muted)">${s._cost_usd ? fmtCost(s._cost_usd) : '-'}</div>`;
         el.appendChild(row);
       });
 
       if (rest.length > 0) {
         const otherTok = rest.reduce((s, r) => s + (r._week_tokens || 0), 0);
-        const otherPct = ppt ? `${(otherTok * ppt).toFixed(2)}%` : '—';
+        const otherPct = ppt ? `${(otherTok * ppt).toFixed(2)}%` : '-';
         const row = document.createElement('div');
         row.className = 'top-sess-row other-row';
         row.innerHTML = `
           <div style="color:var(--text-muted)">Other (${rest.length} sessions)</div>
           <div style="font-weight:600">${otherPct}</div>
           <div style="color:var(--text-muted)">${fmtNum(otherTok)}</div>
-          <div>—</div>`;
+          <div>N/A</div>`;
         el.appendChild(row);
       }
 
       // Total row
       const totalTok = withTokens.reduce((s, r) => s + (r._week_tokens || 0), 0);
       const totalCost = withTokens.reduce((s, r) => s + (r._cost_usd || 0), 0);
-      const totalPct = ppt ? `${(totalTok * ppt).toFixed(2)}%` : '—';
+      const totalPct = ppt ? `${(totalTok * ppt).toFixed(2)}%` : '-';
       const totalRow = document.createElement('div');
       totalRow.className = 'top-sess-row total-row';
       totalRow.innerHTML = `
         <div style="font-weight:700">Total (${withTokens.length} sessions)</div>
         <div style="font-weight:700;color:var(--accent)">${totalPct}</div>
         <div style="font-weight:700">${fmtNum(totalTok)}</div>
-        <div style="font-weight:700">${totalCost ? fmtCost(totalCost) : '—'}</div>`;
+        <div style="font-weight:700">${totalCost ? fmtCost(totalCost) : '-'}</div>`;
       el.appendChild(totalRow);
     }
 
@@ -2919,22 +2919,22 @@
     function formatModelWeeklyPct(model, context) {
       const ctx = context || {};
       const tokens = modelWeeklyBasisTokens(model);
-      if (!(tokens > 0)) return '—';
+      if (!(tokens > 0)) return '-';
       if (isCodexModelRow(model, ctx.engine)) {
         const total = Number(ctx.codexWeeklyTotalTokens || 0);
         const pct = Number(ctx.codexWeeklyPct);
-        if (!(total > 0) || !Number.isFinite(pct)) return '—';
+        if (!(total > 0) || !Number.isFinite(pct)) return '-';
         return `${((tokens / total) * pct).toFixed(2)}%`;
       }
       if (isKimiModelRow(model, ctx.engine)) {
         const total = Number(ctx.kimiWeeklyTotalTokens || 0);
         const pct = Number(ctx.kimiWeeklyPct);
-        if (!(total > 0) || !Number.isFinite(pct)) return '—';
+        if (!(total > 0) || !Number.isFinite(pct)) return '-';
         return `${((tokens / total) * pct).toFixed(2)}%`;
       }
       const total = Number(ctx.claudeWeeklyTotalTokens || 0);
       const pct = Number(ctx.claudeWeeklyPct);
-      if (!(total > 0) || !Number.isFinite(pct)) return '—';
+      if (!(total > 0) || !Number.isFinite(pct)) return '-';
       return `${((tokens / total) * pct).toFixed(2)}%`;
     }
 
@@ -4598,7 +4598,7 @@
       if (title) title.textContent = manual ? 'Manual limit reset' : 'Detected limit reset';
       if (details) {
         const pctLine = activeResetEvent.prev_pct != null || activeResetEvent.new_pct != null
-          ? `<div><strong>Usage:</strong> ${activeResetEvent.prev_pct ?? '—'}% → ${activeResetEvent.new_pct ?? '—'}%</div>`
+          ? `<div><strong>Usage:</strong> ${activeResetEvent.prev_pct ?? '-'}% → ${activeResetEvent.new_pct ?? '-'}%</div>`
           : '';
         details.innerHTML = `
           <div><strong>Window:</strong> ${resetEventWindowLabel(activeResetEvent.window)}</div>
@@ -5106,7 +5106,7 @@
           bars += '<rect class="tz-bar" data-ms="' + ms + '" x="' + x.toFixed(1) +
             '" y="' + (H - padB - bh).toFixed(1) + '" width="' + barW.toFixed(1) +
             '" height="' + bh.toFixed(1) + '" rx="2" fill="var(--accent)" opacity="0.5" style="cursor:pointer;">' +
-            '<title>' + label + ' — ' + fmtTok(v) + ' cache-adj tokens · ' + (r ? r.turns : 0) +
+            '<title>' + label + ': ' + fmtTok(v) + ' cache-adj tokens · ' + (r ? r.turns : 0) +
             ' calls · ' + fmtUsd(r ? r.cost : 0) + '\nClick for per-session breakdown</title></rect>';
         } else {
           bars += '<rect x="' + x.toFixed(1) + '" y="' + (H - padB - 1) + '" width="' + barW.toFixed(1) +
