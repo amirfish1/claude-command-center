@@ -61462,16 +61462,25 @@
   // (All / Active / archived) picks it up from CSS alone.
   const CONV_ROWSTYLE_STORAGE_KEY = 'ccc-conv-rowstyle';
   const CONV_ROWSTYLE_VARIANTS = [
-    { id: 'default',   label: 'Default',   op: 70, h: 2,   gap: 3 },
-    { id: 'bright',    label: 'Bright',    op: 100, h: 2,  gap: 3 },
-    { id: 'dim',       label: 'Dim',       op: 42, h: 2,   gap: 3 },
-    { id: 'airy',      label: 'Airy',      op: 70, h: 2,   gap: 5 },
-    { id: 'compact',   label: 'Compact',   op: 70, h: 2,   gap: 1 },
-    { id: 'bold',      label: 'Bold',      op: 92, h: 3,   gap: 3 },
-    { id: 'large',     label: 'Large',     op: 78, h: 3,   gap: 4 },
-    { id: 'mono',      label: 'Mono',      op: 70, h: 2,   gap: 2 },
-    { id: 'contrast',  label: 'Contrast',  op: 100, h: 3,  gap: 4 },
-    { id: 'editorial', label: 'Editorial', op: 88, h: 1.5, gap: 5 },
+    // kind 'lines' previews as a 3-bar glyph (density / brightness);
+    // kind 'font' previews as "Aa" set in the typeface it applies.
+    { id: 'default',    label: 'Default',    kind: 'lines', op: 70,  h: 2,   gap: 3 },
+    { id: 'bright',     label: 'Bright',     kind: 'lines', op: 100, h: 2,   gap: 3 },
+    { id: 'bold',       label: 'Bold',       kind: 'lines', op: 92,  h: 3,   gap: 3 },
+    { id: 'contrast',   label: 'Contrast',   kind: 'lines', op: 100, h: 3,   gap: 4 },
+    { id: 'compact',    label: 'Compact',    kind: 'lines', op: 70,  h: 2,   gap: 1 },
+    { id: 'airy',       label: 'Airy',       kind: 'lines', op: 70,  h: 2,   gap: 5 },
+    { id: 'large',      label: 'Large',      kind: 'lines', op: 78,  h: 3,   gap: 4 },
+    { id: 'mono',       label: 'Mono',       kind: 'font', font: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+    { id: 'serif',      label: 'Serif',      kind: 'font', font: 'ui-serif, "New York", Georgia, serif' },
+    { id: 'slab',       label: 'Slab',       kind: 'font', font: 'Charter, "Iowan Old Style", Palatino, serif' },
+    { id: 'rounded',    label: 'Rounded',    kind: 'font', font: 'ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui', weight: 500 },
+    { id: 'grotesk',    label: 'Grotesk',    kind: 'font', font: '"Helvetica Neue", Helvetica, Inter, Arial, sans-serif' },
+    { id: 'humanist',   label: 'Humanist',   kind: 'font', font: 'Optima, Candara, "Gill Sans", sans-serif' },
+    { id: 'geometric',  label: 'Geometric',  kind: 'font', font: 'Futura, "Century Gothic", "Avenir Next", sans-serif' },
+    { id: 'condensed',  label: 'Condensed',  kind: 'font', font: '"Avenir Next Condensed", "Arial Narrow", sans-serif' },
+    { id: 'typewriter', label: 'Typewriter', kind: 'font', font: '"Courier New", Courier, monospace', weight: 600 },
+    { id: 'caps',       label: 'Small caps', kind: 'font', font: 'inherit', weight: 600, caps: true },
   ];
 
   function storedConvRowStyle() {
@@ -61510,9 +61519,17 @@
         btn.setAttribute('aria-label', variant.label);
         btn.setAttribute('data-conv-rowstyle-id', variant.id);
         btn.title = 'Row style: ' + variant.label;
-        btn.style.setProperty('--rs-op', String(variant.op));
-        btn.style.setProperty('--rs-h', variant.h + 'px');
-        btn.style.setProperty('--rs-gap', variant.gap + 'px');
+        if (variant.kind === 'font') {
+          btn.classList.add('is-font');
+          btn.textContent = variant.caps ? 'AA' : 'Aa';
+          if (variant.font && variant.font !== 'inherit') btn.style.fontFamily = variant.font;
+          if (variant.weight) btn.style.fontWeight = String(variant.weight);
+          if (variant.caps) btn.style.letterSpacing = '0.04em';
+        } else {
+          btn.style.setProperty('--rs-op', String(variant.op));
+          btn.style.setProperty('--rs-h', variant.h + 'px');
+          btn.style.setProperty('--rs-gap', variant.gap + 'px');
+        }
         btn.addEventListener('click', (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
