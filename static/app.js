@@ -47744,8 +47744,9 @@
             + tsSpan(ev.ts)
             + '<div class="session-interrupted-msg">'
             + '<span class="session-interrupted-title">⏸ Session interrupted</span>'
-            + '<span class="session-interrupted-sub">This turn was cut off before it finished.'
-            + ' Send a message to pick it back up.</span>'
+            + '<span class="session-interrupted-sub">Claude\'s turn was cut off mid-response'
+            + ' (a kill, an approved interrupt, or Esc) — this reflects the transcript itself,'
+            + ' not a hook. Send a message to pick it back up.</span>'
             + '</div>';
         } else {
         div.innerHTML = '<span class="label">User</span>'
