@@ -1,1 +1,0 @@
-Kimi `/goal` compatibility prompts now tell the model it can use `UpdateGoal` to clear or complete the goal and the `compact-to-queue` skill when context is full, instead of relying on CLI-only `/goal clear` or `/compact` that the agent cannot invoke.

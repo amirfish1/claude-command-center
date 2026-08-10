@@ -1,1 +1,0 @@
-- Kimi sessions no longer wedge their message queue forever after a mid-turn crash or worker restart: a wire tail quiet for 10+ minutes with no terminal event is now treated as a dead turn, so queued messages auto-send instead of waiting on a turn that will never finish.

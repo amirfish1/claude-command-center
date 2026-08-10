@@ -1,1 +1,0 @@
-- CCC no longer interrupts or kills a possibly-mid-turn session on its own. Automatic interrupt paths (Codex stalled-turn recovery, the idle reaper hitting a session with a tool still running) now file an approval ask, surfaced as a dashboard banner ("CCC wants to interrupt this session. Approve?") with Approve/Dismiss.

@@ -1,1 +1,0 @@
-Fixed mobile new-session composer overflow: engine/model/effort selectors now scroll horizontally instead of pushing the send/mic/tts buttons off-screen, and spawn selects are forced to 16px on mobile to prevent iOS auto-zoom.

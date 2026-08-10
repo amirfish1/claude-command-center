@@ -55943,6 +55943,30 @@
 
   const WHATS_NEW_FEATURES = [
     {
+      id: 'mobile-responsiveness-pass',
+      title: 'Mobile Responsiveness Pass',
+      date: 'Aug 10, 2026',
+      tag: 'Mobile',
+      desc: '<p>The phone dashboard got a full responsiveness pass. Conversations now open <strong>~6× faster</strong> (worst main-thread block dropped from 2476ms to 395ms) by loading a 120-line window instead of 400 and skipping layout for offscreen rows.</p><p>The sidebar scrolls as <strong>one surface</strong> instead of trapping your finger in three separate panels, the new-session composer stops pushing its send button off-screen (selectors scroll horizontally), and the list chrome condenses so many more sessions fit on a phone screen.</p>',
+      mockup: '<div style="font-family:var(--mono,monospace);font-size:11px;line-height:1.7;color:#a6accd;padding:12px 14px;background:rgba(0,0,0,.25);border-radius:6px;border-left:3px solid #3dd68c;"><div style="display:flex;justify-content:space-between;gap:12px;"><span>Conversation open</span><span><span style="color:#f85149;text-decoration:line-through;opacity:0.6;">2476ms</span> &nbsp;→&nbsp; <span style="color:#3dd68c;">395ms</span></span></div><div style="display:flex;justify-content:space-between;gap:12px;"><span>Back navigation</span><span><span style="color:#f85149;text-decoration:line-through;opacity:0.6;">978ms</span> &nbsp;→&nbsp; <span style="color:#3dd68c;">221ms</span></span></div><div style="display:flex;justify-content:space-between;gap:12px;"><span>Initial window</span><span><span style="color:#f85149;text-decoration:line-through;opacity:0.6;">400 lines</span> &nbsp;→&nbsp; <span style="color:#3dd68c;">120 lines</span></span></div><div style="margin-top:6px;color:var(--text-muted);">Sidebar scrolls as one surface · send button stays on-screen</div></div>'
+    },
+    {
+      id: 'interrupt-approval-and-delivery-health',
+      title: 'Interrupt Approvals & Delivery Health',
+      date: 'Aug 10, 2026',
+      tag: 'Reliability',
+      desc: '<p>CCC no longer interrupts or kills a possibly-mid-turn session on its own. Automatic interrupt paths (Codex stalled-turn recovery, the idle reaper hitting a session with a tool still running) now file an <strong>approval ask</strong>, surfaced as a dashboard banner with Approve/Dismiss.</p><p>A new global <strong>delivery-health banner</strong> surfaces newly-lost WatchTower message receipts (read in-process, no <code>wt</code> subprocess), dismissible and durably acked across reloads. Plus fixes for Kimi/Devin queues wedging forever after a mid-turn crash and trashed sessions resurrecting for minutes after the click.</p>',
+      mockup: '<div style="border:1px solid rgba(248,81,73,.4);border-radius:8px;padding:12px 14px;background:rgba(248,81,73,0.06);font-size:11px;"><div style="color:#f85149;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">CCC wants to interrupt this session. Approve?</div><div style="color:var(--text);margin-bottom:10px;">Codex · stalled-turn recovery · a tool is still running</div><div style="display:flex;gap:8px;justify-content:flex-end;"><span style="padding:6px 12px;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);">Dismiss</span><span style="padding:6px 12px;border-radius:5px;background:#f85149;color:white;">Approve interrupt</span></div></div>'
+    },
+    {
+      id: 'throughput-cache-adjusted-ranking',
+      title: 'Cache-Adjusted Throughput',
+      date: 'Aug 10, 2026',
+      tag: 'Throughput',
+      desc: '<p>The status rail token headline now shows an <strong>aggregated cache-adjusted burn number</strong> (weighting cache writes/reads by model-specific list-price ratios) alongside the raw <code>in · in cached · out</code> breakdown.</p><p>The throughput sidebar adds <strong>1D, 2D, and 7D cache-adjusted session ranking</strong>, and the combined chart now draws a <strong>Kimi quota-utilization line</strong> (purple) next to the Claude and Codex series — all three engines\' weekly burn curves in one view.</p>',
+      mockup: '<div style="border:1px solid var(--border);border-radius:8px;padding:13px;background:var(--bg,#0d1117);font-size:11px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><strong style="color:var(--text);">Throughput · Combined</strong><span style="color:var(--text-muted);">7D cache-adjusted</span></div><div style="display:flex;gap:14px;align-items:center;padding:8px 0;"><span style="color:#58a6ff;">● Claude</span><span style="color:#60a5fa;">● Codex</span><span style="color:#c084fc;">● Kimi</span></div><div style="margin-top:6px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;color:var(--text);">ctx 74k / 200k <span style="color:var(--text-muted);">(37%) · cache-adjusted</span></div></div>'
+    },
+    {
       id: 'liveness-and-system-status',
       title: 'Rock-Solid Codex & System Status',
       date: 'Jul 28, 2026',

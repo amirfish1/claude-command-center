@@ -1,1 +1,0 @@
-Fixed the Codex session pill always showing "exec" even while CCC was actively driving it through the shared worker-owned app-server — the per-session status endpoint was checking the dashboard's own (always-empty) app-server handle instead of asking the worker that actually owns it.
