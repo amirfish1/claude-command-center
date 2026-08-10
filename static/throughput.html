@@ -4220,6 +4220,9 @@
         if (activeThroughputEngine === 'combined' && codexSeries) {
           drawQuotaSeries(svg, codexSeries, xScale, yPct, '#60a5fa', 'Codex', 13);
         }
+        if (activeThroughputEngine === 'combined' && kimiSeries) {
+          drawQuotaSeries(svg, kimiSeries, xScale, yPct, '#c084fc', 'Kimi', -13);
+        }
 
         // 7. IF OPUS ONLY — red dashed line showing hypothetical all-Opus cumulative %
         if (_opusRatio) {

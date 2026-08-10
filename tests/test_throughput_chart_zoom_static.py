@@ -94,8 +94,10 @@ def test_combined_chart_draws_separate_normalized_quota_series():
     assert "function drawQuotaSeries" in throughput_html
     assert "claudeSeries" in throughput_html
     assert "codexSeries" in throughput_html
+    assert "kimiSeries" in throughput_html
     assert "weeklyData.display_pct / claudeCurrentTokens" in throughput_html
     assert "weeklyData.codex.weekly_pct / codexCurrentTokens" in throughput_html
+    assert "drawQuotaSeries(svg, kimiSeries, xScale, yPct, '#c084fc', 'Kimi', -13);" in throughput_html
 
 
 def test_zoomed_chart_switches_to_one_hour_columns():

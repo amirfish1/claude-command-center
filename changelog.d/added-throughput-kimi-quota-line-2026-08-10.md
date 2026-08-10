@@ -1,0 +1,1 @@
+- The combined throughput chart now draws a Kimi quota-utilization line (purple) alongside the Claude and Codex series, so all three engines' weekly burn curves are visible in one view.
