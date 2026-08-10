@@ -16820,6 +16820,129 @@ def summarize_session_title(session_id):
     return result
 
 
+# ── Auto-titler ────────────────────────────────────────────────────────────
+# Claude Code only generates its own session title inside the interactive TUI,
+# and even there it skips a session that already carries a custom title. Every
+# CCC-spawned lane runs through the stream-json entrypoint, so it can never
+# self-title: measured across 16 live sessions (all unnamed, 9 with no custom
+# title at all), zero had an ai-title event. Codex and ACP agents name their own
+# threads; Claude is the only engine with this hole, so CCC fills it.
+#
+# Triggered by hooks/stop.py at the end of a turn. Runs once per session ever
+# (marker file), only when the row has no real title, and at most
+# _AUTO_TITLE_MAX_CONCURRENT at a time so a fleet-wide Stop storm can't fork a
+# haiku per row.
+_AUTO_TITLE_MAX_CONCURRENT = 2
+_auto_title_sem = threading.Semaphore(_AUTO_TITLE_MAX_CONCURRENT)
+
+
+def _auto_title_enabled():
+    return os.environ.get("CCC_AUTO_TITLE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _auto_title_marker_path(session_id):
+    return SIDECAR_STATE_DIR / f"{session_id}_autotitled"
+
+
+def _auto_title_claim(session_id):
+    """Claim the once-ever titling slot for this session. False if already taken.
+
+    O_CREAT|O_EXCL so two Stop hooks firing in the same beat can't both spend a
+    haiku call on the same session.
+    """
+    path = _auto_title_marker_path(session_id)
+    try:
+        SIDECAR_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        os.write(fd, str(time.time()).encode())
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+    return True
+
+
+def _auto_title_release(session_id):
+    """Give the slot back so a failed attempt can be retried on a later Stop."""
+    try:
+        _auto_title_marker_path(session_id).unlink()
+    except OSError:
+        pass
+
+
+def _auto_title_needed(session_id):
+    """True when this session has no real title of its own.
+
+    A spawn-derived name (custom_title == agent_name, i.e. still whatever CCC
+    passed as --name) counts as untitled: that is the "prewarm-<repo>" case the
+    sidebar renders as a slug. A user rename always wins and stops us.
+    """
+    if _load_session_name_overrides().get(session_id):
+        return False
+    path = _find_session_jsonl(session_id)
+    if path is None:
+        return None  # no transcript — nothing to summarize
+    try:
+        tail = _extract_tail_meta(path) or {}
+    except Exception:
+        return False
+    if tail.get("ai_title"):
+        return False
+    if tail.get("custom_title") and not _tail_meta_spawn_named(tail):
+        return False
+    return True
+
+
+def _auto_title_worker(session_id):
+    acquired = _auto_title_sem.acquire(blocking=False)
+    if not acquired:
+        # Fleet-wide Stop storm — let a later Stop on this session retry.
+        _auto_title_release(session_id)
+        return
+    try:
+        result = summarize_session_title(session_id)
+        if not result.get("ok"):
+            _auto_title_release(session_id)
+            _log_activity("autotitle", "FAILED",
+                          f"sid={session_id[:8]} err={str(result.get('error') or '')[:120]}")
+        else:
+            _log_activity("autotitle", "TITLED",
+                          f"sid={session_id[:8]} title={str(result.get('title') or '')[:60]}")
+    except Exception as e:
+        _auto_title_release(session_id)
+        _log_activity("autotitle", "ERROR", f"sid={session_id[:8]} {str(e)[:120]}")
+    finally:
+        _auto_title_sem.release()
+
+
+def request_auto_title(session_id):
+    """Queue a background auto-title for a session. Returns immediately.
+
+    The Stop hook calls this through /api/conversations/<id>/auto-title and
+    must not block on a haiku round-trip, so every check that can be cheap is
+    done here and the actual `claude -p` runs on a daemon thread.
+    """
+    sid = str(session_id or "").strip()
+    if not sid or not _auto_title_enabled():
+        return {"ok": True, "queued": False, "reason": "disabled"}
+    if _auto_title_marker_path(sid).exists():
+        return {"ok": True, "queued": False, "reason": "already_attempted"}
+    needed = _auto_title_needed(sid)
+    if needed is None:
+        return {"ok": True, "queued": False, "reason": "no_transcript"}
+    if not needed:
+        return {"ok": True, "queued": False, "reason": "has_title"}
+    if not _auto_title_claim(sid):
+        return {"ok": True, "queued": False, "reason": "already_attempted"}
+    threading.Thread(target=_auto_title_worker, args=(sid,), daemon=True).start()
+    return {"ok": True, "queued": True}
+
+
 # Terminal apps we know how to focus via AppleScript. Matched case-insensitively
 # against the comm of an ancestor process of the running claude.
 _TERMINAL_APPS = {
@@ -62515,6 +62638,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(result)
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif re.match(r"^/api/conversations/[a-f0-9-]+/auto-title$", path):
+            # Fired by hooks/stop.py at the end of every Claude turn. Returns
+            # immediately: the hook must not pay for a haiku round-trip.
+            sid = path.split("/")[-2]
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 0:
+                self.rfile.read(length)
+            try:
+                self.send_json(request_auto_title(sid))
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
         elif re.match(r"^/api/conversations/[a-f0-9-]+/summarize$", path):
