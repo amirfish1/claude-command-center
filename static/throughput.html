@@ -2038,6 +2038,24 @@
       return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`;
     }
 
+    const MONTHLY_PLAN_USD = 200;
+
+    function sessionPlanMetrics(summary, weekly) {
+      const source = summary || {};
+      const rawTokens = Number(source.total_raw_context_tokens || 0) + Number(source.total_output_tokens || 0);
+      const cacheAdjustedTokens = Number(source.total_effective_input_tokens || 0) + Number(source.total_output_tokens || 0);
+      const pctPerToken = Number(weekly && weekly.pct_per_token);
+      const quotaPct = Number.isFinite(pctPerToken) && pctPerToken > 0 && rawTokens > 0
+        ? rawTokens * pctPerToken
+        : null;
+      return {
+        raw_tokens: rawTokens,
+        cache_adjusted_tokens: cacheAdjustedTokens,
+        quota_pct: quotaPct,
+        plan_cost_usd: quotaPct == null ? null : MONTHLY_PLAN_USD * quotaPct / 100,
+      };
+    }
+
     // Sidebar collapse — defaults to collapsed (see boot code below); state
     // persists per-browser so an explicit expand survives a reload.
     function toggleSidebar(forceCollapsed) {
@@ -2658,20 +2676,13 @@
       // ppt calibrated as real_pct / (raw_context + output) — use that same basis throughout.
       const ppt = isClaudeMode && weeklyData && weeklyData.pct_per_token;
 
-      // Billing-period totals: filter hourly to same window the chart uses
-      // (resetAt - 7d  →  resetAt), so card 1 matches the "right now" cumulative.
-      const resetAt2 = isClaudeMode && weeklyData && weeklyData.weekly_resets_at ? new Date(weeklyData.weekly_resets_at) : null;
-      const billingStart = resetAt2 ? new Date(resetAt2.getTime() - 7 * 86400000) : null;
-      const hourlySlots = summary.hourly || [];
-      const billingSlots = billingStart
-        ? hourlySlots.filter(h => new Date(h.hour) >= billingStart)
-        : hourlySlots;
-      const billingRawTok = billingSlots.reduce((s, h) => s + (h.raw_context_tokens||0) + (h.output_tokens||0), 0);
-      const billingEffTok = billingSlots.reduce((s, h) => s + (h.effective_input_tokens||0) + (h.output_tokens||0), 0);
-
-      const rawTok = billingRawTok;
-      const effectiveTok = billingEffTok;
-      const actualPct = ppt ? rawTok * ppt : null; // same basis and window as chart cumulative
+      // Session cards represent the full selected session. Limiting them to
+      // the current reset window made older, high-usage sessions misleadingly
+      // show 0.000% while their token totals remained substantial.
+      const sessionMetrics = sessionPlanMetrics(summary, isClaudeMode ? weeklyData : null);
+      const rawTok = sessionMetrics.raw_tokens;
+      const effectiveTok = sessionMetrics.cache_adjusted_tokens;
+      const actualPct = sessionMetrics.quota_pct;
 
       if (isAggregate) {
         renderAggregateMetrics(summary, data);
@@ -2684,12 +2695,12 @@
         document.getElementById('val-active-duration').textContent =
           actualPct != null ? `${actualPct.toFixed(3)}%` : fmtNum(effectiveTok);
         document.getElementById('val-total-duration').textContent =
-          `${summary.total_turns} calls · ${fmtCost(summary.cost_usd || 0)}`;
+          `${summary.total_turns} calls · full session`;
 
-        document.getElementById('lbl-card2').textContent = 'MODEL CALLS';
-        document.getElementById('val-total-tokens').textContent = summary.total_turns.toLocaleString();
+        document.getElementById('lbl-card2').textContent = 'CACHE-ADJUSTED TOKENS';
+        document.getElementById('val-total-tokens').textContent = fmtNum(effectiveTok);
         document.getElementById('val-token-split').textContent =
-          `${summary.turns_with_tokens} with usage · ${Math.round(summary.total_active_duration_sec/60)}m active`;
+          `${fmtNum(summary.total_effective_input_tokens)} input · ${fmtNum(summary.total_output_tokens)} output`;
 
         document.getElementById('lbl-card3').textContent = 'CACHE HIT';
         document.getElementById('val-in-throughput').textContent =
@@ -2697,10 +2708,13 @@
         document.getElementById('val-in-tps').textContent =
           `saved ${ppt ? (((rawTok - effectiveTok) * ppt).toFixed(3)) : '-'}% by caching`;
 
-        document.getElementById('lbl-card4').textContent = 'COST';
-        document.getElementById('val-out-throughput').textContent = fmtCost(summary.cost_usd || 0);
+        document.getElementById('lbl-card4').textContent = 'PLAN COST';
+        document.getElementById('val-out-throughput').textContent =
+          sessionMetrics.plan_cost_usd == null ? '—' : fmtCost(sessionMetrics.plan_cost_usd);
         document.getElementById('val-out-tps').textContent =
-          `${summary.avg_output_tps ? summary.avg_output_tps.toFixed(1) : '-'} out tok/s · raw ${fmtNum(summary.avg_input_tpm)} TPM`;
+          actualPct == null
+            ? 'Quota calibration unavailable'
+            : `${actualPct.toFixed(3)}% of $${MONTHLY_PLAN_USD}/mo`;
       }
       
       // Draw chart. Aggregate ranges use hourly buckets; per-session views
