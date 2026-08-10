@@ -22802,6 +22802,11 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
 .f2c-panel .route:hover { border-color: var(--accent); }
 .f2c-panel .route.is-recommended { border-color: rgba(63,185,80,0.45); }
 .f2c-panel .route.is-recommended:hover { border-color: rgba(63,185,80,0.7); }
+/* CCC-763: origin session that already continued into a new one -- a link,
+   not an action, so it reads as blue rather than the green "recommended". */
+.f2c-panel .route.is-continued { border-color: rgba(88,166,255,0.45); }
+.f2c-panel .route.is-continued:hover { border-color: rgba(88,166,255,0.7); }
+.f2c-panel .route.is-continued .route-glyph { color: #58a6ff; }
 
 /* The clickable surface is a separate element from .route so the ▾ caret
    can be a real control rather than a button nested inside a button. */

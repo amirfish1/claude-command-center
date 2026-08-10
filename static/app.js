@@ -3176,6 +3176,25 @@
     return parentId;
   }
 
+  // CCC-763: forward lookup for the ORIGIN session — "what did I continue
+  // into", the mirror of f2EffectiveParentSessionId's "what did I continue
+  // from". Lets the origin's own composer link straight to the session it
+  // was continued into instead of re-offering "Continue new" as if nothing
+  // happened.
+  function f2ContinuedIntoSessionId(sid) {
+    const s = String(sid || '').trim();
+    if (!s) return '';
+    const edges = _f2ContinuationEdges();
+    let newest = '';
+    let newestTs = -1;
+    for (const [newSid, edge] of Object.entries(edges)) {
+      if (!edge || String(edge.continued_from || '').trim() !== s) continue;
+      const ts = Number(edge.ts) || 0;
+      if (ts >= newestTs) { newestTs = ts; newest = String(newSid || '').trim(); }
+    }
+    return (newest && newest !== s) ? newest : '';
+  }
+
   // ── composer plumbing ──────────────────────────────────────────────────
   // The composer lives inside .conv-input-bar (two slots, added in
   // index.html), so it is cloned along with the pane in split mode and every
@@ -3375,6 +3394,27 @@
       // Only ordinary sessions get the treatment — new-session/backlog composer
       // modes spawn rather than resume, so there is no context to reload.
       if (!sid || currentConversation === '__new__') { clear(); return; }
+      // CCC-763: this session already spawned a "Continue in a new session"
+      // child. Re-offering the same "Continue new" button here reads as if
+      // nothing happened -- link straight to the child instead.
+      const continuedInto = f2ContinuedIntoSessionId(sid);
+      if (continuedInto) {
+        rail.hidden = false;
+        rail.setAttribute('role', 'status');
+        rail.innerHTML = '<span class="rail-dot" aria-hidden="true"></span>'
+          + '<strong>Continued</strong>'
+          + '<span class="sep" aria-hidden="true">·</span>'
+          + '<span class="meta">This session moved to a new one</span>';
+        if (bar) { bar.classList.remove('is-f2-cold', 'is-f2-idle-only'); bar.classList.add('is-f2-continued'); }
+        panel.hidden = false;
+        panel.innerHTML = '<div class="routes"><div class="route is-continued">'
+          + '<button type="button" class="route-main" data-f2-open-continuation data-target-sid="'
+          + escapeAttr(continuedInto) + '" title="Open the session this was continued into">'
+          + '<span class="route-glyph" aria-hidden="true">&#8617;</span>'
+          + '<span class="route-name">Continued in new session</span>'
+          + '</button></div></div>';
+        return;
+      }
       gate = f2ResumeGate(ctx);
       if (!gate && f2ManualPanes.get(f2PaneKey(paneId)) === sid) gate = f2ManualGate(ctx);
     } catch (_) { clear(); return; }
@@ -3513,6 +3553,19 @@
   // One delegated listener for every pane's composer — the panel DOM is
   // rebuilt on repaint, so per-node handlers would leak.
   document.addEventListener('click', (ev) => {
+    // CCC-763: "Continued in new session" link -- jump straight to the
+    // child session instead of re-showing "Continue new" on the origin.
+    const continuationLink = ev.target && ev.target.closest && ev.target.closest('[data-f2-open-continuation]');
+    if (continuationLink) {
+      ev.preventDefault();
+      const targetSid = continuationLink.getAttribute('data-target-sid');
+      const clPane = continuationLink.closest('.conv-pane');
+      const clPaneId = (clPane && clPane.getAttribute('data-pane-id')) || null;
+      if (targetSid && typeof selectConversation === 'function') {
+        try { selectConversation(targetSid, clPaneId); } catch (_) {}
+      }
+      return;
+    }
     // Manual "Continue in a new session" button — always in the toolbar,
     // independent of the token/idle gate (CCC-744).
     const continueBtn = ev.target && ev.target.closest && ev.target.closest('.continue-new-btn');
