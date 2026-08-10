@@ -3740,6 +3740,7 @@
   // recovery) and this banner surfaces it. Approve executes the interrupt;
   // Dismiss snoozes the asker. Polled via /api/sessions/live-activity.
   const _interruptAskLogged = new Set();
+  const _interruptAskAutoDismissPending = new Set();
 
   function _interruptAskSessionLabel(sid) {
     const row = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
@@ -3749,9 +3750,47 @@
     return name ? String(name) : (String(sid || '').slice(0, 8) || 'unknown');
   }
 
+  async function resolveInterruptAsk(ask, decision, label) {
+    const resolvedLabel = label || _interruptAskSessionLabel(ask && ask.sid);
+    try {
+      const res = await fetch('/api/interrupt-asks/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: ask.id, decision }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!data || !data.ok) {
+        if (typeof showOpToast === 'function' && !debugModeEnabled()) {
+          showOpToast('Interrupt ask failed: ' + ((data && data.error) || 'unknown error'), 'error');
+        }
+        return false;
+      }
+      if (!debugModeEnabled()) {
+        _appendActivityLog('interrupt', (decision === 'approve' ? 'Approved' : 'Dismissed')
+          + ' interrupt for "' + resolvedLabel + '"' + (data.note ? ' (' + data.note + ')' : ''));
+      }
+      return true;
+    } catch (_) {
+      if (typeof showOpToast === 'function' && !debugModeEnabled()) {
+        showOpToast('Interrupt ask failed: network error', 'error');
+      }
+      return false;
+    }
+  }
+
   function _renderInterruptAsks(asks) {
-    let host = document.getElementById('interruptAsks');
     if (!Array.isArray(asks)) asks = [];
+    if (debugModeEnabled()) {
+      const host = document.getElementById('interruptAsks');
+      if (host) host.remove();
+      asks.forEach((ask) => {
+        if (!ask || !ask.id || _interruptAskAutoDismissPending.has(ask.id)) return;
+        _interruptAskAutoDismissPending.add(ask.id);
+        resolveInterruptAsk(ask, 'dismiss').finally(() => _interruptAskAutoDismissPending.delete(ask.id));
+      });
+      return;
+    }
+    let host = document.getElementById('interruptAsks');
     if (!asks.length) { if (host) host.remove(); return; }
     if (!host) {
       host = document.createElement('div');
@@ -3781,22 +3820,7 @@
       card.appendChild(body);
       const resolve = async (decision) => {
         card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-        try {
-          const res = await fetch('/api/interrupt-asks/resolve', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: ask.id, decision }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (data && data.ok) {
-            _appendActivityLog('interrupt', (decision === 'approve' ? 'Approved' : 'Dismissed')
-              + ' interrupt for "' + label + '"' + (data.note ? ' (' + data.note + ')' : ''));
-          } else if (typeof showOpToast === 'function') {
-            showOpToast('Interrupt ask failed: ' + ((data && data.error) || 'unknown error'), 'error');
-          }
-        } catch (_) {
-          if (typeof showOpToast === 'function') showOpToast('Interrupt ask failed: network error', 'error');
-        }
+        await resolveInterruptAsk(ask, decision, label);
         card.remove();
         const remaining = document.getElementById('interruptAsks');
         if (remaining && !remaining.querySelector('[data-ask-id]')) remaining.remove();
@@ -3843,6 +3867,7 @@
   const _ACTIVITY_LOG_MAX = 50;
 
   function _appendActivityLog(kind, text) {
+    if (debugModeEnabled()) return;
     const ts = new Date();
     const tsStr = [ts.getHours(), ts.getMinutes(), ts.getSeconds()]
       .map(n => String(n).padStart(2, '0')).join(':');
@@ -24068,6 +24093,7 @@
   }
 
   function showOpToast(msg, kind, action) {
+    if (debugModeEnabled() && (kind === 'error' || kind === 'info')) return;
     const toast = document.createElement('div');
     const color = kind === 'error' ? 'var(--red)'
       : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
@@ -62098,6 +62124,23 @@
     if (ev.key === CONV_ROWSTYLE_STORAGE_KEY) applyConvRowStyle(storedConvRowStyle());
   });
 
+  const DEBUG_MODE_STORAGE_KEY = 'ccc-debug-mode';
+
+  function debugModeEnabled() {
+    try { return localStorage.getItem(DEBUG_MODE_STORAGE_KEY) === '1'; }
+    catch (_) { return false; }
+  }
+
+  function applyDebugMode(on) {
+    const enabled = !!on;
+    document.documentElement.classList.toggle('ccc-debug-mode', enabled);
+    if (!enabled) return;
+    if (typeof _dismissActivityLog === 'function') _dismissActivityLog();
+    if (typeof closeActivityLogModal === 'function') closeActivityLogModal();
+    const stats = document.getElementById('statsModal');
+    if (stats) stats.classList.remove('open');
+  }
+
   function getThemePref() { return localStorage.getItem('ccc-theme') || 'dark'; }
   function getFontPref() { return localStorage.getItem('ccc-font') || 'system'; }
   function getViewGhPref() { return localStorage.getItem('ccc-view-gh') || 'show'; }
@@ -62168,7 +62211,14 @@
     if ($liveToggle) {
       $liveToggle.classList.toggle('is-on', lv === 'B');
       $liveToggle.setAttribute('aria-checked', String(lv === 'B'));
-    }  }
+    }
+    const $debugToggle = document.getElementById('settingsDebugModeToggle');
+    if ($debugToggle) {
+      const on = debugModeEnabled();
+      $debugToggle.classList.toggle('is-on', on);
+      $debugToggle.setAttribute('aria-checked', String(on));
+    }
+  }
   // Live-update when the user has 'system' selected and OS theme flips.
   _systemThemeMQ.addEventListener && _systemThemeMQ.addEventListener('change', () => {
     if (getThemePref() === 'system') applyTheme('system');
@@ -62779,6 +62829,18 @@
         try { localStorage.setItem('ccc-hero-live-variant', lv === 'B' ? 'A' : 'B'); } catch (_) {}
         refreshAppearanceChecks();
         showSettingsSavedPulse(liveVariantToggle.closest('.settings-row'));
+        return;
+      }
+      const debugModeToggle = e.target.closest('[data-debug-mode-toggle]');
+      if (debugModeToggle) {
+        const next = !debugModeEnabled();
+        try {
+          if (next) localStorage.setItem(DEBUG_MODE_STORAGE_KEY, '1');
+          else localStorage.removeItem(DEBUG_MODE_STORAGE_KEY);
+        } catch (_) {}
+        applyDebugMode(next);
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(debugModeToggle.closest('.settings-row'));
         return;
       }
       const ffToggle = e.target.closest('[data-ff-toggle]');

@@ -141,7 +141,7 @@
        surfaces the same flow in a conversation popout window. It reuses the
        existing annStart handler (wired in app.js) — no duplicated logic.
        Hidden by default; CSS reveals it only under body.conversation-popout. -->
-  <button type="button" id="annotationFabBtn" class="annotation-fab" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">
+  <button type="button" id="annotationFabBtn" data-debug-hide class="annotation-fab" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">
     &#9998; Annotate
   </button>
   <!-- A collapsed rail normally leaves only a slim edge chevron. In the
@@ -259,6 +259,8 @@
         if (resolved === 'light') document.documentElement.setAttribute('data-theme', 'light');
         const fontPref = localStorage.getItem('ccc-font') || 'system';
         if (fontPref === 'mono') document.documentElement.setAttribute('data-font', 'mono');
+        const debugMode = localStorage.getItem('ccc-debug-mode') === '1';
+        document.documentElement.classList.toggle('ccc-debug-mode', debugMode);
       } catch (_) {}
     })();
   </script>
@@ -755,13 +757,13 @@
             </svg>
           </button>
         </span>
-        <button type="button" id="annotationStartBtn" class="annotation-link" title="Annotate the visible page and save a local note for agent context.">
+        <button type="button" id="annotationStartBtn" data-debug-hide class="annotation-link" title="Annotate the visible page and save a local note for agent context.">
           &#9998; Annotate
         </button>
-        <button type="button" id="annotationScreenBtn" class="annotation-link" title="Minimize CCC, capture a screen region, and save a local note.">
+        <button type="button" id="annotationScreenBtn" class="annotation-link" data-debug-hide title="Minimize CCC, capture a screen region, and save a local note.">
           Screen
         </button>
-        <button type="button" id="annotationNotesBtn" class="annotation-link" title="View saved annotation notes.">
+        <button type="button" id="annotationNotesBtn" class="annotation-link" data-debug-hide title="View saved annotation notes.">
           Notes
         </button>
         <button id="kptWorktreesBtn" class="topbar-btn" title="Show all worktrees of this repo, with an indicator for those that have uncommitted changes." aria-label="Show worktrees">&#127807; Worktrees</button>
@@ -776,7 +778,7 @@
         </div>
         <div id="setupBanner" class="ccc-setup-banner"></div>
       </div>
-      <div class="font-size-controls">
+      <div class="font-size-controls" data-debug-hide>
         <button class="font-size-btn" id="fontMinus" title="Decrease font size">A-</button>
         <button class="font-size-btn" id="fontPlus" title="Increase font size">A+</button>
       </div>
@@ -805,7 +807,7 @@
                Annotate remains one-click, while recording controls live in
                the adjacent overflow menu. -->
           <span class="conv-pane-actions" data-role="pane-actions">
-            <button type="button" class="conv-pane-action conv-pane-icon-action" data-role="pane-annotate" aria-label="Annotate visible page" title="Annotate the visible page and save a local note for agent context">&#9998;</button>
+            <button type="button" class="conv-pane-action conv-pane-icon-action" data-role="pane-annotate" data-debug-hide aria-label="Annotate visible page" title="Annotate the visible page and save a local note for agent context">&#9998;</button>
             <details class="conv-pane-more">
               <summary class="conv-pane-action conv-pane-more-trigger" data-role="pane-more" aria-label="More pane actions" title="More pane actions">&#8230;</summary>
               <div class="conv-pane-more-menu" data-role="pane-more-menu" role="menu" aria-label="Pane actions">
@@ -881,7 +883,7 @@
             <!-- CCC-454: Verbose transcript toggle — keeps tool calls, command
                  details, and thinking expanded in conversation views. -->
             <button type="button" id="verboseToggleBtn" class="status-rail-annotate verbose-toggle-btn" title="Verbose transcript: keep tool calls, command details, and thinking expanded in conversation views." aria-label="Toggle verbose transcript" aria-pressed="false">&#8801; Verbose</button>
-            <button type="button" id="statusRailAnnotateBtn" class="status-rail-annotate" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">&#9998; Annotate</button>
+            <button type="button" id="statusRailAnnotateBtn" data-debug-hide class="status-rail-annotate" title="Annotate the visible page and save a local note for agent context." aria-label="Annotate">&#9998; Annotate</button>
             <!-- Quick-close X — collapses the rail without having to drag
                  the resizer or find the topbar toggle. Wired below in
                  the rail-toggle IIFE. -->
@@ -907,7 +909,7 @@
                        unlike the sticky header, which only exists once the
                        first user_text event renders (gated behind full-history
                        load on long/truncated transcripts). -->
-                  <button type="button" id="statusRailActivityLogBtn" class="status-rail-activity-log-btn" title="View CCC's spawn/inject/kill activity log for this session" aria-label="View activity log" style="display:none;">Log</button>
+                  <button type="button" id="statusRailActivityLogBtn" data-debug-hide class="status-rail-activity-log-btn" title="View CCC's spawn/inject/kill activity log for this session" aria-label="View activity log" style="display:none;">Log</button>
                 </div>
                 <!-- CCC-505: the bold title above is clipped (WT ticket
                      context is hard-capped at 60 chars); show whatever got
@@ -1935,7 +1937,7 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="font typeface ui mono system monospace">
+            <div class="settings-row" data-debug-hide data-keywords="font typeface ui mono system monospace">
               <div class="settings-row-main">
                 <div class="settings-row-label">Font</div>
                 <div class="settings-row-desc">UI typeface used across the dashboard.</div>
@@ -1948,7 +1950,7 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="conversation text size reader font scale zoom message a- a+">
+            <div class="settings-row" data-debug-hide data-keywords="conversation text size reader font scale zoom message a- a+">
               <div class="settings-row-main">
                 <div class="settings-row-label">Conversation text size</div>
                 <div class="settings-row-desc">Reader font scale for message text.</div>
@@ -1957,6 +1959,18 @@
                 <!-- Slice B moves the existing `.font-size-controls` (A-/A+
                      stepper, id-less, drives ccc-conv-font-scale) here. -->
                 <div id="settingsModalFontSlot" class="settings-modal-font-slot"></div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="debug diagnostics activity stats traffic fleet pulse interrupt">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Debug mode</div>
+                <div class="settings-row-desc">Hide diagnostic dashboard controls and automatically dismiss interrupt requests in this browser.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsDebugModeToggle" data-debug-mode-toggle role="switch" aria-checked="false" aria-label="Debug mode">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
               </div>
             </div>
 
@@ -1980,7 +1994,7 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="live updates left variant hero position session list">
+            <div class="settings-row" data-debug-hide data-keywords="live updates left variant hero position session list">
               <div class="settings-row-main">
                 <div class="settings-row-label">Live updates on left</div>
                 <div class="settings-row-desc">Move live session updates to the left side of the hero strip.</div>
@@ -1992,7 +2006,7 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="fleet pulse hero health strip repos nodes show">
+            <div class="settings-row" data-debug-hide data-keywords="fleet pulse hero health strip repos nodes show">
               <div class="settings-row-main">
                 <div class="settings-row-label">Fleet Pulse</div>
                 <div class="settings-row-desc">A live health strip summarizing every repo and node at a glance.</div>
@@ -2105,7 +2119,7 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="fleet view matrix repos worktrees branches prs deployments">
+            <div class="settings-row" data-debug-hide data-keywords="fleet view matrix repos worktrees branches prs deployments">
               <div class="settings-row-main">
                 <div class="settings-row-label">Fleet</div>
                 <div class="settings-row-desc">See every repo across every paired node in one matrix.</div>

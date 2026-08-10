@@ -1,0 +1,1 @@
+- Add a browser-local Debug mode that hides diagnostic dashboard controls, suppresses diagnostic operation notices, and automatically declines interrupt requests.

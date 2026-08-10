@@ -23171,3 +23171,25 @@ a.q2-toggle-opt:hover { color: var(--text); background: var(--surface-2); }
   .sidebar-footer { padding: 3px 6px; }
   .sidebar-footer-btn { width: 26px; height: 26px; }
 }
+/* Browser-local Debug mode removes optional diagnostic/operator surfaces. */
+html.ccc-debug-mode [data-debug-hide],
+html.ccc-debug-mode #statsBtn,
+html.ccc-debug-mode #annotationFabBtn,
+html.ccc-debug-mode #annotationStartBtn,
+html.ccc-debug-mode #annotationScreenBtn,
+html.ccc-debug-mode #annotationNotesBtn,
+html.ccc-debug-mode #statusRailAnnotateBtn,
+html.ccc-debug-mode #statusRailActivityLogBtn,
+html.ccc-debug-mode [data-role="pane-annotate"],
+html.ccc-debug-mode #cccHealth,
+html.ccc-debug-mode #cccAdvisorPill,
+html.ccc-debug-mode #cccThroughputPill,
+html.ccc-debug-mode #cccThroughputStrip,
+html.ccc-debug-mode #cccFleetPill,
+html.ccc-debug-mode #cccHeroPulsePill,
+html.ccc-debug-mode #customNavLinks .q2-toggle-opt[href="/view/reddit"],
+html.ccc-debug-mode [data-role="conv-rowstyle-palette"],
+html.ccc-debug-mode [data-role="conv-bg-palette"],
+html.ccc-debug-mode #statsModal {
+  display: none !important;
+}
