@@ -64757,6 +64757,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             last_keepalive = time.time()
             last_size = -1
+            last_pending_sig = None
             first_pass = True
             try:
                 while True:
@@ -64775,6 +64776,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if size != last_size:
                         last_size = size
                         events = _acp_transcript_events_after("kimi", conversation_id, after_line)
+                    # CCC-764: a busy-turn follow-up parks in the durable
+                    # input queue with no channel of its own until Kimi goes
+                    # idle. This branch reads the ACP transcript directly and
+                    # skips parse_conversation() (and its pending-event
+                    # merge), so without this the composer gave zero
+                    # indication the message was still queued -- it read as
+                    # silently dropped even though pending-inputs.json still
+                    # had it. Only resend on an actual change so a still-busy
+                    # turn doesn't reprint an identical bubble every 5s.
+                    pending_events = _get_queued_events_for_session(conversation_id)
+                    pending_sig = tuple(e.get("text") for e in pending_events)
+                    if pending_sig != last_pending_sig:
+                        last_pending_sig = pending_sig
+                        events = list(events) + pending_events
                     if events:
                         after_line = max(
                             [after_line] + [int(e.get("line") or 0) for e in events]
