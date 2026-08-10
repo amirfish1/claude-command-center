@@ -1,0 +1,1 @@
+Fixed trashed/archived sessions resurrecting in the session list for up to a few minutes after the click: the ?all=1 cold-serve fallback served the persisted snapshot's pre-mutation lifecycle flags; it now re-stamps archived/trashed from the lifecycle sidecars before responding.
