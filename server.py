@@ -10,7 +10,8 @@ view for goals/tactical-item triage.
 
 Usage:
     ./run.sh                 # starts on port 8090
-    PORT=9000 ./run.sh       # custom port
+    PORT=9000 ./run.sh       # custom port via env var
+    ./run.sh --port 9001     # custom port via CLI flag
 """
 
 from __future__ import annotations
@@ -13262,12 +13263,12 @@ def _detect_tailnet_origins(port):
     }
 
 
-def _resolve_runtime_network(port):
+def _resolve_runtime_network(port, bind_host=None):
     """Merge env vars, persisted config, and Tailscale auto-detect into the
     final {bind_host, allowed_origins[]} the server should use this run.
 
     Priority:
-      bind_host: env CCC_BIND_HOST > config.bind_host > "127.0.0.1"
+      bind_host: explicit bind_host arg > env CCC_BIND_HOST > config.bind_host > "127.0.0.1"
       allowed_origins: union of env CCC_ALLOWED_ORIGIN, config.allowed_origins,
         and detected tailnet origins (when trust_tailnet is on)
       trust_tailnet: env CCC_TRUST_TAILNET in {"1","true","yes","on"}
@@ -13277,7 +13278,7 @@ def _resolve_runtime_network(port):
     """
     config = _load_network_config()
     env_bind = os.environ.get("CCC_BIND_HOST", "").strip()
-    bind_host = env_bind or (config["bind_host"] or "127.0.0.1")
+    bind_host = bind_host or env_bind or (config["bind_host"] or "127.0.0.1")
 
     # Ephemeral verification servers (CCC_EPHEMERAL=1) must never expose the
     # network: force loopback regardless of CCC_BIND_HOST or config. Ad-hoc
@@ -69672,7 +69673,7 @@ def _read_registry_pruned():
     return pruned
 
 
-def write_port_file(bind_host):
+def write_port_file(bind_host, port=None):
     """Persist the listening URL to ~/.claude/command-center/port.txt so the
     ccc-orchestration skill (and any other scripted caller) can find this
     server without hardcoding the port. Single line, format
@@ -69683,9 +69684,11 @@ def write_port_file(bind_host):
     from the primary. Start such instances with `CCC_EPHEMERAL=1` to skip the
     write. (Prefer `node snapshot.js` against the already-running server over
     spinning up a second instance at all.)"""
+    if port is None:
+        port = PORT
     if os.environ.get("CCC_EPHEMERAL"):
         print("  [skill] CCC_EPHEMERAL set — not claiming shared port.txt")
-        return f"http://127.0.0.1:{PORT}"
+        return f"http://127.0.0.1:{port}"
     # Bind addresses like 0.0.0.0/:: are not reliable dial targets. The
     # skill runs locally, so always publish a loopback URL for wildcard or
     # loopback binds and reserve the configured host only for explicit
@@ -69697,7 +69700,7 @@ def write_port_file(bind_host):
     )
     if ":" in display_host and not display_host.startswith("["):
         display_host = f"[{display_host}]"
-    url = f"http://{display_host}:{PORT}"
+    url = f"http://{display_host}:{port}"
     port_file = COMMAND_CENTER_STATE_DIR / "port.txt"
     try:
         COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -70392,6 +70395,27 @@ def main():
     class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         allow_reuse_address = True
         daemon_threads = True
+    # Parse CLI overrides for this server instance. Env var PORT and the
+    # module-level default still apply when the flags are absent.
+    port = PORT
+    bind_host_arg = None
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == "--port" and i + 1 < len(sys.argv):
+            try:
+                port = int(sys.argv[i + 1])
+            except (TypeError, ValueError):
+                print(f"Invalid --port value: {sys.argv[i + 1]}", file=sys.stderr)
+                raise SystemExit(2)
+            i += 1
+        elif arg == "--host" and i + 1 < len(sys.argv):
+            bind_host_arg = sys.argv[i + 1]
+            i += 1
+        i += 1
+    if not 1 <= port <= 65535:
+        print(f"Invalid --port value: {port} (must be 1-65535)", file=sys.stderr)
+        raise SystemExit(2)
     _raise_open_file_limit()
     migrate_state_dir()
     _install_python_stack_dump_handler()
@@ -70497,12 +70521,12 @@ def main():
     # final value is resolved across env vars, the persisted network.json,
     # and (when trust_tailnet is on) the live Tailscale node — see
     # `_resolve_runtime_network`.
-    bind_host, resolved_origins, network_info = _resolve_runtime_network(PORT)
+    bind_host, resolved_origins, network_info = _resolve_runtime_network(port, bind_host_arg)
     ALLOWED_ORIGINS[:] = resolved_origins  # in-place: _check_same_origin reads the global list
     global RUNTIME_NETWORK_INFO, BIND_HOST
     RUNTIME_NETWORK_INFO = network_info
     BIND_HOST = bind_host
-    server = ThreadedHTTPServer((bind_host, PORT), CommandCenterHandler)
+    server = ThreadedHTTPServer((bind_host, port), CommandCenterHandler)
     if bind_host not in ("127.0.0.1", "localhost", "::1"):
         print(f"⚠️  WARNING: binding to {bind_host} — server is reachable from the network.")
         print(f"   This server has no auth. Anyone who can reach this port can run")
@@ -70514,8 +70538,8 @@ def main():
     if _wt_messaging_enabled() and not _wt_cli_available():
         print("⚠️  CCC_MESSAGING_BACKEND=wt is set but `wt` is not on PATH — headless delivery falls back to native `claude --resume`. Install WatchTower or unset to silence.")
     _check_duplicate_repo_instance()
-    write_port_file(bind_host)
-    _register_self(PORT, bind_host)
+    write_port_file(bind_host, port=port)
+    _register_self(port, bind_host)
     # SIGTERM (systemd / `kill <pid>`) needs explicit cleanup; SIGINT (Ctrl+C)
     # raises KeyboardInterrupt below and is handled there. Both paths remove
     # this server's registry entry so peers don't see a stale ghost.
@@ -70527,7 +70551,7 @@ def main():
         sys.exit(0)
     signal.signal(signal.SIGTERM, _on_sigterm)
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
-    print(f"Command Center running at http://{display_host}:{PORT}")
+    print(f"Command Center running at http://{display_host}:{port}")
     print(f"  State dir:     {COMMAND_CENTER_STATE_DIR}")
     print(f"  Projects dir:  {PROJECTS_ROOT}")
     print(f"  Press Ctrl+C to stop")
