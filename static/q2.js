@@ -2630,4 +2630,9 @@
     if (document.hidden) return;
     refresh();
   }, POLL_MS);
+
+  // Lets same-page callers (e.g. the annotate widget, which files a ticket
+  // straight into this board's own queue) skip the up-to-5s poll wait and
+  // show a just-filed ticket immediately.
+  window.q2Refresh = refresh;
 })();
