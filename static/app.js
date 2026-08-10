@@ -36944,7 +36944,7 @@
           + ' title="' + (isDrainPending
             ? ('Turning auto-drain ' + (displayedAutoDrain ? 'on' : 'off') + '…')
             : (displayedAutoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable')) + '">'
-          + 'drain&nbsp;<span class="fq-health-drain-val">' + (displayedAutoDrain ? 'on' : 'off') + '</span>'
+          + '<span class="fq-health-drain-val">' + (displayedAutoDrain ? 'on' : 'off') + '</span>'
           + '</button>';
         // Claim-types restriction control: click-cycles all → bug → feature.
         // Only meaningful while auto-drain is on (the policy only affects
@@ -36979,9 +36979,9 @@
           + configBtn
           + '<span class="fq-health-proj">' + escapeHtml(project) + '</span>'
           + '<span class="fq-health-sep">·</span>'
-          + '<span class="fq-health-depth">' + depth + ' open</span>'
+          + '<span class="fq-health-depth" title="' + escapeAttr(depth + ' open') + '">' + depth + '</span>'
           + '<span class="fq-health-sep">·</span>'
-          + '<span class="fq-health-age">oldest ' + escapeHtml(age) + '</span>'
+          + '<span class="fq-health-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>'
           + badge
           + drainToggle
           + typeToggle
