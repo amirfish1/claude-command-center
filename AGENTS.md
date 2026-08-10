@@ -123,7 +123,26 @@ when a specific condition is available.
 
 **Do not use the Codex in-app browser (`iab`) backend or Playwright for this.** `iab` is unavailable outside a desktop app context, and Playwright is not a CCC dependency — "iab browser not available" / "cannot import playwright" means wrong tool, not a breakage. Use `node snapshot.js` (Chromium is sufficient; no WebKit/Firefox needed).
 
-Depends entirely on what you touched. Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.
+## Restart requirements
+
+For every code change, the agent must explicitly state which of these three
+servers need a restart before the change takes effect:
+
+1. **CCC dashboard server** (`server.py`, `ccc_server/*.py`, `static/`, `hooks/`)
+2. **CCC worker / control-plane worker** (`infra/support-worker/`, control-plane subprocess)
+3. **WatchTower** (`wt` CLI / queue tracker — external, not part of CCC)
+
+Default assumption: only the CCC dashboard server needs a restart. Worker and
+WatchTower need a restart only when the touched files are part of those
+processes. State it clearly in the final summary, e.g.:
+
+- CCC dashboard server: **needs restart**
+- Worker: **no restart needed**
+- WatchTower: **no restart needed**
+
+## How users get changes
+
+Most changes ship the moment you `git push origin main`. Only `.app`-shell changes need a real release.
 
 | You touched… | How users get it | What you owe |
 |---|---|---|
