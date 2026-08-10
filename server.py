@@ -13497,6 +13497,32 @@ def _build_healthcheck():
 STATIC_DIR = CCC_ROOT / "static"
 MORNING_STATIC_DIR = STATIC_DIR / "morning"
 
+
+def _custom_links_config():
+    """Parse ~/.claude/command-center/custom-links.json.
+
+    Accepts the original bare list of {label, url} links, or
+    {"links": [...], "proxies": {"<name>": <port>}} where proxies feeds the
+    /proxy/<name>/ loopback forwarder. Returns (links, proxies); malformed
+    or absent file returns empty both."""
+    try:
+        raw = json.loads(
+            (COMMAND_CENTER_STATE_DIR / "custom-links.json").read_text())
+    except Exception:
+        return [], {}
+    raw_links = raw.get("links", []) if isinstance(raw, dict) else raw
+    raw_proxies = raw.get("proxies", {}) if isinstance(raw, dict) else {}
+    links = [{"label": str(l.get("label", ""))[:40],
+              "url": str(l.get("url", ""))[:500]}
+             for l in (raw_links if isinstance(raw_links, list) else [])
+             if isinstance(l, dict) and l.get("label") and l.get("url")]
+    proxies = {}
+    if isinstance(raw_proxies, dict):
+        for name, port in raw_proxies.items():
+            if re.fullmatch(r"[a-z0-9_-]+", str(name)) and str(port).isdigit():
+                proxies[str(name)] = int(port)
+    return links, proxies
+
 # ── Optional Morning view plugin ──────────────────────────────────────────
 # The Morning view (goals/strategic/tactical/braindump) is highly opinionated
 # to one user's workflow. Files (morning.py, morning_store.py, static/morning/,
@@ -58873,19 +58899,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(_build_injection_health())
         elif path == "/api/custom-links":
             # User-defined nav links rendered beside the Queues/Sessions
-            # toggle. Read from ~/.claude/command-center/custom-links.json
-            # ([{"label": "...", "url": "..."}]); absent file means no links.
-            # Personal workflow config stays out of the public repo.
-            try:
-                raw = json.loads(
-                    (COMMAND_CENTER_STATE_DIR / "custom-links.json").read_text())
-                links = [{"label": str(l.get("label", ""))[:40],
-                          "url": str(l.get("url", ""))[:500]}
-                         for l in raw if isinstance(l, dict)
-                         and l.get("label") and l.get("url")]
-            except Exception:
-                links = []
-            self.send_json({"links": links})
+            # toggle. Read from ~/.claude/command-center/custom-links.json;
+            # absent file means no links. Personal workflow config stays out
+            # of the public repo.
+            self.send_json({"links": _custom_links_config()[0]})
+        elif path.startswith("/proxy/"):
+            self._proxy_local_view("GET")
         elif path == "/api/version":
             # Additive only. Note _ccc_last_updated_iso() forks `git log -1`,
             # so this endpoint must never be put on a timer — the System status
@@ -59482,10 +59501,74 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_json({"error": error, "origin": origin}, 403)
         return False
 
+    def _proxy_local_view(self, method):
+        """Forward /proxy/<name>/<rest> to the loopback port registered for
+        <name> in custom-links.json (`proxies` map), rewriting root-relative
+        URLs in HTML and redirect Locations so the companion stays inside the
+        proxy prefix. Exists because the Mac app cancels any navigation off
+        the dashboard port — a direct iframe to another local port renders
+        blank there; same-origin proxying makes companion dashboards render
+        in-app. Targets are always 127.0.0.1 at a user-configured port."""
+        parsed = urllib.parse.urlparse(self.path)
+        m = re.match(r"^/proxy/([a-z0-9_-]+)(/.*)?$", parsed.path)
+        proxies = _custom_links_config()[1] if m else {}
+        if not m or m.group(1) not in proxies:
+            self.send_json({"error": f"not found: {parsed.path}"}, 404)
+            return
+        name, port = m.group(1), proxies[m.group(1)]
+        prefix = f"/proxy/{name}"
+        target = f"http://127.0.0.1:{port}{m.group(2) or '/'}"
+        if parsed.query:
+            target += f"?{parsed.query}"
+        body = None
+        headers = {}
+        if method == "POST":
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            if self.headers.get("Content-Type"):
+                headers["Content-Type"] = self.headers["Content-Type"]
+            # Companion dashboards may run their own loopback origin checks.
+            headers["Origin"] = f"http://127.0.0.1:{port}"
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+
+        req = urllib.request.Request(target, data=body, headers=headers,
+                                     method=method)
+        try:
+            resp = urllib.request.build_opener(_NoRedirect).open(req, timeout=30)
+            payload, status, rheaders = resp.read(), resp.status, resp.headers
+        except urllib.error.HTTPError as e:
+            payload, status, rheaders = e.read(), e.code, e.headers
+        except (urllib.error.URLError, OSError) as e:
+            self.send_json({"error": f"local view '{name}' unreachable on "
+                                     f"127.0.0.1:{port}: {e}"}, 502)
+            return
+        ctype = rheaders.get("Content-Type", "application/octet-stream")
+        if "text/html" in ctype:
+            p = prefix.encode()
+            for attr in (b"href", b"src", b"action"):
+                payload = payload.replace(attr + b"='/", attr + b"='" + p + b"/")
+                payload = payload.replace(attr + b'="/', attr + b'="' + p + b"/")
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        loc = rheaders.get("Location")
+        if loc and loc.startswith("/"):
+            self.send_header("Location", prefix + loc)
+        elif loc:
+            self.send_header("Location", loc)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_POST(self):
         if not self._check_same_origin():
             return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
+        if path.startswith("/proxy/"):
+            self._proxy_local_view("POST")
+            return
         # Morning view is opt-in via CCC_ENABLE_MORNING=1.
         if self._is_morning_path(path) and not MORNING_ENABLED:
             self.send_json({
