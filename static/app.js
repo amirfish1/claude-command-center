@@ -2780,7 +2780,7 @@
   const _sessionLiveOverlay = new Map();
   const _LIVE_OVERLAY_KEYS = [
     'is_live', 'state', 'ended_blocked', 'sidecar_status', 'sidecar_has_writes', 'sidecar_tool', 'sidecar_file',
-    'sidecar_ts', 'sidecar_in_flight', 'is_compacting', 'compacting_trigger', 'pending_tool', 'pending_file', 'last_event_type',
+    'sidecar_ts', 'sidecar_in_flight', 'is_compacting', 'compacting_trigger', 'recently_interrupted', 'pending_tool', 'pending_file', 'last_event_type',
     'needs_approval', 'needs_approval_message', 'question_waiting', 'question_text',
     'question_header', 'question_preamble', 'question_options', 'question_option_details',
     'codex_state', 'codex_fresh', 'codex_state_reason',
@@ -24852,6 +24852,13 @@
             + ' <span class="kanban-live-file">' + escapeHtml(liveActivityToolLabel(staleTool)) + '</span>'
             + (staleAge ? '<span class="kanban-live-age">' + escapeHtml(staleAge) + '</span>' : '')
             + '</div>';
+        } else if (c.recently_interrupted) {
+          // Not gated on is_live: an interrupt usually kills the process in
+          // the same beat it fires, so the card is often already non-live by
+          // the time this renders.
+          html += '<div class="kanban-live-tool stale" title="This session\'s turn was recently interrupted (Request interrupted by user)">'
+            + '<span class="kanban-live-name">⏸ Interrupted</span>'
+            + '</div>';
         } else if (c.is_live && c.is_compacting) {
           // Transient busy state between turns — takes priority over the
           // stale most-recently-completed-tool pill, which would otherwise
@@ -27129,6 +27136,14 @@
       if (sidVal && sessionIsOptimisticallySending(sidVal)) {
         liveToolHtml = '<span class="conv-live-tool sending" title="Sending - waiting for the first response from the agent">'
           + '<span class="conv-live-name">● Sending&hellip;</span>'
+          + '</span>';
+      } else if (c.recently_interrupted) {
+        // Not gated on is_live: an interrupt usually kills the process in
+        // the same beat it fires, so the row is often already non-live by
+        // the time this renders. Confirms an approved/auto interrupt (or a
+        // stray one) actually reached the transcript.
+        liveToolHtml = '<span class="conv-live-tool stale" title="This session\'s turn was recently interrupted (Request interrupted by user)">'
+          + '<span class="conv-live-name">⏸ Interrupted</span>'
           + '</span>';
       } else if (c.needs_approval) {
         const msg = c.needs_approval_message || c.sidecar_file || 'Agent is asking for approval';

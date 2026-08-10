@@ -6667,6 +6667,7 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
     "sidecar_in_flight",
     "is_compacting",
     "compacting_trigger",
+    "recently_interrupted",
     "pending_tool",
     "pending_file",
     "last_event_type",
@@ -14127,8 +14128,24 @@ def _emit_interrupt_event(sid, uuid_str, *, source, agent_name="", event_ts=None
             caller=source,
             alive=False,
         )
+        with _RECENT_INTERRUPT_LOCK:
+            _RECENT_INTERRUPT_BY_SID[sid] = event_ts if event_ts is not None else time.time()
     except Exception:
         pass
+
+
+def _session_recently_interrupted(sid):
+    """True if `sid` had an interrupt event within _RECENT_INTERRUPT_WINDOW_S.
+
+    Drives the "Interrupted" badge on the session row — a visual confirmation
+    that a request_interrupted event actually reached the transcript, distinct
+    from an interrupt-ask that's still pending or was dismissed.
+    """
+    if not sid:
+        return False
+    with _RECENT_INTERRUPT_LOCK:
+        ts = _RECENT_INTERRUPT_BY_SID.get(sid)
+    return bool(ts and (time.time() - ts) < _RECENT_INTERRUPT_WINDOW_S)
 
 
 def _seed_seen_interrupts_from_ledger():
@@ -14708,6 +14725,14 @@ _CONV_META_SCHEMA_VERSION = 17
 # once, not grown incrementally.
 _SEEN_INTERRUPTS = set()
 _SEEN_INTERRUPTS_LOCK = threading.Lock()
+
+# Most-recent interrupt timestamp per sid, for a transient "Interrupted"
+# badge on the session row (_add_sidecar_fields reads this). Small and
+# unbounded-but-tiny: only sids that have ever been interrupted get an
+# entry, and the badge itself only shows within _RECENT_INTERRUPT_WINDOW_S.
+_RECENT_INTERRUPT_BY_SID = {}
+_RECENT_INTERRUPT_LOCK = threading.Lock()
+_RECENT_INTERRUPT_WINDOW_S = 10 * 60
 
 # Interrupt event emission is disabled by default and enabled only in the
 # dashboard server's main() (and only when not CCC_EPHEMERAL). This makes the
@@ -22234,6 +22259,10 @@ def _add_sidecar_fields(entry):
     # the session into the "waiting" kanban column.
     entry["is_compacting"] = bool(compacting_state)
     entry["compacting_trigger"] = compacting_state.get("trigger", "") if compacting_state else ""
+    # Not gated by is_live: an interrupt usually kills the process, so the
+    # row often goes non-live in the same beat the interrupt fires. The
+    # badge needs to survive that transition to be seen at all.
+    entry["recently_interrupted"] = _session_recently_interrupted(sid)
     entry["sidecar_status"] = sc.get("status") if sc else None
     entry["sidecar_has_writes"] = sc.get("has_writes", False) if sc else False
     entry["question_waiting"] = False
@@ -57534,6 +57563,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 compacting_state = _read_compacting_state(sid) if sid else None
                 status["is_compacting"] = bool(compacting_state)
                 status["compacting_trigger"] = compacting_state.get("trigger", "") if compacting_state else ""
+                status["recently_interrupted"] = _session_recently_interrupted(sid) if sid else False
                 # Default stale-tool fields so the response shape matches Codex
                 # (the UI reads stale_tool_call/age unconditionally). Filled in
                 # below when a long-running tool child is detected. Kimi sessions
