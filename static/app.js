@@ -944,7 +944,7 @@
               '<div class="ma-empty-hint">The advisor checks after meaningful session changes.</div></div>';
     } else {
       live.forEach(function (r) {
-        const from = _maModels[r.current_model] || r.current_model || '?';
+        const from = formatModelEffort(_maModels[r.current_model] || r.current_model || '?', r.reasoning_effort);
         const to = _maModels[r.to_model] || r.to_model;
         html += '<div class="ma-rec">';
         html += '<div class="ma-rec-main">';
@@ -1008,7 +1008,7 @@
             '<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _maEsc(s.name || s.session_id) + '">' +
             _maEsc((s.name || s.session_id || '').slice(0, 32)) + '</td>' +
             '<td><span class="ma-badge ' + (s.current_model === 'opus' ? 'ma-up' : s.current_model === 'sonnet' ? 'ma-down' : '') + '">' +
-            _maEsc(_maModels[s.current_model] || s.current_model || '?') + '</span></td>' +
+            _maEsc(formatModelEffort(_maModels[s.current_model] || s.current_model || '?', s.reasoning_effort)) + '</span></td>' +
             '<td style="white-space:nowrap;">' +
             '<span class="ma-score-bar"><span class="ma-score-dot" style="left:' + dotPct + '%;color:' + scoreColor + ';"></span></span>' +
             '<span style="color:' + scoreColor + ';font-size:11px;font-family:ui-monospace,Menlo,monospace;">' + Math.round(score) + '</span>' +

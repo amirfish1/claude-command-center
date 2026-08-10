@@ -20243,6 +20243,7 @@ def build_model_advisor_report(persist=True):
     live_recs = []
     scanned = []
     recent = _recent_session_ids(hours=2)  # {sid: (mtime, path)}
+    overrides = _load_session_overrides()  # hoisted once for the whole scan
     for sid, (_mt, path) in list(recent.items()):
         try:
             if not path:
@@ -20255,12 +20256,14 @@ def build_model_advisor_report(persist=True):
             rec = model_advisor.recommend(current, turns)
             name = _advisor_session_name(sid, path)
             family = model_advisor._family(current)
+            effort = _conv_row_reasoning_effort(sid, overrides)
 
             # Every checked session goes into the scan log (transparency).
             scanned.append({
                 "session_id": sid,
                 "name": name,
                 "current_model": family,
+                "reasoning_effort": effort,
                 "score": window.get("score"),
                 "recent_score": window.get("recent_score"),
                 "phase": window.get("phase"),
@@ -20298,6 +20301,7 @@ def build_model_advisor_report(persist=True):
                     "session_id": sid,
                     "name": name,
                     "current_model": family,
+                    "reasoning_effort": effort,
                     "status": (stored or {}).get("status", "pending"),
                     **rec,
                 }
