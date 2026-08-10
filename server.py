@@ -8217,6 +8217,7 @@ def _live_registry_conversation_row(
         "display_name": display_name,
         "spawn_named": spawn_named,
         "name_overridden": bool(overrides.get(sid)),
+        "auto_titled": sid in _auto_titled_session_ids(),
         "archived": sid in (archived_set or set()),
         "trashed": sid in (trashed_set or set()),
         "recently_unarchived": _is_recently_unarchived(sid),
@@ -8710,6 +8711,7 @@ def find_all_conversations(
                 "display_name": display_name,
                 "spawn_named": spawn_named,
                 "name_overridden": bool(name_overrides.get(session_id)),
+                "auto_titled": session_id in _auto_titled_session_ids(),
                 "archived": session_id in archived_set,
                 "trashed": session_id in trashed_set,
                 "recently_unarchived": _is_recently_unarchived(session_id),
@@ -9773,7 +9775,7 @@ _ARCHIVE_LIST_FIELDS = (
     "session_cwd", "session_cwd_exists", "session_cwd_is_worktree", "mtime",
     "modified", "last_interacted", "size", "first_message", "ai_title",
     "branch", "git_branch", "effective_branch", "effective_kind", "display_name",
-    "spawn_named", "spawn_pid", "name_overridden", "archived", "trashed",
+    "spawn_named", "spawn_pid", "name_overridden", "auto_titled", "archived", "trashed",
     "recently_unarchived", "verified", "pinned", "pin_rank", "all_lane_override",
     "worktree_dirty", "has_commit", "has_push", "has_edit", "tail_pr_number",
     "tail_pr_url", "pr_state", "pr_notes", "is_live", "worktree_label", "state",
@@ -16751,8 +16753,12 @@ def summarize_issue_title(issue_number, repo_path):
     return result
 
 
-def summarize_session_title(session_id):
-    """Use `claude -p` to produce a concise title for a session's opening prompt."""
+def summarize_session_title(session_id, validate=False):
+    """Use `claude -p` to produce a concise title for a session's opening prompt.
+
+    `validate=True` (the auto-titler path) rejects an answer that is really the
+    summarizer asking us for a prompt, rather than writing it onto the row.
+    """
     result = {"ok": False}
     first_msg = _extract_first_message(session_id)
     if not first_msg:
@@ -16809,6 +16815,9 @@ def summarize_session_title(session_id):
 
     # Cap length defensively
     title = title[:120]
+    if validate and _auto_title_looks_bogus(title):
+        result["error"] = f"model answered instead of titling: {title[:80]}"
+        return result
     # source="auto": writes the JSONL custom-title (so the title sticks) but
     # skips the sidecar — keeps name_overridden False / ✏️ off the row.
     rename_result = rename_session(session_id, title, source="auto")
@@ -16834,6 +16843,38 @@ def summarize_session_title(session_id):
 # haiku per row.
 _AUTO_TITLE_MAX_CONCURRENT = 2
 _auto_title_sem = threading.Semaphore(_AUTO_TITLE_MAX_CONCURRENT)
+
+
+_auto_titled_cache = {"key": None, "data": frozenset()}
+_auto_titled_lock = threading.Lock()
+
+
+def _auto_titled_session_ids():
+    """Set of sessions CCC has auto-titled. ONE listdir, cached by dir mtime.
+
+    Read once per list build and membership-tested per row -- never a stat()
+    per row (see CLAUDE.md "Performance gates").
+    """
+    try:
+        st = SIDECAR_STATE_DIR.stat()
+        key = (st.st_mtime, st.st_size)
+    except OSError:
+        return frozenset()
+    with _auto_titled_lock:
+        if _auto_titled_cache["key"] == key:
+            return _auto_titled_cache["data"]
+    try:
+        data = frozenset(
+            n[: -len("_autotitled")]
+            for n in os.listdir(SIDECAR_STATE_DIR)
+            if n.endswith("_autotitled")
+        )
+    except OSError:
+        return frozenset()
+    with _auto_titled_lock:
+        _auto_titled_cache["key"] = key
+        _auto_titled_cache["data"] = data
+    return data
 
 
 def _auto_title_enabled():
@@ -16875,6 +16916,34 @@ def _auto_title_release(session_id):
         pass
 
 
+# A title that is really the summarizer talking back to us ("Could you provide
+# the opening prompt?"). Haiku does that when handed boilerplate instead of a
+# real ask; without this check those answers get written straight onto the row.
+_AUTO_TITLE_REJECT_MARKERS = (
+    "opening prompt",
+    "actual prompt",
+    "provide the",
+    "please paste",
+    "please share",
+    "i don't see",
+    "i need the",
+    "appears to be incomplete",
+    "got cut off",
+)
+
+
+def _auto_title_looks_bogus(title):
+    t = str(title or "").strip()
+    if not t:
+        return True
+    low = t.lower()
+    if t.endswith("?"):
+        return True
+    if len(t.split()) > 14:
+        return True
+    return any(m in low for m in _AUTO_TITLE_REJECT_MARKERS)
+
+
 def _auto_title_needed(session_id):
     """True when this session has no real title of its own.
 
@@ -16883,6 +16952,16 @@ def _auto_title_needed(session_id):
     sidebar renders as a slug. A user rename always wins and stops us.
     """
     if _load_session_name_overrides().get(session_id):
+        return False
+    # NEVER title the summarizer's own throwaway `claude -p` sessions. Each one
+    # is a real session with a Stop hook, so without this the titler feeds
+    # itself: title a session -> that spawns a scratch session -> its Stop hook
+    # asks us to title IT -> another scratch session, forever. Observed: 16
+    # junk-titled sessions in four minutes.
+    first = _extract_first_message(session_id) or ""
+    if not first.strip() or first.startswith(_GENERATED_HELPER_SESSION_PREFIXES):
+        return False
+    if _is_transcript_control_text(first):
         return False
     path = _find_session_jsonl(session_id)
     if path is None:
@@ -16905,7 +16984,7 @@ def _auto_title_worker(session_id):
         _auto_title_release(session_id)
         return
     try:
-        result = summarize_session_title(session_id)
+        result = summarize_session_title(session_id, validate=True)
         if not result.get("ok"):
             _auto_title_release(session_id)
             _log_activity("autotitle", "FAILED",
@@ -21874,6 +21953,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             **_token_optimizer_quality_for_session(sid),
             "spawn_named": spawn_named,
             "name_overridden": name_overridden,
+            "auto_titled": sid in _auto_titled_session_ids(),
             "last_prompt": (tail_meta.get("last_prompt") or "")[:200],
             "size": stat.st_size,
             # Use last meaningful event timestamp when available; fall back to mtime.

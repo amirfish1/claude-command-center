@@ -26713,7 +26713,7 @@
       if (!c) return 'Object';
       const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
       const raw = (c.display_name || c.ai_title || cleanFirst || c.id || 'Object');
-      const title = String(raw).replace(/^\s*[✨›]\s*/, '').replace(/-/g, ' ').trim();
+      const title = String(raw).replace(/^\s*[✨🪄›]\s*/, '').replace(/-/g, ' ').trim();
       return title || 'Object';
     }
     function elevateConversationToOwnObject(convId) {
@@ -27081,6 +27081,10 @@
       // glyph; the .user-renamed CSS class gives them a quiet dotted underline
       // instead so the row doesn't shout.
       if (titleSource === 'ai' && !quietTitleChrome) title = '✨ ' + title;
+      // 🪄 = CCC's own auto-titler (haiku, fired from the Stop hook) filled a
+      // row that would otherwise show a raw first sentence. Deliberately a
+      // different glyph from ✨, which means "the engine titled itself".
+      else if (c.auto_titled && !titleSource && !quietTitleChrome) title = '🪄 ' + title;
       // A session the auto-unarchive sweep just pulled back out of Archived
       // (CCC-443) — flag it so the user notices it reappeared rather than
       // wondering why an "archived" session is back in Current sessions.
