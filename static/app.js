@@ -38938,6 +38938,17 @@
     _uxqHealthCache.ts = 0;
     await _renderQueuePanel();
     showOpToast('Queue ' + name + ' created (auto-drain off) - ready for tickets from this session.', 'success');
+    // The whole point is a place THIS session can hand off follow-up work, so
+    // it needs to be told the queue exists — a silent toast only the human
+    // sees defeats that (CCC-769 feedback). Goes through the normal send
+    // channel (queued if the session is mid-turn), same as typing a message.
+    const sessionId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
+    if (sessionId && typeof injectToSession === 'function') {
+      injectToSession(sessionId,
+        'Created WatchTower queue ' + name + ' for this session (repo ' + repoPath
+        + ', auto-drain off). File follow-up tickets there if useful, e.g. '
+        + '`wt add -q ' + name + ' "..."`.');
+    }
   }
 
   // Plan-to-fleet (W51): drop a plan/spec/mission-brief document, preview the
