@@ -58859,6 +58859,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # acked. Purely in-process reads (workers.json state, receipts.json)
             # -- no `wt` subprocess call anywhere in this poll.
             self.send_json(_build_injection_health())
+        elif path == "/api/custom-links":
+            # User-defined nav links rendered beside the Queues/Sessions
+            # toggle. Read from ~/.claude/command-center/custom-links.json
+            # ([{"label": "...", "url": "..."}]); absent file means no links.
+            # Personal workflow config stays out of the public repo.
+            try:
+                raw = json.loads(
+                    (COMMAND_CENTER_STATE_DIR / "custom-links.json").read_text())
+                links = [{"label": str(l.get("label", ""))[:40],
+                          "url": str(l.get("url", ""))[:500]}
+                         for l in raw if isinstance(l, dict)
+                         and l.get("label") and l.get("url")]
+            except Exception:
+                links = []
+            self.send_json({"links": links})
         elif path == "/api/version":
             # Additive only. Note _ccc_last_updated_iso() forks `git log -1`,
             # so this endpoint must never be put on a timer — the System status

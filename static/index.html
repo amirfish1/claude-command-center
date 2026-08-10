@@ -465,7 +465,25 @@
     <div class="q2-toggle" role="group" aria-label="Switch view">
       <a class="q2-toggle-opt" href="/q2.html">Queues</a>
       <span class="q2-toggle-opt is-active" aria-current="page">Sessions</span>
+      <span id="customNavLinks"></span>
     </div>
+    <script>
+      // User-defined nav links (e.g. a local companion dashboard) from
+      // /api/custom-links; renders nothing when the config file is absent.
+      fetch('/api/custom-links').then(function (r) { return r.json(); }).then(function (d) {
+        var host = document.getElementById('customNavLinks');
+        if (!host || !d || !Array.isArray(d.links)) return;
+        d.links.forEach(function (l) {
+          var a = document.createElement('a');
+          a.className = 'q2-toggle-opt';
+          a.href = l.url;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.textContent = l.label;
+          host.appendChild(a);
+        });
+      }).catch(function () {});
+    </script>
     <div class="sidebar-header">
       <div class="sidebar-header-brand">
       <div class="sh-title-row">
