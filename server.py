@@ -14424,6 +14424,17 @@ def _resolve_interrupt_ask(ask_id, decision):
             _mark_interrupt_ask(ask_id, "executed", note="process already gone")
             return {"ok": True, "status": "executed",
                     "note": "process already gone"}
+        # The ask's idle check only ran once, when it was filed — this dialog
+        # can sit unresolved for hours. Re-check right before the kill so a
+        # click on a since-gone-busy process doesn't tear down a live turn.
+        # ps-based (not the in-memory spawn entry), so it works even when the
+        # spawn is owned by the worker process rather than this one.
+        if _spawn_entry_active_tool_child({"pid": pid}):
+            _mark_interrupt_ask(
+                ask_id, "deferred",
+                note="process started a tool call since this ask was filed; not killed")
+            return {"ok": True, "status": "deferred", "pid": pid,
+                    "note": "session is busy now — not killed. Re-open the dialog once it's idle."}
         try:
             os.kill(pid, signal.SIGTERM)
         except (OSError, ProcessLookupError) as e:
@@ -39734,7 +39745,7 @@ _ANTIGRAVITY_APP_LS_TOKEN_RE = re.compile(
     r"--csrf_token\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
-_ANTIGRAVITY_META_VERSION = 2
+_ANTIGRAVITY_META_VERSION = 3
 # An Antigravity transcript writes every assistant tool call / message, so if
 # the file moved within this window we treat the session as live. Antigravity
 # has no hook system that CCC could listen to (the way Claude Code does via
@@ -39982,7 +39993,12 @@ def _antigravity_model_from_text(text):
 
 def _antigravity_spawn_pid_by_session_id():
     out = {}
-    for s in _spawned_sessions:
+    entries = list(_spawned_sessions)
+    try:
+        entries.extend(_load_spawn_registry())
+    except Exception:
+        pass
+    for s in entries:
         if s.get("engine") != "antigravity":
             continue
         meta = {}
@@ -40307,6 +40323,11 @@ def _antigravity_path_base(path_text):
 def _antigravity_infer_cwd_from_candidates(candidates):
     fallback = ""
     known_projects = _antigravity_known_project_paths()
+    try:
+        home_path = Path.home().resolve()
+    except (OSError, ValueError, RuntimeError):
+        home_path = None
+
     for raw in candidates or []:
         base = _antigravity_path_base(raw)
         if not base:
@@ -40315,34 +40336,73 @@ def _antigravity_infer_cwd_from_candidates(candidates):
             base_resolved = base.expanduser().resolve(strict=False)
         except (OSError, ValueError, RuntimeError):
             base_resolved = base
+
+        if home_path:
+            if base_resolved == home_path:
+                continue
+            skip = False
+            for sys_dir in (
+                home_path / ".claude",
+                home_path / ".gemini",
+                home_path / ".config",
+                home_path / ".cache",
+                Path("/tmp"),
+                Path("/private/tmp"),
+            ):
+                if base_resolved == sys_dir or sys_dir in base_resolved.parents:
+                    skip = True
+                    break
+            if skip:
+                continue
+
         if not fallback:
             fallback = str(base_resolved)
+
         matched_project = None
         for project in known_projects:
             try:
-                if base_resolved == project or project in base_resolved.parents:
-                    matched_project = project
+                p_res = project.resolve()
+                if p_res != home_path and (base_resolved == p_res or p_res in base_resolved.parents):
+                    matched_project = p_res
                     break
             except (OSError, RuntimeError):
                 continue
-        try:
-            home_path = Path.home().resolve()
-        except (OSError, ValueError, RuntimeError):
-            home_path = None
+
         if matched_project and matched_project != home_path:
             return str(matched_project)
+
         git_root = _find_git_root(str(base_resolved))
-        if git_root:
+        if git_root and Path(git_root).resolve() != home_path:
             try:
                 return str(Path(git_root).resolve())
             except (OSError, ValueError, RuntimeError):
                 return git_root
-        if matched_project:
+
+        if matched_project and matched_project != home_path:
             return str(matched_project)
+
         marked = _nearest_marked_repo_dir(str(base_resolved))
-        if marked:
+        if marked and Path(marked).resolve() != home_path:
             return marked
-    return fallback
+
+    if fallback and home_path:
+        try:
+            f_res = Path(fallback).resolve()
+            if f_res != home_path:
+                for sys_dir in (
+                    home_path / ".claude",
+                    home_path / ".gemini",
+                    home_path / ".config",
+                    home_path / ".cache",
+                    Path("/tmp"),
+                    Path("/private/tmp"),
+                ):
+                    if f_res == sys_dir or sys_dir in f_res.parents:
+                        return ""
+                return fallback
+        except (OSError, ValueError, RuntimeError):
+            pass
+    return ""
 
 
 def _antigravity_event_path_candidates(ev):
@@ -40692,8 +40752,25 @@ def find_antigravity_conversations(
                 continue
             if pinned == repo_path:
                 pinned_repo = True
-            elif not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
-                continue
+            else:
+                cli_cwd = (cli_meta or cli_meta_by_sid.get(sid, {})).get("cwd") or ""
+                spawn_cwd = spawn_info.get("cwd") or ""
+                spawn_repo = spawn_info.get("repo_path") or ""
+                matched = (
+                    _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache)
+                    or _codex_cwd_matches_repo(cli_cwd, repo_path_obj, git_top_cache)
+                    or _codex_cwd_matches_repo(spawn_cwd, repo_path_obj, git_top_cache)
+                    or _codex_cwd_matches_repo(spawn_repo, repo_path_obj, git_top_cache)
+                )
+                if not matched:
+                    continue
+                if not _codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
+                    cwd = (
+                        (cli_cwd if _codex_cwd_matches_repo(cli_cwd, repo_path_obj, git_top_cache) else "")
+                        or (spawn_cwd if _codex_cwd_matches_repo(spawn_cwd, repo_path_obj, git_top_cache) else "")
+                        or (spawn_repo if _codex_cwd_matches_repo(spawn_repo, repo_path_obj, git_top_cache) else "")
+                        or cwd
+                    )
         spawn_pid = spawn_info.get("pid")
         spawn_alive = bool(spawn_info.get("alive"))
         modified = tail.get("last_meaningful_ts") or st.st_mtime
