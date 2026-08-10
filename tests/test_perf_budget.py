@@ -1787,6 +1787,9 @@ def test_cold_persisted_snapshot_does_not_rehydrate_on_request(
         "_rehydrate_archive_cached_rows",
         lambda _rows: pytest.fail("cold request synchronously rehydrated the archive"),
     )
+    # The cold-serve path re-stamps archived/trashed from lifecycle sidecars
+    # (the trash-resurrect fix). Pin empty sets so the overlay is deterministic.
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
 
     rows, from_cache, _ver = server._archive_serve_rows_versioned(
         _ALL_KEY,
@@ -1794,7 +1797,9 @@ def test_cold_persisted_snapshot_does_not_rehydrate_on_request(
         force_refresh=False,
     )
 
-    assert rows == entry["conversations"]
+    assert rows == [
+        {"session_id": "persisted", "state": "ended", "archived": False, "trashed": False}
+    ]
     assert from_cache is True
 
 
@@ -1833,13 +1838,18 @@ def test_cold_archive_variant_borrows_base_snapshot_and_refreshes_detached(
             "missing archive variant full-built on the request thread"
         ),
     )
+    # The cold-serve path re-stamps archived/trashed from lifecycle sidecars
+    # (the trash-resurrect fix). Pin empty sets so the overlay is deterministic.
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
 
     rows, from_cache, _ver = server._archive_serve_rows_versioned(
         variant_key,
         variant_options,
     )
 
-    assert rows == base_entry["conversations"]
+    assert rows == [
+        {"session_id": "base-snapshot", "archived": False, "trashed": False}
+    ]
     assert from_cache is True
     assert len(spawned) == 1
     assert spawned[0].target is server._archive_serve_refresh
