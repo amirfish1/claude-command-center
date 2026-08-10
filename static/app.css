@@ -16471,6 +16471,35 @@ body.status-pos-right.status-rail-collapsed .conv-pane:has(> .status-rail) > .co
   flex-shrink: 0;
   gap: 4px;
 }
+/* CCC-761: refresh/history/board/chip-color and New-Group-chat/live/manage
+   are secondary next to "New session" -- collapsed by default, revealed by
+   #sidebarMoreBtn ("..."). Kept as simple show/hide (not a floating menu) so
+   every button keeps its existing id and click handler unchanged. */
+.sh-more-collapsed {
+  display: none !important;
+}
+.sh-more-btn {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim, #999);
+  cursor: pointer;
+}
+.sh-more-btn:hover,
+.sh-more-btn[aria-expanded="true"] {
+  background: var(--hover-bg, rgba(255,255,255,0.08));
+  color: var(--text, #eee);
+}
 .sidebar-header-actions .sh-btn,
 .sidebar-header-actions .bug-link {
   position: relative;

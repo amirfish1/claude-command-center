@@ -12836,6 +12836,22 @@
   if ($convListCollapseBtn) $convListCollapseBtn.addEventListener('click', () => setConvListCollapsed(true));
   if ($convListRestoreBtn) $convListRestoreBtn.addEventListener('click', () => setConvListCollapsed(false));
 
+  // CCC-761: "..." reveals the secondary header/session-panel rows
+  // (refresh/history/board/chips, New Group chat/live/manage) that are
+  // collapsed by default so "New session" isn't crowded on every visit.
+  const $sidebarMoreBtn = document.getElementById('sidebarMoreBtn');
+  const $sidebarHeaderActions = document.getElementById('sidebarHeaderActions');
+  const $newSessionSecondaryRow = document.getElementById('newSessionSecondaryRow');
+  if ($sidebarMoreBtn) {
+    $sidebarMoreBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const next = $sidebarMoreBtn.getAttribute('aria-expanded') !== 'true';
+      $sidebarMoreBtn.setAttribute('aria-expanded', String(next));
+      if ($sidebarHeaderActions) $sidebarHeaderActions.classList.toggle('sh-more-collapsed', !next);
+      if ($newSessionSecondaryRow) $newSessionSecondaryRow.classList.toggle('sh-more-collapsed', !next);
+    });
+  }
+
   if ($cpCloseBtn) $cpCloseBtn.addEventListener('click', () => {
     if (isMobile()) { mobileShowConv(false); return; }
     setConvPanelOpen(!convPanelOpen);

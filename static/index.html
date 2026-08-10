@@ -514,7 +514,12 @@
            Items are populated at boot by JS that re-parents nodes from
            `.ccc-topbar`. Empty by default; collapses via :empty rule. -->
       <div class="sidebar-top-alerts" id="sidebarTopAlerts" data-role="top-alerts"></div>
-      <div class="sidebar-header-actions">
+      <!-- CCC-761: this whole row (refresh/history/board/chip-color, plus the
+           New Group chat row below) read as clutter next to "New session" --
+           the one action that matters on every visit. Both rows now live
+           behind #sidebarMoreBtn's "..." toggle instead of always-on,
+           collapsed by default (see .sh-more-collapsed in app.css). -->
+      <div class="sidebar-header-actions sh-more-collapsed" id="sidebarHeaderActions">
         <span class="sh-refresh-wrap">
           <button type="button" id="sidebarRefreshBtn" class="sh-btn sh-refresh-btn" title="Hard reload the page (cache-bust)" aria-label="Reload page"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 4 21 10 15 10"/></svg></button>
           <button type="button" id="sidebarRefreshCaret" class="sh-btn sh-refresh-caret" title="More refresh options" aria-label="More refresh options" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
@@ -544,8 +549,9 @@
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
         <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
+        <button type="button" id="sidebarMoreBtn" class="sh-btn sh-more-btn" title="More actions" aria-label="More actions" aria-haspopup="true" aria-expanded="false">&#8942;</button>
       </div>
-      <div class="new-session-secondary-row">
+      <div class="new-session-secondary-row sh-more-collapsed" id="newSessionSecondaryRow">
         <button class="new-session-btn new-session-btn-secondary" id="sidebarNewGroupChatBtn" data-tour="group-chat" title="Create a new empty group chat - drag sessions in afterwards to add them" aria-label="New group chat"><span class="plus" aria-hidden="true">+</span> New Group chat</button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view"><span aria-hidden="true">&#9654;</span></button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarManageGroupChatsBtn" title="Manage existing group chats - pause / unpause orchestration" aria-label="Manage group chats">&#8801;</button>
