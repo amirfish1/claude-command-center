@@ -61149,6 +61149,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cfg = _wt_read_config() or {}
                 matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
                 case_mismatch = bool(matched and matched != queue_name)
+                if matched is None:
+                    # A queue with no existing entry is being created here, not
+                    # edited (CCC-768) — force auto_drain off no matter what the
+                    # client sent, so a brand-new queue always starts as a
+                    # deliberate backlog. Editing an existing queue (matched is
+                    # not None) still respects whatever the form submitted.
+                    normalized["config"]["auto_drain"] = False
                 if _WT_CONFIG_AVAILABLE and _wt_config is not None and not case_mismatch:
                     # WT owns queue-config.json — write through the same setters
                     # `wt config -q ...` uses. Direct write remains below for
