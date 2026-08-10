@@ -184,19 +184,21 @@
   </div>
   <!-- Global delivery-health banner (P0c). Fixed top-of-page, independent of
        which session/view is focused -- deliberately global rather than
-       scoped to the affected session, so a stuck or silently-lost message
+       scoped to the affected session, so a silently-lost message
        is impossible to miss regardless of what you're looking at. Polls
        /api/injection-health (in-process on the server, no `wt` subprocess);
-       shown only while any_active is true. Two incident classes: active
-       foreign-writer holds (a live session CCC has no recognized delivery
-       channel to -- auto-resolve once delivered or reachable, no dismiss
-       needed) and newly-lost wt receipts (permanent historical facts,
-       dismissible and durably acked so a reload doesn't re-alarm). -->
+       shown only while there are newly-lost wt receipts (permanent
+       historical facts, dismissible and durably acked so a reload doesn't
+       re-alarm). The API's second incident class, active foreign-writer
+       holds (a live session CCC has no recognized delivery channel to),
+       is intentionally never surfaced here: holds auto-resolve once the
+       foreign process exits and the queue drains, and the red banner over
+       a held queue was pure noise. -->
   <div id="injectionHealthBanner" class="injection-health-banner" hidden role="alert" aria-live="assertive">
     <span class="injection-health-banner__icon" aria-hidden="true">&#9888;</span>
     <span class="injection-health-banner__text" id="injectionHealthBannerText"></span>
     <button type="button" class="injection-health-banner__details" id="injectionHealthBannerDetailsBtn" aria-expanded="false" aria-controls="injectionHealthBannerDetails" title="Show the full list of affected sessions">Details</button>
-    <button type="button" class="injection-health-banner__dismiss" id="injectionHealthBannerDismissAll" title="Dismiss the lost-receipt incidents shown above (active holds clear on their own)">Dismiss</button>
+    <button type="button" class="injection-health-banner__dismiss" id="injectionHealthBannerDismissAll" title="Dismiss the lost-receipt incidents shown above">Dismiss</button>
   </div>
   <div id="injectionHealthBannerDetails" class="injection-health-banner-details" hidden></div>
   <!-- Global dispatch-paused banner. Shown while the control-plane drain is
@@ -3624,16 +3626,13 @@
   }
 
   function renderText(health) {
-    const holds = health.active_holds || [];
+    // Foreign-writer "stuck session" holds (health.active_holds) are
+    // deliberately NOT surfaced here: they auto-resolve the moment the
+    // foreign process exits and the queue drains, and the red banner over a
+    // held queue proved to be pure noise. The API still reports them;
+    // /api/injection-health keeps them for tooling that wants the detail.
     const lost = health.new_lost_receipts || [];
     const parts = [];
-    if (holds.length) {
-      parts.push(
-        holds.length + ' session' + (holds.length === 1 ? '' : 's') +
-        ' stuck. CCC can\'t reach a live process it didn\'t start. Use `wt send <session-id> "text"` to deliver directly: ' +
-        holds.map((h) => h.sid).join(', ')
-      );
-    }
     if (lost.length) {
       // "Lost" bundles two different certainty levels (see proofExplain
       // below) -- say so up front instead of a flat "confirmed lost" that
@@ -3652,18 +3651,9 @@
   }
 
   function renderDetails(health) {
-    const holds = health.active_holds || [];
+    // Holds intentionally omitted -- see renderText.
     const lost = health.new_lost_receipts || [];
     let html = '';
-    if (holds.length) {
-      html += '<div class="injection-health-details__group-label">Stuck sessions</div>'
-        + holds.map((h) => (
-          '<div class="injection-health-details__row">'
-          + sidLinkHtml(h.sid)
-          + '<span class="injection-health-details__meta">pid ' + escapeHtml(h.pid) + ' · stuck since ' + fmtWhen(h.first_seen) + '</span>'
-          + '</div>'
-        )).join('');
-    }
     if (lost.length) {
       html += '<div class="injection-health-details__group-label">Lost messages</div>'
         + lost.map((r) => (
@@ -3740,15 +3730,13 @@
       .then((health) => {
         if (!health) return;
         _lastHealth = health;
-        if (health.any_active) {
+        // The banner is only for newly-lost receipts (a message proven or
+        // suspected never delivered). Active foreign-writer holds never
+        // raise it -- see renderText.
+        if ((health.new_lost_receipts || []).length) {
           renderText(health);
           $banner.hidden = false;
-          // The Dismiss button only acks lost-receipt incidents. When the
-          // banner is up solely because of active foreign-writer holds
-          // (which auto-resolve), there is nothing to dismiss — hide it so
-          // the button doesn't look broken (clicking it acked zero receipts
-          // and the immediate re-poll re-showed the banner).
-          $dismiss.hidden = !(health.new_lost_receipts || []).length;
+          $dismiss.hidden = false;
           if (!$details.hidden) renderDetails(health);
         } else {
           $banner.hidden = true;
