@@ -42256,9 +42256,12 @@
   }
   // RAIL_SESSION_COST_PRESENTATION_END
 
-  // Big accumulated-token headline in the status rail head. The rail is global,
-  // so only the active pane drives it. Reuses the /usage payload the composer
-  // strip already fetched (_usageDataByPane) — no extra request per selection.
+  // Big accumulated-token headline in the status rail head. When the server
+  // provides a cache-adjusted total, the headline shows that number instead of
+  // raw window size; the raw in / cached / out breakdown still appears below.
+  // The rail is global, so only the active pane drives it. Reuses the /usage
+  // payload the composer strip already fetched (_usageDataByPane) — no extra
+  // request per selection.
   function _renderRailTokens(paneId) {
     if (document.hidden) return;
     const el = document.getElementById('statusRailTokens');
@@ -42272,9 +42275,11 @@
       ? (Number(u.total_cache_read_tokens) || 0)
         + (Number(u.total_cache_creation_tokens) || 0)
       : 0;
-    const inTok = inFresh + inCached;
     const outTok = u ? (Number(u.total_output_tokens) || 0) : 0;
-    const total = inTok + outTok;
+    const rawTotal = inFresh + inCached + outTok;
+    const cacheAdjusted = u ? (Number(u.cache_adjusted_tokens) || NaN) : NaN;
+    const hasCacheAdjusted = Number.isFinite(cacheAdjusted) && cacheAdjusted > 0;
+    const total = hasCacheAdjusted ? cacheAdjusted : rawTotal;
     if (!total) {
       el.hidden = true;
       el.innerHTML = '';
@@ -42286,16 +42291,22 @@
       u, sessionId, monthlyPlan, _weeklyClaudeUsage
     );
     const costText = railSessionCostText(presentation);
+    const headlineLabel = hasCacheAdjusted
+      ? 'cache-adjusted tokens this conversation'
+      : 'tokens this conversation';
     el.innerHTML =
       '<div class="rail-tokens-value">' + _formatTokens(total) + '</div>'
-      + '<div class="rail-tokens-label">tokens this conversation'
+      + '<div class="rail-tokens-label">' + headlineLabel
       + (presentation ? ' &middot; ' + costText.label : '')
       + '</div>'
       + '<div class="rail-tokens-cache">in ' + _formatTokens(inFresh)
       + ' &middot; in cached ' + _formatTokens(inCached)
       + ' &middot; out ' + _formatTokens(outTok)
       + '</div>';
-    el.title = total.toLocaleString() + ' tokens ('
+    el.title = (hasCacheAdjusted
+        ? total.toLocaleString() + ' cache-adjusted tokens (raw total '
+          + rawTotal.toLocaleString() + ', '
+        : total.toLocaleString() + ' tokens (')
       + _formatTokens(inFresh) + ' in, '
       + _formatTokens(inCached) + ' in cached, '
       + _formatTokens(outTok) + ' out)'
@@ -51948,6 +51959,54 @@
     return out;
   }
 
+  // The include_prs payload comes from a separate server cache variant whose
+  // snapshot lags the base one (slow detached rebuild; it can freeze for an
+  // hour when that worker times out). Current rows stay authoritative for
+  // liveness/activity; the enriched payload only contributes PR / effective-
+  // branch / worktree fields and standalone github_pr rows. Replacing
+  // archiveData with the enriched rows wholesale made sessions vanish until
+  // the next base poll (the conv-list flicker).
+  function _graftArchivePrEnrichment(currentRows, enrichedRows) {
+    const current = Array.isArray(currentRows) ? currentRows : [];
+    const enriched = Array.isArray(enrichedRows) ? enrichedRows : [];
+    if (!current.length) return enriched.slice();
+
+    const enrichedByKey = new Map();
+    for (const row of enriched) {
+      const key = _archiveRowStableKey(row);
+      if (key) enrichedByKey.set(key, row);
+    }
+
+    const seen = new Set();
+    const out = current.map(row => {
+      const key = _archiveRowStableKey(row);
+      if (key) seen.add(key);
+      const source = key ? enrichedByKey.get(key) : null;
+      if (!source) return row;
+      const merged = Object.assign({}, row);
+      // Overwrite only with meaningful values — the enriched snapshot is
+      // usually older, so a null/empty there must not clobber fresher data.
+      const graft = (field) => {
+        const val = source[field];
+        if (val !== undefined && val !== null && val !== '') merged[field] = val;
+        else if (val === false && merged[field] == null) merged[field] = val;
+      };
+      [
+        'tail_pr_number', 'tail_pr_url', 'pr_state', 'pr_notes',
+        'pr_is_draft', 'pr_mergeable', 'pr_review_decision',
+        'effective_branch', 'effective_kind', 'worktree_dirty',
+      ].forEach(graft);
+      return merged;
+    });
+
+    for (const row of enriched) {
+      const key = _archiveRowStableKey(row);
+      if (key && seen.has(key)) continue;
+      if (row.source === 'github_pr') out.push(row);
+    }
+    return out;
+  }
+
   function _captureArchiveListScroll(q, $list) {
     if (!$list || _lastArchiveRenderFilter !== q) return null;
     const state = { filter: q, top: $list.scrollTop, anchorAttr: '', anchorValue: '', anchorOffset: 0 };
@@ -52358,7 +52417,7 @@
     }
     _archivePrHydratePromise = loadArchiveAll({ includePrs: true, window: archiveDataWindow || _archiveWindow() }).then(convs => {
       if (Array.isArray(convs) && convs.length) {
-        archiveData = convs;
+        archiveData = _graftArchivePrEnrichment(archiveData, convs);
         archiveDataWindow = archiveDataWindow || _archiveWindow();
         _archivePrHydratedAt = Date.now();
         _renderArchiveIfLoaded();

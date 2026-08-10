@@ -1,0 +1,1 @@
+- Conversation list no longer flickers between a stale and fresh session set: the 5-minute PR-hydrate pass now grafts PR/branch/worktree enrichment onto the current rows instead of wholesale-replacing them with the older `include_prs` cache variant, which made sessions vanish (and counts/context % regress) until the next base poll.
