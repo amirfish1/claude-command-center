@@ -973,6 +973,20 @@
   }
   .event.user_text .label { color: var(--green); font-weight: 600; font-size: 11px; text-transform: uppercase; }
   .event.user_text .user-msg { margin-top: 6px; white-space: pre-wrap; font-size: 15px; }
+  /* "[Request interrupted by user]" — a transcript line Claude writes itself
+     when a turn is cut off. Styled as a system/interrupt marker, NOT a green
+     user bubble: the human did not type those words, and a quietly-ended turn
+     otherwise reads as a clean finish. */
+  .event.user_text.session-interrupted-event {
+    background: color-mix(in srgb, var(--orange, #d29922) 10%, transparent);
+    border-left-color: var(--orange, #d29922);
+  }
+  .event.user_text.session-interrupted-event .label { color: var(--orange, #d29922); }
+  .session-interrupted-msg { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .session-interrupted-title {
+    font-size: 14px; font-weight: 600; color: var(--orange, #d29922);
+  }
+  .session-interrupted-sub { font-size: 12px; color: var(--text-muted); }
   /* Queue candidates belong at the composer, not in scrollback. Keep pasted
      image previews recognizable without letting attachments dominate the
      narrow handoff strip. */

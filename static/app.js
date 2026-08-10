@@ -47531,6 +47531,23 @@
         } else {
           textHtml = bridgeSenderHtml ? '<div class="user-msg" dir="auto" data-raw-text="">' + bridgeSenderHtml + '</div>' : '';
         }
+        // Claude writes "[Request interrupted by user]" into the transcript as
+        // a USER message when its turn is cut off (CCC kill, an approved
+        // interrupt-ask, or a real Esc). Rendering it as a normal user bubble
+        // reads as though the human typed those words, and the turn just looks
+        // like it quietly ended ("Done"). Render it as an explicit interrupted
+        // marker instead, so the conversation itself says what happened.
+        if (/^\[Request interrupted by user/.test(_rawText)) {
+          div.classList.add('session-interrupted-event');
+          div.innerHTML = '<span class="label">Session</span>'
+            + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
+            + tsSpan(ev.ts)
+            + '<div class="session-interrupted-msg">'
+            + '<span class="session-interrupted-title">⏸ Session interrupted</span>'
+            + '<span class="session-interrupted-sub">This turn was cut off before it finished.'
+            + ' Send a message to pick it back up.</span>'
+            + '</div>';
+        } else {
         div.innerHTML = '<span class="label">User</span>'
           + (ev.line != null ? '<span class="line-num">L' + ev.line + '</span>' : '')
           + tsSpan(ev.ts)
@@ -47539,6 +47556,7 @@
           + eventModelMetaHtml(ev, 'user')
           + (_isPinned ? '' : imagesHtml)
           + userSteerHtml;
+        }
 
       } else if (ev.type === 'assistant') {
         if (_kimiPane) {
