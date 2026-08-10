@@ -38180,7 +38180,8 @@
       // still offers its primary action.
       $queue.innerHTML = pendingAddsHtml + queueRowsHtml
         + historyPagerHtml
-        + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>';
+        + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>'
+        + '<div class="fq-create-session-queue-wrap"><button class="fq-create-session-queue" id="filesQueueCreateForSession" type="button" title="Create a new WatchTower queue for this session\'s repo, auto-drain off">Create queue for this session</button></div>';
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
     });
@@ -38230,6 +38231,12 @@
         if (addBtn) {
           ev.stopPropagation();
           await _addQueueTicket();
+          return;
+        }
+        const createSessionQueueBtn = ev.target && ev.target.closest && ev.target.closest('#filesQueueCreateForSession');
+        if (createSessionQueueBtn) {
+          ev.stopPropagation();
+          await _createQueueForSession();
           return;
         }
         // The one ▶ : queue this ticket to run, or — pressed again while it is
@@ -38881,6 +38888,56 @@
       _renderQueuePanel({ allowStale: true });
       showOpToast('Add failed: ' + e);
     }
+  }
+
+  // "Create queue for this session" (CCC-769): a one-click way to spin up a
+  // fresh WatchTower queue scoped to the open session's repo, so a session
+  // that wants to hand off follow-up work has somewhere to drop tickets
+  // without leaving the dashboard to fill in the full queue-config form.
+  // Auto-drain off is a deliberate default (a human decides when it starts
+  // draining), and the server also enforces it for any brand-new queue
+  // (CCC-768) regardless of what this sends.
+  async function _createQueueForSession() {
+    const repoPath = requireConvRepo('Create queue for this session');
+    if (!repoPath) return;
+    const row = openConvRow();
+    const rawTitle = (typeof paneTitleForRow === 'function' ? paneTitleForRow(row) : '')
+      || _pathLeaf(repoPath) || 'Session';
+    let base = String(rawTitle).toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    if (!base || !/^[A-Z0-9]/.test(base)) base = 'Q-' + (base || 'SESSION');
+    let options;
+    try {
+      const res = await fetch('/api/queue/config-options', { method: 'POST' });
+      options = await res.json();
+      if (!res.ok || !options.ok) throw new Error((options && options.error) || res.status);
+    } catch (e) {
+      showOpToast('Could not load queue configuration: ' + e, 'error');
+      return;
+    }
+    const existing = new Set((options.queues || []).map(q => String(q.queue).toUpperCase()));
+    let name = base;
+    for (let n = 2; existing.has(name); n++) name = (base + '-' + n).slice(0, 64);
+    try {
+      const res = await fetch('/api/queue/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          queue: name, repo_path: repoPath, auto_drain: false,
+          backend: 'file', desired_workers: 1, claim_types: [],
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || res.status);
+    } catch (e) {
+      showOpToast('Could not create queue: ' + e, 'error');
+      return;
+    }
+    if (typeof setStatusRailTab === 'function') setStatusRailTab('queue');
+    if (typeof _uxqSetScopeOverride === 'function') _uxqSetScopeOverride(name);
+    _uxqItemsCache.ts = 0;
+    _uxqHealthCache.ts = 0;
+    await _renderQueuePanel();
+    showOpToast('Queue ' + name + ' created (auto-drain off) - ready for tickets from this session.', 'success');
   }
 
   // Plan-to-fleet (W51): drop a plan/spec/mission-brief document, preview the

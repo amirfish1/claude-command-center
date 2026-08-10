@@ -19800,6 +19800,18 @@ body:has(.gc-reader) .pwa-install-banner {
 .fq-add-row:hover, .fq-add-row:focus-visible {
   color: var(--accent); background: var(--surface-hover); outline: none;
 }
+.fq-create-session-queue-wrap {
+  flex: 1; min-height: 32px; display: flex; align-items: center; justify-content: center;
+  padding: 12px 10px;
+}
+.fq-create-session-queue {
+  border: 1px dashed var(--border); border-radius: 6px; padding: 6px 12px;
+  background: transparent; color: var(--text-muted); font: inherit; font-size: 12px;
+  font-weight: 600; cursor: pointer;
+}
+.fq-create-session-queue:hover, .fq-create-session-queue:focus-visible {
+  color: var(--accent); border-color: var(--accent); background: var(--surface-hover); outline: none;
+}
 .fq-empty-sub {
   margin-top: 4px;
   font-size: 12px;
