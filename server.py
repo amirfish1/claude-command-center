@@ -58811,6 +58811,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_html((MORNING_STATIC_DIR / "index.html").read_text())
             except OSError as e:
                 self.send_json({"error": "morning/index.html missing", "detail": str(e)}, 500)
+        elif re.match(r"^/view/[a-z0-9_-]+$", path):
+            # Local view plugins: serve a (typically gitignored) per-user
+            # static/<name>/index.html as an in-app page. Pairs with
+            # /api/custom-links, which puts the nav chip beside the
+            # Queues/Sessions toggle. The regex confines <name> to a single
+            # safe path segment; only that directory's index.html is served
+            # (its assets go through the extension-allowlisted /static/ route).
+            target = STATIC_DIR / path[len("/view/"):] / "index.html"
+            if target.is_file():
+                self.send_html(target.read_text())
+            else:
+                self.send_json({"error": f"not found: {path}"}, 404)
         elif re.match(r"^/morning/goals/[A-Za-z0-9_-]+$", path):
             try:
                 self.send_html((MORNING_STATIC_DIR / "goal-detail.html").read_text())

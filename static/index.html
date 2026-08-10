@@ -477,8 +477,12 @@
           var a = document.createElement('a');
           a.className = 'q2-toggle-opt';
           a.href = l.url;
-          a.target = '_blank';
-          a.rel = 'noopener';
+          if (!/^\//.test(l.url)) {
+            // External links open a new tab; same-origin paths switch views
+            // in place like the Queues/Sessions toggle.
+            a.target = '_blank';
+            a.rel = 'noopener';
+          }
           a.textContent = l.label;
           host.appendChild(a);
         });
