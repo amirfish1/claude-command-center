@@ -38945,9 +38945,11 @@
     const sessionId = (typeof currentConversation !== 'undefined') ? currentConversation : '';
     if (sessionId && typeof injectToSession === 'function') {
       injectToSession(sessionId,
-        'Created WatchTower queue ' + name + ' for this session (repo ' + repoPath
-        + ', auto-drain off). File follow-up tickets there if useful, e.g. '
-        + '`wt add -q ' + name + ' "..."`.');
+        'Created WatchTower queue ' + name + ' for this session (repo ' + repoPath + '). '
+        + 'Auto-drain is off, so nothing runs on it automatically. Use it to track topics '
+        + 'you\'re working on: file a ticket per topic (`wt add -q ' + name + ' "..."`), and '
+        + 'claim it before you start work on that topic (`wt claim -q ' + name + ' <ref> '
+        + '--worker <your-id>`) so parallel threads on this queue don\'t collide.');
     }
   }
 
