@@ -1559,6 +1559,13 @@ body.q2-resizing .q2-col { pointer-events: none; }
 .q2-checkrow label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 @media (max-width: 620px) { .q2-fields { grid-template-columns: 1fr; } }
 
+.q2-fields-optional { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+.q2-fields-optional > summary { cursor: pointer; font-size: 12px; color: var(--text-muted); list-style: none; }
+.q2-fields-optional > summary::-webkit-details-marker { display: none; }
+.q2-fields-optional > summary::before { content: '\25b8'; display: inline-block; margin-right: 5px; transition: transform 0.1s; }
+.q2-fields-optional[open] > summary::before { transform: rotate(90deg); }
+.q2-fields-optional > .q2-fields { margin-top: 10px; }
+
 /* The ticket dot doubles as a run control: hover swaps it for a play glyph,
    click queues the ticket. Mirrors the main dashboard's .fq-status-action.
    Only rendered for tickets that CAN run — closed and live-claimed rows keep

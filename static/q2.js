@@ -2164,6 +2164,7 @@
       + field('Name', '<input class="q2-input" data-q2-cfg="queue" value="' + esc(queueName || '')
           + '"' + (isNew ? '' : ' readonly') + ' placeholder="MYQUEUE">',
           isNew ? '1-64 letters, numbers, _ or -' : 'Renaming is not supported here')
+      + (isNew ? '</div><details class="q2-fields-optional"><summary>Optional settings <span class="q2-dim">(defaults are fine)</span></summary><div class="q2-fields">' : '')
       + field('Repo path', '<input class="q2-input" data-q2-cfg="repo_path" list="q2RepoPaths" value="'
           + esc(c.repo_path || '') + '" placeholder="/Users/you/Apps/project">')
       + '<datalist id="q2RepoPaths">'
@@ -2195,7 +2196,7 @@
           + '<label><input type="checkbox" data-q2-claim="bug"' + (types.indexOf('bug') !== -1 ? ' checked' : '') + '> bug</label>'
           + '<label><input type="checkbox" data-q2-claim="feature"' + (types.indexOf('feature') !== -1 ? ' checked' : '') + '> feature</label>'
           + '</span>', 'Neither ticked means every type')
-      + '</div>'
+      + '</div>' + (isNew ? '</details>' : '')
       + '<div class="q2-modal-foot">'
       // These fields override the SYSTEM spawn defaults. When a queue leaves
       // one unset it falls through to those, so the form has to say where they
