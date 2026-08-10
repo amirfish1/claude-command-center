@@ -9059,6 +9059,19 @@
     }
     if (!text) return;
     rememberComposerCommand(text);
+    // CCC-762: typing `/goal clear` directly (rather than clicking the goal
+    // strip's Clear button) skipped applyOptimisticConversationGoalAction
+    // entirely, so the strip only updated once the server re-parsed the
+    // transcript -- which a slow archive rescan can lag by well over a
+    // minute, and a refresh landing before then re-shows the stale
+    // objective. Apply the same optimistic clear + anti-reversion guard here.
+    if (/^\/goal\s+(clear|cancel|reset|remove)\s*$/i.test(text)) {
+      const _goalRow = currentConversationRow();
+      if (_goalRow) {
+        applyOptimisticConversationGoalAction(_goalRow, 'clear');
+        renderConversationGoalStrip(paneId || activePaneId(), _goalRow);
+      }
+    }
     // Join link (CCC-98): `ccc:join-gc:<chat id or path>` pasted into any
     // session's composer joins THAT session to the group chat instead of
     // being sent to the agent as text.
