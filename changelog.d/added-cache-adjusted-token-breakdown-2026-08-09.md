@@ -1,0 +1,1 @@
+- Status rail token headline now shows the aggregated cache-adjusted token count, with the raw `in · in cached · out` breakdown underneath.

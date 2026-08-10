@@ -37830,7 +37830,7 @@ def _resume_queue_engine_busy(sid):
     if any(
         s.get("resumed_sid") == sid and _poll_spawn_entry(s) is None
         for s in _spawned_sessions
-        if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes", "opencode")
+        if s.get("engine") in ("codex", "gemini", "cursor", "antigravity", "hermes", "opencode", "devin")
     ):
         return True
     if _is_codex_session(sid):
@@ -49919,6 +49919,7 @@ def _inject_text_into_session(
     is_hermes = _is_hermes_session(session_id)
     is_kimi = _is_kimi_session(session_id)
     is_opencode = _is_opencode_session(session_id)
+    is_devin_cli = _is_devin_cli_session(session_id)
     if (
         not is_codex
         and not is_kimi
@@ -49927,6 +49928,7 @@ def _inject_text_into_session(
         and not is_opencode
         and not _is_gemini_session(session_id)
         and not _is_antigravity_session(session_id)
+        and not is_devin_cli
         and not has_tty
     ):
         routed = _control_plane_engine_call(
@@ -57666,6 +57668,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         sid,
                         _load_session_overrides(),
                         _spawn_registry_entry_for_session(sid),
+                    )
+                # Add a cache-adjusted token total that weights cache writes/reads
+                # by model-specific list-price ratios, so the status rail can show
+                # an aggregated burn number alongside the raw in/cached/out breakdown.
+                total_in = float(usage.get("total_input_tokens") or 0)
+                total_cw = float(usage.get("total_cache_creation_tokens") or 0)
+                total_cr = float(usage.get("total_cache_read_tokens") or 0)
+                total_out = float(usage.get("total_output_tokens") or 0)
+                if total_in + total_cw + total_cr + total_out > 0:
+                    norm = _throughput_normalize_usage(
+                        {
+                            "raw_context_tokens": total_in + total_cw + total_cr,
+                            "cache_creation_input_tokens": total_cw,
+                            "cache_read_input_tokens": total_cr,
+                            "output_tokens": total_out,
+                        },
+                        engine=usage.get("engine") or "",
+                        model=usage.get("model") or "",
+                    )
+                    usage["cache_adjusted_tokens"] = round(
+                        norm["effective_total_tokens"], 2
                     )
             self.send_json(usage)
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/slash-commands$", path):

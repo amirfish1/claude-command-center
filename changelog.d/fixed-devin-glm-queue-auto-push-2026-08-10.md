@@ -1,0 +1,1 @@
+Fixed Devin/GLM sessions not auto-pushing queued follow-up messages after the assistant ended its turn. The dashboard now routes Devin CLI injects locally and waits for running Devin resume spawns before draining the resume queue.
