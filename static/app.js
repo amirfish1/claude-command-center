@@ -3838,6 +3838,8 @@
   // retirements. Auto-shows on first event, stays until dismissed.
   let _activityLogLines = [];
   let _activityLogActive = false;
+  let _activityLogRenderPending = false;
+  let _activityLogRenderedIds = new Set();
   const _ACTIVITY_LOG_MAX = 50;
 
   function _appendActivityLog(kind, text) {
@@ -3849,11 +3851,21 @@
       _activityLogLines = _activityLogLines.slice(0, _ACTIVITY_LOG_MAX);
     }
     _activityLogActive = true;
-    _renderActivityLogPanel();
+    _scheduleActivityLogRender();
+  }
+
+  function _scheduleActivityLogRender() {
+    if (_activityLogRenderPending) return;
+    _activityLogRenderPending = true;
+    requestAnimationFrame(() => {
+      _activityLogRenderPending = false;
+      _renderActivityLogPanel();
+    });
   }
 
   function _dismissActivityLog() {
     _activityLogActive = false;
+    _activityLogRenderedIds.clear();
     const $panel = document.getElementById('attentionPanel');
     if ($panel) $panel.classList.add('collapsed');
     if (typeof loadAttentionList === 'function') loadAttentionList();
@@ -3867,24 +3879,68 @@
     const $list = document.getElementById('attentionList');
     if (!$panel || !$list) return;
     $panel.classList.remove('collapsed');
-    const lines = _activityLogLines.map(line => {
+
+    // If the panel shell isn't built yet, build it once. After that, only
+    // prepend new lines incrementally — avoids the full innerHTML rebuild
+    // that caused a visible flash + layout shift on every prewarm event.
+    let $shell = $list.querySelector('.ship-log');
+    if (!$shell) {
+      $list.innerHTML =
+        '<div class="ship-log">'
+        + '<div class="ship-log-head">'
+          + '<span class="ship-log-title">CCC activity</span>'
+          + '<button type="button" class="ship-log-dismiss" data-role="activity-log-dismiss">✕ close</button>'
+        + '</div>'
+        + '<div class="ship-log-body"></div>'
+        + '</div>';
+      $shell = $list.querySelector('.ship-log');
+      _activityLogRenderedIds.clear();
+      const dz = $list.querySelector('[data-role="activity-log-dismiss"]');
+      if (dz) dz.addEventListener('click', (e) => { e.stopPropagation(); _dismissActivityLog(); });
+    }
+    const $body = $shell.querySelector('.ship-log-body');
+    if (!$body) return;
+
+    // Prepend only lines we haven't rendered yet (newest first).
+    const frag = document.createDocumentFragment();
+    let added = 0;
+    for (const line of _activityLogLines) {
+      if (_activityLogRenderedIds.has(line.id)) break; // rest are already rendered
       const cls = line.kind === 'interrupt' ? 'warn'
         : (line.kind === 'kill' ? 'warn'
         : (line.kind === 'stale' ? 'warn' : 'info'));
-      return '<div class="ship-log-line ' + cls + '">'
-        + '<span class="ship-log-ts">' + escapeHtml(line.ts) + '</span>'
-        + '<span class="ship-log-txt">' + escapeHtml(line.text) + '</span></div>';
-    }).join('');
-    $list.innerHTML =
-      '<div class="ship-log">'
-      + '<div class="ship-log-head">'
-        + '<span class="ship-log-title">CCC activity</span>'
-        + '<button type="button" class="ship-log-dismiss" data-role="activity-log-dismiss">✕ close</button>'
-      + '</div>'
-      + '<div class="ship-log-body">' + (lines || '<div class="ship-log-line info"><span class="ship-log-txt">…</span></div>') + '</div>'
-      + '</div>';
-    const dz = $list.querySelector('[data-role="activity-log-dismiss"]');
-    if (dz) dz.addEventListener('click', (e) => { e.stopPropagation(); _dismissActivityLog(); });
+      const row = document.createElement('div');
+      row.className = 'ship-log-line ' + cls;
+      const tsSpan = document.createElement('span');
+      tsSpan.className = 'ship-log-ts';
+      tsSpan.textContent = line.ts;
+      const txtSpan = document.createElement('span');
+      txtSpan.className = 'ship-log-txt';
+      txtSpan.textContent = line.text;
+      row.appendChild(tsSpan);
+      row.appendChild(txtSpan);
+      frag.appendChild(row);
+      _activityLogRenderedIds.add(line.id);
+      added++;
+    }
+    if (added) $body.insertBefore(frag, $body.firstChild);
+
+    // Trim excess DOM rows to match _ACTIVITY_LOG_MAX.
+    const rows = $body.querySelectorAll('.ship-log-line');
+    if (rows.length > _ACTIVITY_LOG_MAX) {
+      for (let i = _ACTIVITY_LOG_MAX; i < rows.length; i++) rows[i].remove();
+    }
+
+    // Placeholder when empty.
+    if ($body.children.length === 0) {
+      const ph = document.createElement('div');
+      ph.className = 'ship-log-line info';
+      const phTxt = document.createElement('span');
+      phTxt.className = 'ship-log-txt';
+      phTxt.textContent = '…';
+      ph.appendChild(phTxt);
+      $body.appendChild(ph);
+    }
   }
   async function refreshLiveSessionsActivity() {
     // Dashboard-wide overlay: patches WIP/live chips onto conversation-list
