@@ -37132,22 +37132,6 @@ def _is_ccc_hook_command(command):
     return any(name in (command or "") for name in _CCC_HOOK_SCRIPTS)
 
 
-def _spawn_has_produced_output(entry):
-    """True if the spawn has written any stream output to its log file.
-
-    Used to distinguish "prompt written, Claude is thinking" (no output yet)
-    from "Claude has started responding" (output exists). Killing a spawn
-    that has a prompt but no output produces [Request interrupted by user].
-    """
-    log_path = (entry or {}).get("log")
-    if not log_path:
-        return True  # can't tell — don't block the retire
-    try:
-        return Path(log_path).stat().st_size > 0
-    except OSError:
-        return True
-
-
 def _spawn_entry_active_tool_child(entry):
     """Return metadata for a transient child tool process under a spawned agent.
 
@@ -44874,12 +44858,15 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
             spawn["retire_when_idle"] = True
             return {"retired": False, "reason": "busy", "deferred": True}
         return {"retired": False, "reason": "busy"}
-    # Also check if the spawn has a pending prompt (was claimed but hasn't
-    # produced any output yet). Between "prompt written" and "first tool call",
-    # Claude is thinking — there are no tool children, but the session is NOT
-    # idle. Killing it here produces "[Request interrupted by user]" and leaves
-    # the session stuck with no response.
-    if spawn.get("prompt") and not _spawn_has_produced_output(spawn):
+    # Also check if the spawn has a pending prompt that hasn't reached a turn
+    # boundary yet. `_spawn_entry_active_tool_child` only sees TOOL calls —
+    # once the prompt is written, Claude can be mid-response (streaming plain
+    # text, no tool child) for a while before its first `result` event, and
+    # killing it in that window produces "[Request interrupted by user]" and
+    # loses the in-flight response just as much as killing a tool call would.
+    # `_headless_log_result_count` covers the whole window (no output yet AND
+    # output streaming but not yet complete) with one check.
+    if spawn.get("prompt") and _headless_log_result_count(spawn) == 0:
         if defer_if_busy:
             spawn["retire_when_idle"] = True
             return {"retired": False, "reason": "pending_prompt", "deferred": True}
