@@ -12952,6 +12952,32 @@ def enqueue_annotation_ux_fixes_queue(
         existing = _find_annotation_ux_queue_session(queue_name)
         if existing:
             sid = existing.get("session_id") or existing.get("id")
+            # CCC must never interrupt a possibly-mid-turn session on its
+            # own (see the interrupt-asks contract above _file_interrupt_ask).
+            # This picks an EXISTING live worker automatically — the human
+            # filed a ticket, but didn't choose to interrupt whatever that
+            # worker happens to be mid-turn on right now. File an approval
+            # ask instead of steering straight through.
+            existing_spawn = _find_live_spawn_entry_for_session(sid)
+            if existing_spawn is not None and _spawn_entry_active_tool_child(existing_spawn):
+                _file_interrupt_ask(
+                    sid, "annotate-queue",
+                    f"A new \"{queue_name}\" annotation ticket arrived but this "
+                    "session is mid-turn. Approve to steer it now, dismiss to "
+                    "leave it running (the ticket stays queued).",
+                    {"kind": "sigterm-steer", "pid": existing_spawn.get("pid"),
+                     "text": text, "session_id": sid},
+                    name=str(existing.get("name") or ""),
+                )
+                return {
+                    "ok": True,
+                    "action": "queued",
+                    "number": item.get("number") if item else None,
+                    "queue_name": queue_name,
+                    "repo_path": repo_path,
+                    "item": item,
+                    "note": "target session is mid-turn; filed an interrupt-ask instead of steering",
+                }
             injected = _inject_text_into_session(
                 sid, text, mode="steer", source="annotate-queue"
             )
@@ -14365,6 +14391,16 @@ def _resolve_interrupt_ask(ask_id, decision):
         )
         _mark_interrupt_ask(ask_id, "executed")
         return {"ok": True, "status": "executed", "pid": pid}
+    if kind == "sigterm-steer":
+        text = action.get("text") or ""
+        target_sid = action.get("session_id") or sid
+        if not text or not target_sid:
+            _mark_interrupt_ask(ask_id, "executed", note="missing text or session_id")
+            return {"ok": False, "error": "stored action is incomplete"}
+        result = _inject_text_into_session(target_sid, text, mode="steer", source="annotate-queue-approved")
+        note = "executed" if result.get("ok") else f"steer failed: {result.get('error') or 'unknown'}"
+        _mark_interrupt_ask(ask_id, "executed", note=note)
+        return {"ok": bool(result.get("ok")), "status": "executed", "inject": result}
     # codex-interrupt (and any future owner-executed kind): leave `approved`;
     # the asker consumes it on its next tick and marks it executed.
     return {"ok": True, "status": "approved",
