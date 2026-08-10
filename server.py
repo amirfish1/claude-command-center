@@ -24675,6 +24675,17 @@ def _parse_conversation_event(ev, line_num):
         content = msg.get("content", "")
         text = _strip_mode3_instruction(_extract_text_from_content(content))
         if _is_transcript_control_text(text):
+            # "[Request interrupted by user]" is control text, but suppressing
+            # it entirely is why an interrupted turn read as a clean finish
+            # ("Done") in the conversation pane — the transcript never said the
+            # turn had been cut off. Surface it so the UI can render an
+            # explicit "Session interrupted" marker (see the
+            # .session-interrupted-event branch in app.js, which matches on
+            # this exact text and renders it as a system marker, NOT as a
+            # green user bubble).
+            if (text or "").strip().startswith("[Request interrupted by user"):
+                return {"line": line_num, "ts": ts, "type": "user_text",
+                        "text": (text or "").strip(), "images": []}
             # Slash-command invocations look like
             #   <command-message>dev</command-message>\n<command-name>/dev</command-name>
             # Without surfacing them the transcript pane looks like the agent
