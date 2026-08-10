@@ -8126,6 +8126,25 @@ def _spawn_registry_entries_by_session(engine=None):
     return out
 
 
+def _apply_auto_title(display_name, spawn_named, session_id, overridden):
+    """Let a CCC auto-title win over a launch slug that keeps being re-written.
+
+    CCC re-appends its `--name` slug as a custom-title on every turn, so an
+    auto-title written into the transcript gets clobbered within a turn. The
+    recorded title (stored beside the marker) is the durable copy: prefer it
+    whenever the row would otherwise render the launch name, and clear
+    spawn_named so the row reads as titled.
+
+    Returns (display_name, spawn_named).
+    """
+    if overridden or not spawn_named:
+        return display_name, spawn_named
+    auto = _auto_titled_session_ids().get(session_id) or ""
+    if not auto:
+        return display_name, spawn_named
+    return auto, False
+
+
 def _tail_meta_spawn_named(tail_meta):
     """True when Claude's transcript still reflects its launch --name."""
     custom_title = str((tail_meta or {}).get("custom_title") or "").strip()
@@ -8175,9 +8194,11 @@ def _live_registry_conversation_row(
     ).strip()
     spawn_name = str(spawn_entry.get("name") or "").strip()
     parent_session_id = str(spawn_entry.get("parent_session_id") or "").strip()
+    auto_title = _auto_titled_session_ids().get(sid) or ""
     display_name = (
         overrides.get(sid)
         or (meta or {}).get("name")
+        or auto_title
         or spawn_name
         or (f"Session in {natural_folder_label}" if natural_folder_label and natural_folder_label not in ("Live session",) else f"Live session {sid[:8]}")
     )
@@ -8595,6 +8616,9 @@ def find_all_conversations(
                 or tail_meta.get("agent_name")
                 or tail_meta.get("ai_title")
                 or None
+            )
+            display_name, spawn_named = _apply_auto_title(
+                display_name, spawn_named, session_id, bool(name_overrides.get(session_id)),
             )
             has_edit = bool(tail_meta.get("has_edit"))
             has_commit = bool(tail_meta.get("has_commit"))
@@ -16845,12 +16869,14 @@ _AUTO_TITLE_MAX_CONCURRENT = 2
 _auto_title_sem = threading.Semaphore(_AUTO_TITLE_MAX_CONCURRENT)
 
 
-_auto_titled_cache = {"key": None, "data": frozenset()}
+_auto_titled_cache = {"key": None, "data": {}}
 _auto_titled_lock = threading.Lock()
 
 
 def _auto_titled_session_ids():
-    """Set of sessions CCC has auto-titled. ONE listdir, cached by dir mtime.
+    """Map of session_id -> auto title (empty string when unknown).
+
+    ONE listdir, cached by dir mtime.
 
     Read once per list build and membership-tested per row -- never a stat()
     per row (see CLAUDE.md "Performance gates").
@@ -16859,18 +16885,27 @@ def _auto_titled_session_ids():
         st = SIDECAR_STATE_DIR.stat()
         key = (st.st_mtime, st.st_size)
     except OSError:
-        return frozenset()
+        return {}
     with _auto_titled_lock:
         if _auto_titled_cache["key"] == key:
             return _auto_titled_cache["data"]
     try:
-        data = frozenset(
-            n[: -len("_autotitled")]
-            for n in os.listdir(SIDECAR_STATE_DIR)
-            if n.endswith("_autotitled")
-        )
+        data = {}
+        for n in os.listdir(SIDECAR_STATE_DIR):
+            if not n.endswith("_autotitled"):
+                continue
+            sid = n[: -len("_autotitled")]
+            title = ""
+            try:
+                blob = json.loads((SIDECAR_STATE_DIR / n).read_text() or "{}")
+            except (OSError, ValueError):
+                blob = None
+            # Legacy markers hold a bare timestamp, not an object.
+            if isinstance(blob, dict):
+                title = str(blob.get("title") or "")
+            data[sid] = title
     except OSError:
-        return frozenset()
+        return {}
     with _auto_titled_lock:
         _auto_titled_cache["key"] = key
         _auto_titled_cache["data"] = data
@@ -16900,12 +16935,28 @@ def _auto_title_claim(session_id):
     except OSError:
         return False
     try:
-        os.write(fd, str(time.time()).encode())
+        os.write(fd, json.dumps({"ts": time.time()}).encode())
     except OSError:
         pass
     finally:
         os.close(fd)
     return True
+
+
+def _auto_title_record(session_id, title):
+    """Remember the title we wrote, so a LIVE row can show it too.
+
+    A live session's sidebar row is built from the spawn registry, not the
+    transcript, so it keeps rendering the launch slug until the session goes
+    cold. Stashing the title next to the marker lets the live path pick it up
+    without parsing a transcript per row.
+    """
+    try:
+        _auto_title_marker_path(session_id).write_text(
+            json.dumps({"ts": time.time(), "title": title})
+        )
+    except OSError:
+        pass
 
 
 def _auto_title_release(session_id):
@@ -16990,6 +17041,7 @@ def _auto_title_worker(session_id):
             _log_activity("autotitle", "FAILED",
                           f"sid={session_id[:8]} err={str(result.get('error') or '')[:120]}")
         else:
+            _auto_title_record(session_id, str(result.get("title") or ""))
             _log_activity("autotitle", "TITLED",
                           f"sid={session_id[:8]} title={str(result.get('title') or '')[:60]}")
     except Exception as e:
@@ -21856,6 +21908,9 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             or None
         )
         spawn_named = _tail_meta_spawn_named(tail_meta)
+        display_name, spawn_named = _apply_auto_title(
+            display_name, spawn_named, sid, bool(override),
+        )
         # name_overridden means "user touched the name from the command center"
         # (used for teal visual marker). Decoupled from display value.
         name_overridden = bool(override)

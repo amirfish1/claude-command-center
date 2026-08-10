@@ -27084,7 +27084,10 @@
       // 🪄 = CCC's own auto-titler (haiku, fired from the Stop hook) filled a
       // row that would otherwise show a raw first sentence. Deliberately a
       // different glyph from ✨, which means "the engine titled itself".
-      else if (c.auto_titled && !titleSource && !quietTitleChrome) title = '🪄 ' + title;
+      // Shown even under quietTitleChrome (unlike ✨): the Active list is where
+      // you actually scan for machine-named rows, and hiding it there would
+      // make the marker invisible in the view that needs it most.
+      else if (c.auto_titled && !titleSource) title = '🪄 ' + title;
       // A session the auto-unarchive sweep just pulled back out of Archived
       // (CCC-443) — flag it so the user notices it reappeared rather than
       // wondering why an "archived" session is back in Current sessions.
@@ -52717,6 +52720,7 @@
           display_name: c.display_name || '',
           ai_title: c.ai_title || null,
           name_overridden: !!c.name_overridden,
+          auto_titled: !!c.auto_titled,
           last_assistant_text: '',
           modified: c.modified || c.mtime || 0,
           last_interacted: c.modified || c.mtime || 0,
@@ -52786,6 +52790,10 @@
         display_name: c.display_name || '',
         ai_title: c.ai_title || null,
         name_overridden: !!c.name_overridden,
+        // 🪄 marker — CCC's own auto-titler filled this row's name. Must be in
+        // the allowlist or the glyph silently never renders (this shaping drops
+        // every field it doesn't name).
+        auto_titled: !!c.auto_titled,
         last_assistant_text: '',
         // GOAL-1: carry the server-parsed end-of-turn self-report through the
         // archive-shaping allowlist so the row's outcome line (DID / next) can
