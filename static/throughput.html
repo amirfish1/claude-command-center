@@ -276,6 +276,24 @@
     padding: 16px;
     border-bottom: 1px solid var(--border);
   }
+
+  .throughput-range-tabs {
+    display: flex;
+    gap: 4px;
+    margin-top: 10px;
+  }
+  .throughput-range-tab {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font: 600 10px var(--font-mono);
+    padding: 5px 0;
+  }
+  .throughput-range-tab:hover { color: var(--text); border-color: var(--border-active); }
+  .throughput-range-tab.active { color: var(--accent); border-color: var(--accent); background: rgba(57, 210, 192, 0.08); }
   
   .search-input {
     width: 100%;
@@ -1234,6 +1252,11 @@
       </div>
       <div class="search-container">
         <input type="text" class="search-input" id="search-input" placeholder="Search sessions..." oninput="filterSessions()">
+        <div class="throughput-range-tabs" role="group" aria-label="Session activity window">
+          <button type="button" class="throughput-range-tab" data-throughput-range="1d" onclick="setThroughputRange('1d')">1D</button>
+          <button type="button" class="throughput-range-tab" data-throughput-range="2d" onclick="setThroughputRange('2d')">2D</button>
+          <button type="button" class="throughput-range-tab active" data-throughput-range="7d" onclick="setThroughputRange('7d')">7D</button>
+        </div>
       </div>
       <div class="session-list" id="session-list">
         <div style="padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px;">
@@ -1421,7 +1444,7 @@
 
         <!-- Top sessions table (aggregate only) -->
         <div id="top-sessions-section" style="display:none">
-          <div class="section-title"><span>🏆</span> Top Sessions This Week</div>
+          <div class="section-title"><span>🏆</span> <span id="top-sessions-title">Top Sessions This Week</span></div>
           <div id="top-sessions-table"></div>
         </div>
 
@@ -1454,6 +1477,7 @@
       return 'claude';
     }
     let activeThroughputEngine = initialThroughputEngine();
+    let activeThroughputRange = '7d';
     let lastRender = null;   // {turns, summary, isAggregate, bucketMode} for resize redraws
     let weeklyData = null;   // populated by loadWeeklyUsage(); used by drawChart() overlay
     let weeklyDataLoaded = false;
@@ -1462,15 +1486,21 @@
     const CHART_ZOOM_HOURS = 48;
     let chartZoomLastHours = false;
     let activeResetEvent = null;
-    let weekRankings = {};   // sessionId → rank (1-indexed); populated by fetchWeekRankings()
+    let weekRankings = {};   // sessionId → rank in the selected activity window
     const THROUGHPUT_BOOTSTRAP_SCHEMA = 1;
     let visibleBootstrap = null;
     let refreshStatus = null;
     let refreshPollTimer = null;
     let refreshElapsedTimer = null;
     const aggregateSessions = [
-      { session_id: 'all_7_days', display_name: 'Claude Total (Last 7 Days)', engine: 'claude', meta: '7d window' },
+      { session_id: 'all_7_days', display_name: 'Claude Total (Last 7 Days)', engine: 'claude', meta: '7d window', aggregate: true, range: '7d' },
     ];
+
+    const THROUGHPUT_RANGE_LABELS = { '1d': 'Last Day', '2d': 'Last 2 Days', '7d': 'Last 7 Days' };
+
+    function throughputRangeSeconds() {
+      return ({ '1d': 86400, '2d': 2 * 86400, '7d': 7 * 86400 })[activeThroughputRange] || 7 * 86400;
+    }
 
     function throughputEngineLabel() {
       if (activeThroughputEngine === 'combined') return 'Combined';
@@ -1506,9 +1536,11 @@
     }
 
     function currentAggregateSession() {
-      aggregateSessions[0].display_name = `${throughputEngineLabel()} Total (Last 7 Days)`;
+      const label = THROUGHPUT_RANGE_LABELS[activeThroughputRange] || THROUGHPUT_RANGE_LABELS['7d'];
+      aggregateSessions[0].display_name = `${throughputEngineLabel()} Total (${label})`;
       aggregateSessions[0].engine = activeThroughputEngine;
-      aggregateSessions[0].meta = `${activeThroughputEngine} · 7d window`;
+      aggregateSessions[0].meta = `${activeThroughputEngine} · ${activeThroughputRange} window`;
+      aggregateSessions[0].range = activeThroughputRange;
       return aggregateSessions[0];
     }
 
@@ -1883,6 +1915,7 @@
     function bootThroughputPage() {
       window.__throughputBootStartedMs = performance.now();
       updateThroughputEngineUi();
+      updateThroughputRangeUi();
       const session = currentAggregateSession();
       activeSessionId = session.session_id;
       toggleSidebar(localStorage.getItem('ccc-throughput-sidebar-collapsed') !== '0');
@@ -1916,6 +1949,27 @@
       updateActiveEngineBadge(findSessionById(activeSessionId));
     }
 
+    function updateThroughputRangeUi() {
+      document.querySelectorAll('[data-throughput-range]').forEach(button => {
+        const active = button.dataset.throughputRange === activeThroughputRange;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
+
+    function setThroughputRange(range) {
+      if (!Object.hasOwn(THROUGHPUT_RANGE_LABELS, range) || range === activeThroughputRange) return;
+      activeThroughputRange = range;
+      sessionListExpanded = false;
+      weekRankings = {};
+      updateThroughputRangeUi();
+      const aggregate = currentAggregateSession();
+      activeSessionId = aggregate.session_id;
+      renderSessionList();
+      void loadSessions({ selectDefault: false }).then(fetchWeekRankings);
+      void selectSession(aggregate);
+    }
+
     async function setThroughputEngine(engine) {
       const next = ['combined', 'codex', 'kimi'].includes(engine) ? engine : 'claude';
       if (next === activeThroughputEngine) return;
@@ -1931,6 +1985,14 @@
       renderSessionList();
       const agg = currentAggregateSession();
       activeSessionId = agg.session_id;
+      if (activeThroughputRange !== '7d') {
+        showFirstSnapshotShell(agg);
+        queueMicrotask(() => {
+          void loadSessions({ selectDefault: false }).then(fetchWeekRankings);
+          void selectSession(agg);
+        });
+        return;
+      }
       const cached = readActiveThroughputBootstrap(agg.session_id, activeThroughputEngine);
       if (!applyThroughputBootstrap(cached, 'browser')) showFirstSnapshotShell(agg);
       queueMicrotask(() => loadServerBootstrapThenRefresh(agg));
@@ -2216,30 +2278,37 @@
       else startRefreshStatusPolling(session);
     }
 
-    // Load session list from /api/conversations?all=true
-    // Fetch week-rankings in the background after sessions load.
-    // When the response arrives, re-sorts allSessions by rank (sessions not
-    // in the rankings go to the bottom) and re-renders the sidebar list.
-    // The existing search filter is applied first inside renderSessionList(),
-    // so rank-ordering is preserved within whatever set is currently visible.
+    // Fetch cache-adjusted per-session totals for the selected activity window.
+    // The response is also the membership list: sessions without activity in
+    // the window do not appear in the sidebar, and all visible sessions rank
+    // by the same cache-adjusted value used by the aggregate view.
     async function fetchWeekRankings() {
-      if (activeThroughputEngine !== 'claude') {
+      if (activeThroughputEngine === 'combined') {
         weekRankings = {};
         renderSessionList();
         return;
       }
       try {
-        const res = await fetch('/api/throughput/week-rankings');
+        const end = Math.floor(Date.now() / 1000);
+        const start = end - throughputRangeSeconds();
+        const engine = activeThroughputEngine;
+        const res = await fetch(
+          `/api/throughput/window?start=${start}&end=${end}&engine=${encodeURIComponent(engine)}&limit=200`,
+          { cache: 'no-store' }
+        );
         if (!res.ok) return;
         const data = await res.json();
-        const rankings = data.rankings || [];
+        if (!data.ok) return;
+        if (engine !== activeThroughputEngine) return;
+        const rankings = data.sessions || [];
         weekRankings = {};
         const tokenMap = {};
         rankings.forEach((r, i) => {
           weekRankings[r.session_id] = i + 1;
-          tokenMap[r.session_id] = r.week_tokens;
+          tokenMap[r.session_id] = Number(r.cache_adjusted_tokens || 0);
         });
-        // Attach _week_tokens so sidebar and top-sessions table can show %.
+        // Keep this field for the existing aggregate table, but its value is
+        // now cache-adjusted tokens in the selected sidebar window.
         allSessions.forEach(s => { s._week_tokens = tokenMap[s.session_id] || 0; });
         renderSessionList();
         if (document.getElementById('top-sessions-section') &&
@@ -2315,7 +2384,7 @@
 
       const filtered = allSessions.filter(s => {
         const title = (s.display_name || s.name || s.title || s.session_id || '').toLowerCase();
-        return title.includes(searchVal);
+        return title.includes(searchVal) && (!Object.keys(weekRankings).length || (s._week_tokens || 0) > 0);
       });
 
       if (filtered.length === 0 && listEl.children.length === 0) {
@@ -2323,8 +2392,7 @@
         return;
       }
 
-      // Sort by this week's contribution if rankings are loaded.
-      const ppt = weeklyData && weeklyData.pct_per_token;
+      // Sort by cache-adjusted burn in the selected activity window.
       const hasRankings = Object.keys(weekRankings).length > 0;
       const sorted = hasRankings
         ? [...filtered].sort((a, b) => {
@@ -2346,7 +2414,7 @@
         const routing = routingSummary(engine, s.model, s.reasoning_effort);
         const effort = String(s.reasoning_effort || '').trim();
         const wt = s._week_tokens;
-        const pctStr = (ppt && wt) ? `${(wt * ppt).toFixed(2)}%` : '';
+        const tokenLabel = wt ? formatCompactTokens(wt) : '';
 
         const item = document.createElement('div');
         item.className = `session-item ${sid === activeSessionId ? 'active' : ''}`;
@@ -2361,7 +2429,7 @@
           </div>
           <div class="session-meta">
             <span>${sid.substring(0, 8)}...${effort ? ` · ${effort}` : ''}</span>
-            <span>${pctStr || ageText}</span>
+            <span title="${wt ? `${fmtNum(wt)} cache-adjusted tokens in the selected window` : ageText}">${tokenLabel || ageText}</span>
           </div>
         `;
         listEl.appendChild(item);
@@ -2370,7 +2438,7 @@
       // "Other" row: sum of sessions beyond top 20.
       if (rest.length > 0 && !sessionListExpanded) {
         const otherTokens = rest.reduce((sum, s) => sum + (s._week_tokens || 0), 0);
-        const otherPct = (ppt && otherTokens) ? `${(otherTokens * ppt).toFixed(2)}%` : `${rest.length} sessions`;
+        const otherLabel = otherTokens ? formatCompactTokens(otherTokens) : `${rest.length} sessions`;
         const other = document.createElement('div');
         other.className = 'session-item';
         other.style.opacity = '0.6';
@@ -2383,7 +2451,7 @@
           <div class="session-item-header">
             <span class="session-title" style="color: var(--text-muted);">Show all ${rest.length} sessions</span>
           </div>
-          <div class="session-meta"><span></span><span>${otherPct}</span></div>
+          <div class="session-meta"><span></span><span>${otherLabel}</span></div>
         `;
         listEl.appendChild(other);
       }
@@ -2434,7 +2502,49 @@
       document.getElementById('tp-loader').classList.remove('active');
     }
 
+    function aggregateThroughputUrl(session, engine) {
+      return `/api/throughput?session_id=${encodeURIComponent(session.session_id)}&engine=${encodeURIComponent(engine)}&range=${encodeURIComponent(activeThroughputRange)}`;
+    }
+
+    async function selectAggregateSession(session) {
+      activeSessionId = session.session_id;
+      renderSessionList();
+      updateActiveEngineBadge(session);
+      setStatus(`Loading ${THROUGHPUT_RANGE_LABELS[activeThroughputRange]} throughput…`, true);
+      showLoader(session);
+      try {
+        const engines = activeThroughputEngine === 'combined'
+          ? ['claude', 'codex']
+          : [activeThroughputEngine];
+        const payloads = await Promise.all(engines.map(async engine => {
+          const response = await fetch(aggregateThroughputUrl(session, engine));
+          if (!response.ok) throw new Error('API failed');
+          return response.json();
+        }));
+        if (!payloads.every(data => data && data.ok)) throw new Error('API returned an error');
+        let data = payloads[0];
+        if (activeThroughputEngine === 'combined') {
+          const [claude, codex] = payloads;
+          data = {
+            ...claude,
+            scope: { ...claude.scope, engine: 'combined' },
+            summary: mergeThroughputSummaries(claude.summary, codex.summary),
+            turns: [],
+            components: { claude, codex },
+          };
+        }
+        renderDashboard(session, data);
+        setStatus('Idle');
+      } catch (err) {
+        console.error(err);
+        setStatus('Error loading throughput');
+      } finally {
+        hideLoader();
+      }
+    }
+
     async function selectSession(s) {
+      if (s.aggregate) return selectAggregateSession(s);
       activeSessionId = s.session_id;
 
       // Update UI active class in list
@@ -2505,7 +2615,8 @@
 
       document.getElementById('lbl-card1').textContent = 'CALLS';
       document.getElementById('val-active-duration').textContent = Math.round(calls).toLocaleString();
-      document.getElementById('val-total-duration').textContent = 'Last 7 days';
+      document.getElementById('val-total-duration').textContent =
+        (data.scope && data.scope.range) || THROUGHPUT_RANGE_LABELS[activeThroughputRange] || 'Last 7 Days';
 
       document.getElementById('lbl-card2').textContent = 'USAGE RATE';
       const combinedRates = [claudeRate && `C ${claudeRate.pctPerDay.toFixed(1)}%`,
@@ -2809,8 +2920,9 @@
       const el = document.getElementById('top-sessions-table');
       if (!el) return;
       el.innerHTML = '';
-      const ppt = weeklyData && weeklyData.pct_per_token;
-      // Merge allSessions with _week_tokens; sort by tokens desc; top 20 + Other
+      const title = document.getElementById('top-sessions-title');
+      if (title) title.textContent = `Top Sessions (${THROUGHPUT_RANGE_LABELS[activeThroughputRange] || 'Last 7 Days'})`;
+      // Merge allSessions with selected-window cache-adjusted tokens; top 20 + Other.
       const withTokens = allSessions
         .filter(s => (s._week_tokens || 0) > 0)
         .sort((a, b) => (b._week_tokens || 0) - (a._week_tokens || 0));
@@ -2822,16 +2934,17 @@
       const top = withTokens.slice(0, 20);
       const rest = withTokens.slice(20);
       const maxTok = top[0] ? top[0]._week_tokens : 1;
+      const totalTok = withTokens.reduce((sum, s) => sum + (s._week_tokens || 0), 0);
 
       // Header
       const hdr = document.createElement('div');
       hdr.className = 'top-sess-row header';
-      hdr.innerHTML = `<div>Session</div><div>% Quota</div><div>Tokens</div><div>Cost</div>`;
+      hdr.innerHTML = `<div>Session</div><div>Window share</div><div>Cache-adjusted</div><div>Cost</div>`;
       el.appendChild(hdr);
 
       top.forEach(s => {
         const tok = s._week_tokens || 0;
-        const pctStr = ppt ? `${(tok * ppt).toFixed(2)}%` : '-';
+        const pctStr = totalTok ? `${(tok / totalTok * 100).toFixed(1)}%` : '-';
         const barW = Math.round((tok / maxTok) * 80);
         const row = document.createElement('div');
         row.className = 'top-sess-row';
@@ -2851,7 +2964,7 @@
 
       if (rest.length > 0) {
         const otherTok = rest.reduce((s, r) => s + (r._week_tokens || 0), 0);
-        const otherPct = ppt ? `${(otherTok * ppt).toFixed(2)}%` : '-';
+        const otherPct = totalTok ? `${(otherTok / totalTok * 100).toFixed(1)}%` : '-';
         const row = document.createElement('div');
         row.className = 'top-sess-row other-row';
         row.innerHTML = `
@@ -2863,9 +2976,8 @@
       }
 
       // Total row
-      const totalTok = withTokens.reduce((s, r) => s + (r._week_tokens || 0), 0);
       const totalCost = withTokens.reduce((s, r) => s + (r._cost_usd || 0), 0);
-      const totalPct = ppt ? `${(totalTok * ppt).toFixed(2)}%` : '-';
+      const totalPct = totalTok ? '100%' : '-';
       const totalRow = document.createElement('div');
       totalRow.className = 'top-sess-row total-row';
       totalRow.innerHTML = `

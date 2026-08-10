@@ -52190,6 +52190,15 @@ def _throughput_scope(session_id, range_key=None):
     rk = str(range_key or "").strip().lower()
     now = time.time()
     is_all = sid in ("all", "all_time") or sid.startswith("all_")
+    # Explicit rolling ranges are shared by the aggregate dashboard and its
+    # sidebar. Check them before legacy aggregate IDs so `all_7_days?range=2d`
+    # cannot accidentally retain the seven-day scope.
+    if rk in ("1d", "24h", "last_1_day"):
+        return is_all, now - 86400, "Last day"
+    if rk in ("2d", "48h", "last_2_days"):
+        return is_all, now - 2 * 86400, "Last 2 days"
+    if rk in ("7d", "week", "last_7_days"):
+        return is_all, now - 7 * 86400, "Last 7 days"
     if sid == "all_1_hour" or rk in ("1h", "hour", "last_hour"):
         return is_all, now - 3600, "Last hour"
     if sid == "all_today" or rk in ("today", "day"):
@@ -52197,7 +52206,7 @@ def _throughput_scope(session_id, range_key=None):
             hour=0, minute=0, second=0, microsecond=0
         )
         return is_all, local_midnight.timestamp(), "Today"
-    if sid == "all_7_days" or rk in ("7d", "week", "last_7_days"):
+    if sid == "all_7_days":
         return is_all, now - 7 * 86400, "Last 7 days"
     if sid == "all_56_days":
         return True, now - 56 * 86400, "Last 56 days"
@@ -54425,20 +54434,27 @@ def _throughput_payload(
     is_aggregate, cutoff_epoch, label = _throughput_scope(session_id, range_key)
     if is_aggregate:
         # cutoff_epoch shifts every call (float); key on stable scope + engine.
-        _cache_key = _throughput_aggregate_cache_key(session_id, engine_filter)
+        _cache_key = _throughput_aggregate_cache_key(
+            f"{session_id}:{range_key or ''}", engine_filter
+        )
         _cached = _THROUGHPUT_AGG_CACHE.get(_cache_key)
         if not force_refresh and _cached and (time.time() - _cached["ts"] < _THROUGHPUT_AGG_CACHE_TTL):
             return _cached["payload"], _cached["status"]
     turns = []
     if is_aggregate:
-        bounded_recent = session_id == "all_7_days"
+        bounded_recent = session_id == "all_7_days" or bool(range_key)
+        discovery_cutoff = (
+            time.time() - _THROUGHPUT_DISCOVERY_DAYS * 86400
+            if session_id == "all_7_days" and not range_key
+            else cutoff_epoch
+        )
         try:
             if bounded_recent:
                 # The interactive dashboard needs at most the current billing
                 # week plus its prior-week overlay, both covered by 14 days.
                 recent = _throughput_recent_conversations(
                     engine_filter,
-                    time.time() - _THROUGHPUT_DISCOVERY_DAYS * 86400,
+                    discovery_cutoff,
                     progress=progress,
                 )
             elif engine_filter == "kimi":
@@ -54564,7 +54580,7 @@ def _throughput_payload(
                     # cutoff-scoped extraction so we never serve nothing.
                     _fb_cutoff = (
                         time.time() - 14 * 86400
-                        if session_id == "all_7_days" and cutoff_epoch is not None
+                        if session_id == "all_7_days" and not range_key and cutoff_epoch is not None
                         else cutoff_epoch
                     )
                     try:
@@ -54590,7 +54606,7 @@ def _throughput_payload(
             # below doesn't mutate the shared cached dicts.
             _turn_cutoff = (
                 time.time() - 14 * 86400
-                if session_id == "all_7_days" and cutoff_epoch is not None
+                if session_id == "all_7_days" and not range_key and cutoff_epoch is not None
                 else cutoff_epoch
             )
             for t in full_turns:
@@ -54648,19 +54664,22 @@ def _throughput_payload(
         },
         "summary": _throughput_summary(
             turns,
-            stat_cutoff_epoch=cutoff_epoch if session_id == "all_7_days" else None,
+            stat_cutoff_epoch=cutoff_epoch if is_aggregate else None,
         ),
         "turns": serialised_turns,
     }
     _status = 200
     if is_aggregate:
-        _cache_key = _throughput_aggregate_cache_key(session_id, engine_filter)
+        _cache_key = _throughput_aggregate_cache_key(
+            f"{session_id}:{range_key or ''}", engine_filter
+        )
         _THROUGHPUT_AGG_CACHE[_cache_key] = {
             "ts": time.time(),
             "payload": _payload,
             "status": _status,
         }
-        _throughput_persist_aggregate_snapshot(session_id, _payload, _status, engine_filter)
+        if not range_key:
+            _throughput_persist_aggregate_snapshot(session_id, _payload, _status, engine_filter)
     return _payload, _status
 
 
@@ -54700,7 +54719,7 @@ def _throughput_history_payload(cache_only=False):
 _THROUGHPUT_WINDOW_CACHE = {}      # (start,end,engine,limit) -> {"ts","payload","status"}
 _THROUGHPUT_WINDOW_CACHE_TTL = 60
 _THROUGHPUT_WINDOW_CACHE_MAX = 64
-_THROUGHPUT_WINDOW_MAX_SPAN_SEC = 26 * 3600
+_THROUGHPUT_WINDOW_MAX_SPAN_SEC = 7 * 86400
 _THROUGHPUT_WINDOW_MAX_AGE_SEC = 56 * 86400
 _THROUGHPUT_DAILY_SCHEMA = 1
 _THROUGHPUT_DAILY_CACHE = {}       # (iso_date,engine) -> {"ts","payload","status"}

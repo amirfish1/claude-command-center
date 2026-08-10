@@ -1,0 +1,1 @@
+- Add 1D, 2D, and 7D cache-adjusted session ranking to the throughput sidebar.
