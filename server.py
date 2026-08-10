@@ -44895,6 +44895,7 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
             spawn["retire_when_idle"] = True
             spawn["retire_requires_approval"] = require_approval
             spawn["retire_reason"] = reason
+            _ensure_headless_staleness_watcher_started()
             return {"retired": False, "reason": "busy", "deferred": True}
         return {"retired": False, "reason": "busy"}
     # Also check if the spawn has a pending prompt that hasn't reached a turn
@@ -44910,6 +44911,7 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
             spawn["retire_when_idle"] = True
             spawn["retire_requires_approval"] = require_approval
             spawn["retire_reason"] = reason
+            _ensure_headless_staleness_watcher_started()
             return {"retired": False, "reason": "pending_prompt", "deferred": True}
         return {"retired": False, "reason": "pending_prompt"}
     # Startup grace period: a freshly spawned headless runs SessionStart hooks
@@ -45055,6 +45057,31 @@ def _bg_pty_entry_for_session(session_id):
         if _pid_is_engine_process(pid, "claude"):
             return data
     return None
+
+
+_HEADLESS_STALENESS_WATCHER_LOCK = threading.Lock()
+_HEADLESS_STALENESS_WATCHER_STARTED = False
+
+
+def _ensure_headless_staleness_watcher_started() -> None:
+    """Idempotently start _start_headless_staleness_watcher in THIS process.
+
+    The dashboard process starts it unconditionally at boot (see main()).
+    But `retire_when_idle` can also get set on a spawn entry that lives in
+    the WORKER process (e.g. a model-switch deferred while mid-turn, routed
+    through the control plane) -- a spawn the dashboard's own watcher can
+    never see, since _spawned_sessions is per-process. Callers that set the
+    flag call this too, so whichever process actually holds the deferred
+    spawn also has a watcher running to honor it, without hardcoding a
+    worker-startup hook that's easy to forget when a new deferred-retire
+    caller is added.
+    """
+    global _HEADLESS_STALENESS_WATCHER_STARTED
+    with _HEADLESS_STALENESS_WATCHER_LOCK:
+        if _HEADLESS_STALENESS_WATCHER_STARTED:
+            return
+        _HEADLESS_STALENESS_WATCHER_STARTED = True
+    _start_headless_staleness_watcher()
 
 
 def _start_headless_staleness_watcher() -> None:
@@ -70249,7 +70276,7 @@ def main():
     # GH #71 (mechanism 5) — always-on reaper for stale Claude headless agents
     # whose session has been taken over by a live terminal. Runs regardless of
     # any open dashboard so the ~500MB stale process doesn't linger.
-    _start_headless_staleness_watcher()
+    _ensure_headless_staleness_watcher_started()
     # Pre-warm the throughput caches so the first /throughput page load is
     # instant (hits in-memory caches instead of re-parsing transcripts).
     def _prewarm_throughput():
