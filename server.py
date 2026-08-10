@@ -44829,7 +44829,7 @@ def _headless_spawn_is_stale(entry, session_id=None):
     return True
 
 
-def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=False):
+def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=False, require_approval=False):
     """Retire a CCC-spawned IDLE Claude headless for `session_id` (GH #71).
 
     Used when a terminal takes over a session (mechanism 2 on launch, and
@@ -44842,6 +44842,14 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     busy, `defer_if_busy` records intent to retire it as soon as it goes idle
     (honored by the staleness watcher) — so "spawn a terminal" reliably kills
     the headless once its current turn finishes, instead of leaving it running.
+
+    `require_approval` is for callers where retiring the session isn't the
+    human directly acting on THIS session (e.g. a model/effort override that
+    only needs to apply on the process's NEXT natural resume) — even once
+    every busy/pending-prompt/startup-grace guard above says it's safe to
+    kill, CCC still shouldn't unilaterally interrupt a live process the human
+    didn't ask to interrupt right now. Files an interrupt-ask instead of
+    killing; the ask executes the same SIGTERM on approval.
 
     Returns a dict {retired: bool, pid?, reason?, deferred?}.
     """
@@ -44856,6 +44864,8 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     if _spawn_entry_active_tool_child(spawn):
         if defer_if_busy:
             spawn["retire_when_idle"] = True
+            spawn["retire_requires_approval"] = require_approval
+            spawn["retire_reason"] = reason
             return {"retired": False, "reason": "busy", "deferred": True}
         return {"retired": False, "reason": "busy"}
     # Also check if the spawn has a pending prompt that hasn't reached a turn
@@ -44869,6 +44879,8 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
     if spawn.get("prompt") and _headless_log_result_count(spawn) == 0:
         if defer_if_busy:
             spawn["retire_when_idle"] = True
+            spawn["retire_requires_approval"] = require_approval
+            spawn["retire_reason"] = reason
             return {"retired": False, "reason": "pending_prompt", "deferred": True}
         return {"retired": False, "reason": "pending_prompt"}
     # Startup grace period: a freshly spawned headless runs SessionStart hooks
@@ -44888,6 +44900,17 @@ def _retire_idle_headless_for_session(session_id, *, reason="", defer_if_busy=Fa
         if "claude_system_init" not in marks and "claude_first_stream_event" not in marks:
             return {"retired": False, "reason": "startup_grace"}
     pid = spawn.get("pid")
+    if require_approval:
+        ask = _file_interrupt_ask(
+            session_id, reason or "retire-idle-headless",
+            f"CCC wants to retire this session's headless process "
+            f"(reason: {reason or 'unspecified'}) to apply a change on its "
+            "next resume. Approve to SIGTERM it now, dismiss to let it keep "
+            "running on the current process until it exits naturally.",
+            {"kind": "sigterm", "pid": pid},
+        )
+        return {"retired": False, "reason": "pending_approval",
+                "ask_id": (ask or {}).get("id"), "pid": pid}
     spawn.pop("retire_when_idle", None)
     _retire_unresponsive_spawn_entry(spawn, terminate=True, reason=reason or "terminal-takeover", caller=reason or "terminal-takeover")
     return {"retired": True, "pid": pid, "reason": reason or "terminal-takeover"}
@@ -45042,7 +45065,10 @@ def _start_headless_staleness_watcher() -> None:
                     if not sid:
                         continue
                     _retire_idle_headless_for_session(
-                        sid, reason="deferred-terminal-takeover")
+                        sid,
+                        reason=entry.get("retire_reason") or "deferred-terminal-takeover",
+                        require_approval=bool(entry.get("retire_requires_approval")),
+                    )
                 except Exception:
                     continue
     threading.Thread(
@@ -50185,13 +50211,16 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
         # a fresh `--resume` on the new model (resume_session_headless reads the
         # override and passes `--model alias[1m]`).
         retired = _retire_idle_headless_for_session(
-            session_id, reason="model-switch", defer_if_busy=True)
+            session_id, reason="model-switch", defer_if_busy=True,
+            require_approval=True)
         payload["applied"] = "queued"
         payload["via"] = "respawn-on-next-turn"
         if retired.get("retired"):
             payload["retired_headless_pid"] = retired.get("pid")
         elif retired.get("deferred"):
             payload["headless_retire_deferred"] = True
+        elif retired.get("reason") == "pending_approval":
+            payload["headless_retire_ask_id"] = retired.get("ask_id")
         return payload
     payload["applied"] = "queued"
     return payload
