@@ -61,3 +61,41 @@ class TestQueueHeaderLayout(unittest.TestCase):
             app_js.index('function _qfInit()', app_js.index('function _qfEnsureChrome()'))
         ]
         self.assertIn("document.getElementById('queueBoardMenuSlot')", chrome)
+
+    def test_scope_picker_nests_sub_queues_under_a_derived_family_root(self):
+        """"FOO-BAR" queues group under "FOO" instead of stacking flat."""
+        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+        # Roots are derived from the live queue names, never hardcoded.
+        derive = app_js[
+            app_js.index('function _uxqRefreshFamilyRoots('):
+            app_js.index('function _projectForRepoPath(')
+        ]
+        self.assertIn('_UXQ_FAMILY_ROOTS.clear()', derive)
+        self.assertIn('count >= 2 || names.has(cand)', derive)
+        self.assertIn('_uxqHealthCache', derive)
+
+        # The available-scopes pass must NOT collapse children away — the picker
+        # needs them to build the <optgroup>.
+        scopes = app_js[
+            app_js.index('function _uxqAvailableScopes('):
+            app_js.index('function _uxqRenderScopeSelect(')
+        ]
+        self.assertNotIn('_UXQ_FAMILY_ROOTS', scopes)
+
+        render = app_js[
+            app_js.index('function _uxqRenderScopeSelect('):
+            app_js.index('function _uxqSetScopeLoading(')
+        ]
+        self.assertIn('<optgroup label="', render)
+        self.assertIn("'All ' + name + ' (+'", render)
+        self.assertIn('_uxqFamilyCandidate(s)', render)
+
+        # Families must be recomputed before anything asks whether a sub-queue
+        # rolls up, otherwise the first paint renders a flat list.
+        panel_start = app_js.index('function _renderQueuePanel(')
+        panel = app_js[
+            panel_start:
+            app_js.index('_uxqResolvePanelProject(items, requestedProject)', panel_start)
+        ]
+        self.assertIn('_uxqRefreshFamilyRoots(items)', panel)

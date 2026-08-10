@@ -7706,9 +7706,16 @@
       + '</span>';
   }
 
+  // See the CCC-762 comment in renderConversationGoalStrip -- keyed by
+  // session id (not row object identity) since a refresh replaces rows
+  // wholesale rather than mutating them in place.
+  const _recentlyClearedGoals = new Map();
+
   function applyOptimisticConversationGoalAction(row, action) {
     if (!row) return;
     if (action === 'clear') {
+      const sid = row.session_id || row.id;
+      if (sid && row.goal) _recentlyClearedGoals.set(sid, { objective: String(row.goal).trim(), at: Date.now() });
       row.goal = '';
       row.goal_status = '';
     } else if (action === 'resume') {
@@ -7753,7 +7760,25 @@
     const pane = document.querySelector('.conv-pane[data-pane-id="' + (paneId || activePaneId()) + '"]');
     const strip = pane && pane.querySelector('[data-role="conv-goal-strip"]');
     if (!strip) return;
-    const objective = row && String(row.goal || '').trim();
+    let objective = row && String(row.goal || '').trim();
+    // CCC-762: a full archive rescan can lag several seconds to minutes
+    // behind a just-run `/goal clear` (see the "60-95s live" rescan cost
+    // noted on _archive_compute_rows), so the next refreshConversationList
+    // can re-populate row.goal with the pre-clear text from a stale server
+    // snapshot -- the banner reappears even though the session already
+    // confirmed "No goal set". Suppress re-showing that exact objective for
+    // a grace window; a genuinely different objective clears the guard.
+    const sid = row && (row.session_id || row.id);
+    if (sid) {
+      const cleared = _recentlyClearedGoals.get(sid);
+      if (cleared) {
+        if (objective && objective === cleared.objective && (Date.now() - cleared.at) < 120000) {
+          objective = '';
+        } else if (objective !== cleared.objective) {
+          _recentlyClearedGoals.delete(sid);
+        }
+      }
+    }
     if (!objective) {
       strip.hidden = true;
       strip.innerHTML = '';
@@ -36220,6 +36245,9 @@
       // Past workers from the last 24h (log file scan, excludes live workers).
       const past_workers = Array.isArray(data && data.past_workers) ? data.past_workers : [];
       _uxqHealthCache = { ts: Date.now(), rows, wt_workers, queues, worker_session_ids, past_workers };
+      // A brand-new sub-queue can arrive here before any of its tickets do, so
+      // re-derive the families off the fresh queue list.
+      _uxqRefreshFamilyRoots();
     } catch (_) { /* keep stale cache */ }
     finally { _uxqHealthPromise = null; }
     return _uxqHealthCache;
@@ -36832,15 +36860,49 @@
   };
   // Project "families": a single repo whose work is split across sub-queues
   // (a family root "FOO" rolls up "FOO-BAR"/"FOO-BAZ" into one panel;
-  // `_UXQ_FAMILY_DEFAULT` routes a "+ add" to the fix-now sub-queue). Currently
-  // empty — WatchTower used to split WT-BUGS / WT-FEATURES, but those collapsed
-  // into a single WT queue where the item's `type` field carries bug vs feature.
+  // `_UXQ_FAMILY_DEFAULT` routes a "+ add" to the fix-now sub-queue). Derived
+  // from the live queue names by `_uxqRefreshFamilyRoots` rather than hardcoded,
+  // so a new "FOO-QUUX" queue nests itself with no code change.
   const _UXQ_FAMILY_ROOTS = new Set();
   const _UXQ_FAMILY_DEFAULT = {};
   const _UXQ_PROJECT_ALIASES = { CC: 'CCC' };
   function _uxqProjectKey(value) {
     const key = String(value || '').trim().toUpperCase();
     return _UXQ_PROJECT_ALIASES[key] || key;
+  }
+  // A queue's candidate family root is its FIRST hyphen-delimited segment, so
+  // "BYM-PR-REVIEW" belongs to "BYM" and never to "BYM-PR" — one level of
+  // nesting, which is all `_uxqInScope` and the scope picker model.
+  function _uxqFamilyCandidate(name) {
+    const key = _uxqProjectKey(name);
+    const cut = key.indexOf('-');
+    return cut > 0 ? key.slice(0, cut) : '';
+  }
+  // Recompute family roots from every queue name we know: the tickets' projects
+  // plus the health strip's queue list, so a parent whose own backlog is empty
+  // still adopts its children. A prefix becomes a root when it is itself a
+  // queue, or when two or more queues share it — that keeps one-off names like
+  // "MOVE-VM" or "AUG-4" from inventing a "MOVE" / "AUG" family.
+  function _uxqRefreshFamilyRoots(items) {
+    const list = Array.isArray(items) ? items : ((_uxqItemsCache && _uxqItemsCache.items) || []);
+    const names = new Set();
+    for (const it of list) {
+      const p = _uxqProjectKey(it && it.project);
+      if (p && p !== '?') names.add(p);
+    }
+    for (const q of ((_uxqHealthCache && _uxqHealthCache.queues) || [])) {
+      const p = _uxqProjectKey(q && q.queue);
+      if (p && p !== '?') names.add(p);
+    }
+    const kids = new Map();
+    for (const name of names) {
+      const cand = _uxqFamilyCandidate(name);
+      if (cand) kids.set(cand, (kids.get(cand) || 0) + 1);
+    }
+    _UXQ_FAMILY_ROOTS.clear();
+    for (const [cand, count] of kids) {
+      if (count >= 2 || names.has(cand)) _UXQ_FAMILY_ROOTS.add(cand);
+    }
   }
   // True when item project Q belongs to panel scope P: exact match, or P is a
   // family root and Q is one of its sub-queues ("WT" matches "WT-BUGS").
@@ -37024,18 +37086,21 @@
       return _projectForRepoPath(rp);
     } catch (_) { return ''; }
   }
-  // Distinct scopes present in the queue, collapsing family sub-queues into
-  // their root ("WT-BUGS"/"WT-FEATURES" -> "WT") for the scope picker.
+  // CCC first, then alphabetical — the local repo's own queue is the one the
+  // operator reaches for most.
+  function _uxqScopeCmp(a, b) {
+    return a === 'CCC' ? -1 : b === 'CCC' ? 1 : a.localeCompare(b);
+  }
+  // Distinct scopes present in the queue, uncollapsed. `_uxqRenderScopeSelect`
+  // does the family nesting, so sub-queues must survive this pass.
   function _uxqAvailableScopes(items) {
     const set = new Set();
     for (const it of (Array.isArray(items) ? items : [])) {
       const p = _uxqProjectKey(it && it.project);
       if (!p || p === '?') continue;
-      let fam = null;
-      for (const r of _UXQ_FAMILY_ROOTS) { if (p.startsWith(r + '-')) { fam = r; break; } }
-      set.add(fam || p);
+      set.add(p);
     }
-    return [...set].sort((a, b) => (a === 'CCC' ? -1 : b === 'CCC' ? 1 : a.localeCompare(b)));
+    return [...set].sort(_uxqScopeCmp);
   }
   // Fill the Queue-header scope picker and reflect the current scope. 'AUTO'
   // clears the override (back to repo-derived). Built fresh each render so new
@@ -37049,8 +37114,38 @@
     // busted so items is empty), add it explicitly so $sel.value sticks.
     if (override && !scopes.includes(override)) scopes.push(override);
     const opts = ['<option value="AUTO">Auto: ' + escapeHtml(currentScope || 'all') + '</option>',
-                  '<option value="ALL">All queues</option>']
-      .concat(scopes.map(s => '<option value="' + escapeAttr(s) + '">' + escapeHtml(s) + '</option>'));
+                  '<option value="ALL">All queues</option>'];
+    // Nest sub-queues under their family root so 40 queues read as ~15 rows.
+    // The root's own entry scopes to the whole family (that is what
+    // `_uxqInScope` does with a root), and each child stays selectable on its
+    // own inside the group.
+    const families = new Map(); // root -> child scopes
+    const roots = new Set();
+    const loose = [];
+    for (const s of scopes) {
+      const cand = _uxqFamilyCandidate(s);
+      if (cand && _UXQ_FAMILY_ROOTS.has(cand)) {
+        if (!families.has(cand)) families.set(cand, []);
+        families.get(cand).push(s);
+        roots.add(cand);
+      } else if (_UXQ_FAMILY_ROOTS.has(s)) {
+        if (!families.has(s)) families.set(s, []);
+        roots.add(s);
+      } else {
+        loose.push(s);
+      }
+    }
+    const plain = (name, label) =>
+      '<option value="' + escapeAttr(name) + '">' + escapeHtml(label || name) + '</option>';
+    // One ordered pass, so each family sits where its root would have sorted.
+    for (const name of loose.concat([...roots]).sort(_uxqScopeCmp)) {
+      const kids = (families.get(name) || []).slice().sort(_uxqScopeCmp);
+      if (!kids.length) { opts.push(plain(name)); continue; }
+      opts.push('<optgroup label="' + escapeAttr(name) + '">');
+      opts.push(plain(name, 'All ' + name + ' (+' + kids.length + ')'));
+      for (const kid of kids) opts.push(plain(kid));
+      opts.push('</optgroup>');
+    }
     $sel.innerHTML = opts.join('');
     $sel.value = override || 'AUTO';
     $sel.title = override
@@ -37709,6 +37804,9 @@
     _uxqRenderWrapToggle();
     return _fetchUxqItems(allowStale).then(async items => {
       const renderVersion = _uxqItemsVersion;
+      // Families first: everything below (scope resolution, the picker, the
+      // in-scope filter) asks _UXQ_FAMILY_ROOTS whether a sub-queue rolls up.
+      _uxqRefreshFamilyRoots(items);
       const requestedProject = _uxqWorkerProject();
       const proj = _uxqResolvePanelProject(items, requestedProject);
       const allQueues = _uxqProjectKey(requestedProject) === 'ALL';
