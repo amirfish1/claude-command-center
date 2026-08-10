@@ -1656,10 +1656,19 @@
       + '<span class="q2-detail-ref">' + esc(item.ref) + '</span>'
       + chips
       + '</div>'
-      + '<h1 class="q2-detail-title">'
-      + '<span class="q2-title-first">' + esc(parts[0]) + '</span>'
-      + (parts[1] ? '<span class="q2-title-rest"> ' + esc(parts[1]) + '</span>' : '')
-      + '</h1>'
+      + (!githubBacked && state.editingTitle
+          ? '<div class="q2-detail-title q2-title-edit">'
+            + '<textarea class="q2-input" data-q2-input="title" rows="2"'
+            + ' placeholder="Ticket title" aria-label="Edit ticket title">' + esc(titleOf(item)) + '</textarea>'
+            + '<div class="q2-actrow">'
+            + '<button type="button" class="q2-btn" data-q2-title-cancel>Cancel</button>'
+            + '<button type="button" class="q2-btn q2-btn-primary" data-q2-title-save>Save</button>'
+            + '</div></div>'
+          : '<h1 class="q2-detail-title"' + (githubBacked ? '' : ' data-q2-title-open title="Click to edit"')
+            + '>'
+            + '<span class="q2-title-first">' + esc(parts[0]) + '</span>'
+            + (parts[1] ? '<span class="q2-title-rest"> ' + esc(parts[1]) + '</span>' : '')
+            + '</h1>')
       + toolbar
       + formHtml
       + (showPrompt
@@ -2375,6 +2384,7 @@
     state.ref = ref;
     state.detail = null;
     state.arm = '';
+    state.editingTitle = false;
     rememberSelection();
     renderQueues();
     renderTickets();
@@ -2446,6 +2456,26 @@
       saveField(field, nextInCycle(field, cyc.getAttribute('data-q2-val')));
       return;
     }
+    if (e.target.closest('[data-q2-title-open]')) {
+      state.editingTitle = true;
+      renderDetail();
+      var titleTa = document.querySelector('[data-q2-input="title"]');
+      if (titleTa) { titleTa.focus(); titleTa.setSelectionRange(titleTa.value.length, titleTa.value.length); }
+      return;
+    }
+    if (e.target.closest('[data-q2-title-cancel]')) {
+      state.editingTitle = false;
+      renderDetail();
+      return;
+    }
+    if (e.target.closest('[data-q2-title-save]')) {
+      var titleVal = document.querySelector('[data-q2-input="title"]');
+      var newTitle = titleVal ? titleVal.value.trim() : '';
+      if (!newTitle) { note('Title cannot be empty.'); return; }
+      state.editingTitle = false;
+      saveField('title', newTitle);
+      return;
+    }
     // The whole log header toggles, not just the caret.
     var logHead = e.target.closest('.q2-logbar-head');
     if (logHead && !e.target.closest('a')) {
@@ -2489,6 +2519,18 @@
   // Queue rows are divs now (they contain a real button), so the Enter/Space
   // activation a <button> gave for free has to be restored by hand.
   document.addEventListener('keydown', function (e) {
+    var titleTa = e.target.closest && e.target.closest('[data-q2-input="title"]');
+    if (titleTa) {
+      if (e.key === 'Escape') { e.preventDefault(); state.editingTitle = false; renderDetail(); return; }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        var newTitle = titleTa.value.trim();
+        if (!newTitle) { note('Title cannot be empty.'); return; }
+        state.editingTitle = false;
+        saveField('title', newTitle);
+      }
+      return;
+    }
     if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
     var row = e.target.closest && e.target.closest('.q2-qrow[data-q2-queue]');
     var all = e.target.closest && e.target.closest('.q2-all-row[data-q2-all-queues]');

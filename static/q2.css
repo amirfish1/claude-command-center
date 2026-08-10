@@ -1075,6 +1075,9 @@ body.q2-resizing .q2-col { pointer-events: none; }
 }
 .q2-title-first { display: block; font-size: 14px; font-weight: 650; line-height: 1.4; }
 .q2-title-rest { display: block; margin-top: 6px; color: var(--text-muted); }
+h1.q2-detail-title[data-q2-title-open] { cursor: pointer; }
+h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); border-radius: 4px; }
+.q2-title-edit textarea.q2-input { width: 100%; font-size: 12.5px; }
 
 /* No properties rail: the pane is one column, split top (ticket) / bottom
    (conversation). The old fixed 232px sidebar is what stopped this column
