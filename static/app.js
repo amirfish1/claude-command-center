@@ -41771,7 +41771,7 @@
   // 🌿 pill (sibling worktrees of the active session's repo) and the
   // topbar Worktrees button (every worktree in the watched repo, with a
   // dirty marker for those carrying uncommitted changes).
-  function _renderWorktreesModal({ worktrees, summaryItems, emptyText, orphanPrs }) {
+  function _renderWorktreesModal({ worktrees, summaryItems, emptyText, orphanPrs, repoPath }) {
     const $modal = document.getElementById('worktreesModal');
     const $summary = document.getElementById('worktreesSummary');
     const $list = document.getElementById('worktreesList');
@@ -41785,7 +41785,13 @@
         const tildePath = (wt.path || '').replace(/^\/Users\/[^/]+/, '~');
         const branch = wt.branch || '';
         const tags = [];
-        if (wt.dirty) tags.push('<span class="wt-tag wt-tag-dirty" title="Has uncommitted changes">uncommitted</span>');
+        if (wt.dirty) {
+          tags.push('<span class="wt-tag wt-tag-dirty" title="Has uncommitted changes">uncommitted</span>');
+          if (repoPath) {
+            tags.push('<button type="button" class="wt-tag wt-tag-who" data-wt-attribute="'
+              + escapeAttr(wt.path || '') + '" title="Find which session likely made these edits">who?</button>');
+          }
+        }
         if (wt.is_agent) tags.push('<span class="wt-tag wt-tag-agent">subagent</span>');
         else if (wt.locked) tags.push('<span class="wt-tag wt-tag-locked">locked</span>');
         if (wt.detached) tags.push('<span class="wt-tag wt-tag-detached">detached</span>');
@@ -41837,6 +41843,55 @@
     }
     $list.innerHTML = html;
     $modal.classList.add('open');
+    Array.prototype.forEach.call($list.querySelectorAll('[data-wt-attribute]'), function (btn) {
+      btn.addEventListener('click', function () {
+        _attributeWorktreeDirty(btn, repoPath, btn.getAttribute('data-wt-attribute'));
+      });
+    });
+  }
+
+  // "who?" on a dirty worktree row — asks the server which session most
+  // likely made the uncommitted edits (hook write events > worktree
+  // ownership > transcript tool paths > timestamp correlation; see
+  // _fleet_attribute_path). Answers the recurring "I have uncommitted
+  // files and don't know which session made them" pain point.
+  async function _attributeWorktreeDirty(btn, repoPath, worktreePath) {
+    if (!repoPath || !worktreePath) return;
+    const prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    let data;
+    try {
+      const res = await fetch('/api/fleet/attribute', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_path: repoPath, worktree_path: worktreePath }),
+      });
+      data = await res.json();
+    } catch (_) {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+      showOpToast('Attribution request failed', 'error');
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = prevLabel;
+    if (!data || !data.ok) {
+      showOpToast('Could not attribute: ' + ((data && (data.detail || data.error)) || 'unknown error'), 'error');
+      return;
+    }
+    const candidates = data.candidates || [];
+    if (!candidates.length) {
+      showOpToast('No session could be matched to these edits (unknown origin)', 'info');
+      return;
+    }
+    const top = candidates[0];
+    const name = top.display_name || top.session_id || 'unknown session';
+    const msg = 'Likely ' + escapeHtml(name) + ' (' + escapeHtml(top.confidence || 'low') + ' confidence)'
+      + (candidates.length > 1 ? ' · +' + (candidates.length - 1) + ' other candidate' + (candidates.length > 2 ? 's' : '') : '');
+    showOpToast(msg, 'info', top.session_id ? {
+      label: 'Open',
+      onClick: function () { if (typeof selectConversation === 'function') selectConversation(top.session_id); },
+    } : undefined);
   }
 
   // Per-session worktrees modal — opened by clicking the 🌿 pill. Reads
@@ -41897,6 +41952,7 @@
       summaryItems: items,
       emptyText: 'No worktrees in this repo.',
       orphanPrs: orphanPrs,
+      repoPath: repoPath,
     });
   }
   function closeWorktreesModal() {

@@ -59834,9 +59834,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     return
                 target = str(data.get("path") or "").strip()
                 if not target:
-                    self.send_json({"ok": False, "error": "bad_request",
-                                    "detail": "path required"}, 400)
-                    return
+                    # No specific file given — auto-pick the first dirty file
+                    # so the UI can ask "who touched this worktree?" without
+                    # listing files itself first (same heuristic the handoff
+                    # preflight already uses for its dirty_owner_candidates).
+                    status_at = str(data.get("worktree_path") or repo_path)
+                    if not os.path.isdir(status_at):
+                        status_at = str(repo_path)
+                    try:
+                        r = subprocess.run(
+                            ["git", "-C", status_at, "status", "--porcelain"],
+                            capture_output=True, text=True, timeout=2)
+                        first_line = next(
+                            (ln for ln in r.stdout.splitlines() if ln.strip()), "")
+                    except (subprocess.SubprocessError, OSError):
+                        first_line = ""
+                    first_file = first_line[3:].strip() if first_line else ""
+                    if not first_file:
+                        self.send_json({"ok": True, "path": status_at,
+                                        "candidates": [], "unknown": True,
+                                        "detail": "no uncommitted changes found"})
+                        return
+                    target = os.path.join(status_at, first_file)
                 self.send_json(_fleet_attribute_path(str(repo_path), target))
             else:
                 self.send_json({"ok": False, "error": "not_found"}, 404)
