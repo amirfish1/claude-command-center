@@ -50211,16 +50211,12 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
     status = session_live_status(session_id, cwd) or {}
     tty = status.get("tty")
     has_tty = _is_real_tty(tty)
-    spawn = _find_live_spawn_entry_for_session(session_id) if not has_tty else None
-    if not (status.get("live") and has_tty) and spawn is None:
-        payload["applied"] = "queued"
-        return payload
-    slash = (f"/effort {reasoning_effort}" if effort_only and reasoning_effort
-             else _build_slash_model_command(model, context_1m))
-    if not slash:
-        payload["applied"] = "queued"
-        return payload
     if has_tty and status.get("live"):
+        slash = (f"/effort {reasoning_effort}" if effort_only and reasoning_effort
+                 else _build_slash_model_command(model, context_1m))
+        if not slash:
+            payload["applied"] = "queued"
+            return payload
         result = inject_input_via_keystroke(tty, status.get("terminal_app") or "Terminal", slash)
         if result.get("ok"):
             payload["applied"] = "live"
@@ -50229,30 +50225,58 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
         payload["applied"] = "queued"
         payload["inject_error"] = result.get("error")
         return payload
-    if spawn is not None:
-        # CCC-54 follow-up: a headless `claude -p` does NOT process slash
-        # commands. Writing "/model X[1m]" over the stream-json FIFO just makes
-        # it answer "/model isn't available in this environment" — the model
-        # never changes and the transcript gets a confusing error. A headless
-        # model is fixed at spawn via `--model`, so switching means respawning.
-        # The override is already persisted; retire the current headless (now if
-        # idle, deferred to idle if busy — never mid-turn) so the next turn does
-        # a fresh `--resume` on the new model (resume_session_headless reads the
-        # override and passes `--model alias[1m]`).
-        retired = _retire_idle_headless_for_session(
-            session_id, reason="model-switch", defer_if_busy=True,
-            require_approval=True)
-        payload["applied"] = "queued"
-        payload["via"] = "respawn-on-next-turn"
-        if retired.get("retired"):
-            payload["retired_headless_pid"] = retired.get("pid")
-        elif retired.get("deferred"):
-            payload["headless_retire_deferred"] = True
-        elif retired.get("reason") == "pending_approval":
-            payload["headless_retire_ask_id"] = retired.get("ask_id")
+    # Headless: the spawn entry lives in whichever process owns engine
+    # execution (the worker), so route through the control plane before the
+    # in-process fallback — same pattern as _interrupt_session's "claude",
+    # "interrupt" call. Without this, the dashboard process's own (always
+    # empty, for a worker-spawned session) _spawned_sessions list made this
+    # silently no-op as "queued" instead of ever reaching the retire/approval
+    # logic below.
+    routed = _control_plane_engine_call(
+        "claude", "model", {
+            "session_id": session_id, "model": model,
+            "context_1m": context_1m, "reasoning_effort": reasoning_effort,
+            "effort_only": effort_only,
+        },
+    )
+    local = routed if routed is not None else _set_session_model_headless_local(
+        session_id, model, context_1m, reasoning_effort, effort_only,
+    )
+    if local.get("ok") and local.get("code") != "no_spawn":
+        payload.update({k: v for k, v in local.items() if k not in ("ok",)})
+        payload.setdefault("applied", "queued")
         return payload
     payload["applied"] = "queued"
     return payload
+
+
+def _set_session_model_headless_local(session_id, model, context_1m, reasoning_effort, effort_only):
+    """In-band model switch for a CCC-owned headless Claude spawn.
+
+    Runs wherever the spawn entry actually lives (see _interrupt_claude_headless_local
+    for the same routing shape). CCC-54 follow-up: a headless `claude -p` does
+    NOT process slash commands — writing "/model X[1m]" over the stream-json
+    FIFO just makes it answer "/model isn't available in this environment".
+    A headless model is fixed at spawn via `--model`, so switching means
+    respawning. The override is already persisted by the caller; this only
+    retires the current headless (now if idle, deferred to idle if busy,
+    approval-gated per _retire_idle_headless_for_session) so the next turn
+    does a fresh `--resume` on the new model.
+    """
+    spawn = _find_live_spawn_entry_for_session(session_id)
+    if spawn is None or (spawn.get("engine") or "claude") != "claude":
+        return {"ok": False, "code": "no_spawn"}
+    retired = _retire_idle_headless_for_session(
+        session_id, reason="model-switch", defer_if_busy=True,
+        require_approval=True)
+    result = {"ok": True, "via": "respawn-on-next-turn"}
+    if retired.get("retired"):
+        result["retired_headless_pid"] = retired.get("pid")
+    elif retired.get("deferred"):
+        result["headless_retire_deferred"] = True
+    elif retired.get("reason") == "pending_approval":
+        result["headless_retire_ask_id"] = retired.get("ask_id")
+    return result
 
 
 def _interrupt_claude_headless_local(session_id):

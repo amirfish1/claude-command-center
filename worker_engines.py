@@ -516,6 +516,14 @@ class EngineHost:
                 return legacy._interrupt_claude_headless_local(
                     args.get("session_id")
                 )
+            if operation == "model":
+                return legacy._set_session_model_headless_local(
+                    args.get("session_id"),
+                    args.get("model"),
+                    bool(args.get("context_1m")),
+                    args.get("reasoning_effort"),
+                    bool(args.get("effort_only")),
+                )
             if operation == "inject_pid":
                 return legacy.inject_into_spawned(
                     int(args.get("pid")), args.get("text") or ""
