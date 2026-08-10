@@ -1,1 +1,0 @@
-Fixed Devin CLI conversations taking a long time to load by adding an incremental parse cache (only newly appended SQLite rows are parsed on refresh) and batching the first-message lookup for the session list.

@@ -1,1 +1,0 @@
-Restored the missing Codex app-server state indicator below the composer (right-hand side): it now shows whether Codex is connected to the managed app-server, CCC app-server, or exec fallback. Also mirrored the top breadcrumb process-status pill into the conversation pane header for split/popout views.

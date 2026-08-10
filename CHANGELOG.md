@@ -7,9 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.21.0] - 2026-08-10
+
+### Added
+- Global delivery-health banner fed by a new `/api/injection-health` endpoint: surfaces newly-lost WatchTower message receipts, read in-process from `receipts.json` (no `wt` subprocess). Historical losses are baselined once, ever — not per restart — so a loss that happens while CCC is down still surfaces on the next start; dismissible per-incident or all-at-once, durably acked across reloads. Active foreign-writer holds are reported by the API for tooling but intentionally not bannered — they auto-resolve the moment the foreign process exits and the queue drains.
+- Status rail token headline now shows the aggregated cache-adjusted token count, with the raw `in · in cached · out` breakdown underneath.
+- Show the connection-type chip (headless, stream-json, terminal, app-server, managed app-server, ACP) in the session Metadata rail, not just the pane header above the transcript.
+- CCC no longer interrupts or kills a possibly-mid-turn session on its own. Automatic interrupt paths (Codex stalled-turn recovery, the idle reaper hitting a session with a tool still running) now file an approval ask, surfaced as a dashboard banner ("CCC wants to interrupt this session. Approve?") with Approve/Dismiss.
+- The combined throughput chart now draws a Kimi quota-utilization line (purple) alongside the Claude and Codex series, so all three engines' weekly burn curves are visible in one view.
+- Add 1D, 2D, and 7D cache-adjusted session ranking to the throughput sidebar.
+
+### Changed
+- Devin CLI sessions now resolve their git repo from `working_directory` and group under the correct project/repo folder, matching other CLI engines. Unbound Devin cloud sessions stay in their own "Devin" bucket and are no longer shown in repo-only views unless pinned to that repo.
+- Mobile: condensed the chrome above and below the conversation list so many more conversations fit on a phone screen — the new-session/search/group-chat controls collapse to a single line (group-chat label shortens to "+ Group"), the "Last updated · check for updates" header line hides on phones, the tab bars and throughput strip lose padding, and the footer pills collapse into one horizontally-scrollable line instead of three wrapped rows.
+
 ### Fixed
 - Fixed CCC silently holding a message forever when a live WatchTower-tracked worker session had no channel CCC recognized as its own (a "foreign live writer" — CCC didn't spawn it, so the existing fork guard would neither deliver nor fail loudly). CCC now recognizes a live WT worker's FIFO in-process (reading `workers.json` directly, zero subprocess) and delivers through it before falling back to the hold, wired into both the watcher's hold gate and the inject fork guard; a write failure (ENXIO, no reader) still falls back to the existing hold, never to a parallel `claude --resume`. A hold that persists past two consecutive watcher ticks (~5-10s) now logs an actionable incident instead of staying invisible, and the queue's user-facing note stops claiming the message "sends when it finishes" for a headless worker that never will.
-- Added a global delivery-health banner fed by a new `/api/injection-health` endpoint: surfaces active foreign-writer holds and newly-lost WatchTower receipts, read in-process from `receipts.json` (no `wt` subprocess). Historical losses are baselined once, ever — not per restart — so a loss that happens while CCC is down still surfaces on the next start; dismissible per-incident or all-at-once, durably acked across reloads.
+- Fixed the Codex session pill always showing "exec" even while CCC was actively driving it through the shared worker-owned app-server — the per-session status endpoint was checking the dashboard's own (always-empty) app-server handle instead of asking the worker that actually owns it.
+- Fixed duplicate Codex resume entries: identical injected text (e.g. a verifier report) is now queued only once per session, preventing repeated re-injection when delivery confirmation is slow.
+- Conversation list no longer flickers between a stale and fresh session set: the 5-minute PR-hydrate pass now grafts PR/branch/worktree enrichment onto the current rows instead of wholesale-replacing them with the older `include_prs` cache variant, which made sessions vanish (and counts/context % regress) until the next base poll.
+- Fixed Devin CLI conversations taking a long time to load by adding an incremental parse cache (only newly appended SQLite rows are parsed on refresh) and batching the first-message lookup for the session list.
+- Fixed Devin/GLM sessions not auto-pushing queued follow-up messages after the assistant ended its turn. The dashboard now routes Devin CLI injects locally and waits for running Devin resume spawns before draining the resume queue.
+- Kimi `/goal` compatibility prompts now tell the model it can use `UpdateGoal` to clear or complete the goal and the `compact-to-queue` skill when context is full, instead of relying on CLI-only `/goal clear` or `/compact` that the agent cannot invoke.
+- Kimi sessions no longer wedge their message queue forever after a mid-turn crash or worker restart: a wire tail quiet for 10+ minutes with no terminal event is now treated as a dead turn, so queued messages auto-send instead of waiting on a turn that will never finish.
+- Mobile: the Back button is no longer hidden underneath the stuck-session banner, which wraps to several lines on a phone and used to land right on top of the conversation toolbar.
+- Mobile: opening a conversation no longer freezes the UI for seconds. The first window is 120 transcript lines instead of 400 (Load earlier pages the rest), offscreen list rows skip layout, and repo ship status is fetched only for headers you actually scroll to. Worst main-thread block on open dropped from 2476ms to 395ms, and on Back from 978ms to 221ms.
+- Mobile: the sidebar scrolls as one surface instead of trapping your finger in three separate panels (Current sessions, Project tree, Triggered workers) that each captured the scroll and could not chain out to the page.
+- Fixed mobile new-session composer overflow: engine/model/effort selectors now scroll horizontally instead of pushing the send/mic/tts buttons off-screen, and spawn selects are forced to 16px on mobile to prevent iOS auto-zoom.
+- Restored the missing Codex app-server state indicator below the composer (right-hand side): it now shows whether Codex is connected to the managed app-server, CCC app-server, or exec fallback. Also mirrored the top breadcrumb process-status pill into the conversation pane header for split/popout views.
+- Fixed trashed/archived sessions resurrecting in the session list for up to a few minutes after the click: the ?all=1 cold-serve fallback served the persisted snapshot's pre-mutation lifecycle flags; it now re-stamps archived/trashed from the lifecycle sidecars before responding.
 
 ## [5.20.2] - 2026-08-07
 
@@ -2488,7 +2514,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.20.2...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.21.0...HEAD
+[5.21.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.21.0
 [5.20.2]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.20.2
 [5.20.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.20.1
 [5.20.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.20.0

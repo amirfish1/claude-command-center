@@ -1,1 +1,0 @@
-Devin CLI sessions now resolve their git repo from `working_directory` and group under the correct project/repo folder, matching other CLI engines. Unbound Devin cloud sessions stay in their own "Devin" bucket and are no longer shown in repo-only views unless pinned to that repo.

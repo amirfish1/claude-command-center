@@ -1,1 +1,0 @@
-The red delivery-health banner no longer alarms on foreign-writer "session stuck" holds (a live process CCC didn't start holding queued input). Holds still auto-resolve and drain the queue the moment the foreign process exits, and `/api/injection-health` still reports them for tooling — only the page banner is silenced. The banner still appears for newly-lost message receipts.

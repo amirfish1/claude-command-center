@@ -1,1 +1,0 @@
-- Hide the injection-health banner's Dismiss button when there are no lost-receipt incidents to ack (banner showing only for active foreign-writer holds, which auto-resolve). Previously the button was always visible and appeared broken — clicking it acked nothing and the immediate re-poll re-showed the banner.
