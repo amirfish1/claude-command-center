@@ -8392,6 +8392,18 @@ def find_all_conversations(
         if _wt_idx > 0:
             _wt_worktree_label = folder_label[_wt_idx + 4:]  # e.g. "gemini"
             folder_label = folder_label[:_wt_idx]             # e.g. "claude-command-center"
+        elif not repo_path:
+            # Nested `<repo>/.worktrees/<name>` dirs encode to
+            # `...-worktrees-<name>` (the `/` and `.` both become `-`).
+            # When the worktree has since been deleted, `_decode_project_slug`
+            # can't resolve it and folder_label falls back to the raw encoded
+            # slug -- strip the suffix so these still bucket under the parent
+            # repo's label instead of surfacing as an unreadable orphan chip
+            # in a category of their own (CCC-760).
+            _wtd_match = re.search(r"-+worktrees-(.+)$", folder_label)
+            if _wtd_match:
+                _wt_worktree_label = _wtd_match.group(1)
+                folder_label = folder_label[:_wtd_match.start()]
 
         try:
             jsonls = []
