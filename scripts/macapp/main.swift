@@ -1031,7 +1031,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        pollUntilReady(process: proc, operation: "installation")
+        // Cloning a multi-hundred-MB history over a slow link can legitimately
+        // take minutes; the 60s default is tuned for local server startup, not
+        // a network transfer. A too-short timeout here SIGTERMs the clone
+        // mid-transfer, which git reports as a confusing "unexpected
+        // disconnect" rather than "we killed it."
+        pollUntilReady(process: proc, operation: "installation", timeout: 600)
     }
 
     func spawnServer() {
@@ -1081,9 +1086,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollUntilReady(process: proc, operation: "server startup")
     }
 
-    func pollUntilReady(process: Process?, operation: String) {
+    func pollUntilReady(process: Process?, operation: String, timeout: TimeInterval = 60) {
         let start = Date()
-        let timeout: TimeInterval = 60
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
             if portIsBound(CCC_PORT) {
