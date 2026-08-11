@@ -43,7 +43,7 @@ class TestWatchtowerAnswerNotification(unittest.TestCase):
             "--worker <your-id> --summary \"...\" --commit <SHA>` (or `--no-code` "
             "if no code changed). If it still cannot be resolved, run `wt block` "
             "again with the new open question.",
-            mode="steer",
+            mode="send",
         )
 
 

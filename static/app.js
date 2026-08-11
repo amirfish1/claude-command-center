@@ -37655,6 +37655,7 @@
       + '<div class="uxq-td-pg">'
       + '<div class="uxq-td-pg-label">Origin</div>'
       + (item.project  ? _propRow('Project', escapeHtml(item.project)) : '')
+      + (item.project  ? _propRow('Learnings', '<button type="button" class="uxq-td-learnings-btn" data-queue="' + escapeAttr(item.project) + '">edit learning file ↗</button>') : '')
       + (item.source   ? _propRow('Source',  escapeHtml(item.source)) : '')
       + (item.lane     ? _propRow('Lane',    escapeHtml(item.lane)) : '')
       + (item.repo_path ? _propRow('Repository', '<span class="uxq-td-mono">' + escapeHtml(item.repo_path) + '</span>') : '')
@@ -37921,6 +37922,31 @@
         if (sid && typeof selectConversation === 'function') { close(); selectConversation(sid); }
       });
     });
+
+    // Learning file link (queue detail screen — WT-29 follow-up)
+    const learningsBtn = modal.querySelector('.uxq-td-learnings-btn');
+    if (learningsBtn) {
+      learningsBtn.addEventListener('click', async () => {
+        const queue = learningsBtn.getAttribute('data-queue');
+        if (!queue) return;
+        learningsBtn.disabled = true;
+        try {
+          const res = await fetch('/api/queue/learnings/open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ queue }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok || !d.ok) {
+            showOpToast('Could not open learning file: ' + (d.error || res.status), 'error');
+          }
+        } catch (e) {
+          showOpToast('Could not open learning file: ' + e, 'error');
+        } finally {
+          learningsBtn.disabled = false;
+        }
+      });
+    }
 
     // Inline answer (WT-29)
     const answerInput = modal.querySelector('.uxq-answer-input');

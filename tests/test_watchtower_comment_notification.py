@@ -37,7 +37,7 @@ class TestWatchtowerCommentNotification(unittest.TestCase):
             "11111111-2222-3333-4444-555555555555",
             "[WATCHTOWER] A new comment was added to your claimed ticket "
             "CCC-617:\n\nPlease use the safer parser.",
-            mode="steer",
+            mode="send",
         )
 
 

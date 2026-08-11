@@ -1740,6 +1740,10 @@ def _answer_queue_item_and_notify_worker(ref, text):
     ``wt answer`` sends this same follow-up through WatchTower's liveness-aware
     messaging path.  CCC's inline answer endpoint must do so too: clearing
     ``needs_input`` alone leaves a claimed, idle worker unaware of the answer.
+
+    Delivered with mode="send" (queued for the next turn boundary), not
+    "steer" (forced interrupt) - a human answering a blocked question isn't
+    urgent enough to yank the worker off whatever it's already doing.
     """
     item = _queue_answer(ref, text, session_id="ccc")
     delivery = None
@@ -1760,7 +1764,7 @@ def _answer_queue_item_and_notify_worker(ref, text):
         )
         try:
             from watchtower import messages as wt_messages
-            delivery = wt_messages.send(str(target), prompt, mode="steer")
+            delivery = wt_messages.send(str(target), prompt, mode="send")
         except Exception as e:
             delivery = {"ok": False, "error": str(e)}
     return item, delivery
@@ -1773,6 +1777,9 @@ def _comment_queue_item_and_notify_worker(ref, text):
     the queue for its dashboard endpoint, so it must preserve the same
     best-effort notification without letting a delivery failure lose the
     durable comment.
+
+    Delivered with mode="send" (queued), not "steer" - see
+    _answer_queue_item_and_notify_worker for why.
     """
     item = _q.comment(ref, text, by="human", session_id="ccc")
     delivery = None
@@ -1789,7 +1796,7 @@ def _comment_queue_item_and_notify_worker(ref, text):
         )
         try:
             from watchtower import messages as wt_messages
-            delivery = wt_messages.send(str(target), prompt, mode="steer")
+            delivery = wt_messages.send(str(target), prompt, mode="send")
         except Exception as e:
             delivery = {"ok": False, "error": str(e)}
     return item, delivery
@@ -60706,6 +60713,31 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            return
+        if path == "/api/queue/learnings/open":
+            # Open a queue's learnings file in the user's default editor from
+            # the ticket detail screen (paired with the read-only GET above).
+            # The queue name is validated by _wt_queue_learnings_path the same
+            # way GET is, so the resulting path is never attacker-influenced.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            queue = str((payload or {}).get("queue") or "").strip()
+            learnings_path = _wt_queue_learnings_path(queue)
+            if learnings_path is None:
+                self.send_json({"ok": False, "error": "invalid queue"}, 400)
+                return
+            try:
+                learnings_path.parent.mkdir(parents=True, exist_ok=True)
+                if not learnings_path.exists():
+                    learnings_path.write_text(f"# {queue.upper()} learnings\n", encoding="utf-8")
+                subprocess.Popen(["open", str(learnings_path)])
+                self.send_json({"ok": True, "path": str(learnings_path)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path == "/api/ux-fixes/set-priority":
             # Bump/set priority of a ticket from the queue row (CCC-339).
