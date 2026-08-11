@@ -39018,7 +39018,25 @@ def _start_resume_queue_watcher() -> None:
                         # bg-undeliverable, invalid cwd) — entry is safe; back
                         # off so a held session isn't re-driven every 5s tick.
                         _complete_pending_input_handoff(text)
-                        _mark_terminal_queue_retry(sid)
+                        if result.get("foreign_live_writer"):
+                            # CCC-799: a foreign-live-writer re-park here can be
+                            # a one-tick status race, not a persistently stuck
+                            # session — the watcher's own gate above already
+                            # confirmed a channel (spawn/wt-fifo/tty) via its
+                            # OWN session_live_status() call this same tick,
+                            # but _inject_text_into_session recomputes status
+                            # independently and can catch the channel mid-
+                            # flicker a beat later. The generic 60s backoff
+                            # meant for genuinely stuck sessions was costing
+                            # every real recovery an extra ~60-90s of queued-
+                            # but-undelivered time (confirmed via
+                            # activity.log: INJECT_STALLED to first delivery
+                            # gaps landing right at ~60s + tick slack). Retry
+                            # soon, same short window already used for the
+                            # wt-receipt-lost case below.
+                            _mark_terminal_queue_retry(sid, delay=5.0)
+                        else:
+                            _mark_terminal_queue_retry(sid)
                     elif not result.get("ok"):
                         _requeue_terminal_input_front(sid, text)
                         _mark_terminal_queue_retry(sid)
