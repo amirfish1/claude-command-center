@@ -20246,8 +20246,19 @@ body:has(.gc-reader) .pwa-install-banner {
   0%, 100% { opacity: 0.4; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.35); }
 }
+/* Idle (nothing currently claimed): a slow, dim green breathe reads as
+   resting rather than working -- the fast blue pulse above is reserved for
+   a worker actually attached to a ticket right now. */
+.fq-status-spin.is-idle {
+  background: var(--green, #3fb950);
+  animation: fq-status-pulse-sleepy 3.6s ease-in-out infinite;
+}
+@keyframes fq-status-pulse-sleepy {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .fq-status-spin { animation: none; }
+  .fq-status-spin, .fq-status-spin.is-idle { animation: none; }
 }
 .fq-health-add {
   width: 100%; border: 0; border-top: 1px solid rgba(139,148,158,0.12);

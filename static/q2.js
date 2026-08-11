@@ -967,7 +967,12 @@
       workerBody = m.workers.map(function (w) {
         var on = m.working.filter(function (it) { return workerMatchesItem(w, it); })[0];
         var idle = Q2WorkerIdle.presentation(w.idle_seconds);
-        var idleClass = idle.severity === 'pending' ? ' is-idle-pending'
+        // 'warm' (< 30m idle) used to fall through to '' here, so a worker
+        // with nothing claimed still got the plain is-live look -- same
+        // spinning green ring as one actively working a ticket. Every idle
+        // tier now gets a class so the spin can read as "sleeping" instead.
+        var idleClass = idle.severity === 'warm' ? ' is-idle-warm'
+          : idle.severity === 'pending' ? ' is-idle-pending'
           : idle.severity === 'warning' ? ' is-idle-warning'
           : idle.severity === 'stale' ? ' is-idle-stale' : '';
         return '<div class="q2-dg-worker is-live' + (on ? '' : idleClass) + '"'
@@ -1535,14 +1540,14 @@
       } else {
         var path = learnings.path || '';
         host.innerHTML = '<div class="q2-detail-top q2-learnings">'
-          + '<div class="q2-detail-head"><span class="q2-detail-ref">' + esc(state.queue) + '</span>'
-          + '<span class="q2-spacer"></span>'
-          + '<button type="button" class="q2-btn" data-q2-learnings-open title="Open this learnings file in its default editor">Open &#8599;</button></div>'
+          + '<div class="q2-detail-head"><span class="q2-detail-ref">' + esc(state.queue) + '</span></div>'
           + '<h1 class="q2-detail-title">Queue learnings</h1>'
           + (learnings.exists
             ? '<pre class="q2-pre q2-learnings-body">' + esc(learnings.content || '') + '</pre>'
             : '<div class="q2-empty">No learnings file yet.<br><span class="q2-dim">'
               + esc(path) + '</span></div>')
+          + '<button type="button" class="q2-btn q2-btn-primary q2-learnings-edit-btn" '
+          + 'data-q2-learnings-open title="Open this learnings file in its default editor">Edit File</button>'
           + '</div>';
       }
       return;

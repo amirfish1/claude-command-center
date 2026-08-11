@@ -38228,8 +38228,14 @@
           const on = workerItem(w);
           const label = on ? (_uxqItemRef(on) + (on.title || on.note ? ' · ' + (on.title || on.note).split('\n')[0].slice(0, 40) : ''))
             : 'idle';
-          return '<span class="fq-status-worker is-live" title="' + escapeAttr(w.worker_id || 'worker') + '">'
-            + '<span class="fq-status-spin" aria-hidden="true"></span>'
+          // A worker with nothing claimed (idle < RELEASE_IDLE_S, not yet
+          // released) still showed the same fast blue pulse as one actually
+          // attached to a ticket -- read as "working" when it's just
+          // waiting. Blue+fast is reserved for a real claim; idle gets a
+          // slow, dim green breathe instead.
+          const idleCls = on ? '' : ' is-idle';
+          return '<span class="fq-status-worker is-live' + idleCls + '" title="' + escapeAttr(w.worker_id || 'worker') + '">'
+            + '<span class="fq-status-spin' + idleCls + '" aria-hidden="true"></span>'
             + escapeHtml(w.worker_id || 'worker') + '<b>' + escapeHtml(label) + '</b>'
             + '</span>';
         }).join('')

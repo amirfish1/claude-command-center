@@ -466,8 +466,27 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   border-color: var(--red);
   background: color-mix(in srgb, var(--bg) 90%, var(--red));
 }
-.q2-dg-worker.is-idle-warning .q2-dg-spin { border-color: var(--orange); border-right-color: transparent; }
-.q2-dg-worker.is-idle-stale .q2-dg-spin { border-color: var(--red); border-right-color: transparent; }
+/* Idle (any severity, including the < 30m "warm" tier that used to fall
+   through with no class at all) doesn't spin -- a rotating ring means
+   "doing something right now"; idle means waiting for reuse. Severity
+   still escalates warm -> pending -> warning -> stale via colour, same as
+   the border/background above; here it only breathes gently instead of
+   rotating, and the ring goes solid (no transparent gap) so it doesn't
+   read as a spinner arc even at a glance. */
+.q2-dg-worker.is-idle-warm .q2-dg-spin { border-color: var(--green); border-right-color: var(--green); }
+.q2-dg-worker.is-idle-pending .q2-dg-spin { border-color: var(--text-muted); border-right-color: var(--text-muted); }
+.q2-dg-worker.is-idle-warning .q2-dg-spin { border-color: var(--orange); border-right-color: var(--orange); }
+.q2-dg-worker.is-idle-stale .q2-dg-spin { border-color: var(--red); border-right-color: var(--red); }
+.q2-dg-worker.is-idle-warm .q2-dg-spin,
+.q2-dg-worker.is-idle-pending .q2-dg-spin,
+.q2-dg-worker.is-idle-warning .q2-dg-spin,
+.q2-dg-worker.is-idle-stale .q2-dg-spin {
+  animation: q2-dg-sleepy 2.6s ease-in-out infinite;
+}
+@keyframes q2-dg-sleepy {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 0.9; transform: scale(1); }
+}
 .q2-dg-worker.is-idle-warning .q2-dg-worker-idle { color: var(--orange); opacity: 1; }
 .q2-dg-worker.is-idle-stale .q2-dg-worker-idle { color: var(--red); opacity: 1; }
 .q2-dg-worker.is-empty {
@@ -1115,6 +1134,16 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
 }
 .q2-detail-foot .q2-dim { flex: 1 1 auto; color: var(--text-muted); }
 .q2-learnings-body { max-height: none; margin: 0; }
+.q2-learnings-edit-btn {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  border-radius: 8px;
+}
 
 /* Assignment + origin, one wrapping strip instead of a sidebar. */
 .q2-meta-strip {
