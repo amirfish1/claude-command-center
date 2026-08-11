@@ -1740,10 +1740,6 @@ def _answer_queue_item_and_notify_worker(ref, text):
     ``wt answer`` sends this same follow-up through WatchTower's liveness-aware
     messaging path.  CCC's inline answer endpoint must do so too: clearing
     ``needs_input`` alone leaves a claimed, idle worker unaware of the answer.
-
-    Delivered with mode="send" (queued for the next turn boundary), not
-    "steer" (forced interrupt) - a human answering a blocked question isn't
-    urgent enough to yank the worker off whatever it's already doing.
     """
     item = _queue_answer(ref, text, session_id="ccc")
     delivery = None
@@ -1764,7 +1760,7 @@ def _answer_queue_item_and_notify_worker(ref, text):
         )
         try:
             from watchtower import messages as wt_messages
-            delivery = wt_messages.send(str(target), prompt, mode="send")
+            delivery = wt_messages.send(str(target), prompt, mode="steer")
         except Exception as e:
             delivery = {"ok": False, "error": str(e)}
     return item, delivery
@@ -1777,9 +1773,6 @@ def _comment_queue_item_and_notify_worker(ref, text):
     the queue for its dashboard endpoint, so it must preserve the same
     best-effort notification without letting a delivery failure lose the
     durable comment.
-
-    Delivered with mode="send" (queued), not "steer" - see
-    _answer_queue_item_and_notify_worker for why.
     """
     item = _q.comment(ref, text, by="human", session_id="ccc")
     delivery = None
@@ -1796,7 +1789,7 @@ def _comment_queue_item_and_notify_worker(ref, text):
         )
         try:
             from watchtower import messages as wt_messages
-            delivery = wt_messages.send(str(target), prompt, mode="send")
+            delivery = wt_messages.send(str(target), prompt, mode="steer")
         except Exception as e:
             delivery = {"ok": False, "error": str(e)}
     return item, delivery
