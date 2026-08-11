@@ -30340,15 +30340,23 @@
       if (!raw) return false;
       const plain = raw.replace(/^🧵\s*/, '').trim();
       const low = plain.toLowerCase();
+      if (/^drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b/.test(low)) return true;
+      if (_wtWorkerQueues.size) {
+        // Queue list is warm: a "QUEUE#N" / "QUEUE worker:" title only marks a
+        // worker when QUEUE is a real WatchTower queue. A bare pattern match on
+        // any uppercased prefix misclassified user-renamed sessions like
+        // "CLI#1: done" as workers.
+        for (const q of _wtWorkerQueues) {
+          const qlow = q.toLowerCase();
+          if (low === qlow + ' queue worker' || low === qlow + ' worker' || low.startsWith(qlow + ' worker:')) return true;
+          if (low.startsWith(qlow + '#')) return true;
+        }
+        return false;
+      }
+      // Cold-start fallback: the queue list hasn't loaded yet, so match the
+      // generic WT title shapes. Self-corrects once _uxqHealthCache warms.
       if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*\s+worker(?::|\s*$)/.test(plain)) return true;
       if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*#\d+\b/.test(plain)) return true;
-      if (/^drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b/.test(low)) return true;
-      if (!_wtWorkerQueues.size) return false;
-      for (const q of _wtWorkerQueues) {
-        const qlow = q.toLowerCase();
-        if (low === qlow + ' queue worker' || low === qlow + ' worker' || low.startsWith(qlow + ' worker:')) return true;
-        if (low.startsWith(qlow + '#')) return true;
-      }
       return false;
     };
     const _isWatchTowerWorkerRow = (c) => {
