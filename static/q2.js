@@ -927,9 +927,12 @@
       m.working.map(function (it) { return it.ref; }).join(','),
       m.workers.map(function (w) {
         // The spec is part of what the card draws, so a worker that respawned
-        // on a different engine/model/effort has to repaint.
+        // on a different engine/model/effort has to repaint. session_id has to
+        // be in here too: the "open" link is baked from it at render time, so
+        // a worker that resumes under the same worker_id with a new session
+        // must repaint or that link keeps pointing at the stale session.
         return w.worker_id + ':' + Q2WorkerIdle.signatureBucket(w.idle_seconds)
-          + ':' + workerSpecFields(w).join('/');
+          + ':' + workerSpecFields(w).join('/') + ':' + (w.session_id || '');
       }).join(','),
       m.doneRecent.map(function (it) { return it.ref; }).join(','),
     ].join('|');
