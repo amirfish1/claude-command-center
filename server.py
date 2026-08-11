@@ -8704,7 +8704,8 @@ def find_all_conversations(
             row_mtime = tail_meta.get("last_meaningful_ts") or stat.st_mtime
             model = tail_meta.get("model") or ""
             latest_tok = tail_meta.get("latest_input_tokens") or 0
-            if "[1m]" in model.lower() or latest_tok > 200_000:
+            _ov_1m = (session_overrides.get(session_id) or {}).get("context_1m")
+            if _ov_1m or "[1m]" in model.lower() or latest_tok > 200_000:
                 ctx_limit = 1_000_000
             else:
                 ctx_limit = 200_000
@@ -22033,7 +22034,8 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
 
         model = tail_meta.get("model") or ""
         latest_tok = tail_meta.get("latest_input_tokens") or 0
-        if "[1m]" in model.lower() or latest_tok > 200_000:
+        _ov_1m = (session_overrides.get(sid) or {}).get("context_1m")
+        if _ov_1m or "[1m]" in model.lower() or latest_tok > 200_000:
             limit = 1_000_000
         else:
             limit = 200_000
