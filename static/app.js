@@ -26709,7 +26709,7 @@
     const _sidebarTab = (() => {
       try {
         const t = localStorage.getItem('ccc-sidebar-tab');
-        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived') ? t : 'inprogress';
+        return (t === 'issues' || t === 'queues' || t === 'inprogress' || t === 'archived' || t === 'coding' || t === 'workers') ? t : 'inprogress';
       } catch (_) { return 'inprogress'; }
     })();
     const _activeDraftInputBefore = document.activeElement;
@@ -30341,7 +30341,12 @@
       || _savedAllTabView !== 'coding'
     );
     const _allTabGroupChatView = _savedAllTabView === 'group-chats' ? 'group-chats' : _savedAllTabView;
-    const _allTabView = _allTabHasHermesSplit ? _allTabGroupChatView : 'coding';
+    // CCC-778: the top-level Coding/Workers tabs (shown instead of Issues/
+    // Queues when "Show issues and queues as separate tabs" is off) are just
+    // the All tab pre-filtered to that lane, regardless of the nested
+    // Hermes-split tab's own saved state.
+    const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers' : null;
+    const _allTabView = _topLevelLaneOverride || (_allTabHasHermesSplit ? _allTabGroupChatView : 'coding');
     const _allTabMainConvs = (_allTabHasHermesSplit && _allTabView === 'workers')
       ? _allTabWorkerConvs
       : ((_allTabHasHermesSplit && _allTabView === 'messages')
@@ -30743,12 +30748,22 @@
     // Tabs (CCC-85): Active / All / GH Issues / WatchTower queues
     // are tabs now, one section visible at a time. Search result rows
     // (id/repo search) always render above the active tab's content.
-    const _tabDefs = [
-      ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
-      ['archived', 'All', _arcCount || 0],
-      ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
-      ['queues', 'Queues', ((_uxqHealthCache && _uxqHealthCache.queues) || []).length],
-    ];
+    // CCC-778: "Show issues and queues as separate tabs" (default off) gates
+    // whether Issues/Queues get their own top-level tabs, or Coding/Workers
+    // (the All tab, pre-filtered to that lane) stand in for them instead.
+    const _tabDefs = getSeparateTabsPref()
+      ? [
+        ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
+        ['archived', 'All', _arcCount || 0],
+        ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
+        ['queues', 'Queues', ((_uxqHealthCache && _uxqHealthCache.queues) || []).length],
+      ]
+      : [
+        ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
+        ['archived', 'All', _arcCount || 0],
+        ['coding', 'Coding', _allTabCodingConvs.length],
+        ['workers', 'Workers', _allTabWorkerConvs.length],
+      ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
         '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '">'
@@ -30772,7 +30787,7 @@
         .replace('aria-expanded="false"', 'aria-expanded="true"'));
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
-      : _sidebarTab === 'archived' ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
+      : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       : (_forceOpen(_inProgressHtml, 'conv-inprogress-section') || _tabEmpty('in-progress sessions'));
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml + _tabBody;
     const _objectsSplitActive = _sidebarTab === 'inprogress' && _shouldGroupByObjects;
@@ -62197,6 +62212,9 @@
   function getThemePref() { return localStorage.getItem('ccc-theme') || 'dark'; }
   function getFontPref() { return localStorage.getItem('ccc-font') || 'system'; }
   function getViewGhPref() { return localStorage.getItem('ccc-view-gh') || 'show'; }
+  // CCC-778: default OFF (hidden) — Issues/Queues collapse into top-level
+  // Coding/Workers tabs instead. ON restores the original Issues/Queues tabs.
+  function getSeparateTabsPref() { return localStorage.getItem('ccc-separate-tabs') === 'on'; }
 
   function applyTheme(pref) {
     let resolved = pref;
@@ -62270,6 +62288,12 @@
       const on = debugModeEnabled();
       $debugToggle.classList.toggle('is-on', on);
       $debugToggle.setAttribute('aria-checked', String(on));
+    }
+    const $separateTabsToggle = document.getElementById('settingsSeparateTabsToggle');
+    if ($separateTabsToggle) {
+      const on = getSeparateTabsPref();
+      $separateTabsToggle.classList.toggle('is-on', on);
+      $separateTabsToggle.setAttribute('aria-checked', String(on));
     }
   }
   // Live-update when the user has 'system' selected and OS theme flips.
@@ -62873,6 +62897,23 @@
         applyViewGh(next);
         refreshAppearanceChecks();
         showSettingsSavedPulse(viewGhToggle.closest('.settings-row'));
+        return;
+      }
+      const separateTabsToggle = e.target.closest('[data-separate-tabs-toggle]');
+      if (separateTabsToggle) {
+        const next = getSeparateTabsPref() ? 'off' : 'on';
+        localStorage.setItem('ccc-separate-tabs', next);
+        // Switching modes can strand the sidebar on a tab that no longer
+        // exists (e.g. 'issues' when the flag just turned off) — fall back
+        // to Active rather than rendering an empty/orphaned tab.
+        const _curTab = (() => { try { return localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) { return 'inprogress'; } })();
+        const _hiddenNow = next === 'on' ? ['coding', 'workers'] : ['issues', 'queues'];
+        if (_hiddenNow.indexOf(_curTab) !== -1) {
+          try { localStorage.setItem('ccc-sidebar-tab', 'inprogress'); } catch (_) {}
+        }
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(separateTabsToggle.closest('.settings-row'));
+        if (typeof conversationsData !== 'undefined' && typeof renderSidebar === 'function') renderSidebar(conversationsData);
         return;
       }
       const liveVariantToggle = e.target.closest('[data-live-variant-toggle]');
