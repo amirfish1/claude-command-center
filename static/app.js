@@ -9558,6 +9558,8 @@
           // never did). Confirm it now: "delivered, awaiting Claude".
           markPendingSendDelivered(pendingSend, data);
         }
+      } else if (compactCommand && data && data.code === 'compact_timeout') {
+        handleCompactTimeout(sid);
       } else {
         const reason = formatInjectFailure(data, res.status);
         if (isCursorUsageLimitFailure(data, reason)) {
@@ -26323,6 +26325,18 @@
     else showOpToast('Compacting conversation… (usually 1-3 min)', 'info');
   }
 
+  // code: 'compact_timeout' means CCC's own poll gave up waiting for the
+  // compact boundary — NOT that compaction failed. The server only returns
+  // this when the live session is still up and may still be running
+  // /compact itself, so treat it as "still working" rather than an error
+  // (CCC-786: users saw "/compact failed: timed out" when it usually landed
+  // moments later). Keep the progress banner up and keep polling.
+  function handleCompactTimeout(sid) {
+    showOpToast('Compaction is taking longer than usual - still watching for it to land.', 'info');
+    showCompactInProgressBanner(sid);
+    scheduleCompactUsageRefresh(sid);
+  }
+
   // Compact-button handler. Reuses postRunCompactForSession + the same
   // toast/banner/refresh logic as typing /compact so both paths stay
   // consistent. Used by the #convCompactBtn click + the breadcrumb button.
@@ -26372,6 +26386,8 @@
       } else if (data && data.code === 'compact_needs_manual') {
         clearCompactInProgressBanner();
         offerManualCompact(sid);
+      } else if (data && data.code === 'compact_timeout') {
+        handleCompactTimeout(sid);
       } else {
         clearCompactInProgressBanner();
         // Surface the engine's real compact_error when it told us why it failed
@@ -32436,6 +32452,8 @@
           } else if (data && data.code === 'compact_needs_manual') {
             clearCompactInProgressBanner();
             offerManualCompact(sid);
+          } else if (data && data.code === 'compact_timeout') {
+            handleCompactTimeout(sid);
           } else {
             clearCompactInProgressBanner();
             showOpToast('/compact failed: ' + ((data && (data.compact_error || data.error)) || 'unknown'), 'error');
@@ -52072,6 +52090,9 @@
     // Per project, the most recently CLOSED ticket and who closed it. Drives
     // the "last fix" chip so an idle worker row still shows what it finished.
     const projectLastClosed = new Map();
+    // CCC-785: every ticket closed by each session id, for the status rail's
+    // "tickets handled this session" list (not just the single latest).
+    const closedTicketsBySession = new Map();
     for (const item of (Array.isArray(items) ? items : [])) {
       const seq = _uxFixesSeq(item);
       if (!seq) continue;
@@ -52094,8 +52115,17 @@
         const closedAt = _uxFixesClosedAtMs(item);
         const prevC = projectLastClosed.get(project);
         if (!prevC || closedAt > prevC.closedAt) {
-          projectLastClosed.set(project, { seq, project, ref: item.ref || '', closedAt, sid: csid });
+          projectLastClosed.set(project, {
+            seq, project, ref: item.ref || '', closedAt, sid: csid,
+            title: item.title || '', note: item.note || '',
+          });
         }
+        // CCC-785: keep every closed ticket credited to this session (not
+        // just the latest), so the status rail can list "tickets handled
+        // this session" for a long-running WatchTower drain worker.
+        let list = closedTicketsBySession.get(csid);
+        if (!list) { list = []; closedTicketsBySession.set(csid, list); }
+        list.push({ ref: item.ref || '', title: item.title || '', note: item.note || '', project, closedAt });
         continue;
       }
       if (status !== 'in_progress') continue;
@@ -52108,7 +52138,10 @@
       const claimedAt = _uxFixesClaimedAtMs(item);
       const prev = byClaimedSession.get(sid);
       if (!prev || claimedAt > prev.claimedAt) {
-        const rec = { seq, project, ref: item.ref || '', lane: item.lane || 'normal', claimedAt };
+        const rec = {
+          seq, project, ref: item.ref || '', lane: item.lane || 'normal', claimedAt,
+          title: item.title || '', note: item.note || '',
+        };
         byClaimedSession.set(sid, rec);
         const prevProject = activeByProject.get(project);
         if (!prevProject || claimedAt > prevProject.claimedAt) {
@@ -52136,9 +52169,37 @@
     for (const [proj, rec] of lastFixByProject) sigParts.push('pd' + proj + ':' + rec.seq);
     for (const [proj, mx] of projectMaxSeq) sigParts.push('m' + proj + ':' + mx);
     const _sig = sigParts.sort().join('|');
-    uxFixesQueueMeta = { projectMaxSeq, byClaimedSession, activeByProject, lastFixBySession, lastFixByProject, _sig };
+    for (const list of closedTicketsBySession.values()) {
+      list.sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0));
+      list.length = Math.min(list.length, 25);
+    }
+    uxFixesQueueMeta = {
+      projectMaxSeq, byClaimedSession, activeByProject, lastFixBySession, lastFixByProject,
+      closedTicketsBySession, _sig,
+    };
     _uxFixesQueueMetaLoadedAt = Date.now();
     return uxFixesQueueMeta;
+  }
+  // CCC-785: tickets this session has closed (via any of its identity keys),
+  // most recent first — feeds the status rail's "tickets handled" list for a
+  // long-running WatchTower drain worker.
+  function _uxFixesHandledTicketsForRow(c, limit = 25) {
+    if (!uxFixesQueueMeta) return [];
+    const byId = uxFixesQueueMeta.closedTicketsBySession || new Map();
+    const keys = _uxFixesRowIdentityKeys(c);
+    const seen = new Set();
+    const out = [];
+    for (const key of keys) {
+      const list = byId.get(key);
+      if (!list) continue;
+      for (const t of list) {
+        if (!t.ref || seen.has(t.ref)) continue;
+        seen.add(t.ref);
+        out.push(t);
+      }
+    }
+    out.sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0));
+    return out.slice(0, limit);
   }
   // Signature of the queue state last painted into the live sessions sidebar.
   let _uxFixesChipPaintedSig = '';

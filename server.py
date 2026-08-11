@@ -28614,6 +28614,12 @@ def _system_services_worker_entry():
         "active": active,
         "queued": queued,
         "uncertain": int(health.get("uncertain") or 0),
+        # Distinct from "uncertain": every worker restart marks in-flight
+        # work uncertain, and that alone self-clears within a couple of
+        # sweep cycles (see ccc_worker.RETIRE_UNCERTAIN_AFTER_S). Only a
+        # count that has survived a full sweep past retirement is actually
+        # stuck -- that's what should page the status chip.
+        "uncertain_stale": bool(health.get("uncertain_stale")),
         "drain_enabled": bool(drain.get("enabled")),
         "capabilities": worker.get("capabilities") or [],
         "restart_endpoint": "/api/restart/worker",

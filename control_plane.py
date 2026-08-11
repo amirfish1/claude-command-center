@@ -620,11 +620,25 @@ class WorkLedger:
                     "SELECT state, COUNT(*) AS n FROM work_items GROUP BY state"
                 ).fetchall()
             }
+            oldest_uncertain = conn.execute(
+                "SELECT MIN(updated_at) AS ts FROM work_items WHERE state='uncertain'"
+            ).fetchone()["ts"]
+        uncertain_max_age_s = (
+            max(0.0, time.time() - float(oldest_uncertain))
+            if oldest_uncertain is not None else 0.0
+        )
         return {
             "counts": counts,
             "active": sum(counts.get(state, 0) for state in ACTIVE_STATES),
             "queued": counts.get("queued", 0),
             "uncertain": counts.get("uncertain", 0),
+            # Age of the oldest uncertain item, in seconds. A fresh worker
+            # restart always marks in-flight work uncertain -- that alone is
+            # not an operator problem, retirement clears it automatically
+            # (see worker_engines.RETIRE_UNCERTAIN_AFTER_S). Callers use this
+            # to decide whether the count is still "settling" or is actually
+            # stuck.
+            "uncertain_max_age_s": uncertain_max_age_s,
             "drain": self.drain_state(),
         }
 

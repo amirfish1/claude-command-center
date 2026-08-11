@@ -22,6 +22,7 @@ from control_plane import (
     ControlPlaneClient, WorkLedger, authenticated, ensure_token, socket_path,
     token_path, worker_pid_path,
 )
+from worker_engines import RETIRE_UNCERTAIN_AFTER_S
 
 
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
@@ -73,6 +74,17 @@ class WorkerRuntime:
             # worker when they differ, so upgrades actually reach worker-owned
             # code paths (e.g. the Codex app-server liveness probe).
             server_mod = sys.modules.get("server")
+            summary = self.ledger.summary()
+            # A restart marks in-flight work "uncertain" on purpose (see
+            # WorkLedger.recover_orphaned_running) -- that's expected on
+            # every restart, not a problem. Only call it "stale" once it has
+            # had a full sweep cycle past the retirement window to clear on
+            # its own; that's the point at which a human should look.
+            summary["uncertain_stale"] = bool(
+                summary.get("uncertain")
+                and summary.get("uncertain_max_age_s", 0.0)
+                > RETIRE_UNCERTAIN_AFTER_S + UNCERTAIN_SWEEP_INTERVAL_S
+            )
             return {
                 "ok": True,
                 "worker": {
@@ -88,7 +100,7 @@ class WorkerRuntime:
                         "safe-drain-v1",
                     ],
                 },
-                **self.ledger.summary(),
+                **summary,
             }
         if method == "system.app_server":
             # The Codex transport lives HERE, not in the dashboard:

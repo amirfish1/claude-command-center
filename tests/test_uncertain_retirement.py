@@ -150,5 +150,62 @@ class UncertainSweepTests(LedgerFixture):
         self.assertEqual(self.ledger.get(work_id)["state"], "uncertain")
 
 
+class UncertainMaxAgeTests(LedgerFixture):
+    """`summary()` must expose how old the count is, not just its size.
+
+    A restart marking in-flight work uncertain is expected on every restart
+    and self-clears; only a count that has survived retirement is actually
+    stuck. The System status chip needs the age to tell the two apart (see
+    UncertainStaleHealthTests below).
+    """
+
+    def test_no_uncertain_work_reports_zero_age(self):
+        self.assertEqual(self.ledger.summary()["uncertain_max_age_s"], 0.0)
+
+    def test_reports_the_oldest_item_age(self):
+        self._uncertain("younger", age_s=30)
+        self._uncertain("older", age_s=RETIRE_UNCERTAIN_AFTER_S + 60)
+
+        age = self.ledger.summary()["uncertain_max_age_s"]
+
+        self.assertGreaterEqual(age, RETIRE_UNCERTAIN_AFTER_S + 60)
+
+
+class UncertainStaleHealthTests(LedgerFixture):
+    """The worker's `health` RPC must gate `uncertain_stale` on age, not count.
+
+    static/app.js only raises the System status chip to amber when this flag
+    is set -- a fresh restart's orphans must not trip it before they've had a
+    full sweep cycle past retirement to clear on their own.
+    """
+
+    def _health(self):
+        import ccc_worker
+
+        runtime = mock.Mock()
+        runtime.pid = 1
+        runtime.epoch = "e"
+        runtime.started_at = time.time()
+        runtime.recovered = []
+        runtime.ledger = self.ledger
+        return ccc_worker.WorkerRuntime.dispatch(runtime, "health", {})
+
+    def test_fresh_restart_orphans_are_not_stale(self):
+        self._uncertain("fresh", age_s=30)
+
+        self.assertFalse(self._health()["uncertain_stale"])
+
+    def test_orphans_past_a_full_sweep_cycle_are_stale(self):
+        import ccc_worker
+
+        self._uncertain("old", age_s=RETIRE_UNCERTAIN_AFTER_S
+                         + ccc_worker.UNCERTAIN_SWEEP_INTERVAL_S + 60)
+
+        self.assertTrue(self._health()["uncertain_stale"])
+
+    def test_no_uncertain_work_is_never_stale(self):
+        self.assertFalse(self._health()["uncertain_stale"])
+
+
 if __name__ == "__main__":
     unittest.main()
