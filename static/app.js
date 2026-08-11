@@ -42536,6 +42536,7 @@
       const sid = pane && pane.currentSession && pane.currentSession.id;
       if (sid && _sessionUsagePaneIsVisible(pane.id, sid)) {
         fetchSessionUsage(sid, pane.id);
+        if (typeof fetchSessionWorkspace === 'function') fetchSessionWorkspace(sid, pane.id);
       }
     });
   });
