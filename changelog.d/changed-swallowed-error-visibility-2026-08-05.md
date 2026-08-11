@@ -1,0 +1,1 @@
+Best-effort failures (state files that can't be written, hooks that die mid-run) now log one rate-limited `[ccc:swallowed]` line to stderr instead of disappearing. Mute with `CCC_QUIET_ERRORS=1`; `CCC_DEBUG=1` adds tracebacks.

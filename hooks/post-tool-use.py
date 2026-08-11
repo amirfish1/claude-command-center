@@ -7,6 +7,13 @@ import re
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from _errlog import log_swallowed
+except ImportError:
+    def log_swallowed(*_a, **_k):
+        pass
+
 LIVE_STATE_DIR = os.path.expanduser("~/.claude/command-center/live-state")
 SECRET_RE = re.compile(
     r"(?i)\b(?:sk-[a-z0-9_-]{16,}|gsk_[a-z0-9_-]{16,}|xox[abprs]-[a-z0-9-]{16,})\b"
@@ -215,7 +222,7 @@ def main():
         os.replace(tmp_path, state_path)
 
     except Exception:
-        pass
+        log_swallowed("post-tool-use hook")
 
 
 if __name__ == "__main__":
