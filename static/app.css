@@ -20072,6 +20072,53 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-health:empty { display: none; }
 .fq-health:empty + .fq-health-resize-handle { display: none; }
+
+/* CCC-781: "Show queue list on RHS" off — hide the multi-queue health list
+   and its resize handle; the compact single-queue status strip (below)
+   stands in for it above the ticket list instead. */
+.queue-rhs-list-off #queueHealthStrip,
+.queue-rhs-list-off #queueHealthResizeHandle { display: none; }
+
+/* Compact single-queue status strip: auto-drain state + live worker(s) and
+   what they're claimed on, for the queue currently selected in the scope
+   dropdown. Stands in for the full q2.html flow diagram, which assumes a
+   440px-wide column the rail doesn't have. */
+.fq-status-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(139,148,158,0.14);
+  font-size: 11px; color: var(--text-muted);
+}
+.fq-status-strip[hidden] { display: none; }
+.fq-status-watch {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-weight: 600; color: var(--text-muted);
+}
+.fq-status-watch.is-on { color: var(--green, #3fb950); }
+.fq-status-radar {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; opacity: 0.55;
+}
+.fq-status-watch.is-on .fq-status-radar { animation: fq-status-pulse 1.6s ease-in-out infinite; }
+@keyframes fq-status-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.35); }
+}
+.fq-status-worker {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--text);
+}
+.fq-status-worker.is-empty { color: var(--text-muted); }
+.fq-status-worker b { font-weight: 500; color: var(--text-muted); margin-left: 2px; }
+.fq-status-spin {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); flex: 0 0 auto;
+  animation: fq-status-pulse 1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fq-status-watch.is-on .fq-status-radar,
+  .fq-status-spin { animation: none; }
+}
 .fq-health-add {
   width: 100%; border: 0; border-top: 1px solid rgba(139,148,158,0.12);
   padding: 7px 10px; background: transparent; color: var(--text-muted);

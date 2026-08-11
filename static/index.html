@@ -992,6 +992,7 @@
                     <span class="files-count" id="queueCount"></span>
                     <input type="text" id="queueSearchInput" class="fq-search-input" placeholder="Search issues…" aria-label="Search queue tickets">
                   </div>
+                  <div class="fq-status-strip" id="queueStatusStrip" hidden></div>
                   <div class="files-queue-list" id="sidebarQueueList"></div>
                 </div>
               </div>
@@ -2012,6 +2013,18 @@
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-toggle" id="settingsSeparateTabsToggle" data-separate-tabs-toggle role="switch" aria-checked="false" aria-label="Show issues and queues as separate tabs">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="queue list rhs right hand side health strip diagram worker status">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Show queue list on RHS</div>
+                <div class="settings-row-desc">When off, the queue tab hides the multi-queue health list and shows a compact status strip (auto-drain, live worker) for the selected queue above the ticket list instead.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsQueueRhsListToggle" data-queue-rhs-list-toggle role="switch" aria-checked="false" aria-label="Show queue list on RHS">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
               </div>

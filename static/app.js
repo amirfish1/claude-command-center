@@ -38035,12 +38035,58 @@
       answerInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
     }
   }
+  // CCC-781: compact single-queue replacement for the RHS health strip when
+  // "Show queue list on RHS" is off — auto-drain state + live worker + what
+  // it's claimed, for the queue currently selected in queueScopeSelect only
+  // (mirrors the facts q2.html's flow diagram shows, without the full
+  // multi-stage diagram, which needs ~440px and the rail is narrower).
+  function _renderQueueStatusStrip(proj, items, liveWorkers) {
+    const $el = document.getElementById('queueStatusStrip');
+    if (!$el) return;
+    if (getQueueRhsListPref()) { $el.hidden = true; return; }
+    const key = _uxqProjectKey(proj);
+    if (!key) { $el.hidden = true; return; } // "All queues" — no single queue to summarize
+    const q = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
+      .find(x => x && _uxqProjectKey(x.queue) === key);
+    const auto = q ? !!q.auto_drain : false;
+    const workers = (liveWorkers || []).filter(w => w && _uxqProjectKey(w.queue) === key);
+    const workerItem = (w) => (items || []).find(it => {
+      const claimedSession = String((it && it.claimed_session_id) || '').trim();
+      const claimedBy = String((it && it.claimed_by) || '').trim();
+      const session = String(w.session_id || '').trim();
+      const id = String(w.worker_id || '').trim();
+      return (claimedSession && claimedSession === session)
+        || (claimedBy && (claimedBy === session || claimedBy === id));
+    });
+    const watchHtml = '<span class="fq-status-watch' + (auto ? ' is-on' : '') + '"'
+      + ' title="' + escapeAttr(auto ? 'Auto-drain is on for this queue' : 'Auto-drain is off for this queue') + '">'
+      + '<span class="fq-status-radar" aria-hidden="true"></span>'
+      + (auto ? 'Auto-drain on' : 'Auto-drain off')
+      + '</span>';
+    const workerHtml = workers.length
+      ? workers.map(w => {
+          const on = workerItem(w);
+          const label = on ? (_uxqItemRef(on) + (on.title || on.note ? ' · ' + (on.title || on.note).split('\n')[0].slice(0, 40) : ''))
+            : 'idle';
+          return '<span class="fq-status-worker is-live" title="' + escapeAttr(w.worker_id || 'worker') + '">'
+            + '<span class="fq-status-spin" aria-hidden="true"></span>'
+            + escapeHtml(w.worker_id || 'worker') + '<b>' + escapeHtml(label) + '</b>'
+            + '</span>';
+        }).join('')
+      : '<span class="fq-status-worker is-empty">No live worker</span>';
+    $el.hidden = false;
+    $el.innerHTML = watchHtml + workerHtml;
+  }
+
   function _renderQueuePanel(options) {
     const $queue = document.getElementById('sidebarQueueList');
     if (!$queue) return;
     const allowStale = !!(options && options.allowStale);
     const queuePanel = document.getElementById('queuePanel');
-    if (queuePanel) queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());
+    if (queuePanel) {
+      queuePanel.classList.toggle('queue-wrap-titles', _uxqGetWrapTitles());
+      queuePanel.classList.toggle('queue-rhs-list-off', !getQueueRhsListPref());
+    }
     _uxqRenderWrapToggle();
     return _fetchUxqItems(allowStale).then(async items => {
       const renderVersion = _uxqItemsVersion;
@@ -38094,6 +38140,7 @@
             || (claimedBy && (claimedBy === session || claimedBy === id));
         });
       };
+      _renderQueueStatusStrip(proj, items, _liveWorkers);
       const _isUnverifiedClaim = it => {
         const claimedBy = String((it && it.claimed_by) || '').trim();
         const claimedSession = String((it && it.claimed_session_id) || '').trim();
@@ -62219,6 +62266,9 @@
   // CCC-778: default OFF (hidden) — Issues/Queues collapse into top-level
   // Coding/Workers tabs instead. ON restores the original Issues/Queues tabs.
   function getSeparateTabsPref() { return localStorage.getItem('ccc-separate-tabs') === 'on'; }
+  // CCC-781: default OFF — the multi-queue health list (queueHealthStrip) is
+  // hidden and a compact single-queue status strip takes its place instead.
+  function getQueueRhsListPref() { return localStorage.getItem('ccc-queue-rhs-list') === 'on'; }
 
   function applyTheme(pref) {
     let resolved = pref;
@@ -62298,6 +62348,12 @@
       const on = getSeparateTabsPref();
       $separateTabsToggle.classList.toggle('is-on', on);
       $separateTabsToggle.setAttribute('aria-checked', String(on));
+    }
+    const $queueRhsListToggle = document.getElementById('settingsQueueRhsListToggle');
+    if ($queueRhsListToggle) {
+      const on = getQueueRhsListPref();
+      $queueRhsListToggle.classList.toggle('is-on', on);
+      $queueRhsListToggle.setAttribute('aria-checked', String(on));
     }
   }
   // Live-update when the user has 'system' selected and OS theme flips.
@@ -62918,6 +62974,16 @@
         refreshAppearanceChecks();
         showSettingsSavedPulse(separateTabsToggle.closest('.settings-row'));
         if (typeof conversationsData !== 'undefined' && typeof renderSidebar === 'function') renderSidebar(conversationsData);
+        return;
+      }
+      const queueRhsListToggle = e.target.closest('[data-queue-rhs-list-toggle]');
+      if (queueRhsListToggle) {
+        const next = getQueueRhsListPref() ? 'off' : 'on';
+        localStorage.setItem('ccc-queue-rhs-list', next);
+        refreshAppearanceChecks();
+        showSettingsSavedPulse(queueRhsListToggle.closest('.settings-row'));
+        _uxqHealthCache.ts = 0;
+        _renderQueuePanel();
         return;
       }
       const liveVariantToggle = e.target.closest('[data-live-variant-toggle]');
