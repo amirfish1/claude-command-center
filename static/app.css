@@ -2181,6 +2181,59 @@
     border-bottom: 1px solid var(--border, #2a2a2a);
     background: color-mix(in srgb, var(--surface) 82%, var(--bg));
   }
+  /* Desktop conversation chrome: session identity, the latest user message,
+     and an icon-only pop-out action live outside the transcript scroller.
+     This replaces the large sticky transcript card, which read as a floating
+     message and could cover the conversation. */
+  .conv-pane.has-last-user-message > .conv-pane-header {
+    display: flex;
+  }
+  .conv-pane-last-user-message {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .conv-pane-titlebar {
+    flex: 0 1 38%;
+  }
+  .conv-pane-popout {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .conv-pane-popout:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  }
+  .conv-pane-popout:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .conv-pane-popout svg { display: block; }
+  body.conversation-popout .conv-pane-popout { display: none; }
+  @media (min-width: 1201px) {
+    .conversations-view .conv-sticky-header { display: none !important; }
+  }
+  @media (max-width: 1200px) {
+    body:not(.conversation-popout) .conv-pane.has-last-user-message > .conv-pane-header {
+      display: none;
+    }
+  }
   /* In single-pane mode the active-pane breadcrumb is mirrored into the
      global toolbar (#cccBreadcrumb), so keep the per-pane header hidden
      to give the sticky "original ask" the slot below the toolbar. In
@@ -2363,7 +2416,7 @@
   }
   .conv-pane-titlebar {
     min-width: 0;
-    flex: 1 1 auto;
+    flex: 0 1 38%;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -6397,6 +6450,18 @@
   .conv-folder-group .conv-item.is-grouped-row .conv-branch-slot,
   .conv-folder-group .conv-item.is-grouped-row .conv-engine-slot {
     flex: 0 0 auto;
+  }
+  /* CCC-775: the leading engine+cost icon (.conv-session-icon) is fixed-width
+     chrome reserved via --conv-content-left, not information the title's own
+     truncation can reclaim — yield it first, ahead of every other tier in
+     this cascade, so a narrow row spends its width on the session name. */
+  @container sidebar (max-width: 780px) {
+    .conv-item .conv-session-icon {
+      display: none;
+    }
+    .conv-item {
+      --conv-content-left: var(--conv-icon-left);
+    }
   }
   @container sidebar (max-width: 760px) {
     .conv-item .conv-meta-inline {
