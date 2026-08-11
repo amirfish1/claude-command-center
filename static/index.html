@@ -1139,6 +1139,20 @@
                   <path d="M4 8 L4 5 L7 5 M20 8 L20 5 L17 5 M4 16 L4 19 L7 19 M20 16 L20 19 L17 19 M9 12 L15 12"></path>
                 </svg>
               </button>
+              <!-- Send (queue if busy): explicit opt-in to defer delivery to
+                   the next turn boundary instead of writing mid-turn, so it
+                   can never trigger a mid-turn interrupt. Regular Send is
+                   unaffected - this is a separate, deliberate choice per
+                   message, not a global setting. Its own button (promoted
+                   out of the send caret menu on request) rather than the
+                   CCC-776 collapse, since it's a one-click action people
+                   reach for often, not a rarely-used mode. -->
+              <button type="button" class="send-queue-btn" id="convSendQueueBtn" title="Send, but wait for the current turn to end instead of possibly interrupting it" aria-label="Send (queue if busy)">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <path d="M12 7v5l3.5 2"></path>
+                </svg>
+              </button>
               <!-- CCC-776: Send plus its two alternate modes ("continue in a
                    new session" and Submit+ phone-mode) used to sit as three
                    always-on buttons, eating title/textarea width. They now
@@ -1173,18 +1187,6 @@
                       <path d="M17 3v5M14.5 5.5h5"></path>
                     </svg>
                     <span>Telephone submit (phone mode)</span>
-                  </button>
-                  <!-- Send (queue if busy): explicit opt-in to defer delivery to
-                       the next turn boundary instead of writing mid-turn, so it
-                       can never trigger a mid-turn interrupt. Regular Send is
-                       unaffected - this is a separate, deliberate choice per
-                       message, not a global setting. -->
-                  <button type="button" class="send-queue-btn conv-send-menu-item" id="convSendQueueBtn" role="menuitem" title="Send, but wait for the current turn to end instead of possibly interrupting it" aria-label="Send (queue if busy)">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <circle cx="12" cy="12" r="9"></circle>
-                      <path d="M12 7v5l3.5 2"></path>
-                    </svg>
-                    <span>Send (queue if busy)</span>
                   </button>
                 </div>
               </span>
