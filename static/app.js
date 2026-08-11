@@ -38299,7 +38299,7 @@
           return '<span class="fq-status-worker is-live' + idleCls + (sid ? ' is-clickable' : '') + '"' + sidAttr
             + ' title="' + escapeAttr((w.worker_id || 'worker') + (sid ? ' — open session' : '')) + '">'
             + '<span class="fq-status-spin' + idleCls + '" aria-hidden="true"></span>'
-            + escapeHtml(w.worker_id || 'worker') + '<b>' + escapeHtml(label) + '</b>'
+            + escapeHtml(w.worker_id || 'worker') + '<span class="fq-status-sep">·</span><b>' + escapeHtml(label) + '</b>'
             + '</span>';
         }).join('')
       : '<span class="fq-status-worker is-empty">No live worker</span>';
@@ -39323,14 +39323,23 @@
   // Auto-drain off is a deliberate default (a human decides when it starts
   // draining), and the server also enforces it for any brand-new queue
   // (CCC-768) regardless of what this sends.
+  // CCC-805: one session should have exactly one "its own" queue — repeated
+  // clicks (or double-clicks) on the button previously minted NAME-2, NAME-3,
+  // ... forever. Remember the queue this session already created, keyed the
+  // same way as _uxqScopeKey(), so a second click reuses it instead.
+  const _UXQ_SESSION_CREATED_QUEUE_LS = 'ccc-uxq-session-created-queue';
+  function _uxqLoadSessionCreatedQueueMap() {
+    try { return JSON.parse(localStorage.getItem(_UXQ_SESSION_CREATED_QUEUE_LS) || '{}') || {}; } catch (_) { return {}; }
+  }
+  function _uxqRememberSessionCreatedQueue(name) {
+    const k = _uxqScopeKey(); if (!k) return;
+    const map = _uxqLoadSessionCreatedQueueMap();
+    map[k] = name;
+    try { localStorage.setItem(_UXQ_SESSION_CREATED_QUEUE_LS, JSON.stringify(map)); } catch (_) {}
+  }
   async function _createQueueForSession() {
     const repoPath = requireConvRepo('Create queue for this session');
     if (!repoPath) return;
-    const row = openConvRow();
-    const rawTitle = (typeof paneTitleForRow === 'function' ? paneTitleForRow(row) : '')
-      || _pathLeaf(repoPath) || 'Session';
-    let base = String(rawTitle).toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-    if (!base || !/^[A-Z0-9]/.test(base)) base = 'Q-' + (base || 'SESSION');
     let options;
     try {
       const res = await fetch('/api/queue/config-options', { method: 'POST' });
@@ -39341,6 +39350,21 @@
       return;
     }
     const existing = new Set((options.queues || []).map(q => String(q.queue).toUpperCase()));
+    const already = String(_uxqLoadSessionCreatedQueueMap()[_uxqScopeKey()] || '').toUpperCase();
+    if (already && existing.has(already)) {
+      if (typeof setStatusRailTab === 'function') setStatusRailTab('queue');
+      if (typeof _uxqSetScopeOverride === 'function') _uxqSetScopeOverride(already);
+      _uxqItemsCache.ts = 0;
+      _uxqHealthCache.ts = 0;
+      await _renderQueuePanel();
+      showOpToast('This session already has queue ' + already + ' - switched to it.', 'info');
+      return;
+    }
+    const row = openConvRow();
+    const rawTitle = (typeof paneTitleForRow === 'function' ? paneTitleForRow(row) : '')
+      || _pathLeaf(repoPath) || 'Session';
+    let base = String(rawTitle).toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    if (!base || !/^[A-Z0-9]/.test(base)) base = 'Q-' + (base || 'SESSION');
     let name = base;
     for (let n = 2; existing.has(name); n++) name = (base + '-' + n).slice(0, 64);
     try {
@@ -39358,6 +39382,7 @@
       showOpToast('Could not create queue: ' + e, 'error');
       return;
     }
+    _uxqRememberSessionCreatedQueue(name);
     if (typeof setStatusRailTab === 'function') setStatusRailTab('queue');
     if (typeof _uxqSetScopeOverride === 'function') _uxqSetScopeOverride(name);
     _uxqItemsCache.ts = 0;

@@ -1,0 +1,1 @@
+- Fixed the status-rail live-worker badge running the worker id directly into the claimed ticket ref with no separator (e.g. `ccc-efbe070bCCC-805`), making the ticket # unreadable.
