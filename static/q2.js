@@ -939,12 +939,23 @@
   }
 
   // mm:ss, counting down to 0 and staying there (never negative, never
-  // rolls over past an hour since BLOCKED_RELEASE_CEILING_S caps at 60:00).
+  // rolls over past an hour since both ceilings below cap at 60:00).
   function countdownClock(remainingMs) {
     var totalSeconds = Math.max(0, Math.round(remainingMs / 1000));
     var m = Math.floor(totalSeconds / 60);
     var s = totalSeconds % 60;
     return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  // A ticking countdown span: data-q2-release-at is the absolute epoch-ms
+  // deadline tickCountdowns() (bottom of file) rewrites every second from
+  // Date.now(), independent of the poll/repaint cycle. `releaseAtMs` null
+  // means idle_seconds wasn't a valid number -- render nothing rather than
+  // a countdown to a made-up time.
+  function countdownSpanHtml(releaseAtMs) {
+    if (releaseAtMs === null) return '';
+    return '<span class="q2-countdown" data-q2-release-at="' + releaseAtMs + '">'
+      + esc(countdownClock(releaseAtMs - Date.now())) + '</span>';
   }
 
   // The per-worker card, shared between the per-queue diagram's Worker stage
@@ -989,10 +1000,7 @@
       var releaseAtMs = idleKnown
         ? Date.now() + Math.max(0, Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S - w.idle_seconds) * 1000
         : null;
-      var countdownHtml = releaseAtMs === null ? '' : (
-        '<span class="q2-countdown" data-q2-release-at="' + releaseAtMs + '">'
-        + esc(countdownClock(Math.max(0, releaseAtMs - Date.now()))) + '</span>'
-      );
+      var countdownHtml = countdownSpanHtml(releaseAtMs);
       idle = {
         // esc()'d normally at the render site below; this one path needs the
         // <span> to survive, so it's carried separately as trusted HTML --
@@ -1012,6 +1020,20 @@
       };
     } else {
       idle = Q2WorkerIdle.presentation(w.idle_seconds);
+      if (idle.severity === 'warm') {
+        // Same ticking-deadline treatment as the blocked-only countdown
+        // above, counting down to the OTHER boundary: when this worker
+        // stops being "warm" and becomes release-eligible.
+        var warmAtMs = Date.now()
+          + Math.max(0, Q2WorkerIdle.WARM_CEILING_S - w.idle_seconds) * 1000;
+        idle = {
+          labelHtml: 'Idle ' + esc(idle.age) + ' · warm for '
+            + countdownSpanHtml(warmAtMs) + ' more',
+          label: idle.label,
+          severity: 'warm',
+          title: idle.title + ' Eligible for release once the countdown reaches 0.',
+        };
+      }
     }
     // 'warm' (< 30m idle) used to fall through to '' here, so a worker
     // with nothing claimed still got the plain is-live look -- same

@@ -42,3 +42,9 @@ test('ageText formats minutes and hours consistently for countdowns too', () => 
 test('BLOCKED_RELEASE_CEILING_S mirrors workers.py RELEASED_TTL_S (1h)', () => {
   assert.equal(idle.BLOCKED_RELEASE_CEILING_S, 60 * 60);
 });
+
+test('WARM_CEILING_S mirrors workers.py RELEASE_IDLE_S (30m) and the warm bucket boundary', () => {
+  assert.equal(idle.WARM_CEILING_S, 30 * 60);
+  assert.equal(idle.presentation(idle.WARM_CEILING_S - 1).severity, 'warm');
+  assert.equal(idle.presentation(idle.WARM_CEILING_S).severity, 'pending');
+});
