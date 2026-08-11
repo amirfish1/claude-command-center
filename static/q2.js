@@ -323,12 +323,21 @@
         ? '<span class="q2-n is-wip" title="Claimed by a worker and in progress">'
           + '<b>' + f.wip + '</b> wip</span>'
         : '',
-      open: '<span class="q2-n is-open' + ((f.waiting || 0) ? '' : ' is-zero')
-        + '" title="' + esc(openTip) + '"><b>'
-        + (f.waiting || 0) + '</b> ' + esc(openWord) + '</span>',
-      // Parked (open, but excluded by claim_types) is deliberately NOT counted
-      // here. It is inventory nothing will act on, and a second number beside
-      // the real one only competed with it. The diagram still shows the pile.
+      // CCC-811: "0 open" read as "nothing here" when it actually meant
+      // "nothing CLAIMABLE" — a queue whose open tickets are all parked
+      // (wrong claim type, or a GitHub issue missing the queue's label)
+      // still showed a flat 0 with no hint the ticket list wasn't empty.
+      // Only surface the parked count as a fallback when it would otherwise
+      // be the whole story (waiting === 0); once there's a real open count
+      // to show, parked stays folded away as before (a second number next
+      // to a nonzero one only competed with it).
+      open: (f.waiting || 0)
+        ? '<span class="q2-n is-open" title="' + esc(openTip) + '"><b>'
+          + f.waiting + '</b> ' + esc(openWord) + '</span>'
+        : (f.parked
+            ? '<span class="q2-n is-parked" title="Open, but nothing here is claimable right now (wrong ticket type, or a GitHub issue missing this queue&#39;s label)"><b>'
+              + f.parked + '</b> parked</span>'
+            : '<span class="q2-n is-open is-zero" title="' + esc(openTip) + '"><b>0</b> ' + esc(openWord) + '</span>'),
       parked: '',
       done: '<span class="q2-n is-done' + ((done || 0) ? '' : ' is-zero')
         + '" title="Closed, all time"><b>' + (done || 0) + '</b> closed</span>',

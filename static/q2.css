@@ -776,6 +776,7 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-n.is-done, .q2-n.is-done b { color: var(--text-muted); }
 /* A zero is not news. Dim it so the eye lands on the counts that matter. */
 .q2-n.is-zero, .q2-n.is-zero b { color: var(--text-muted); opacity: 0.45; }
+.q2-n.is-parked, .q2-n.is-parked b { color: var(--text-muted); }
 .q2-n-sep { color: var(--border); }
 .q2-qage { flex: 0 0 auto; color: var(--text-muted); opacity: 0.8; }
 .q2-chip {
