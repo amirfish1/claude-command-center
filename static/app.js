@@ -38829,6 +38829,25 @@
     });
   }
 
+  // CCC-789: "how do i get to the queue settings?" — openQueueManager
+  // already exists (wired to the RHS health-strip's gear icon), but that
+  // strip is hidden whenever the compact single-queue status line is shown
+  // instead (getQueueRhsListPref() off), leaving no path to it from this
+  // panel at all. Surface the same modal from the "…" menu, for whichever
+  // queue this rail is currently showing.
+  const $queueSettingsLink = document.getElementById('queueSettingsLink');
+  if ($queueSettingsLink) {
+    $queueSettingsLink.addEventListener('click', () => {
+      _closeQueueMoreMenu();
+      const proj = _uxqLastResolvedProject || '';
+      if (!proj || proj === 'ALL') {
+        showOpToast('Pick a specific queue first (not "All queues").', 'error');
+        return;
+      }
+      openQueueManager(proj);
+    });
+  }
+
   function openQueueTicketComposer() {
     return new Promise((resolve) => {
       document.querySelectorAll('.fq-ticket-composer').forEach(n => n.remove());
