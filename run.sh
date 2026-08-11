@@ -556,15 +556,22 @@ ensure_watchtower() {
   if [ ! -f "$script" ]; then
     return 0
   fi
-  # Fast path: already importable and already checked today. The marker is
-  # owned and written by install-watchtower.sh; we only read it.
+  local ccc_version
+  ccc_version="$(grep -m1 '^__version__ = ' "$HERE/server.py" 2>/dev/null | sed -E 's/^__version__ = "(.*)"$/\1/')"
+  # Fast path: already importable, already checked today, AND CCC has not
+  # been upgraded since the last check. That third condition is what makes a
+  # fresh `brew upgrade`/Sparkle/`git pull` install pick up WatchTower right
+  # away instead of waiting out the rest of today's rate-limit window — see
+  # wt_ccc_version_changed in install-watchtower.sh, which owns this marker.
   if "$PYTHON" -c 'import watchtower' >/dev/null 2>&1; then
     local marker="$HOME/.claude/command-center/watchtower-last-check"
-    if [ -f "$marker" ] && [ -n "$(find "$marker" -mtime -1 2>/dev/null)" ]; then
+    local version_marker="$HOME/.claude/command-center/watchtower-last-ccc-version"
+    if [ -f "$marker" ] && [ -n "$(find "$marker" -mtime -1 2>/dev/null)" ] \
+      && { [ -z "$ccc_version" ] || [ "$(cat "$version_marker" 2>/dev/null || true)" = "$ccc_version" ]; }; then
       return 0
     fi
   fi
-  CCC_PYTHON="$PYTHON" CCC_WATCHTOWER_LOG_PREFIX="  watchtower: " \
+  CCC_PYTHON="$PYTHON" CCC_WATCHTOWER_LOG_PREFIX="  watchtower: " CCC_VERSION="$ccc_version" \
     bash "$script" || true
 }
 ensure_watchtower

@@ -30,6 +30,10 @@
 #   WATCHTOWER_REPO_URL             clone source
 #   WATCHTOWER_TARBALL_URL          git-less fallback source
 #   CCC_WATCHTOWER_FORCE=1          ignore the once-a-day rate limits
+#   CCC_VERSION                     caller's own __version__; a change from the
+#                                    last recorded value also bypasses the
+#                                    rate limit, so an upgraded CCC does not
+#                                    wait out the rest of today's window
 #   CCC_WATCHTOWER_LOG_PREFIX       line prefix ("install: " for install.sh)
 #   CCC_WATCHTOWER_STATE_DIR        where the marker files live
 #   CCC_SKIP_WATCHTOWER_DAEMON=1    install, but do not run `wt start`
@@ -120,6 +124,31 @@ wt_marker_fresh() {
 wt_touch_marker() {
   mkdir -p "$(dirname "$1")" 2>/dev/null || true
   : > "$1" 2>/dev/null || true
+}
+
+# CCC's own version, recorded next to the daily marker. A caller (run.sh,
+# install.sh) that knows its own __version__ passes it in as $CCC_VERSION; if
+# it differs from what's on disk, that means CCC itself was just upgraded and
+# WatchTower must not wait out the rest of today's rate limit to catch up —
+# see wt_ccc_version_changed below.
+WT_VERSION_MARKER="$WT_STATE_DIR/watchtower-last-ccc-version"
+
+# True when the caller told us its version (CCC_VERSION) and it differs from
+# the version recorded at the last forced refresh. No CCC_VERSION or no prior
+# marker both read as "nothing to compare" and never force on their own — this
+# only ever ADDS trigger points on top of the existing daily cadence.
+wt_ccc_version_changed() {
+  local ver="${CCC_VERSION:-}"
+  [ -n "$ver" ] || return 1
+  local last=""
+  [ -f "$WT_VERSION_MARKER" ] && last="$(cat "$WT_VERSION_MARKER" 2>/dev/null || true)"
+  [ "$ver" != "$last" ]
+}
+
+wt_write_version_marker() {
+  [ -n "${CCC_VERSION:-}" ] || return 0
+  mkdir -p "$(dirname "$WT_VERSION_MARKER")" 2>/dev/null || true
+  printf '%s' "$CCC_VERSION" > "$WT_VERSION_MARKER" 2>/dev/null || true
 }
 
 # --- install / update primitives --------------------------------------------
@@ -286,10 +315,11 @@ ccc_install_watchtower() {
   #    daemon) is rate-limited to once a day: CCC restarts often, and a git
   #    pull per restart is a network call per restart.
   if wt_importable; then
-    if wt_marker_fresh "$WT_CHECK_MARKER"; then
+    if wt_marker_fresh "$WT_CHECK_MARKER" && ! wt_ccc_version_changed; then
       return 0
     fi
     wt_touch_marker "$WT_CHECK_MARKER"
+    wt_write_version_marker
     local root
     root="$(wt_install_root || true)"
     if wt_is_dev_checkout "$root"; then

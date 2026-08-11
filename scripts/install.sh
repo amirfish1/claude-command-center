@@ -301,9 +301,13 @@ install_watchtower() {
   fi
   # CCC_WATCHTOWER_FORCE: an explicit install is a user asking for this now,
   # so it must not be silently skipped by the once-a-day rate limits.
+  # CCC_VERSION: records what we just installed, so the very next routine
+  # `run.sh` launch (no force) does not redundantly re-force on the same
+  # version — see wt_ccc_version_changed in install-watchtower.sh.
   CCC_PYTHON="$PYTHON3" \
   CCC_WATCHTOWER_LOG_PREFIX="install: " \
   CCC_WATCHTOWER_FORCE=1 \
+  CCC_VERSION="$(grep -m1 '^__version__ = ' "$INSTALL_DIR/server.py" 2>/dev/null | sed -E 's/^__version__ = "(.*)"$/\1/')" \
     bash "$script" || true
 }
 

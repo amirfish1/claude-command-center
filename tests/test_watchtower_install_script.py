@@ -258,6 +258,34 @@ class TestAlreadyInstalled(WatchtowerInstallHarness):
         self.run_script(installed_root=root, env_extra={"CCC_WATCHTOWER_FORCE": "1"})
         self.assertEqual(len([c for c in self.calls() if "pull" in c]), 2)
 
+    def test_ccc_version_change_overrides_the_daily_rate_limit(self):
+        """An upgraded CCC must not wait out today's rate-limit window.
+
+        A `brew upgrade`/Sparkle/`git pull` relaunch never sets
+        CCC_WATCHTOWER_FORCE (only an explicit install does), so without this
+        WatchTower could sit stale for up to a day after CCC itself moved.
+        """
+        managed = self.make_checkout(self.home / ".ccc" / "watchtower")
+        root = self.set_installed(managed)
+        self.run_script(installed_root=root, env_extra={"CCC_VERSION": "5.21.0"})
+        self.assertEqual(len([c for c in self.calls() if "pull" in c]), 1)
+
+        # Same version, same day: still rate-limited, no new pull or wt calls.
+        before = len(self.calls())
+        self.run_script(installed_root=root, env_extra={"CCC_VERSION": "5.21.0"})
+        self.assertEqual(len(self.calls()), before, "same-version relaunch must be a no-op")
+
+        # CCC just upgraded: bypasses the rate limit even though it's the same day,
+        # both re-pulling the clone AND restarting the daemon (not just a no-op start).
+        before_wt = [c for c in self.calls() if c.startswith("wt ")]
+        self.run_script(installed_root=root, env_extra={"CCC_VERSION": "5.22.0"})
+        self.assertEqual(len([c for c in self.calls() if "pull" in c]), 2)
+        after_wt = [c for c in self.calls() if c.startswith("wt ")]
+        self.assertGreater(
+            len(after_wt), len(before_wt), "version bump must also re-ensure the daemon"
+        )
+        self.assertIn("wt start", after_wt)
+
     def test_daemon_is_ensured_on_the_installed_path(self):
         managed = self.make_checkout(self.home / ".ccc" / "watchtower")
         self.run_script(installed_root=self.set_installed(managed))
