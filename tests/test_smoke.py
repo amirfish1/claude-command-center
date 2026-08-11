@@ -8033,6 +8033,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 skip_wt=False,
                 force_terminal=False,
                 force_headless=False,
+                force_queue=False,
             )
         finally:
             httpd.shutdown()
@@ -8084,6 +8085,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 skip_wt=False,
                 force_terminal=False,
                 force_headless=False,
+                force_queue=False,
             )
         finally:
             httpd.shutdown()
@@ -8130,6 +8132,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 skip_wt=False,
                 force_terminal=False,
                 force_headless=False,
+                force_queue=False,
             )
         finally:
             httpd.shutdown()
