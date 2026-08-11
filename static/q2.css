@@ -564,6 +564,9 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
 }
 .q2-dg-worker-idle { font-size: 10.5px; color: var(--text-muted); opacity: 0.7; }
+/* Ticks every second (q2.js tickCountdowns) -- tabular-nums so the digits
+   don't jitter the surrounding text's width as they change. */
+.q2-countdown { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 /* What the running worker was spawned with. Same readout as the tickets-column
    header spec, but these are facts about a live process rather than links into
    the config form, so nothing here invites a click. */

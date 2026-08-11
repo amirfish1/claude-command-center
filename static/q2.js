@@ -938,6 +938,15 @@
     ].join('|');
   }
 
+  // mm:ss, counting down to 0 and staying there (never negative, never
+  // rolls over past an hour since BLOCKED_RELEASE_CEILING_S caps at 60:00).
+  function countdownClock(remainingMs) {
+    var totalSeconds = Math.max(0, Math.round(remainingMs / 1000));
+    var m = Math.floor(totalSeconds / 60);
+    var s = totalSeconds % 60;
+    return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
   // The per-worker card, shared between the per-queue diagram's Worker stage
   // and the ALL-queues live-workers view -- both need the same idle/"kept
   // warm while blocked"/release-button treatment, and having two copies is
@@ -967,27 +976,39 @@
       // the same session after that -- it resumes fresh instead of steering
       // a live process -- so the countdown is to "this card goes away", not
       // to "your answer stops working".
+      //
+      // A live MM:SS clock (not a static "released in Xm" that only updates
+      // on the next 5s poll, or worse the per-minute repaint bucket) needs a
+      // fixed target: data-q2-release-at is an absolute epoch-ms deadline,
+      // computed once here from the freshest idle_seconds. tickCountdowns()
+      // (a separate 1s setInterval, see bottom of file) finds every such
+      // element in the DOM each second and rewrites its text from
+      // Date.now() vs. that deadline -- no re-render, no drift, because
+      // idle_seconds and wall-clock time advance at the same rate.
       var idleKnown = typeof w.idle_seconds === 'number' && isFinite(w.idle_seconds) && w.idle_seconds >= 0;
-      var releaseInS = idleKnown
-        ? Math.max(0, Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S - w.idle_seconds) : null;
-      var countdown = releaseInS === null ? ''
-        : releaseInS > 0 ? ' — released in ' + Q2WorkerIdle.ageText(releaseInS) + ' unless answered'
-        : ' — releasing any moment unless answered';
+      var releaseAtMs = idleKnown
+        ? Date.now() + Math.max(0, Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S - w.idle_seconds) * 1000
+        : null;
+      var countdownHtml = releaseAtMs === null ? '' : (
+        '<span class="q2-countdown" data-q2-release-at="' + releaseAtMs + '">'
+        + esc(countdownClock(Math.max(0, releaseAtMs - Date.now()))) + '</span>'
+      );
       idle = {
-        label: 'Kept warm' + countdown,
+        // esc()'d normally at the render site below; this one path needs the
+        // <span> to survive, so it's carried separately as trusted HTML --
+        // built entirely from a computed number, nothing ticket-authored.
+        labelHtml: 'Kept warm' + (countdownHtml ? ' — released in ' + countdownHtml + ' unless answered' : ''),
+        label: 'Kept warm',
         severity: 'blocked',
         title: 'Holding ' + blockedOn.ref + ', blocked on your answer'
           + (blockedOn.block_question ? ': ' + String(blockedOn.block_question).slice(0, 160) : '')
           + '. WatchTower keeps this worker alive so it can resume the moment you answer'
-          + (releaseInS === null
+          + (releaseAtMs === null
               ? '.'
-              : releaseInS > 0
-                ? ', but releases it automatically in ' + Q2WorkerIdle.ageText(releaseInS)
-                  + ' if still unanswered. wt answer still reaches the same session after '
-                  + 'that (it resumes fresh instead of steering a live process) -- release just '
-                  + 'means the process itself stops, about '
-                  + Q2WorkerIdle.ageText(Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S) + ' later.'
-                : ', but is about to be released automatically since nobody has answered yet.'),
+              : ', but releases it automatically once the countdown reaches 0. wt answer still '
+                + 'reaches the same session after that (it resumes fresh instead of steering a '
+                + 'live process) -- release just means the process itself stops, about '
+                + Q2WorkerIdle.ageText(Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S) + ' later.'),
       };
     } else {
       idle = Q2WorkerIdle.presentation(w.idle_seconds);
@@ -1020,7 +1041,7 @@
             + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
             + '<span class="q2-dg-worker-title">' + esc(titleOf(on).split('\n')[0].slice(0, 60)) + '</span></div>'
           : '<div class="q2-dg-worker-idle" title="' + esc(idle.title) + '">'
-            + esc(idle.label) + '</div>')
+            + (idle.labelHtml || esc(idle.label)) + '</div>')
       + '</div>';
   }
 
@@ -2840,12 +2861,28 @@
 
   loadConfigs().then(renderAll);
 
+  // Every "kept warm" worker card's countdown span (data-q2-release-at, an
+  // absolute epoch-ms deadline set once at render time -- see
+  // workerCardHtml) ticks independently of the 5s poll / per-minute repaint
+  // bucket, so the seconds visibly count down instead of jumping once a
+  // minute.
+  function tickCountdowns() {
+    if (document.hidden) return;
+    var now = Date.now();
+    document.querySelectorAll('[data-q2-release-at]').forEach(function (el) {
+      var at = parseInt(el.getAttribute('data-q2-release-at'), 10);
+      if (!isFinite(at)) return;
+      el.textContent = countdownClock(at - now);
+    });
+  }
+
   // ── boot ─────────────────────────────────────────────────────────────────
   refresh();
   setInterval(function () {
     if (document.hidden) return;
     refresh();
   }, POLL_MS);
+  setInterval(tickCountdowns, 1000);
 
   // Lets same-page callers (e.g. the annotate widget, which files a ticket
   // straight into this board's own queue) skip the up-to-5s poll wait and
