@@ -36905,6 +36905,61 @@
       }).join('')
       + '</div>';
   }
+  // Compact label for the claim-types restriction shown on the toggle.
+  function _uxqClaimLabel(ct) {
+    if (!ct || !ct.length) return 'any';
+    if (ct.length === 1) return ct[0] + 's';
+    return ct.join(',');
+  }
+  // Auto-drain toggle + claim-type cycle + config-gear controls for one
+  // queue — shared between the full health-strip row (CCC-789/790 wanted
+  // the SAME live controls, not just a read-only line) and the compact
+  // single-queue status strip shown when the RHS health list is off
+  // (CCC-781/789). Both bind their clicks on a common ancestor (#queuePanel)
+  // via delegated listeners keyed off these classes/data-attrs, so one
+  // markup+handler pair drives either surface.
+  function _uxqQueueControlsHtml(project, autoDrain, claimTypes) {
+    const drainKey = String(project || '').toUpperCase();
+    const pendingDrain = _uxqPendingDrainStates.get(drainKey);
+    const isDrainPending = !!(pendingDrain && pendingDrain.pending);
+    // A health request can have started before the POST and complete after
+    // it. Keep the confirmed value through that stale repaint; discard the
+    // override only when a later health snapshot agrees with the write.
+    const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;
+    if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);
+    const displayedAutoDrain = pendingDrain ? pendingDrain.on : autoDrain;
+    const drainToggle = '<button type="button" class="fq-health-drain-toggle'
+      + (displayedAutoDrain ? ' is-on' : '') + (isDrainPending ? ' is-pending' : '') + '"'
+      + ' data-drain-queue="' + escapeAttr(project) + '"'
+      + ' data-drain-on="' + (displayedAutoDrain ? '1' : '0') + '"'
+      + ' aria-pressed="' + (displayedAutoDrain ? 'true' : 'false') + '"'
+      + (isDrainPending ? ' aria-busy="true" disabled' : '')
+      + ' title="' + (isDrainPending
+        ? ('Turning auto-drain ' + (displayedAutoDrain ? 'on' : 'off') + '…')
+        : (displayedAutoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable')) + '">'
+      + '<span class="fq-health-drain-val">' + (displayedAutoDrain ? 'on' : 'off') + '</span>'
+      + '</button>';
+    const typeToggle = '<span class="fq-health-type-toggle' + (claimTypes && claimTypes.length ? ' is-restricted' : '') + '"'
+      + ' role="button" tabindex="0"'
+      + ' data-claim-queue="' + escapeAttr(project) + '"'
+      + ' data-claim-types="' + escapeAttr(JSON.stringify(claimTypes || [])) + '"'
+      + ' title="Claim filter - click to cycle all / bug / feature">'
+      + '<span class="fq-health-type-val">' + escapeHtml(_uxqClaimLabel(claimTypes)) + '</span>'
+      + '</span>';
+    const configBtn = '<button class="fq-health-config" data-fq-config-queue="' + escapeAttr(project) + '"'
+      + ' title="Edit ' + escapeAttr(project) + ' queue configuration" aria-label="Edit ' + escapeAttr(project) + ' queue configuration">⚙</button>';
+    return { drainToggle, typeToggle, configBtn };
+  }
+  // Bust the health cache and repaint whichever queue strip(s) are on
+  // screen (the full health list and/or the compact single-queue status
+  // strip) after a config/drain/claim-type mutation.
+  async function _uxqRefreshQueueStrips() {
+    _uxqHealthCache.ts = 0;
+    await _renderQueueHealthStrip(true, null);
+    const liveWorkers = ((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])
+      .filter(w => w && w.alive !== false);
+    _renderQueueStatusStrip(_uxqLastResolvedProject, _uxqItemsCache.items, liveWorkers);
+  }
   // Render the health strip at the top of the Queue tab. Scoped to the same
   // project the ticket list shows when one is resolvable; otherwise shows all
   // projects with open tickets. Bust the cache with force=true after a write.
@@ -36985,12 +37040,6 @@
         if (q.claimable != null) _claimableByQueue.set(key, Number(q.claimable) || 0);
       }
     });
-    // Compact label for the claim-types restriction shown on the toggle.
-    const _claimLabel = (ct) => {
-      if (!ct || !ct.length) return 'any';
-      if (ct.length === 1) return ct[0] + 's';
-      return ct.join(',');
-    };
     let html = '';
     if (!rows.length) {
       html += '<div class="fq-health-clear">All queues clear</div>';
@@ -37043,44 +37092,20 @@
         const autoDrain = _drainByQueue.has(drainKey)
           ? _drainByQueue.get(drainKey)
           : !!r.auto_drain;
-        const pendingDrain = _uxqPendingDrainStates.get(drainKey);
-        const isDrainPending = !!(pendingDrain && pendingDrain.pending);
-        // A health request can have started before the POST and complete after
-        // it. Keep the confirmed value through that stale repaint; discard the
-        // override only when a later health snapshot agrees with the write.
-        const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;
-        if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);
-        const displayedAutoDrain = pendingDrain ? pendingDrain.on : autoDrain;
-        const drainToggle = '<button type="button" class="fq-health-drain-toggle'
-          + (displayedAutoDrain ? ' is-on' : '') + (isDrainPending ? ' is-pending' : '') + '"'
-          + ' data-drain-queue="' + escapeAttr(project) + '"'
-          + ' data-drain-on="' + (displayedAutoDrain ? '1' : '0') + '"'
-          + ' aria-pressed="' + (displayedAutoDrain ? 'true' : 'false') + '"'
-          + (isDrainPending ? ' aria-busy="true" disabled' : '')
-          + ' title="' + (isDrainPending
-            ? ('Turning auto-drain ' + (displayedAutoDrain ? 'on' : 'off') + '…')
-            : (displayedAutoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable')) + '">'
-          + '<span class="fq-health-drain-val">' + (displayedAutoDrain ? 'on' : 'off') + '</span>'
-          + '</button>';
         // Claim-types restriction control: click-cycles all → bug → feature.
         // Only meaningful while auto-drain is on (the policy only affects
         // auto-drain workers), but always shown so the user can preset it.
         const claimTypes = _claimTypesByQueue.has(project.toUpperCase())
           ? _claimTypesByQueue.get(project.toUpperCase())
           : (Array.isArray(r.claim_types) ? r.claim_types : []);
-        const typeToggle = '<span class="fq-health-type-toggle' + (claimTypes && claimTypes.length ? ' is-restricted' : '') + '"'
-          + ' role="button" tabindex="0"'
-          + ' data-claim-queue="' + escapeAttr(project) + '"'
-          + ' data-claim-types="' + escapeAttr(JSON.stringify(claimTypes || [])) + '"'
-          + ' title="Claim filter - click to cycle all / bug / feature">'
-          + '<span class="fq-health-type-val">' + escapeHtml(_claimLabel(claimTypes)) + '</span>'
-          + '</span>';
+        const controls = _uxqQueueControlsHtml(project, autoDrain, claimTypes);
+        const drainToggle = controls.drainToggle;
+        const typeToggle = controls.typeToggle;
+        const configBtn = controls.configBtn;
         const delTitle = depth > 0 ? ('Delete queue - drain ' + depth + ' open item(s) first') : ('Delete queue ' + project);
         const delBtn = '<button class="fq-health-del' + (depth > 0 ? ' is-disabled' : '') + '"'
           + ' data-del-queue="' + escapeAttr(project) + '" data-depth="' + depth + '"'
           + ' title="' + escapeAttr(delTitle) + '" aria-label="' + escapeAttr(delTitle) + '">×</button>';
-        const configBtn = '<button class="fq-health-config" data-fq-config-queue="' + escapeAttr(project) + '"'
-          + ' title="Edit ' + escapeAttr(project) + ' queue configuration" aria-label="Edit ' + escapeAttr(project) + ' queue configuration">⚙</button>';
         const liveWorkerRows = (_liveWorkersByQueue.get(_ckey) || [])
           .map(worker => _renderWtWorkerCompactRow(worker, { showQueue: false })).join('');
         const pastWorkerRows = _renderWtPastWorkers(_pastWorkersByQueue.get(_ckey) || []);
@@ -38114,6 +38139,11 @@
     const q = ((_uxqHealthCache && _uxqHealthCache.queues) || [])
       .find(x => x && _uxqProjectKey(x.queue) === key);
     const auto = q ? !!q.auto_drain : false;
+    const claimTypes = Array.isArray(q && q.claim_types) ? q.claim_types : [];
+    const row = ((_uxqHealthCache && _uxqHealthCache.rows) || [])
+      .find(x => x && _uxqProjectKey(x.project) === key);
+    const depth = row ? (Number(row.depth) || 0) : 0;
+    const age = row ? _uxqFmtAge(row.oldest_open_age_seconds) : '';
     const workers = (liveWorkers || []).filter(w => w && _uxqProjectKey(w.queue) === key);
     const workerItem = (w) => (items || []).find(it => {
       const claimedSession = String((it && it.claimed_session_id) || '').trim();
@@ -38123,11 +38153,20 @@
       return (claimedSession && claimedSession === session)
         || (claimedBy && (claimedBy === session || claimedBy === id));
     });
-    const watchHtml = '<span class="fq-status-watch' + (auto ? ' is-on' : '') + '"'
-      + ' title="' + escapeAttr(auto ? 'Auto-drain is on for this queue' : 'Auto-drain is off for this queue') + '">'
-      + '<span class="fq-status-radar" aria-hidden="true"></span>'
-      + (auto ? 'Auto-drain on' : 'Auto-drain off')
-      + '</span>';
+    // CCC-789 follow-up: a read-only "Auto-drain off" line left no path to
+    // actually change it (or claim types) from this compact view — reuse
+    // the same live controls (gear/drain-toggle/claim-cycle) the full
+    // health-strip row has, not just a label.
+    const controls = _uxqQueueControlsHtml(key, auto, claimTypes);
+    const watchHtml = controls.configBtn
+      + '<span class="fq-status-proj">' + escapeHtml(key) + '</span>'
+      + (row ? ('<span class="fq-status-sep">·</span>'
+          + '<span class="fq-status-depth" title="' + escapeAttr(depth + ' open') + '">' + depth + '</span>'
+          + '<span class="fq-status-sep">·</span>'
+          + '<span class="fq-status-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>') : '')
+      + (workers.length ? '<span class="fq-status-live">LIVE</span>' : '')
+      + controls.drainToggle
+      + controls.typeToggle;
     const workerHtml = workers.length
       ? workers.map(w => {
           const on = workerItem(w);
@@ -38521,8 +38560,14 @@
       });
     }
     // STUCK badge in the health strip — nudge that project's fixer via the same
-    // throttled /api/inject-input channel the worker-row pill uses.
-    const $health = document.getElementById('queueHealthStrip');
+    // throttled /api/inject-input channel the worker-row pill uses. Bound to
+    // #queuePanel (the shared ancestor of both #queueHealthStrip and the
+    // compact #queueStatusStrip) rather than #queueHealthStrip alone, so the
+    // same delegated, class-based handlers drive the drain-toggle/claim-cycle/
+    // config-gear controls on whichever of the two strips is on screen
+    // (CCC-789 follow-up: the compact strip grew its own copies of these
+    // controls and needs the same click wiring).
+    const $health = document.getElementById('queuePanel');
     if ($health) {
       const openWorkerSession = (ev) => {
         const card = ev.target && ev.target.closest && ev.target.closest('[data-fq-worker-sid], .cepw-row[data-cepw-sid]');
@@ -38608,13 +38653,11 @@
           if (drainSucceeded) {
             const refreshDrainHealth = async () => {
               if (healthInFlightAtClick) await healthInFlightAtClick.catch(() => {});
-              _uxqHealthCache.ts = 0;
-              _renderQueueHealthStrip(true, null);
+              await _uxqRefreshQueueStrips();
             };
             void refreshDrainHealth();
           } else {
-            _uxqHealthCache.ts = 0;
-            _renderQueueHealthStrip(true, null);
+            void _uxqRefreshQueueStrips();
           }
         }
       };
@@ -38640,8 +38683,7 @@
           });
         } catch (_) {}
         btn.style.opacity = '';
-        _uxqHealthCache.ts = 0;
-        _renderQueueHealthStrip(true, null);
+        void _uxqRefreshQueueStrips();
       };
       const deleteQueue = async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('.fq-health-del[data-del-queue]');
@@ -38664,8 +38706,7 @@
           });
           const data = await res.json().catch(() => ({}));
           if (res.ok && data.ok) {
-            _uxqHealthCache.ts = 0;
-            _renderQueueHealthStrip(true, null);
+            void _uxqRefreshQueueStrips();
           } else {
             showOpToast('Delete failed: ' + (data.error || res.status), 'error');
             btn.disabled = false;
@@ -38827,25 +38868,6 @@
     });
     document.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') _closeQueueMoreMenu();
-    });
-  }
-
-  // CCC-789: "how do i get to the queue settings?" — openQueueManager
-  // already exists (wired to the RHS health-strip's gear icon), but that
-  // strip is hidden whenever the compact single-queue status line is shown
-  // instead (getQueueRhsListPref() off), leaving no path to it from this
-  // panel at all. Surface the same modal from the "…" menu, for whichever
-  // queue this rail is currently showing.
-  const $queueSettingsLink = document.getElementById('queueSettingsLink');
-  if ($queueSettingsLink) {
-    $queueSettingsLink.addEventListener('click', () => {
-      _closeQueueMoreMenu();
-      const proj = _uxqLastResolvedProject || '';
-      if (!proj || proj === 'ALL') {
-        showOpToast('Pick a specific queue first (not "All queues").', 'error');
-        return;
-      }
-      openQueueManager(proj);
     });
   }
 

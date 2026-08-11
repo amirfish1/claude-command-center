@@ -5307,9 +5307,12 @@ class TestServerImports(unittest.TestCase):
     def test_queue_drain_toggle_keeps_optimistic_state_through_refresh(self):
         """A stale health repaint must not erase a confirmed drain transition."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        # The pendingDrain/optimistic-state logic lives in _uxqQueueControlsHtml,
+        # shared between the full health-strip row and the compact single-queue
+        # status strip (CCC-789 follow-up) so both surfaces agree on in-flight state.
         strip_js = app_js[
-            app_js.index("async function _renderQueueHealthStrip"):
-            app_js.index("// Repo-basename", app_js.index("async function _renderQueueHealthStrip"))
+            app_js.index("function _uxqQueueControlsHtml"):
+            app_js.index("async function _uxqRefreshQueueStrips", app_js.index("function _uxqQueueControlsHtml"))
         ]
         toggle_js = app_js[
             app_js.index("const toggleDrain = async (ev) =>"):

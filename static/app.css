@@ -20170,23 +20170,25 @@ body:has(.gc-reader) .pwa-install-banner {
   font-size: 11px; color: var(--text-muted);
 }
 .fq-status-strip[hidden] { display: none; }
-.fq-status-watch {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-weight: 600; color: var(--text-muted);
-}
-.fq-status-watch.is-on { color: var(--green, #3fb950); }
-.fq-status-radar {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: currentColor; opacity: 0.55;
-}
-.fq-status-watch.is-on .fq-status-radar { animation: fq-status-pulse 1.6s ease-in-out infinite; }
-@keyframes fq-status-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.35); }
+/* CCC-789 follow-up: the strip's first line is now the SAME live controls
+   the full health-strip row has (gear/drain-toggle/claim-cycle), not just a
+   read-only "Auto-drain off" label — this compact view is the only queue
+   summary visible when the RHS health list is off, so it needs a real path
+   to change auto-drain/claim-types, not just observe them. */
+.fq-status-strip .fq-health-config { opacity: 0.7; }
+.fq-status-strip .fq-health-config:hover { opacity: 1; }
+.fq-status-proj { font-weight: 600; color: var(--text); }
+.fq-status-sep { color: var(--faint, var(--text-muted)); opacity: 0.7; }
+.fq-status-depth, .fq-status-age { color: var(--text-muted); }
+.fq-status-live {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(63,185,80,0.15); color: var(--green, #3fb950);
 }
 .fq-status-worker {
   display: inline-flex; align-items: center; gap: 5px;
   color: var(--text);
+  flex-basis: 100%;
 }
 .fq-status-worker.is-empty { color: var(--text-muted); }
 .fq-status-worker b { font-weight: 500; color: var(--text-muted); margin-left: 2px; }
@@ -20195,8 +20197,11 @@ body:has(.gc-reader) .pwa-install-banner {
   background: var(--accent); flex: 0 0 auto;
   animation: fq-status-pulse 1s ease-in-out infinite;
 }
+@keyframes fq-status-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.35); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .fq-status-watch.is-on .fq-status-radar,
   .fq-status-spin { animation: none; }
 }
 .fq-health-add {
