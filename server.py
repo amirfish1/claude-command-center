@@ -50385,22 +50385,24 @@ def _inject_text_into_session(
                         "session_id": session_id,
                     }
             active_child = _spawn_entry_active_tool_child(spawn)
-            if not _from_terminal_queue:
-                # Deliver mid-turn. A headless `claude -p` reading stream-json
-                # from its FIFO accepts a user message written WHILE a tool
-                # child is running — it buffers it and processes it at the next
-                # turn boundary, exactly like the TUI's queued messages
-                # (verified: a mid-tool stdin write neither blocks nor is lost,
-                # and claude picks it up). So do NOT proactively park input
-                # behind a busy turn the way the old `or active_child` gate did
-                # — that was the source of the "Queued — will send when the
-                # session finishes its current step" friction. Only queue when
-                # input is ALREADY queued, to preserve delivery order; the write
-                # below still falls back to the queue if the pipe genuinely
-                # rejects the message.
-                if _terminal_input_queue_has_pending(session_id):
+            if not _from_terminal_queue and mode != "steer":
+                # "send" means defer to the next turn boundary, same contract
+                # as the TTY path (_session_status_is_busy gates that one too)
+                # and the interactive TUI's own queued-messages behavior.
+                # A prior version of this gate only checked active_child (a
+                # running tool subprocess), which misses the much more common
+                # case of a turn that's busy generating text with no tool
+                # child at all — a mid-turn write during THAT window doesn't
+                # reliably defer (confirmed against community reports for
+                # `claude -p --input-format stream-json`: unlike the TUI, nothing
+                # in the stream-json protocol guarantees a mid-turn stdin write
+                # is held for the next boundary rather than acting like steer).
+                # Callers that genuinely need mid-turn delivery should ask for
+                # it explicitly with mode="steer" rather than relying on "send"
+                # to sneak one in.
+                if _session_status_is_busy(status) or _terminal_input_queue_has_pending(session_id):
                     queued_status = dict(status or {})
-                    queued_status["status"] = "busy"
+                    queued_status["status"] = queued_status.get("status") or "busy"
                     queued_status["pid"] = queued_status.get("pid") or spawn.get("pid")
                     if active_child:
                         queued_status["active_child_pid"] = active_child.get("pid")
