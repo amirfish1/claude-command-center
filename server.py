@@ -45118,6 +45118,53 @@ def _headless_log_result_count(entry):
     return count
 
 
+def _headless_log_turn_open(entry):
+    """True if a Claude headless's own stdout log ends mid-turn.
+
+    Each completed turn ends with exactly one `{"type":"result"}` line (see
+    `_headless_log_result_count`). If the LAST event in the log is anything
+    else — plain text delta, tool_use, system, whatever — the turn the last
+    user input triggered hasn't finished yet. This is the only busy signal
+    that covers a turn that's streaming text with no tool child running at
+    all: `_spawn_entry_active_tool_child` and the sidecar hook markers are
+    both tool-boundary-only (PreToolUse/PostToolUse/Stop), so neither one
+    fires during a pure-text turn. Returns False (not busy) if the log is
+    missing, empty, or unreadable — same fail-open default as the rest of
+    the busy-detection chain.
+    """
+    if not isinstance(entry, dict):
+        return False
+    log = entry.get("log")
+    if not log:
+        return False
+    last_type = None
+    try:
+        with open(log, "rb") as f:
+            try:
+                size = os.fstat(f.fileno()).st_size
+            except OSError:
+                size = 0
+            if size > 65536:
+                f.seek(size - 65536)
+                f.readline()  # discard partial first line
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                t = ev.get("type") if isinstance(ev, dict) else None
+                if t:
+                    last_type = t
+    except OSError:
+        return False
+    if last_type is None:
+        return False
+    return last_type != "result"
+
+
 def _transcript_tail_signature(session_id):
     """Return (size_bytes, last_event_uuid) for a session's transcript.
 
@@ -50408,7 +50455,22 @@ def _inject_text_into_session(
                 # Callers that genuinely need mid-turn delivery should ask for
                 # it explicitly with mode="steer" rather than relying on "send"
                 # to sneak one in.
-                if _session_status_is_busy(status) or _terminal_input_queue_has_pending(session_id):
+                #
+                # _session_status_is_busy(status) is included for parity with
+                # the TTY path, but for a headless spawn it's a no-op: nothing
+                # upstream of this call populates status["status"] for a plain
+                # (non-ACP) Claude session, and even when it IS populated (see
+                # the /api/session-status handler) it's set from the same
+                # tool-child signal as active_child — never from generic
+                # mid-text-generation activity. _headless_log_turn_open reads
+                # the headless's own stdout log, which is the only signal that
+                # actually distinguishes "turn open, streaming text" from
+                # "turn closed, idle" regardless of whether a tool is running.
+                if (
+                    _session_status_is_busy(status)
+                    or _headless_log_turn_open(spawn)
+                    or _terminal_input_queue_has_pending(session_id)
+                ):
                     queued_status = dict(status or {})
                     queued_status["status"] = queued_status.get("status") or "busy"
                     queued_status["pid"] = queued_status.get("pid") or spawn.get("pid")
