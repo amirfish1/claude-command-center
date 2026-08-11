@@ -938,6 +938,68 @@
     ].join('|');
   }
 
+  // The per-worker card, shared between the per-queue diagram's Worker stage
+  // and the ALL-queues live-workers view -- both need the same idle/"kept
+  // warm while blocked"/release-button treatment, and having two copies is
+  // exactly how the ALL view fell behind (it never got the idle-severity or
+  // blocked-ticket handling added to the per-queue card over time).
+  // `working`/`blocked` are the ticket pools to match this worker against
+  // (one queue's, for the diagram; every queue's, for the ALL view).
+  // `opts.showQueue` labels which queue a card belongs to -- meaningless in
+  // the per-queue diagram (the whole column is already that queue) but the
+  // only way to tell workers apart once they're mixed together in ALL view.
+  function workerCardHtml(w, working, blocked, opts) {
+    opts = opts || {};
+    var on = working.filter(function (it) { return workerMatchesItem(w, it); })[0];
+    // A worker whose only claimed ticket just got blocked (needs_input)
+    // is not "idle" in the WatchTower-would-release sense: it is being
+    // deliberately kept warm because the ticket needs a human answer,
+    // not a fresh claim (see workers.py's IDLE_DECISION PRESERVE with
+    // reason "blocked_ticket"). Q2WorkerIdle's plain idle-time buckets
+    // ("release pending" / "should have released") don't know this and
+    // read as an alarm for a worker that is behaving exactly as designed.
+    var blockedOn = !on && blocked.filter(function (it) { return workerMatchesItem(w, it); })[0];
+    var idle = blockedOn
+      ? {
+          label: 'Kept warm — previously worked a ticket that now needs input',
+          severity: 'blocked',
+          title: 'Holding ' + blockedOn.ref + ', blocked on your answer'
+            + (blockedOn.block_question ? ': ' + String(blockedOn.block_question).slice(0, 160) : '')
+            + '. WatchTower keeps this worker alive so it can resume the moment you answer.',
+        }
+      : Q2WorkerIdle.presentation(w.idle_seconds);
+    // 'warm' (< 30m idle) used to fall through to '' here, so a worker
+    // with nothing claimed still got the plain is-live look -- same
+    // spinning green ring as one actively working a ticket. Every idle
+    // tier now gets a class so the spin can read as "sleeping" instead.
+    var idleClass = idle.severity === 'warm' ? ' is-idle-warm'
+      : idle.severity === 'pending' ? ' is-idle-pending'
+      : idle.severity === 'warning' ? ' is-idle-warning'
+      : idle.severity === 'stale' ? ' is-idle-stale'
+      : idle.severity === 'blocked' ? ' is-idle-blocked' : '';
+    return '<div class="q2-dg-worker is-live' + (on ? '' : idleClass) + '"'
+      + (on ? '' : ' data-idle-severity="' + esc(idle.severity) + '"') + '>'
+      + '<div class="q2-dg-worker-head">'
+      + '<span class="q2-dg-spin" aria-hidden="true"></span>'
+      + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
+      + (w.session_id ? sessionBtn(w.session_id, 'open ' + String(w.session_id).slice(0, 8)) : '')
+      + '<button type="button" class="q2-dg-worker-release"'
+      + ' data-q2-release-worker="' + esc(w.worker_id || '') + '"'
+      + ' title="Release this worker and requeue its ticket"'
+      + ' aria-label="Release ' + esc(w.worker_id || 'worker') + ' and requeue its ticket">Release</button>'
+      + '</div>'
+      + (opts.showQueue
+          ? '<div class="q2-dg-worker-queue">' + esc(w.queue || 'unknown queue') + '</div>' : '')
+      + workerSpecHtml(w, 'q2-dg-worker-spec')
+      + (on
+          ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
+            + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
+            + '<span class="q2-dg-worker-title">' + esc(titleOf(on).split('\n')[0].slice(0, 60)) + '</span></div>'
+          : '<div class="q2-dg-worker-idle" title="' + esc(idle.title) + '">'
+            + esc(idle.label) + '</div>')
+      + '</div>';
+  }
+
   function renderDiagram() {
     var host = $('q2Diagram');
     if (!host) return;
@@ -965,52 +1027,7 @@
     var workerBody;
     if (m.workers.length) {
       workerBody = m.workers.map(function (w) {
-        var on = m.working.filter(function (it) { return workerMatchesItem(w, it); })[0];
-        // A worker whose only claimed ticket just got blocked (needs_input)
-        // is not "idle" in the WatchTower-would-release sense: it is being
-        // deliberately kept warm because the ticket needs a human answer,
-        // not a fresh claim (see workers.py's IDLE_DECISION PRESERVE with
-        // reason "blocked_ticket"). Q2WorkerIdle's plain idle-time buckets
-        // ("release pending" / "should have released") don't know this and
-        // read as an alarm for a worker that is behaving exactly as designed.
-        var blockedOn = !on && m.blocked.filter(function (it) { return workerMatchesItem(w, it); })[0];
-        var idle = blockedOn
-          ? {
-              label: 'Kept warm — previously worked a ticket that now needs input',
-              severity: 'blocked',
-              title: 'Holding ' + blockedOn.ref + ', blocked on your answer'
-                + (blockedOn.block_question ? ': ' + String(blockedOn.block_question).slice(0, 160) : '')
-                + '. WatchTower keeps this worker alive so it can resume the moment you answer.',
-            }
-          : Q2WorkerIdle.presentation(w.idle_seconds);
-        // 'warm' (< 30m idle) used to fall through to '' here, so a worker
-        // with nothing claimed still got the plain is-live look -- same
-        // spinning green ring as one actively working a ticket. Every idle
-        // tier now gets a class so the spin can read as "sleeping" instead.
-        var idleClass = idle.severity === 'warm' ? ' is-idle-warm'
-          : idle.severity === 'pending' ? ' is-idle-pending'
-          : idle.severity === 'warning' ? ' is-idle-warning'
-          : idle.severity === 'stale' ? ' is-idle-stale'
-          : idle.severity === 'blocked' ? ' is-idle-blocked' : '';
-        return '<div class="q2-dg-worker is-live' + (on ? '' : idleClass) + '"'
-          + (on ? '' : ' data-idle-severity="' + esc(idle.severity) + '"') + '>'
-          + '<div class="q2-dg-worker-head">'
-          + '<span class="q2-dg-spin" aria-hidden="true"></span>'
-          + '<span class="q2-dg-worker-id">' + esc(w.worker_id || 'worker') + '</span>'
-          + (w.session_id ? sessionBtn(w.session_id, 'open ' + String(w.session_id).slice(0, 8)) : '')
-          + '<button type="button" class="q2-dg-worker-release"'
-          + ' data-q2-release-worker="' + esc(w.worker_id || '') + '"'
-          + ' title="Release this worker and requeue its ticket"'
-          + ' aria-label="Release ' + esc(w.worker_id || 'worker') + ' and requeue its ticket">Release</button>'
-          + '</div>'
-          + workerSpecHtml(w, 'q2-dg-worker-spec')
-          + (on
-              ? '<div class="q2-dg-worker-on" data-q2-ref="' + esc(on.ref) + '" title="' + esc(titleOf(on).split('\n')[0]) + '">'
-                + '<span class="q2-dg-card-ref">' + esc(on.ref) + '</span>'
-                + '<span class="q2-dg-worker-title">' + esc(titleOf(on).split('\n')[0].slice(0, 60)) + '</span></div>'
-              : '<div class="q2-dg-worker-idle" title="' + esc(idle.title) + '">'
-                + esc(idle.label) + '</div>')
-          + '</div>';
+        return workerCardHtml(w, m.working, m.blocked);
       }).join('');
     } else {
       // The Worker stage is about the running INSTANCE. What the queue would
@@ -1084,28 +1101,37 @@
 
   // ALL is a triage view, not a synthetic queue. Its summary therefore shows
   // only real, live workers and does not imply that an armed queue is working.
+  // ALL-queues worker view. Used to be a flat one-line-per-worker strip with
+  // no idle status, no "on ticket X", no release button -- everything the
+  // per-queue diagram's Worker stage already had. Now it's the same
+  // workerCardHtml() cards, just matched against every queue's tickets
+  // instead of one, with a queue badge added since that context is no
+  // longer implicit from a single selected column.
   function renderLiveWorkersStrip(host) {
     var workers = state.workers || [];
+    var working = [], blocked = [];
+    (state.items || []).forEach(function (it) {
+      var st = statusOf(it);
+      if (st === 'in_progress') working.push(it);
+      else if (st === 'blocked') blocked.push(it);
+    });
     var sig = 'all|' + workers.map(function (w) {
-      // engine/model/effort are drawn here too, so keying on worker+queue alone
-      // would freeze a stale spec on screen after a respawn.
+      // Same signature shape as flowSignature's per-worker entry: engine/
+      // model/effort (respawn on a new spec must repaint), idle bucket, and
+      // session_id (a resumed worker's "open" link must repaint too).
       return String(w.worker_id || '') + '|' + String(w.queue || '')
-        + '|' + workerSpecFields(w).join('/');
-    }).join(',');
+        + '|' + Q2WorkerIdle.signatureBucket(w.idle_seconds)
+        + '|' + workerSpecFields(w).join('/') + '|' + (w.session_id || '');
+    }).join(',')
+      + '|' + working.map(function (it) { return it.ref; }).join(',')
+      + '|' + blocked.map(function (it) { return it.ref; }).join(',');
     if (host.getAttribute('data-sig') === sig) return;
     host.setAttribute('data-sig', sig);
     host.innerHTML = '<div class="q2-live-workers">'
       + '<div class="q2-live-workers-head">Live workers <span>' + workers.length + '</span></div>'
       + (workers.length
-          ? '<div class="q2-live-workers-list">' + workers.map(function (w) {
-              // Same triple as the per-queue worker cards, on the short model
-              // name: this strip is the only place the ALL view says anything
-              // about how each queue's worker is configured.
-              var spec = [w.engine, shortModel(w.model), w.effort].filter(Boolean).join(' · ');
-              return '<span class="q2-live-worker" title="' + esc(workerSpecTitle(w)) + '">'
-                + '<span class="q2-dg-spin" aria-hidden="true"></span>'
-                + esc(w.worker_id || 'worker') + '<b>' + esc(w.queue || 'unknown queue') + '</b>'
-                + (spec ? '<i>' + esc(spec) + '</i>' : '') + '</span>';
+          ? '<div class="q2-live-workers-grid">' + workers.map(function (w) {
+              return workerCardHtml(w, working, blocked, { showQueue: true });
             }).join('') + '</div>'
           : '<div class="q2-dg-empty">No workers are live.</div>')
       + '</div>';

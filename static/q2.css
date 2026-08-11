@@ -1020,11 +1020,27 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-live-workers { padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .q2-live-workers-head { font-size: 11px; font-weight: 650; color: var(--text-muted); }
 .q2-live-workers-head span { color: var(--green); }
-.q2-live-workers-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
-.q2-live-worker { display: inline-flex; align-items: center; gap: 4px; font: 10.5px var(--font-mono); color: var(--text); }
-.q2-live-worker b { font: inherit; color: var(--cyan); }
-/* Engine and effort, dimmed behind the worker and queue that identify the row. */
-.q2-live-worker i { font: inherit; font-style: normal; color: var(--text-muted); }
+/* Same q2-dg-worker cards the per-queue diagram uses, just wrapped instead of
+   stacked in one column (workerCardHtml() is shared -- see its comment). */
+.q2-live-workers-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+.q2-live-workers-grid .q2-dg-worker { width: 220px; }
+/* Only present with showQueue: true (the ALL view) -- a single-queue diagram
+   never needs to say which queue a card belongs to, it's the whole column.
+   Its own line rather than squeezed into the header row, which already
+   holds the worker id and two buttons. */
+.q2-dg-worker-queue {
+  font: 10px var(--font-mono);
+  color: var(--cyan);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
 /* Triage chips: type/priority, readiness, value/confidence. Fixed width, never
    shrink — the title yields the space instead, since it is truncated anyway. */
 .q2-tchips { flex: 0 0 auto; display: inline-flex; gap: 2px; }
