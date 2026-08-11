@@ -71576,6 +71576,17 @@ def main():
     # Token Optimizer quality is advisory UI metadata. Hydrate it in the
     # background; every request only reads the published in-memory map.
     _start_token_optimizer_quality_index_refresher()
+    # WatchTower's ticket list is GitHub-backed and its cache is in-process,
+    # so it is cold at exactly the moment the dashboard boot burst hits it.
+    # Measured on a restart: four concurrent /api/queue/* + /api/watchtower/*
+    # requests each fired their own `gh` round-trip and took 6-9s, and because
+    # they hold the GIL between subprocess waits they dragged /api/sessions to
+    # 11s alongside them. Warm it once, off the request path, before the
+    # browser asks. Failure is fine -- the endpoints still fetch on demand.
+    threading.Thread(
+        target=lambda: _wt_list_items_display_cached(max_age=0),
+        name="ccc-wt-items-prewarm", daemon=True,
+    ).start()
     _load_conv_meta_cache()
     # Seed _SEEN_INTERRUPTS from the resume ledger BEFORE any background
     # thread starts parsing transcripts. The seed makes dedup at-most-once
