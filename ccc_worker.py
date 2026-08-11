@@ -277,6 +277,38 @@ def _release_stale_restart_drain(runtime):
     return False
 
 
+# How often the worker sweeps orphaned `uncertain` work. Retirement itself is
+# age-gated (RETIRE_UNCERTAIN_AFTER_S), so this only decides how long the
+# System status chip carries a stale "N items need reconciliation" before it
+# settles — not how eagerly anything is retired.
+UNCERTAIN_SWEEP_INTERVAL_S = 300.0
+
+
+def _uncertain_sweep(runtime, stop_event, interval=UNCERTAIN_SWEEP_INTERVAL_S):
+    """Keep the uncertain count able to reach zero without a human.
+
+    Startup reconcile only sees the orphans that already aged past the
+    retirement window; the batch this very restart just created is minutes
+    old and survives it. With no sweep, those sit `uncertain` until somebody
+    presses Reconcile or the worker restarts again — which is how the count
+    grew to 48 items over 16 days in the first place.
+
+    Reconcile runs first, every time: liveness is re-checked immediately
+    before anything is retired, so a long-running turn the worker lost track
+    of is reclaimed rather than written off.
+    """
+    while not stop_event.wait(interval):
+        try:
+            if not runtime.ledger.summary().get("uncertain"):
+                continue
+            host = runtime._engines()
+            host.reconcile_uncertain()
+            host.retire_stale_uncertain()
+        except Exception:
+            # A sweep is best-effort bookkeeping; never take the worker down.
+            continue
+
+
 def serve(path=None):
     path = Path(path or socket_path())
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -326,9 +358,17 @@ def serve(path=None):
             daemon=True,
             name="ccc-reconcile",
         ).start()
+    sweep_stop = threading.Event()
+    threading.Thread(
+        target=_uncertain_sweep,
+        args=(runtime, sweep_stop),
+        daemon=True,
+        name="ccc-uncertain-sweep",
+    ).start()
     try:
         server.serve_forever(poll_interval=0.25)
     finally:
+        sweep_stop.set()
         server.server_close()
         try:
             path.unlink()
