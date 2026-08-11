@@ -36434,6 +36434,11 @@
   // Per-project queue-health snapshot (GET /api/ux-fixes/health). Same cache
   // window as the ticket list so a Queue refresh costs one extra cheap GET.
   let _uxqHealthCache = { ts: 0, rows: [], wt_workers: [], queues: [], worker_session_ids: [], past_workers: [] };
+  // Compact status strip's inline "Learnings" panel (CCC-789 follow-up 2):
+  // which queue's file is currently expanded (null = closed) + rendered-HTML
+  // cache per queue so repaints while open don't re-fetch every time.
+  let _uxqStatusLearningsOpenFor = null;
+  const _uxqLearningsCache = new Map();
   // A queue-health refresh can finish after a drain click but before its POST.
   // Keep the requested state separately so that stale snapshot cannot repaint
   // the button back to its former value or hide its in-progress spinner.
@@ -36918,7 +36923,7 @@
   // (CCC-781/789). Both bind their clicks on a common ancestor (#queuePanel)
   // via delegated listeners keyed off these classes/data-attrs, so one
   // markup+handler pair drives either surface.
-  function _uxqQueueControlsHtml(project, autoDrain, claimTypes) {
+  function _uxqQueueControlsHtml(project, autoDrain, claimTypes, opts) {
     const drainKey = String(project || '').toUpperCase();
     const pendingDrain = _uxqPendingDrainStates.get(drainKey);
     const isDrainPending = !!(pendingDrain && pendingDrain.pending);
@@ -36928,6 +36933,14 @@
     const drainStateConfirmed = pendingDrain && !pendingDrain.pending && autoDrain === pendingDrain.on;
     if (drainStateConfirmed) _uxqPendingDrainStates.delete(drainKey);
     const displayedAutoDrain = pendingDrain ? pendingDrain.on : autoDrain;
+    // The dense multi-row health list needs the terse "on"/"off" pill; the
+    // single-row compact status strip has room to spell it out so it reads
+    // on its own without the "Auto-drain" context a neighboring label gave
+    // it in the old read-only version (verbose opt, CCC-789 follow-up 2).
+    const verbose = !!(opts && opts.verboseDrainLabel);
+    const drainValText = verbose
+      ? ('auto-drain ' + (displayedAutoDrain ? 'on' : 'off'))
+      : (displayedAutoDrain ? 'on' : 'off');
     const drainToggle = '<button type="button" class="fq-health-drain-toggle'
       + (displayedAutoDrain ? ' is-on' : '') + (isDrainPending ? ' is-pending' : '') + '"'
       + ' data-drain-queue="' + escapeAttr(project) + '"'
@@ -36937,7 +36950,7 @@
       + ' title="' + (isDrainPending
         ? ('Turning auto-drain ' + (displayedAutoDrain ? 'on' : 'off') + '…')
         : (displayedAutoDrain ? 'Auto-drain is on - click to disable' : 'Auto-drain is off - click to enable')) + '">'
-      + '<span class="fq-health-drain-val">' + (displayedAutoDrain ? 'on' : 'off') + '</span>'
+      + '<span class="fq-health-drain-val">' + escapeHtml(drainValText) + '</span>'
       + '</button>';
     const typeToggle = '<span class="fq-health-type-toggle' + (claimTypes && claimTypes.length ? ' is-restricted' : '') + '"'
       + ' role="button" tabindex="0"'
@@ -38156,8 +38169,16 @@
     // CCC-789 follow-up: a read-only "Auto-drain off" line left no path to
     // actually change it (or claim types) from this compact view — reuse
     // the same live controls (gear/drain-toggle/claim-cycle) the full
-    // health-strip row has, not just a label.
-    const controls = _uxqQueueControlsHtml(key, auto, claimTypes);
+    // health-strip row has, not just a label. Spelled-out "auto-drain
+    // on/off" label and a bigger gear since this is the only queue summary
+    // on screen, not one of many dense rows.
+    const controls = _uxqQueueControlsHtml(key, auto, claimTypes, { verboseDrainLabel: true });
+    const learningsOpen = _uxqStatusLearningsOpenFor === key;
+    const learningsToggle = '<button type="button" class="fq-status-learnings-toggle'
+      + (learningsOpen ? ' is-open' : '') + '"'
+      + ' data-learnings-queue="' + escapeAttr(key) + '"'
+      + ' aria-expanded="' + (learningsOpen ? 'true' : 'false') + '"'
+      + ' title="Show this queue\'s learnings file (accumulated worker notes)">Learnings</button>';
     const watchHtml = controls.configBtn
       + '<span class="fq-status-proj">' + escapeHtml(key) + '</span>'
       + (row ? ('<span class="fq-status-sep">·</span>'
@@ -38166,7 +38187,8 @@
           + '<span class="fq-status-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>') : '')
       + (workers.length ? '<span class="fq-status-live">LIVE</span>' : '')
       + controls.drainToggle
-      + controls.typeToggle;
+      + controls.typeToggle
+      + learningsToggle;
     const workerHtml = workers.length
       ? workers.map(w => {
           const on = workerItem(w);
@@ -38178,8 +38200,43 @@
             + '</span>';
         }).join('')
       : '<span class="fq-status-worker is-empty">No live worker</span>';
+    const learningsHtml = learningsOpen
+      ? '<div class="fq-status-learnings markdown-body" id="queueStatusLearnings">'
+        + (_uxqLearningsCache.has(key)
+          ? _uxqLearningsCache.get(key)
+          : '<div class="fq-status-learnings-loading">Loading…</div>')
+        + '</div>'
+      : '';
     $el.hidden = false;
-    $el.innerHTML = watchHtml + workerHtml;
+    $el.innerHTML = watchHtml + workerHtml + learningsHtml;
+  }
+  function _uxqRepaintStatusStrip() {
+    const liveWorkers = ((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])
+      .filter(w => w && w.alive !== false);
+    _renderQueueStatusStrip(_uxqLastResolvedProject, _uxqItemsCache.items, liveWorkers);
+  }
+  // Fetch + cache a queue's learnings file, then repaint if it's still the
+  // one the user has open (a slow fetch must not clobber a since-closed or
+  // since-switched panel).
+  function _uxqLoadLearningsInto(queue) {
+    fetch('/api/queue/learnings?queue=' + encodeURIComponent(queue))
+      .then(r => r.json())
+      .then(data => {
+        let html;
+        if (data && data.ok) {
+          html = (data.content && data.content.trim())
+            ? renderMarkdown(data.content)
+            : '<div class="fq-status-learnings-empty">No learnings recorded yet for ' + escapeHtml(queue) + '.</div>';
+        } else {
+          html = '<div class="fq-status-learnings-empty">Could not load learnings: ' + escapeHtml((data && data.error) || 'unknown') + '</div>';
+        }
+        _uxqLearningsCache.set(queue, html);
+        if (_uxqStatusLearningsOpenFor === queue) _uxqRepaintStatusStrip();
+      })
+      .catch(e => {
+        _uxqLearningsCache.set(queue, '<div class="fq-status-learnings-empty">Could not load learnings: ' + escapeHtml((e && e.message) || 'network error') + '</div>');
+        if (_uxqStatusLearningsOpenFor === queue) _uxqRepaintStatusStrip();
+      });
   }
 
   function _renderQueuePanel(options) {
@@ -38732,11 +38789,26 @@
         _uxqItemsCache.ts = 0;
         _renderQueuePanel();
       };
+      const toggleLearnings = (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.fq-status-learnings-toggle[data-learnings-queue]');
+        if (!btn) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const queue = btn.getAttribute('data-learnings-queue');
+        if (_uxqStatusLearningsOpenFor === queue) {
+          _uxqStatusLearningsOpenFor = null;
+        } else {
+          _uxqStatusLearningsOpenFor = queue;
+          if (!_uxqLearningsCache.has(queue)) _uxqLoadLearningsInto(queue);
+        }
+        _uxqRepaintStatusStrip();
+      };
       $health.addEventListener('click', openWorkerSession);
       $health.addEventListener('click', nudgeFromBadge);
       $health.addEventListener('click', toggleDrain);
       $health.addEventListener('click', cycleClaimTypes);
       $health.addEventListener('click', deleteQueue);
+      $health.addEventListener('click', toggleLearnings);
       $health.addEventListener('click', async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
@@ -38745,7 +38817,7 @@
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); toggleLearnings(ev); scopeFromRow(ev); }
       });
     }
   }
