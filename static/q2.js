@@ -966,7 +966,23 @@
     if (m.workers.length) {
       workerBody = m.workers.map(function (w) {
         var on = m.working.filter(function (it) { return workerMatchesItem(w, it); })[0];
-        var idle = Q2WorkerIdle.presentation(w.idle_seconds);
+        // A worker whose only claimed ticket just got blocked (needs_input)
+        // is not "idle" in the WatchTower-would-release sense: it is being
+        // deliberately kept warm because the ticket needs a human answer,
+        // not a fresh claim (see workers.py's IDLE_DECISION PRESERVE with
+        // reason "blocked_ticket"). Q2WorkerIdle's plain idle-time buckets
+        // ("release pending" / "should have released") don't know this and
+        // read as an alarm for a worker that is behaving exactly as designed.
+        var blockedOn = !on && m.blocked.filter(function (it) { return workerMatchesItem(w, it); })[0];
+        var idle = blockedOn
+          ? {
+              label: 'Kept warm — previously worked a ticket that now needs input',
+              severity: 'blocked',
+              title: 'Holding ' + blockedOn.ref + ', blocked on your answer'
+                + (blockedOn.block_question ? ': ' + String(blockedOn.block_question).slice(0, 160) : '')
+                + '. WatchTower keeps this worker alive so it can resume the moment you answer.',
+            }
+          : Q2WorkerIdle.presentation(w.idle_seconds);
         // 'warm' (< 30m idle) used to fall through to '' here, so a worker
         // with nothing claimed still got the plain is-live look -- same
         // spinning green ring as one actively working a ticket. Every idle
@@ -974,7 +990,8 @@
         var idleClass = idle.severity === 'warm' ? ' is-idle-warm'
           : idle.severity === 'pending' ? ' is-idle-pending'
           : idle.severity === 'warning' ? ' is-idle-warning'
-          : idle.severity === 'stale' ? ' is-idle-stale' : '';
+          : idle.severity === 'stale' ? ' is-idle-stale'
+          : idle.severity === 'blocked' ? ' is-idle-blocked' : '';
         return '<div class="q2-dg-worker is-live' + (on ? '' : idleClass) + '"'
           + (on ? '' : ' data-idle-severity="' + esc(idle.severity) + '"') + '>'
           + '<div class="q2-dg-worker-head">'
@@ -1221,8 +1238,12 @@
     var canRun = st !== 'closed' && !isLiveWip(it);
     // run_requested is its own state, distinct from plain "open": the ticket
     // is sitting idle until WatchTower's reconciler picks it up. Only surface
-    // it where it can actually mean something (an idle, runnable row).
-    var queued = canRun && !!it.run_requested;
+    // it where it can actually mean something (an idle, runnable row) --
+    // and never over "needs input": a worker already read this ticket, hit
+    // a question only a human can answer, and blocked on it. The stale run
+    // request is still true but no longer the thing to tell someone; showing
+    // "run requested" here reads as if nothing had happened yet.
+    var queued = canRun && !!it.run_requested && st !== 'blocked';
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
       : unverified ? 'claimed by ' + String(it.claimed_by || '') + ', liveness unverified'
       : (stale && st !== 'blocked') ? 'stale claim, no live worker is on this'

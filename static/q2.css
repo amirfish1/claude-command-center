@@ -466,6 +466,14 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   border-color: var(--red);
   background: color-mix(in srgb, var(--bg) 90%, var(--red));
 }
+/* Kept warm on purpose (holding a blocked/needs-input ticket) -- same
+   "needs input" blue used for ticket rows (.q2-trow.is-blocked), not the
+   pending/warning/stale escalation: this worker isn't overdue for release,
+   it's correctly waiting on a human answer. */
+.q2-dg-worker.is-live.is-idle-blocked {
+  border-color: var(--wip-blue);
+  background: color-mix(in srgb, var(--bg) 90%, var(--wip-blue));
+}
 /* Idle (any severity, including the < 30m "warm" tier that used to fall
    through with no class at all) doesn't spin -- a rotating ring means
    "doing something right now"; idle means waiting for reuse. Severity
@@ -477,10 +485,12 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-dg-worker.is-idle-pending .q2-dg-spin { border-color: var(--text-muted); border-right-color: var(--text-muted); }
 .q2-dg-worker.is-idle-warning .q2-dg-spin { border-color: var(--orange); border-right-color: var(--orange); }
 .q2-dg-worker.is-idle-stale .q2-dg-spin { border-color: var(--red); border-right-color: var(--red); }
+.q2-dg-worker.is-idle-blocked .q2-dg-spin { border-color: var(--wip-blue); border-right-color: var(--wip-blue); }
 .q2-dg-worker.is-idle-warm .q2-dg-spin,
 .q2-dg-worker.is-idle-pending .q2-dg-spin,
 .q2-dg-worker.is-idle-warning .q2-dg-spin,
-.q2-dg-worker.is-idle-stale .q2-dg-spin {
+.q2-dg-worker.is-idle-stale .q2-dg-spin,
+.q2-dg-worker.is-idle-blocked .q2-dg-spin {
   animation: q2-dg-sleepy 2.6s ease-in-out infinite;
 }
 @keyframes q2-dg-sleepy {
@@ -489,6 +499,7 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 }
 .q2-dg-worker.is-idle-warning .q2-dg-worker-idle { color: var(--orange); opacity: 1; }
 .q2-dg-worker.is-idle-stale .q2-dg-worker-idle { color: var(--red); opacity: 1; }
+.q2-dg-worker.is-idle-blocked .q2-dg-worker-idle { color: var(--wip-blue); opacity: 1; }
 .q2-dg-worker.is-empty {
   border-style: dashed;
   flex-direction: row;
