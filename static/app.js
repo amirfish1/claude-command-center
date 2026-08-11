@@ -7097,6 +7097,20 @@
     btn.textContent = expanded ? 'Show less' : 'Show full result';
   });
 
+  // CCC-783: sidebar row kebab ("actions") menu — closes on outside click
+  // or Escape. The open/close toggle itself lives per-render next to the
+  // other row-action listeners (search .conv-kebab-btn).
+  document.addEventListener('click', (ev) => {
+    if (ev.target.closest('.conv-kebab-btn')) return;
+    document.querySelectorAll('.conv-item.is-actions-open').forEach(row => {
+      if (!row.contains(ev.target)) row.classList.remove('is-actions-open');
+    });
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    document.querySelectorAll('.conv-item.is-actions-open').forEach(row => row.classList.remove('is-actions-open'));
+  });
+
   document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-copy-assistant-message]');
     if (!btn) return;
@@ -28140,7 +28154,7 @@
             // narrow and there's no per-row layout shift between hover
             // states (CSS uses `position: absolute` for one of them).
             + '<span class="conv-row-end">'
-            +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
+            +   '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions (last activity ' + escapeAttr(rel) + ')" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + lifecycleButtons + elevateObjectBtn + '</span>'
             + '</span>'
           + '</div>'
@@ -32566,6 +32580,19 @@
           return;
         }
         startInlineRename(item);
+      });
+    });
+    $convList.querySelectorAll('.conv-kebab-btn').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const item = btn.closest('.conv-item');
+        if (!item) return;
+        const willOpen = !item.classList.contains('is-actions-open');
+        $convList.querySelectorAll('.conv-item.is-actions-open').forEach(row => {
+          if (row !== item) row.classList.remove('is-actions-open');
+        });
+        item.classList.toggle('is-actions-open', willOpen);
       });
     });
     $convList.querySelectorAll('.conv-pin-btn').forEach(btn => {

@@ -5138,13 +5138,48 @@
     z-index: 5;
   }
   .conv-item .conv-row-actions:empty { display: none; }
-  /* On hover (or focus-within for keyboard users), swap: time fades out,
+  /* On hover (or focus-within for keyboard users), swap: kebab fades out,
      actions fade in. Only applied when actions are non-empty so rows
-     without any actions just keep showing the time. */
+     without any actions just keep showing the kebab. CCC-783: the kebab
+     button gives the same swap on click (`.is-actions-open`), for touch
+     users and anyone who'd rather not rely on discovering hover. */
   .conv-item:hover .conv-row-actions:not(:empty),
-  .conv-item:focus-within .conv-row-actions:not(:empty) {
+  .conv-item:focus-within .conv-row-actions:not(:empty),
+  .conv-item.is-actions-open .conv-row-actions:not(:empty) {
     opacity: 1;
     pointer-events: auto;
+  }
+  .conv-item .conv-kebab-btn {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    width: 20px;
+    height: 18px;
+    border: none;
+    background: transparent;
+    padding: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: opacity 0.06s ease, background 0.1s ease;
+  }
+  .conv-item .conv-kebab-btn:hover,
+  .conv-item .conv-kebab-btn:focus-visible {
+    background: rgba(255,255,255,0.08);
+  }
+  .conv-item .conv-kebab-dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .conv-item:hover .conv-row-end > .conv-kebab-btn,
+  .conv-item:focus-within .conv-row-end > .conv-kebab-btn,
+  .conv-item.is-actions-open .conv-row-end > .conv-kebab-btn {
+    opacity: 0;
+    pointer-events: none;
   }
   .conv-item.is-pinned:not(:hover):not(:focus-within) .conv-row-actions:not(:empty) {
     opacity: 1;
