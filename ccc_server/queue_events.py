@@ -153,6 +153,12 @@ def _queue_replay_events():
 _UXQ_STUCK_NO_PROGRESS_S = 10 * 60
 
 
+# Mirrors watchtower.queue.UNCLAIMABLE_READINESS. A ticket in one of these
+# states is not work a drainer can pick up, so it must not count toward the
+# depth that decides whether a queue is stuck.
+_UNCLAIMABLE_READINESS = ("needs-shaping", "needs-spec")
+
+
 def compute_ux_fixes_health(items=None):
     """Per-project queue-health snapshot used by /api/ux-fixes/health.
 
@@ -334,7 +340,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     # `open` stays = depth (from health); these add a done/total progress count.
     closed_by_q = {}
     total_by_q = {}
-    claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim (claim_types)
+    claimable_by_q = {}  # queue → open items a worker is ALLOWED to claim
     last_activity_q = {}  # queue → most-recent item-touch epoch (any status)
     try:
         for it in ((_core._q.list_items() if items is None else items) or []):
@@ -352,6 +358,20 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             # claimable=True; un-runnable issues must not trigger drain state.
             if it.get("status") == "open":
                 if it.get("claimable") is False:
+                    continue
+                # Readiness gating, the other half of WatchTower's claim
+                # filter. `claim_next` skips needs-shaping/needs-spec tickets
+                # unless it is explicitly shaping, and the WT reconciler counts
+                # claimable depth through that same filter — so a queue whose
+                # only open tickets are unshaped is NOT under-staffed, it is
+                # correctly unstaffed, and WT will never spawn for it. CCC used
+                # to copy only the claim_types half, which made those queues
+                # read "stuck" forever: an alarm about work no worker is
+                # allowed to touch, which no restart or spawn could ever clear.
+                # A ticket a human pressed ▶ on is claimable regardless — that
+                # is the manual override WT honours too.
+                readiness = str(it.get("readiness") or "").strip().lower()
+                if readiness in _UNCLAIMABLE_READINESS and not it.get("run_requested"):
                     continue
                 types = cfg_claim.get(qn, [])
                 # Untyped == bug (matches WatchTower's claim filter): a ticket
