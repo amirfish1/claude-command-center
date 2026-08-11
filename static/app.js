@@ -30612,7 +30612,11 @@
     }
     const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
     _arcCount = _allTabTotalCount;
-    const _allHermesTabBarHtml = _allTabHasHermesSplit
+    // CCC-780: the nested Coding/Workers/Messages/Group-chats filter bar is
+    // redundant (and confusing) when we're already inside the top-level
+    // Coding or Workers tab — that tab IS the filter. Only show it on the
+    // actual All tab.
+    const _allHermesTabBarHtml = (_allTabHasHermesSplit && !_topLevelLaneOverride)
       ? '<div class="conv-all-hermes-tabs" data-role="all-hermes-tabs" role="tablist" aria-label="All Hermes lanes">'
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'coding' ? ' is-active' : '') + '" data-all-hermes-tab="coding" role="tab" aria-selected="' + (_allTabView === 'coding') + '" title="Drop a session here to show it under Coding">'
         +   'Coding<span class="conv-tab-count">' + _allTabCodingConvs.length + '</span>'
@@ -30754,15 +30758,15 @@
     const _tabDefs = getSeparateTabsPref()
       ? [
         ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
-        ['archived', 'All', _arcCount || 0],
         ['issues', 'Issues', (_ghIssueConvs && _ghIssueConvs.length) || 0],
         ['queues', 'Queues', ((_uxqHealthCache && _uxqHealthCache.queues) || []).length],
+        ['archived', 'All', _arcCount || 0],
       ]
       : [
         ['inprogress', 'Active', ((_openAskConvs && _openAskConvs.length) || 0) + ((_visibleSessionConvs && _visibleSessionConvs.length) || 0) + ((_gcItems && _gcItems.length) || 0)],
-        ['archived', 'All', _arcCount || 0],
         ['coding', 'Coding', _allTabCodingConvs.length],
         ['workers', 'Workers', _allTabWorkerConvs.length],
+        ['archived', 'All', _arcCount || 0],
       ];
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
