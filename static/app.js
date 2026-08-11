@@ -63862,7 +63862,7 @@
 
     listContainer.innerHTML = '';
 
-    const engines = ['claude', 'antigravity', 'cursor', 'codex'];
+    const engines = ['claude', 'antigravity', 'codex', 'kimi', 'cursor'];
     engines.forEach(key => {
       const cli = onbCliStatus[key];
       if (!cli) return;
@@ -63879,18 +63879,28 @@
         statusBadge = `<span class="onb-badge onb-badge-gray">✗ Not Installed</span>`;
       }
 
-      // Add a special "Antigravity has free tier" note if Antigravity is not installed or logged in
+      // Add special notes for specific engines
       let noteHtml = '';
       if (key === 'antigravity' && (!cli.available || !cli.logged_in)) {
         noteHtml = `<div style="font-size: 11px; color: var(--accent); margin-top: 4px; font-weight: 500;">💡 Antigravity has a free tier! Try it out.</div>`;
+      } else if (key === 'kimi' && (!cli.available || !cli.logged_in)) {
+        noteHtml = `<div style="font-size: 11px; color: var(--accent); margin-top: 4px; font-weight: 500;">💡 Kimi Code features high-speed coding models and affordable plans.</div>`;
       }
+
+      let installCmdHtml = '';
+      if (!cli.available && cli.install_instruction) {
+        installCmdHtml = `<div style="font-family: monospace; font-size: 11px; margin-top: 4px; color: var(--ink-dim, #8a96a8); background: rgba(0,0,0,0.15); padding: 2px 6px; border-radius: 4px; word-break: break-all; display: inline-block;">install: <code>${escapeHtml(cli.install_instruction)}</code></div>`;
+      }
+
+      const icon = key === 'claude' ? '🤖' : key === 'antigravity' ? '🌌' : key === 'codex' ? '💻' : key === 'kimi' ? '🌙' : '🖱️';
 
       item.innerHTML = `
         <div class="onb-cli-info">
-          <div class="onb-cli-icon">${key === 'claude' ? '🤖' : key === 'antigravity' ? '🌌' : key === 'cursor' ? '🖱️' : '💻'}</div>
+          <div class="onb-cli-icon">${icon}</div>
           <div class="onb-cli-details">
             <h4>${cli.name}</h4>
             <p style="font-family: monospace; font-size: 11px;">command: ${cli.command}</p>
+            ${installCmdHtml}
             ${noteHtml}
           </div>
         </div>
@@ -63903,10 +63913,39 @@
       const badgesContainer = item.querySelector('.onb-cli-status-badges');
       if (badgesContainer) {
         if (!cli.available) {
+          if (cli.install_instruction) {
+            const installBtn = document.createElement('button');
+            installBtn.type = 'button';
+            installBtn.className = 'onb-setup-action';
+            installBtn.innerHTML = '⚡ Install';
+            installBtn.title = 'Run install command in Terminal';
+            installBtn.onclick = async () => {
+              try {
+                const res = await fetch('/api/onboarding/install-terminal', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ engine: key })
+                });
+                const data = await res.json();
+                if (data && data.ok) {
+                  showOpToast('Opened terminal to install ' + cli.name + '!', 'ok');
+                } else {
+                  navigator.clipboard.writeText(cli.install_instruction);
+                  showOpToast('Copied install command for ' + cli.name + ' to clipboard!', 'ok');
+                }
+              } catch (e) {
+                navigator.clipboard.writeText(cli.install_instruction);
+                showOpToast('Copied install command for ' + cli.name + ' to clipboard!', 'ok');
+              }
+            };
+            badgesContainer.appendChild(installBtn);
+          }
+
           const link = document.createElement('a');
           link.href = cli.signup_url;
           link.target = '_blank';
           link.className = 'onb-setup-action';
+          link.style.marginLeft = '4px';
           link.innerHTML = '🌐 Setup Guide &rarr;';
           badgesContainer.appendChild(link);
         } else if (!cli.logged_in) {
@@ -63992,7 +64031,8 @@
 
     select.innerHTML = '';
 
-    const engines = ['claude', 'antigravity', 'cursor', 'codex'];
+    const engines = ['claude', 'antigravity', 'codex', 'kimi', 'cursor'];
+    let addedCount = 0;
     let addedCount = 0;
 
     engines.forEach(key => {

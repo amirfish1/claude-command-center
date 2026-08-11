@@ -29,9 +29,19 @@ class TestOnboardingInlineLogin(unittest.TestCase):
             self.server,
             "_resolve_codex_bin",
             return_value={"available": True, "bin": "/usr/local/bin/codex"},
+        ), mock.patch.object(
+            self.server,
+            "_resolve_antigravity_bin",
+            return_value={"available": True, "bin": "/usr/local/bin/agy"},
+        ), mock.patch.object(
+            self.server,
+            "_resolve_kimi_bin",
+            return_value={"available": True, "bin": "/usr/local/bin/kimi"},
         ):
             claude = self.server._onboarding_login_command("claude")
             codex = self.server._onboarding_login_command("codex")
+            antigravity = self.server._onboarding_login_command("antigravity")
+            kimi = self.server._onboarding_login_command("kimi")
 
         self.assertTrue(claude["ok"])
         self.assertEqual(claude["argv"], ["/usr/local/bin/claude", "auth", "login"])
@@ -39,6 +49,23 @@ class TestOnboardingInlineLogin(unittest.TestCase):
         self.assertTrue(codex["ok"])
         self.assertEqual(codex["argv"], ["/usr/local/bin/codex", "login"])
         self.assertEqual(codex["command"], "/usr/local/bin/codex login")
+        self.assertTrue(antigravity["ok"])
+        self.assertEqual(antigravity["argv"], ["/usr/local/bin/agy", "login"])
+        self.assertTrue(kimi["ok"])
+        self.assertEqual(kimi["argv"], ["/usr/local/bin/kimi", "login"])
+
+    def test_get_onboarding_status_includes_antigravity_codex_and_kimi(self):
+        status = self.server._get_onboarding_status()
+        clis = status.get("clis", {})
+        self.assertIn("claude", clis)
+        self.assertIn("antigravity", clis)
+        self.assertIn("codex", clis)
+        self.assertIn("kimi", clis)
+        self.assertIn("cursor", clis)
+
+        self.assertIn("install_instruction", clis["antigravity"])
+        self.assertIn("install_instruction", clis["codex"])
+        self.assertIn("install_instruction", clis["kimi"])
 
     def test_login_output_hints_extract_urls_and_device_codes(self):
         hints = self.server._onboarding_login_output_hints(
@@ -82,7 +109,7 @@ class TestOnboardingInlineLogin(unittest.TestCase):
         self.assertTrue(cancelled["ok"])
         self.assertFalse(cancelled["running"])
 
-    def test_onboarding_ui_wires_inline_login_panel(self):
+    def test_onboarding_ui_wires_inline_login_and_install_panel(self):
         app_js = open(os.path.join(PROJECT_ROOT, "static", "app.js"), encoding="utf-8").read()
         app_css = open(os.path.join(PROJECT_ROOT, "static", "app.css"), encoding="utf-8").read()
 
@@ -90,5 +117,7 @@ class TestOnboardingInlineLogin(unittest.TestCase):
         self.assertIn("/api/onboarding/login/status", app_js, "missing login status endpoint")
         self.assertIn("/api/onboarding/login/input", app_js, "missing login input endpoint")
         self.assertIn("/api/onboarding/login/cancel", app_js, "missing login cancel endpoint")
+        self.assertIn("/api/onboarding/install-terminal", app_js, "missing install-terminal endpoint")
         self.assertIn("onb-login-panel", app_js, "missing inline login panel markup")
         self.assertIn(".onb-login-panel", app_css, "missing inline login panel styles")
+

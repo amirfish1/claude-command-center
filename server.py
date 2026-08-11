@@ -60191,6 +60191,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             return
+        if path == "/api/onboarding/install-terminal":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                engine = payload.get("engine")
+                if not engine:
+                    self.send_json({"error": "missing engine"}, 400)
+                    return
+                res = _launch_install_terminal(engine)
+                self.send_json(res)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            return
         if path == "/api/history/setup" or path == "/api/history/ingest":
             # First-click OOBE: kick a background ingest of all known JSONL
             # transcripts. /api/history/setup is called from the OOBE prompt;
@@ -66904,6 +66918,30 @@ def _get_onboarding_status():
         except Exception:
             pass
 
+    # 6. Kimi Status
+    kimi_info = _resolve_kimi_bin()
+    kimi_available = kimi_info.get("available", False)
+    kimi_bin = kimi_info.get("bin")
+    kimi_logged_in = False
+    kimi_email = None
+    
+    kimi_creds_file = Path.home() / ".kimi-code" / "credentials.json"
+    if kimi_creds_file.is_file():
+        try:
+            with open(kimi_creds_file, "r", encoding="utf-8") as f:
+                cdata = json.load(f)
+                if cdata.get("access_token") or cdata.get("token") or cdata.get("user"):
+                    kimi_logged_in = True
+                    user_info = cdata.get("user") or {}
+                    if isinstance(user_info, dict) and user_info.get("email"):
+                        kimi_email = user_info.get("email")
+        except Exception:
+            pass
+    if not kimi_logged_in:
+        kimi_config_file = Path.home() / ".kimi-code" / "config.toml"
+        if kimi_config_file.is_file() or os.environ.get("KIMI_API_KEY"):
+            kimi_logged_in = True
+
     return {
         "completed": completed,
         "completed_at": completed_at,
@@ -66927,19 +66965,8 @@ def _get_onboarding_status():
                 "logged_in": antigravity_logged_in,
                 "email": antigravity_email,
                 "signup_url": "https://antigravity.google",
-                "install_instruction": "Install from https://antigravity.google",
-                "login_instruction": "agy"
-            },
-            "cursor": {
-                "name": "Cursor Agent",
-                "command": "cursor-agent",
-                "available": cursor_available,
-                "bin_path": cursor_bin,
-                "logged_in": cursor_logged_in,
-                "email": cursor_email,
-                "signup_url": "https://cursor.com",
-                "install_instruction": "Install via Cursor App or npm install -g @cursor/agent",
-                "login_instruction": "cursor-agent login"
+                "install_instruction": "curl -fsSL https://antigravity.google/install.sh | bash",
+                "login_instruction": "agy login"
             },
             "codex": {
                 "name": "Codex CLI",
@@ -66951,6 +66978,28 @@ def _get_onboarding_status():
                 "signup_url": "https://openai.com",
                 "install_instruction": "npm install -g @openai/codex",
                 "login_instruction": "codex login"
+            },
+            "kimi": {
+                "name": "Kimi Code",
+                "command": "kimi",
+                "available": kimi_available,
+                "bin_path": kimi_bin,
+                "logged_in": kimi_logged_in,
+                "email": kimi_email,
+                "signup_url": "https://www.kimi.com/code",
+                "install_instruction": "curl -fsSL https://www.kimi.com/code/install.sh | bash",
+                "login_instruction": "kimi login"
+            },
+            "cursor": {
+                "name": "Cursor Agent",
+                "command": "cursor-agent",
+                "available": cursor_available,
+                "bin_path": cursor_bin,
+                "logged_in": cursor_logged_in,
+                "email": cursor_email,
+                "signup_url": "https://cursor.com",
+                "install_instruction": "Install via Cursor App or npm install -g @cursor/agent",
+                "login_instruction": "cursor-agent login"
             }
         }
     }
@@ -66979,7 +67028,8 @@ def _onboarding_login_command(engine):
         "claude": (_resolve_claude_bin, ["auth", "login"]),
         "codex": (_resolve_codex_bin, ["login"]),
         "cursor": (_resolve_cursor_bin, ["login"]),
-        "antigravity": (_resolve_antigravity_bin, []),
+        "antigravity": (_resolve_antigravity_bin, ["login"]),
+        "kimi": (_resolve_kimi_bin, ["login"]),
     }
     spec = specs.get(key)
     if not spec:
@@ -67356,6 +67406,49 @@ def _launch_login_terminal(engine):
         
     try:
         # Launch terminal in background
+        subprocess.Popen(["osascript", "-e", script])
+        return {"ok": True, "terminal_app": target, "command": command}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _launch_install_terminal(engine):
+    """Launch a terminal window and run the install command for the specified engine."""
+    import subprocess
+    if platform.system() != "Darwin":
+        _log_macos_only("onboardingInstallTerminal")
+        return {"ok": False, "error": "opening a visible terminal is macOS-only"}
+
+    status = _get_onboarding_status()
+    cli = status.get("clis", {}).get(engine)
+    if not cli or not cli.get("install_instruction"):
+        return {"ok": False, "error": f"no install instruction available for engine: {engine}"}
+
+    command = cli["install_instruction"]
+    cmd_lit = command.replace("\\", "\\\\").replace('"', '\\"')
+    target = _preferred_terminal_app()
+
+    if target == "iTerm2":
+        script = f'''
+        tell application "iTerm2"
+          activate
+          set newWin to (create window with default profile)
+          tell current session of newWin
+            write text "{cmd_lit}"
+          end tell
+        end tell
+        return "ok"
+        '''
+    else:
+        script = f'''
+        tell application "Terminal"
+          activate
+          do script "{cmd_lit}"
+        end tell
+        return "ok"
+        '''
+
+    try:
         subprocess.Popen(["osascript", "-e", script])
         return {"ok": True, "terminal_app": target, "command": command}
     except Exception as e:
