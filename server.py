@@ -18504,7 +18504,40 @@ def launch_terminal_for_session(session_id, cwd=None, terminal_app=None, post_sl
     return result
 
 
+_tty_keystroke_locks_guard = threading.Lock()
+_tty_keystroke_locks: dict = {}
+
+
+def _tty_keystroke_lock(tty):
+    """Per-tty lock so two concurrent keystroke injections (e.g. a composer
+    send racing the terminal-queue-watcher's drain) can't both write their
+    body into the terminal's pending input line before either submits —
+    CCC-797: observed as two unrelated messages splicing into one line with
+    no separator.
+    """
+    key = str(tty or "")
+    with _tty_keystroke_locks_guard:
+        lock = _tty_keystroke_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _tty_keystroke_locks[key] = lock
+        return lock
+
+
 def inject_input_via_keystroke(tty, terminal_app, text, submit_key="return"):
+    """Serialize per-tty, then delegate to `_inject_input_via_keystroke_impl`.
+
+    Holding the lock for the full write-body + delay + submit sequence is
+    what CCC-797 needed: without it, a second injection's `write text` /
+    `do script` can land in the terminal's pending input line before the
+    first one's submit keystroke fires, gluing two unrelated messages
+    together with no separator.
+    """
+    with _tty_keystroke_lock(tty):
+        return _inject_input_via_keystroke_impl(tty, terminal_app, text, submit_key=submit_key)
+
+
+def _inject_input_via_keystroke_impl(tty, terminal_app, text, submit_key="return"):
     """Find the terminal tab for `tty`, then send `text` + a submit key to it.
 
     Two stages, both inside one osascript call:
