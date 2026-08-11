@@ -1,0 +1,1 @@
+Orphaned "uncertain" queue work (created any time a worker restarts) is now swept and retired every 5 minutes instead of only at the next server restart or a manual Reconcile click — the previous startup-only sweep let a backlog build up over days.

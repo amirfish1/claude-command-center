@@ -1,0 +1,1 @@
+The Model Advisor (fleet drift scan) now shows reasoning effort alongside the model name everywhere it lists sessions — scanned-sessions table, live recommendations, and "from → to" badges — instead of showing model with no effort, the one Model Advisor surface that was still effort-blind.

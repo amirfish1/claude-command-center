@@ -1,0 +1,1 @@
+Fixed the Annotate button (status rail and top bar) disappearing when Debug mode is off. Annotate is a general-purpose affordance, not a diagnostic one, so it now stays visible regardless of the Debug mode setting.

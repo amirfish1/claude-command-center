@@ -1,0 +1,1 @@
+Fixed the composer's context-usage pill showing 200K instead of 1M for a session already switched to the 1M-context beta, until `/context` happened to run once. The server now checks the persisted 1M override first, so the pill is correct on first render.

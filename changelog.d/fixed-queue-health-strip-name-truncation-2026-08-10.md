@@ -1,0 +1,1 @@
+Fixed queue names in the sidebar's Queue-tab health rows truncating to 1-3 characters at normal rail widths — the fixed-width badge/auto-drain/claim-type chrome was crowding out the name, the one thing meant to identify the row. Rows now wrap onto a second line when needed and the name gets a guaranteed minimum width.

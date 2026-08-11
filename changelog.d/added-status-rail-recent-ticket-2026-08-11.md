@@ -1,0 +1,1 @@
+The status rail's "Original ask" panel for a WatchTower drain worker now shows the most recently claimed/closed ticket (with a collapsible "Tickets handled this session" list), instead of staying frozen on the original queue-drain instruction it launched with — which went stale the moment the worker closed its first ticket.

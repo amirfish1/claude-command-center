@@ -1,0 +1,1 @@
+Added a Settings > Appearance toggle, "Show queue list on RHS" (off by default). Off, the rail's Queue panel replaces the multi-queue health list with a compact single-queue status strip showing auto-drain state and any live worker(s) for the currently selected queue, without needing the full ~440px flow diagram.

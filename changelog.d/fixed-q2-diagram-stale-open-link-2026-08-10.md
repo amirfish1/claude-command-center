@@ -1,0 +1,1 @@
+Fixed a worker card's "open" link pointing at a stale session after a worker resumed under the same worker id with a new session — the diagram's change-detection now keys on session id so it repaints instead of skipping the update.

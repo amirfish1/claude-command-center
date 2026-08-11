@@ -1,0 +1,1 @@
+Added a Layout & View setting, "Show issues and queues as separate tabs" (off by default). Off, the sidebar's top-level Issues/Queues tabs are replaced by Coding/Workers — the same content, pre-filtered to that lane — so most people see fewer, more relevant tabs; on restores the original Issues/Queues tabs.

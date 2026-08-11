@@ -1,0 +1,1 @@
+Fixed error toasts being silently swallowed for everyone without Debug mode enabled. `showOpToast` used to hide both 'info' and 'error' toasts behind Debug mode; failed dashboard actions (e.g. a failed Send) now always show an error toast, while low-priority 'info' toasts stay debug-only.

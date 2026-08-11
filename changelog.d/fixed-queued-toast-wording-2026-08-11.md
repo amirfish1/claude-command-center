@@ -1,0 +1,1 @@
+Cleaned up queued-send toast wording: replaced the nonsensical "Still queued: HTTP 0" fallback (a literal `0` was being used in place of a real HTTP status) with an actual reason, and the steer-fallback toast now just says "Queued" instead of editorializing with an unhelpful "Steer failed; …" explanation.

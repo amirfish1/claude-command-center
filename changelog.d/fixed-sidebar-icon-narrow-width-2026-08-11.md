@@ -1,0 +1,1 @@
+Fixed the sidebar's leading engine/cost icon disappearing at normal, comfortable sidebar widths — the hide breakpoint was tuned for a much wider rail (780px) than most people actually use. Lowered to 460px so the icon only yields its space to the session name in genuinely tight rows.

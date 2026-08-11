@@ -1,0 +1,1 @@
+Fixed two messages occasionally gluing together into one with no separator when a composer send and the terminal-queue watcher's drain both tried to type into the same terminal at the same time. Keystroke injection into a given terminal is now serialized so only one write is in flight at a time.

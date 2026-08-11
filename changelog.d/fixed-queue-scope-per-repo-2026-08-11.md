@@ -1,0 +1,1 @@
+Fixed the Queue tab's scope picker (e.g. "All queues") leaking across sessions — picking a scope in one session's Queue tab was saved globally and silently became the default for every other session's Queue tab too. It's now keyed per-repo, so it survives a same-repo session resume but no longer overrides a different repo's own scope.

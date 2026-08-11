@@ -1,0 +1,1 @@
+Sidebar rows now show a two-dot kebab menu for pin/archive/trash on hover/focus (in place of the time chip), instead of requiring a hover-only icon swap that's easy to miss and unreachable on touch; the time chip is still shown at rest, and clicking the kebab opens the actions inline.
