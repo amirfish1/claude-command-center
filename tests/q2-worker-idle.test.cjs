@@ -31,3 +31,14 @@ test('signature changes each minute and at severity boundaries', () => {
   assert.equal(idle.signatureBucket(120 * 60), 'stale:120');
   assert.equal(idle.signatureBucket(null), 'unknown');
 });
+
+test('ageText formats minutes and hours consistently for countdowns too', () => {
+  assert.equal(idle.ageText(0), '0m');
+  assert.equal(idle.ageText(59 * 60), '59m');
+  assert.equal(idle.ageText(60 * 60), '1h');
+  assert.equal(idle.ageText(83 * 60), '1h 23m');
+});
+
+test('BLOCKED_RELEASE_CEILING_S mirrors workers.py RELEASED_TTL_S (1h)', () => {
+  assert.equal(idle.BLOCKED_RELEASE_CEILING_S, 60 * 60);
+});

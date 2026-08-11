@@ -959,15 +959,39 @@
     // ("release pending" / "should have released") don't know this and
     // read as an alarm for a worker that is behaving exactly as designed.
     var blockedOn = !on && blocked.filter(function (it) { return workerMatchesItem(w, it); })[0];
-    var idle = blockedOn
-      ? {
-          label: 'Kept warm — previously worked a ticket that now needs input',
-          severity: 'blocked',
-          title: 'Holding ' + blockedOn.ref + ', blocked on your answer'
-            + (blockedOn.block_question ? ': ' + String(blockedOn.block_question).slice(0, 160) : '')
-            + '. WatchTower keeps this worker alive so it can resume the moment you answer.',
-        }
-      : Q2WorkerIdle.presentation(w.idle_seconds);
+    var idle;
+    if (blockedOn) {
+      // Kept warm is bounded, not forever (workers.py's blocked_only_past_
+      // ceiling, mirrored here as BLOCKED_RELEASE_CEILING_S): past it the
+      // worker is released like any other idle one. `wt answer` still reaches
+      // the same session after that -- it resumes fresh instead of steering
+      // a live process -- so the countdown is to "this card goes away", not
+      // to "your answer stops working".
+      var idleKnown = typeof w.idle_seconds === 'number' && isFinite(w.idle_seconds) && w.idle_seconds >= 0;
+      var releaseInS = idleKnown
+        ? Math.max(0, Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S - w.idle_seconds) : null;
+      var countdown = releaseInS === null ? ''
+        : releaseInS > 0 ? ' — released in ' + Q2WorkerIdle.ageText(releaseInS) + ' unless answered'
+        : ' — releasing any moment unless answered';
+      idle = {
+        label: 'Kept warm' + countdown,
+        severity: 'blocked',
+        title: 'Holding ' + blockedOn.ref + ', blocked on your answer'
+          + (blockedOn.block_question ? ': ' + String(blockedOn.block_question).slice(0, 160) : '')
+          + '. WatchTower keeps this worker alive so it can resume the moment you answer'
+          + (releaseInS === null
+              ? '.'
+              : releaseInS > 0
+                ? ', but releases it automatically in ' + Q2WorkerIdle.ageText(releaseInS)
+                  + ' if still unanswered. wt answer still reaches the same session after '
+                  + 'that (it resumes fresh instead of steering a live process) -- release just '
+                  + 'means the process itself stops, about '
+                  + Q2WorkerIdle.ageText(Q2WorkerIdle.BLOCKED_RELEASE_CEILING_S) + ' later.'
+                : ', but is about to be released automatically since nobody has answered yet.'),
+      };
+    } else {
+      idle = Q2WorkerIdle.presentation(w.idle_seconds);
+    }
     // 'warm' (< 30m idle) used to fall through to '' here, so a worker
     // with nothing claimed still got the plain is-live look -- same
     // spinning green ring as one actively working a ticket. Every idle
