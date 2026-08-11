@@ -30615,12 +30615,14 @@
         + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'workers' ? ' is-active' : '') + '" data-all-hermes-tab="workers" role="tab" aria-selected="' + (_allTabView === 'workers') + '" title="Drop a session here to show it under Workers">'
         +   'Workers<span class="conv-tab-count">' + _allTabWorkerConvs.length + '</span>'
         + '</button>'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '" title="Drop a session here to show it under Messages">'
-        +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
-        + '</button>'
-        + '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'group-chats' ? ' is-active' : '') + '" data-all-hermes-tab="group-chats" role="tab" aria-selected="' + (_allTabView === 'group-chats') + '">'
-        +   'Group chats<span class="conv-tab-count">' + _allTabGroupChatCount + '</span>'
-        + '</button>'
+        + ((_allTabHermesMessageConvs.length === 0 && _allTabView !== 'messages') ? '' :
+          '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'messages' ? ' is-active' : '') + '" data-all-hermes-tab="messages" role="tab" aria-selected="' + (_allTabView === 'messages') + '" title="Drop a session here to show it under Messages">'
+          +   'Messages<span class="conv-tab-count">' + _allTabHermesMessageConvs.length + '</span>'
+          + '</button>')
+        + ((_allTabGroupChatCount === 0 && _allTabView !== 'group-chats') ? '' :
+          '<button type="button" class="conv-all-hermes-tab' + (_allTabView === 'group-chats' ? ' is-active' : '') + '" data-all-hermes-tab="group-chats" role="tab" aria-selected="' + (_allTabView === 'group-chats') + '">'
+          +   'Group chats<span class="conv-tab-count">' + _allTabGroupChatCount + '</span>'
+          + '</button>')
         + '</div>'
       : '';
 
