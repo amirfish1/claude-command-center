@@ -3073,6 +3073,7 @@ def _record_recent_repo(path_str):
         _RECENT_REPOS_FILE.write_text("\n".join(new_list) + "\n")
     except OSError:
         pass
+    _invalidate_known_repo_paths()
 
 
 def _append_custom_repo(path_str):
@@ -3087,6 +3088,7 @@ def _append_custom_repo(path_str):
     _CUSTOM_REPOS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with _CUSTOM_REPOS_FILE.open("a") as f:
         f.write(str(p) + "\n")
+    _invalidate_known_repo_paths()
     return str(p)
 
 
@@ -4583,7 +4585,38 @@ def _discover_repo_paths_from_projects():
     return out
 
 
+# _known_repo_paths walks every known/recent/custom repo AND rediscovers repos
+# from ~/.claude/projects (169 dirs, ~100k is_dir syscalls). One /api/sessions
+# load called it 20 times -- mostly via resolve_repo_path, which every request
+# path funnels through -- for 1.6s of pure repeat work. The answer only moves
+# when a repo is added or removed, so a few seconds of staleness is invisible
+# while the repeat cost is not.
+_KNOWN_REPO_PATHS_CACHE = {"at": 0.0, "paths": None}
+_KNOWN_REPO_PATHS_TTL_S = 5.0
+_KNOWN_REPO_PATHS_LOCK = threading.Lock()
+
+
+def _invalidate_known_repo_paths():
+    """Drop the memo — call after adding/removing a repo."""
+    with _KNOWN_REPO_PATHS_LOCK:
+        _KNOWN_REPO_PATHS_CACHE["at"] = 0.0
+        _KNOWN_REPO_PATHS_CACHE["paths"] = None
+
+
 def _known_repo_paths():
+    now = time.time()
+    with _KNOWN_REPO_PATHS_LOCK:
+        hit = _KNOWN_REPO_PATHS_CACHE["paths"]
+        if hit is not None and now - _KNOWN_REPO_PATHS_CACHE["at"] < _KNOWN_REPO_PATHS_TTL_S:
+            return list(hit)
+    out = _known_repo_paths_uncached()
+    with _KNOWN_REPO_PATHS_LOCK:
+        _KNOWN_REPO_PATHS_CACHE["at"] = time.time()
+        _KNOWN_REPO_PATHS_CACHE["paths"] = out
+    return list(out)
+
+
+def _known_repo_paths_uncached():
     paths = []
     try:
         for r in load_known_repos():

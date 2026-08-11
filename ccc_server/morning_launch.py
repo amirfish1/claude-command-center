@@ -520,6 +520,16 @@ _TIMELINE_COMMIT_RESULT_RE = re.compile(r"\[[^\]]+\s+([0-9a-f]{7,40})\]\s*(.+)")
 # repeat `git rev-parse` subprocess each per-call cache used to re-fire.
 _GIT_TOPLEVEL_CACHE = {}
 _GIT_TOPLEVEL_CACHE_MAX = 2000
+# Thirteen callers across server.py and every engine finder open a THROWAWAY
+# `git_top_cache = {}` per scan, so each one re-forked `git rev-parse
+# --show-toplevel` for directories the process had already resolved -- and
+# re-forked them again on the next request. A directory's git toplevel does
+# not change under a running server, so memoise the subprocess result itself,
+# process-wide, below whatever per-call dict the caller passed. Callers keep
+# their local fast path; nobody pays for the same fork twice.
+_GIT_TOPLEVEL_RESULTS = {}
+_GIT_TOPLEVEL_RESULTS_MAX = 4000
+_GIT_TOPLEVEL_RESULTS_LOCK = threading.Lock()
 
 
 def _git_toplevel_for_path(path, cache=None):
@@ -567,17 +577,34 @@ def _git_toplevel_for_path(path, cache=None):
         if key == top or key.startswith(top + os.sep):
             cache[key] = top
             return top
-    try:
-        r = subprocess.run(
-            ["git", "-C", key, "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=2,
-        )
-        top = r.stdout.strip() if r.returncode == 0 else None
-    except (subprocess.SubprocessError, OSError):
-        top = None
+    with _GIT_TOPLEVEL_RESULTS_LOCK:
+        memo_hit = key in _GIT_TOPLEVEL_RESULTS
+        memo_top = _GIT_TOPLEVEL_RESULTS.get(key)
+    if memo_hit:
+        top = memo_top
+    else:
+        try:
+            r = subprocess.run(
+                ["git", "-C", key, "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, timeout=2,
+            )
+            top = r.stdout.strip() if r.returncode == 0 else None
+        except (subprocess.SubprocessError, OSError):
+            top = None
+        with _GIT_TOPLEVEL_RESULTS_LOCK:
+            if len(_GIT_TOPLEVEL_RESULTS) > _GIT_TOPLEVEL_RESULTS_MAX:
+                _GIT_TOPLEVEL_RESULTS.clear()
+            _GIT_TOPLEVEL_RESULTS[key] = top
     if len(cache) > _GIT_TOPLEVEL_CACHE_MAX:
-        cache.clear()
-        tops = cache["\x00tops"] = []
+        # Evict the oldest half instead of clearing outright. A wholesale
+        # clear also dropped the "\x00tops" prefix list, which is what lets a
+        # subdir resolve without shelling out -- so a scan that overflowed the
+        # bound went straight back to one `git rev-parse` fork per directory
+        # and thrashed there for the rest of the walk (observed: the same
+        # repo path re-forking 6x in a single /api/sessions load). Keep tops.
+        victims = [k for k in cache if k != "\x00tops"][:_GIT_TOPLEVEL_CACHE_MAX // 2]
+        for victim in victims:
+            cache.pop(victim, None)
     cache[key] = top
     if top and top not in tops:
         tops.append(top)
@@ -1183,6 +1210,15 @@ def list_repo_worktrees(repo_top, include_prs=True):
     }
 
 
+# One `git worktree list` per repo per scan, not per row. An /api/sessions
+# load fired 45 identical `git -C <same repo> worktree list --porcelain`
+# subprocesses; the answer cannot change 45 times inside one request. Short
+# TTL so a freshly added worktree still shows up on the next poll.
+_WORKTREE_LIST_CACHE = {}
+_WORKTREE_LIST_TTL_S = 10.0
+_WORKTREE_LIST_LOCK = threading.Lock()
+
+
 def _list_worktrees(repo_top):
     """Run `git worktree list --porcelain` for a repo and return its
     worktrees as a list of dicts: {path, branch, detached, locked,
@@ -1194,14 +1230,24 @@ def _list_worktrees(repo_top):
     """
     if not repo_top:
         return []
+    now = time.time()
+    cache_key = str(repo_top)
+    with _WORKTREE_LIST_LOCK:
+        hit = _WORKTREE_LIST_CACHE.get(cache_key)
+        if hit is not None and now - hit[0] < _WORKTREE_LIST_TTL_S:
+            return hit[1]
     try:
         r = subprocess.run(
             ["git", "-C", repo_top, "worktree", "list", "--porcelain"],
             capture_output=True, text=True, timeout=2,
         )
         if r.returncode != 0:
+            with _WORKTREE_LIST_LOCK:
+                _WORKTREE_LIST_CACHE[cache_key] = (now, [])
             return []
     except (subprocess.SubprocessError, OSError):
+        with _WORKTREE_LIST_LOCK:
+            _WORKTREE_LIST_CACHE[cache_key] = (now, [])
         return []
     out = []
     cur = {}
@@ -1234,6 +1280,8 @@ def _list_worktrees(repo_top):
             cur["locked"] = True
             cur["lock_reason"] = val
     flush()
+    with _WORKTREE_LIST_LOCK:
+        _WORKTREE_LIST_CACHE[cache_key] = (now, out)
     return out
 
 
