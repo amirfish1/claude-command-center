@@ -4732,10 +4732,24 @@
         terminalPresent: !!data.terminal_present,
         bgPresent: !!data.bg_present,
         bgPid: data.bg_pid || null,
+        // CCC-796: live process, but CCC found no way to deliver to it (no
+        // spawn-registry entry, no tty, no WatchTower FIFO) — a queued
+        // mode=send message will NOT drain on its own from this state.
+        foreignWriterHold: !!data.foreign_writer_hold,
       };
       // Timestamp of this successful status read — drives the "checked Xs ago"
       // freshness label on the conversation top-bar process indicator.
       _lastStatusCheckedAt = Date.now();
+      // Rewrite the generic "still running" queued-send note into something
+      // that actually explains why nothing is landing, the moment the
+      // watcher confirms there's no delivery channel — the submission-time
+      // text can't know this yet since the hold escalates a few ticks later.
+      if (liveStatus.foreignWriterHold && Array.isArray(_pendingSends)) {
+        _pendingSends
+          .filter(p => p && p.sid === _fetchedFor && !p.delivered && p.entry)
+          .forEach(p => markPendingSendQueued(p, "Queued - no delivery channel found for this session "
+            + "(it's live, but CCC lost its spawn registry entry — open a real terminal to it to unblock)."));
+      }
       // Audible feedback when the agent stops working for this conversation.
       // Only fire while this page is visible and the status still belongs to
       // the open session, so background tabs / switched conversations don't chirp.

@@ -18455,6 +18455,23 @@ class TestForeignWriterHoldEscalation(unittest.TestCase):
         # an escalation.
         self.assertFalse(self.server._note_foreign_writer_hold(self.SID, self.PID))
 
+    def test_foreign_writer_hold_for_sid_none_until_escalated(self):
+        """CCC-796: /api/session-status and the queued-send reason both key
+        off this lookup -- it must stay None on the un-escalated first tick,
+        the same 2-tick debounce _note_foreign_writer_hold itself uses."""
+        self.assertIsNone(self.server._foreign_writer_hold_for_sid(self.SID))
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        self.assertIsNone(self.server._foreign_writer_hold_for_sid(self.SID))
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        hold = self.server._foreign_writer_hold_for_sid(self.SID)
+        self.assertIsNotNone(hold)
+        self.assertEqual(hold["pid"], self.PID)
+
+    def test_foreign_writer_hold_for_sid_ignores_other_sessions(self):
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        self.server._note_foreign_writer_hold(self.SID, self.PID)
+        self.assertIsNone(self.server._foreign_writer_hold_for_sid("some-other-sid"))
+
 
 class TestInjectionHealthBanner(unittest.TestCase):
     """P0c: the global delivery-health banner's feed. Two sources, both
