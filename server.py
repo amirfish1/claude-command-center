@@ -50216,6 +50216,7 @@ def _inject_text_into_session(
     source="api",
     force_terminal=False,
     force_headless=False,
+    force_queue=False,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -50469,7 +50470,12 @@ def _inject_text_into_session(
             # states (question/approval), where keystrokes WOULD mangle, are
             # already caught by the guard above. The tty-unreachable fallback
             # below still queues if the keystroke can't reach the tab.
-            if _terminal_input_queue_has_pending(session_id):
+            # force_queue is the explicit "Send (queue if busy)" opt-in: skip
+            # the TUI's own mid-turn keystroke acceptance and hold for the
+            # next turn boundary even though nothing is queued yet.
+            if _terminal_input_queue_has_pending(session_id) or (
+                force_queue and _session_status_is_busy(status)
+            ):
                 return _queue_terminal_input(session_id, text, status)
         if answering_tty_question:
             _drop_matching_terminal_queue_entries(session_id, text)
@@ -64832,6 +64838,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "skip_wt": bool(payload.get("skip_wt")),
                         "force_terminal": bool(payload.get("force_terminal")),
                         "force_headless": bool(payload.get("force_headless")),
+                        "force_queue": bool(payload.get("force_queue")),
                     }
                     if replace_queued:
                         inject_options["preserve_queued_steer"] = True

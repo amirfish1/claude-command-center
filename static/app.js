@@ -9393,9 +9393,14 @@
         const payload = {
           session_id: sid,
           text,
-          mode: injectMode,
+          // send_queue isn't a real backend mode - it's plain "send" plus an
+          // explicit opt-in to always defer to the next turn boundary
+          // (force_queue), even on a tty session where regular "send" lets
+          // the Claude TUI accept input mid-turn on its own.
+          mode: injectMode === 'send_queue' ? 'send' : injectMode,
           idempotency_key: durableActionId('inject'),
         };
+        if (injectMode === 'send_queue') payload.force_queue = true;
         if (injectMode === 'send'
             && _paneEl
             && String(_paneEl.dataset.presentationMode || '').toLowerCase() === '3') {
