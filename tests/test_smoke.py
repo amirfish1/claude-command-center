@@ -6085,7 +6085,7 @@ class TestServerImports(unittest.TestCase):
         fn = server_py[server_py.index("def _inject_text_into_session("):]
         fn = fn[:fn.index("\ndef ", 10)]
         self.assertLess(
-            fn.index('mode = mode_value if mode_value in ("answer", "steer")'),
+            fn.index('mode = mode_value if mode_value in ("answer", "steer", "send_queue")'),
             fn.index("if compact_command and not is_codex:"),
         )
         compact_branch = fn[fn.index("if compact_command and not is_codex:"):]

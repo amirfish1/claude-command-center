@@ -7528,6 +7528,7 @@
   const $convInput = document.getElementById('convInput');
   const $convSendBtn = document.getElementById('convSendBtn');
   const $convSubmitPlusBtn = document.getElementById('convSubmitPlusBtn');
+  const $convSendQueueBtn = document.getElementById('convSendQueueBtn');
   const $convSteerBtn = document.getElementById('convSteerBtn');
   const $convCompactBtn = document.getElementById('convCompactBtn');
   const $convAnnouncedFrom = document.getElementById('convAnnouncedFrom');
@@ -9174,8 +9175,8 @@
     if (paneId) {
       setActivePaneById(paneId);
     }
-    let injectMode = mode === 'steer' ? 'steer' : (mode === 'answer' ? 'answer' : 'send');
-    if (injectMode === 'send'
+    let injectMode = mode === 'steer' ? 'steer' : (mode === 'answer' ? 'answer' : (mode === 'send_queue' ? 'send_queue' : 'send'));
+    if ((injectMode === 'send' || injectMode === 'send_queue')
         && liveStatusMatchesOpenConv()
         && liveStatus
         && liveStatus.questionWaiting
@@ -10911,6 +10912,7 @@
   if ($convEscBtn) $convEscBtn.addEventListener('click', sendEscToTerminal);
   if ($convSendBtn) $convSendBtn.addEventListener('click', () => sendToTerminal('p1'));
   if ($convSubmitPlusBtn) $convSubmitPlusBtn.addEventListener('click', () => submitPlus('p1'));
+  if ($convSendQueueBtn) $convSendQueueBtn.addEventListener('click', () => sendToTerminal('p1', 'send_queue'));
 
   // CCC-776: caret dropdown for the two alternate send modes (continue-new,
   // Submit+ phone mode) — same open/close/outside-click pattern as

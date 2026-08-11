@@ -1174,6 +1174,18 @@
                     </svg>
                     <span>Telephone submit (phone mode)</span>
                   </button>
+                  <!-- Send (queue if busy): explicit opt-in to defer delivery to
+                       the next turn boundary instead of writing mid-turn, so it
+                       can never trigger a mid-turn interrupt. Regular Send is
+                       unaffected - this is a separate, deliberate choice per
+                       message, not a global setting. -->
+                  <button type="button" class="send-queue-btn conv-send-menu-item" id="convSendQueueBtn" role="menuitem" title="Send, but wait for the current turn to end instead of possibly interrupting it" aria-label="Send (queue if busy)">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9"></circle>
+                      <path d="M12 7v5l3.5 2"></path>
+                    </svg>
+                    <span>Send (queue if busy)</span>
+                  </button>
                 </div>
               </span>
             </div>

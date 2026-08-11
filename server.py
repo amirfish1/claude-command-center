@@ -45204,17 +45204,6 @@ def _headless_log_result_count(entry):
     return count
 
 
-def _strict_headless_busy_gate_enabled():
-    """CCC_STRICT_HEADLESS_BUSY_GATE=1 opt-in — see _headless_log_turn_open.
-
-    Off by default (2026-08-11): the stricter gate got stuck reporting
-    "turn open" indefinitely for at least one live session, blocking ALL
-    further composer input into it. Kept behind a flag rather than deleted
-    outright so both behaviors can be A/B tested without a code revert.
-    """
-    return os.environ.get("CCC_STRICT_HEADLESS_BUSY_GATE", "0").strip() == "1"
-
-
 def _headless_log_turn_open(entry):
     """True if a Claude headless's own stdout log ends mid-turn.
 
@@ -45229,8 +45218,10 @@ def _headless_log_turn_open(entry):
     missing, empty, or unreadable — same fail-open default as the rest of
     the busy-detection chain.
 
-    Only called when _strict_headless_busy_gate_enabled() is true — see
-    that function's docstring for why this is opt-in, not the default.
+    Only called for mode="send_queue" — CCC's composer "Send (queue if
+    busy)" option — not for the default "send", because this signal got
+    stuck reporting "turn open" indefinitely for at least one live
+    session, which would block ALL further input if it were the default.
     """
     if not isinstance(entry, dict):
         return False
@@ -50172,7 +50163,7 @@ def _inject_text_into_session(
     compact_command = bool(_COMPACT_TRIGGER_RE.match(text))
     slash_command = bool(_SLASH_COMMAND_TRIGGER_RE.match(text))
     mode_value = str(mode or "").strip().lower()
-    mode = mode_value if mode_value in ("answer", "steer") else "send"
+    mode = mode_value if mode_value in ("answer", "steer", "send_queue") else "send"
     if compact_command and not is_codex:
         # Steered /compact: clear the wedge first, then compact. `mode` used to
         # be parsed BELOW this early return, so a steered /compact silently
@@ -50541,16 +50532,25 @@ def _inject_text_into_session(
                     }
             active_child = _spawn_entry_active_tool_child(spawn)
             if not _from_terminal_queue:
-                # A/B flag (default off, 2026-08-11) — see
-                # _strict_headless_busy_gate_enabled's docstring. Default
-                # path only queues when input is ALREADY queued (preserves
-                # delivery order); the write below still falls back to the
-                # queue if the pipe genuinely rejects the message. Strict
-                # path additionally defers to the next turn boundary on
-                # ANY busy signal, closer to the TTY path's contract, at
-                # the cost of the stuck-forever failure mode that got it
-                # turned off by default.
-                if _strict_headless_busy_gate_enabled() and mode != "steer":
+                # mode="send" (default, e.g. the composer's Send button):
+                # only queue when input is ALREADY queued, to preserve
+                # delivery order — the write below still falls back to the
+                # queue if the pipe genuinely rejects the message. This can
+                # occasionally interrupt a busy turn (mid-turn stdin writes
+                # aren't guaranteed to defer — see c115c5cc's history).
+                #
+                # mode="send_queue" (the composer's explicit "Send (queue
+                # if busy)" option) opts into deferring to the next turn
+                # boundary on ANY busy signal instead, closer to the TTY
+                # path's contract — never interrupts, at the cost of
+                # sometimes waiting. Not the default because the busy
+                # signal it relies on (_headless_log_turn_open, reading the
+                # headless's own stdout log) got stuck reporting "turn
+                # open" indefinitely for at least one live session,
+                # blocking ALL further input — a worse failure than the
+                # occasional interrupt. Left as an explicit per-message
+                # choice rather than forced on everyone.
+                if mode == "send_queue":
                     is_busy = (
                         _session_status_is_busy(status)
                         or _headless_log_turn_open(spawn)
