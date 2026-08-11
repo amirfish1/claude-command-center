@@ -3760,18 +3760,18 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!data || !data.ok) {
-        if (typeof showOpToast === 'function' && !debugModeEnabled()) {
+        if (typeof showOpToast === 'function' && debugModeEnabled()) {
           showOpToast('Interrupt ask failed: ' + ((data && data.error) || 'unknown error'), 'error');
         }
         return false;
       }
-      if (!debugModeEnabled()) {
+      if (debugModeEnabled()) {
         _appendActivityLog('interrupt', (decision === 'approve' ? 'Approved' : 'Dismissed')
           + ' interrupt for "' + resolvedLabel + '"' + (data.note ? ' (' + data.note + ')' : ''));
       }
       return true;
     } catch (_) {
-      if (typeof showOpToast === 'function' && !debugModeEnabled()) {
+      if (typeof showOpToast === 'function' && debugModeEnabled()) {
         showOpToast('Interrupt ask failed: network error', 'error');
       }
       return false;
@@ -3780,7 +3780,7 @@
 
   function _renderInterruptAsks(asks) {
     if (!Array.isArray(asks)) asks = [];
-    if (debugModeEnabled()) {
+    if (!debugModeEnabled()) {
       const host = document.getElementById('interruptAsks');
       if (host) host.remove();
       asks.forEach((ask) => {
@@ -3867,7 +3867,7 @@
   const _ACTIVITY_LOG_MAX = 50;
 
   function _appendActivityLog(kind, text) {
-    if (debugModeEnabled()) return;
+    if (!debugModeEnabled()) return;
     const ts = new Date();
     const tsStr = [ts.getHours(), ts.getMinutes(), ts.getSeconds()]
       .map(n => String(n).padStart(2, '0')).join(':');
@@ -24093,7 +24093,7 @@
   }
 
   function showOpToast(msg, kind, action) {
-    if (debugModeEnabled() && (kind === 'error' || kind === 'info')) return;
+    if (!debugModeEnabled() && (kind === 'error' || kind === 'info')) return;
     const toast = document.createElement('div');
     const color = kind === 'error' ? 'var(--red)'
       : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
@@ -62135,7 +62135,7 @@
   function applyDebugMode(on) {
     const enabled = !!on;
     document.documentElement.classList.toggle('ccc-debug-mode', enabled);
-    if (!enabled) return;
+    if (enabled) return;
     if (typeof _dismissActivityLog === 'function') _dismissActivityLog();
     if (typeof closeActivityLogModal === 'function') closeActivityLogModal();
     const stats = document.getElementById('statsModal');

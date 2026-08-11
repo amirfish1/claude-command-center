@@ -23,7 +23,7 @@ class TestDebugModeStatic(unittest.TestCase):
         self.assertIn('id="settingsDebugModeToggle"', self.index)
         self.assertIn('data-debug-mode-toggle', self.index)
 
-    def test_mode_hides_approved_controls(self):
+    def test_debug_off_hides_approved_controls(self):
         for selector in (
             '#statsBtn', '#annotationFabBtn', '#annotationStartBtn', '#annotationScreenBtn', '#annotationNotesBtn',
             '#statusRailAnnotateBtn', '#statusRailActivityLogBtn',
@@ -32,17 +32,17 @@ class TestDebugModeStatic(unittest.TestCase):
             '#customNavLinks .q2-toggle-opt[href="/view/reddit"]',
             '[data-role="conv-rowstyle-palette"]', '[data-role="conv-bg-palette"]',
         ):
-            self.assertIn("html.ccc-debug-mode " + selector, self.css)
+            self.assertIn("html:not(.ccc-debug-mode) " + selector, self.css)
 
-    def test_interrupt_path_is_dismiss_only_in_debug_mode(self):
+    def test_interrupt_path_is_dismiss_only_when_debug_is_off(self):
         self.assertIn("function debugModeEnabled()", self.app)
-        self.assertIn("if (debugModeEnabled())", self.app)
+        self.assertIn("if (!debugModeEnabled()) {\n      const host", self.app)
         self.assertIn("resolveInterruptAsk(ask, 'dismiss')", self.app)
 
-    def test_mode_suppresses_diagnostic_operation_toasts(self):
+    def test_debug_off_suppresses_diagnostic_operation_toasts(self):
         self.assertIn("function showOpToast(msg, kind, action)", self.app)
         self.assertIn(
-            "if (debugModeEnabled() && (kind === 'error' || kind === 'info')) return;",
+            "if (!debugModeEnabled() && (kind === 'error' || kind === 'info')) return;",
             self.app,
         )
 
