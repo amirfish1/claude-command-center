@@ -1480,9 +1480,12 @@
     // mid-story. Cap it with where the ticket actually stands.
     if (!item.closed_at) {
       var st = statusOf(item);
+      // This row summarizes current status, not a new event — no one "opened"
+      // it. Say so plainly for the unclaimed case, since "Open" alone reads
+      // like an action someone just took.
       var verb = st === 'in_progress' ? 'In progress'
-        : st === 'blocked' ? 'Needs your input' : 'Open';
-      rows += evt('now', '<span class="q2-tl-verb">' + esc(verb) + '</span>'
+        : st === 'blocked' ? 'Needs your input' : 'Open · unclaimed';
+      rows += evt('now', '<span class="q2-tl-verb" title="Current status, not a new event">' + esc(verb) + '</span>'
         + (item.claimed_by ? '<span class="q2-tl-who">' + esc(String(item.claimed_by).slice(0, 26)) + '</span>' : ''), '');
     }
     return '<div class="q2-tl">' + rows + '</div>';
