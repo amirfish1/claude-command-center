@@ -15887,8 +15887,8 @@ button.subagent-row.wf-agent:hover { border-color: rgba(139, 87, 215, 0.45); }
 .status-rail { display: none; }
 .status-rail-resizer {
   position: absolute;
-  left: -6px; top: 0; bottom: 0;
-  width: 12px;
+  left: -9px; top: 0; bottom: 0;
+  width: 18px;
   cursor: col-resize;
   touch-action: none;
   z-index: 4;
@@ -15897,7 +15897,7 @@ button.subagent-row.wf-agent:hover { border-color: rgba(139, 87, 215, 0.45); }
 .status-rail-resizer::before {
   content: '';
   position: absolute;
-  left: 4px; top: 50%;
+  left: 7px; top: 50%;
   width: 4px; height: 44px;
   transform: translateY(-50%);
   border-radius: 999px;
