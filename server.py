@@ -15172,6 +15172,24 @@ _SIGNAL_MARKERS = (
     '"type":"result"',  # turn completion
 )
 
+# The per-line prefilter in _extract_tail_meta runs over every line of every
+# transcript (1.4M+ lines on a real corpus), so it is measured, not guessed.
+# `any(m in line for m in MARKERS)` pays a Python generator frame per marker
+# per line (~10M frames, 11s of a cold scan). A compiled alternation is worse
+# still — the regex engine loses to a plain substring scan on long literals.
+# An unrolled `or` chain of `in` tests is the fast form: pure C, short-circuit,
+# no frames. Keep these in sync with the tuples above by hand; the assert
+# below fails loudly if a marker is added to one and not the other.
+_check_markers = lambda line: (
+    '"type":"custom-title"' in line
+    or '"type":"agent-name"' in line
+    or '"type":"last-prompt"' in line
+    or '"type":"queued_command"' in line
+    or '"type":"ai-title"' in line
+)
+assert all(_check_markers('x' + m + 'y') for m in _META_MARKERS), "meta marker drift"
+del _check_markers
+
 
 def _claude_usage_cost_breakdown(model, usage):
     """Return API-list-price cost components for one Claude assistant turn."""
@@ -15310,8 +15328,18 @@ def _extract_tail_meta(path):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 _pos += 1
-                is_meta = any(m in line for m in _META_MARKERS)
-                is_signal = not is_meta and any(m in line for m in _SIGNAL_MARKERS)
+                # Unrolled on purpose — see the note by _META_MARKERS. These
+                # three tests run ~1.4M times per cold scan.
+                is_meta = (
+                    '"type":"custom-title"' in line
+                    or '"type":"agent-name"' in line
+                    or '"type":"last-prompt"' in line
+                    or '"type":"queued_command"' in line
+                    or '"type":"ai-title"' in line
+                )
+                is_signal = not is_meta and (
+                    '"tool_use"' in line or '"type":"result"' in line
+                )
                 # User/assistant events may not start with "type" (parentUuid first).
                 # Check for a timestamp + user/assistant marker to catch them.
                 is_typed = not is_meta and not is_signal and (
@@ -32554,6 +32582,16 @@ def _gh_pr_create(tokens, start):
     return tokens[i:i + 2] == ["pr", "create"]
 
 
+# shlex tokenization is the single most expensive thing a cold archive scan
+# does (~28% of a 147s walk: 3.4M read_token calls over ~180k Bash commands).
+# The token walk below can only produce a signal from `cd`, a `git ...`
+# invocation, or `gh pr create` — every other command tokenizes to nothing.
+# This prefilter runs on the RAW string, so it is a strict superset of what
+# the walk can see (it also matches inside quotes, keeping nested
+# `bash -c "git push"` on the slow path). No hint word => skip tokenizing.
+_SHELL_SIGNAL_HINT_RE = re.compile(r"(?:\A|[^A-Za-z0-9_])(?:cd|git|gh)(?:[^A-Za-z0-9_]|\Z)")
+
+
 def _shell_command_signals(cmd, base_cwd=None, _depth=0):
     """Return edit/commit/push/pr/external-cd flags for a shell command."""
     cmd = cmd or ""
@@ -32562,7 +32600,8 @@ def _shell_command_signals(cmd, base_cwd=None, _depth=0):
     subcommands = set()
     pr_create = False
     external_cd = False
-    for toks in _shell_segments(cmd):
+    _segments = _shell_segments(cmd) if _SHELL_SIGNAL_HINT_RE.search(cmd) else ()
+    for toks in _segments:
         start = _shell_command_start(toks)
         if start >= len(toks):
             continue
