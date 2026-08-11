@@ -10882,6 +10882,40 @@
   if ($convEscBtn) $convEscBtn.addEventListener('click', sendEscToTerminal);
   if ($convSendBtn) $convSendBtn.addEventListener('click', () => sendToTerminal('p1'));
   if ($convSubmitPlusBtn) $convSubmitPlusBtn.addEventListener('click', () => submitPlus('p1'));
+
+  // CCC-776: caret dropdown for the two alternate send modes (continue-new,
+  // Submit+ phone mode) — same open/close/outside-click pattern as
+  // #localhostCaret/#localhostMenu. The mode buttons keep their own click
+  // handlers (delegated .continue-new-btn listener; $convSubmitPlusBtn above);
+  // this just opens/closes the menu they live in and closes it once one fires.
+  (function _initConvSendMenu() {
+    const caret = document.getElementById('convSendCaret');
+    const menu = document.getElementById('convSendMenu');
+    if (!caret || !menu) return;
+    const hide = () => {
+      menu.style.display = 'none';
+      caret.setAttribute('aria-expanded', 'false');
+    };
+    const toggle = () => {
+      const opening = menu.style.display === 'none';
+      menu.style.display = opening ? 'block' : 'none';
+      caret.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    };
+    caret.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggle();
+    });
+    menu.addEventListener('click', (ev) => {
+      if (ev.target && ev.target.closest && ev.target.closest('.conv-send-menu-item')) hide();
+    });
+    document.addEventListener('click', (ev) => {
+      if (menu.style.display === 'none') return;
+      const group = menu.closest('.conv-send-group');
+      if (group && group.contains(ev.target)) return;
+      hide();
+    });
+  })();
   if ($convSteerBtn) $convSteerBtn.addEventListener('click', () => sendToTerminal('p1', 'steer'));
   if ($convCompactBtn) $convCompactBtn.addEventListener('click', () => compactCurrentSession());
   // Mobile: lift the Compact button out of the composer into the header so the

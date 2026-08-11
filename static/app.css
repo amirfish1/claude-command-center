@@ -8129,6 +8129,46 @@
   }
   .conv-input-bar .continue-new-btn:active { transform: translateY(1px); }
   .conv-input-bar .continue-new-btn svg { display: block; }
+  /* CCC-776: Send + its two alternate modes (continue-new, Submit+) collapsed
+     from three always-on toolbar buttons into one caret dropdown, so the
+     title/textarea above keeps the width the extra buttons used to eat.
+     Mirrors the #localhostCaret/#localhostMenu pattern. */
+  .conv-input-bar .conv-send-group {
+    position: relative; display: inline-flex; align-items: center; gap: 2px;
+    flex-shrink: 0;
+  }
+  .conv-input-bar .conv-send-caret {
+    width: 16px; height: 32px; flex-shrink: 0;
+    border-radius: 999px; border: 1px solid var(--border); cursor: pointer;
+    background: transparent; color: var(--text-muted);
+    padding: 0; font-size: 9px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .conv-input-bar .conv-send-caret:hover,
+  .conv-input-bar .conv-send-caret[aria-expanded="true"] {
+    background: var(--surface-2); color: var(--text); border-color: var(--text-muted);
+  }
+  .conv-input-bar .conv-send-menu {
+    position: absolute; bottom: calc(100% + 6px); right: 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px;
+    min-width: 200px; z-index: 200;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  }
+  /* Menu items reuse .continue-new-btn/.submit-plus-btn for their existing
+     click handlers and accent colors, but read as a labeled row here instead
+     of a bare circular icon button. */
+  .conv-send-menu .conv-send-menu-item {
+    width: 100%; height: auto; border-radius: 6px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; font-size: 12.5px; text-align: left;
+    background: transparent;
+  }
+  .conv-send-menu .conv-send-menu-item svg { flex-shrink: 0; }
+  .conv-send-menu .conv-send-menu-item span { white-space: nowrap; }
+  .conv-send-menu .continue-new-btn:hover { background: var(--surface-2); }
+  .conv-send-menu .submit-plus-btn:hover { background: rgba(63,185,80,0.14); }
   /* Codex app-server indicator — a subtle pill in the input hint row. */
   .conv-input-hint .codex-appsrv {
     display: none; align-items: center; gap: 4px;

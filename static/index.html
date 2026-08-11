@@ -182,25 +182,10 @@
       </svg>
     </button>
   </div>
-  <!-- Global delivery-health banner (P0c). Fixed top-of-page, independent of
-       which session/view is focused -- deliberately global rather than
-       scoped to the affected session, so a silently-lost message
-       is impossible to miss regardless of what you're looking at. Polls
-       /api/injection-health (in-process on the server, no `wt` subprocess);
-       shown only while there are newly-lost wt receipts (permanent
-       historical facts, dismissible and durably acked so a reload doesn't
-       re-alarm). The API's second incident class, active foreign-writer
-       holds (a live session CCC has no recognized delivery channel to),
-       is intentionally never surfaced here: holds auto-resolve once the
-       foreign process exits and the queue drains, and the red banner over
-       a held queue was pure noise. -->
-  <div id="injectionHealthBanner" class="injection-health-banner" hidden role="alert" aria-live="assertive">
-    <span class="injection-health-banner__icon" aria-hidden="true">&#9888;</span>
-    <span class="injection-health-banner__text" id="injectionHealthBannerText"></span>
-    <button type="button" class="injection-health-banner__details" id="injectionHealthBannerDetailsBtn" aria-expanded="false" aria-controls="injectionHealthBannerDetails" title="Show the full list of affected sessions">Details</button>
-    <button type="button" class="injection-health-banner__dismiss" id="injectionHealthBannerDismissAll" title="Dismiss the lost-receipt incidents shown above">Dismiss</button>
-  </div>
-  <div id="injectionHealthBannerDetails" class="injection-health-banner-details" hidden></div>
+  <!-- The P0c delivery-health banner (foreign-writer holds + lost wt
+       receipts) was removed 2026-08-10: both incident classes proved to be
+       red-banner noise. The data still lives at /api/injection-health for
+       tooling; the page never surfaces it. -->
   <!-- Global dispatch-paused banner. Shown while the control-plane drain is
        enabled (restart handoff, or a leaked drain) -- new sends queue
        server-side instead of dispatching, which otherwise reads as every
@@ -803,6 +788,14 @@
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
             <span class="conv-pane-title" data-role="pane-title"></span>
           </div>
+          <span class="conv-pane-last-user-message" data-role="pane-last-user-message" hidden></span>
+          <button type="button" class="conv-pane-popout" data-role="pane-popout ccc-breadcrumb-popout"
+                  title="Pop out conversation" aria-label="Pop out conversation">
+            <svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true">
+              <path d="M5 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+              <path d="M7 1h4v4M11 1 6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
           <!-- Per-pane header actions are compact in split mode / popouts:
                Annotate remains one-click, while recording controls live in
                the adjacent overflow menu. -->
@@ -1142,28 +1135,43 @@
                   <path d="M4 8 L4 5 L7 5 M20 8 L20 5 L17 5 M4 16 L4 19 L7 19 M20 16 L20 19 L17 19 M9 12 L15 12"></path>
                 </svg>
               </button>
-              <!-- Manual "continue in a new session" trigger — same route the
-                   F2 cold/idle gate offers automatically, always available on
-                   demand (CCC-744). Wired via delegated click on .continue-new-btn. -->
-              <button type="button" class="continue-new-btn" title="Continue in a new session" aria-label="Continue in a new session">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M14 3h7v7M21 3l-9 9M10 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path>
-                </svg>
-              </button>
-              <button class="send-btn" id="convSendBtn" title="Send to terminal" aria-label="Send to terminal">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 19 L12 5 M6 11 L12 5 L18 11"></path>
-                </svg>
-              </button>
-              <!-- Submit+ : appends a "reply phone-style, short & conversational"
-                   instruction to the message, sends it, then auto-reads the
-                   reply aloud when it lands (summary block excluded). -->
-              <button class="submit-plus-btn" id="convSubmitPlusBtn" title="Submit+ - phone-mode reply (short, conversational, multi-turn) and auto-read it aloud" aria-label="Submit Plus - phone mode">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4 6.2 2 2 0 0 1 5 4Z"></path>
-                  <path d="M17 3v5M14.5 5.5h5"></path>
-                </svg>
-              </button>
+              <!-- CCC-776: Send plus its two alternate modes ("continue in a
+                   new session" and Submit+ phone-mode) used to sit as three
+                   always-on buttons, eating title/textarea width. They now
+                   collapse into a triangle-caret dropdown next to Send, same
+                   pattern as #localhostCaret/#localhostMenu. The two mode
+                   buttons keep their original classes/ids so the existing
+                   delegated click handler (.continue-new-btn, app.js ~3571)
+                   and direct listener ($convSubmitPlusBtn) still fire unchanged. -->
+              <span class="conv-send-group" id="convSendGroup">
+                <button class="send-btn" id="convSendBtn" title="Send to terminal" aria-label="Send to terminal">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 19 L12 5 M6 11 L12 5 L18 11"></path>
+                  </svg>
+                </button>
+                <button type="button" class="conv-send-caret" id="convSendCaret" title="More send options" aria-label="More send options" aria-haspopup="menu" aria-expanded="false">&#9662;</button>
+                <div class="conv-send-menu" id="convSendMenu" role="menu" aria-label="Send options" style="display:none;">
+                  <!-- Manual "continue in a new session" trigger — same route the
+                       F2 cold/idle gate offers automatically, always available on
+                       demand (CCC-744). Wired via delegated click on .continue-new-btn. -->
+                  <button type="button" class="continue-new-btn conv-send-menu-item" role="menuitem" title="Continue in a new session" aria-label="Continue in a new session">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M14 3h7v7M21 3l-9 9M10 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path>
+                    </svg>
+                    <span>Continue in new session</span>
+                  </button>
+                  <!-- Submit+ : appends a "reply phone-style, short & conversational"
+                       instruction to the message, sends it, then auto-reads the
+                       reply aloud when it lands (summary block excluded). -->
+                  <button class="submit-plus-btn conv-send-menu-item" id="convSubmitPlusBtn" role="menuitem" title="Submit+ - phone-mode reply (short, conversational, multi-turn) and auto-read it aloud" aria-label="Submit Plus - phone mode">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M5 4h3l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4 6.2 2 2 0 0 1 5 4Z"></path>
+                      <path d="M17 3v5M14.5 5.5h5"></path>
+                    </svg>
+                    <span>Telephone submit (phone mode)</span>
+                  </button>
+                </div>
+              </span>
             </div>
           </div>
         </div>
