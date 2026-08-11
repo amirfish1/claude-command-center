@@ -1266,8 +1266,10 @@
     var closedBtn = $('q2ClosedBtn');
     var newTicketBtn = $('q2NewTicketBtn');
     var settingsBtn = $('q2QueueSettingsBtn');
+    var editPromptBtn = $('q2EditPromptBtn');
     if (newTicketBtn) newTicketBtn.hidden = state.viewAll;
     if (settingsBtn) settingsBtn.hidden = state.viewAll;
+    if (editPromptBtn) editPromptBtn.hidden = state.viewAll;
     if (closedBtn) {
       closedBtn.hidden = state.viewAll;
       closedBtn.setAttribute('aria-pressed', state.showClosed ? 'true' : 'false');
@@ -2365,6 +2367,19 @@
     loadLog(name).then(renderLogBar);
   }
 
+  function showQueueLearningsInDetail() {
+    // Same effect as clicking the queue name in the left column: deselect
+    // the ticket so the detail pane (RHS) falls back to the queue's
+    // learnings doc, without changing which queue is selected.
+    if (!state.queue || state.viewAll) return;
+    state.ref = '';
+    state.detail = null;
+    rememberSelection();
+    renderTickets();
+    renderDetail();
+    showMobileColumn('detail');
+  }
+
   function selectAllQueues() {
     if (state.viewAll) return;
     state.viewAll = true;
@@ -2506,6 +2521,7 @@
       return;
     }
     if (e.target.closest('#q2ClosedBtn')) { state.showClosed = !state.showClosed; renderTickets(); return; }
+    if (e.target.closest('#q2EditPromptBtn')) { showQueueLearningsInDetail(); return; }
     if (e.target.closest('#q2ThemeBtn')) { toggleTheme(); return; }
     if (e.target.closest('[data-q2-modal-close]')) { closeModal(); return; }
     if (e.target.closest('#q2NewTicketBtn')) { openNewTicket(); return; }
