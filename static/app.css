@@ -6453,9 +6453,13 @@
   }
   /* CCC-775: the leading engine+cost icon (.conv-session-icon) is fixed-width
      chrome reserved via --conv-content-left, not information the title's own
-     truncation can reclaim — yield it first, ahead of every other tier in
-     this cascade, so a narrow row spends its width on the session name. */
-  @container sidebar (max-width: 780px) {
+     truncation can reclaim — yield it so a narrow row spends its width on the
+     session name. 780px was too generous: that's wider than most users' daily
+     sidebar width, so the icon was disappearing at normal, comfortable sizes
+     instead of only in genuinely tight rows (user report, CCC-775 follow-up).
+     460px sits below every other tier in this cascade — the icon now only
+     goes at widths already too narrow for the OTHER meta chips too. */
+  @container sidebar (max-width: 460px) {
     .conv-item .conv-session-icon {
       display: none;
     }
