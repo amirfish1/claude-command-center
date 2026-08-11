@@ -37642,6 +37642,17 @@ def _queue_terminal_input(session_id, text, status=None):
             payload["queued_reason"] = (
                 "the current turn is still running; your message will send next"
             )
+    # CCC-796: a session already stuck as a foreign-writer hold (live
+    # process, no recognized delivery channel) at submission time will NOT
+    # clear on its own -- say so distinctly instead of the generic busy-turn
+    # message, which implies it'll send "next" when nothing will deliver it
+    # until a human opens a real terminal to the session.
+    if _foreign_writer_hold_for_sid(session_id):
+        payload["queued_reason"] = (
+            "no delivery channel found for this session (it's live, but CCC lost its "
+            "spawn registry entry -- open a real terminal to it to unblock)"
+        )
+        payload["queued_no_channel"] = True
     return payload
 
 
@@ -38591,6 +38602,22 @@ def _active_foreign_writer_holds():
             for (sid, pid), state in _foreign_writer_hold_incidents.items()
             if state.get("escalated")
         ]
+
+
+def _foreign_writer_hold_for_sid(sid):
+    """The escalated hold for this session, if any (CCC-796): a session with
+    a live process but no recognized delivery channel (no spawn-registry
+    entry, no tty, not a WatchTower-worker FIFO) gets queued input parked
+    here forever -- there's no auto-recovery, only a human opening a real
+    terminal to the session (which attaches a tty and unblocks it). Exposed
+    per-sid on /api/session-status so a queued mode=send bubble can say so,
+    instead of the generic "current turn is still running" (which implies
+    it'll clear on its own)."""
+    with _foreign_writer_hold_lock:
+        for (hold_sid, pid), state in _foreign_writer_hold_incidents.items():
+            if hold_sid == sid and state.get("escalated"):
+                return {"pid": pid, "first_seen": state["first_seen"]}
+    return None
 
 
 def _build_injection_health():
@@ -57981,6 +58008,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not cwd:
                 cwd = find_session_cwd(sid)
             status = session_live_status(sid, cwd)
+            hold = _foreign_writer_hold_for_sid(sid) if sid else None
+            status["foreign_writer_hold"] = bool(hold)
             status["cwd"] = cwd
             status["cwd_exists"] = bool(cwd and Path(cwd).is_dir())
             status["auto_handover_enabled"] = bool(sid) and sid in _load_auto_handover_flags()
