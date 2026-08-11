@@ -33296,6 +33296,45 @@
     return x <= 0 || y <= 0 || x >= window.innerWidth - 1 || y >= window.innerHeight - 1;
   }
 
+  // A "new session" composer has no conversation id to hand the reader-only
+  // popout page, so it can't reuse openConversationPopout — instead open a
+  // second full CCC window (not conversation-popout mode) so the user gets
+  // an independent "Start a new session" composer to work in.
+  function openNewSessionPopout() {
+    const url = window.location.origin + window.location.pathname;
+    const name = 'ccc-new-session-' + Date.now();
+    const width = 920;
+    const height = 900;
+    const features = 'popup=yes,width=' + width + ',height=' + height
+      + ',menubar=no,toolbar=no,location=no,status=no,scrollbars=yes,resizable=yes';
+    if (isCccMacApp()) {
+      const popup = window.open(url, name, features);
+      if (popup) {
+        try { popup.focus(); } catch (_) {}
+        showOpToast('New session opened in a new window');
+        return true;
+      }
+      if (tryOpenNativeMacPopout(url, { successToast: 'New session opened in a new window' })) return true;
+    }
+    const popup = window.open(url, name, features);
+    if (popup) {
+      try { popup.focus(); } catch (_) {}
+      showOpToast('New session opened in a new window');
+      return true;
+    }
+    fetch('/api/open-browser', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url })
+    }).then(r => r.json()).then(data => {
+      if (data.ok) showOpToast('New session opened in external browser');
+      else showOpToast('Pop-up blocked. Allow pop-ups for CCC.', 'error');
+    }).catch(() => {
+      showOpToast('Pop-up blocked. Allow pop-ups for CCC.', 'error');
+    });
+    return false;
+  }
+
   // Breadcrumb pop-out button — delegated so it survives every
   // updatePaneHeader innerHTML rewrite. Pops out whatever conversation
   // the active pane is currently showing (same target as the
@@ -33309,7 +33348,11 @@
       ? currentConversation
       : null;
     if (!convId) {
-      try { showOpToast('No conversation selected to pop out', 'error'); } catch (_) {}
+      if (typeof currentConversation === 'string' && currentConversation === '__new__') {
+        openNewSessionPopout();
+      } else {
+        try { showOpToast('No conversation selected to pop out', 'error'); } catch (_) {}
+      }
       return;
     }
     openConversationPopout(convId, null, null);
