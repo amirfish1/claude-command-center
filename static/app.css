@@ -20177,18 +20177,22 @@ body:has(.gc-reader) .pwa-install-banner {
    to change auto-drain/claim-types, not just observe them. */
 /* Bigger, clearer gear than the dense health-row's hover-only version — this
    strip is the only queue summary on screen, so the settings entry point
-   should read as an obvious button, not a barely-there row accent. */
+   should read as an obvious button, not a barely-there row accent. The base
+   .fq-health-config rule sets opacity:0 and color:var(--text-muted) for its
+   hover-reveal-on-row behavior; both are overridden here (not just opacity)
+   since muted-gray glyph on a muted-gray background read as invisible. */
 .fq-status-strip .fq-health-config {
-  opacity: 0.85; font-size: 16px;
-  width: 24px; height: 24px;
+  opacity: 1 !important; font-size: 22px;
+  width: 34px; height: 34px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 6px;
-  background: rgba(139,148,158,0.12);
-  border: 1px solid rgba(139,148,158,0.18);
+  border-radius: 8px;
+  color: var(--text) !important;
+  background: rgba(139,148,158,0.16);
+  border: 1px solid rgba(139,148,158,0.30);
 }
 .fq-status-strip .fq-health-config:hover {
-  opacity: 1; color: var(--accent);
-  background: rgba(88,166,255,0.14); border-color: rgba(88,166,255,0.35);
+  color: var(--accent) !important;
+  background: rgba(88,166,255,0.18); border-color: rgba(88,166,255,0.45);
 }
 .fq-status-proj { font-weight: 600; color: var(--text); }
 .fq-status-sep { color: var(--faint, var(--text-muted)); opacity: 0.7; }
@@ -20205,7 +20209,7 @@ body:has(.gc-reader) .pwa-install-banner {
 }
 .fq-status-worker.is-empty { color: var(--text-muted); }
 .fq-status-worker b { font-weight: 500; color: var(--text-muted); margin-left: 2px; }
-.fq-status-learnings-toggle {
+.fq-status-learnings-toggle, .fq-status-workers-toggle {
   flex-shrink: 0; cursor: pointer;
   font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em;
   padding: 1px 7px; border-radius: 999px;
@@ -20214,20 +20218,9 @@ body:has(.gc-reader) .pwa-install-banner {
   transition: background 0.12s, border-color 0.12s;
   white-space: nowrap;
 }
-.fq-status-learnings-toggle:hover { background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30); }
-.fq-status-learnings-toggle.is-open {
-  background: rgba(88,166,255,0.14); border-color: rgba(88,166,255,0.35); color: var(--accent);
+.fq-status-learnings-toggle:hover, .fq-status-workers-toggle:hover {
+  background: rgba(139,148,158,0.18); border-color: rgba(139,148,158,0.30);
 }
-.fq-status-learnings {
-  flex-basis: 100%;
-  margin-top: 4px; padding: 8px 10px;
-  background: rgba(139,148,158,0.06);
-  border: 1px solid rgba(139,148,158,0.14);
-  border-radius: 6px;
-  max-height: 260px; overflow-y: auto;
-  font-size: 11.5px; line-height: 1.5; color: var(--text);
-}
-.fq-status-learnings-loading, .fq-status-learnings-empty { color: var(--text-muted); }
 .fq-status-spin {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--accent); flex: 0 0 auto;

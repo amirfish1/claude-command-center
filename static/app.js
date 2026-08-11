@@ -38234,29 +38234,6 @@
       .filter(w => w && w.alive !== false);
     _renderQueueStatusStrip(_uxqLastResolvedProject, _uxqItemsCache.items, liveWorkers);
   }
-  // Fetch + cache a queue's learnings file, then repaint if it's still the
-  // one the user has open (a slow fetch must not clobber a since-closed or
-  // since-switched panel).
-  function _uxqLoadLearningsInto(queue) {
-    fetch('/api/queue/learnings?queue=' + encodeURIComponent(queue))
-      .then(r => r.json())
-      .then(data => {
-        let html;
-        if (data && data.ok) {
-          html = (data.content && data.content.trim())
-            ? renderMarkdown(data.content)
-            : '<div class="fq-status-learnings-empty">No learnings recorded yet for ' + escapeHtml(queue) + '.</div>';
-        } else {
-          html = '<div class="fq-status-learnings-empty">Could not load learnings: ' + escapeHtml((data && data.error) || 'unknown') + '</div>';
-        }
-        _uxqLearningsCache.set(queue, html);
-        if (_uxqStatusLearningsOpenFor === queue) _uxqRepaintStatusStrip();
-      })
-      .catch(e => {
-        _uxqLearningsCache.set(queue, '<div class="fq-status-learnings-empty">Could not load learnings: ' + escapeHtml((e && e.message) || 'network error') + '</div>');
-        if (_uxqStatusLearningsOpenFor === queue) _uxqRepaintStatusStrip();
-      });
-  }
 
   function _renderQueuePanel(options) {
     const $queue = document.getElementById('sidebarQueueList');
@@ -38808,26 +38785,57 @@
         _uxqItemsCache.ts = 0;
         _renderQueuePanel();
       };
-      const toggleLearnings = (ev) => {
+      // Opens the queue's learnings file the SAME way the Files tab opens any
+      // .md file — the shared status-rail file viewer, not a bespoke panel.
+      const openLearnings = async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('.fq-status-learnings-toggle[data-learnings-queue]');
         if (!btn) return;
         ev.preventDefault();
         ev.stopPropagation();
         const queue = btn.getAttribute('data-learnings-queue');
-        if (_uxqStatusLearningsOpenFor === queue) {
-          _uxqStatusLearningsOpenFor = null;
-        } else {
-          _uxqStatusLearningsOpenFor = queue;
-          if (!_uxqLearningsCache.has(queue)) _uxqLoadLearningsInto(queue);
+        try {
+          const res = await fetch('/api/queue/learnings?queue=' + encodeURIComponent(queue));
+          const data = await res.json().catch(() => ({}));
+          if (!data || !data.ok || !data.path) {
+            showOpToast('Could not open learnings: ' + ((data && data.error) || 'unknown'), 'error');
+            return;
+          }
+          await loadMarkdownIntoFileViewer(data.path, queue + ' learnings');
+        } catch (e) {
+          showOpToast('Could not open learnings: ' + ((e && e.message) || 'network error'), 'error');
         }
-        _uxqRepaintStatusStrip();
+      };
+      // Desired-workers cycle (1x → 2x → 3x → 1x) for the compact strip.
+      const cycleWorkers = async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest('.fq-status-workers-toggle[data-workers-queue]');
+        if (!btn) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const queue = btn.getAttribute('data-workers-queue');
+        const current = Math.max(1, Math.min(3, parseInt(btn.getAttribute('data-workers-current'), 10) || 1));
+        const next = current >= 3 ? 1 : current + 1;
+        btn.style.opacity = '0.4';
+        try {
+          const res = await fetch('/api/wt/queue/workers', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({queue, desired_workers: next}),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+        } catch (e) {
+          showOpToast('Could not update worker count: ' + ((e && e.message) || 'unknown'), 'error');
+        }
+        btn.style.opacity = '';
+        void _uxqRefreshQueueStrips();
       };
       $health.addEventListener('click', openWorkerSession);
       $health.addEventListener('click', nudgeFromBadge);
       $health.addEventListener('click', toggleDrain);
       $health.addEventListener('click', cycleClaimTypes);
+      $health.addEventListener('click', cycleWorkers);
       $health.addEventListener('click', deleteQueue);
-      $health.addEventListener('click', toggleLearnings);
+      $health.addEventListener('click', openLearnings);
       $health.addEventListener('click', async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
@@ -38836,7 +38844,7 @@
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); deleteQueue(ev); toggleLearnings(ev); scopeFromRow(ev); }
+        if (ev.key === 'Enter' || ev.key === ' ') { openWorkerSession(ev); nudgeFromBadge(ev); toggleDrain(ev); cycleClaimTypes(ev); cycleWorkers(ev); deleteQueue(ev); openLearnings(ev); scopeFromRow(ev); }
       });
     }
   }

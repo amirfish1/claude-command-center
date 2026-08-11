@@ -316,6 +316,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
     cfg_drain = {}
     cfg_repo = {}
     cfg_claim = {}
+    cfg_workers = {}
     cfg_names = set()
     try:
         for name, conf in (_core._wt_read_config() or {}).items():
@@ -327,10 +328,15 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
                 cfg_repo[qn] = rp
             ct = (conf or {}).get("claim_types", [])
             cfg_claim[qn] = [t for t in ct if t in ("bug", "feature")] if isinstance(ct, list) else []
+            try:
+                cfg_workers[qn] = max(1, int((conf or {}).get("desired_workers", 1) or 1))
+            except (TypeError, ValueError):
+                cfg_workers[qn] = 1
     except Exception:
         cfg_drain = {}
         cfg_repo = {}
         cfg_claim = {}
+        cfg_workers = {}
         cfg_names = set()
 
     health_by_q = {_norm(r.get("project")): r for r in (health or [])}
@@ -464,6 +470,7 @@ def compute_queues_health(health=None, wt_workers=None, items=None):
             "fixer_session_id": hr.get("fixer_session_id"),
             "repo_path": cfg_repo.get(q, ""),
             "claim_types": cfg_claim.get(q, []),
+            "desired_workers": cfg_workers.get(q, 1),
             "configured": q in cfg_names,
             "last_activity_seconds": (
                 int(time.time() - last_activity_q[q]) if q in last_activity_q else None
