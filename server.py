@@ -20021,6 +20021,74 @@ def find_session_cwd(session_id):
     return None
 
 
+# GitHub enrichment caches (issue titles, issue states, backlog cards) were
+# in-process only, so every dashboard restart re-forked `gh issue list` on the
+# first render -- ~2s of network inside /api/sessions, which is time the user
+# spends staring at the "No sessions yet" empty state. These are enrichment,
+# never correctness: a title or label a few minutes old is fine, a blocking
+# network call in the render path is not.
+#
+# So: hydrate from disk once per process, serve stale immediately and refresh
+# in the background, and only block when there is genuinely nothing on disk.
+_GH_CACHE_DIR = COMMAND_CENTER_STATE_DIR / "gh-cache"
+_GH_CACHE_HYDRATED = set()
+_GH_CACHE_LOCK = threading.Lock()
+_GH_CACHE_REFRESHING = set()
+
+
+def _hydrate_gh_cache(name, target):
+    """Warm an in-process {key: {ts, data}} cache from disk, once per process."""
+    with _GH_CACHE_LOCK:
+        if name in _GH_CACHE_HYDRATED:
+            return
+        _GH_CACHE_HYDRATED.add(name)
+    try:
+        with (_GH_CACHE_DIR / (name + ".json")).open("r") as f:
+            disk = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(disk, dict):
+        return
+    for key, value in disk.items():
+        if isinstance(value, dict) and "ts" in value and key not in target:
+            target[key] = value
+
+
+def _persist_gh_cache(name, target):
+    try:
+        _GH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _GH_CACHE_DIR / (name + ".json.tmp")
+        with tmp.open("w") as f:
+            json.dump(target, f)
+        tmp.replace(_GH_CACHE_DIR / (name + ".json"))
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def _refresh_gh_cache_async(name, key, fetch):
+    """Run one background refresh for (name, key); coalesce concurrent asks."""
+    token = (name, key)
+    with _GH_CACHE_LOCK:
+        if token in _GH_CACHE_REFRESHING:
+            return
+        _GH_CACHE_REFRESHING.add(token)
+
+    def _run():
+        try:
+            fetch()
+        except Exception:
+            pass
+        finally:
+            with _GH_CACHE_LOCK:
+                _GH_CACHE_REFRESHING.discard(token)
+
+    try:
+        threading.Thread(target=_run, name="gh-cache-refresh", daemon=True).start()
+    except RuntimeError:
+        with _GH_CACHE_LOCK:
+            _GH_CACHE_REFRESHING.discard(token)
+
+
 _issue_titles_cache = {}  # repo_path -> {"ts": float, "data": dict}
 
 # Per-repo issue state map: repo_path -> {"ts": float, "data": {number_str: ...}}
@@ -20881,11 +20949,24 @@ def prune_unresumable_claude_desktop_metadata(dry_run=False):
     return {"ok": True, "dry_run": bool(dry_run), "pruned": len(pruned), "paths": pruned}
 
 
-def _fetch_issue_states(repo_path):
-    """Bulk-fetch state+labels+title for all issues. Cached 5 min."""
+def _fetch_issue_states(repo_path, _blocking=False):
+    """Bulk-fetch state+labels+title for all issues. Cached 60s, disk-backed.
+
+    Stale entries are served immediately with a background refresh behind
+    them; only a completely cold cache blocks on `gh`. Mutations bust the
+    cache explicitly (see _bust_issue_state_cache), so a close/reopen still
+    shows up right away rather than waiting out the TTL.
+    """
     repo_path = resolve_repo_path(repo_path)
+    _hydrate_gh_cache("issue_states", _issue_state_cache)
     cached = _issue_state_cache.get(repo_path) or {}
     if time.time() - cached.get("ts", 0) < 60 and cached.get("data"):
+        return cached["data"]
+    if cached.get("data") and not _blocking:
+        _refresh_gh_cache_async(
+            "issue_states", repo_path,
+            lambda: _fetch_issue_states(repo_path, _blocking=True),
+        )
         return cached["data"]
     data = cached.get("data") or {}
     try:
@@ -20905,6 +20986,7 @@ def _fetch_issue_states(repo_path):
                 for i in issues
             }
             _issue_state_cache[repo_path] = {"ts": time.time(), "data": data}
+            _persist_gh_cache("issue_states", _issue_state_cache)
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
     return data
@@ -20913,6 +20995,11 @@ def _fetch_issue_states(repo_path):
 def _bust_issue_state_cache(repo_path=None):
     """Force next _fetch_issue_states() to re-query gh. Call after any mutation
     (close/reopen/label change) so the UI doesn't serve 5-minute-stale state."""
+    # Mark hydration done before popping: otherwise a bust that lands before
+    # this process has read the disk snapshot gets silently undone by a later
+    # _hydrate_gh_cache re-adding the pre-mutation entry.
+    with _GH_CACHE_LOCK:
+        _GH_CACHE_HYDRATED.add("issue_states")
     if repo_path:
         try:
             _issue_state_cache.pop(resolve_repo_path(repo_path), None)
@@ -20920,17 +21007,44 @@ def _bust_issue_state_cache(repo_path=None):
             pass
     else:
         _issue_state_cache.clear()
+    _persist_gh_cache("issue_states", _issue_state_cache)
 
 
 # Backlog: full issue data (labels, body) for open issues
 _backlog_issues_cache = {}  # repo_path -> {"ts": float, "data": list}
 
 
-def _fetch_issue_titles(repo_path):
-    """Bulk-fetch GitHub issue titles. Cached for 5 minutes."""
+def _bust_issue_titles_cache(repo_path=None):
+    """Drop cached issue titles after a mutation, on disk as well as in memory."""
+    # See _bust_issue_state_cache for why hydration is claimed first.
+    with _GH_CACHE_LOCK:
+        _GH_CACHE_HYDRATED.add("issue_titles")
+    if repo_path:
+        try:
+            _issue_titles_cache.pop(resolve_repo_path(repo_path), None)
+        except RepoContextError:
+            _issue_titles_cache.pop(repo_path, None)
+    else:
+        _issue_titles_cache.clear()
+    _persist_gh_cache("issue_titles", _issue_titles_cache)
+
+
+def _fetch_issue_titles(repo_path, _blocking=False):
+    """Bulk-fetch GitHub issue titles. Cached for 5 minutes, disk-backed.
+
+    Stale entries are served immediately with a background refresh behind
+    them; only a completely cold cache blocks on `gh`.
+    """
     repo_path = resolve_repo_path(repo_path)
+    _hydrate_gh_cache("issue_titles", _issue_titles_cache)
     cached = _issue_titles_cache.get(repo_path) or {}
     if time.time() - cached.get("ts", 0) < 300 and cached.get("data"):
+        return cached["data"]
+    if cached.get("data") and not _blocking:
+        _refresh_gh_cache_async(
+            "issue_titles", repo_path,
+            lambda: _fetch_issue_titles(repo_path, _blocking=True),
+        )
         return cached["data"]
     data = cached.get("data") or {}
     try:
@@ -20946,6 +21060,7 @@ def _fetch_issue_titles(repo_path):
                 for i in issues
             }
             _issue_titles_cache[repo_path] = {"ts": time.time(), "data": data}
+            _persist_gh_cache("issue_titles", _issue_titles_cache)
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
     return data
@@ -21303,6 +21418,10 @@ def conversations_with_open_prs(convs):
 
 
 def _bust_backlog_issue_cache(repo_path=None):
+    # See _bust_issue_state_cache: claim hydration first so a bust can't be
+    # undone by a later disk read re-adding the pre-mutation entry.
+    with _GH_CACHE_LOCK:
+        _GH_CACHE_HYDRATED.add("backlog_issues")
     if repo_path:
         try:
             _backlog_issues_cache.pop(resolve_repo_path(repo_path), None)
@@ -21310,16 +21429,29 @@ def _bust_backlog_issue_cache(repo_path=None):
             pass
     else:
         _backlog_issues_cache.clear()
+    _persist_gh_cache("backlog_issues", _backlog_issues_cache)
 
 
-def _fetch_backlog_issues(repo_path):
+def _fetch_backlog_issues(repo_path, _blocking=False):
     """Fetch open + recently-closed GitHub issues with labels and body.
-    Cached 5 minutes. Closed issues get a `state_reason` field so the UI
-    can route them (completed -> Verified, not planned -> Archived).
+
+    Cached 5 minutes and disk-backed: stale entries serve immediately with a
+    background refresh behind them, so a dashboard restart does not block the
+    first session render on two `gh issue list` round-trips.
+
+    Closed issues get a `state_reason` field so the UI can route them
+    (completed -> Verified, not planned -> Archived).
     """
     repo_path = resolve_repo_path(repo_path)
+    _hydrate_gh_cache("backlog_issues", _backlog_issues_cache)
     cached = _backlog_issues_cache.get(repo_path) or {}
     if time.time() - cached.get("ts", 0) < 300 and cached.get("data") is not None:
+        return cached.get("data") or []
+    if cached.get("data") and not _blocking:
+        _refresh_gh_cache_async(
+            "backlog_issues", repo_path,
+            lambda: _fetch_backlog_issues(repo_path, _blocking=True),
+        )
         return cached.get("data") or []
     merged = []
     try:
@@ -21343,6 +21475,7 @@ def _fetch_backlog_issues(repo_path):
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass
     _backlog_issues_cache[repo_path] = {"ts": time.time(), "data": merged}
+    _persist_gh_cache("backlog_issues", _backlog_issues_cache)
     return merged
 
 
@@ -63606,7 +63739,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         cwd=ctx["repo_path"],
                     )
                     _bust_backlog_issue_cache(ctx["repo_path"])
-                    _issue_titles_cache.pop(ctx["repo_path"], None)
+                    _bust_issue_titles_cache(ctx["repo_path"])
                     _bust_issue_state_cache(ctx["repo_path"])
                     self.send_json({
                         "ok": gh_out.returncode == 0,
