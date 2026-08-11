@@ -5138,17 +5138,10 @@
     z-index: 5;
   }
   .conv-item .conv-row-actions:empty { display: none; }
-  /* On hover (or focus-within for keyboard users), swap: kebab fades out,
-     actions fade in. Only applied when actions are non-empty so rows
-     without any actions just keep showing the kebab. CCC-783: the kebab
-     button gives the same swap on click (`.is-actions-open`), for touch
-     users and anyone who'd rather not rely on discovering hover. */
-  .conv-item:hover .conv-row-actions:not(:empty),
-  .conv-item:focus-within .conv-row-actions:not(:empty),
-  .conv-item.is-actions-open .conv-row-actions:not(:empty) {
-    opacity: 1;
-    pointer-events: auto;
-  }
+  /* Three-state row-end swap (CCC-783): at rest, the time shows. On hover
+     (or focus-within for keyboard users), the time fades out and a 2-dot
+     kebab fades in. Clicking the kebab (`.is-actions-open`) swaps again to
+     the actions bar itself — only one of the three is ever visible. */
   .conv-item .conv-kebab-btn {
     display: inline-flex;
     flex-direction: column;
@@ -5163,6 +5156,8 @@
     border-radius: 4px;
     cursor: pointer;
     flex: 0 0 auto;
+    opacity: 0;
+    pointer-events: none;
     transition: opacity 0.06s ease, background 0.1s ease;
   }
   .conv-item .conv-kebab-btn:hover,
@@ -5176,22 +5171,33 @@
     background: var(--text-muted);
   }
   .conv-item:hover .conv-row-end > .conv-kebab-btn,
-  .conv-item:focus-within .conv-row-end > .conv-kebab-btn,
+  .conv-item:focus-within .conv-row-end > .conv-kebab-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .conv-item.is-actions-open .conv-row-actions:not(:empty) {
+    opacity: 1;
+    pointer-events: auto;
+  }
   .conv-item.is-actions-open .conv-row-end > .conv-kebab-btn {
     opacity: 0;
     pointer-events: none;
   }
-  .conv-item.is-pinned:not(:hover):not(:focus-within) .conv-row-actions:not(:empty) {
+  .conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-actions:not(:empty) {
     opacity: 1;
     pointer-events: auto;
     background: transparent;
   }
-  .conv-item.is-pinned:not(:hover):not(:focus-within) .conv-row-actions > :not(.conv-pin-btn) {
+  .conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-actions > :not(.conv-pin-btn) {
     opacity: 0;
     pointer-events: none;
   }
   .conv-item:hover .conv-row-end > .conv-rel,
-  .conv-item:focus-within .conv-row-end > .conv-rel {
+  .conv-item:focus-within .conv-row-end > .conv-rel,
+  .conv-item.is-actions-open .conv-row-end > .conv-rel {
+    opacity: 0;
+  }
+  .conv-item.is-pinned:not(:hover):not(:focus-within):not(.is-actions-open) .conv-row-end > .conv-rel {
     opacity: 0;
   }
   /* CCC-449: with several buttons the hover action bar extends left past the

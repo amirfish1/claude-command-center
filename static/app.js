@@ -28154,7 +28154,8 @@
             // narrow and there's no per-row layout shift between hover
             // states (CSS uses `position: absolute` for one of them).
             + '<span class="conv-row-end">'
-            +   '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions (last activity ' + escapeAttr(rel) + ')" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
+            +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
+            +   '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '<span class="conv-row-actions">' + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + lifecycleButtons + elevateObjectBtn + '</span>'
             + '</span>'
           + '</div>'
@@ -55383,10 +55384,15 @@
       text = 'Idle. Nothing is running. Restarting now is safe and takes a few seconds.';
     }
     const uncertain = Number(svc.uncertain || 0);
-    if (uncertain > 0) {
+    if (uncertain > 0 && svc.uncertain_stale) {
       text += ' ' + uncertain + ' '
         + _plural(uncertain, 'item already needs reconciliation.',
                   'items already need reconciliation.');
+    } else if (uncertain > 0) {
+      text += ' ' + uncertain + ' '
+        + _plural(uncertain, 'item is settling after the restart',
+                  'items are settling after the restart')
+        + ' -- clears on its own within about 20 minutes.';
     }
     if (svc.drain_enabled) text += ' Dispatch is paused, so nothing new starts.';
     if (svc.version_stale) {
@@ -55463,8 +55469,13 @@
     if (stuck > 0) {
       reasons.push(stuck + ' ' + _plural(stuck, 'queue stuck', 'queues stuck'));
     }
+    // A worker restart marks in-flight work "uncertain" on purpose -- that
+    // alone self-clears within a couple of sweep cycles and is not an
+    // operator problem. Only flag it once it has survived a full sweep past
+    // the retirement window (uncertain_stale), same signal the backend uses
+    // to decide the item is actually stuck.
     const uncertain = Number(worker.uncertain || 0);
-    if (uncertain > 0) {
+    if (uncertain > 0 && worker.uncertain_stale) {
       reasons.push(uncertain + ' ' + _plural(uncertain, 'item needs', 'items need')
         + ' reconciliation');
     }
