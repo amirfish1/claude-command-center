@@ -1787,15 +1787,26 @@
       + '</div>' + timelineHtml(item)
       // The answer box belongs WITH the question, at the end of the thread —
       // the agent is waiting on it and it should need no hunting.
-      + (!githubBacked && st === 'blocked'
-          // The question is NOT repeated here. The timeline's last "Needs input"
-          // event already shows it, immediately above, and printing it twice
-          // read as two separate questions.
-          ? '<div class="q2-inline q2-inline-answer">'
-            + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
-            + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
-            + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
-            + ' data-q2-act="answer">Send answer</button></div></div>'
+      + (st === 'blocked'
+          ? (githubBacked
+              // CCC-807: a GitHub-backed ticket can still land in "needs
+              // input" (synced label), but answering here 404s (CCC-759) —
+              // it was simply omitted, which read as a missing feature
+              // ("I no longer see a place to enter the input"). Tell the
+              // user explicitly where to actually respond instead of
+              // silently dropping the box.
+              ? '<div class="q2-inline q2-inline-answer">'
+                + '<span class="q2-dim">This ticket needs input, but is synced from GitHub — answer it there.'
+                + (item.url ? ' <a class="q2-linklike" href="' + esc(item.url) + '" target="_blank" rel="noopener">Open on GitHub &#8599;</a>' : '')
+                + '</span></div>'
+              // The question is NOT repeated here. The timeline's last "Needs input"
+              // event already shows it, immediately above, and printing it twice
+              // read as two separate questions.
+              : '<div class="q2-inline q2-inline-answer">'
+                + '<textarea class="q2-input" data-q2-input="answer" rows="2"'
+                + ' placeholder="Answer the agent&hellip;" aria-label="Answer this ticket"></textarea>'
+                + '<div class="q2-actrow"><button type="button" class="q2-btn q2-btn-primary"'
+                + ' data-q2-act="answer">Send answer</button></div></div>')
           : '')
       // Comment sits after the last activity item, always available: it is a
       // reply to the thread, so it reads as the next entry in it. Not offered

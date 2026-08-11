@@ -1,0 +1,1 @@
+- Fixed a "needs input" GitHub-synced ticket in the Queues detail pane showing no way to respond at all; it now explains the ticket is read-only here and links to answer it on GitHub instead of silently omitting the answer box.
