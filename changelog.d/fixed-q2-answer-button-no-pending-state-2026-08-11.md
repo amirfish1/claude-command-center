@@ -1,0 +1,1 @@
+- Fixed "Send answer" (and Comment/Close/Reopen) in the Queues (q2) detail pane looking unresponsive on click; they now show a pending label and in-flight styling until the request completes, matching the existing Run button.

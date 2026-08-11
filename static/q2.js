@@ -2069,10 +2069,10 @@
     // server.py:52747 (answer.text), :52943 (close.note), :52890 (reopen.note),
     // :52913 (comment.text).
     var plan = {
-      answer:  ['/api/ux-fixes/answer',  { ref: ref, text: detailInput('answer') },  true,  'Answer sent'],
-      comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') }, true,  'Comment added'],
-      close:   ['/api/ux-fixes/close',   { ref: ref, note: detailInput('close') },   false, 'Ticket closed'],
-      reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened'],
+      answer:  ['/api/ux-fixes/answer',  { ref: ref, text: detailInput('answer') },  true,  'Answer sent',    'Sending…'],
+      comment: ['/api/ux-fixes/comment', { ref: ref, text: detailInput('comment') }, true,  'Comment added',  'Adding…'],
+      close:   ['/api/ux-fixes/close',   { ref: ref, note: detailInput('close') },   false, 'Ticket closed',  'Closing…'],
+      reopen:  ['/api/ux-fixes/reopen',  { ref: ref, note: detailInput('reopen') },  false, 'Ticket reopened', 'Reopening…'],
     }[act];
     if (!plan) return;
     // Answer and comment carry the user's words; sending an empty one would
@@ -2082,7 +2082,14 @@
       return;
     }
 
+    // CCC-810: give write actions (answer above all — it is the one an
+    // agent is actively blocked waiting on) the same in-flight feedback the
+    // Run button already had, instead of just a disabled-but-unlabeled
+    // button that looked like nothing happened on click.
     btn.disabled = true;
+    btn.classList.add('is-pending');
+    var prevLabel = btn.textContent;
+    btn.textContent = plan[4];
     try {
       await postJson(plan[0], plan[1]);
       note(plan[3]);
@@ -2096,8 +2103,10 @@
       await refresh();
     } catch (e) {
       note('Failed: ' + e.message);
+      btn.textContent = prevLabel;
     } finally {
       btn.disabled = false;
+      btn.classList.remove('is-pending');
     }
   }
 
