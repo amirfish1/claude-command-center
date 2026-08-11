@@ -2660,6 +2660,82 @@
     setColWidth('tickets', readColWidth('tickets'), false);
   });
 
+  // ── activity-log resizer ─────────────────────────────────────────────────
+  // Same drag pattern as the column resizers, but vertical: drags the log
+  // band's height instead of a column's width. The CSS var falls back to the
+  // original 28% when nothing has been dragged yet.
+  var LOGBAR_KEY = 'ccc-q2-logbar-h';
+  var LOGBAR_MIN = 96;
+
+  function logbarMax() {
+    var host = $('q2LogBar');
+    var avail = (host && host.parentElement) ? host.parentElement.clientHeight : window.innerHeight;
+    return Math.max(LOGBAR_MIN, Math.round(avail * 0.7));
+  }
+
+  function setLogbarHeight(px, persist) {
+    var h = Math.round(Math.max(LOGBAR_MIN, Math.min(logbarMax(), px)));
+    document.documentElement.style.setProperty('--q2-logbar-h', h + 'px');
+    if (persist) {
+      try { localStorage.setItem(LOGBAR_KEY, String(h)); } catch (_) {}
+    }
+    return h;
+  }
+
+  (function initLogbarHeight() {
+    var saved = null;
+    try { saved = localStorage.getItem(LOGBAR_KEY); } catch (_) {}
+    var n = parseFloat(saved);
+    if (!isNaN(n)) setLogbarHeight(n, false);
+  })();
+
+  var logbarHandle = document.querySelector('[data-q2-resize-v="logbar"]');
+  if (logbarHandle) {
+    logbarHandle.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var startY = e.clientY;
+      var host = $('q2LogBar');
+      var startH = host ? host.getBoundingClientRect().height : LOGBAR_MIN;
+      logbarHandle.setPointerCapture(e.pointerId);
+      logbarHandle.classList.add('is-dragging');
+      document.body.classList.add('q2-resizing-v');
+
+      // Dragging the handle up (clientY decreases) grows the log band below it.
+      function onMove(ev) { setLogbarHeight(startH + (startY - ev.clientY), false); }
+      function onUp() {
+        logbarHandle.removeEventListener('pointermove', onMove);
+        logbarHandle.removeEventListener('pointerup', onUp);
+        logbarHandle.removeEventListener('pointercancel', onUp);
+        logbarHandle.classList.remove('is-dragging');
+        document.body.classList.remove('q2-resizing-v');
+        var host2 = $('q2LogBar');
+        if (host2) setLogbarHeight(host2.getBoundingClientRect().height, true);
+      }
+      logbarHandle.addEventListener('pointermove', onMove);
+      logbarHandle.addEventListener('pointerup', onUp);
+      logbarHandle.addEventListener('pointercancel', onUp);
+    });
+
+    logbarHandle.addEventListener('dblclick', function () {
+      document.documentElement.style.removeProperty('--q2-logbar-h');
+      try { localStorage.removeItem(LOGBAR_KEY); } catch (_) {}
+    });
+
+    logbarHandle.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 60 : 20;
+      var host = $('q2LogBar');
+      var cur = host ? host.getBoundingClientRect().height : LOGBAR_MIN;
+      if (e.key === 'ArrowUp') { e.preventDefault(); setLogbarHeight(cur + step, true); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); setLogbarHeight(cur - step, true); }
+      else if (e.key === 'Home') {
+        e.preventDefault();
+        document.documentElement.style.removeProperty('--q2-logbar-h');
+        try { localStorage.removeItem(LOGBAR_KEY); } catch (_) {}
+      }
+    });
+  }
+
   // Glyph buttons in the markup are filled with drawn icons here, so the page
   // never depends on a font shipping a decent gear or plus.
   document.querySelectorAll('[data-q2-icon]').forEach(function (el) {

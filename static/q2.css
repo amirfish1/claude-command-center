@@ -164,9 +164,26 @@ body {
 }
 .q2-resizer:hover::after,
 .q2-resizer.is-dragging::after { opacity: 0; }
+/* Horizontal variant: the activity-log handle, dragged up/down instead of
+   left/right. Same grip-dot treatment, rotated. */
+.q2-resizer-h {
+  flex: 0 0 auto;
+  height: 6px;
+  cursor: row-resize;
+  border-left: none;
+  border-right: none;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+.q2-resizer-h::after {
+  width: 26px;
+  height: 2px;
+}
 /* While dragging, kill text selection and pointer noise everywhere else. */
 body.q2-resizing { cursor: col-resize; user-select: none; }
-body.q2-resizing .q2-col { pointer-events: none; }
+body.q2-resizing-v { cursor: row-resize; user-select: none; }
+body.q2-resizing .q2-col,
+body.q2-resizing-v .q2-col { pointer-events: none; }
 
 .q2-col-head {
   flex: 0 0 auto;
@@ -559,9 +576,9 @@ body.q2-resizing .q2-col { pointer-events: none; }
 /* ── reconciler log (bottom band) ─────────────────────────────────────── */
 .q2-logbar {
   flex: 0 0 auto;
-  height: 28%;
+  height: var(--q2-logbar-h, 28%);
   min-height: 96px;
-  max-height: 230px;
+  max-height: 60vh;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
