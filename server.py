@@ -8404,12 +8404,137 @@ def _live_registry_conversation_row(
     return row
 
 
+# ── Parallel transcript prewarm ────────────────────────────────────────────
+# A cold archive scan (no _conv_meta_cache on disk: first ever run, or any
+# _CONV_META_SCHEMA_VERSION bump, which drops the whole file) re-parses every
+# transcript serially. On a real corpus that measured 147s for 6148 files /
+# 6.9 GB, and the sidebar sits on "Loading archive…" for all of it.
+#
+# _extract_tail_meta is a pure path -> dict function, which makes it a clean
+# process-pool boundary. Threads would not help: the work is json.loads and
+# regex, neither of which releases the GIL. Workers import server without ever
+# running main(), so _INTERRUPT_EVENTS_ENABLED stays False there and the parse
+# has no emission side effect -- the parent re-emits from the cached meta when
+# it later hits the cache (see _emit_interrupts_from_meta).
+#
+# Only cold files go to the pool. A warm cache means zero misses, no pool, and
+# no cost, which is the common case.
+_TAIL_META_PREWARM_MIN = 64  # below this the pool costs more than it saves
+
+
+def _tail_meta_prewarm_workers():
+    if os.environ.get("CCC_ARCHIVE_PARALLEL", "1") in ("0", "false", "no"):
+        return 0
+    try:
+        cpus = os.cpu_count() or 2
+    except Exception:
+        cpus = 2
+    return max(0, min(8, cpus - 2))
+
+
+def _tail_meta_prewarm_one(path_str):
+    """Pool worker: parse one transcript, hand its meta back to the parent."""
+    try:
+        return path_str, _extract_tail_meta(Path(path_str))
+    except Exception:
+        return path_str, None
+
+
+def _conv_meta_cache_is_cold(path, stat_result=None):
+    """True when _extract_tail_meta would have to re-parse this file."""
+    try:
+        st = stat_result if stat_result is not None else path.stat()
+    except OSError:
+        return False
+    cached = _conv_meta_cache.get(str(path))
+    return not (cached and cached.get("cache_key") == (st.st_mtime_ns, st.st_size))
+
+
+def _prewarm_conv_meta_parallel(cold_paths, progress_step=None):
+    """Fill _conv_meta_cache for `cold_paths` across a process pool.
+
+    Best-effort: any failure falls back to leaving the cache cold, and the
+    serial walk re-parses exactly as it did before. Returns how many entries
+    were filled.
+    """
+    workers = _tail_meta_prewarm_workers()
+    if workers < 2 or len(cold_paths) < _TAIL_META_PREWARM_MIN:
+        return 0
+    filled = 0
+    try:
+        import concurrent.futures as _futures
+        path_strs = [str(p) for p in cold_paths]
+        if progress_step:
+            progress_step(
+                "transcripts", state="running", count=0, total=len(path_strs),
+                detail=f"Parsing {len(path_strs)} transcripts across {workers} workers.",
+            )
+        with _futures.ProcessPoolExecutor(max_workers=workers) as pool:
+            # chunksize=1 on purpose: transcripts range from a few KB to
+            # ~90 MB, so any batching hands one worker a run of giants while
+            # the rest idle. Per-item dispatch costs nothing next to a parse.
+            for path_str, meta in pool.map(_tail_meta_prewarm_one, path_strs, chunksize=1):
+                if not isinstance(meta, dict) or not meta:
+                    continue
+                with _conv_meta_cache_lock:
+                    _conv_meta_cache[path_str] = meta
+                filled += 1
+                if progress_step and filled % 200 == 0:
+                    progress_step(
+                        "transcripts", state="running",
+                        count=filled, total=len(path_strs),
+                    )
+    except Exception:
+        # Pool unavailable (sandbox, fork restriction, spawn failure) or a
+        # worker died. The serial walk below still produces correct rows.
+        return filled
+    return filled
+
+
+def _prewarm_claude_transcripts(projects_root, progress_step=None):
+    """Collect cold Claude transcripts under projects_root and prewarm them."""
+    if _tail_meta_prewarm_workers() < 2:
+        return 0
+    cold = []
+    try:
+        for project_dir in projects_root.iterdir():
+            if not project_dir.is_dir():
+                continue
+            try:
+                entries = list(project_dir.iterdir())
+            except OSError:
+                continue
+            for f in entries:
+                if not f.name.endswith(".jsonl"):
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                if _conv_meta_cache_is_cold(f, st):
+                    cold.append((st.st_size, f))
+    except OSError:
+        return 0
+    if len(cold) < _TAIL_META_PREWARM_MIN:
+        return 0
+    # Biggest first: the pool drains the long files while short ones fill the
+    # gaps behind them, instead of ending on one ~90 MB straggler with seven
+    # idle workers. Sizes come from the stat already taken above.
+    cold.sort(key=lambda pair: pair[0], reverse=True)
+    return _prewarm_conv_meta_parallel(
+        [f for _, f in cold], progress_step=progress_step,
+    )
+
+
 def find_all_conversations(
     limit_per_folder=None,
     resolve_pr_states=True,
     resolve_effective=True,
     resolve_worktree_dirty=True,
     only_jsonl_paths=None,
+    progress_step=None,
 ):
     """Walk ~/.claude/projects/ for every subdir and return a flat list of
     conversation metadata across every folder you've ever Claude-Code'd in.
@@ -8441,6 +8566,16 @@ def find_all_conversations(
         _only_dirs = {os.path.dirname(p) for p in only_jsonl_paths}
     projects_root = Path.home() / ".claude" / "projects"
     projects_root_exists = projects_root.is_dir()
+
+    # Cold-scan fast path: parse every uncached transcript across a process
+    # pool before the serial walk below asks for them one at a time. On a warm
+    # cache this finds nothing cold and returns immediately. Skipped for
+    # incremental scans, which are a handful of files by construction.
+    if projects_root_exists and only_jsonl_paths is None:
+        try:
+            _prewarm_claude_transcripts(projects_root, progress_step=progress_step)
+        except Exception:
+            pass
 
     # Build slug → repo_path map for label resolution.
     known_by_slug = {}
@@ -11000,6 +11135,7 @@ def _build_archive_conversations(
         resolve_pr_states=resolve_pr_states,
         resolve_effective=resolve_effective,
         resolve_worktree_dirty=resolve_worktree_dirty,
+        progress_step=progress,
     )
     count = len(raw_convs or [])
     progress("folders",     state="done")

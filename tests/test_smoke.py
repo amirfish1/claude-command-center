@@ -705,6 +705,67 @@ class TestServerImports(unittest.TestCase):
             "find_all_conversations must apply the WT display-name overlay before returning",
         )
 
+    def test_parallel_tail_meta_prewarm_matches_serial_and_can_be_disabled(self):
+        """The cold-scan process pool must produce byte-identical meta.
+
+        A cold archive scan (first run, or any _CONV_META_SCHEMA_VERSION bump
+        that drops the disk cache) re-parses every transcript. The pool is
+        only safe if a pooled parse is indistinguishable from a serial one,
+        and only acceptable if it can be turned off in one env var.
+        """
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            paths = []
+            for i in range(4):
+                p = root / f"sess{i}.jsonl"
+                p.write_text(
+                    '{"type":"user","timestamp":"2026-01-0%dT00:00:00Z",'
+                    '"message":{"role":"user","content":"hi %d"}}\n' % (i + 1, i)
+                    + '{"type":"custom-title","customTitle":"title-%d"}\n' % i
+                )
+                paths.append(p)
+
+            serial = {}
+            for p in paths:
+                serial[str(p)] = server._extract_tail_meta(p)
+                server._conv_meta_cache.pop(str(p), None)
+
+            # Below _TAIL_META_PREWARM_MIN the pool is deliberately skipped —
+            # spinning up workers for a handful of files is a loss.
+            self.assertEqual(
+                server._prewarm_conv_meta_parallel(paths), 0,
+                "tiny batches must not pay for a process pool",
+            )
+
+            old_min = server._TAIL_META_PREWARM_MIN
+            server._TAIL_META_PREWARM_MIN = 1
+            old_env = os.environ.get("CCC_ARCHIVE_PARALLEL")
+            try:
+                filled = server._prewarm_conv_meta_parallel(paths)
+                self.assertEqual(filled, len(paths))
+                for p in paths:
+                    self.assertEqual(
+                        server._conv_meta_cache.get(str(p)), serial[str(p)],
+                        f"pooled meta differs from serial for {p.name}",
+                    )
+                # Kill switch: one env var puts the cold scan back on the
+                # serial path without a code change.
+                os.environ["CCC_ARCHIVE_PARALLEL"] = "0"
+                self.assertEqual(server._tail_meta_prewarm_workers(), 0)
+                self.assertEqual(server._prewarm_conv_meta_parallel(paths), 0)
+            finally:
+                server._TAIL_META_PREWARM_MIN = old_min
+                if old_env is None:
+                    os.environ.pop("CCC_ARCHIVE_PARALLEL", None)
+                else:
+                    os.environ["CCC_ARCHIVE_PARALLEL"] = old_env
+                for p in paths:
+                    server._conv_meta_cache.pop(str(p), None)
+
     def test_wt_display_items_cache_avoids_repeat_queue_fetches(self):
         """The display overlay's ticket source must not hit `gh` per rebuild.
 
