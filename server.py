@@ -37513,6 +37513,8 @@ def _finalize_queued_steer_result(session_id, text, result):
         return result
     result["queued"] = True
     result["queued_preserved"] = True
+    if not result.get("error") and not result.get("message"):
+        result["message"] = "Steer failed; your message stays queued and will send once the turn ends."
     return result
 
 

@@ -7261,7 +7261,7 @@
         return;
       }
       if (data && data.queued_preserved) {
-        const reason = formatInjectFailure(data, 0) || data.error || 'the active turn cannot be steered from CCC';
+        const reason = data.error || data.message || 'the active turn cannot be steered from CCC';
         showOpToast('Still queued: ' + reason, 'error');
         setTimeout(refreshConversationList, 500);
         return;
