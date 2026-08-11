@@ -624,7 +624,7 @@ class TestServerImports(unittest.TestCase):
             "queue": "THROUGHPUT",
             "session_id": sid,
             "alive": True,
-        }]), mock.patch.object(server._q, "list_items", return_value=items):
+        }]), mock.patch.object(server, "_wt_list_items_display_cached", return_value=items):
             server._apply_watchtower_worker_display_names(rows)
 
         self.assertEqual(
@@ -653,7 +653,7 @@ class TestServerImports(unittest.TestCase):
             "queue": "CCC",
             "session_id": sid,
             "alive": True,
-        }]), mock.patch.object(server._q, "list_items", return_value=[]):
+        }]), mock.patch.object(server, "_wt_list_items_display_cached", return_value=[]):
             server._apply_watchtower_worker_display_names(rows)
 
         self.assertEqual(rows[0]["display_name"], "CCC worker")
@@ -682,7 +682,7 @@ class TestServerImports(unittest.TestCase):
         }]
 
         with mock.patch.object(server, "_wt_read_workers", return_value=[]), \
-                mock.patch.object(server._q, "list_items", return_value=items):
+                mock.patch.object(server, "_wt_list_items_display_cached", return_value=items):
             server._apply_watchtower_worker_display_names(rows)
 
         self.assertEqual(
@@ -704,6 +704,49 @@ class TestServerImports(unittest.TestCase):
             server_py[fn_start:fn_end],
             "find_all_conversations must apply the WT display-name overlay before returning",
         )
+
+    def test_wt_display_items_cache_avoids_repeat_queue_fetches(self):
+        """The display overlay's ticket source must not hit `gh` per rebuild.
+
+        `_q.list_items()` can be GitHub-backed (four `gh` subprocess calls,
+        ~5s cold). The archive refresh runs in a short-lived subprocess, so
+        WatchTower's own 2s in-memory cache is always cold there and every
+        rebuild paid the full network cost. Assert the memo + disk snapshot
+        collapse repeat reads to a single fetch.
+        """
+        for mod in ("server", "morning", "morning_store"):
+            sys.modules.pop(mod, None)
+        server = importlib.import_module("server")
+        items = [{"project": "OPS", "ref": "OPS-1", "status": "in_progress"}]
+        calls = []
+
+        def fake_list_items(*a, **k):
+            calls.append(1)
+            return items
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_file = server._WT_ITEMS_SNAPSHOT_FILE
+            old_memo = dict(server._wt_items_memo)
+            server._WT_ITEMS_SNAPSHOT_FILE = pathlib.Path(tmp) / "wt_items.json"
+            server._wt_items_memo["at"] = 0.0
+            server._wt_items_memo["items"] = None
+            try:
+                with mock.patch.object(server._q, "list_items", fake_list_items):
+                    first = server._wt_list_items_display_cached()
+                    second = server._wt_list_items_display_cached()
+                    # Drop the process memo: the on-disk snapshot alone must
+                    # be enough, since the refresh worker is a fresh process.
+                    server._wt_items_memo["at"] = 0.0
+                    server._wt_items_memo["items"] = None
+                    third = server._wt_list_items_display_cached()
+                self.assertEqual(first, items)
+                self.assertEqual(second, items)
+                self.assertEqual(third, items)
+                self.assertEqual(len(calls), 1, "one real fetch, then cache")
+                self.assertTrue(server._WT_ITEMS_SNAPSHOT_FILE.is_file())
+            finally:
+                server._WT_ITEMS_SNAPSHOT_FILE = old_file
+                server._wt_items_memo.update(old_memo)
 
     def test_usage_pace_uses_ccc_calibration_and_week_override(self):
         """CCC owns weekly calibration/pace state without relying on legacy

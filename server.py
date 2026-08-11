@@ -1569,6 +1569,72 @@ def _wt_item_ts(item):
     return 0
 
 
+# The archive walk stamps WT ticket titles onto worker rows. Its only ticket
+# source, `_q.list_items()`, can be GitHub-backed: on a cold process that is
+# four `gh` subprocess round-trips (~5s), and WatchTower's own in-memory cache
+# has a 2s TTL. The archive *refresh* runs in a short-lived subprocess
+# (`_archive_refresh_worker_main`), so that in-memory cache is ALWAYS cold
+# there — every archive rebuild was paying a full uncached GitHub list, which
+# measured as 5.4s of a 10.4s warm-cache build (52%).
+#
+# This is a display-only overlay, so a slightly stale ticket title is free.
+# Snapshot to disk with a generous TTL and let the short-lived worker read that
+# instead of the network. Whoever pays for a real fetch writes the snapshot.
+_WT_ITEMS_SNAPSHOT_FILE = (
+    Path.home() / ".claude" / "command-center" / "wt_items_snapshot.json"
+)
+_WT_ITEMS_SNAPSHOT_TTL_S = 30.0
+_wt_items_memo = {"at": 0.0, "items": None}
+_wt_items_memo_lock = threading.Lock()
+
+
+def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
+    """Ticket list for display overlays — never blocks on GitHub if avoidable.
+
+    Order: process memo -> on-disk snapshot -> real `_q.list_items()`. Returns
+    a stale snapshot rather than raising; callers only use this to prettify
+    row titles, so wrong-but-fast beats right-but-blocking.
+    """
+    now = time.time()
+    with _wt_items_memo_lock:
+        if _wt_items_memo["items"] is not None and now - _wt_items_memo["at"] < max_age:
+            return _wt_items_memo["items"]
+    snapshot_items = None
+    try:
+        st = _WT_ITEMS_SNAPSHOT_FILE.stat()
+        if now - st.st_mtime < max_age:
+            with _WT_ITEMS_SNAPSHOT_FILE.open("r") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                snapshot_items = data["items"]
+    except (OSError, ValueError):
+        snapshot_items = None
+    if snapshot_items is not None:
+        with _wt_items_memo_lock:
+            _wt_items_memo["at"] = now
+            _wt_items_memo["items"] = snapshot_items
+        return snapshot_items
+    try:
+        items = _q.list_items() or []
+    except Exception:
+        # Fall back to whatever we last saw, however old — a failed `gh` must
+        # not blank out every worker row's title.
+        with _wt_items_memo_lock:
+            return _wt_items_memo["items"] or []
+    with _wt_items_memo_lock:
+        _wt_items_memo["at"] = time.time()
+        _wt_items_memo["items"] = items
+    try:
+        _WT_ITEMS_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _WT_ITEMS_SNAPSHOT_FILE.with_suffix(".json.tmp")
+        with tmp.open("w") as f:
+            json.dump({"items": items}, f)
+        tmp.replace(_WT_ITEMS_SNAPSHOT_FILE)
+    except (OSError, TypeError, ValueError):
+        pass
+    return items
+
+
 def _apply_watchtower_worker_display_names(rows):
     """Layer WT ticket names onto live WT worker session rows.
 
@@ -1601,10 +1667,7 @@ def _apply_watchtower_worker_display_names(rows):
             sid_to_worker[sid] = w
         if wid and sid:
             worker_ids[wid] = sid
-    try:
-        items = _q.list_items() or []
-    except Exception:
-        items = []
+    items = _wt_list_items_display_cached()
     titles_by_sid = {}
     for it in items:
         if not isinstance(it, dict):
