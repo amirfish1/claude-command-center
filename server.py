@@ -70024,6 +70024,50 @@ def _pid_command(pid):
     return (proc.stdout or "").strip() if proc.returncode == 0 else ""
 
 
+def _other_instance_responding(port):
+    """True if a CCC server is actually answering HTTP on `port`.
+
+    Distinguishes a genuinely live peer from a process that is still
+    OS-alive (passes `_is_pid_alive`) but hung -- e.g. deadlocked, or stuck
+    behind a crashed accept loop. `_is_pid_alive` alone can't tell these
+    apart, and a hung holder of the port is exactly the case that turns a
+    single crash into an hours-long restart-refused loop under launchd's
+    KeepAlive (observed 2026-08-10/11: a stuck pid blocked every respawn
+    attempt for ~14h). Short timeout on purpose -- this runs on the startup
+    path and a healthy peer answers in milliseconds.
+    """
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/api/loading-status", timeout=2) as r:
+            return 200 <= r.status < 500
+    except Exception:
+        return False
+
+
+def _kill_stale_duplicate(pid, port):
+    """Best-effort reclaim of a hung duplicate: SIGTERM, wait briefly, SIGKILL.
+
+    Mirrors the stale-worker reap in run.sh (kill, poll for death, replace)
+    rather than inventing a new pattern. Never raises -- worst case the pid
+    lingers and the caller's own bind() surfaces the real error.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(20):  # ~2s
+        if not _is_pid_alive(pid):
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def _check_duplicate_repo_instance():
     """Refuse to start when another live CCC server already serves this repo.
 
@@ -70036,6 +70080,10 @@ def _check_duplicate_repo_instance():
     dir, which is the identity key. Intentional duplicates (dev/verification
     instances) bypass via CCC_EPHEMERAL=1 (matching the port.txt convention)
     or CCC_ALLOW_DUPLICATE_REPO=1.
+
+    A registry entry that is OS-alive but not answering HTTP is treated as
+    stale rather than a real duplicate: it's reaped and startup proceeds,
+    instead of refusing forever until someone manually kills it.
     """
     if os.environ.get("CCC_EPHEMERAL") or os.environ.get("CCC_ALLOW_DUPLICATE_REPO"):
         return
@@ -70057,15 +70105,23 @@ def _check_duplicate_repo_instance():
                 # process (the registry prunes dead pids, but pid REUSE makes
                 # a dead CCC look alive). Not a real duplicate.
                 continue
+            if _other_instance_responding(entry.get("port")):
+                print(
+                    f"FATAL: another CCC server for this repo is already running: "
+                    f"pid {entry.get('pid')} ({entry.get('install_path')}, "
+                    f"port {entry.get('port')}, started {entry.get('started_at')}).\n"
+                    f"Kill it first, or set CCC_ALLOW_DUPLICATE_REPO=1 for an "
+                    f"intentional second instance.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             print(
-                f"FATAL: another CCC server for this repo is already running: "
-                f"pid {entry.get('pid')} ({entry.get('install_path')}, "
-                f"port {entry.get('port')}, started {entry.get('started_at')}).\n"
-                f"Kill it first, or set CCC_ALLOW_DUPLICATE_REPO=1 for an "
-                f"intentional second instance.",
+                f"  duplicate-guard: pid {entry.get('pid')} is registered for "
+                f"this repo but not answering on port {entry.get('port')} -- "
+                f"reaping stale instance and continuing startup.",
                 file=sys.stderr,
             )
-            sys.exit(1)
+            _kill_stale_duplicate(entry.get("pid"), entry.get("port"))
 
 
 def _register_self(port, bind_host):
